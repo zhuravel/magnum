@@ -188,7 +188,7 @@ func (e *Engine) prStatus(ctx context.Context, j statusTask, st PRState, fix Fix
 	}
 	switch {
 	case len(stg.envs) > 0:
-		s.Stagings = prStagings(stg.envs, old.Stagings)
+		s.Stagings = prStagings(stg, old.Stagings, now)
 		s.Staging = s.Stagings[0] // the readers from before stagings render the first
 	case ok && (j.t.State != registry.TaskPublished || len(e.cfg.Stagings(j.t.Repo)) > 0):
 		// An ended task's last write, or a tick that read no staging status

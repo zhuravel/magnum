@@ -2,17 +2,22 @@ package factory
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/prstatus"
 	"github.com/zhuravel/magnum/internal/staging"
 	"github.com/zhuravel/magnum/internal/tui"
@@ -20,19 +25,25 @@ import (
 
 // fakeStaging is the factory's staging client in the tests: Status answers
 // each env's preset status (unknown for one with none), Refresh records
-// what it was asked and waits on block while it is set (or for its ctx),
-// and Close counts.
+// what it was asked, waits on block while it is set (or for its ctx),
+// panics with panicWith while it is set, and reads (ReadAt moves to the
+// clock's now) unless it fails or answers cached, as a Refresh within the
+// minute does; Close counts.
 type fakeStaging struct {
-	mu       sync.Mutex
-	statuses map[string]staging.EnvStatus // by env name
-	asked    []stagingAsk
-	prs      []staging.PR
-	block    chan struct{}
-	started  chan struct{}
-	err      error
-	cut      int // Refreshes their ctx ended
-	running  int
-	closed   int
+	mu        sync.Mutex
+	now       func() time.Time
+	statuses  map[string]staging.EnvStatus // by env name
+	asked     []stagingAsk
+	prs       []staging.PR
+	block     chan struct{}
+	started   chan struct{}
+	err       error
+	cached    bool
+	panicWith string
+	readAt    map[string]time.Time // by repository, lower case
+	cut       int                  // Refreshes their ctx ended
+	running   int
+	closed    int
 	// closedRunning is how many Refreshes still ran when Close came.
 	closedRunning int
 }
@@ -46,13 +57,16 @@ func (f *fakeStaging) Refresh(ctx context.Context, repo string, open []staging.O
 	f.mu.Lock()
 	f.asked = append(f.asked, stagingAsk{repo, slices.Clone(open)})
 	f.running++
-	block, started, err := f.block, f.started, f.err
+	block, started, err, cached, boom := f.block, f.started, f.err, f.cached, f.panicWith
 	f.mu.Unlock()
 	defer func() {
 		f.mu.Lock()
 		f.running--
 		f.mu.Unlock()
 	}()
+	if boom != "" {
+		panic(boom)
+	}
 	if started != nil {
 		select {
 		case started <- struct{}{}:
@@ -69,7 +83,21 @@ func (f *fakeStaging) Refresh(ctx context.Context, repo string, open []staging.O
 			return ctx.Err()
 		}
 	}
+	if err == nil && !cached && f.now != nil {
+		f.mu.Lock()
+		if f.readAt == nil {
+			f.readAt = map[string]time.Time{}
+		}
+		f.readAt[strings.ToLower(repo)] = f.now()
+		f.mu.Unlock()
+	}
 	return err
+}
+
+func (f *fakeStaging) ReadAt(repo string) time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.readAt[strings.ToLower(repo)]
 }
 
 func (f *fakeStaging) Status(pr staging.PR, envs []staging.Env) []staging.EnvStatus {
@@ -93,6 +121,13 @@ func (f *fakeStaging) Close() {
 	defer f.mu.Unlock()
 	f.closed++
 	f.closedRunning += f.running
+}
+
+// setFields runs edit on f under its lock.
+func (f *fakeStaging) setFields(edit func(f *fakeStaging)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	edit(f)
 }
 
 // set makes env's status s.
@@ -123,8 +158,30 @@ func newStagingRig(t *testing.T) (*followRig, *fakeStaging) {
 	t.Helper()
 	f := &fakeStaging{}
 	r := newFollowRig(t, func(d *Deps) { d.Staging = f })
+	f.now = r.clock.Now
 	r.cfg.Factory.Repos = append(r.cfg.Factory.Repos, config.FactoryRepo{Repo: followRef.Repo, Base: "master", Staging: theStagings})
 	return r, f
+}
+
+// countWrites counts the engine's writes of staging.json, which still
+// reach the file.
+func (r *followRig) countWrites() *atomic.Int32 {
+	var n atomic.Int32
+	r.e.stagingWrite = func(path string, b []byte) error {
+		n.Add(1)
+		return fsx.ReplaceFile(path, b, 0o600)
+	}
+	return &n
+}
+
+// screenDown is the screen's data while no factory daemon runs.
+func (r *followRig) screenDown() tui.FactoryData {
+	r.t.Helper()
+	d, err := ScreenData(r.ctx, r.reg, nil, r.clock.Now(), time.Time{}, ScreenOptions{Config: r.cfg, Layout: r.layout, DaemonDown: true})
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return d
 }
 
 // settle waits until no Refresh the engine started runs.
@@ -190,10 +247,8 @@ func TestStagingCellsMapEachStateInTheConfigsOrder(t *testing.T) {
 		{staging.EnvStatus{State: staging.StateNone}, "none"},
 		{staging.EnvStatus{State: staging.StateUnknown, Why: "cloning the mirror"}, "unknown"},
 	} {
-		seen := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
-		c := stagingCell(tc.status, seen)
-		if c.State != tc.want || c.OnYou || !c.Seen.Equal(seen) {
-			t.Errorf("%s/%s: cell %+v, want %q, not on you, seen %v", tc.status.State, tc.status.Detail, c, tc.want, seen)
+		if got := stagingState(tc.status); got != tc.want {
+			t.Errorf("%s/%s: cell %q, want %q", tc.status.State, tc.status.Detail, got, tc.want)
 		}
 	}
 
@@ -209,8 +264,8 @@ func TestStagingCellsMapEachStateInTheConfigsOrder(t *testing.T) {
 		t.Fatalf("cells %q, want %q in the config's order", got, want)
 	}
 	for _, c := range row.Stagings {
-		if !c.Seen.Equal(r.clock.Now()) {
-			t.Errorf("%s: seen %v, want the last good Refresh %v", c.Name, c.Seen, r.clock.Now())
+		if !c.Seen.Equal(r.clock.Now()) || c.OnYou {
+			t.Errorf("%s: seen %v, on you %v; want the read %v, not on you", c.Name, c.Seen, c.OnYou, r.clock.Now())
 		}
 	}
 	card := r.screen().Cards[r.task.ID].Task
@@ -224,8 +279,8 @@ func TestStagingCellsMapEachStateInTheConfigsOrder(t *testing.T) {
 }
 
 // A repository without staging envs gets no Refresh and no cell, and
-// neither does a task without a published PR; a cell whose last good read
-// is older than staging.StaleAfter (its daemon stopped) reads unknown.
+// neither does a task without a published PR; while no factory daemon runs,
+// every cell reads unknown.
 func TestNoStagingCellsWithoutStagingEnvsOrAPublishedPR(t *testing.T) {
 	f := &fakeStaging{}
 	r := newFollowRig(t, func(d *Deps) { d.Staging = f })
@@ -261,9 +316,8 @@ func TestNoStagingCellsWithoutStagingEnvsOrAPublishedPR(t *testing.T) {
 		}
 	}
 
-	r.clock.Add(staging.StaleAfter + time.Minute) // the daemon stopped: no tick wrote the file since
-	if got := cellStates(r.stagingRow(r.screen()).Stagings); !slices.Equal(got, []string{"void=unknown", "bart=unknown", "bastion=unknown"}) {
-		t.Errorf("stale cells %q, want each unknown", got)
+	if got := cellStates(r.stagingRow(r.screenDown()).Stagings); !slices.Equal(got, []string{"void=unknown", "bart=unknown", "bastion=unknown"}) {
+		t.Errorf("cells %q while the daemon is down, want each unknown", got)
 	}
 }
 
@@ -310,17 +364,15 @@ func TestAFailedRefreshIsLoggedOncePerCause(t *testing.T) {
 		r.tick()
 		r.settle()
 	}
-	f.mu.Lock()
-	f.err = errors.New("staging example/shop: the mirror could not be read: exit 128 after 31s")
-	f.mu.Unlock()
+	f.setFields(func(f *fakeStaging) {
+		f.err = errors.New("staging example/shop: the mirror could not be read: exit 128 after 31s")
+	})
 	r.tick()
 	r.settle()
 	if n := strings.Count(r.log.String(), "the staging status of a repository is not read"); n != 1 {
 		t.Errorf("%d warnings for one cause, want 1:\n%s", n, r.log)
 	}
-	f.mu.Lock()
-	f.err = errors.New("staging example/shop: no git env for the fetch")
-	f.mu.Unlock()
+	f.setFields(func(f *fakeStaging) { f.err = errors.New("staging example/shop: no git env for the fetch") })
 	r.tick()
 	r.settle()
 	if n := strings.Count(r.log.String(), "the staging status of a repository is not read"); n != 2 {
@@ -442,5 +494,249 @@ func TestTheStagingStatusReadsAsTheReposPollIdentity(t *testing.T) {
 	cfg.Identities = cfg.Identities[1:]
 	if _, err := StagingIdentity(cfg, "other/app"); err == nil {
 		t.Error("a repository no watch covers, without a gh identity, reads as someone")
+	}
+}
+
+// With no staging state changing, neither the screen's staging.json nor the
+// PR's status file is written again, however many reads and ticks go by: a
+// cell's Seen stays the read that first saw its state. One state that
+// changes writes each once, and moves that cell's Seen alone. Before, every
+// tick rewrote staging.json, its Seen the time of the last Refresh call.
+func TestUnchangedStagingStatesWriteNothing(t *testing.T) {
+	r, f := newStagingRig(t)
+	r.published("unchanged")
+	writes := r.countWrites()
+	f.set("void", staging.EnvStatus{State: staging.StateLatest})
+	f.set("bart", staging.EnvStatus{State: staging.StateNone})
+	f.set("bastion", staging.EnvStatus{State: staging.StateNone})
+	r.tick()
+	r.settle()
+	r.tick() // the first read gives the cells their Seen
+	r.settle()
+	first := r.clock.Now()
+	n := writes.Load()
+	status := r.mustStatus()
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(r.statusPath(), old, old); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 10 {
+		r.clock.Add(45 * time.Second)
+		if i%2 == 1 { // half the calls answer from the minute's cache, the rest read
+			f.setFields(func(f *fakeStaging) { f.cached = true })
+		} else {
+			f.setFields(func(f *fakeStaging) { f.cached = false })
+		}
+		r.tick()
+		r.settle()
+	}
+	if got := writes.Load() - n; got != 0 {
+		t.Errorf("staging.json written %d times in 10 ticks with no state change, want none", got)
+	}
+	if st, err := os.Stat(r.statusPath()); err != nil || !st.ModTime().Equal(old) {
+		t.Errorf("the status file was written again with no state change (%v, %v)", st, err)
+	}
+	for _, c := range r.stagingRow(r.screen()).Stagings {
+		if !c.Seen.Equal(first) {
+			t.Errorf("%s: seen %v, want the read that first saw its state, %v", c.Name, c.Seen, first)
+		}
+	}
+
+	f.setFields(func(f *fakeStaging) { f.cached = false })
+	r.clock.Add(45 * time.Second)
+	r.tick() // this tick's Refresh reads bart's new state
+	r.settle()
+	changed := r.clock.Now()
+	f.set("bart", staging.EnvStatus{State: staging.StatePushed, Detail: staging.DetailCIFailedOurs})
+	n = writes.Load()
+	r.clock.Add(45 * time.Second)
+	r.tick()
+	r.settle()
+	r.clock.Add(45 * time.Second)
+	r.tick()
+	r.settle()
+	if got := writes.Load() - n; got != 1 {
+		t.Errorf("staging.json written %d times for one state change, want once", got)
+	}
+	if got := r.mustStatus(); got.UpdatedAt.Equal(status.UpdatedAt) || got.Stagings[1].State != prstatus.StagingFailed {
+		t.Errorf("the status file after the change: %+v, want bart failed and a new updated_at", got.Stagings)
+	}
+	cells := r.stagingRow(r.screen()).Stagings
+	if !cells[0].Seen.Equal(first) || !cells[1].Seen.Equal(changed) || !cells[2].Seen.Equal(first) {
+		t.Errorf("seen %v %v %v, want void and bastion at %v, bart at the read that saw its change %v",
+			cells[0].Seen, cells[1].Seen, cells[2].Seen, first, changed)
+	}
+}
+
+// staging.json names its fields itself (name, state, seen), never by the Go
+// names of the screen's types: a daemon and a screen of two builds read one
+// file.
+func TestTheStagingFileNamesItsOwnFields(t *testing.T) {
+	r, f := newStagingRig(t)
+	f.set("void", staging.EnvStatus{State: staging.StateLatest})
+	r.tick()
+	b, err := os.ReadFile(r.layout.FactoryStaging())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file struct {
+		Tasks map[string]struct {
+			PR    int              `json:"pr"`
+			Cells []map[string]any `json:"cells"`
+		} `json:"tasks"`
+	}
+	if err := json.Unmarshal(b, &file); err != nil {
+		t.Fatal(err)
+	}
+	cells := file.Tasks[strconv.FormatInt(r.task.ID, 10)].Cells
+	if len(cells) != 3 {
+		t.Fatalf("staging.json %s: want the task's three cells", b)
+	}
+	keys := slices.Sorted(maps.Keys(cells[0]))
+	if !slices.Equal(keys, []string{"name", "seen", "state"}) || cells[0]["name"] != "void" || cells[0]["state"] != "latest" {
+		t.Errorf("a cell %v, want name, state and seen", cells[0])
+	}
+}
+
+// A Refresh that panics is contained as every other goroutine off the loop
+// is: the daemon goes on, the panic is logged once while it repeats, and the
+// next Refresh of the repository starts only after a backoff that doubles;
+// a good Refresh ends the backoff.
+func TestAPanickingRefreshIsContainedAndRetriedAfterABackoff(t *testing.T) {
+	r, f := newStagingRig(t)
+	f.set("void", staging.EnvStatus{State: staging.StateLatest})
+	f.setFields(func(f *fakeStaging) { f.panicWith = "staging: index out of range [3] with length 3" })
+	r.tick()
+	r.settle()
+	if n := len(f.refreshes()); n != 1 {
+		t.Fatalf("%d Refreshes, want 1", n)
+	}
+	r.clock.Add(45 * time.Second)
+	r.tick() // within the first backoff, a minute
+	r.settle()
+	if n := len(f.refreshes()); n != 1 {
+		t.Errorf("%d Refreshes within the backoff, want still 1", n)
+	}
+	r.clock.Add(30 * time.Second)
+	r.tick()
+	r.settle()
+	if n := len(f.refreshes()); n != 2 {
+		t.Errorf("%d Refreshes after the backoff, want 2", n)
+	}
+	r.clock.Add(90 * time.Second)
+	r.tick() // the second backoff is two minutes
+	r.settle()
+	if n := len(f.refreshes()); n != 2 {
+		t.Errorf("%d Refreshes within the second backoff, want still 2", n)
+	}
+	if n := strings.Count(r.log.String(), "a staging Refresh panicked"); n != 1 {
+		t.Errorf("the panic logged %d times, want once:\n%s", n, r.log)
+	}
+	f.setFields(func(f *fakeStaging) { f.panicWith = "" })
+	r.clock.Add(time.Minute)
+	r.tick()
+	r.settle()
+	r.clock.Add(45 * time.Second)
+	r.tick()
+	r.settle()
+	if n := len(f.refreshes()); n != 4 {
+		t.Errorf("%d Refreshes, want a good one after the backoff and the next tick's", n)
+	}
+}
+
+// No Refresh starts while the disk hold is in force: the first clones the
+// whole history, and the factory parks agents for the disk then.
+func TestNoRefreshStartsUnderTheDiskHold(t *testing.T) {
+	r, f := newStagingRig(t)
+	dir := t.TempDir()
+	repo := &r.cfg.Factory.Repos[len(r.cfg.Factory.Repos)-1]
+	repo.Copies, repo.MinFreeDiskGB = dir+"/shop.factory{n}", 15
+	var free atomic.Uint64
+	free.Store(1 << 30)
+	r.e.d.Disk = func(string) (uint64, error) { return free.Load(), nil }
+	r.tick()
+	r.settle()
+	if n := len(f.refreshes()); n != 0 {
+		t.Errorf("%d Refreshes under the disk hold, want none", n)
+	}
+	free.Store(100 << 30)
+	r.tick()
+	r.settle()
+	if n := len(f.refreshes()); n != 1 {
+		t.Errorf("%d Refreshes once the hold lifted, want 1", n)
+	}
+}
+
+// An env whose status stays unknown keeps the status file's word only
+// while it is younger than staging.StaleAfter: reads that fail for long
+// leave no "deployed" of days ago in the PR's comment.
+func TestAnUnknownStagingKeepsTheFilesWordOnlyForAWhile(t *testing.T) {
+	r, f := newStagingRig(t)
+	r.published("unknown")
+	f.set("void", staging.EnvStatus{State: staging.StateLatest})
+	r.tick()
+	if got := r.mustStatus().Stagings[0].State; got != prstatus.StagingDeployed {
+		t.Fatalf("void %s, want deployed", got)
+	}
+	f.set("void", staging.EnvStatus{State: staging.StateUnknown, Why: "the mirror's volume is not mounted"})
+	r.clock.Add(time.Minute)
+	r.tick()
+	if got := r.mustStatus().Stagings[0].State; got != prstatus.StagingDeployed {
+		t.Errorf("void %s a minute into the unknown, want deployed kept", got)
+	}
+	r.clock.Add(staging.StaleAfter)
+	r.tick()
+	if got := r.mustStatus().Stagings[0].State; got != prstatus.StagingNone {
+		t.Errorf("void %s past staging.StaleAfter of unknown, want none", got)
+	}
+}
+
+// stubGit is a staging.Git whose Base fails, so a Refresh goes no further
+// than its git env and its lock, and whose Fetch fails when fail is set.
+type stubGit struct {
+	staging.Git
+	fail bool
+}
+
+func (stubGit) Base(context.Context, string, string) (string, error) { return "", errors.New("stub") }
+
+func (g stubGit) Fetch(context.Context, string, map[string]string, []string) error {
+	if g.fail {
+		return errors.New("stub fetch failed")
+	}
+	return nil
+}
+
+type ctxKey struct{}
+
+// The staging client the daemon builds hands its git env the context of
+// the Refresh that asks for it, which the daemon's stop cancels, so a mint
+// of an App's token ends with the drain; and ReadAt moves only on a fetch
+// that worked.
+func TestTheStagingClientsGitEnvTakesTheRefreshsContext(t *testing.T) {
+	root := t.TempDir() + "/staging"
+	var got any
+	cfg := config.Defaults()
+	c := NewStaging(cfg, staging.Deps{Git: stubGit{}, Mirror: staging.MirrorDir(root), MirrorRoot: staging.MirrorRoot(root)},
+		func(ctx context.Context, repo string) map[string]string {
+			got = ctx.Value(ctxKey{})
+			return map[string]string{"GH_HOST": "github.com"}
+		})
+	defer c.Close()
+	ctx := context.WithValue(t.Context(), ctxKey{}, "the refresh")
+	_ = c.Refresh(ctx, "example/shop", nil)
+	if got != "the refresh" {
+		t.Fatalf("the git env's context carries %v, want the Refresh's", got)
+	}
+
+	sc := c.(*stagingClient)
+	dir, _ := staging.MirrorDir(root)("example/shop")
+	sc.git.Git = stubGit{fail: true}
+	if err := sc.git.Fetch(t.Context(), dir, nil, nil); err == nil || !c.ReadAt("example/shop").IsZero() {
+		t.Errorf("a failed fetch: %v, read at %v; want an error and no read", err, c.ReadAt("example/shop"))
+	}
+	sc.git.Git = stubGit{}
+	if err := sc.git.Fetch(t.Context(), dir, nil, nil); err != nil || c.ReadAt("example/shop").IsZero() {
+		t.Errorf("a fetch that worked: %v, read at %v; want a read", err, c.ReadAt("example/shop"))
 	}
 }

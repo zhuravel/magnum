@@ -201,8 +201,9 @@ type WaitsOn struct {
 // "none", "outdated", "merging", "conflict", "ci", "ci-fail" (the staging
 // branch's CI failed on the PR's own change), "deploying", "qa", "qa-pass",
 // "qa-fail", "latest" or "unknown". Count is the progress of a "ci" or "qa"
-// cell ("12/41", "4/9"). Seen is when the factory read it: a wide screen
-// shows its age.
+// cell ("12/41", "4/9"). Seen is when the factory's read first saw its
+// state: a wide screen and the task card show its age, how long the state
+// has stood as the reads tell it.
 type StagingCell struct {
 	Name, State, Count string
 	Seen               time.Time
@@ -460,7 +461,8 @@ type TaskCard struct {
 	PRInfo *CardPR
 	// Stagings are where a published task's PR stands on each staging
 	// server, as its row's cells say it, drawn as one STAGINGS line after
-	// the PR's lines (each server's state and age); none: no line.
+	// the PR's lines (each server's state and how long it has stood); none:
+	// no line.
 	Stagings []StagingCell
 	Stages   []CardStage
 	Agents   []CardAgent

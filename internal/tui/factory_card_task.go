@@ -261,9 +261,9 @@ func (p *cardPainter) prSection(c *CardPR, stagings []StagingCell) []string {
 }
 
 // stagingsText is the card's STAGINGS line: each staging server's name and
-// its cell as a wide row draws it, the state and its age ("void: latest
-// 3m · bart: CI 12m · bastion: none"); a server the PR is not on says
-// none, in words. None for no cell.
+// its cell as a wide row draws it, the state and how long it has stood
+// ("void: latest 3m · bart: CI 12m · bastion: none"); a server the PR is not
+// on says none, in words. None for no cell.
 func (p *cardPainter) stagingsText(cells []StagingCell) cell {
 	var out cell
 	for i, c := range cells {

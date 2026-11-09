@@ -24,7 +24,7 @@ var factoryWords = [][2]string{
 	{"FINDINGS", "what magnum's last review of the PR found, by priority (✗ P1 P2×3), or ✔ clean"},
 	{"APPR", "the people's reviews GitHub counts: ✔ 2 approvals (⟳ one of an older commit), ✗ 1 changes request"},
 	{"YOUR MOVE", "the step the factory recommends to you; on a narrow screen the help line says it"},
-	{"VOID, BART", "the staging servers of the PR's repository, one column each: where the task's PR stands there, read at most once a minute (its age on a wide screen)"},
+	{"VOID, BART", "the staging servers of the PR's repository, one column each: where the task's PR stands there, read at most once a minute (on a wide screen, how long it has stood so)"},
 	{"latest", "the PR's head is live on that staging server: a deploy holds it"},
 	{"CI, CI ✗", "the PR's head is on the staging branch and waits for its CI (running, or red on another change); ✗: it failed on the PR's own change"},
 	{"deploying", "the PR's head is on the staging branch, the server not on it yet"},

@@ -275,9 +275,10 @@ type Deps struct {
 	Notifier *notify.Notifier
 	Sidebar  func(ctx context.Context, workspaceID string, tokens map[string]string) error
 	// Staging reads where the published tasks' PRs stand on their
-	// repositories' staging envs (staging.go: internal/staging's client,
-	// which the daemon builds only when a [[factory.repo]] has staging
-	// entries); nil reads none, and no row has staging cells.
+	// repositories' staging envs (staging.go: NewStaging, over
+	// internal/staging's client, which the daemon builds only when a
+	// [[factory.repo]] has staging entries); nil reads none, and no row has
+	// staging cells.
 	Staging Staging
 	// Clock returns the current time; nil means time.Now.
 	Clock func() time.Time
@@ -496,7 +497,10 @@ type Engine struct {
 	statusFinal   map[int64]bool
 	// stg is the record of the staging Refreshes that run off the loop and
 	// of the screen's staging.json (staging.go); its mutex guards it.
-	stg stagingReads
+	// stagingWrite writes staging.json (nil: fsx.ReplaceFile), a seam of the
+	// tests.
+	stg          stagingReads
+	stagingWrite func(path string, b []byte) error
 	// beforeStop runs between the end of a loop's cycle that needs you
 	// (unavailable, the cap) and the task's move to you; an error stops
 	// there (a test's seam: the daemon stopping in between). nil in a
@@ -571,7 +575,7 @@ func New(d Deps) *Engine {
 		debts:        map[int64]*releaseDebt{},
 		statusErrs:   map[int64]bool{},
 		statusFinal:  map[int64]bool{},
-		stg:          stagingReads{running: map[string]bool{}, good: map[string]time.Time{}, cause: map[string]string{}},
+		stg:          newStagingReads(),
 		agentRuns:    map[int64]*agentsRun{},
 		qaSessions:   map[int64]*qaSession{},
 		run:          Guard(d.Run, d.Config),
@@ -965,8 +969,12 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.handleRequests(ctx)
 	e.pruneScreenRequests(ctx, now)
 	e.admit(ctx)
-	states := e.followPRs(ctx, tasks) // its moves are compare-and-set from published: a request's stop since wins
-	stagings := e.stagingPass(ctx, tasks, states)
+	var refs map[int64]PRRef // the published tasks' PRs, read once for the passes that follow them
+	if e.d.Magnum != nil || e.d.Staging != nil {
+		refs = e.publishedRefs(ctx, tasks)
+	}
+	states := e.followPRs(ctx, tasks, refs) // its moves are compare-and-set from published: a request's stop since wins
+	stagings := e.stagingPass(tasks, refs, states)
 	e.writePRStatuses(ctx, tasks, states, stagings)
 
 	if advance {

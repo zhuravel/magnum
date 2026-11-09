@@ -4269,10 +4269,16 @@ off its loop (at most once a minute, as the repository's poll identity) and writ
 `<data dir>/factory/staging.json`, so the screen runs no git: `latest` (a deployment holds the PR's head), `CI`
 (the head is on the branch and its ci.yml runs, or failed on another change), `CI ✗` (it failed on the PR's own
 change, in red), `deploying` (ci.yml passed and no deployment confirms the head yet), `outdated` (an older commit
-of the PR is there), `–` (nothing of it) and `?` (not read: the mirror's clone, a failed read, or a last good read
-over 10 minutes old, as when the daemon stopped); a wide screen adds each cell's age, the time of the last good
-read. The task card says the same in one line under the PR's lines (`STAGINGS  void: latest 3m · bart: CI 12m ·
-bastion: none`). Nothing deploys from the screen yet. A title
+of the PR is there), `–` (nothing of it) and `?` (not read: the mirror's clone, a failed read, a last good read
+over 10 minutes old, or no factory daemon running); a wide screen adds each cell's age, how long its state has
+stood since a read first saw it (a read that changes no state writes nothing, so `bart: CI 12m` says CI has run
+for 12 minutes). The task card says the same in one line under the PR's lines (`STAGINGS  void: latest 3m · bart:
+CI 12m · bastion: none`). No Refresh starts while the disk hold is in force, and a Refresh that panics waits a
+backoff from 1 to 30 minutes before the next. The reads go as the repository's poll identity: an App mints its
+token in the factory daemon too (into the gh config dir the review daemon writes), so the factory daemon needs the
+App's key as the review daemon does; a gh identity reads as your own login, never as a GitHub token the daemon
+inherited. Until the poll identity has Deployments: read, a pushed PR stays `deploying` and never reads `latest`.
+Nothing deploys from the screen yet. A title
 that starts with the issue key its row's key cell shows leaves it out (`[PR-12400] Coupon rounding` beside
 `PR-12400` reads `Coupon rounding`). NEEDS YOU, WAITS ON OTHERS and LEFT ALONE each list their rows oldest wait
 first. The help (`?`) glosses only the words the screen draws. The task
@@ -4678,9 +4684,10 @@ replied in, never fewer than the file had, since magnum prunes old events); and 
 `failed`). The Jira row stays empty while the factory keeps no status of the issue. The stagings are the PR on
 each staging env of its repository, in the config's order (`stagings`: each an `env`, its name when it is a slug,
 and a `state`: `deployed` for `latest`, `failed` when ci.yml failed on the PR's own change, `deploying` for the
-rest of `pushed`, `none` for `outdated` and `none`; an env whose status cannot be read keeps the state the file
-had), and `staging` is the first of them, for readers from before `stagings`; a repository without staging envs
-has no `stagings`, and its `staging` is `none`. The
+rest of `pushed`, ci.yml red on another change included, `none` for `outdated` and `none`; an env whose status
+cannot be read keeps the state the file had for up to 10 minutes, then reads `none`), and `staging` is the first of
+them, for readers from before `stagings`; a repository without staging envs has no `stagings`, and its `staging` is
+`none`. The
 file is written only when its content changes, so its `updated_at` is the time of the last change, and a task that
 ended gets one last write with its end and none after. Nothing is written before the publish, or while magnum's
 registry cannot be read (the file keeps its last content); a write that fails is logged once until a write succeeds

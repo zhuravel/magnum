@@ -13280,6 +13280,15 @@ func NextQueued(tasks []registry.Task) string
     or the oldest waits on something a copy does not free, such as memory:
     no queued task jumps another).
 
+func OperatorReadEnv(ctx context.Context, id config.Identity, run execx.Runner) (map[string]string, error)
+    OperatorReadEnv is the env of a read as you, gh identity id, for a caller
+    that can only set variables (internal/staging's fetch, a GitHub client's
+    Env): identity.GH's (GH_HOST pinned) with your gh config dir named
+    (operatorGHDir) and every GitHub token of the daemon's environment set
+    empty, which gh reads as unset. So gh, and git through gh's credential
+    helper, answer as your login, never as a token the daemon inherited
+    (asOperator unsets them for the publish).
+
 func PickKind(cfg config.Factory, t *jira.Ticket, prompt string) (kind, why string)
     PickKind picks the kind of a task: the kind kind_by_jira_type maps the
     ticket's issue type to (the type's case ignored), else the kind whose
@@ -13330,11 +13339,13 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 func StagingIdentity(cfg *config.Config, repo string) (config.Identity, error)
     StagingIdentity is the identity the staging status of repo reads
     as (internal/staging: its mirror's fetch and its GitHub reads):
-    the poll identity of the watch that covers repo (its identity without a
-    poll_identity), as magnum's review daemon reads that repository, so both
-    daemons fill the mirror's shared state as one login, the one that holds
-    Deployments: read; a repository no watch covers reads as the gh identity the
-    factory publishes as (operatorIdentity).
+    the poll identity of the watch that covers repo (its identity without
+    a poll_identity), as magnum's review daemon reads that repository,
+    so both daemons fill the mirror's shared state as one login, the one
+    Deployments: read is to be granted to (until it is, no deploy is confirmed:
+    a pushed PR stays deploying, never latest); a repository no watch covers
+    reads as the gh identity the factory publishes as (operatorIdentity),
+    as you (OperatorReadEnv).
 
 func TaskKey(t registry.Task) string
     TaskKey names a task as the screen and the waits do: its Jira key, else
@@ -13511,9 +13522,10 @@ type Deps struct {
 	Notifier *notify.Notifier
 	Sidebar  func(ctx context.Context, workspaceID string, tokens map[string]string) error
 	// Staging reads where the published tasks' PRs stand on their
-	// repositories' staging envs (staging.go: internal/staging's client,
-	// which the daemon builds only when a [[factory.repo]] has staging
-	// entries); nil reads none, and no row has staging cells.
+	// repositories' staging envs (staging.go: NewStaging, over
+	// internal/staging's client, which the daemon builds only when a
+	// [[factory.repo]] has staging entries); nil reads none, and no row has
+	// staging cells.
 	Staging Staging
 	// Clock returns the current time; nil means time.Now.
 	Clock func() time.Time
@@ -14429,10 +14441,21 @@ type ScreenOptions struct {
 type Staging interface {
 	Refresh(ctx context.Context, repo string, open []staging.OpenPR) error
 	Status(pr staging.PR, envs []staging.Env) []staging.EnvStatus
+	ReadAt(repo string) time.Time
 	Close()
 }
-    Staging is the staging status the factory reads: internal/staging's Client
-    (staging.New), its read side alone.
+    Staging is the staging status the factory reads: internal/staging's Client,
+    its read side alone, and when it last read a repository (ReadAt:
+    the last fetch of the repository's mirror that worked; zero before one),
+    which NewStaging adds.
+
+func NewStaging(cfg *config.Config, d staging.Deps, gitEnv func(ctx context.Context, repo string) map[string]string) Staging
+    NewStaging is the factory daemon's staging client: internal/staging's on d,
+    with the repositories' envs from cfg (config.Stagings), the time of each
+    mirror's last fetch that worked (ReadAt; a Refresh within the minute,
+    or one that took another process's read, fetches nothing), and its fetch's
+    git env from gitEnv on the context of the Refresh that asks for it, which
+    the daemon's stop cancels (an App's token mint ends with the drain).
 
 type StartInput struct {
 	Key, Guidance, Prompt string
@@ -31858,8 +31881,9 @@ type StagingCell struct {
     "outdated", "merging", "conflict", "ci", "ci-fail" (the staging branch's
     CI failed on the PR's own change), "deploying", "qa", "qa-pass", "qa-fail",
     "latest" or "unknown". Count is the progress of a "ci" or "qa" cell
-    ("12/41", "4/9"). Seen is when the factory read it: a wide screen shows its
-    age.
+    ("12/41", "4/9"). Seen is when the factory's read first saw its state:
+    a wide screen and the task card show its age, how long the state has stood
+    as the reads tell it.
 
 type StatusData struct {
 	Daemon    DaemonInfo
@@ -31911,7 +31935,8 @@ type TaskCard struct {
 	PRInfo *CardPR
 	// Stagings are where a published task's PR stands on each staging
 	// server, as its row's cells say it, drawn as one STAGINGS line after
-	// the PR's lines (each server's state and age); none: no line.
+	// the PR's lines (each server's state and how long it has stood); none:
+	// no line.
 	Stagings []StagingCell
 	Stages   []CardStage
 	Agents   []CardAgent

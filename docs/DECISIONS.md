@@ -20426,49 +20426,89 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheRefsOfAnEffectEndedWhileTheMirrorWasBusyAreDroppedLater.
 - **The factory reads magnum's staging status for its published tasks' PRs: a staging cell per env on the
   task's row, a STAGINGS line on its card, and `stagings` in the PR's status file** (R27 on the factory,
-  2026-11-09). The factory daemon owns one `staging.Client` (`Deps.Staging`), built only when a `[[factory.repo]]`
-  has staging entries: its git in `[staging] mirror_dir` through the deny list in the C locale (staging reads git's
-  English refusals), logged at debug; GitHub and the fetch's env as each repository's poll identity
-  (`factory.StagingIdentity`: the poll identity of the watch that covers the repository, as the review daemon reads
-  it, so both daemons fill the mirror's shared state as one login, the one with Deployments: read; the gh
-  identity the factory publishes as for a repository no watch covers), its source and client from
-  `app.NewIdentity` (New's own loop, extracted), the fetch's env the identity's `Env` (an App's gh config dir with a
-  fresh token); the envs from `config.Stagings`. No resolver, PushEnv or commit identity: nothing deploys, and no E
-  key exists yet. Each tick, for each repository with staging envs and a published task's PR, starts one Refresh
-  off the loop on the engine's background context (bounded at 10 minutes; Refresh itself runs at most once a
-  minute, and the first starts the clone), never two at a time and none while the daemon drains, with the
-  published PRs and their bases (magnum's view of the PR's base, else the repository's); a repository without one
-  is not refreshed, so no mirror is cloned for nothing. The tick reads each PR's statuses with Status, a pure lookup,
-  maps them to the painter's cells and writes them to `staging.json` (`Layout.FactoryStaging`, by task id with the
-  PR's number, only when it changed, and on the first tick), which the screen reads: the screen runs no Refresh and
-  no git. Seen is the last good Refresh; the screen turns a cell over `staging.StaleAfter` old into unknown (a
-  stopped daemon). The mapping: latest is `latest`; pushed is `ci` while ci.yml runs or failed on another change,
-  the new `ci-fail` (`CI ✗` in Err, `CI fail` and `CI x` in ASCII) when it failed on the PR's own change,
-  `deploying` once it passed and no deployment confirms it (`waiting_jenkins`, `not_confirmed`); outdated, none and
-  unknown are theirs; no cell is OnYou. The card draws one line after the PR's lines, each env's cell as a wide row
-  draws it (`void: latest 3m · bart: CI 12m · bastion: none`). The status file gets `stagings` (additive under v=1,
-  `omitempty`, so a file without staging envs keeps its digest): each env in the config's order, Env through
-  `StagingEnv`, latest `deployed`, a failure of the PR's own `failed`, the rest of pushed `deploying`, outdated and
-  none `none`; an unknown status keeps the word the file had at that place (an unknown read writes nothing), and
-  `staging` is the first entry for readers from before `stagings`; an ended task's last write keeps them. Read
-  checks each entry (`stagings[i].env`, `stagings[i].state`). The daemon's stop cancels a Refresh in flight with
-  the rest of the work off the loop, then closes the client within the drain's wait (`closeStaging`). A failed
-  Refresh is logged once while its cause stays the same (numbers aside). The help glosses the cells' words now that
-  data fills them. Rejected: Refresh inline in the Tick (the first clones and a fetch can take minutes), the CLI
-  running Status itself (its client has no Refresh, so every cell would be unknown, and a Refresh there would be
-  git in the screen's process), carrying the cells in the status file (its words are coarser, it has no read time,
-  and it is written only on a change), ci_failed_not_ours in red (it is not the PR's, or cannot be told) or as
-  deploying (Jenkins deploys nothing while ci.yml is red), outdated as `deployed` in the status file (the head is
-  not there), a new StagingState word (readers before it would refuse the whole file at `staging`), and refreshing
-  a repository with no published PR. Tests: TestStagingCellsMapEachStateInTheConfigsOrder (each state, and the
-  cells through staging.json to the row and the card in the config's order), TestNoStagingCellsWithoutStagingEnvsOrAPublishedPR
-  (and the stale cells), TestARefreshRunsOffTheTick, TestAFailedRefreshIsLoggedOncePerCause,
-  TestTheDaemonClosesItsStagingClientWhenItStops, TestThePRStatusFileCarriesEachStaging,
-  TestAStagingEnvThatIsNoSlugIsWrittenWithoutItsName, TestNoStagingClientWritesNoStagings,
-  TestTheStagingStatusReadsAsTheReposPollIdentity, prstatus's TestStagingsComeBackInOrderAndAStatusWithoutThemWritesNoKey
-  and TestAReaderBeforeStagingsTakesAFileWithThem (and the stagings rows of TestReadRefusesAWordOutsideItsEnum), the
-  cli's TestTheFactoryDaemonBuildsItsStagingClientOnlyForStagingEnvs and TestTheStagingGitEnvIsThePollIdentitysOrNone,
-  and the goldens of TestFactoryFramesOfStagingCells (100, 200, 140 dark ANSI, 100 ASCII) and
+  2026-11-09). The factory daemon owns one staging client (`Deps.Staging`, `factory.NewStaging` over
+  `staging.New`), built only when a `[[factory.repo]]` has staging entries: its git in `[staging] mirror_dir`
+  through the deny list in the C locale (staging reads git's English refusals), logged at debug; GitHub and the
+  fetch's env as each repository's poll identity (`factory.StagingIdentity`: the poll identity of the watch that
+  covers the repository, as the review daemon reads it, so both daemons fill the mirror's shared state as one
+  login, the one Deployments: read is to be granted to: until it is, no deploy is confirmed and a pushed PR stays
+  `deploying`, never `latest`; a repository no watch covers reads as the gh identity the factory publishes as), its
+  source and client from `app.NewIdentity` (New's own loop, extracted). An App's fetch env is its `Env`, its gh
+  config dir with a fresh token: the factory daemon then mints the App's installation token in its own process,
+  into the gh config dir the review daemon writes too (`state/gh/<name>`); each process writes its own fresh token
+  atomically, both valid, about one extra mint every 45 minutes. A gh identity's is `factory.OperatorReadEnv`: GH_HOST
+  pinned, your gh config dir named and every GitHub token the daemon inherited set empty, and its GitHub client reads
+  with the same env, as the publish's `asOperator` does. The envs come from `config.Stagings`. No resolver, PushEnv or
+  commit identity: nothing deploys, and no E key exists yet. Each tick, for each repository with staging envs and a
+  published task's PR, starts one Refresh off the loop on the engine's background context (bounded at 10 minutes;
+  Refresh itself reads at most once a minute, and the first starts the clone), never two at a time and none while
+  the daemon drains or the disk hold is in force, with the published PRs and their bases (magnum's view of the PR's
+  base, else the repository's); a repository without one is not refreshed, so no mirror is cloned for nothing. The
+  published tasks' PRs are read once per tick (`publishedRefs`) for followPRs and the staging pass. The tick reads
+  each PR's statuses with Status, a pure lookup, maps them to the painter's cells and writes them to `staging.json`
+  (`Layout.FactoryStaging`: by task id with the PR's number, each cell's `name`, `state` and `seen` in the file's own
+  field names, never the screen's Go names), which the screen reads: the screen runs no Refresh and no git, and
+  draws every cell unknown while no factory daemon runs. The mapping: latest is `latest`; pushed is `ci` while
+  ci.yml runs or failed on another change, the new `ci-fail` (`CI ✗` in Err, `CI fail` and `CI x` in ASCII) when it
+  failed on the PR's own change, `deploying` once it passed and no deployment confirms it (`waiting_jenkins`,
+  `not_confirmed`); outdated, none and unknown are theirs; no cell is OnYou. The card draws one line after the PR's
+  lines, each env's cell as a wide row draws it (`void: latest 3m · bart: CI 12m · bastion: none`). The status file
+  gets `stagings` (additive under v=1, `omitempty`, so a file without staging envs keeps its digest): each env in
+  the config's order, Env through `StagingEnv`, latest `deployed`, a failure of the PR's own `failed`, the rest of
+  pushed `deploying`, outdated and none `none`, and `staging` is the first entry for readers from before `stagings`;
+  an ended task's last write keeps them. Read checks each entry (`stagings[i].env`, `stagings[i].state`). The
+  daemon's stop cancels a Refresh in flight with the rest of the work off the loop, then closes the client within
+  the drain's wait (`closeStaging`). A failed Refresh is logged once while its cause stays the same (numbers aside).
+  The help glosses the cells' words now that data fills them. The rulings and choices of the review:
+  - A cell's Seen is the time of the read that first saw its state: a Refresh that fetched (`ReadAt`, the time of
+    the mirror's last fetch that worked, which `NewStaging` keeps by wrapping the client's Git), never one that
+    answered from its minute's cache or took another process's read. A cell keeps its Seen while its state stays,
+    so staging.json and the status files are written only when a state changes: a tick or a read that changes none
+    writes nothing (before, every tick rewrote staging.json, each write two disk flushes, and the ages read "0m" or
+    "1m"). Its age on a wide row and on the card is how long the state has stood, as the reads tell it, so
+    `bart: CI 12m` says CI has run for 12 minutes. staging.json is rebuilt at each daemon's first tick, unless the
+    file already says the same, so it is written with `fsx.ReplaceFile` (no syncs). The screen's stale rule is the
+    daemon being down; the daemon's own Status turns data over `staging.StaleAfter` old into unknown, a change that
+    is written. A daemon's restart starts the ages again. Rejected: a heartbeat write every few minutes (a write
+    with no change), and a Seen that moves without a write (the screen could not see it).
+  - The Refresh goroutine runs under a recover, as every goroutine off the loop does: a panic is logged once while
+    it repeats, the daemon goes on, `running` is cleared, and the repository's next Refresh waits a backoff of 1
+    minute, doubled with each panic in a row up to 30 minutes; a good Refresh ends it.
+  - The fetch's git env runs on the context of the Refresh that asks for it (`staging.Deps.GitEnv` takes none, so
+    `NewStaging` keeps each Refresh's context by repository), which the daemon's stop cancels: an App's token mint
+    ends with the drain.
+  - An env whose status is unknown keeps the status file's word only while it has been unknown for less than
+    `staging.StaleAfter` (a restart's first ticks, a short outage), then reads `none`: reads that fail for days
+    leave no "deployed" of days ago in the PR's comment, through new pushes too.
+  - `ci_failed_not_ours` is `deploying` in the status file though the screen draws `CI`: the file's enum has no
+    word for a deploy that waits on someone else's red CI, `none` would say the PR is not on the branch and
+    `failed` would blame it, so "deploying" is the least wrong word there, and the screen's cell says more.
+  - A repository's identity that cannot be found, or whose env cannot be made, is logged once while its cause stays
+    the same (numbers aside), again after an env that worked; the engine's line that the repository is not read
+    stays beside it, once per cause.
+  Rejected: Refresh inline in the Tick (the first clones and a fetch can take minutes), the CLI running Status
+  itself (its client has no Refresh, so every cell would be unknown, and a Refresh there would be git in the
+  screen's process), carrying the cells in the status file (its words are coarser, it has no read time, and it is
+  written only on a change), ci_failed_not_ours in red on the screen (it is not the PR's, or cannot be told) or as
+  deploying there (Jenkins deploys nothing while ci.yml is red), outdated as `deployed` in the status file (the
+  head is not there), a new StagingState word (readers before it would refuse the whole file at `staging`), holding
+  Refreshes under the memory hold (a fetch is light, and the hold lasts), and refreshing a repository with no
+  published PR. Tests: TestStagingCellsMapEachStateInTheConfigsOrder (each state, and the cells through
+  staging.json to the row and the card in the config's order), TestNoStagingCellsWithoutStagingEnvsOrAPublishedPR
+  (and every cell unknown while the daemon is down), TestARefreshRunsOffTheTick,
+  TestAFailedRefreshIsLoggedOncePerCause, TestTheDaemonClosesItsStagingClientWhenItStops,
+  TestThePRStatusFileCarriesEachStaging, TestAStagingEnvThatIsNoSlugIsWrittenWithoutItsName,
+  TestNoStagingClientWritesNoStagings, TestTheStagingStatusReadsAsTheReposPollIdentity,
+  TestUnchangedStagingStatesWriteNothing (10 ticks with no state change, reads and cached answers alike, write
+  neither file; one change writes each once and moves that cell's Seen alone; the review's probe found a write
+  on 10 of 10 ticks before the fix), TestTheStagingFileNamesItsOwnFields, TestAPanickingRefreshIsContainedAndRetriedAfterABackoff,
+  TestNoRefreshStartsUnderTheDiskHold, TestAnUnknownStagingKeepsTheFilesWordOnlyForAWhile and
+  TestTheStagingClientsGitEnvTakesTheRefreshsContext (each failed with its guard taken out), prstatus's
+  TestStagingsComeBackInOrderAndAStatusWithoutThemWritesNoKey and TestAReaderBeforeStagingsTakesAFileWithThem (and
+  the stagings rows of TestReadRefusesAWordOutsideItsEnum), the cli's
+  TestTheFactoryDaemonBuildsItsStagingClientOnlyForStagingEnvs and TestTheStagingGitEnvIsThePollIdentitysOrNone
+  (the gh identity's env with the tokens blanked, the warning said again after an env that worked), and the goldens
+  of TestFactoryFramesOfStagingCells (100, 200, 140 dark ANSI, 100 ASCII) and
   TestTaskCardSaysWhereItsPRStandsOnEachStaging.
 
 ## Learned rules

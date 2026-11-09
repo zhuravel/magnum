@@ -14,6 +14,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -161,7 +162,7 @@ type factoryDaemon struct {
 	// repositories' staging envs (internal/staging's read side,
 	// factoryStaging): nil when no [[factory.repo]] has staging entries.
 	// The engine closes it as the daemon stops.
-	Staging *staging.Client
+	Staging factory.Staging
 
 	closers []func() error
 }
@@ -361,32 +362,25 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	return d, nil
 }
 
-// factoryStaging is the factory daemon's staging client (internal/staging),
-// when a [[factory.repo]] has staging entries, nil otherwise: its git in
-// the mirrors under [staging] mirror_dir, through the deny list in the C
-// locale (staging reads git's English refusals), logged at debug (it runs
-// every minute); GitHub and the fetch's git env as each repository's poll
-// identity (factory.StagingIdentity, stagingIdentities); the envs from
-// config.Stagings. No resolver, push or commit identity: it deploys nothing.
-func factoryStaging(cfg *config.Config, l paths.Layout, log *slog.Logger) *staging.Client {
+// factoryStaging is the factory daemon's staging client
+// (factory.NewStaging over internal/staging), when a [[factory.repo]] has
+// staging entries, nil otherwise: its git in the mirrors under [staging]
+// mirror_dir, through the deny list in the C locale (staging reads git's
+// English refusals), logged at debug (it runs every minute); GitHub and the
+// fetch's git env as each repository's identity (factory.StagingIdentity,
+// stagingIdentities). No resolver, push or commit identity: it deploys
+// nothing.
+func factoryStaging(cfg *config.Config, l paths.Layout, log *slog.Logger) factory.Staging {
 	if !slices.ContainsFunc(cfg.Factory.Repos, func(r config.FactoryRepo) bool { return len(r.Staging) > 0 }) {
 		return nil
 	}
 	run := cLocale{factory.Guard(&execx.Real{Log: app.Printf{Logger: log, Level: slog.LevelDebug, Src: "staging"}}, cfg)}
 	ids := newStagingIdentities(cfg, l, run, log)
-	return staging.New(staging.Deps{
+	return factory.NewStaging(cfg, staging.Deps{
 		Git: staging.NewGit(run), GitHub: staging.NewGitHub(ids.client),
 		Mirror: staging.MirrorDir(cfg.Staging.MirrorDir), MirrorRoot: staging.MirrorRoot(cfg.Staging.MirrorDir),
-		GitEnv: ids.gitEnv,
-		Stagings: func(repo string) []staging.Env {
-			var out []staging.Env
-			for _, s := range cfg.Stagings(repo) {
-				out = append(out, staging.Env{Name: s.Name, Branch: s.Branch})
-			}
-			return out
-		},
 		Log: log,
-	})
+	}, ids.gitEnv)
 }
 
 // stagingIdentityTimeout bounds the minting of an App's token for a
@@ -395,8 +389,11 @@ const stagingIdentityTimeout = time.Minute
 
 // stagingIdentities are the identities the staging status reads as, one
 // source and GitHub client per identity (app.NewIdentity), made at their
-// first use; a repository whose identity cannot be found, or whose env
-// cannot be made, is logged once per cause.
+// first use: an App reads as itself, a gh identity as you
+// (factory.OperatorReadEnv: your gh config dir, no inherited GitHub token).
+// A repository whose identity cannot be found, or whose env cannot be made,
+// is logged once while its cause stays the same (numbers aside), again
+// after an env that worked.
 type stagingIdentities struct {
 	cfg *config.Config
 	l   paths.Layout
@@ -406,68 +403,90 @@ type stagingIdentities struct {
 	mu     sync.Mutex
 	src    map[string]identity.Source
 	gh     map[string]*github.Client
-	warned map[string]string // by repository: the cause last logged
+	env    map[string]map[string]string // a gh identity's env, as made once
+	warned map[string]string            // by repository: the cause last logged
 }
 
 func newStagingIdentities(cfg *config.Config, l paths.Layout, run execx.Runner, log *slog.Logger) *stagingIdentities {
 	return &stagingIdentities{cfg: cfg, l: l, run: run, log: log, src: map[string]identity.Source{}, gh: map[string]*github.Client{},
-		warned: map[string]string{}}
+		env: map[string]map[string]string{}, warned: map[string]string{}}
 }
 
-// of is repo's identity's source and client; ok is false when the config
-// names none for it.
-func (s *stagingIdentities) of(repo string) (identity.Source, *github.Client, bool) {
+// of is repo's identity's source and client, and its env when it is a gh
+// identity's (nil for an App's, which its source makes); ok is false when
+// the config names none for it, or a gh identity's env cannot be made.
+func (s *stagingIdentities) of(repo string) (identity.Source, *github.Client, map[string]string, bool) {
 	id, err := factory.StagingIdentity(s.cfg, repo)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
 		s.warnLocked(repo, "the staging status of a repository has no identity", err)
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 	if _, ok := s.src[id.Name]; !ok {
-		s.src[id.Name], s.gh[id.Name] = app.NewIdentity(s.cfg, s.l, s.run, id)
+		src, c := app.NewIdentity(s.cfg, s.l, s.run, id)
+		if id.Kind != "app" {
+			env, err := factory.OperatorReadEnv(context.Background(), id, s.run)
+			if err != nil {
+				s.warnLocked(repo, "the staging status of a repository has no git env", err)
+				return nil, nil, nil, false
+			}
+			c.Env, s.env[id.Name] = env, env
+		}
+		s.src[id.Name], s.gh[id.Name] = src, c
 	}
-	return s.src[id.Name], s.gh[id.Name], true
+	return s.src[id.Name], s.gh[id.Name], s.env[id.Name], true
 }
 
 // client is staging.Deps' GitHub client of repo: its identity's, nil for
 // none.
 func (s *stagingIdentities) client(repo string) *github.Client {
-	_, c, _ := s.of(repo)
+	_, c, _, _ := s.of(repo)
 	return c
 }
 
-// gitEnv is staging.Deps.GitEnv: the env of repo's fetch, its identity's
-// (an App's gh config dir with a fresh token, GH_HOST pinned), which gh, git's
-// only credential helper, reads its login from; nil when there is none,
-// and the fetch then reads nothing.
-func (s *stagingIdentities) gitEnv(repo string) map[string]string {
-	src, _, ok := s.of(repo)
+// gitEnv is factory.NewStaging's git env: the env of repo's fetch on ctx
+// (its Refresh's, which the daemon's stop cancels), its identity's (an
+// App's gh config dir with a fresh token, a gh identity's
+// OperatorReadEnv), which gh, git's only credential helper, reads its login
+// from; nil when there is none, and the fetch then reads nothing.
+func (s *stagingIdentities) gitEnv(ctx context.Context, repo string) map[string]string {
+	src, _, env, ok := s.of(repo)
 	if !ok {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), stagingIdentityTimeout)
-	defer cancel()
-	env, err := src.Env(ctx)
-	if err != nil {
-		s.mu.Lock()
-		s.warnLocked(repo, "the staging status of a repository has no git env", err)
-		s.mu.Unlock()
-		return nil
+	if env == nil {
+		ctx, cancel := context.WithTimeout(ctx, stagingIdentityTimeout)
+		defer cancel()
+		var err error
+		if env, err = src.Env(ctx); err != nil {
+			s.mu.Lock()
+			s.warnLocked(repo, "the staging status of a repository has no git env", err)
+			s.mu.Unlock()
+			return nil
+		}
 	}
+	s.mu.Lock()
+	delete(s.warned, repo) // the next failure says its cause again
+	s.mu.Unlock()
 	return env
 }
 
 // warnLocked logs what about repo, err its cause, once while the cause
-// stays the same; s.mu is held.
+// stays the same, its numbers aside; s.mu is held.
 func (s *stagingIdentities) warnLocked(repo, what string, err error) {
 	msg := execx.Redact(err.Error())
-	if s.warned[repo] == what+msg {
+	key := what + ": " + stagingNumbers.ReplaceAllString(msg, "#")
+	if s.warned[repo] == key {
 		return
 	}
-	s.warned[repo] = what + msg
+	s.warned[repo] = key
 	s.log.Warn(what, "repo", repo, "err", msg)
 }
+
+// stagingNumbers are the numbers of a cause's words, which change from one
+// try to the next (a timeout's seconds, a temporary file's name).
+var stagingNumbers = regexp.MustCompile(`[0-9]+(?:[.,][0-9]+)*`)
 
 // factoryReviewSession is how the local review sees magnum's review session
 // (Config.ReviewHerdr: [herdr] review_session, yours by default), where its

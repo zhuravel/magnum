@@ -117,7 +117,7 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 		}
 	}
 	s := &screen{ctx: ctx, reg: reg, agents: agents, cfg: cmp.Or(o.Config, &config.Config{}), l: o.Layout, now: now, tasks: tasks,
-		stagings: readStagingScreen(o.Layout)}
+		stagings: readStagingScreen(o.Layout), down: o.DaemonDown}
 	for _, t := range tasks {
 		v, err := s.read(t)
 		switch {
@@ -209,8 +209,10 @@ type screen struct {
 	oldBuild *engine.Build
 	// stagings are the published tasks' staging cells as the factory
 	// daemon last wrote them (staging.json), by task id: the screen runs no
-	// Refresh and no git.
+	// Refresh and no git; down says no factory daemon runs
+	// (ScreenOptions.DaemonDown).
 	stagings map[int64]stagingScreenTask
+	down     bool
 }
 
 // taskView is what the screen read of a task on home.
@@ -427,7 +429,7 @@ func (s *screen) task(v *taskView) (tui.FactoryRow, tui.FactoryCards, int) {
 	if t.State == registry.TaskQueued && t.WaitsWho == waitCopy {
 		row.Frees = s.frees(v)
 	}
-	row.Stagings = stagingCellsOf(s.cfg, s.stagings, t, cmp.Or(v.link.Number, t.PRNumber), s.now)
+	row.Stagings = stagingCellsOf(s.cfg, s.stagings, t, cmp.Or(v.link.Number, t.PRNumber), s.down)
 	row.Help = s.help(v, row)
 	cards := tui.FactoryCards{Task: s.taskCard(v, row)}
 	cards.Task.Stagings = row.Stagings

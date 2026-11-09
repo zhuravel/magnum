@@ -11,7 +11,6 @@ package factory
 // daemon down.
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -29,31 +28,21 @@ func closedWait(n int) string {
 	return fmt.Sprintf("PR #%d closed without a merge: %s", n, reopenMove)
 }
 
-// followPRs follows the PRs of tasks that are published with one, on every
-// tick, whether or not the tick advances (it needs neither herdr nor
-// MySQL; a park herdr cannot take waits, parkEnded): see the file's
-// comment. A failed read is logged once while it stays the same. It
+// followPRs follows the PRs of tasks that are published with one (refs,
+// publishedRefs), on every tick, whether or not the tick advances (it needs
+// neither herdr nor MySQL; a park herdr cannot take waits, parkEnded): see
+// the file's comment. A failed read is logged once while it stays the same. It
 // returns what magnum's registry said of the PRs (nil when it read none),
 // which the PRs' status files are written from (writePRStatuses).
-func (e *Engine) followPRs(ctx context.Context, tasks []registry.Task) map[PRRef]PRState {
+func (e *Engine) followPRs(ctx context.Context, tasks []registry.Task, refs map[int64]PRRef) map[PRRef]PRState {
 	if e.d.Magnum == nil {
 		return nil
 	}
-	refs := map[int64]PRRef{}
 	var list []PRRef
 	for _, t := range tasks {
-		if t.State != registry.TaskPublished || t.PRNumber <= 0 {
-			continue
+		if ref, ok := refs[t.ID]; ok {
+			list = append(list, ref)
 		}
-		ref := PRRef{Repo: t.Repo, Number: t.PRNumber}
-		if l, err := e.reg.LinkedPR(ctx, t.ID); err == nil && l.Number > 0 {
-			ref = PRRef{Repo: cmp.Or(l.Repo, t.Repo), Number: l.Number}
-		} else if err != nil && !errors.Is(err, registry.ErrNotFound) {
-			e.log.Warn("follow a published task's PR: read its link", "task", t.ID, "err", err)
-			continue
-		}
-		refs[t.ID] = ref
-		list = append(list, ref)
 	}
 	if len(list) == 0 {
 		return nil

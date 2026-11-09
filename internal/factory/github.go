@@ -104,9 +104,11 @@ func operatorIdentity(cfg *config.Config, repo string) (config.Identity, error) 
 // (internal/staging: its mirror's fetch and its GitHub reads): the poll
 // identity of the watch that covers repo (its identity without a
 // poll_identity), as magnum's review daemon reads that repository, so both
-// daemons fill the mirror's shared state as one login, the one that holds
-// Deployments: read; a repository no watch covers reads as the gh identity
-// the factory publishes as (operatorIdentity).
+// daemons fill the mirror's shared state as one login, the one Deployments:
+// read is to be granted to (until it is, no deploy is confirmed: a pushed
+// PR stays deploying, never latest); a repository no watch covers reads as
+// the gh identity the factory publishes as (operatorIdentity), as you
+// (OperatorReadEnv).
 func StagingIdentity(cfg *config.Config, repo string) (config.Identity, error) {
 	if w := cfg.WatchFor(repo); w != nil {
 		name := cmp.Or(w.PollIdentity, w.Identity)
@@ -116,6 +118,30 @@ func StagingIdentity(cfg *config.Config, repo string) (config.Identity, error) {
 		return config.Identity{}, fmt.Errorf("no [[identity]] named %s", name)
 	}
 	return operatorIdentity(cfg, repo)
+}
+
+// OperatorReadEnv is the env of a read as you, gh identity id, for a
+// caller that can only set variables (internal/staging's fetch, a GitHub
+// client's Env): identity.GH's (GH_HOST pinned) with your gh config dir
+// named (operatorGHDir) and every GitHub token of the daemon's environment
+// set empty, which gh reads as unset. So gh, and git through gh's
+// credential helper, answer as your login, never as a token the daemon
+// inherited (asOperator unsets them for the publish).
+func OperatorReadEnv(ctx context.Context, id config.Identity, run execx.Runner) (map[string]string, error) {
+	env, err := identity.NewGH(id, run).Env(ctx)
+	if err != nil {
+		return nil, err
+	}
+	dir, err := operatorGHDir()
+	if err != nil {
+		return nil, err
+	}
+	env = maps.Clone(env)
+	env["GH_CONFIG_DIR"] = dir
+	for _, k := range ghTokens {
+		env[k] = ""
+	}
+	return env, nil
 }
 
 // operatorRunner runs each command through next as you (asOperator): env
