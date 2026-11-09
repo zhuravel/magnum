@@ -10,14 +10,17 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/dblock"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/eval"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/slots"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // The files a case worktree's preparation reads in the fixtures' main clones.
@@ -298,4 +301,83 @@ func TestAPooledRepositorysCaseWorktreeGetsThePoolsSetup(t *testing.T) {
 			t.Errorf("hook %s, want it through mise exec in %s with the per-PR WT_BRANCH", c.String(), wt)
 		}
 	}
+}
+
+// A kept worktree (Options.Keep) keeps its databases: its replay runs no teardown and leaves the
+// worktree, and the next replay of the case tears it down before it replaces it, then prepares its
+// own.
+func TestAKeptCaseWorktreeKeepsItsDatabasesUntilTheNextReplayReplacesIt(t *testing.T) {
+	f := newPrepFixture(t)
+	kept := f.options()
+	kept.Keep = true
+	if cr := RunCase(context.Background(), f.d, localEvalCase(t), kept); cr.Score == nil {
+		t.Fatalf("kept: case run %+v", cr)
+	}
+	if got := f.h.said(); !slices.Equal(got, []string{"worktree add", "setup bin/setup", "round"}) {
+		t.Fatalf("kept: steps %q, want no teardown", got)
+	}
+	wt := caseWorktree(f.d, kept, "task-1-round-1")
+	if _, err := os.Stat(wt); err != nil {
+		t.Fatalf("the kept worktree: %v", err)
+	}
+	f.h.steps = nil
+	if cr := RunCase(context.Background(), f.d, localEvalCase(t), f.options()); cr.Score == nil {
+		t.Fatalf("the next replay: case run %+v", cr)
+	}
+	if got := f.h.said(); !slices.Equal(got, []string{"teardown bin/teardown", "worktree remove", "worktree add", "setup bin/setup", "round",
+		"teardown bin/teardown", "worktree remove"}) {
+		t.Fatalf("the next replay: steps %q, want the kept worktree torn down before it is replaced", got)
+	}
+}
+
+// One case's worktree is prepared at a time, whoever replays it: a case whose preparation finds
+// another's under way waits for it, saying once whom it waits for, and runs its setup once that one
+// ended; one that waits out the bound (the slots' setup timeout) runs none and ends environment.
+func TestOneCaseWorktreeIsPreparedAtATime(t *testing.T) {
+	storetest.Serial(t) // prepareWait
+	ctx := context.Background()
+	t.Run("waits", func(t *testing.T) {
+		f := newPrepFixture(t)
+		held, err := dblock.Acquire(ctx, prepareLock(f.d.Layout), dblock.Holder{Command: "prepare other-case (run 20261109-110000)", PID: os.Getpid()}, 0, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var w warnings
+		f.d.Warn = w.warn
+		done := make(chan eval.CaseRun, 1)
+		go func() { done <- RunCase(ctx, f.d, localEvalCase(t), f.options()) }()
+		waitFor(t, "the replay to say it waits", func() bool { return len(w.said()) > 0 })
+		if got := f.h.said(); slices.Contains(got, "setup bin/setup") {
+			t.Fatalf("steps %q: the setup ran while another case's preparation held the lock", got)
+		}
+		held.Release()
+		select {
+		case cr := <-done:
+			if cr.Score == nil || !slices.Contains(f.h.said(), "setup bin/setup") {
+				t.Fatalf("case run %+v, steps %q", cr, f.h.said())
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the replay never prepared its worktree after the other's preparation ended")
+		}
+		if said := w.said(); len(said) != 1 || !strings.Contains(said[0], "other-case") {
+			t.Fatalf("said %q, want once whom it waits for", said)
+		}
+	})
+	t.Run("waits out the bound", func(t *testing.T) {
+		defer func(d time.Duration) { prepareWait = d }(prepareWait)
+		prepareWait = 300 * time.Millisecond
+		f := newPrepFixture(t)
+		held, err := dblock.Acquire(ctx, prepareLock(f.d.Layout), dblock.Holder{Command: "prepare other-case (run 20261109-110000)", PID: os.Getpid()}, 0, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer held.Release()
+		cr := RunCase(ctx, f.d, localEvalCase(t), f.options())
+		if cr.Outcome != eval.OutcomeEnvironment || !strings.Contains(cr.Error, "other-case") || len(f.rounds) != 0 {
+			t.Fatalf("case run %+v (%d rounds), want the environment outcome naming the other case", cr, len(f.rounds))
+		}
+		if got := f.h.said(); slices.Contains(got, "setup bin/setup") {
+			t.Fatalf("steps %q, want no setup", got)
+		}
+	})
 }

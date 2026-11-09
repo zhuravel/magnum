@@ -17,6 +17,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/pipeline"
+	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
@@ -115,5 +116,23 @@ func TestAPostedCasesWorktreeIsPreparedToo(t *testing.T) {
 	}
 	if line := agents.DBLockLine("magnum", f.cases[0].Checkout, "claude-review"); !strings.Contains(line, "--checkout "+wt+" ") {
 		t.Errorf("the db-lock line %q does not name the prepared worktree %s", line, wt)
+	}
+}
+
+// A posted case whose PR has a per-PR worktree of its own next to the clone is not prepared: the two
+// would share the databases of magnum-pr-<N>, which the replay's teardown drops. It ends environment
+// naming that worktree, before any worktree is added or command runs.
+func TestAPostedCaseIsNeverPreparedBesideThePRsOwnWorktree(t *testing.T) {
+	f := newPostedFixture(t)
+	own := slots.PRWorktreePath(f.clone, 3)
+	if err := os.MkdirAll(own, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cr := RunCase(context.Background(), f.d, f.ec, f.o)
+	if cr.Outcome != eval.OutcomeEnvironment || !strings.Contains(cr.Error, own) || !strings.Contains(cr.Error, "magnum-pr-3") {
+		t.Fatalf("case run %+v, want the environment outcome naming %s", cr, own)
+	}
+	if got := f.h.said(); len(got) != 0 || len(f.cases) != 0 {
+		t.Fatalf("steps %q, rounds %d: want none", got, len(f.cases))
 	}
 }
