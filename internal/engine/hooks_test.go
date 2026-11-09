@@ -426,7 +426,7 @@ func TestAPingIsAcceptedAndDroppedQuietly(t *testing.T) {
 	ctx, cancel := context.WithCancel(h.ctx)
 	done := h.goRun(ctx, Options{NoSignals: true, Claim: c})
 	before := logs.len()
-	for _, ping := range []agenthooks.Event{{Name: hookPing}, {Agent: agenthooks.AgentClaude, Name: hookPing, Pane: "w1:p1"}} {
+	for _, ping := range []agenthooks.Event{{Name: agenthooks.PingName}, {Agent: agenthooks.AgentClaude, Name: agenthooks.PingName, Pane: "w1:p1"}} {
 		if err := agenthooks.Send(l.HookSocket(), ping); err != nil {
 			t.Fatalf("the ping %+v was refused: %v", ping, err)
 		}
@@ -454,7 +454,7 @@ func TestAPingIsAcceptedAndDroppedQuietly(t *testing.T) {
 
 	quiet := &recordLog{}
 	h.e.log = slog.New(quiet)
-	h.e.routeHook(h.ctx, agenthooks.Event{Agent: agenthooks.AgentClaude, Name: hookPing, Pane: "w1:p1"})
+	h.e.routeHook(h.ctx, agenthooks.Event{Agent: agenthooks.AgentClaude, Name: agenthooks.PingName, Pane: "w1:p1"})
 	if n := quiet.len(); n != 0 || len(h.ag.wakes()) != 1 {
 		t.Fatalf("the router logged %d lines and woke %d times for a ping, want none", n, len(h.ag.wakes())-1)
 	}

@@ -181,13 +181,8 @@ func (e *Engine) startHooks(ctx context.Context, stop context.CancelFunc, c *Cla
 	}
 }
 
-// The router's words: the doctor's probe, which only checks that the
-// socket takes a datagram (Name ping), and the debug line of each event it
-// hands on.
-const (
-	hookPing     = "ping"
-	hookEventMsg = "hook event routed"
-)
+// hookEventMsg is the router's debug line of each event it hands on.
+const hookEventMsg = "hook event routed"
 
 // hookRouter hands the hook listener's events to the agents managers whose
 // registries record a live session on the event's pane: the daemon's own
@@ -285,11 +280,12 @@ func (r *hookRouter) take() []*hookSink {
 // routeHook hands hook event ev to Wake on every agents manager whose
 // registry records a live session on its pane (hookOwner): the daemon's own
 // on ctx, the daemon's, and each registered pane agent's on its sink's. A
-// ping (the doctor's probe) is dropped without a word, and an event of a
+// ping (agenthooks.PingName: the doctor's probe, which only checks that the
+// socket takes a datagram) is dropped without a word, and an event of a
 // pane no registry records is dropped with a debug line naming the event
 // alone (an agent picks the pane, so it is never logged).
 func (e *Engine) routeHook(ctx context.Context, ev agenthooks.Event) {
-	if ev.Name == hookPing {
+	if ev.Name == agenthooks.PingName {
 		return
 	}
 	routed := false
