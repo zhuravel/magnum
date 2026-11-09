@@ -14164,24 +14164,25 @@ type PRState struct {
     (config.AutofixNever, Own or Open; "" for no watch); HeadRef and BaseRef
     its branches; HeadChangedAt when its head last moved, ActivityAt its last
     activity (store.PR.Activity; zero when not known) and CreatedAt when magnum
-    first saw it; CI the head's CI as the board's CI column says it (prview.CI,
-    by the repository's required checks: one that did not run at the head is
-    missing, never green; nil before magnum read the checks); Review magnum's
-    last posted review (nil for none), Findings it as the board's FINDINGS
-    column says it, and ReviewEvent what magnum's review of the head posted
-    (prs.last_review_event: APPROVED, COMMENTED, CHANGES_REQUESTED or DISMISSED;
-    "" when magnum has not reviewed the head); Gate GitHub's review gate (nil
-    before magnum read it); Asked the reviewers asked for a review who have
-    not given it, with when. LastTick is magnum's last tick (zero with its
-    daemon down or none recorded), which tells whether its look still runs;
-    OldBuild the build magnum's daemon runs when its binary on disk is newer
-    (engine.SkewNote), nil when it runs what is on disk, when it is down or when
-    it recorded none. Replies are the replies to magnum's reviews its judge
-    has not read yet (store.PR.PendingReplies), oldest first. OpenRestores
-    says magnum's open of the PR (the screens' o, `magnum open`) restores it
-    in a slot, which claims the slot and holds the PR for OpenHold ([daemon]
-    open_hold), as the board tells it (engine.OpenWouldRestore over the PR's
-    sessions); false when it focuses a live pane.
+    first saw it; CI the head's CI as the board's CI column says it (prview.CI:
+    its State over every check of the head that ignore_checks leaves in,
+    required or not; its Required by the repository's required checks, one
+    that did not run at the head missing, never green; nil before magnum read
+    the checks); Review magnum's last posted review (nil for none), Findings
+    it as the board's FINDINGS column says it, and ReviewEvent what magnum's
+    review of the head posted (prs.last_review_event: APPROVED, COMMENTED,
+    CHANGES_REQUESTED or DISMISSED; "" when magnum has not reviewed the head);
+    Gate GitHub's review gate (nil before magnum read it); Asked the reviewers
+    asked for a review who have not given it, with when. LastTick is magnum's
+    last tick (zero with its daemon down or none recorded), which tells whether
+    its look still runs; OldBuild the build magnum's daemon runs when its binary
+    on disk is newer (engine.SkewNote), nil when it runs what is on disk, when
+    it is down or when it recorded none. Replies are the replies to magnum's
+    reviews its judge has not read yet (store.PR.PendingReplies), oldest first.
+    OpenRestores says magnum's open of the PR (the screens' o, `magnum open`)
+    restores it in a slot, which claims the slot and holds the PR for OpenHold
+    ([daemon] open_hold), as the board tells it (engine.OpenWouldRestore over
+    the PR's sessions); false when it focuses a live pane.
 
 type PRView struct {
 	Number                     int

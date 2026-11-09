@@ -21039,15 +21039,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
     copy asked when git fails in one: a published task's copy was released at the publish, and every copy is a
     worktree of the main clone, whose objects hold every commit a copy made; never the main clone itself, which may be
     your checkout. The copies are read off the loop, in the check.
-  - Complete or not. A check is complete when every comparison of a posted finding's file at two heads ran and magnum
-    recorded the findings its round's result counts. Without a copy on disk, with git failing in every copy, with the
-    diffs past their minute, or with a round whose result counts P0 to P2 findings and whose rows magnum has none of
-    (a result without provenance, or a read between the verdict and the record), the check stores nothing and is
-    tried again after 5 minutes, its cause logged once; only its sixth try stores it, with the files it compared at
-    the same head only (`same_head_only`) and the findings unrecorded (`unrecorded`) counted on the row, which the
-    event and the stats say. A passing failure so never stores a wrong count for good, and one that persists (a head
-    no copy has, a copies volume that stays unplugged) is stored flagged rather than never. Only the comparisons of
-    posted findings' files count: those of the comparable count alone do not.
+  - Complete or not. A check is complete when every comparison its result depends on ran and magnum recorded the
+    findings its round's result counts. The result depends on a comparison of a file that has an escape (`no_local` or
+    `far`), since a local finding there at another head might have caught it; a caught posted finding, and an escape on
+    a file no comparison of failed, depend on none, so a failed diff elsewhere neither delays nor flags the check.
+    Without a copy on disk, with git failing in every copy, with the diffs past their minute, or with a round whose
+    result counts P0 to P2 findings and whose rows magnum has none of (a result without provenance, or a read between
+    the verdict and the record), the check stores nothing and is tried again after 5 minutes, its cause logged once.
+    The try once magnum's round is 25 minutes old stores it, with the files of its escapes compared at the same head
+    only (`same_head_only`) and the findings unrecorded (`unrecorded`) counted on the row, which the event (with this
+    daemon's tries) and the stats say. The last try goes by the round's age, which a restart keeps, not by a count in
+    memory, so restarts closer together than the bound cannot keep a check from storing. A passing failure so never
+    stores a wrong count for good, and one that persists (a head no copy has, a copies volume that stays unplugged) is
+    stored flagged rather than never. A round already older than the bound at its first try (the daemon was down, or
+    the PR was published before this change) gets that one try.
   - Off the loop. The tick's PR follow starts a task's check once magnum posted a review of the PR
     (`PRState.Review`) while the task has no stored check; the check (the read of magnum's round, one query with its
     findings, `store.FirstPostedReview`; the registry's reads; the diffs) runs in the background within 2 minutes, at
@@ -21081,7 +21086,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   every local finding would be incomparable); the main clone or a fetch for the diffs (your checkout, and a write);
   the git calls on the loop; storing an incomplete check at once (a slow or briefly failing git would count escapes
   that are none, for good); retrying an incomplete check forever (a persistent cause would leave it unchecked); checks
-  of ended tasks in this change (`not checked` says so); a unique index on `checks` for the CI rows (the existing record of causes writes several
+  of ended tasks in this change (`not checked` says so); the last try by a count of tries in memory (a daemon
+  restarted more often than the bound never stores); a unique index on `checks` for the CI rows (the existing record of causes writes several
   GitHub CI rows of one head, and the only writer of these keeps them single in its transaction); reading the
   posted round's findings one query per finding.
   Tests: the registry's TestTheEscapesMigrationAppliesOnTheTemplateAndAVersion6File,
@@ -21093,13 +21099,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestADeadlineOfTheDiffsStoresNothingAndTheNextTryCompares, TestACopyWithoutGitIsSkippedAndAFailingCopyGivesWayToTheNext,
   TestTheFirstPostedRoundCountsFromThePublishsFirstBegin, TestAStopMidCheckWritesNothingAndTheNextDaemonChecksOnce,
   TestAFailedCheckWaitsItsRetryAndIsLoggedOnce, TestATaskHasOneCheckAtATime,
-  TestARoundWhoseFindingsMagnumDidNotRecordIsStoredUnrecorded, TestTheEscapeCheckRunsOnce,
+  TestARoundWhoseFindingsMagnumDidNotRecordIsStoredUnrecorded, TestRestartsDoNotKeepAnIncompleteCheckFromStoring,
+  TestAFailedDiffTheResultDoesNotDependOnNeitherDelaysNorFlagsTheCheck, TestNoEscapeCheckStartsWhileTheDaemonDrains,
+  TestTheEscapeCheckRunsOnce,
   TestNoEscapeCheckBeforeAPostedRoundAfterThePublish, TestAPostedTitleNeverReachesTheFactorysRegistry,
   TestThePRsCIAfterThePublishIsCopiedOncePerHeadAndResult and TestFixLoopsCountTheFixersPushesAndCommits; stats'
   TestStatsShowTheQualityOfThePublishedPRs; the CLI's TestFactoryStatsShowsTheQualityOfThePublishedPRs. The follow's
   call, the P0 to P2 filter, the head rule, the CI's stale guard and its once-per-head rule, the incomplete check's
   retry, the publish effect's cutoff, the `.git` rule, the next copy, the stop's guard, the one-check guard and the
-  retry's wait were each taken out once, and a test failed.
+  retry's wait, the drain guard, the last try by the round's age and the rule of what the result depends on were each
+  taken out once, and a test failed.
 
 ## Learned rules
 
