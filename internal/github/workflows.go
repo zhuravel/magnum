@@ -44,12 +44,16 @@ func (c *Client) DispatchWorkflow(ctx context.Context, owner, repo, workflow, re
 	return c.restInput(ctx, op, "POST", path, map[string]string{"ref": ref}, true, nil)
 }
 
-// WorkflowRun is a run of a workflow as DispatchedRuns, CommitRuns and
-// RecentRuns list it: its id, its status (queued, waiting, requested,
-// pending, in_progress or completed), its conclusion once completed
-// (success, failure, cancelled, timed_out, ...), its page and when GitHub
-// created it; RecentRuns also says the commit, the branch and the event it
-// ran for (the branch is a PR's text: never logged).
+// WorkflowRun is a run of a workflow as DispatchedRuns, CommitRuns,
+// RecentRuns and HeadRuns list it: its id, its status (queued, waiting,
+// requested, pending, in_progress or completed), its conclusion once
+// completed (success, failure, cancelled, timed_out, startup_failure, ...),
+// its page and when GitHub created it; RecentRuns also says the commit, the
+// branch and the event it ran for (the branch is a PR's text: never
+// logged), and HeadRuns the commit, the event, the run's attempt (Attempt:
+// its run_attempt, 1, then 2 after a re-run) and its workflow's file in
+// .github/workflows (Workflow: "ci.yml"; "" for a run of no such file,
+// GitHub's own dynamic runs).
 type WorkflowRun struct {
 	ID         int64
 	Status     string
@@ -59,6 +63,8 @@ type WorkflowRun struct {
 	HeadSHA    string
 	HeadBranch string
 	Event      string
+	Attempt    int
+	Workflow   string
 }
 
 // Done reports whether r ended (completed, whatever its conclusion).
@@ -304,4 +310,76 @@ func (c *Client) RecentRuns(ctx context.Context, owner, repo, workflow string) (
 		runs = append(runs, run)
 	}
 	return runs, nil
+}
+
+// headRunsPage is how many runs HeadRuns reads: the newest runs of every
+// workflow at one commit.
+const headRunsPage = 20
+
+// HeadRuns lists the runs of every workflow of owner/repo at commit sha, of
+// any event, newest first, each with its event, its attempt and its
+// workflow's file: GET /repos/{o}/{r}/actions/runs filtered by head_sha,
+// one page of headRunsPage. A run that started no job is there (its check
+// suite holds no check run, so a PR's check rollup cannot show it), and so
+// is one still queued. A run of another commit in the answer is left out.
+// The identity needs read access to the repository's Actions (an App:
+// Actions: read). A sha that is no full commit id is refused before any
+// call.
+func (c *Client) HeadRuns(ctx context.Context, owner, repo, sha string) ([]WorkflowRun, error) {
+	if err := checkRepo(owner, repo); err != nil {
+		return nil, err
+	}
+	if !commitOidRe.MatchString(sha) {
+		return nil, fmt.Errorf("github: invalid commit %q", sha)
+	}
+	var data struct {
+		Runs []struct {
+			ID         int64     `json:"id"`
+			Event      string    `json:"event"`
+			HeadSHA    string    `json:"head_sha"`
+			Path       string    `json:"path"`
+			Status     string    `json:"status"`
+			Conclusion *string   `json:"conclusion"`
+			Attempt    int       `json:"run_attempt"`
+			URL        string    `json:"html_url"`
+			CreatedAt  time.Time `json:"created_at"`
+		} `json:"workflow_runs"`
+	}
+	path := fmt.Sprintf("repos/%s/%s/actions/runs?head_sha=%s&exclude_pull_requests=true&per_page=%d", owner, repo, sha, headRunsPage)
+	if err := c.rest(ctx, fmt.Sprintf("head runs %s/%s@%s", owner, repo, sha[:7]), "GET", path, nil, false, &data); err != nil {
+		return nil, err
+	}
+	runs := []WorkflowRun{}
+	for _, r := range data.Runs {
+		if r.HeadSHA != sha {
+			continue
+		}
+		run := WorkflowRun{ID: r.ID, Status: r.Status, URL: r.URL, CreatedAt: r.CreatedAt, HeadSHA: r.HeadSHA, Event: r.Event, Attempt: r.Attempt}
+		if file, ok := strings.CutPrefix(r.Path, ".github/workflows/"); ok && ValidWorkflowFile(file) {
+			run.Workflow = file
+		}
+		if r.Conclusion != nil {
+			run.Conclusion = *r.Conclusion
+		}
+		runs = append(runs, run)
+	}
+	return runs, nil
+}
+
+// RerunRun re-runs every job of run id of owner/repo as the client's
+// identity, a new attempt of the same run (its run_attempt goes up by one):
+// POST /repos/{o}/{r}/actions/runs/{id}/rerun. GitHub runs it with the
+// run's own event, commit and workflow file, and refuses (HTTP 403) an
+// identity that may not run workflows (a gh login that cannot push, an App
+// without Actions: write). A run id that is no id is refused before any
+// call. It is marked Mutates, so execx.DryRun only plans it.
+func (c *Client) RerunRun(ctx context.Context, owner, repo string, runID int64) error {
+	if err := checkRepo(owner, repo); err != nil {
+		return err
+	}
+	if runID <= 0 {
+		return fmt.Errorf("github: invalid run %d", runID)
+	}
+	path := fmt.Sprintf("repos/%s/%s/actions/runs/%d/rerun", owner, repo, runID)
+	return c.rest(ctx, fmt.Sprintf("rerun %s/%s#%d", owner, repo, runID), "POST", path, nil, true, nil)
 }
