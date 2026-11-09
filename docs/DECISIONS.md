@@ -16939,6 +16939,29 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAReplaysPanesRunWithTheEnvItsCheckoutWasPreparedWith; TestARepositoryWithoutSetupOrCopyFilesKeepsTheBareWorktree
   pins what stays. The slots tests pass unchanged.
 
+- **A comment that left optional findings only needs the operator as a clean one does** (2026-11-09, amends
+  "PRs Magnum approved that still need the operator's approval", 2026-10-06, after an audit of PRs waiting on
+  the operator). The needs-you list took a comment for magnum's approval only when its round's verdict was
+  exactly `clean`. That rule was pinned before `auto_approve_skip_authors` existed: on the PR of an author the
+  list names, the App comments even when it would approve, and a round that left one P3 (verdict
+  `non_blocking`, "No blocking problems") never showed `needs you`. So the row had no `approve_as`, and `A`
+  approved as the App, whose approval GitHub does not count; only a second `A` on the next load approved as
+  the operator. Yet the operator's own approval policy approves that round (the engine's `roundBlocks`: no
+  P0, P1 or P2, new or still open). Now `ReviewSummary.OnlyOptional` says a round left optional findings only
+  (a non-blocking verdict, no P0 to P2 new, `OpenProblems` zero, so an open finding of unknown priority
+  still counts as a problem), `NeedsMeFacts.Optional` carries it, and `NeedsMe` takes such a comment wherever
+  it takes a clean one: an identity that comments when clean (for the repository or for the PR's author),
+  or a comment the approval's gates asked for. Nothing else widens: an optional-only comment from an
+  identity that approves when clean, with no gate's record, is not one (a missing reviewer report or a held
+  approval can cause it), and a round with a P2, new or open, stays off the list. The needs-you toast of a
+  comment no longer says "magnum approved b1b1b1b", which was already false for a skipped author's clean
+  comment: it says "magnum found no blocking problems in b1b1b1b (its review is a comment)"
+  (`needsMeToastBody`). Tests, failing first: TestNeedsMePRsTakesAnOptionalOnlyCommentForAnApproval,
+  TestTheBoardListsAnOptionalOnlyCommentOnASkippedAuthorsPRAsNeedingYou (`approve_as` is the operator, with
+  no refusal) and TestTheNeedsYouToastSaysWhatMagnumPosted; TestNeedsMeDecidesWhatTheOperatorsApprovalWouldFix
+  gains the optional-only cases, and TestNeedsMePRsListsThePRsWaitingForTheOperator's non-clean round now has
+  a P2, so it still means "left something to fix".
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is

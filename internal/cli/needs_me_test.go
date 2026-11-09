@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -242,6 +244,74 @@ func TestTheBoardListsACleanCommentTheGatesAskedForAsNeedingYou(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(rows) != 1 || rows[0].Number != 11970 {
+		t.Fatalf("--needs-me rows %+v", rows)
+	}
+}
+
+// A review that left optional findings only (one P3, no P0 to P2 new or
+// open) on the PR of an author auto_approve_skip_authors lists, which the
+// PR's App would have approved, needs you as a clean one does: `magnum tui
+// --json` says needs_me "approve" with approve_as the watch's
+// auto_approve_as and no refusal, so A approves as you rather than as the
+// App, and --needs-me lists it. The same round on another author's PR (the
+// App approves those) and a round with a P2 on the skipped author's PR stay
+// off the list.
+func TestTheBoardListsAnOptionalOnlyCommentOnASkippedAuthorsPRAsNeedingYou(t *testing.T) {
+	f := newInspFixture(t)
+	cfg := strings.Replace(strings.ReplaceAll(inspTestConfig, "HOME", f.Home),
+		"no_findings_event = \"COMMENT\"\nblocking_event", "no_findings_event = \"APPROVE\"\nblocking_event", 1)
+	cfg = strings.Replace(cfg, "identity = \"talkable-app\"\npoll_identity = \"zhuravel\"\n",
+		"identity = \"talkable-app\"\npoll_identity = \"zhuravel\"\nauto_approve_as = \"zhuravel\"\nauto_approve_skip_authors = [\"bob-rev\"]\n", 1)
+	if err := os.WriteFile(filepath.Join(f.Home, "config.toml"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st := f.store()
+	ctx := context.Background()
+	for n, c := range map[int]struct{ author, result string }{
+		11980: {"bob-rev", `{"event":"COMMENT","verdict":"non_blocking","findings":{"P3":1}}`},
+		11981: {"bob-rev", `{"event":"COMMENT","verdict":"non_blocking","findings":{"P2":1}}`},
+		11982: {"dev", `{"event":"COMMENT","verdict":"non_blocking","findings":{"P3":1}}`},
+	} {
+		_, pr := inspSeedPR(t, st, "talkable/talkable", n, store.PRReviewed, func(u *store.PRUpdate) {
+			approvedBy("COMMENTED", nmRequired)(u)
+			u.Set("author_login", c.author)
+			u.Set("last_review_id", int64(n))
+		})
+		if _, err := st.DB().ExecContext(ctx, `INSERT INTO runs (id, pr_id, round, role, kind, target_sha, identity, reviewer_login, state, outcome, review_id, prompt_text, result_json, created_at)
+			VALUES (?, ?, 1, 'codex-judge', 'initial', ?, 'talkable-app', 'talkable[bot]', 'verified', 'posted', ?, 'p', ?, ?)`,
+			"r-"+strconv.Itoa(n), pr.ID, nmHead, n, c.result, store.FormatTime(pr.CreatedAt)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st.Close()
+
+	if code := f.run("tui", "--json"); code != 0 {
+		t.Fatalf("code %d err %s", code, f.Err.String())
+	}
+	var rows []prsJSONRow
+	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	got := map[int]prsJSONRow{}
+	for _, r := range rows {
+		got[r.Number] = r
+	}
+	if r := got[11980]; r.NeedsMe != "approve" || r.ApproveAs == nil || *r.ApproveAs != (prsJSONApproveAs{Identity: "zhuravel", Login: "zhuravel"}) {
+		t.Fatalf("#11980: needs_me %q, approve_as %+v; want approve as zhuravel, no refusal", r.NeedsMe, r.ApproveAs)
+	}
+	for _, n := range []int{11981, 11982} {
+		if r := got[n]; r.NeedsMe != "" || r.ApproveAs != nil {
+			t.Errorf("#%d: needs_me %q, approve_as %+v; want neither", n, r.NeedsMe, r.ApproveAs)
+		}
+	}
+	if code := f.run("tui", "--needs-me", "--json"); code != 0 {
+		t.Fatalf("code %d err %s", code, f.Err.String())
+	}
+	rows = nil
+	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Number != 11980 {
 		t.Fatalf("--needs-me rows %+v", rows)
 	}
 }

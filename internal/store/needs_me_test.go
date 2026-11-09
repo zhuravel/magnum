@@ -74,8 +74,17 @@ func TestNeedsMeDecidesWhatTheOperatorsApprovalWouldFix(t *testing.T) {
 		{"a clean comment from an identity that comments when clean", func(f *NeedsMeFacts) {
 			f.LastReviewEvent, f.Verdict, f.CommentWhenClean = "COMMENTED", VerdictClean, true
 		}, NeedsMeApprove},
-		{"a non-blocking comment from that identity", func(f *NeedsMeFacts) {
+		{"a non-blocking comment with a P2 from that identity", func(f *NeedsMeFacts) {
 			f.LastReviewEvent, f.Verdict, f.CommentWhenClean = "COMMENTED", VerdictNonBlocking, true
+		}, ""},
+		// A round that left optional findings only (no P0 to P2, new or
+		// open) is one magnum would approve: its comment counts as a clean
+		// one does, and only where a clean one does.
+		{"an optional-only comment from that identity", func(f *NeedsMeFacts) {
+			f.LastReviewEvent, f.Verdict, f.Optional, f.CommentWhenClean = "COMMENTED", VerdictNonBlocking, true, true
+		}, NeedsMeApprove},
+		{"an optional-only comment from an identity that approves when clean", func(f *NeedsMeFacts) {
+			f.LastReviewEvent, f.Verdict, f.Optional = "COMMENTED", VerdictNonBlocking, true
 		}, ""},
 		{"a comment whose verdict is unknown", func(f *NeedsMeFacts) {
 			f.LastReviewEvent, f.CommentWhenClean = "COMMENTED", true
@@ -86,9 +95,12 @@ func TestNeedsMeDecidesWhatTheOperatorsApprovalWouldFix(t *testing.T) {
 		{"a clean comment the approval's gates asked for", func(f *NeedsMeFacts) {
 			f.LastReviewEvent, f.Verdict, f.Refused = "COMMENTED", VerdictClean, "the PR changes its own workflows or actions"
 		}, NeedsMeApprove},
-		{"a non-blocking comment the gates asked for", func(f *NeedsMeFacts) {
+		{"a non-blocking comment with a P2 the gates asked for", func(f *NeedsMeFacts) {
 			f.LastReviewEvent, f.Verdict, f.Refused = "COMMENTED", VerdictNonBlocking, "the PR changes its own workflows or actions"
 		}, ""},
+		{"an optional-only comment the gates asked for", func(f *NeedsMeFacts) {
+			f.LastReviewEvent, f.Verdict, f.Optional, f.Refused = "COMMENTED", VerdictNonBlocking, true, "the PR changes its own workflows or actions"
+		}, NeedsMeApprove},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := base()
@@ -226,13 +238,15 @@ func TestNeedsMePRsListsThePRsWaitingForTheOperator(t *testing.T) {
 	add(3, "zhuravel", "APPROVED", required, "talkable-app") // the operator's own
 	add(4, "alice", "APPROVED", nil, "talkable-app")         // the gate not read yet
 	clean := add(5, "alice", "COMMENTED", required, "commenter")
-	add(6, "alice", "COMMENTED", required, "commenter")                 // its round was not clean
+	add(6, "alice", "COMMENTED", required, "commenter")                 // its round left a P2 to fix
 	refused := add(7, "bob-rev", "COMMENTED", required, "talkable-app") // the lists refuse bob-rev: the App comments
 	add(8, "alice", "COMMENTED", required, "talkable-app")              // the App approves alice's clean PRs
-	for id, verdict := range map[int64]string{clean: VerdictClean, clean + 1: VerdictNonBlocking, refused: VerdictClean, refused + 1: VerdictClean} {
+	const cleanResult = `{"event":"COMMENT","verdict":"clean","findings":{}}`
+	for id, result := range map[int64]string{clean: cleanResult, clean + 1: `{"event":"COMMENT","verdict":"non_blocking","findings":{"P2":1}}`,
+		refused: cleanResult, refused + 1: cleanResult} {
 		if _, err := st.DB().ExecContext(ctx, `INSERT INTO runs (id, pr_id, round, role, kind, target_sha, identity, reviewer_login, state, outcome, review_id, prompt_text, result_json, created_at)
 			VALUES (?, ?, 1, 'codex-judge', 'initial', 'h', 'commenter', 'talkable[bot]', 'verified', 'posted', 1, 'p', ?, ?)`,
-			"r-"+strconv.FormatInt(id, 10), id, `{"event":"COMMENT","verdict":"`+verdict+`","findings":{}}`, FormatTime(t0)); err != nil {
+			"r-"+strconv.FormatInt(id, 10), id, result, FormatTime(t0)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -256,6 +270,71 @@ func TestNeedsMePRsListsThePRsWaitingForTheOperator(t *testing.T) {
 	}
 	if got[0].PR.ID != approved || got[1].PR.ID != lift || got[2].PR.ID != clean || got[3].PR.ID != refused {
 		t.Fatalf("ids %d %d %d %d", got[0].PR.ID, got[1].PR.ID, got[2].PR.ID, got[3].PR.ID)
+	}
+}
+
+// A comment whose round left optional findings only (a non-blocking verdict
+// with no P0, P1 or P2, new or still open) counts for the needs-you list
+// wherever a clean one does: on the PR of an author the auto-approval lists
+// refuse, whose identity comments when clean, and on one the approval's
+// gates refused, with the gates' reason. A round with a P2, new or open, one
+// whose open findings have no priorities, and an optional-only comment from
+// an identity that approves when clean, with no gate's record, stay out.
+func TestNeedsMePRsTakesAnOptionalOnlyCommentForAnApproval(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	required := &ReviewGate{Decision: "REVIEW_REQUIRED", Opinions: []LatestReview{}, Complete: true}
+	const why = "the PR changes the review agents' instructions or hooks"
+	add := func(n int, author, result string, gated bool) int64 {
+		t.Helper()
+		head := "h" + strconv.Itoa(n)
+		res, err := st.UpsertPRFromGitHub(ctx, GitHubPR{RepoID: repo.ID, NodeID: "PR_" + head, Number: n, URL: "https://github.com/talkable/talkable/pull/" + head,
+			HeadSHA: head, GHState: GHOpen, AuthorLogin: new(author), ReviewGate: required, InitialState: PRReviewed, Identity: "talkable-app"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := res.PR.ID
+		if err := st.UpdatePR(ctx, id, func(u *PRUpdate) {
+			u.Set("reviewed_sha", head)
+			u.Set("last_review_event", "COMMENTED")
+			u.Set("last_review_id", 900+int64(n))
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.DB().ExecContext(ctx, `INSERT INTO runs (id, pr_id, round, role, kind, target_sha, identity, reviewer_login, state, outcome, review_id, prompt_text, result_json, created_at)
+			VALUES (?, ?, 1, 'codex-judge', 'initial', ?, 'talkable-app', 'talkable[bot]', 'verified', 'posted', ?, 'p', ?, ?)`,
+			"r-"+head, id, head, 900+n, result, FormatTime(t0)); err != nil {
+			t.Fatal(err)
+		}
+		if gated {
+			if err := st.SetKV(ctx, KVPRNoApprovalReview(id), NoApprovalReview{ReviewID: 900 + int64(n), Reason: why}.Value()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return id
+	}
+	skipped := add(1, "bob-rev", `{"event":"COMMENT","verdict":"non_blocking","findings":{"P3":1}}`, false)
+	refused := add(2, "alice", `{"verdict":"non_blocking","findings":{"P0":0,"P1":0,"P2":0,"P3":0},"previous_findings":{"open":{"P3":2}}}`, true)
+	add(3, "bob-rev", `{"verdict":"non_blocking","findings":{"P2":1,"P3":1}}`, false)                          // a P2 to fix
+	add(4, "bob-rev", `{"verdict":"non_blocking","findings":{},"previous_findings":{"open":{"P2":1}}}`, false) // a P2 still open
+	add(5, "bob-rev", `{"verdict":"non_blocking","findings":{},"previous_findings":{"open":1}}`, false)        // open, priorities unknown
+	add(6, "alice", `{"event":"COMMENT","verdict":"non_blocking","findings":{"P3":1}}`, false)                 // the App approves alice's PRs
+	skips := func(_, _, author string) bool { return author == "bob-rev" }
+	got, err := st.NeedsMePRs(ctx, skips, mineZhuravel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var have []string
+	for _, n := range got {
+		have = append(have, n.NeedsMe+":"+n.PR.HeadSHA+":"+n.Refused)
+	}
+	want := []string{NeedsMeApprove + ":h1:", NeedsMeApprove + ":h2:" + why}
+	if !reflect.DeepEqual(have, want) {
+		t.Fatalf("NeedsMePRs = %v, want %v", have, want)
+	}
+	if got[0].PR.ID != skipped || got[1].PR.ID != refused {
+		t.Fatalf("ids %d %d, want %d %d", got[0].PR.ID, got[1].PR.ID, skipped, refused)
 	}
 }
 

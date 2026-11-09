@@ -72,27 +72,34 @@ type NeedsMeFacts struct {
 	// Verdict is the verdict of magnum's latest posted round
 	// (ReviewSummary.Verdict); only a comment reads it.
 	Verdict string
-	Gate    *ReviewGate // nil until the Details read it
+	// Optional: that round left optional findings only
+	// (ReviewSummary.OnlyOptional); only a comment reads it, as Verdict.
+	Optional bool
+	Gate     *ReviewGate // nil until the Details read it
 }
 
-// WantsVerdict reports whether NeedsMe reads f.Verdict: magnum's latest
-// review is a comment from an identity that comments when clean, or one
-// the approval's gates turned from an approval into a comment (Refused).
+// WantsVerdict reports whether NeedsMe reads f.Verdict and f.Optional:
+// magnum's latest review is a comment from an identity that comments when
+// clean, or one the approval's gates turned from an approval into a comment
+// (Refused).
 func (f NeedsMeFacts) WantsVerdict() bool {
 	return f.cleanCommentCounts() && reviewEvent(f.LastReviewEvent) == "COMMENTED"
 }
 
-// cleanCommentCounts reports whether a clean comment of magnum's stands for
-// its approval: its identity comments when clean, or the approval's gates
-// turned its approval into that comment.
+// cleanCommentCounts reports whether a clean comment of magnum's, or one
+// that left optional findings only, stands for its approval: its identity
+// comments when clean, or the approval's gates turned its approval into that
+// comment.
 func (f NeedsMeFacts) cleanCommentCounts() bool { return f.CommentWhenClean || f.Refused != "" }
 
 // NeedsMe is what the operator's approval would fix on a PR magnum approved,
 // "" when nothing: an open PR, not a draft and not authored by one of the
 // operator's logins (mine), whose latest verified magnum review is on the
-// current head and clean (an approval, or a clean comment from an identity
-// that comments when clean or one the approval's gates turned from an
-// approval into a comment: Refused), and which GitHub still blocks on a review:
+// current head and clean (an approval, or a comment that is clean or left
+// optional findings only, from an identity that comments when clean or one
+// the approval's gates turned from an approval into a comment: Refused; a
+// comment of any other identity, or with a P0 to P2 new or open, is not), and
+// which GitHub still blocks on a review:
 // NeedsMeApprove for REVIEW_REQUIRED, NeedsMeLift for CHANGES_REQUESTED when
 // every outstanding changes request is the operator's. Anyone else's changes
 // request, an unread gate or a list of opinions GitHub cut leaves it alone.
@@ -106,7 +113,7 @@ func NeedsMe(f NeedsMeFacts, mine func(login string) bool) string {
 	switch reviewEvent(f.LastReviewEvent) {
 	case "APPROVED":
 	case "COMMENTED":
-		if !f.cleanCommentCounts() || f.Verdict != VerdictClean {
+		if !f.cleanCommentCounts() || (f.Verdict != VerdictClean && !f.Optional) {
 			return ""
 		}
 	default:
@@ -153,14 +160,14 @@ func reviewEvent(e string) string {
 }
 
 // NeedsMeFacts are p's facts for NeedsMe; the caller adds CommentWhenClean
-// and, when it WantsVerdict, Verdict.
+// and, when it WantsVerdict, Verdict and Optional.
 func (p PR) NeedsMeFacts() NeedsMeFacts {
 	return NeedsMeFacts{GHState: p.GHState, Draft: p.IsDraft, Author: Deref(p.AuthorLogin), HeadSHA: p.HeadSHA,
 		ReviewedSHA: Deref(p.ReviewedSHA), LastReviewEvent: Deref(p.LastReviewEvent), Gate: p.ReviewGate}
 }
 
 // NeedsMeFacts are b's facts for NeedsMe; the caller adds CommentWhenClean
-// and, when it WantsVerdict, Verdict.
+// and, when it WantsVerdict, Verdict and Optional.
 func (b BoardRow) NeedsMeFacts() NeedsMeFacts {
 	return NeedsMeFacts{GHState: b.GHState, Draft: b.Draft, Author: b.Author, HeadSHA: b.HeadSHA,
 		ReviewedSHA: b.ReviewedSHA, LastReviewEvent: b.LastReviewEvent, Gate: b.ReviewGate}
@@ -249,9 +256,10 @@ func (s *Store) NoApprovalReviews(ctx context.Context) (map[int64]NoApprovalRevi
 // repository and number. commentsWhenClean tells whether an identity posts
 // a comment for a clean verdict on a repository (owner/name) on a PR by an
 // author (its login, "" when unknown); mine whether a login is one of the
-// operator's. It reads magnum's latest round only for a PR whose last
-// review is such a comment, or one the approval's gates turned from an
-// approval into a comment (NoApprovalReviews: its Refused).
+// operator's. It reads magnum's latest round (its verdict, and whether it
+// left optional findings only) only for a PR whose last review is such a
+// comment, or one the approval's gates turned from an approval into a
+// comment (NoApprovalReviews: its Refused).
 func (s *Store) NeedsMePRs(ctx context.Context, commentsWhenClean func(repo, identity, author string) bool, mine func(login string) bool) ([]NeedsMePR, error) {
 	rows, err := s.db.QueryContext(ctx, "SELECT "+cols("p", prColumns)+`, r.owner || '/' || r.name
 FROM prs p JOIN repos r ON r.id = p.repo_id
@@ -295,7 +303,7 @@ ORDER BY r.owner, r.name, p.number`, GHOpen)
 	}
 	var out []NeedsMePR
 	for _, c := range list {
-		c.facts.Verdict = sums[c.pr.ID].Verdict
+		c.facts.Verdict, c.facts.Optional = sums[c.pr.ID].Verdict, sums[c.pr.ID].OnlyOptional()
 		if n := NeedsMe(c.facts, mine); n != "" {
 			out = append(out, NeedsMePR{PR: c.pr, Repo: c.repo, NeedsMe: n, Refused: c.facts.Refused})
 		}

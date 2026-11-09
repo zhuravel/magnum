@@ -527,7 +527,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			}
 			nf := r.NeedsMeFacts()
 			nf.CommentWhenClean = cfg.CommentsWhenClean(r.Owner+"/"+r.Name, r.Identity, r.Author)
-			nf.Verdict = sums[r.PRID].Verdict
+			nf.Verdict, nf.Optional = sums[r.PRID].Verdict, sums[r.PRID].OnlyOptional()
 			nf.Refused = refused[r.PRID].For(sums[r.PRID].ReviewID) // magnum's latest posted round's review
 			if out[i].NeedsMe = store.NeedsMe(nf, mine); out[i].NeedsMe != "" {
 				out[i].NeedsMeReason = store.NeedsMeWords(nf.Refused)

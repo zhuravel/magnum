@@ -129,3 +129,32 @@ func TestAPRThatNeedsTheOperatorToastsOncePerHead(t *testing.T) {
 		t.Fatalf("new head toasts = %q", again)
 	}
 }
+
+// The needs-you toast says what magnum posted: "magnum approved b1" for an
+// approval, and for a comment that stands for one (its identity comments
+// when clean, or on the PR of an author the auto-approval lists refuse;
+// the round clean or left optional findings only) that magnum found no
+// blocking problems, never that it approved. A comment the approval's
+// gates asked for names their reason, as before.
+func TestTheNeedsYouToastSaysWhatMagnumPosted(t *testing.T) {
+	const url = "https://github.com/talkable/talkable/pull/2"
+	pr := func(event string) store.PR {
+		return store.PR{URL: url, HeadSHA: "b1b1b1b1b1", LastReviewEvent: &event}
+	}
+	const why = "GitHub still requires an approval that counts (an App's does not)"
+	for _, c := range []struct {
+		name string
+		n    store.NeedsMePR
+		want string
+	}{
+		{"an approval", store.NeedsMePR{PR: pr("APPROVED"), NeedsMe: store.NeedsMeApprove}, url + "\nmagnum approved b1b1b1b; " + why + "."},
+		{"a comment that stands for one", store.NeedsMePR{PR: pr("COMMENTED"), NeedsMe: store.NeedsMeApprove},
+			url + "\nmagnum found no blocking problems in b1b1b1b (its review is a comment); " + why + "."},
+		{"a comment the gates asked for", store.NeedsMePR{PR: pr("COMMENTED"), NeedsMe: store.NeedsMeApprove, Refused: "it is muted"},
+			url + "\nmagnum found nothing to fix in b1b1b1b; approve by hand: it is muted."},
+	} {
+		if got := needsMeToastBody(c.n, why); got != c.want {
+			t.Errorf("%s: body %q, want %q", c.name, got, c.want)
+		}
+	}
+}

@@ -5625,7 +5625,9 @@ approve the PR's current head (or, for an identity that comments when clean, `no
 or on a PR whose author the auto-approval author lists refuse, to comment with a clean verdict, as does a
 clean review the approval's gates turned from an approval into a comment: the card then says "approve by
 hand: the PR changes its own workflows or actions", the toast too, and `needs_me_reason` in `magnum tui
---json`), an open PR that is not a draft and not yours, and no changes request of
+--json`; a comment whose round left optional findings only, P3s and simplifications with no P0, P1 or P2 new
+or still open, counts as a clean one there, since Magnum would approve that round as you too), an open PR
+that is not a draft and not yours, and no changes request of
 anyone else's; yours are the logins the board marks ★ (every watch's posting identity and every gh identity),
 and only reviewers with write access count, as for GitHub's decision. Magnum reads the decision
 (`reviewDecision`, `latestOpinionatedReviews`) with the PR's details, at no extra GitHub point. While such

@@ -58,6 +58,15 @@ func (s ReviewSummary) OpenProblems() int {
 	return s.OpenCounts[0] + s.OpenCounts[1] + s.OpenCounts[2]
 }
 
+// OnlyOptional reports whether the round left optional findings only: a
+// non-blocking verdict with no P0, P1 or P2, new or still open
+// (OpenProblems: an open finding of unknown priority counts as one). Such a
+// round is one magnum would approve (the engine's roundBlocks), posted as a
+// comment ("No blocking problems").
+func (s ReviewSummary) OnlyOptional() bool {
+	return s.Verdict == VerdictNonBlocking && s.Counts[0]+s.Counts[1]+s.Counts[2] == 0 && s.OpenProblems() == 0
+}
+
 // VerdictWords is the review's verdict line in a few words, rebuilt from
 // the summary as the review skill writes it (section 7), without its
 // period, its LGTM or a re-review's lead: "Blocking: 2 problems must be

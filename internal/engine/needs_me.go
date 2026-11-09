@@ -73,17 +73,12 @@ func (e *Engine) noteNeedsMe(ctx context.Context) {
 		e.needsMe[key] = true
 		_, name, _ := strings.Cut(n.Repo, "/")
 		label := fmt.Sprintf("%s#%d", name, n.PR.Number)
-		head := textx.ShortSHA(n.PR.HeadSHA)
 		what, why := label+" needs your approval", "GitHub still requires an approval that counts (an App's does not)"
 		if n.NeedsMe == store.NeedsMeLift {
 			what, why = label+": lift your changes request", "your changes request is the only one blocking it"
 		}
-		body := fmt.Sprintf("%s\nmagnum approved %s; %s.", n.PR.URL, head, why)
-		if n.Refused != "" { // its clean review is a comment: the approval's gates refused it (approval_gates.go)
-			body = fmt.Sprintf("%s\nmagnum found nothing to fix in %s; %s.", n.PR.URL, head, store.NeedsMeWords(n.Refused))
-		}
 		e.info(notify.Item{Key: key, Title: "magnum: " + what,
-			Body: body,
+			Body: needsMeToastBody(n, why),
 			Line: what + " " + n.PR.URL, Kind: kindNeedsMe, Window: needsMeToastWindow})
 	}
 	for k := range e.needsMe {
@@ -91,4 +86,22 @@ func (e *Engine) noteNeedsMe(ctx context.Context) {
 			delete(e.needsMe, k)
 		}
 	}
+}
+
+// needsMeToastBody is the needs-you toast's body for n, why GitHub still
+// blocks it (why) after its link: what magnum posted on the head. An
+// approval says "magnum approved b1b1b1b"; a comment that stands for one (an
+// identity that comments when clean, or for the PR's author: the round
+// clean or left optional findings only) says magnum found no blocking
+// problems; one the approval's gates asked for names their reason instead
+// of why (approval_gates.go).
+func needsMeToastBody(n store.NeedsMePR, why string) string {
+	head := textx.ShortSHA(n.PR.HeadSHA)
+	switch {
+	case n.Refused != "":
+		return fmt.Sprintf("%s\nmagnum found nothing to fix in %s; %s.", n.PR.URL, head, store.NeedsMeWords(n.Refused))
+	case strings.HasPrefix(strings.ToUpper(strings.TrimSpace(store.Deref(n.PR.LastReviewEvent))), "COMMENT"): // COMMENTED, or as posted
+		return fmt.Sprintf("%s\nmagnum found no blocking problems in %s (its review is a comment); %s.", n.PR.URL, head, why)
+	}
+	return fmt.Sprintf("%s\nmagnum approved %s; %s.", n.PR.URL, head, why)
 }
