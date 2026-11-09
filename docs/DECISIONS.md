@@ -22408,19 +22408,27 @@ skill versions); people add theirs to the sections before it, at the end of the 
   their first clause ("deploy to a staging before the merge"), the move is "E deploys to a staging" ("E deploys it"),
   and the row says `tui.FactoryRow.DeployFirst`, so home's hints offer "E deploy first" right after enter (not again
   last), a task card's after j k and your PR's card's first, where E acts (`deployFirstHint`); E itself and its y/N are
-  unchanged. A published task's changed paths are its ready card's (the change you pushed: one file read, only for a
-  merge wait, never a git call) and its envs its row's staging cells (staging.json mapped back, `cellEnvs`: every cell
-  unknown while no factory daemon runs says no). Your own PRs had no staging read at all ("not read yet"); magnum's
-  registry, which OwnPRs already opens read only, holds both of their facts, so `fillStaging` reads them with the row:
-  the paths the poller listed at the head (`pr_files`, only of that head) and the review daemon's staging record
-  (`engine.KVPRStaging` through `engine.StagingShown`, as the board: unknown without a record of the head or with
-  magnum's daemon not ticking). Those records also become your PR's staging cells on its row and card (no age: the
-  record keeps no first-seen time), so E's chooser lists its servers as the row says them; PRStates (the tick's and the
-  task rows' read) does not read them. The words lead the merge words rather than replace them: the What is cut at
-  the column's edge, so words after it would vanish on a 140-column screen, and the engine's verdict text is not the
-  factory's to rewrite. Rejected: putting the deploy first on any wait on you (CI failed, a reviewer's changes, no
-  reviewer asked: each is the next step before it); magnum's `pr_files` for a task's PR (the brief's source is the
-  task's own diff; an adopted PR without a ready card keeps the merge words); a new git or GitHub read per frame. Not
+  unchanged, and the move keeps what the merge move said after it (the optional calls). The paths are those of the
+  PR's head (`st.Head`), the head the rest of the row and card read, since magnum's fixer pushes to factory PRs as a
+  matter of course and may add or remove a migration after the publish: a published task's are its ready card's (the
+  change you pushed) when the card is of that head, else the paths magnum's poller listed there (`PRState.Files`),
+  else the card's, the only change known (`taskDeployFirst`: one file read, only for a merge wait with staging cells,
+  never a git call); its envs are its row's staging cells (staging.json mapped back, `cellEnvs`: every cell unknown
+  while no factory daemon runs says no). Your own PRs had no staging read at all ("not read yet"); magnum's registry,
+  which the screen already opens read only, holds both of their facts. `fillPR` reads the paths at the head
+  (`pr_files`, only of that head) for every PR of a repository with staging envs, a task's and yours, and `fillStaging`
+  your PR's review daemon's staging record (`engine.KVPRStaging` through `engine.StagingShown`, as the board: unknown
+  without a record of the head or with magnum's daemon not ticking). A repository without envs reads neither, and a
+  read that fails is no list, or no record (every env unknown), as the board's: it hides no PR, and neither asks a
+  deploy. The records also become your PR's staging cells on its row and card (no age: the record keeps no
+  first-seen time), so E's chooser lists its servers as the row says them; the help and the README list E on your
+  PR's card. The words lead the merge words rather than replace them: the What is cut at the column's edge, so words
+  after it would vanish on a 140-column screen, and the engine's verdict text is not the factory's to rewrite. With
+  several migrations the words name the first one alone, the shared rule's words (a count is a later change of the
+  rule, with the board's side). Rejected: putting the deploy first on any wait on you (CI failed, a reviewer's
+  changes, no reviewer asked: each is the next step before it); the ready card's paths at any head (a fixer's
+  migration would go unasked, a removed one asked); failing OwnPRs on a failed read of the paths or the record (every
+  one of your PRs would leave home); a new git or GitHub read per frame. Not
   changed: the PR status comment's factory part (it says "waits on the operator", never the merge, and its Who stays
   you), and the stats (a published PR's wait on you is the screen's, from magnum's registry, never a span the stats
   classify). Tests: TestAPublishedTaskWhoseMigrationIsOnNoStagingDeploysBeforeItsMerge (the verdict and magnum's row),
@@ -22428,9 +22436,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestATaskWithoutAMigrationKeepsTheMergeWords (no migration, no ready card, no staging envs),
   TestOnlyTheMergeWaitPutsTheDeployFirst, TestYourPRWhoseMigrationIsOnNoStagingDeploysBeforeItsMerge (one env latest
   keeps the merge; the cells in the screen's words), TestOwnPRsReadTheReviewDaemonsStagingRecordAndTheHeadsPaths (a list
-  and a record of an older head, magnum's last tick an hour old, the registry unchanged) and
-  TestARowWhoseDeployComesFirstOffersEFirst (home, the task card, your PR's card, E's chooser and its y/N), each failing
-  first. No new dependencies.
+  and a record of an older head, magnum's last tick an hour old, the registry unchanged),
+  TestATasksPathsAreThoseOfThePRsHead (a card of an older head whose migration the head's list lacks, a migration the
+  head's list adds, no list, no ready card), TestTheDeployFirstMoveKeepsTheOptionalCalls,
+  TestThePathsAreReadOnlyInARepositoryWithStagingEnvs, TestAFailedReadOfThePathsHidesNoPR (a list that does not decode,
+  a record that does not), TestARowWhoseDeployComesFirstOffersEFirst (home, the task card, your PR's card, E's chooser
+  and its y/N) and TestTheHelpListsEOnYourPRsCard, each failing first. No new dependencies.
 
 ## Learned rules
 

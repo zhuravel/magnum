@@ -131,7 +131,8 @@ var factoryKeyHelp = []struct {
 		{"E", "on a card with a PR and staging servers: deploy to staging (choose, y/N), as on home, offered first where the PR's " +
 			"deploy comes before its merge; its deploys show under STAGINGS"},
 		{"a", "the next card that needs you (a walk; off one, its first)"},
-		{"", "your PR's card has the PR's keys alone: f F K r R z M U, o magnum's pane, b t e, a the next; no task to retry, diff or drop"},
+		{"", "your PR's card has the PR's keys alone: f F K r R z M U, E (offered first where the PR's deploy comes before its merge), " +
+			"o magnum's pane, b t e, a the next; no task to retry, diff or drop"},
 		{"esc", "back"}}},
 	{"New task", []hint{{"enter", "start (y/N)"}, {"ctrl+j", "a new line"}, {"ctrl+g", "your editor"},
 		{"tab", "the kind: bug, feature, chore"}, {repoKey, "the repository, when the factory has several"},

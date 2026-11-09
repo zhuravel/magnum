@@ -3,6 +3,8 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // deployFirstWhat is the needs-you line of a PR whose staging deploy comes
@@ -89,4 +91,12 @@ func TestARowWhoseDeployComesFirstOffersEFirst(t *testing.T) {
 	y.press("ctrl+r")
 	y.open("#4603")
 	wantEFirst(t, "your PR's card", y.hintLine(), "")
+}
+
+// The help lists E among your PR's card's keys, which offers it first where
+// the PR's deploy comes before its merge. Before, the list left E out.
+func TestTheHelpListsEOnYourPRsCard(t *testing.T) {
+	h := testFactory(t, 200, 60)
+	mustContain(t, ansi.Strip(strings.Join(h.m.helpContent(200), "\n")),
+		"your PR's card has the PR's keys alone: f F K r R z M U, E (offered first where the PR's deploy comes before its merge)")
 }

@@ -14433,13 +14433,16 @@ type PRState struct {
 	OpenRestores              bool
 	OpenHold                  time.Duration
 
-	// Files and Stagings are read for your own PRs alone (OwnPRs): the
-	// paths magnum's poller listed at the PR's head (pr_files; nil without
-	// a list of that head), and where the PR stands on each staging env
-	// of its repository as the review daemon last told it (its record,
-	// engine.KVPRStaging, as engine.StagingShown shows it: the config's
-	// envs in order, unknown without a record of the head or with
-	// magnum's daemon not ticking; none for a repository without envs).
+	// Files and Stagings are read only for a PR of a repository with
+	// staging envs, where the deploy before the merge can be asked
+	// (staging.DeployBeforeMerge): Files, for every such PR (fillPR), are
+	// the paths magnum's poller listed at the PR's head (pr_files; nil
+	// without a list of that head, or when it cannot be read); Stagings,
+	// for your own PRs alone (OwnPRs: a task's are the factory daemon's
+	// own), where the PR stands on each env as the review daemon last told
+	// it (its record, engine.KVPRStaging, as engine.StagingShown shows it:
+	// the config's envs in order, unknown without a record of the head that
+	// reads, or with magnum's daemon not ticking).
 	Files    []string
 	Stagings []engine.StagingEnv
 }

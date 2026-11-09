@@ -263,7 +263,7 @@ func (s *screen) prWaitOf(v *taskView, st PRState, read bool, err error) prWait 
 		w.move, w.moveShort = fmt.Sprintf("magnum review %s#%d", ref.Repo, ref.Number), "magnum review"
 		return w
 	}
-	return s.taskDeployFirst(v, publishedWait(t, prRef(v), st, s.clock()))
+	return s.taskDeployFirst(v, st, publishedWait(t, prRef(v), st, s.clock()))
 }
 
 // prClock is when a PR's wait is read and the timings of magnum's daemon it

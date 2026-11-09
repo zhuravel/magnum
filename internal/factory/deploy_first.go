@@ -15,6 +15,8 @@ package factory
 // a reviewer, findings stay the next step. Nothing here runs git.
 
 import (
+	"strings"
+
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/staging"
 	"github.com/zhuravel/magnum/internal/tui"
@@ -31,8 +33,9 @@ const (
 // files are paths and whose staging status is envs, with the staging
 // deploy first when staging.DeployBeforeMerge says the PR needs one: its
 // words lead the blocker's (their first clause its short form) and the
-// help line, and E is the move. Any other wait, and a PR that needs no
-// deploy, is w.
+// help line, and E is the move, with what the merge move said after it
+// (the optional calls magnum's fixer left you; its short form is E's
+// alone). Any other wait, and a PR that needs no deploy, is w.
 func deployFirst(w prWait, paths []string, envs []staging.EnvStatus) prWait {
 	if !w.merge {
 		return w
@@ -49,28 +52,45 @@ func deployFirst(w prWait, paths []string, envs []staging.EnvStatus) prWait {
 		return words + " · " + s
 	}
 	w.on.What, w.on.Short, w.on.Long, w.help = first(w.on.What), firstClause(words), first(w.on.Long), first(w.help)
-	w.move, w.moveShort, w.deploy = deployMove, deployMoveShort, true
+	move := deployMove
+	if _, rest, ok := strings.Cut(w.move, " · "); ok { // what the merge move said after it: the optional calls
+		move += " · " + rest
+	}
+	w.move, w.moveShort, w.deploy = move, deployMoveShort, true
 	return w
 }
 
-// taskDeployFirst is deployFirst on published task v's wait w: the paths
-// of the ready card it pushed (ready-card.json; none without one) and its
-// row's staging cells (staging.json, as stagingCellsOf reads them: none in
-// a repository without envs, each unknown while no factory daemon runs).
-// It reads the card only for a wait on the merge.
-func (s *screen) taskDeployFirst(v *taskView, w prWait) prWait {
+// taskDeployFirst is deployFirst on published task v's wait w, whose PR
+// magnum's registry tells as st: its row's staging cells (staging.json, as
+// stagingCellsOf reads them: none in a repository without envs, each
+// unknown while no factory daemon runs) and the paths of the PR's head,
+// st.Head, the head the rest of its row and card read: the ready card's
+// (ready-card.json, the change you pushed) when it was drawn at that head,
+// else the paths magnum's poller listed there (st.Files: magnum's fixer
+// may have pushed since), else the card's, the only change known; none
+// without either. It reads the card only for a wait on the merge in a
+// repository with staging envs.
+func (s *screen) taskDeployFirst(v *taskView, st PRState, w prWait) prWait {
 	if !w.merge {
 		return w
 	}
-	c, err := ReadReadyCard(s.l, v.t.ID)
-	if err != nil {
+	cells := stagingCellsOf(s.cfg, s.stagings, v.t, prRef(v).Number, s.down)
+	if len(cells) == 0 {
 		return w
 	}
-	paths := make([]string, len(c.Files))
-	for i, f := range c.Files {
-		paths[i] = f.Path
+	c, err := ReadReadyCard(s.l, v.t.ID)
+	var paths []string
+	switch {
+	case err == nil && c.Head == st.Head, err == nil && st.Files == nil:
+		for _, f := range c.Files {
+			paths = append(paths, f.Path)
+		}
+	case st.Files != nil:
+		paths = st.Files
+	default:
+		return w
 	}
-	return deployFirst(w, paths, cellEnvs(stagingCellsOf(s.cfg, s.stagings, v.t, prRef(v).Number, s.down)))
+	return deployFirst(w, paths, cellEnvs(cells))
 }
 
 // cellEnvs are staging cells as internal/staging's statuses, stagingState

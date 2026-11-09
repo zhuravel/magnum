@@ -30,10 +30,17 @@ func stagedRig(t *testing.T) *screenRig {
 	return r
 }
 
-// changes writes task id's ready card, the change it pushed, with paths.
+// changes writes task id's ready card, the change it pushed at the PR's
+// head (prHead), with paths.
 func (r *screenRig) changes(id int64, paths ...string) {
 	r.t.Helper()
-	c := ReadyCardFile{Head: prHead, Base: strings.Repeat("b", 40)}
+	r.changesAt(id, prHead, paths...)
+}
+
+// changesAt writes task id's ready card of head, with paths.
+func (r *screenRig) changesAt(id int64, head string, paths ...string) {
+	r.t.Helper()
+	c := ReadyCardFile{Head: head, Base: strings.Repeat("b", 40)}
 	for _, p := range paths {
 		c.Files = append(c.Files, CardFile{Path: p, Added: 3, InPlan: true})
 	}
@@ -329,5 +336,151 @@ func TestOwnPRsReadTheReviewDaemonsStagingRecordAndTheHeadsPaths(t *testing.T) {
 	}
 	if got := states(prs[0]); !slices.Equal(got, []string{"void=unknown", "bart=unknown", "bastion=unknown"}) {
 		t.Errorf("#7 with magnum's last tick an hour old: stagings %q, want each unknown", got)
+	}
+}
+
+// olderHead is a head of the PR before prHead: the one its ready card was
+// drawn at before magnum's fixer pushed.
+var olderHead = "eeeeeee" + strings.Repeat("0", 33)
+
+// A task's changed paths are those of the PR's head, the head the rest of
+// its row and card read: the ready card's when it was drawn at that head,
+// else the paths magnum's poller listed at it (PRState.Files), else the
+// card's, the only change known; a PR without a ready card (one the factory
+// adopted) has the head's list alone. A migration the card names that the
+// head's list does not (the fixer removed it) asks no deploy, and one the
+// head's list names that the card lacks (the fixer added it) does. Before,
+// the card's paths stood at whatever head the PR had.
+func TestATasksPathsAreThoseOfThePRsHead(t *testing.T) {
+	words := staging.DeployBeforeMergeWords(theMigration)
+	for name, c := range map[string]struct {
+		card  []string
+		files []string
+		first bool
+	}{
+		"a migration the card names and the head's list does not": {[]string{theMigration}, []string{"app/models/metric.rb"}, false},
+		"a migration the head's list names and the card lacks":    {[]string{"app/models/metric.rb"}, []string{"app/models/metric.rb", theMigration}, true},
+		"no list of the head: the card's paths":                   {[]string{theMigration}, nil, true},
+		"no ready card (an adopted PR): the head's list":          {nil, []string{theMigration}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := stagedRig(t)
+			task := r.publishedTask("PR-12324", 4534)
+			if c.card != nil {
+				r.changesAt(task.ID, olderHead, c.card...)
+			}
+			r.stagingFile(task.ID, 4534, "none", "none", "none")
+			r.pr(4534, func(v *PRState) {
+				approvedIdle(v)
+				v.Files = c.files
+			})
+			row := rowOf(t, r.data(time.Time{}), "PR-12324")
+			if !c.first {
+				wantMerge(t, row)
+				return
+			}
+			if !row.DeployFirst || row.WaitsOn[0].What != words+" · "+approvedWhy {
+				t.Errorf("the row: %+v, want the deploy first", row)
+			}
+		})
+	}
+}
+
+// The deploy first keeps what the merge move said after it: the optional
+// calls magnum's fixer left you, seen at the merge. The short move stays
+// E's alone.
+func TestTheDeployFirstMoveKeepsTheOptionalCalls(t *testing.T) {
+	const link = "https://github.com/example/talkable/pull/4534#discussion_r4302866759"
+	r := stagedRig(t)
+	task := r.publishedTask("PR-12324", 4534)
+	r.changes(task.ID, theMigration)
+	r.stagingFile(task.ID, 4534, "none", "none", "none")
+	r.pr(4534, func(v *PRState) {
+		v.HasOpen, v.Approved, v.Open = true, true, verdict(engine.OpenIdle, approvedWhy+" · 1 optional call: "+link)
+		v.Open.Optional = []string{link}
+	})
+	row := rowOf(t, r.data(time.Time{}), "PR-12324")
+	if row.Move != "E deploys to a staging · 1 optional call: "+link || row.MoveShort != "E deploys it" || !row.DeployFirst {
+		t.Errorf("its move %q / %q, deploy first %v: want E's with the optional call", row.Move, row.MoveShort, row.DeployFirst)
+	}
+}
+
+// PRStates and OwnPRs read the paths magnum's poller listed at a PR's head
+// only in a repository with staging envs, where the rule can use them: in
+// one without, neither the paths nor the staging record are read.
+func TestThePathsAreReadOnlyInARepositoryWithStagingEnvs(t *testing.T) {
+	l, st := magnumLayout(t)
+	ctx := t.Context()
+	head := strings.Repeat("ab", 20)
+	seven := magnumPR(t, st, 7, head, func(g *store.GitHubPR) {
+		g.Files = &store.PRFiles{HeadSHA: head, Paths: []string{theMigration}}
+	})
+	setKV(t, st, store.KVDaemonLastTick, store.FormatTime(time.Now()))
+	setKV(t, st, engine.KVPRStaging(seven.ID), engine.StagingRecord{Head: head, Envs: []engine.StagingEnv{{Env: "void", State: "none"}}})
+	ref := PRRef{Repo: "example/shop", Number: 7}
+	staged := selfConfig()
+	staged.Factory.Repos = []config.FactoryRepo{{Repo: "example/shop", Base: "master", Staging: theStagings}}
+	got, err := NewMagnum(l, staged).PRStates(ctx, []PRRef{ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := got[ref]; !slices.Equal(v.Files, []string{theMigration}) || v.Stagings != nil {
+		t.Errorf("a task's PR in a repository with envs: files %q, stagings %+v; want the head's paths and no record", v.Files, v.Stagings)
+	}
+	got, err = NewMagnum(l, selfConfig()).PRStates(ctx, []PRRef{ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := got[ref]; v.Files != nil || v.Stagings != nil {
+		t.Errorf("a repository without envs: files %q, stagings %+v; want neither read", v.Files, v.Stagings)
+	}
+	prs, err := NewMagnum(l, selfConfig()).OwnPRs(ctx)
+	if err != nil || len(prs) != 1 || prs[0].Files != nil || prs[0].Stagings != nil {
+		t.Errorf("OwnPRs without envs = %+v, %v; want #7 with neither read", prs, err)
+	}
+}
+
+// A read of a PR's paths that fails (a list magnum's registry cannot
+// decode) hides no PR: OwnPRs and PRStates go on, the PR's paths are not
+// known (no nudge: the rule finds no migration), and its staging record is
+// still read; a record that does not decode reads as none, each env
+// unknown. Before, the failure failed OwnPRs, and every one of your PRs
+// left home ("your PRs not read").
+func TestAFailedReadOfThePathsHidesNoPR(t *testing.T) {
+	l, st := magnumLayout(t)
+	ctx := t.Context()
+	head := strings.Repeat("ab", 20)
+	cfg := selfConfig()
+	cfg.Factory.Repos = []config.FactoryRepo{{Repo: "example/shop", Base: "master", Staging: theStagings}}
+	seven := magnumPR(t, st, 7, head, func(g *store.GitHubPR) {
+		g.Files = &store.PRFiles{HeadSHA: head, Paths: []string{theMigration}}
+	})
+	eight := magnumPR(t, st, 8, head, nil)
+	if _, err := st.DB().Exec("UPDATE pr_files SET paths_json = '{not json' WHERE pr_id = ?", seven.ID); err != nil {
+		t.Fatal(err)
+	}
+	setKV(t, st, store.KVDaemonLastTick, store.FormatTime(time.Now()))
+	setKV(t, st, engine.KVPRStaging(seven.ID), engine.StagingRecord{Head: head, Envs: []engine.StagingEnv{{Env: "void", State: "none"}}})
+	setKV(t, st, engine.KVPRStaging(eight.ID), "{not a record")
+	prs, err := NewMagnum(l, cfg).OwnPRs(ctx)
+	if err != nil || len(prs) != 2 {
+		t.Fatalf("OwnPRs = %+v, %v; want #7 and #8", prs, err)
+	}
+	states := func(v PRState) []string {
+		var out []string
+		for _, e := range v.Stagings {
+			out = append(out, e.Env+"="+e.State)
+		}
+		return out
+	}
+	if v := prs[0]; v.Files != nil || !slices.Equal(states(v), []string{"void=none", "bart=unknown", "bastion=unknown"}) {
+		t.Errorf("#7, its paths not read: files %q, stagings %q", v.Files, states(v))
+	}
+	if v := prs[1]; !slices.Equal(states(v), []string{"void=unknown", "bart=unknown", "bastion=unknown"}) {
+		t.Errorf("#8, a record that does not decode: stagings %q", states(v))
+	}
+	ref := PRRef{Repo: "example/shop", Number: 7}
+	if got, err := NewMagnum(l, cfg).PRStates(ctx, []PRRef{ref}); err != nil || !got[ref].Found || got[ref].Files != nil {
+		t.Errorf("PRStates = %+v, %v; want #7 found, its paths not known", got[ref], err)
 	}
 }
