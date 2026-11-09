@@ -273,6 +273,7 @@ func (a *fakeStagingAgent) Detach() {
 
 // result writes r as the agent's result file.
 func (a *fakeStagingAgent) result(t *testing.T, r resolveResultFile) {
+	t.Helper()
 	b, err := json.Marshal(r)
 	if err != nil {
 		t.Error(err)

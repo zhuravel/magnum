@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -185,23 +186,25 @@ func resolveNudge(result string, problem error) string {
 		result, oneLine(problem.Error(), 200), result)
 }
 
+// resolveBlanked are the variables the agent's pane gets empty: the
+// GitHub tokens gh and git read, and the SSH agent's socket.
+var resolveBlanked = []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "SSH_AUTH_SOCK"}
+
 // resolvePaneEnv is the agent's pane env: the slot's own (its databases),
-// with no GitHub token, an empty gh config dir under the job's directory,
-// no global or system git config (no credential helper of yours), no
-// askpass and no SSH agent.
+// with no GitHub token (resolveBlanked), an empty gh config dir under the
+// job's directory, no global or system git config (no credential helper
+// of yours), no askpass and no SSH agent.
 func resolvePaneEnv(dir string, slotEnv map[string]string) map[string]string {
 	env := map[string]string{}
-	for k, v := range slotEnv {
-		env[k] = v
+	maps.Copy(env, slotEnv)
+	for _, k := range resolveBlanked {
+		env[k] = ""
 	}
-	for k, v := range map[string]string{
-		"GH_TOKEN": "", "GITHUB_TOKEN": "", "GH_ENTERPRISE_TOKEN": "", "GITHUB_ENTERPRISE_TOKEN": "",
+	maps.Copy(env, map[string]string{ //nolint:gosec // G101: the names of git's askpass variables, no credential
 		"GH_CONFIG_DIR":     filepath.Join(dir, "gh"),
 		"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
-		"GIT_ASKPASS": "/usr/bin/false", "SSH_ASKPASS": "/usr/bin/false", "SSH_AUTH_SOCK": "",
-	} {
-		env[k] = v
-	}
+		"GIT_ASKPASS": "/usr/bin/false", "SSH_ASKPASS": "/usr/bin/false",
+	})
 	return env
 }
 
