@@ -48,6 +48,10 @@ type CaseRun struct {
 	// the newest full replay of it at the same head (FullReplayFor; `magnum eval run --judge-only`).
 	JudgeOnly  bool   `json:"judge_only,omitempty"`
 	ReportsRun string `json:"reports_run,omitempty"`
+	// Findings are what a local case was scored on: its round's findings as the factory acts on
+	// them (evalrun.LocalResult's, a question marked), then the review's body; Rescore scores them
+	// again. A posted case's are re-read from ResultFile, so they are not kept.
+	Findings []Finding `json:"findings,omitempty"`
 }
 
 // outcomeDryRun is a replay's outcome when the judge wrote its planned review (pipeline.OutcomeDryRun).
@@ -235,6 +239,9 @@ const rescoreError = "rescore: "
 // now pins to another head than the run reviewed keeps its score (the defects name the new head's
 // lines), and so does a result that cannot be read or parsed; either sets Error to say so when the
 // case has a score or no other error. A rescore that succeeds clears an Error an earlier one set.
+// A local case (CaseRun.Kind KindLocal) that was scored is scored again on the findings the run
+// kept (CaseRun.Findings), its result file unread; one the corpus now has as another kind of case
+// keeps its score and says so.
 func Rescore(r Run, c *Corpus, read func(path string) ([]byte, error)) Run {
 	if read == nil {
 		read = os.ReadFile
@@ -260,10 +267,22 @@ func Rescore(r Run, c *Corpus, read func(path string) ([]byte, error)) Run {
 				textx.ShortSHA(cs.Head), textx.ShortSHA(cr.Head)))
 			continue
 		}
-		data, err := read(cr.ResultFile)
+		if cs.Kind != cr.Kind {
+			noteRescore(cr, "the corpus has it as another kind of case now: score kept; run the case again")
+			continue
+		}
 		var res Result
-		if err == nil {
-			res, err = ParseResult(data)
+		var err error
+		switch {
+		case cr.Kind == KindLocal && cr.Score == nil:
+			continue // a local round that was not scored (a role it went without, a refusal) has nothing to score again
+		case cr.Kind == KindLocal:
+			res = Result{Status: cr.Score.Status, Event: cr.Score.Event, Findings: cr.Findings}
+		default:
+			var data []byte
+			if data, err = read(cr.ResultFile); err == nil {
+				res, err = ParseResult(data)
+			}
 		}
 		if err != nil {
 			noteRescore(cr, err.Error())

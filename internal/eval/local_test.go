@@ -194,3 +194,32 @@ func TestTheReportSaysAQuestionDefectWantsAQuestion(t *testing.T) {
 		t.Fatalf("report:\n%s", b.String())
 	}
 }
+
+// A local case's run keeps the findings it was scored on (the round's, as the factory acts on them),
+// so `eval score` re-scores it against the corpus's current defects from those, without the result
+// file, which holds no question marks a posted parse would read. A local run whose case the corpus now
+// has as a posted one keeps its score and says why.
+func TestRescoreScoresALocalCaseFromItsRecordedFindings(t *testing.T) {
+	cs := questionCase(t)
+	findings := []Finding{{Body: "Is the rounding the operator's to decide?", Severity: "P2", Question: true}}
+	old := ScoreCase(cs, Result{Findings: findings})
+	if old.Found != 0 {
+		t.Fatalf("fixture: the defect's words should miss the finding: %+v", old)
+	}
+	run := Run{ID: "r1", Cases: []CaseRun{{Case: cs.Name, Kind: KindLocal, PR: cs.PR, Head: cs.Head, Outcome: "dry_run",
+		ResultFile: "/abs/codex-judge.json", Score: &old, Findings: findings}}}
+	fixed := cs
+	fixed.Defects = []Defect{cs.Defects[0]}
+	fixed.Defects[0].Match = []string{"rounding"}
+	read := func(string) ([]byte, error) { t.Fatal("a local case's result file was read"); return nil, nil }
+	got := Rescore(run, &Corpus{Cases: []Case{fixed}}, read)
+	if s := got.Cases[0].Score; s == nil || s.Found != 1 || !s.Defects[0].Question {
+		t.Fatalf("rescored %+v, want the question found", got.Cases[0].Score)
+	}
+	posted := fixed
+	posted.Kind, posted.Defects[0].Question = KindPosted, false
+	got = Rescore(run, &Corpus{Cases: []Case{posted}}, read)
+	if got.Cases[0].Score != &old || !strings.Contains(got.Cases[0].Error, "another kind") {
+		t.Fatalf("case %+v, want the old score kept and why", got.Cases[0])
+	}
+}
