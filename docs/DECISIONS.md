@@ -16948,19 +16948,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   included, so the author's answer stays the last reply and only an operator action cleared the flag. Now the
   re-review and recovery prompts' stop sentence asks the judge to write the ids of the stopped threads whose
   finding it keeps open as `stops_open` in its result file (`[]` when the answers settle them all), and a posted
-  or replied round keeps only those in `RoundResult.Stops` (an id that is not a stopped thread adds nothing).
-  The engine is unchanged: its empty-stalemate branch clears a stale flag on the next round that reads the
-  threads and settles them, without a seen mark, so a later round that holds the same answer open flags it
-  again. What stays: the `stop` mark in `review-threads.json`, `.StopThreads` and post-review's refusal; a
-  result without `stops_open`, or with one that is not a list of strings, and a round with no posted or replied
-  verdict (failed, stopped, needs attention) keep every stop as before; the seen rules and the loop's forced
-  re-review leaving flags in place. A flag already in the registry clears on the next such round or an operator
-  action (`r`). SKILL.md is not touched (the prompt carries the instruction). Rejected: dropping resolved threads
-  (one PR's thread was resolved for days while the judge rightly held its P2 open in 12 reviews, and two of the
-  five were unresolved); reading "Fixed:" and "Answered:" in the review body (the judge's own words, in no
-  contract). Tests, failing first: pipeline's TestTheRoundKeepsOnlyTheStopsTheJudgeHoldsOpen (a posted
-  re-review and a reply round; absent and malformed keep both) and TestParseResultReadsTheStopsTheJudgeHoldsOpen;
-  engine's TestAStalemateTheJudgeSettlesClearsWithoutASeenMark pins that the engine half needed no change.
+  or replied round keeps only those in `RoundResult.Stops` (the id of a thread that is not stopped adds
+  nothing). The list counts only when every entry is the id of a thread in the `review-threads.json` the judge
+  was given on the head: a thread's URL or comment id in its place, or an id the file does not list, would
+  drop every stop the judge meant to keep, so such a list decides nothing and the round warns. The engine's
+  empty-stalemate branch clears a stale flag on the next round that reads the threads and settles them,
+  without a seen mark, so a later round that holds the same answer open flags it again. Two rounds carry a
+  judge's decision without reading the threads: a continued turn (a usage limit or an overload paused the
+  round after it had flagged every stop) and a round adopting an earlier run's review (GitHub could not verify
+  it, or the judge posted after its round gave up). Each reads the judge's `stops_open` from its result,
+  checks it against that head's threads file and carries it as `RoundResult.StopsOpen`; the engine keeps only
+  those threads of the PR's flag, adding none, raising no event and marking nothing seen. What stays: the
+  `stop` mark in `review-threads.json`, `.StopThreads` and post-review's refusal; a result without
+  `stops_open`, or with one that is not a list of strings, and a round with no posted or replied verdict
+  (failed, stopped, needs attention) keep every stop as before; the seen rules and the loop's forced re-review
+  leaving flags in place. A flag already in the registry clears on the next such round or an operator action
+  (`r`). SKILL.md is not touched (the prompt carries the instruction). Rejected: dropping resolved threads (one
+  PR's thread was resolved for days while the judge rightly held its P2 open in 12 reviews, and two of the five
+  were unresolved); reading "Fixed:" and "Answered:" in the review body (the judge's own words, in no
+  contract); filtering on a list that names no stopped thread (it read as "every answer settles it"); a
+  continued turn reading the paused round's threads file again as its own (an older file on the head could
+  flag threads an earlier judge had settled). Tests, failing first: pipeline's
+  TestTheRoundKeepsOnlyTheStopsTheJudgeHoldsOpen (a posted re-review and a reply round; absent and malformed
+  keep both, as do a URL, an id the file does not list and a judge that posted nothing),
+  TestParseResultReadsTheStopsTheJudgeHoldsOpen, TestAContinuedTurnCarriesTheStopsItsJudgeHoldsOpen and
+  TestAnAdoptedReviewCarriesTheStopsItsJudgeHoldsOpen; engine's
+  TestAContinuedTurnSettlesTheStalemateItsPausedRoundFlagged; TestAStalemateTheJudgeSettlesClearsWithoutASeenMark
+  pins the empty-stalemate branch.
 - **A reply in a thread is read from the PR's reviews, not its timeline** (2026-11-09, amends "An author's own
   inline threads are not replies"). Authors answered magnum's findings in its threads on two PRs (a P1 settled
   by the merge order, a declined simplification, a fix in a companion PR) and no reply round came:
@@ -16977,14 +16991,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `resolveAnswers`, `repliesOf`, the 12031 rule, the trusted-replier rule and magnum's own replies being dropped
   are unchanged. `ActivityAt` takes those reviews' submission times too: `latestReviews` leaves out the PR author,
   so the last activity stayed at magnum's review two days before the author's reply. The same shape (two nodes,
-  the same nested comments) and fields only, which GitHub does not price; no dry run priced it again. Limits: only
-  the last two reviews are read, so a reply with two newer reviews after it and no push is still missed; the first
-  polls after the deploy start reply rounds for the replies that waited (the debounce holds), and an App fixer's
-  replies in magnum's threads count for the first time. Rejected: a scalar `reviews(last: 10)` beside the two
+  the same nested comments) and fields only, which GitHub does not price; no dry run priced it again. Replies in
+  threads now often fill both nodes, so the timeline's newest reviews with a body are resolved through
+  `ReviewAnswers` instead (1 point per repository batch, only for a review newer than magnum's latest), where the
+  timeline's last two resolved them for free before. Details are read only for a PR that changed on GitHub, and
+  on both PRs the earlier build had read them after the replies: so the first poll of each repository on this
+  build reads the Details of every open PR magnum reviewed at its head once, changed or not (`detailsEpoch`,
+  `repo.<id>.details_epoch`; one Details batch per repository, then nothing more), and the replies that waited
+  start reply rounds (the debounce holds). Limits: only the last two reviews are read, so a reply with two newer
+  reviews after it and no push is still missed; an App fixer's replies in magnum's threads count for the first
+  time. Rejected: a scalar `reviews(last: 10)` beside the two
   resolved ones (another connection, to be priced first; `resolveAnswers` would resolve them); reading every
   review's comments (the doubled price of the nested connection on every timeline review). Tests, failing first:
-  github's TestDetailsReadsAReplyOnlyReviewTheTimelineLeavesOut and TestTheLastActivityCountsAReplyTheTimelineLeavesOut;
-  `details_remarks.json` no longer lists its reply-only review in the timeline, and its expectations pass unchanged.
+  github's TestDetailsReadsAReplyOnlyReviewTheTimelineLeavesOut and TestTheLastActivityCountsAReplyTheTimelineLeavesOut,
+  engine's TestTheFirstPollOfABuildThatReadsMoreDetailsReReadsTheReviewedPRsOnce; `details_remarks.json` no longer
+  lists its reply-only review in the timeline, and its expectations pass unchanged.
 
 - **A comment that left optional findings only needs the operator as a clean one does** (2026-11-09, amends
   "PRs Magnum approved that still need the operator's approval", 2026-10-06, after an audit of PRs waiting on

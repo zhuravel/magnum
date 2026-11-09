@@ -298,7 +298,11 @@ type PRState struct {
 // reply in a thread (a review with no body whose comments all reply), and
 // reads each one's submission time, author and authorAssociation: the same
 // shape, two nodes with the same nested comments, and fields, which GitHub
-// does not price (not priced again by a dry run). The poll asks
+// does not price (not priced again by a dry run). Replies in threads now
+// often fill both nodes, so the timeline's newest reviews with a body are
+// resolved through ReviewAnswers instead (1 point per repository batch,
+// only for a review newer than magnum's latest one), where the timeline's
+// last two resolved them for free before. The poll asks
 // ReviewAnswers about the reviews it needs beyond those two: 1 point a call
 // of up to 100 reviews, where the last ten reviews here would price batches
 // of 10, 20 and 40 at 2, 4 and 8 points instead of 1, 3 and 5 (dry run,

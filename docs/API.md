@@ -24610,6 +24610,16 @@ type RoundResult struct {
 	// settled their findings.
 	ThreadsRead bool
 	Stops       []StopThread
+	// StopsOpen are, when StopsOpenGiven, the stopped threads whose finding
+	// the judge keeps open, from a posted or replied round that read no
+	// threads but carries the decision of the judge an earlier round gave
+	// them to: a continued turn (KindContinue), or the adoption of an
+	// earlier run's review (unverified.go). That earlier round flagged its
+	// stops before its judge decided them; the engine keeps only these of
+	// the PR's flag. A round that read the threads leaves them unset (its
+	// Stops are decided already).
+	StopsOpen      []string
+	StopsOpenGiven bool
 }
     RoundResult is the round's verdict. The engine decides the PR state from
     Outcome (and Pause).

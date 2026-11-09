@@ -98,7 +98,8 @@ func (e *Engine) ownLogins(ctx context.Context, w config.Watch, pr store.PR) []s
 // whole); one whose inline comments only start threads or answer someone
 // else's (elsewhere) is the author's own finding, never a reply (DECISIONS
 // "An author's own inline threads are not replies"), and a review older than
-// the two the timeline resolves (AnswersKnown false) counts as before. Other
+// the last two reviews Details resolves (AnswersKnown false) counts as
+// before. Other
 // replies start nothing; the judge still reads them in the threads file.
 // "(Claude)" replies an author's agent posts as the author are the author's.
 // A reply in one of own's threads by one of fixers (the watch's fixer

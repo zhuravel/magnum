@@ -319,8 +319,8 @@ func TestOnlyRepliesThatMayAnswerMagnumStartARound(t *testing.T) {
 // threads (or answer another reviewer's) is the author's own, never a reply;
 // one that answers in magnum's thread is, and so is a review with a body
 // alone or an issue comment, which answer the review as a whole. A review
-// older than the last two the timeline resolves (AnswersKnown false) keeps
-// counting as before.
+// older than the last two reviews Details resolves (AnswersKnown false)
+// keeps counting as before.
 func TestAnAuthorsOwnInlineThreadsAreNotReplies(t *testing.T) {
 	at := time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
 	review := func(i int, answers []string, known bool, comments int) github.Remark {

@@ -807,7 +807,10 @@ reviews; for every other review since Magnum's latest review of the PR (up to te
 more call for the batch (1 point, none when nothing needs it), and a review it could not ask about counts
 as before. A reply in a thread is a review with no body, which GitHub's timeline never lists: the poll
 finds it among the PR's last two reviews, so a reply with two newer reviews after it and no push starts
-nothing (the next round's judge still reads it in the threads). Anyone else's reply in a thread (in a public repository anyone may
+nothing (the next round's judge still reads it in the threads). Since replies often fill those two, a newer
+review with a body is then asked about in that one more call. The first poll of each repository with this
+build reads every open PR Magnum reviewed at its head once, changed or not, so a reply an earlier build
+could not see is read too. Anyone else's reply in a thread (in a public repository anyone may
 reply), a bot's without that association, a teammate's review elsewhere or a bot's top-level comment
 starts nothing; the next round's judge reads them anyway. When such replies came on a head Magnum reviewed, the PR waits
 `[daemon] reply_debounce` (default `"3m"`, `"0"` turns it off) after the last one and at least
@@ -831,7 +834,9 @@ a thread, an answer marks the thread `stop`: the judge replies there no more, `p
 and the board flags the PR for you (`pr.stalemate`; `reviewed · argued` in STATE) until you act on it
 (`magnum review`, a verdict, a mute). The judge still decides the finding, and writes the stopped threads
 whose finding it keeps open as `stops_open` in its result: a thread whose answer it accepts is not
-flagged, and a later round that settles a flagged thread clears the flag. Replies older than the daemon's first start with this build start nothing on their own; the board
+flagged, and a later round that settles a flagged thread clears the flag (so does the continued turn of a
+round a usage limit paused after flagging). A list with an entry that names no thread of the threads file
+by its id decides nothing, with a warning: every stopped thread stays flagged. Replies older than the daemon's first start with this build start nothing on their own; the board
 counts them (`↩N`), and `magnum review --replies` (the board's `r` on such a row) re-decides them now.
 
 CI that finishes red after the review gets a round of its own too. The judge reads the head's failing
