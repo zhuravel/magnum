@@ -387,3 +387,40 @@ func (s *stagingIDs) warn(repo string, err error) {
 		s.a.Logger.Warn("staging: no git env for the status fetch", "repo", repo, "err", msg)
 	}
 }
+
+// StagingShown is what a reader shows of a PR's staging status, per env of
+// envs (the config's, in its order; nil without any): the env's state in
+// rec, or unknown, Why saying so, when there is no record (ok false) or
+// the record lacks the env (not read yet), it was told for another head
+// than head (the head moved since; the daemon's next tick tells it), or
+// the daemon's last tick (lastTick; zero: it never ran) is more than
+// staging.StaleAfter before now, so the record no longer follows staging.
+func StagingShown(rec StagingRecord, ok bool, envs []staging.Env, head string, lastTick, now time.Time) []StagingEnv {
+	if len(envs) == 0 {
+		return nil
+	}
+	why := ""
+	switch age := now.Sub(lastTick); {
+	case lastTick.IsZero():
+		why = "the daemon has not run"
+	case age > staging.StaleAfter:
+		why = "stale: the daemon's last tick is " + strings.TrimSuffix(age.Round(time.Minute).String(), "0s") + " old"
+	case !ok:
+		why = "not read yet"
+	case rec.Head != head:
+		why = "the head moved since the last read"
+	}
+	out := make([]StagingEnv, len(envs))
+	for i, env := range envs {
+		j := slices.IndexFunc(rec.Envs, func(e StagingEnv) bool { return e.Env == env.Name })
+		switch {
+		case why != "":
+			out[i] = StagingEnv{Env: env.Name, State: string(staging.StateUnknown), Why: why}
+		case j < 0:
+			out[i] = StagingEnv{Env: env.Name, State: string(staging.StateUnknown), Why: "not read yet"}
+		default:
+			out[i] = rec.Envs[j]
+		}
+	}
+	return out
+}

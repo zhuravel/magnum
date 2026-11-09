@@ -157,6 +157,12 @@ func (p *prbPainter) helpContent(width int) []string {
 		"65/65 checks done", "Completion +1: the worst required check and how many more", p.pal.yellow.Render(g.stale) + " of an older commit",
 	}, "   ", inner)...)
 	lines = append(lines, flow([]string{
+		p.st.Header.Render("STAGE"), p.pal.green.Render(g.stage["live"]) + " live", p.pal.yellow.Render(g.stage["pushed"]) + " pushed: CI or Jenkins",
+		p.pal.red.Render(g.stage["failed"]) + " CI failed on the PR's changes", p.pal.named["magenta"].Render(g.stage["outdated"]) + " an older head",
+		p.st.Dim.Render(g.stage["none"]) + " not there", p.st.Dim.Render(g.stage["unknown"]) + " unknown",
+		"one per staging env, in the config's order",
+	}, "   ", inner)...)
+	lines = append(lines, flow([]string{
 		p.st.Header.Render("REQUESTED"), p.pal.mine.Render(g.mine) + " 2h: a review asked of you 2h ago",
 		p.st.Dim.Render("3d") + " the latest ask of someone else",
 	}, "   ", inner)...)
@@ -446,6 +452,12 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 			for w := range strings.SplitSeq(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(l), "\n") {
 				add("  " + w)
 			}
+		}
+	}
+	if len(r.Stagings) > 0 {
+		add("", p.st.Section.Render(p.g.headed("STAGINGS")))
+		for _, l := range p.stagingLines(r.Stagings, max(inner-2, 10)) {
+			add("  " + l)
 		}
 	}
 	if skipped(r) && r.CodexFlag == "" { // a flagged PR's sentence is under its title
@@ -981,6 +993,69 @@ func (p *prbPainter) ciLines(ci CIInfo) []string {
 	out = append(out, p.requiredLines(ci, mark)...)
 	if ci.Blocked != "" {
 		out = append(out, p.st.Warn.Render(ci.Blocked))
+	}
+	return out
+}
+
+// stagingDetails are the card's words for why a pushed env is not live
+// yet (StagingInfo.Detail).
+var stagingDetails = map[string]string{
+	"ci_running":         "CI running",
+	"ci_failed_ours":     "CI failed on this PR's changes",
+	"ci_failed_not_ours": "CI failed, not on this PR's changes",
+	"waiting_jenkins":    "CI passed, waiting for Jenkins",
+	"not_confirmed":      "CI passed, no deployment confirms it",
+}
+
+// stagingLines are the card's STAGINGS block, width cells wide: per env
+// its glyph, its name and its state, CI's or Jenkins' part of it, the head
+// in the tip or how far behind, when it was deployed or pushed; under it,
+// why it cannot be told and the CI run's page.
+func (p *prbPainter) stagingLines(ss []StagingInfo, width int) []string {
+	nameW := 0
+	for _, s := range ss {
+		nameW = max(nameW, ansi.StringWidth(s.Env))
+	}
+	indent := spaces(ansi.StringWidth(p.g.stage["live"]) + 1 + nameW + 2)
+	sep := p.st.Dim.Render(p.g.sep)
+	var out []string
+	for _, s := range ss {
+		word, st, words := p.stagingLook(s)
+		parts := []string{st.Render(words)}
+		state := normCI(s.State)
+		if d := stagingDetails[normCI(s.Detail)]; d != "" && state == "pushed" {
+			parts = append(parts, d)
+		}
+		switch state {
+		case "latest", "pushed":
+			if s.InTip != "" {
+				parts = append(parts, "head "+textx.ShortSHA(s.InTip))
+			}
+		case "outdated":
+			if s.InTip != "" {
+				parts = append(parts, textx.ShortSHA(s.InTip))
+			}
+			if s.Behind == 1 {
+				parts = append(parts, "1 commit behind")
+			} else if s.Behind > 1 {
+				parts = append(parts, strconv.Itoa(s.Behind)+" commits behind")
+			}
+		}
+		switch {
+		case state == "latest" && !s.DeployedAt.IsZero():
+			parts = append(parts, "deployed "+shortAge(max(p.now.Sub(s.DeployedAt), 0))+" ago")
+		case (state == "latest" || state == "pushed" || state == "outdated") && !s.PushedAt.IsZero():
+			parts = append(parts, "pushed "+shortAge(max(p.now.Sub(s.PushedAt), 0))+" ago")
+		}
+		out = append(out, st.Render(p.g.stage[word])+" "+s.Env+spaces(nameW-ansi.StringWidth(s.Env))+"  "+strings.Join(parts, sep))
+		if s.Why != "" {
+			for l := range strings.SplitSeq(lipgloss.NewStyle().Width(max(width-len(indent), 10)).Render(s.Why), "\n") {
+				out = append(out, indent+p.st.Dim.Render(strings.TrimRight(l, " ")))
+			}
+		}
+		if s.RunURL != "" {
+			out = append(out, indent+"run "+p.st.Accent.Render(s.RunURL))
+		}
 	}
 	return out
 }

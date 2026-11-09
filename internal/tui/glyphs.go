@@ -77,6 +77,9 @@ type glyphs struct {
 	// shows instead of a still icon (herdr-radar's eight-dot braille, the gap
 	// walking round the cell); nil = still.
 	working []string
+	// stage are the STAGE column's glyphs, one cell each in every mode, by
+	// stagingLook's word: live, pushed, failed, outdated, none, unknown.
+	stage map[string]string
 }
 
 func newGlyphs(mode IconMode) glyphs {
@@ -88,6 +91,7 @@ func newGlyphs(mode IconMode) glyphs {
 			stale: "~", mine: "*", pin: "pin", star: "star", errMark: "!", fail: "x", ok: "+", queued: "?", merge: "m", reply: "<-",
 			nonBlocking: "~", simplify: "s", times: "x",
 			ciPass: "+", ciFail: "x", ciPending: "o", ciMissing: "-", ciSkip: "/",
+			stage:  map[string]string{"live": "L", "pushed": "p", "failed": "x", "outdated": "o", "none": ".", "unknown": "?"},
 			cursor: ">", dash: "-", minus: "-", atLeast: ">=", rule: "-", up: "^", down: "v", dot: "",
 			sortDesc: "v", sortAsc: "^", refresh: "at", sep: " | ", chipSep: ":",
 			pinAccent: true,
@@ -115,6 +119,7 @@ func newGlyphs(mode IconMode) glyphs {
 			ciPending:   "\ue641",     // gh-dash WaitingIcon
 			ciMissing:   "\uf48b",     // nf-oct-dash
 			ciSkip:      "\uf517",     // nf-oct-skip
+			stage:       unicodeStage, // three icons side by side: a wide one would cover its neighbour
 			simplify:    "\uf0c4",     // nf-fa-scissors
 			reply:       "↩",          // a plain arrow every font has: it sits in a narrow column
 			stale:       "\uf464",     // nf-oct-history
@@ -170,6 +175,7 @@ func newGlyphs(mode IconMode) glyphs {
 				"LAST REVIEW":      "\uf4af", // nf-oct-code_review
 				"FINDINGS":         "\uf46f", // nf-oct-bug
 				"CI":               "\uf52e", // nf-oct-workflow
+				"STAGINGS":         "\uf473", // nf-oct-server
 				"NOT REVIEWED":     "\uf4c5", // nf-oct-eye_closed
 				"SKIPPED":          "\uf517", // nf-oct-skip
 				"LAST ROUND":       "\uf520", // nf-oct-stopwatch
@@ -192,6 +198,7 @@ func newGlyphs(mode IconMode) glyphs {
 		stale: "⟳", mine: "★", bot: "🤖", pin: "📌", star: "✪", errMark: "!", fail: "✗", ok: "✔", queued: "◷", merge: "⑂", reply: "↩",
 		nonBlocking: "●", simplify: "✂", times: "×",
 		ciPass: "✓", ciFail: "✗", ciPending: "◌", ciMissing: "–", ciSkip: "⊘",
+		stage:  unicodeStage,
 		cursor: "▌", dash: "—", minus: "−", atLeast: "≥", rule: "─", up: "▲", down: "▼", dot: "●",
 		sortDesc: "↓", sortAsc: "↑", refresh: "↻", sep: " · ",
 		// East Asian width N, which no terminal draws wide (∆ U+2206, not
@@ -204,6 +211,11 @@ func newGlyphs(mode IconMode) glyphs {
 		working: workingFrames,
 	}
 }
+
+// unicodeStage are the STAGE column's glyphs in the Unicode and Nerd Font
+// modes, each drawn one cell wide by the terminals the board's other
+// symbols are.
+var unicodeStage = map[string]string{"live": "●", "pushed": "◐", "failed": "✗", "outdated": "○", "none": "·", "unknown": "?"}
 
 // workingFrames are herdr-radar's spinner for a working agent (MIT,
 // lib/config.js): a full braille cell reads as motion from across the

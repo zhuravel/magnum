@@ -421,3 +421,51 @@ func TestAStagingRecordRoundTrips(t *testing.T) {
 		}
 	}
 }
+
+// A reader shows the record's env, in the config's order and for the
+// config's envs only, or unknown saying why: no record yet, a record of an
+// older head, an env the record lacks, or a daemon whose last tick is
+// older than staging.StaleAfter (or that never ticked). Nothing without
+// envs.
+func TestStagingShownIsTheRecordWhileItHoldsElseUnknownSayingWhy(t *testing.T) {
+	now := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
+	envs := []staging.Env{{Name: "void", Branch: "staging-void"}, {Name: "bart", Branch: "staging-bart"}}
+	rec := StagingRecord{Head: "aaa1111", Envs: []StagingEnv{
+		{Env: "bart", State: "pushed", Detail: "ci_running", InTip: "aaa1111"},
+		{Env: "bastion", State: "latest"}, // left the config
+		{Env: "void", State: "latest", InTip: "aaa1111"},
+	}}
+	states := func(ss []StagingEnv) string {
+		var out []string
+		for _, s := range ss {
+			out = append(out, s.Env+":"+s.State+":"+s.Why)
+		}
+		return strings.Join(out, " ")
+	}
+	for _, c := range []struct {
+		name     string
+		ok       bool
+		head     string
+		lastTick time.Time
+		want     string
+	}{
+		{"fresh", true, "aaa1111", now.Add(-time.Minute), "void:latest: bart:pushed:"},
+		{"no record", false, "aaa1111", now.Add(-time.Minute), "void:unknown:not read yet bart:unknown:not read yet"},
+		{"head moved", true, "bbb2222", now.Add(-time.Minute),
+			"void:unknown:the head moved since the last read bart:unknown:the head moved since the last read"},
+		{"stale daemon", true, "aaa1111", now.Add(-11 * time.Minute),
+			"void:unknown:stale: the daemon's last tick is 11m old bart:unknown:stale: the daemon's last tick is 11m old"},
+		{"no daemon", true, "aaa1111", time.Time{}, "void:unknown:the daemon has not run bart:unknown:the daemon has not run"},
+	} {
+		if got := states(StagingShown(rec, c.ok, envs, c.head, c.lastTick, now)); got != c.want {
+			t.Errorf("%s: %s\nwant %s", c.name, got, c.want)
+		}
+	}
+	short := StagingRecord{Head: "aaa1111", Envs: []StagingEnv{{Env: "void", State: "none"}}}
+	if got := states(StagingShown(short, true, envs, "aaa1111", now, now)); got != "void:none: bart:unknown:not read yet" {
+		t.Errorf("an env the record lacks: %s", got)
+	}
+	if got := StagingShown(rec, true, nil, "aaa1111", now, now); got != nil {
+		t.Errorf("no envs: %v", got)
+	}
+}

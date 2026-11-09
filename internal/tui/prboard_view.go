@@ -362,12 +362,13 @@ const (
 	colLastReview
 	colFindings
 	colCI
+	colStaging // one glyph per staging env (STAGE); shown only when a row in scope has any
 	colSince
 	colReviewers
 	prbNumCols
 )
 
-var prbColTitles = [prbNumCols]string{"REPO", "#", "TITLE", "AUTHOR", "ASSIGNEE", "UPDATED", "REQUESTED", "STATE", "LAST REVIEW", "FINDINGS", "CI", "SINCE REVIEW", "REVIEWERS"}
+var prbColTitles = [prbNumCols]string{"REPO", "#", "TITLE", "AUTHOR", "ASSIGNEE", "UPDATED", "REQUESTED", "STATE", "LAST REVIEW", "FINDINGS", "CI", "STAGE", "SINCE REVIEW", "REVIEWERS"}
 
 // dropStage stands in prbDropOrder for the stage of a running round's state
 // cell ("simplify · 17m" becomes "17m"): it gives way where it stands, its
@@ -376,7 +377,7 @@ const dropStage = prbNumCols
 
 var (
 	// prbDropOrder is which columns give way, in turn, on a narrow screen.
-	prbDropOrder = []prbCol{colAssignee, colSince, colAuthor, colRequested, colUpdated, dropStage, colCI, colLastReview, colReviewers, colFindings}
+	prbDropOrder = []prbCol{colAssignee, colSince, colStaging, colAuthor, colRequested, colUpdated, dropStage, colCI, colLastReview, colReviewers, colFindings}
 	// prbFlexMin is the narrowest the flexible columns get; the others
 	// keep their content's width (up to prbCap).
 	prbFlexMin = map[prbCol]int{colTitle: 18, colReviewers: 12}
@@ -426,6 +427,9 @@ type prbPainter struct {
 	// a terminal without colors).
 	shimmer   int
 	colorless bool
+	// anyStaging: some row carries a staging status, so the STAGE column
+	// shows.
+	anyStaging bool
 }
 
 func newPRBPainter(st styles, pal prbPalette, g glyphs, now time.Time, self map[string]bool, all []PRBoardRow, by PRSort, desc bool) prbPainter {
@@ -440,6 +444,9 @@ func newPRBPainter(st styles, pal prbPalette, g glyphs, now time.Time, self map[
 		}
 		if q := r.RequestedToMe; q != nil && !q.At.IsZero() {
 			p.anyAsk = true
+		}
+		if len(r.Stagings) > 0 {
+			p.anyStaging = true
 		}
 	}
 	p.owners = len(owners) > 1
@@ -523,6 +530,7 @@ func (p *prbPainter) cells(r PRBoardRow, since [3]int) prbCells {
 	}
 	cs.c[colFindings] = p.findingsCell(r.Findings)
 	cs.c[colCI] = p.ciCell(r.CI)
+	cs.c[colStaging] = p.stagingCell(r.Stagings)
 	cs.c[colSince] = p.sinceCell(r.SinceReview, since)
 	cs.revs = p.reviewerChips(r.Reviewers)
 	return cs
@@ -1266,6 +1274,41 @@ func (p *prbPainter) ciCell(ci *CIInfo) cell {
 	return c
 }
 
+// stagingLook is how a staging env's state draws: its glyph's word
+// (glyphs.stage), its style, and its words on the card. A pushed env whose
+// CI failed on the PR's changes is failed; one whose CI failed on what the
+// PR does not change, or cannot be told, stays pushed.
+func (p *prbPainter) stagingLook(s StagingInfo) (word string, st lipgloss.Style, words string) {
+	switch normCI(s.State) {
+	case "latest":
+		return "live", p.pal.green, "live"
+	case "pushed":
+		if normCI(s.Detail) == "ci_failed_ours" {
+			return "failed", p.pal.red, "pushed"
+		}
+		return "pushed", p.pal.yellow, "pushed"
+	case "outdated":
+		return "outdated", p.pal.named["magenta"], "an older head"
+	case "none":
+		return "none", p.st.Dim, "not there"
+	}
+	return "unknown", p.st.Dim, "unknown"
+}
+
+// stagingCell is the STAGE column's cell: one glyph per env, in the
+// config's order; a dash for a PR without staging envs.
+func (p *prbPainter) stagingCell(ss []StagingInfo) cell {
+	if len(ss) == 0 {
+		return p.dash()
+	}
+	c := make(cell, 0, len(ss))
+	for _, s := range ss {
+		word, st, _ := p.stagingLook(s)
+		c = append(c, seg{p.g.stage[word], st})
+	}
+	return c
+}
+
 // normCI folds a check state's case and spaces.
 func normCI(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 
@@ -1565,7 +1608,7 @@ func (l prbLayout) total() int {
 type prbWidths [prbNumCols]int
 
 // prbColNames name the columns for ColumnWidths.
-var prbColNames = [prbNumCols]string{"repo", "num", "title", "author", "assignee", "updated", "requested", "state", "last_review", "findings", "ci", "since_review", "reviewers"}
+var prbColNames = [prbNumCols]string{"repo", "num", "title", "author", "assignee", "updated", "requested", "state", "last_review", "findings", "ci", "staging", "since_review", "reviewers"}
 
 // prbWidthsFrom reads kept widths by column name.
 func prbWidthsFrom(m map[string]int) prbWidths {
@@ -1672,7 +1715,10 @@ func (p *prbPainter) fit(n prbNatural, width int, over prbWidths) prbLayout {
 		}
 		return t
 	}
-	cols := []prbCol{colRef, colNum, colTitle, colAuthor, colAssignee, colUpdated, colRequested, colState, colLastReview, colFindings, colCI, colSince, colReviewers}
+	cols := []prbCol{colRef, colNum, colTitle, colAuthor, colAssignee, colUpdated, colRequested, colState, colLastReview, colFindings, colCI, colStaging, colSince, colReviewers}
+	if !p.anyStaging { // no repository in scope has stagings: no column
+		cols = slices.DeleteFunc(cols, func(c prbCol) bool { return c == colStaging })
+	}
 	for _, d := range prbDropOrder {
 		if width <= 0 || need(cols) <= width {
 			break

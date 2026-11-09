@@ -337,6 +337,31 @@ type PRBoardRow struct {
 	// title's tags mark the row with it ("open: needs you") and the card
 	// says it ("verdict: ...").
 	Open *PROpen
+	// Stagings is where the PR stands on its repository's staging envs, in
+	// the config's order, as the daemon last told it (engine.KVPRStaging,
+	// unknown once it is stale or of another head): the STAGE column's
+	// glyphs and the card's STAGINGS block. nil for a repository without
+	// staging envs and for a PR that is not open.
+	Stagings []StagingInfo
+}
+
+// StagingInfo is where a PR stands on one staging env.
+type StagingInfo struct {
+	Env string
+	// State is latest (live: the env's newest deployment holds the PR's
+	// head), pushed, outdated (an older commit of the PR is there), none or
+	// unknown; Detail says why a pushed one is not live yet: ci_running,
+	// ci_failed_ours, ci_failed_not_ours, waiting_jenkins or not_confirmed.
+	State, Detail string
+	// InTip is the PR's commit the env's branch holds: the head, or an
+	// older one Behind commits before it.
+	InTip  string
+	Behind int
+	// PushedAt is when the merge that brought InTip in was made,
+	// DeployedAt (live only) when the deployment that holds it was.
+	PushedAt, DeployedAt time.Time
+	RunURL               string // ci.yml's run on that merge
+	Why                  string // why it is unknown, or what could not be told
 }
 
 // PROpen is autofix = "open"'s verdict on your own PR as the board shows
@@ -883,7 +908,26 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 		g := cleanRoundProgress(*r.Progress)
 		r.Progress = &g
 	}
+	r.Stagings = cleanStagings(r.Stagings)
 	return r
+}
+
+// cleanStagings is a copy of ss with its text cleaned and a run page that
+// is no web address left out; nil for nil.
+func cleanStagings(ss []StagingInfo) []StagingInfo {
+	if ss == nil {
+		return nil
+	}
+	out := make([]StagingInfo, len(ss))
+	for i, s := range ss {
+		s.Env, s.State, s.Detail, s.InTip, s.Why = cleanText(s.Env), cleanText(s.State), cleanText(s.Detail), cleanText(s.InTip), cleanText(s.Why)
+		s.RunURL = ""
+		if l := cleanLinks([]CheckLink{{URL: ss[i].RunURL}}); len(l) == 1 {
+			s.RunURL = l[0].URL
+		}
+		out[i] = s
+	}
+	return out
 }
 
 // cleanDelta is a copy of d with its text safe to draw; nil for nil.

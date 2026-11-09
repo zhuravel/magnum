@@ -383,6 +383,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			return nil, err
 		}
 		notes := map[string]bool{}
+		stagingTick := daemonLastTick(ctx, st)        // the staging records hold while the daemon ticks
 		required := map[string]store.RequiredChecks{} // per repository, for this load
 		ignored := map[string][]string{}              // per repository, for this load
 		trackers := map[string][]config.Tracker{}     // per repository, for this load
@@ -489,6 +490,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 				}
 			}
 			row.ProjectNote = agents.ProjectSentences(ctx, st, r.PRID, r.HeadSHA)
+			row.Stagings = boardStagings(ctx, st, cfg, r, stagingTick, inspNow())
 			out = append(out, row)
 		}
 		// Every star in one read (star.go), before the board filters and
@@ -603,6 +605,50 @@ func prsOpenVerdicts(ctx context.Context, st *store.Store, cfg *config.Config, r
 		out[i].Open = &tui.PROpen{Verdict: v.Verdict, Why: v.Why, Head: v.Head,
 			Stale: v.Stale(pr.HeadSHA, pr.UpdatedAt, lastTick, now, poll)}
 	}
+}
+
+// daemonLastTick is the daemon's last tick (store.KVDaemonLastTick); zero
+// when it never ticked or the registry cannot say.
+func daemonLastTick(ctx context.Context, st *store.Store) time.Time {
+	v, ok, err := st.GetKV(ctx, store.KVDaemonLastTick)
+	if err != nil || !ok {
+		return time.Time{}
+	}
+	t, _ := store.ParseTime(v)
+	return t
+}
+
+// boardStagings is where the open PR r stands on its repository's staging
+// envs, in the config's order, from the daemon's record (engine.KVPRStaging,
+// engine.StagingShown: unknown while there is none, of an older head, or
+// the daemon's last tick lastTick is stale at now); nil for a PR that is
+// not open and for a repository without staging envs.
+func boardStagings(ctx context.Context, st *store.Store, cfg *config.Config, r store.BoardRow, lastTick, now time.Time) []tui.StagingInfo {
+	if r.GHState != store.GHOpen {
+		return nil
+	}
+	envs := engine.StagingEnvs(cfg, r.Owner+"/"+r.Name)
+	if len(envs) == 0 {
+		return nil
+	}
+	rec, ok := readStagingRecord(ctx, st, r.PRID)
+	shown := engine.StagingShown(rec, ok, envs, r.HeadSHA, lastTick, now)
+	out := make([]tui.StagingInfo, len(shown))
+	for i, s := range shown {
+		out[i] = tui.StagingInfo{Env: s.Env, State: s.State, Detail: s.Detail, InTip: s.InTip, Behind: s.Behind,
+			PushedAt: s.PushedAt, DeployedAt: s.DeployedAt, RunURL: s.RunURL, Why: s.Why}
+	}
+	return out
+}
+
+// readStagingRecord is the PR's staging record (engine.KVPRStaging); false
+// when it has none or the registry cannot say.
+func readStagingRecord(ctx context.Context, st *store.Store, prID int64) (engine.StagingRecord, bool) {
+	v, ok, err := st.GetKV(ctx, engine.KVPRStaging(prID))
+	if err != nil || !ok {
+		return engine.StagingRecord{}, false
+	}
+	return engine.ParseStagingRecord(v)
 }
 
 // boardFix is the PR's fix loop as the board shows it: fixing is its state

@@ -121,6 +121,30 @@ type prsJSONRow struct {
 	// Open is autofix = "open"'s verdict on your own open PR; null on
 	// another's PR and on one without a verdict.
 	Open *prsJSONOpen `json:"open"`
+	// Stagings is where the open PR stands on its repository's staging
+	// envs, in the config's order, as the daemon last told it; [] for a
+	// repository without staging envs and a PR that is not open.
+	Stagings []prsJSONStaging `json:"stagings"`
+}
+
+// prsJSONStaging is a PR's state on one staging env: latest (live),
+// pushed (detail: ci_running, ci_failed_ours, ci_failed_not_ours,
+// waiting_jenkins, not_confirmed), outdated, none or unknown (why).
+type prsJSONStaging struct {
+	Env        string    `json:"env"`
+	State      string    `json:"state"`
+	Detail     string    `json:"detail"`
+	InTip      string    `json:"in_tip"` // the PR's commit the env's branch holds: the head, or an older one
+	Behind     int       `json:"behind"` // outdated: the PR's commits after it
+	PushedAt   time.Time `json:"pushed_at,omitzero"`
+	DeployedAt time.Time `json:"deployed_at,omitzero"` // live: when the deployment that holds it was made
+	RunURL     string    `json:"run_url"`
+	Why        string    `json:"why"`
+}
+
+func prsJSONStagingOf(s tui.StagingInfo) prsJSONStaging {
+	return prsJSONStaging{Env: s.Env, State: s.State, Detail: s.Detail, InTip: s.InTip, Behind: s.Behind,
+		PushedAt: s.PushedAt, DeployedAt: s.DeployedAt, RunURL: s.RunURL, Why: s.Why}
 }
 
 // prsJSONOpen is autofix = "open"'s verdict on your own PR: fixing, waits,
@@ -360,6 +384,7 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		Open: mapPtr(r.Open, func(o tui.PROpen) prsJSONOpen {
 			return prsJSONOpen{Verdict: o.Verdict, Why: o.Why, Head: o.Head, Stale: o.Stale}
 		}),
+		Stagings: mapList(r.Stagings, prsJSONStagingOf),
 	}
 }
 
