@@ -4515,8 +4515,13 @@ exists: a blind dry run in the task's copy, the watch's review roles in round 1,
 fresh scratch directory under the task's (`local-review/`), a new agent tag and a synthetic PR number (900000
 plus the task's id times 10 plus the round), so it never meets a real PR's agents, workspace or registry. Its
 judge reads the change's title and body (`description.md`) and the ticket (`ticket.md`) as files and makes no
-`gh` call; claude-review reviews the local diff without `/code-review <url>`, and `post-review` checks the
-anchors against that diff (`--local-base`). The rounds run with this build's prompts and judge skill, written
+`gh` call; the body is the factory's own plan (`report.md`), which the judge's skill reads as the factory's guess,
+not a person's intent: a behaviour the plan calls intended that neither the ticket nor your answers decide is a
+product question, which joins the task's question batch like any other. `ticket.md` holds the ticket and, after
+it, under the heading `## The operator's answers to the factory's questions`, your answers (the task's
+`answers.md`, when you answered anything; with no ticket, the heading and the answers alone), the only statement
+of intent a person made. claude-review reviews the local diff without `/code-review <url>`, and `post-review`
+checks the anchors against that diff (`--local-base`). The rounds run with this build's prompts and judge skill, written
 at the factory daemon's start as a candidate (`<data>/factory/review-candidate/`) that magnum's live rounds
 never read. Its panes get the copy's own environment (its `WT_BRANCH` and env, as the factory's agents there),
 so the reviewers use the copy's databases, in turn with the factory's checks. A round counts as one more of

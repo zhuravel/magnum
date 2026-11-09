@@ -21223,6 +21223,48 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the cli's TestTheFactoryScreensStagingDeployIsTheBoards, TestTheFactoryScreenReadsItsPRsStagingDeploys and
   TestTheFactoryScreenGivesItsPRsTheConfigsStagingEnvs; the factory's TestTheFactoryStagingClientCannotDeploy,
   which fails once the fetch clock passes the deploy's git through.
+- **The factory's local review reads the plan as the factory's guess, and the operator's answers travel with the
+  ticket** (R15, 2026-11-09). On a published PR (talkable#12212) the local judge respected a product behaviour its PR
+  description called deliberate. That description is the factory's own plan (`report.md`), and the plan had chosen the
+  behaviour: neither the ticket nor the operator had decided it. A colleague found it in public. The skill's rule that an
+  author's deliberate behaviour stands is made for a person; here the author is an agent. The judge also never saw the
+  operator's answers to the factory's questions (`answers.md`), the only statement of intent a person made.
+  - The answers. `evalrun.LocalCase` has `AnswersMD`; the factory's `localCase` fills it from the task's `answers.md`
+    (empty when the operator answered nothing). `evalrun.RunLocal` appends it to the round's `ticket.md`, after the
+    ticket's text, under the one fixed heading `## The operator's answers to the factory's questions` (`localTicket`).
+    With no answers the file is the ticket and a newline, as before; with answers and no ticket it is the heading and
+    the answers (the ticket file is then written, where it was not); with neither there is no file. The engine did not
+    change: it already hands the judge the ticket file as data (`engine.LocalRound.TicketFile`), so the answers reach it
+    in the place it reads the ticket. Everything after the heading is the answers, which keep their own `#` and `##`
+    headings (answers.md's title and one section per question).
+  - The skill. One sentence ends the "Local round" section: `The description is the factory's plan, not a person's: a
+    behaviour it calls intended that neither the ticket nor the operator's answers (both in `ticket`) decide is a product
+    question (`"question": true`), never intent.` It is 220 bytes, and the cap had 3 left, so `skillMaxBytes` goes from
+    39,194 to 39,414 (3 left again; the 40,000 ceiling leaves 586) and `skill_pins.txt` is regenerated: no unpinned
+    wording was shortened to pay for it, since this change touches that one sentence of a file the review daemon and the
+    skill editor share. A product question of blocking severity already joins the task's question batch (the entry on
+    the local review's questions above), so the miss turns into a question to the operator before the publish; that path
+    did not change.
+  - The plan judge, mirrored. `factory-judge.md` asks, beside the architecture decisions and the product questions the
+    findings leave open, for each doubt that can change what a user sees while neither the ticket nor the operator's
+    answers decide it: it goes to the operator as a question, never into the plan as a choice. A choice the plan makes
+    there is what the local review would later read as intent.
+  Rejected: a field of its own for the answers in `engine.LocalRound` (the engine is another session's, and the ticket
+  file is already data the judge reads); the answers in the description file, below the plan (the skill says the
+  description is the plan, and the answers would be read as part of the guess); a rule in section 2 or 4 of the skill,
+  which every round reads (a GitHub review has no factory plan; the sentence is in the section only a local round
+  reads); shortening other unpinned wording to keep the cap (it is shared with the skill editor, whose landings rebase
+  on it).
+  Tests: evalrun's TestRunLocalAppendsTheOperatorsAnswersToTheTicketFileUnderOneHeading,
+  TestRunLocalWithoutAnswersWritesTheTicketFileAsBefore and
+  TestRunLocalWithAnswersAndNoTicketWritesTheHeadingAndTheAnswers; the factory's
+  TestTheLocalRoundGetsTheOperatorsAnswersFromTheTasksAnswersFile (the same file missing gives none),
+  TestThePlanJudgeAsksADoubtThatChangesWhatAUserSeesAndNobodyDecidedInsteadOfChoosing and
+  TestAQuestionFindingJoinsTheQuestionBatch (unchanged: the path still holds); agents'
+  TestTheSkillReadsTheFactorysPlanAsItsGuessNotThePersonsIntent (a pin, in the Local round section only) with
+  TestSkillStaysTight and TestSkillPinsFileIsCurrent. No golden holds the skill or the judge's prompt; no new
+  dependencies. Not proven yet: a replay of the #12212 head with `evalrun.RunLocal`, the controller's step after the
+  landing.
 
 ## Learned rules
 
