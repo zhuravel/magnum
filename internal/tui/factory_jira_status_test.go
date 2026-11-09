@@ -167,7 +167,11 @@ func TestTheStatusColumnGoesFirst(t *testing.T) {
 				continue
 			}
 			row := factoryRowLines(t, frame, f.Rows)[0]
-			if title := ansi.StringWidth(lines[3][:at]) + 1 - 2 - ansi.StringWidth(row[:strings.Index(row, "Deploy list")]); title < factoryKeepTitle {
+			before, _, ok := strings.Cut(row, "Deploy list")
+			if !ok {
+				t.Fatalf("%s at %d columns: PR-12310's row has no title: %q", name, w, row)
+			}
+			if title := ansi.StringWidth(lines[3][:at]) + 1 - 2 - ansi.StringWidth(before); title < factoryKeepTitle {
 				t.Errorf("%s at %d columns: the STATUS column leaves the title %d cells, under %d:\n%s", name, w, title, factoryKeepTitle,
 					ansi.Strip(frame))
 			}
@@ -390,7 +394,7 @@ func TestTheHelpGlossesTheJiraStatusWords(t *testing.T) {
 		"not you, nobody  after the status: the issue is assigned to someone else, or to nobody",
 		"Jira done  yellow: Jira says done while the task's PR is still open (in STATUS when shown): merge or close it, or move the issue back",
 		"JIRA  on the task card: the issue's key, status and for how long, who has it, the last read's age; now: why the last try failed")
-	for _, l := range strings.Split(ansi.Strip(strings.Join(h.m.helpContent(140), "\n")), "\n") {
+	for l := range strings.SplitSeq(ansi.Strip(strings.Join(h.m.helpContent(140), "\n")), "\n") {
 		if strings.HasPrefix(l, "STATUS ") || strings.HasPrefix(l, "Jira done ") || strings.HasPrefix(l, "JIRA ") || strings.HasPrefix(l, "Done, To Do") {
 			if strings.HasSuffix(l, "…") {
 				t.Errorf("at 140 columns the help cuts %q", l)
