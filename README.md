@@ -3675,7 +3675,8 @@ loop still ends as done on such a re-review.
 
 Each tick, before dispatch, Magnum looks at every own open PR of such a watch and keeps a verdict for it in
 the registry (`pr.<id>.open`): `fixing`, `waits` (Magnum's review, the settle, CI, the GitHub budget, your
-own push, a pause, quiet hours), `needs_you`, `idle` ("nothing open at a1b2c3d · approved, merge is yours", with "· 2 commits after
+own push, a pause, quiet hours), `needs_you`, `idle` ("nothing open at a1b2c3d · approved, merge is yours", or "no review required, merge is yours" on a
+base that requires no review, with "· 2 commits after
 the approval" when the head moved past a person's approval, and "· 1 optional call: <link>" for each P3 author's call a fixer
 left you whose thread is still open and unanswered since the call: it holds nothing, so you see it at the
 merge; the look starts no loop on such a call, which counts against its own review's P3s alone, never a later

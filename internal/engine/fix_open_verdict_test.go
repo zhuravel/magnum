@@ -225,6 +225,27 @@ func TestTheOpenRowIsIdleOnlyWhenEverythingHolds(t *testing.T) {
 	}
 }
 
+// A base that requires no review (GitHub's review decision is empty) leaves
+// the merge to you as an approval does; only a gate magnum has not read,
+// or one that still wants a review, is no approval yet.
+func TestIdleOnABaseThatRequiresNoReviewLeavesTheMergeToYou(t *testing.T) {
+	for _, c := range []struct {
+		gate *store.ReviewGate
+		why  string
+	}{
+		{&store.ReviewGate{}, "nothing open at a1a1a1a · no review required, merge is yours"},
+		{&store.ReviewGate{Decision: "APPROVED"}, "nothing open at a1a1a1a · approved, merge is yours"},
+		{&store.ReviewGate{Decision: "REVIEW_REQUIRED"}, "nothing open at a1a1a1a · no approval yet"},
+		{&store.ReviewGate{Decision: "CHANGES_REQUESTED"}, "nothing open at a1a1a1a · no approval yet"},
+		{nil, "nothing open at a1a1a1a · no approval yet"},
+	} {
+		f := idleFacts()
+		f.pr.ReviewGate = c.gate
+		v, _, _ := decideOpen(f)
+		wantVerdict(t, v, OpenIdle, c.why)
+	}
+}
+
 // Red required CI needs you, until a later milestone lets the fixer at it.
 func TestRedRequiredCINeedsYou(t *testing.T) {
 	pr := idleFacts().pr

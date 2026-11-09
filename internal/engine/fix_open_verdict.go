@@ -590,9 +590,12 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 		return say(OpenUnknown, "the merge with "+f.mergeUnchecked+" could not be checked; trying again shortly"), nil, needs
 	}
 	why := "nothing open at " + short
-	if f.pr.ReviewGate != nil && f.pr.ReviewGate.Decision == "APPROVED" {
+	switch g := f.pr.ReviewGate; {
+	case g != nil && g.Decision == "APPROVED":
 		why += " · approved, merge is yours"
-	} else {
+	case g != nil && g.Decision == "": // the base requires no review
+		why += " · no review required, merge is yours"
+	default:
 		why += " · no approval yet"
 	}
 	if f.approved != "" && f.afterCount > 0 {
