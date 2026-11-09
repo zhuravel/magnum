@@ -154,10 +154,10 @@ func mergeHarness(t *testing.T, mods ...func(*harness)) (*harness, *mergeGit) {
 }
 
 func (g *mergeGit) IsAncestor(ctx context.Context, dir, ancestor, rev string) (bool, error) {
-	switch {
-	case ancestor == rev:
+	switch ancestor {
+	case rev:
 		return true, nil
-	case ancestor == fixBaseTip:
+	case fixBaseTip:
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		return !g.behind, nil
