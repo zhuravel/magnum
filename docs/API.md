@@ -5418,8 +5418,9 @@ func (c *Config) BaseRole(name string) (Role, bool)
 func (c *Config) CIDispatch(fullName string) string
     CIDispatch returns the workflow file the [[repo]] block of repository
     fullName ("owner/name", any case) names as the one that produces its
-    required checks (ci_dispatch), "" when none does: autofix = "open" starts it
-    once per head on an own PR whose required check did not run at its head.
+    required checks (ci_dispatch), "" when none does: autofix = "open" starts
+    it once per head on an own PR whose required check did not run at its head,
+    and the engine 2 minutes after each push it made to a PR.
 
 func (c *Config) CIDispatchAs(fullName string) string
     CIDispatchAs returns the identity the [[repo]] block of repository
@@ -7329,8 +7330,12 @@ type Repo struct {
 	// that produces the repository's required checks, for a CI that runs
 	// only when a PR opens: under autofix = "open" magnum starts it, at most
 	// once per head, on an own PR whose required check did not run at its
-	// head (see Config.CIDispatch), and a RequiredChecks entry with no run
-	// at a head counts as not run there. "" (the default) starts nothing.
+	// head (see Config.CIDispatch); whatever autofix is, it starts it 2
+	// minutes after each push magnum made to a PR (its merge of the PR's
+	// parent, a fixer's push), once per head, never while a run of the
+	// workflow on the PR's branch is in progress (engine's ciAfterPushes);
+	// and a RequiredChecks entry with no run at a head counts as not run
+	// there. "" (the default) starts nothing.
 	CIDispatch string `toml:"ci_dispatch"`
 
 	// CIDispatchAs names the [[identity]] that starts the CIDispatch
@@ -10314,14 +10319,15 @@ func (e *Engine) StagingPushEnv(mirror func(repo string) (dir string, ok bool)) 
     head]), to target, as the fix identity's bot. It refuses a target the bot
     never pushes to (master, main, the default branch), a merge that is not on
     target's tip in the mirror, and a merge carrying a .github/workflows file
-    that differs from both the tip's and the PR's base tip's (the PR whose
-    head is the merge's second parent; a PR that changes its own workflow
-    files is never pushed by the bot). A merge whose workflow files are the
-    tip's goes with the App's token; one that brings the base's goes with
-    the daemon's own token with Workflows write (identity.App.DaemonPushEnv,
-    never a pane's gh config dir), which the App revokes once its hold is over,
-    since the push's caller has no release; while the App lacks Workflows it is
-    refused with "needs Workflows on the App".
+    that differs from both the tip's and the PR's base tip's (the PR whose head
+    is the merge's second parent; a PR that changes its own workflow files is
+    never pushed by the bot). A merge whose workflow files are the tip's goes
+    with the App's token; one that brings the base's goes with the daemon's
+    own token with Workflows write (identity.App.DaemonPushEnv), which the App
+    revokes once its hold of a few minutes is over, since the push's caller
+    has no release; while the App lacks Workflows it is refused with "needs
+    Workflows on the App". That token rides in the env itself (GH_TOKEN), never
+    in a file: the env is for that one git push alone, never logged nor kept.
 
 func (e *Engine) Tick(ctx context.Context) error
     Tick runs one iteration of the daemon loop. Steps log their own
@@ -10527,24 +10533,25 @@ func ParseFixReport(text string, runID string) (FixReport, error)
     fit its section is an error that quotes the line (not a sentinel).
 
 type FixState struct {
-	Cycle        int        `json:"cycle"`
-	Cap          int        `json:"cap"`
-	Phase        string     `json:"phase"`
-	Since        string     `json:"since"`
-	Head         string     `json:"head"`
-	By           string     `json:"by"`
-	Report       string     `json:"report"`
-	StartedAt    time.Time  `json:"started_at"`
-	NeedsYou     []string   `json:"needs_you,omitempty"`
-	Answered     []string   `json:"answered,omitempty"`
-	Role         string     `json:"role,omitempty"`
-	ForcedAt     time.Time  `json:"forced_at,omitzero"`
-	Held         bool       `json:"held,omitempty"`
-	Context      string     `json:"context,omitempty"`
-	OthersUnread string     `json:"others_unread,omitempty"`
-	Carried      []FixCarry `json:"carried,omitempty"`
-	Waits        []string   `json:"waits,omitempty"`
-	Mode         string     `json:"mode,omitempty"`
+	Cycle         int        `json:"cycle"`
+	Cap           int        `json:"cap"`
+	Phase         string     `json:"phase"`
+	Since         string     `json:"since"`
+	Head          string     `json:"head"`
+	By            string     `json:"by"`
+	Report        string     `json:"report"`
+	StartedAt     time.Time  `json:"started_at"`
+	NeedsYou      []string   `json:"needs_you,omitempty"`
+	Answered      []string   `json:"answered,omitempty"`
+	Role          string     `json:"role,omitempty"`
+	ForcedAt      time.Time  `json:"forced_at,omitzero"`
+	Held          bool       `json:"held,omitempty"`
+	Context       string     `json:"context,omitempty"`
+	OthersUnread  string     `json:"others_unread,omitempty"`
+	Carried       []FixCarry `json:"carried,omitempty"`
+	Waits         []string   `json:"waits,omitempty"`
+	Mode          string     `json:"mode,omitempty"`
+	ParentRefused string     `json:"parent_refused,omitempty"`
 }
     FixState is where a PR's fix loop is: cycle Cycle of at most Cap, in Phase.
     Since is the head the loop started from and Head the head the current
@@ -10585,6 +10592,11 @@ type FixState struct {
     never handed (rule 9): every cycle's external file marks them waiting, and
     the fixer leaves them alone (writeExternal). Mode is what the loop does: ""
     fixes findings, FixModeMerge merges the PR's parent alone (fix_parent.go).
+    ParentRefused is why the daemon did not push its merge of the parent on the
+    loop's first cycle (mergeParent's refusal: "needs Workflows on the App",
+    a branch it never pushes to), which the cycle's fixer goes on without and
+    the loop's end puts under Needs you (parentRefusedNote); "" when it merged
+    or had nothing to merge.
 
 func ParseFixState(s string) (FixState, bool)
     ParseFixState reads a KVPRFix value; ok is false for one that is not a fix
@@ -18210,8 +18222,10 @@ func (c *Client) PushLeaseVia(ctx context.Context, dir, url, sha, branch, expect
 func (c *Client) PushLeaseViaAs(ctx context.Context, dir, url, sha, branch, expect string, env map[string]string) error
     PushLeaseViaAs is PushLeaseVia with env over the push, never over a key
     of gitx's own: the daemon's push as a fixer App, whose GH_CONFIG_DIR (with
-    GH_TOKEN and GITHUB_TOKEN blanked, identity.Source.Env) holds the token gh
-    answers git with. No value of env is ever logged.
+    GH_TOKEN and GITHUB_TOKEN blanked, identity.Source.Env) holds the token
+    gh answers git with, or whose GH_TOKEN is the daemon's own push token
+    (identity.App.DaemonPushEnv), which gh answers with first. No value of env
+    is ever logged.
 
 func (c *Client) RebaseOnto(ctx context.Context, dir, onto, upstream string) error
     RebaseOnto replays the commits of the branch checked out at dir that
@@ -19290,13 +19304,13 @@ func (a *App) DaemonPushEnv(ctx context.Context, workflows bool) (map[string]str
     DaemonPushEnv mints a token for one push the daemon makes as the App,
     narrowed as the App's tokens are (token_repositories and token_permissions,
     config.Identity), with workflows = "write" added when workflows is set,
-    writes it into a gh config dir of its own beside ConfigDir (0700, never
-    ConfigDir, which panes name: the pane's token stays as narrow as it was),
-    and returns the env that selects that dir (as Env does) and the release
-    that removes the dir and revokes the token (once; later calls do nothing).
-    A token never released goes at the first refresh after daemonPushHold.
+    and returns the env of that push: Env's, with the token as GH_TOKEN,
+    which gh's credential helper answers git with before ConfigDir's hosts.yml
+    (the pane's token, which stays as narrow as it was), and no file written;
+    and the release that revokes the token (once; later calls do nothing).
+    A token never released is revoked at the first refresh after daemonPushHold.
     GitHub's refusal of Workflows is ErrWorkflowsNotGranted. The token is never
-    logged nor returned.
+    logged; the env is for that one git command alone.
 
 func (a *App) EnsureConfigDir(ctx context.Context) (string, error)
     EnsureConfigDir makes sure a fresh token exists and that ConfigDir holds
