@@ -3,6 +3,7 @@ package factoryread
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -11,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/zhuravel/magnum/internal/factory/registry"
 )
 
 // ErrNoTask is LocalReview's error when the factory's registry holds no
@@ -21,27 +24,66 @@ var ErrNoTask = errors.New("the factory's registry has no such task")
 // review needs it (`magnum eval add --local-task`): its repository
 // (owner/name), branch, title and Jira key, whether Codex never works on it
 // again (CodexNever, tasks.codex_never: Codex refused it), each cycle of its
-// local review the registry records (Rounds, by cycle), and when each of
-// its answered questions was answered (Answered, oldest first).
+// local review the registry records (Rounds, by cycle), and its answered
+// questions (Questions, by revision and position), from which the answers
+// a round could read are rebuilt (AnswersAt).
 type LocalTask struct {
 	ID                           int64
 	Repo, Branch, Title, JiraKey string
 	CodexNever                   bool
 	Rounds                       []LocalRound
-	Answered                     []time.Time
+	Questions                    []LocalQuestion
 }
 
-// AnsweredAfter counts t's questions answered after at: answers the
-// operator gave once a round that began at at was under way, which that
-// round could not read.
-func (t LocalTask) AnsweredAfter(at time.Time) int {
-	n := 0
-	for _, a := range t.Answered {
-		if a.After(at) {
-			n++
+// LocalQuestion is one of a task's answered questions: its row, with the
+// fields answers.md renders (registry.AnswersMarkdown: its revision,
+// position, text, options, recommendation, answer, who raised it, when it
+// was first answered and whether its answer takes the recommendation), and
+// every answer it had (History, question_answers, oldest first). A row from
+// before the registry kept them has none: its one answer is the one given
+// when it was answered.
+type LocalQuestion struct {
+	registry.Question
+	History []registry.AnswerEdit
+}
+
+// AnswersAt are t's questions as they stood at at (a round's start), by
+// revision and position, for registry.AnswersMarkdown: each one answered
+// before at, with its newest answer before at and whether that answer
+// takes the recommendation (as the factory decides it: the recommended
+// label, spaces trimmed). left counts the answers given at at or later,
+// first answers and revisions alike, which are not there.
+func (t LocalTask) AnswersAt(at time.Time) (qs []registry.Question, left int) {
+	for _, lq := range t.Questions {
+		history := lq.History
+		if len(history) == 0 {
+			history = []registry.AnswerEdit{{Answer: lq.Answer, At: lq.Answered}}
+		}
+		q, stood := lq.Question, false
+		for _, e := range history {
+			if e.At.IsZero() || !e.At.Before(at) {
+				left++
+				continue
+			}
+			if e.Answer != lq.Answer {
+				q.Answer, q.TookRecommendation = e.Answer, takesRecommendation(q, e.Answer)
+			} else {
+				q.Answer, q.TookRecommendation = lq.Answer, lq.TookRecommendation
+			}
+			stood = true
+		}
+		if stood {
+			qs = append(qs, q)
 		}
 	}
-	return n
+	return qs, left
+}
+
+// takesRecommendation reports whether answer is the label of q's
+// recommended option, both trimmed of spaces: the registry's
+// took_recommendation rule (SQLite's trim).
+func takesRecommendation(q registry.Question, answer string) bool {
+	return q.Recommended >= 0 && q.Recommended < len(q.Options) && strings.Trim(answer, " ") == strings.Trim(q.Options[q.Recommended].Label, " ")
 }
 
 // LocalRound is one cycle of a task's local review (review_cycles): its
@@ -65,8 +107,8 @@ var roundBegins = regexp.MustCompile(`^round ([1-9][0-9]*) \(cycle ([1-9][0-9]*)
 
 // LocalReview reads task taskID of the registry at path, read only and in
 // one transaction (one snapshot of what the factory writes): the task, its
-// review cycles with their round and roles (LocalRound), and its answer
-// times. A registry that does not exist is ErrNoRegistry, a task it does not
+// review cycles with their round and roles (LocalRound), and its answered
+// questions with their answers (LocalQuestion). A registry that does not exist is ErrNoRegistry, a task it does not
 // hold ErrNoTask; one that cannot be read is another error.
 func LocalReview(ctx context.Context, path string, taskID int64) (LocalTask, error) {
 	out := LocalTask{ID: taskID}
@@ -100,7 +142,7 @@ func LocalReview(ctx context.Context, path string, taskID int64) (LocalTask, err
 	if err := roundsBegun(ctx, tx, taskID, out.Rounds); err != nil {
 		return out, fmt.Errorf("read the factory's registry: %w", err)
 	}
-	if out.Answered, err = answerTimes(ctx, tx, taskID); err != nil {
+	if out.Questions, err = answeredQuestions(ctx, tx, taskID); err != nil {
 		return out, fmt.Errorf("read the factory's registry: %w", err)
 	}
 	return out, nil
@@ -200,26 +242,69 @@ func roundsBegun(ctx context.Context, tx *sql.Tx, taskID int64, rounds []LocalRo
 	return rows.Err()
 }
 
-// answerTimes are when task taskID's answered questions were answered,
-// oldest first.
-func answerTimes(ctx context.Context, tx *sql.Tx, taskID int64) ([]time.Time, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT answered_at FROM questions WHERE task_id = ? AND state = 'answered' AND answered_at IS NOT NULL
-ORDER BY answered_at`, taskID)
+// answeredQuestions are task taskID's answered questions, by revision and
+// position, each with every answer it had, oldest first.
+func answeredQuestions(ctx context.Context, tx *sql.Tx, taskID int64) ([]LocalQuestion, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id, revision, idx, text, options_json, recommended, answer, raised_by, answered_at, took_recommendation
+FROM questions WHERE task_id = ? AND state = 'answered' ORDER BY revision, idx`, taskID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []time.Time
+	var out []LocalQuestion
 	for rows.Next() {
-		var at string
-		if err := rows.Scan(&at); err != nil {
+		q := LocalQuestion{Question: registry.Question{TaskID: taskID, State: registry.QuestionAnswered}}
+		var options string
+		var at sql.NullString
+		if err := rows.Scan(&q.ID, &q.Revision, &q.Index, &q.Text, &options, &q.Recommended, &q.Answer, &q.RaisedBy, &at,
+			&q.TookRecommendation); err != nil {
 			return nil, err
 		}
-		t, err := time.Parse(time.RFC3339Nano, at)
-		if err != nil {
-			return nil, fmt.Errorf("an answer's time %q: %w", at, err)
+		if err := json.Unmarshal([]byte(options), &q.Options); err != nil {
+			return nil, fmt.Errorf("question %d's options: %w", q.ID, err)
 		}
-		out = append(out, t)
+		if len(q.Options) == 0 {
+			q.Options = nil
+		}
+		if at.Valid {
+			if q.Answered, err = time.Parse(time.RFC3339Nano, at.String); err != nil {
+				return nil, fmt.Errorf("question %d's answer time %q: %w", q.ID, at.String, err)
+			}
+		}
+		out = append(out, q)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, answerHistories(ctx, tx, taskID, out)
+}
+
+// answerHistories adds to each of qs every answer it had (question_answers),
+// oldest first.
+func answerHistories(ctx context.Context, tx *sql.Tx, taskID int64, qs []LocalQuestion) error {
+	rows, err := tx.QueryContext(ctx, `SELECT a.question_id, a.answer, a.at FROM question_answers a JOIN questions q ON q.id = a.question_id
+WHERE q.task_id = ? AND q.state = 'answered' ORDER BY a.id`, taskID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	byID := make(map[int64]*LocalQuestion, len(qs))
+	for i := range qs {
+		byID[qs[i].ID] = &qs[i]
+	}
+	for rows.Next() {
+		var id int64
+		var e registry.AnswerEdit
+		var at string
+		if err := rows.Scan(&id, &e.Answer, &at); err != nil {
+			return err
+		}
+		if e.At, err = time.Parse(time.RFC3339Nano, at); err != nil {
+			return fmt.Errorf("question %d's answer time %q: %w", id, at, err)
+		}
+		if q := byID[id]; q != nil {
+			q.History = append(q.History, e)
+		}
+	}
+	return rows.Err()
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factoryread"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
@@ -29,7 +30,11 @@ import (
 // description (Body), the ticket (TicketMD) and the operator's answers
 // (AnswersMD) its ticket file joins (LocalTicket), and the round's roles;
 // Frozen is when it was added. The texts are files of their own beside
-// inputs.json (plan.md, ticket.md, answers.md).
+// inputs.json (plan.md, ticket.md, answers.md). AnswersAsOf is set when
+// the answers are not a file the round read but rebuilt from the factory's
+// registry as they stood when the round began (its cycle's start), and
+// AnswersLeftOut counts the answers given at that start or later, which
+// the rebuild left out.
 type LocalInputs struct {
 	Task    int64     `json:"task"`
 	Round   int       `json:"round"`
@@ -46,6 +51,9 @@ type LocalInputs struct {
 	// again (factoryread.LocalTask.CodexNever) as it was when the case was
 	// added: a replay whose roles run Codex is refused on it (Refused).
 	CodexNever bool `json:"codex_never,omitempty"`
+
+	AnswersAsOf    time.Time `json:"answers_as_of,omitzero"`
+	AnswersLeftOut int       `json:"answers_left_out,omitempty"`
 
 	Body      string `json:"-"`
 	TicketMD  string `json:"-"`
@@ -178,8 +186,10 @@ func LoadLocalInputs(dir string) (LocalInputs, error) {
 //     commit the round diffed from and whose head must be the cycle's;
 //   - the operator's answers: those under their heading in the round's
 //     ticket file when it has them, else the task's answers.md ("" when
-//     there is none) when no question was answered and the file was not
-//     written after the round began, a round that could not read them.
+//     there is none) when no answer was given at the round's start or
+//     later and the file was not written after it began; else the answers
+//     rebuilt from the factory's registry as they stood when the round
+//     began (answersAt).
 //
 // The base branch is the [[factory.repo]]'s (default master). What cannot
 // be frozen whole is an error that says what is missing; it returns the
@@ -236,8 +246,10 @@ func FreezeLocal(ctx context.Context, d Deps, taskID int64, round, cycle int) (L
 	case !errors.Is(err, fs.ErrNotExist):
 		return fail("its %s: %v", LocalTicketFile, err)
 	}
+	var asOf time.Time
+	left := 0
 	if !held {
-		if answers, err = answersAt(lt, taskDir, r); err != nil {
+		if answers, asOf, left, err = answersAt(lt, taskDir, r); err != nil {
 			return fail("%v", err)
 		}
 	}
@@ -265,7 +277,8 @@ func FreezeLocal(ctx context.Context, d Deps, taskID int64, round, cycle int) (L
 		}
 	}
 	in := LocalInputs{Task: taskID, Round: r.Round, Cycle: r.Cycle, Repo: lt.Repo, BaseSHA: pp.BaseSHA, HeadSHA: r.Head, Branch: lt.Branch, Base: base,
-		Title: strings.TrimSpace(title), Roles: r.Roles, Frozen: d.now(), CodexNever: lt.CodexNever, Body: strings.TrimSpace(body), TicketMD: ticket, AnswersMD: answers}
+		Title: strings.TrimSpace(title), Roles: r.Roles, Frozen: d.now(), CodexNever: lt.CodexNever, Body: strings.TrimSpace(body), TicketMD: ticket, AnswersMD: answers,
+		AnswersAsOf: asOf, AnswersLeftOut: left}
 	if err := in.check(); err != nil {
 		return fail("%v", err)
 	}
@@ -310,28 +323,37 @@ func pickRound(lt factoryread.LocalTask, round, cycle int) (factoryread.LocalRou
 		lt.ID, round, where, strings.Join(have, "; "))
 }
 
-// answersAt are the operator's answers as round r of lt could read them:
-// the task's answers.md in taskDir ("" when there is none) when no
-// question was answered and the file was not written after the round
-// began; an error otherwise.
-func answersAt(lt factoryread.LocalTask, taskDir string, r factoryread.LocalRound) (string, error) {
-	if n := lt.AnsweredAfter(r.Started); n > 0 {
-		return "", fmt.Errorf("the operator answered %d question(s) after round %d began, and its ticket file did not hold the answers it read",
-			n, r.Round)
-	}
+// answersAt are the operator's answers as round r of lt could read them,
+// when its ticket file did not hold them: the task's answers.md in taskDir
+// ("" when there is none) when no answer was given at the round's start or
+// later and the file was not written after it began. Else they are rebuilt
+// from the factory's registry as they stood when the round began, asOf
+// (factoryread.LocalTask.AnswersAt: each question answered before
+// the start, with its newest answer before it), rendered as the factory
+// renders answers.md (registry.AnswersMarkdown), and left counts the
+// answers given at the start or later that the rebuild left out: a later
+// answer (to the very question the round missed, perhaps) would make the
+// replay prove nothing. A registry that holds no answer of the task cannot
+// rebuild what answers.md held then: that is an error.
+func answersAt(lt factoryread.LocalTask, taskDir string, r factoryread.LocalRound) (answers string, asOf time.Time, left int, err error) {
+	qs, left := lt.AnswersAt(r.Started)
 	path := filepath.Join(taskDir, localAnswersFile)
 	st, err := os.Stat(path)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return "", nil
-	case err != nil:
-		return "", err
-	case st.ModTime().After(r.Started):
-		return "", fmt.Errorf("%s was written after round %d began (%s), and its ticket file did not hold the answers it read", localAnswersFile,
-			r.Round, st.ModTime().UTC().Format(time.RFC3339))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", time.Time{}, 0, err
 	}
-	b, err := os.ReadFile(path)
-	return string(b), err
+	written := st != nil && st.ModTime().After(r.Started)
+	switch {
+	case left == 0 && !written && st == nil:
+		return "", time.Time{}, 0, nil
+	case left == 0 && !written:
+		b, err := os.ReadFile(path)
+		return string(b), time.Time{}, 0, err
+	case len(lt.Questions) == 0: // written since, and nothing to rebuild from
+		return "", time.Time{}, 0, fmt.Errorf("%s was written after round %d began (%s), its ticket file did not hold the answers it read, and the "+
+			"factory's registry holds no answer of the task to rebuild them from", localAnswersFile, r.Round, st.ModTime().UTC().Format(time.RFC3339))
+	}
+	return registry.AnswersMarkdown(qs), r.Started, left, nil
 }
 
 // splitLocalTicket is LocalTicket undone: the ticket and the answers of a
