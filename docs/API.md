@@ -18072,6 +18072,13 @@ runs the clone's hooks (see Env).
 
 CONSTANTS
 
+const (
+	ConflictBinary       = "CONFLICT (binary)"
+	ConflictRenameRename = "CONFLICT (rename/rename)"
+)
+    The kinds of conflict merge-tree's messages name (MergeMessage.Kind) that a
+    staging merge's resolver refuses to resolve: git's stable names for them.
+
 const AnyDir = "**/"
     AnyDir is the prefix of a path that names a file in any directory of the
     repository, its top included ("**/CLAUDE.md"; pathspecs).
@@ -18504,6 +18511,12 @@ func (c *Client) MergeTree(ctx context.Context, dir, head, base string) (tree st
     objects and no ref, index or work tree, so CommitTree can make the merge
     commit of that tree with nothing checked out.
 
+func (c *Client) MergeTreeMessages(ctx context.Context, dir, a, b string) ([]MergeMessage, error)
+    MergeTreeMessages lists the messages of merging b into a, in git's
+    order (`git merge-tree --write-tree -z --name-only a b`, read from its
+    informational messages section); none for a clean merge. It writes objects
+    alone: no ref, index or work tree.
+
 func (c *Client) MergeTreeWrite(ctx context.Context, dir, a, b string) (tree string, conflicts []string, err error)
     MergeTreeWrite is `git merge-tree --write-tree a b` with both its answers:
     the merged tree (conflict markers in its conflicted files) and the
@@ -18880,6 +18893,16 @@ type ListedCommit struct {
 
 func (l ListedCommit) Merge() bool
     Merge reports whether the commit has more than one parent.
+
+type MergeMessage struct {
+	Kind  string
+	Paths []string
+}
+    MergeMessage is one of the informational messages of `git merge-tree
+    --write-tree`: its kind, git's stable name for it ("Auto-merging",
+    "CONFLICT (contents)", ConflictBinary, ConflictRenameRename, "CONFLICT
+    (modify/delete)" and so on), and the paths it is about, in git's order.
+    Its text, for people, is not kept.
 
 type Remote struct {
 	Host  string // lower-cased, e.g. github.com

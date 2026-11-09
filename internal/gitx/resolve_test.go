@@ -152,3 +152,50 @@ func TestMergeNoCommitOfACleanMergeAndOfNoRevision(t *testing.T) {
 		t.Error("an option passed as the revision was let through")
 	}
 }
+
+// MergeTreeMessages names each conflict merge-tree reports with git's stable
+// kind and its paths: a text conflict, a binary file both sides changed and
+// a file both sides renamed apart; a clean merge has none, and a revision
+// that is an option is refused.
+func TestMergeTreeMessagesNameEachConflictsKindAndPaths(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	fx.fetchPR7()
+	if msgs, err := fx.c.MergeTreeMessages(ctx, fx.clone, fx.base, fx.pr); err != nil || msgs != nil {
+		t.Errorf("a clean merge's messages = %v, %v; want none", msgs, err)
+	}
+	fx.git(fx.origin, "checkout", "--quiet", "-b", "base2", fx.base)
+	fx.write(fx.origin, "lib/r.rb", "r = 1\n")
+	fx.write(fx.origin, "app/a.rb", "a = 1\n")
+	fx.git(fx.origin, "add", ".")
+	fx.git(fx.origin, "commit", "--quiet", "-m", "base2")
+	for _, side := range []string{"tip", "head"} {
+		fx.git(fx.origin, "checkout", "--quiet", "-b", "side-"+side, "base2") // "head" would be HEAD on a case-insensitive disk
+		fx.write(fx.origin, "app/a.rb", "a = "+side+"\n")
+		fx.write(fx.origin, "logo.png", "\x00\x01"+side+"\x02")
+		fx.git(fx.origin, "mv", "lib/r.rb", "lib/r_"+side+".rb")
+		fx.git(fx.origin, "add", ".")
+		fx.git(fx.origin, "commit", "--quiet", "-m", side)
+	}
+	fx.git(fx.origin, "checkout", "--quiet", "main")
+	fx.git(fx.clone, "fetch", "--quiet", "origin", "side-tip", "side-head")
+	tip, head := fx.git(fx.clone, "rev-parse", "origin/side-tip"), fx.git(fx.clone, "rev-parse", "origin/side-head")
+	msgs, err := fx.c.MergeTreeMessages(ctx, fx.clone, tip, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := func(kind string, paths ...string) bool {
+		return slices.ContainsFunc(msgs, func(m MergeMessage) bool { return m.Kind == kind && slices.Equal(m.Paths, paths) })
+	}
+	switch {
+	case !has("CONFLICT (contents)", "app/a.rb"):
+		t.Errorf("messages %+v; want app/a.rb's text conflict", msgs)
+	case !has(ConflictBinary, "logo.png"):
+		t.Errorf("messages %+v; want logo.png's binary conflict", msgs)
+	case !has(ConflictRenameRename, "lib/r.rb", "lib/r_tip.rb", "lib/r_head.rb"):
+		t.Errorf("messages %+v; want lib/r.rb renamed apart", msgs)
+	}
+	if _, err := fx.c.MergeTreeMessages(ctx, fx.clone, "--all", head); err == nil {
+		t.Error("an option passed as a revision was let through")
+	}
+}

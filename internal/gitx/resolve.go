@@ -12,7 +12,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+
+	"github.com/zhuravel/magnum/internal/execx"
 )
 
 // MergeNoCommit merges rev into the work tree at dir and stops before it
@@ -63,6 +66,66 @@ func (c *Client) MergeTreeWrite(ctx context.Context, dir, a, b string) (tree str
 		return "", nil, fmt.Errorf("gitx: %s: unreadable tree %.40q", what, tree)
 	}
 	return tree, conflicts, nil
+}
+
+// The kinds of conflict merge-tree's messages name (MergeMessage.Kind) that a
+// staging merge's resolver refuses to resolve: git's stable names for them.
+const (
+	ConflictBinary       = "CONFLICT (binary)"
+	ConflictRenameRename = "CONFLICT (rename/rename)"
+)
+
+// MergeMessage is one of the informational messages of `git merge-tree
+// --write-tree`: its kind, git's stable name for it ("Auto-merging",
+// "CONFLICT (contents)", ConflictBinary, ConflictRenameRename,
+// "CONFLICT (modify/delete)" and so on), and the paths it is about, in
+// git's order. Its text, for people, is not kept.
+type MergeMessage struct {
+	Kind  string
+	Paths []string
+}
+
+// MergeTreeMessages lists the messages of merging b into a, in git's order
+// (`git merge-tree --write-tree -z --name-only a b`, read from its
+// informational messages section); none for a clean merge. It writes
+// objects alone: no ref, index or work tree.
+func (c *Client) MergeTreeMessages(ctx context.Context, dir, a, b string) ([]MergeMessage, error) {
+	if err := errors.Join(checkRev("revision", a), checkRev("revision", b)); err != nil {
+		return nil, err
+	}
+	what := "merge-tree " + a + " " + b
+	res, err := c.git(ctx, dir, call{label: what, noExit: 1, timeout: commitTimeout}, "merge-tree", "--write-tree", "-z", "--name-only", a, b)
+	if err == nil {
+		return nil, nil
+	}
+	if code, ok := exitCode(err); !ok || code != 1 {
+		return nil, err
+	}
+	if res.Truncated {
+		return nil, fmt.Errorf("gitx: %s: more than %d bytes", what, execx.MaxOutput)
+	}
+	// "<tree>\0<path>\0...\0\0" (the conflicted paths, ended by an empty
+	// field), then each message: "<n>\0<path 1>\0...<path n>\0<kind>\0<text>\0".
+	fields := strings.Split(string(res.Stdout), "\x00")
+	bad := func() error { return fmt.Errorf("gitx: %s: unreadable messages %.80q", what, res.Stdout) }
+	if !isOID(fields[0]) {
+		return nil, bad()
+	}
+	i := 1
+	for i < len(fields) && fields[i] != "" {
+		i++
+	}
+	i++ // the empty field that ends the paths
+	var out []MergeMessage
+	for i < len(fields) && fields[i] != "" {
+		n, err := strconv.Atoi(fields[i])
+		if err != nil || n < 0 || i+n+2 >= len(fields) {
+			return nil, bad()
+		}
+		out = append(out, MergeMessage{Kind: fields[i+n+1], Paths: slices.Clone(fields[i+1 : i+1+n])})
+		i += n + 3
+	}
+	return out, nil
 }
 
 // WriteTreeFrom writes the tree that is base with each of paths as the work
