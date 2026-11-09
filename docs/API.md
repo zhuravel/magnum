@@ -5496,10 +5496,11 @@ func (c *Config) CIDispatch(fullName string) string
     and the engine 2 minutes after each push it made to a PR.
 
 func (c *Config) CIDispatchAs(fullName string) string
-    CIDispatchAs returns the identity the [[repo]] block of repository
-    fullName ("owner/name", any case) names to start its CIDispatch workflow
-    (ci_dispatch_as), "" when none does: the look starts it as the watch's poll
-    identity, else its identity.
+    CIDispatchAs returns the identity the [[repo]] block of repository fullName
+    ("owner/name", any case) names to start its CIDispatch workflow and to
+    re-run a run of an own PR's head that started no job (ci_dispatch_as),
+    "" when none does: the look does both as the watch's poll identity, else its
+    identity.
 
 func (c *Config) CommentsWhenClean(repo, identity, author string) bool
     CommentsWhenClean reports whether the identity named identity posts
@@ -7462,8 +7463,11 @@ type Repo struct {
 
 	// CIDispatchAs names the [[identity]] that starts the CIDispatch
 	// workflow (see Config.CIDispatchAs): one that can, where the watch's
-	// poll identity cannot (an App with Actions: read only). "" (the
-	// default) starts it as the poll identity.
+	// poll identity cannot (an App with Actions: read only). With or
+	// without CIDispatch, it also names who reads the runs at an own PR's
+	// head and re-runs, once per head, a run that started no job (the
+	// look's rule 11, under autofix = "open"). "" (the default) does both
+	// as the poll identity.
 	CIDispatchAs string `toml:"ci_dispatch_as"`
 }
     Repo is a [[repo]] block: the repository's verdicts (any watched repository,
@@ -18443,6 +18447,16 @@ func (c *Client) FileAt(ctx context.Context, owner, repo, path, ref string) ([]b
     a file above FileAtLimit an error matching ErrFileTooLarge (checked on the
     bytes received).
 
+func (c *Client) HeadRuns(ctx context.Context, owner, repo, sha string) ([]WorkflowRun, error)
+    HeadRuns lists the runs of every workflow of owner/repo at commit sha,
+    of any event, newest first, each with its event, its attempt and its
+    workflow's file: GET /repos/{o}/{r}/actions/runs filtered by head_sha,
+    one page of headRunsPage. A run that started no job is there (its check
+    suite holds no check run, so a PR's check rollup cannot show it), and so
+    is one still queued. A run of another commit in the answer is left out.
+    The identity needs read access to the repository's Actions (an App: Actions:
+    read). A sha that is no full commit id is refused before any call.
+
 func (c *Client) IssueComments(ctx context.Context, owner, repo string, number int, stop func(PRComment) bool) (comments []PRComment, complete bool, err error)
     IssueComments lists the comments on the conversation of pull request number
     (review bodies and inline comments are not among them: AllReviews and
@@ -18515,6 +18529,15 @@ func (c *Client) RequiredChecks(ctx context.Context, owner, repo, branch string)
     403 (a private repository on a free plan) or 404 from the endpoint that
     would have to answer, logged at Debug (restProbe). Any other failure is an
     error.
+
+func (c *Client) RerunRun(ctx context.Context, owner, repo string, runID int64) error
+    RerunRun re-runs every job of run id of owner/repo as the client's identity,
+    a new attempt of the same run (its run_attempt goes up by one): POST
+    /repos/{o}/{r}/actions/runs/{id}/rerun. GitHub runs it with the run's own
+    event, commit and workflow file, and refuses (HTTP 403) an identity that
+    may not run workflows (a gh login that cannot push, an App without Actions:
+    write). A run id that is no id is refused before any call. It is marked
+    Mutates, so execx.DryRun only plans it.
 
 func (c *Client) ReviewAnswers(ctx context.Context, ids []string) (map[string]ReviewAnswer, error)
     ReviewAnswers reads what the inline comments of each review answer
@@ -19067,13 +19090,18 @@ type WorkflowRun struct {
 	HeadSHA    string
 	HeadBranch string
 	Event      string
+	Attempt    int
+	Workflow   string
 }
-    WorkflowRun is a run of a workflow as DispatchedRuns, CommitRuns and
-    RecentRuns list it: its id, its status (queued, waiting, requested, pending,
-    in_progress or completed), its conclusion once completed (success, failure,
-    cancelled, timed_out, ...), its page and when GitHub created it; RecentRuns
-    also says the commit, the branch and the event it ran for (the branch is a
-    PR's text: never logged).
+    WorkflowRun is a run of a workflow as DispatchedRuns, CommitRuns, RecentRuns
+    and HeadRuns list it: its id, its status (queued, waiting, requested,
+    pending, in_progress or completed), its conclusion once completed (success,
+    failure, cancelled, timed_out, startup_failure, ...), its page and when
+    GitHub created it; RecentRuns also says the commit, the branch and the
+    event it ran for (the branch is a PR's text: never logged), and HeadRuns
+    the commit, the event, the run's attempt (Attempt: its run_attempt, 1, then
+    2 after a re-run) and its workflow's file in .github/workflows (Workflow:
+    "ci.yml"; "" for a run of no such file, GitHub's own dynamic runs).
 
 func (r WorkflowRun) Done() bool
     Done reports whether r ended (completed, whatever its conclusion).
