@@ -13029,8 +13029,8 @@ type LocalInputs struct {
 
 func LoadLocalInputs(dir string) (LocalInputs, error)
     LoadLocalInputs reads the frozen inputs in dir (SaveLocalInputs). A file
-    missing, or inputs that cannot be replayed, are an error that says how to
-    freeze the round again.
+    missing, or inputs that cannot be replayed, are an error (its round frozen
+    again, `magnum eval add`, makes them whole).
 
 func (in LocalInputs) Number() int
     Number is the synthetic PR number the round ran under (LocalNumber),
