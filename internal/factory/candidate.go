@@ -17,16 +17,20 @@ import (
 
 	"github.com/zhuravel/magnum"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/prompts"
 )
 
 // LocalReviewPrompt is the local reviewer prompt, the candidate's
-// claude-review.md; LiveReviewPrompt the prompt it stands in for.
+// claude-review.md; LiveReviewPrompt the prompt it stands in for. They are
+// evalrun's, whose RunLocal gives every local round, the factory's and a
+// replay's of a local case alike, the local prompt in the live one's place
+// (evalrun.LocalReviewConfig): the swap here is the same text again.
 const (
-	LocalReviewPrompt = "claude-review-local.md"
-	LiveReviewPrompt  = "claude-review.md"
+	LocalReviewPrompt = evalrun.LocalReviewPrompt
+	LiveReviewPrompt  = evalrun.LiveReviewPrompt
 )
 
 // ReviewCandidateDir is where the factory writes its review candidate:

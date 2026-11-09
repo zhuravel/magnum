@@ -45,6 +45,19 @@ func ReviewerInputs(cfg *config.Config) string {
 	return inputsOf(cfg, func(r config.Role) bool { return !r.Judge }, false)
 }
 
+// LocalReviewInputs are the Inputs of a local round reviewed with cfg
+// (LocalReviewConfig: its reviewer reads the factory's local reviewer
+// prompt, LocalReviewPrompt, where cfg's names the posted one), which a
+// local case's replay records as its own (eval.CaseRun.Inputs) and the skill
+// gate matches a local case's stored replays on. An edit of the posted
+// reviewer prompt, which no local round reads, leaves them alone.
+func LocalReviewInputs(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	return Inputs(LocalReviewConfig(cfg))
+}
+
 // inputsOf hashes the inputs of the roles of cfg that of takes, then the
 // stakes lines, then, with judges, the simplification caps and [jira].
 func inputsOf(cfg *config.Config, of func(config.Role) bool, judges bool) string {

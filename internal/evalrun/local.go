@@ -114,6 +114,36 @@ type LocalFinding struct {
 // case's PR number is one, eval.LocalNumberBase).
 const localNumberBase = eval.LocalNumberBase
 
+// LocalReviewPrompt is the factory's local reviewer prompt, which reviews
+// the change in the copy (`git diff <base>..<head>`) and reads the title
+// and the description from a file; LiveReviewPrompt is the posted
+// reviewer prompt it stands in for in a local round (`/code-review <PR
+// URL>`, whose URL no GitHub serves for a synthetic number).
+const (
+	LocalReviewPrompt = "claude-review-local.md"
+	LiveReviewPrompt  = "claude-review.md"
+)
+
+// LocalReviewConfig is the config a local round reviews with: a copy of
+// cfg (its prompt snapshot, if any, kept) whose every role that names
+// LiveReviewPrompt, for any prompt kind, names LocalReviewPrompt in its
+// place, resolved as cfg resolves prompts (a candidate's prompts_dir, else
+// the embedded one). RunLocal applies it, so the factory's rounds and the
+// replays of a local case review alike; cfg is never changed.
+func LocalReviewConfig(cfg *config.Config) *config.Config {
+	out := *cfg
+	out.Roles = cfg.AllRoles()
+	for i := range out.Roles {
+		r := &out.Roles[i]
+		for _, name := range []*string{&r.Prompt, &r.Rereview, &r.Restart, &r.ContinuePrompt, &r.Recovery, &r.Nudge, &r.OwnPass} {
+			if *name == LiveReviewPrompt {
+				*name = LocalReviewPrompt
+			}
+		}
+	}
+	return &out
+}
+
 // The bounds of the local rounds' synthetic numbers (LocalNumber).
 const (
 	// MaxLocalRound is the last round a synthetic number is kept for: two
@@ -263,7 +293,8 @@ var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 // identity (the watch's, else the first configured: an App's token would be
 // minted from GitHub), with the branch as the head ref and the title with the
 // Jira key. The round's config is d.Config (the factory's review candidate,
-// config.WithCandidate). A case it cannot run is an error and nothing
+// config.WithCandidate; a replay's candidate) with the local reviewer
+// prompt in the posted one's place (LocalReviewConfig). A case it cannot run is an error and nothing
 // starts; a round that ran is a result, whatever its outcome, and only the
 // end of ctx (a drain) is an error after it started.
 func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error) {
@@ -341,7 +372,7 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error) {
 		run = d.runLocalRound
 	}
 	d.progress("local round %d of task %d in herdr workspace \"eval %s#%d\", agents tagged %s (blind, nothing is posted)", c.Round, c.TaskID, name, number, tag)
-	res, runErr := run(ctx, d.Config, layout, tag, lr)
+	res, runErr := run(ctx, LocalReviewConfig(d.Config), layout, tag, lr)
 	out := LocalResult{Outcome: cmp.Or(res.Outcome, pipeline.OutcomeError), ReportDir: res.ReportDir, Round: c.Round, Number: number, Tag: tag,
 		Scratch: scratch, Error: res.Error}
 	if runErr != nil {

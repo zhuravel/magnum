@@ -11,6 +11,7 @@ package cli
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/spf13/cobra"
 
@@ -28,8 +29,9 @@ func newEvalBaselineCmd(c *Context) *cobra.Command {
 			"pins, from a clean checkout, with the inputs this binary and config give a review now (the judge skill, "+
 			"the roles' prompts, the role config, the stakes lines and the simplification caps; run.json's inputs), "+
 			"newest first. A new replay of such a case repeats one of them unless magnum's code changed since its "+
-			"commit (eval-at.sh compares the Go files). It only reads: no replay starts.\n\n"+
-			"Output, tab-separated: `inputs <hash>`, then per case one `reuse <case> <run> <commit> <found>/<total>` "+
+			"commit (eval-at.sh compares the Go files). A local case matches on its round's own inputs, with the "+
+			"factory's local reviewer prompt in the posted one's place. It only reads: no replay starts.\n\n"+
+			"Output, tab-separated: `inputs <hash>`, `local-inputs <hash>` when a case is local, then per case one `reuse <case> <run> <commit> <found>/<total>` "+
 			"line per stored run, or `run <case>` when there is none.",
 		func(pos []string) int {
 			if len(pos) > 0 {
@@ -59,10 +61,17 @@ func runEvalBaseline(c *Context, corpusFlag string, names []string) int {
 	if err != nil {
 		return cmdFail(c, "eval baseline", err)
 	}
-	inputs := evalrun.Inputs(c.Config)
+	inputs, local := evalrun.Inputs(c.Config), evalrun.LocalReviewInputs(c.Config)
 	fmt.Fprintf(c.Stdout, "inputs\t%s\n", inputs)
+	if slices.ContainsFunc(cases, eval.Case.Local) {
+		fmt.Fprintf(c.Stdout, "local-inputs\t%s\n", local)
+	}
 	for _, ec := range cases {
-		found := eval.Baselines(runs, inputs, ec)
+		in := inputs
+		if ec.Local() {
+			in = local // its round reads the factory's local reviewer prompt
+		}
+		found := eval.Baselines(runs, in, ec)
 		if len(found) == 0 {
 			fmt.Fprintf(c.Stdout, "run\t%s\n", ec.Name)
 			continue

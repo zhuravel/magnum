@@ -22757,6 +22757,38 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (its report directory read under 9000111); the cli's TestEvalAddTakesARoundPastTheLoopsTen and a round-11 case in
   TestEvalCaseWhatNamesTheLastRoundOfItsTask. TestRunLocalSeedsAFreshScratchPerRound (900071, 900072),
   TestLocalRoundOfNamesTheTaskAndRoundOfASyntheticNumber and the freeze tests pass unchanged. No new dependencies.
+- **A local case's replay reviews with the factory's local reviewer prompt, as the round did, and records the inputs
+  of that round as the case's own** (2026-11-09, R36's replay, before its gate). The factory's local rounds run
+  with its review candidate, whose `claude-review.md` is `claude-review-local.md` (`factory.WriteReviewCandidate`:
+  `Review the change git diff <base>..<head>`), but `RunCase` gave a local case only `--candidate`'s or the config's
+  prompts, so every replay of a local case (the three of task-1-round-1 so far, a `--candidate` run among them)
+  opened with `/code-review <synthetic PR URL>`, a URL no GitHub serves, and its reviewer reviewed the git diff on
+  its own after that; and `evalrun.Inputs` hashed only the prompts the roles name, never `claude-review-local.md`.
+  So a replay measured a reviewer prompt no factory round reads, the gate R36 planned would have compared local
+  rows on it, and the noise measured on those replays (1/2, then 0/2 at the same inputs) is of the wrong prompt.
+  - One path for both. `evalrun.LocalReviewConfig(cfg)` is a copy of cfg (its prompt snapshot kept) whose every
+    role naming `LiveReviewPrompt` (`claude-review.md`, for any prompt kind) names `LocalReviewPrompt`
+    (`claude-review-local.md`) in its place, resolved as cfg resolves prompts: the candidate's `prompts/`, else the
+    embedded one. `RunLocal` applies it, so the factory's rounds (whose candidate holds `claude-review-local.md` as
+    itself too: the same text) and a local case's replay review alike; `factory.LocalReviewPrompt` and
+    `LiveReviewPrompt` are now evalrun's constants, and the candidate's swap stays (the same text again).
+  - The inputs. A run's `Inputs` stay those of the posted roles (so no stored posted replay loses its baselines).
+    A local case's replay records `evalrun.LocalReviewInputs(cfg)`, the Inputs of that local config, as
+    `eval.CaseRun.Inputs`, and `eval.CaseInputs(run, case)` is what `Baselines`, `JudgeBaselines` and
+    `NewestReplay` (its skip and `Replay.Inputs`) now match: the case's own, else the run's. A local replay that
+    recorded none ran with the posted prompt, so its inputs are `""`, which no inputs match: none of today's three
+    replays is a baseline of anything. `magnum eval baseline` matches a local case on `local-inputs` (a line of its
+    own when the corpus has one). An edit of `claude-review.md` leaves a local case's inputs alone; one of
+    `claude-rereview.md` still moves them (the role names it, though a fresh local round never re-reviews), which
+    costs at most a replay.
+  Rejected: writing a candidate directory per replay as the factory does (it would need every prompt as the config
+  resolves it, the partials files included, and one skill for every judge, which a config with two judge skills
+  does not have); hashing `claude-review-local.md` into every run's Inputs (every stored posted replay would lose
+  its baselines, and an edit of the local prompt would make every posted case replay again); keeping the old local
+  replays as baselines (they reviewed with the prompt no round reads). Tests: evalrun's
+  TestALocalRoundReadsTheFactorysLocalReviewerPrompt and TestALocalReplayRecordsTheInputsOfTheRoundItRan, eval's
+  TestALocalReplayMatchesOnTheInputsOfItsOwnRound, the cli's TestEvalBaselineMatchesALocalCaseOnItsRoundsInputs;
+  `internal/factory`'s tests pass unchanged. No new dependencies.
 
 ## Learned rules
 

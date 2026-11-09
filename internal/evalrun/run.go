@@ -325,6 +325,7 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
 	cr.CodexBefore = codexUsed(ctx, cfg) // the points the case uses
 	defer func() { out.CodexAfter = codexUsed(context.WithoutCancel(ctx), cfg) }()
 	if ec.Local() {
+		cr.Inputs = LocalReviewInputs(cfg) // what its round reads, not the run's (the posted reviewer prompt)
 		return d.replayLocal(ctx, cfg, w, ec, local, o, cr)
 	}
 

@@ -125,6 +125,36 @@ func TestBaselinesAreScoredReplaysWithTheSameInputsNewestFirst(t *testing.T) {
 	}
 }
 
+// A local case's replay matches on the inputs it recorded of its own round (CaseRun.Inputs: its
+// reviewer reads the factory's local prompt), never on the run's, which hash the posted prompt; one
+// from before a local replay recorded its inputs read the posted prompt, which no local round reads,
+// so it matches none, and NewestReplay names a replay's inputs the same way.
+func TestALocalReplayMatchesOnTheInputsOfItsOwnRound(t *testing.T) {
+	c := Case{Name: "task-1-round-1", Kind: KindLocal, Head: sha}
+	scored := &Score{Found: 1, Total: 2}
+	runs := []Run{
+		{ID: "1-before", Inputs: "posted", Cases: []CaseRun{{Case: c.Name, Kind: KindLocal, Head: sha, Score: scored}}},
+		{ID: "2-local", Inputs: "posted", Cases: []CaseRun{{Case: c.Name, Kind: KindLocal, Head: sha, Score: scored, Inputs: "local"}}},
+		{ID: "3-other-round", Inputs: "posted", Cases: []CaseRun{{Case: c.Name, Kind: KindLocal, Head: sha, Score: scored, Inputs: "local-2"}}},
+	}
+	if got := Baselines(runs, "local", c); len(got) != 1 || got[0].Run != "2-local" {
+		t.Fatalf("Baselines on the local inputs = %+v, want 2-local alone", got)
+	}
+	if got := Baselines(runs, "posted", c); len(got) != 0 {
+		t.Fatalf("Baselines on the run's inputs = %+v, want none", got)
+	}
+	if r, ok := NewestReplay(runs, c, "local-2"); !ok || r.Run != "2-local" || r.Inputs != "local" {
+		t.Fatalf("NewestReplay skipping local-2 = %+v, %v, want 2-local with its own inputs", r, ok)
+	}
+	if r, ok := NewestReplay(runs[:1], c, ""); !ok || r.Inputs != "" {
+		t.Fatalf("NewestReplay of a replay without its round's inputs = %+v, %v, want it with none", r, ok)
+	}
+	posted := Run{Inputs: "posted", Cases: []CaseRun{{Case: "geo", Head: sha, Score: scored}}}
+	if CaseInputs(posted, posted.Cases[0]) != "posted" || CaseInputs(runs[1], runs[1].Cases[0]) != "local" || CaseInputs(runs[0], runs[0].Cases[0]) != "" {
+		t.Fatal("CaseInputs")
+	}
+}
+
 // A judge-only replay scored the judge on another run's reviewer reports: a full run would not
 // repeat it, so it is no baseline.
 func TestBaselinesLeaveOutJudgeOnlyReplays(t *testing.T) {

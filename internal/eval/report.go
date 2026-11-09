@@ -52,6 +52,11 @@ type CaseRun struct {
 	// them (evalrun.LocalResult's, a question marked), then the review's body; Rescore scores them
 	// again. A posted case's are re-read from ResultFile, so they are not kept.
 	Findings []Finding `json:"findings,omitempty"`
+	// Inputs are what a local case's replay read (evalrun.LocalReviewInputs: its round's reviewer
+	// reads the factory's local reviewer prompt, which the run's Inputs leave out), "" for a posted
+	// case, whose inputs are the run's, and for a local replay from before they were recorded
+	// (CaseInputs).
+	Inputs string `json:"inputs,omitempty"`
 }
 
 // outcomeDryRun is a replay's outcome when the judge wrote its planned review (pipeline.OutcomeDryRun).

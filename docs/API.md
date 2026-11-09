@@ -12441,6 +12441,14 @@ func AgentTag(id string) string
     carries a role's name, and a run once adopted the agents the run before it
     left behind. It also leads their titles and pane labels.
 
+func CaseInputs(r Run, cr CaseRun) string
+    CaseInputs are the inputs replay cr of run r read, which Baselines,
+    JudgeBaselines and NewestReplay match on: the case's own (CaseRun.Inputs,
+    a local case's round), else the run's (Run.Inputs). A local case's replay
+    that recorded none ran before its round's reviewer read the factory's
+    local reviewer prompt: it read the posted one, as no local round does,
+    so its inputs are "", which no inputs match.
+
 func FullReplayFor(runs []Run, caseName, head string, like *Run) (Run, CaseRun, bool)
     FullReplayFor finds the replay a judge-only replay of case caseName at head
     takes its reviewers' reports from: the newest run whose case of that name
@@ -12519,13 +12527,13 @@ type Baseline struct {
 func Baselines(runs []Run, inputs string, c Case) []Baseline
     Baselines lists, newest run first, the stored replays of c that a run with
     inputs (Run.Inputs: the judge skill, the roles' prompts, the role config,
-    the stakes lines and the simplification caps) may reuse instead of replaying
-    c: runs that recorded the same inputs from a clean checkout, whose case
-    of c's name reviewed c's head with every role (not a judge-only replay,
-    CaseRun.JudgeOnly) and has a score. Unknown inputs ("") reuse nothing.
-    The inputs leave magnum's code out, so the caller decides whether the code
-    of Commit reviews as its own does (eval-at.sh compares the Go files of the
-    two commits).
+    the stakes lines and the simplification caps; a local case's own,
+    CaseInputs) may reuse instead of replaying c: replays that recorded the same
+    inputs in runs from a clean checkout, whose case of c's name reviewed c's
+    head with every role (not a judge-only replay, CaseRun.JudgeOnly) and has
+    a score. Unknown inputs ("") reuse nothing. The inputs leave magnum's code
+    out, so the caller decides whether the code of Commit reviews as its own
+    does (eval-at.sh compares the Go files of the two commits).
 
 func JudgeBaselines(runs []Run, inputs string, c Case, reports string) []Baseline
     JudgeBaselines lists, newest run first, the stored replays of c whose
@@ -12599,6 +12607,11 @@ type CaseRun struct {
 	// them (evalrun.LocalResult's, a question marked), then the review's body; Rescore scores them
 	// again. A posted case's are re-read from ResultFile, so they are not kept.
 	Findings []Finding `json:"findings,omitempty"`
+	// Inputs are what a local case's replay read (evalrun.LocalReviewInputs: its round's reviewer
+	// reads the factory's local reviewer prompt, which the run's Inputs leave out), "" for a posted
+	// case, whose inputs are the run's, and for a local replay from before they were recorded
+	// (CaseInputs).
+	Inputs string `json:"inputs,omitempty"`
 }
     CaseRun is one case of a replay: what became of the review round and,
     when it left a result, the score.
@@ -12711,14 +12724,15 @@ type Replay struct {
 	Case   CaseRun
 }
     Replay is a stored replay of a case (NewestReplay): the run that made it,
-    the inputs that run recorded (Run.Inputs, "" before they were), when it
-    replayed the case (ReplayedAt) and the case as the run recorded it.
+    the inputs it read (CaseInputs: the run's, a local case's own; "" before
+    they were recorded), when it replayed the case (ReplayedAt) and the case as
+    the run recorded it.
 
 func NewestReplay(runs []Run, c Case, skip string) (Replay, bool)
     NewestReplay is the newest stored replay of c at the head the corpus pins
     that has a score, a full or a judge-only one, from a clean checkout or not,
-    leaving out the runs that recorded inputs skip ("" leaves none out;
-    the skill gate leaves out its candidate's own): the one replayed last
+    leaving out the replays that read inputs skip (CaseInputs; "" leaves none
+    out; the skill gate leaves out its candidate's own): the one replayed last
     (ReplayedAt), in whatever run, two dated alike ordered by their runs (oldest
     first: ListRuns) and within a run by their order. ok is false when there is
     none.
@@ -12885,6 +12899,16 @@ directory (WithCandidate) replays another checkout's prompts and skill.
 CONSTANTS
 
 const (
+	LocalReviewPrompt = "claude-review-local.md"
+	LiveReviewPrompt  = "claude-review.md"
+)
+    LocalReviewPrompt is the factory's local reviewer prompt, which reviews the
+    change in the copy (`git diff <base>..<head>`) and reads the title and the
+    description from a file; LiveReviewPrompt is the posted reviewer prompt it
+    stands in for in a local round (`/code-review <PR URL>`, whose URL no GitHub
+    serves for a synthetic number).
+
+const (
 	// MaxLocalRound is the last round a synthetic number is kept for: two
 	// digits of it, past the loop's config.MaxFactoryCycles (a second
 	// opinion's round runs outside the loop's count).
@@ -13013,6 +13037,22 @@ func LocalResultFile(n int) string
     LocalResultFile is the file in a task's directory where the factory keeps
     the result of review cycle n's round (an evalrun.LocalResult as JSON),
     as the factory names it (internal/factory's reviewRoundFile).
+
+func LocalReviewConfig(cfg *config.Config) *config.Config
+    LocalReviewConfig is the config a local round reviews with: a copy of
+    cfg (its prompt snapshot, if any, kept) whose every role that names
+    LiveReviewPrompt, for any prompt kind, names LocalReviewPrompt in its place,
+    resolved as cfg resolves prompts (a candidate's prompts_dir, else the
+    embedded one). RunLocal applies it, so the factory's rounds and the replays
+    of a local case review alike; cfg is never changed.
+
+func LocalReviewInputs(cfg *config.Config) string
+    LocalReviewInputs are the Inputs of a local round reviewed with cfg
+    (LocalReviewConfig: its reviewer reads the factory's local reviewer prompt,
+    LocalReviewPrompt, where cfg's names the posted one), which a local case's
+    replay records as its own (eval.CaseRun.Inputs) and the skill gate matches
+    a local case's stored replays on. An edit of the posted reviewer prompt,
+    which no local round reads, leaves them alone.
 
 func LocalRoot(l paths.Layout, taskID int64) string
     LocalRoot is where task taskID's local rounds keep their scratch
@@ -13284,9 +13324,11 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error)
     --local-base), as a gh identity (the watch's, else the first configured:
     an App's token would be minted from GitHub), with the branch as the head
     ref and the title with the Jira key. The round's config is d.Config (the
-    factory's review candidate, config.WithCandidate). A case it cannot run
-    is an error and nothing starts; a round that ran is a result, whatever its
-    outcome, and only the end of ctx (a drain) is an error after it started.
+    factory's review candidate, config.WithCandidate; a replay's candidate) with
+    the local reviewer prompt in the posted one's place (LocalReviewConfig).
+    A case it cannot run is an error and nothing starts; a round that ran is a
+    result, whatever its outcome, and only the end of ctx (a drain) is an error
+    after it started.
 
 type Options struct {
 	// Candidate replays a candidate directory's prompts and skill
@@ -13628,11 +13670,14 @@ the daemon, its stages and its screen build on it.
 CONSTANTS
 
 const (
-	LocalReviewPrompt = "claude-review-local.md"
-	LiveReviewPrompt  = "claude-review.md"
+	LocalReviewPrompt = evalrun.LocalReviewPrompt
+	LiveReviewPrompt  = evalrun.LiveReviewPrompt
 )
     LocalReviewPrompt is the local reviewer prompt, the candidate's
-    claude-review.md; LiveReviewPrompt the prompt it stands in for.
+    claude-review.md; LiveReviewPrompt the prompt it stands in for. They are
+    evalrun's, whose RunLocal gives every local round, the factory's and a
+    replay's of a local case alike, the local prompt in the live one's place
+    (evalrun.LocalReviewConfig): the swap here is the same text again.
 
 const (
 	HoldInfra  = "infra"

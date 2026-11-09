@@ -136,6 +136,21 @@ func union(a, b map[string]string) map[string]string {
 	return out
 }
 
+// CaseInputs are the inputs replay cr of run r read, which Baselines, JudgeBaselines and NewestReplay
+// match on: the case's own (CaseRun.Inputs, a local case's round), else the run's (Run.Inputs). A
+// local case's replay that recorded none ran before its round's reviewer read the factory's local
+// reviewer prompt: it read the posted one, as no local round does, so its inputs are "", which no
+// inputs match.
+func CaseInputs(r Run, cr CaseRun) string {
+	switch {
+	case cr.Inputs != "":
+		return cr.Inputs
+	case cr.Kind == KindLocal:
+		return ""
+	}
+	return r.Inputs
+}
+
 // Baseline is a stored replay of a case that a run with the same inputs need not repeat.
 type Baseline struct {
 	Run    string    // the stored run's ID
@@ -146,8 +161,8 @@ type Baseline struct {
 
 // Baselines lists, newest run first, the stored replays of c that a run with inputs (Run.Inputs:
 // the judge skill, the roles' prompts, the role config, the stakes lines and the simplification
-// caps) may reuse instead of replaying c: runs that recorded the same inputs from a clean
-// checkout, whose case of c's name reviewed c's head with every role (not a judge-only replay,
+// caps; a local case's own, CaseInputs) may reuse instead of replaying c: replays that recorded the
+// same inputs in runs from a clean checkout, whose case of c's name reviewed c's head with every role (not a judge-only replay,
 // CaseRun.JudgeOnly) and has a score. Unknown inputs ("") reuse nothing. The inputs leave
 // magnum's code out, so the caller decides whether the code of Commit reviews as its own does
 // (eval-at.sh compares the Go files of the two commits).
@@ -157,11 +172,11 @@ func Baselines(runs []Run, inputs string, c Case) []Baseline {
 		return nil
 	}
 	for _, r := range slices.Backward(runs) {
-		if r.Inputs != inputs || r.Dirty {
+		if r.Dirty {
 			continue
 		}
 		for _, cr := range r.Cases {
-			if cr.Case == c.Name && cr.Head == c.Head && cr.Score != nil && !cr.JudgeOnly {
+			if cr.Case == c.Name && cr.Head == c.Head && cr.Score != nil && !cr.JudgeOnly && CaseInputs(r, cr) == inputs {
 				out = append(out, Baseline{Run: r.ID, Commit: r.Commit, Case: cr, At: ReplayedAt(r, cr)})
 				break
 			}
@@ -182,11 +197,11 @@ func JudgeBaselines(runs []Run, inputs string, c Case, reports string) []Baselin
 	}
 	var out []Baseline
 	for _, r := range slices.Backward(runs) {
-		if r.Inputs != inputs || r.Dirty {
+		if r.Dirty {
 			continue
 		}
 		for _, cr := range r.Cases {
-			if cr.Case != c.Name || cr.Head != c.Head || cr.Score == nil {
+			if cr.Case != c.Name || cr.Head != c.Head || cr.Score == nil || CaseInputs(r, cr) != inputs {
 				continue
 			}
 			if cr.JudgeOnly && cr.ReportsRun == reports || !cr.JudgeOnly && r.ID == reports {
@@ -225,8 +240,8 @@ func RunsBefore(runs []Run, t time.Time) []Run {
 	return out
 }
 
-// Replay is a stored replay of a case (NewestReplay): the run that made it, the inputs that run
-// recorded (Run.Inputs, "" before they were), when it replayed the case (ReplayedAt) and the case as
+// Replay is a stored replay of a case (NewestReplay): the run that made it, the inputs it read
+// (CaseInputs: the run's, a local case's own; "" before they were recorded), when it replayed the case (ReplayedAt) and the case as
 // the run recorded it.
 type Replay struct {
 	Run    string
@@ -236,23 +251,21 @@ type Replay struct {
 }
 
 // NewestReplay is the newest stored replay of c at the head the corpus pins that has a score, a full
-// or a judge-only one, from a clean checkout or not, leaving out the runs that recorded inputs skip
-// ("" leaves none out; the skill gate leaves out its candidate's own): the one replayed last
+// or a judge-only one, from a clean checkout or not, leaving out the replays that read inputs skip
+// (CaseInputs; "" leaves none out; the skill gate leaves out its candidate's own): the one replayed last
 // (ReplayedAt), in whatever run, two dated alike ordered by their runs (oldest first: ListRuns) and
 // within a run by their order. ok is false when there is none.
 func NewestReplay(runs []Run, c Case, skip string) (Replay, bool) {
 	var out Replay
 	ok := false
 	for _, r := range runs {
-		if skip != "" && r.Inputs == skip {
-			continue
-		}
 		for _, cr := range r.Cases {
-			if cr.Case != c.Name || cr.Head != c.Head || cr.Score == nil {
+			in := CaseInputs(r, cr)
+			if cr.Case != c.Name || cr.Head != c.Head || cr.Score == nil || skip != "" && in == skip {
 				continue
 			}
 			if at := ReplayedAt(r, cr); !ok || !at.Before(out.At) {
-				out, ok = Replay{Run: r.ID, Inputs: r.Inputs, At: at, Case: cr}, true
+				out, ok = Replay{Run: r.ID, Inputs: in, At: at, Case: cr}, true
 			}
 		}
 	}

@@ -7215,7 +7215,12 @@ same `--candidate` and `--no-notes`: a detached worktree at the frozen head in t
 (`~/.local/state/magnum/eval/wt/<case>`), of the `[[factory.repo]]`'s main clone, which holds every commit its
 copies made (else the clone a posted case uses; a commit it lacks is fetched by id), and the round run again
 (`evalrun.RunLocal`) under the same synthetic number with the frozen title, plan, ticket and answers (written as
-the factory writes them now) and roles. Its worktree is prepared and torn down as a posted case's is, for that
+the factory writes them now) and roles. Its reviewer reads the factory's local reviewer prompt,
+`claude-review-local.md` (the candidate's with `--candidate`), where the watch's names `claude-review.md`, as every
+factory round does (`evalrun.LocalReviewConfig`), and the run records the inputs of that round as the case's own
+(`inputs` in its `run.json` case, which `eval baseline` and the skill gate match a local case on): an edit of
+`claude-review.md` leaves them alone. A replay from before they were recorded reviewed with `claude-review.md` and
+matches no inputs. Its worktree is prepared and torn down as a posted case's is, for that
 number (`WT_BRANCH=magnum-eval-<N>-<6 hex digits>`), its panes get the env its preparation ran with, never the
 copy's, whose databases a task may be using, and its scratch directory is the run's (`cases/<case>/`), never
 the task's. Its findings, as the factory reads them (a
