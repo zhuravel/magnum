@@ -15,7 +15,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/eval"
@@ -146,7 +145,11 @@ func prCase(pr string) (eval.Case, bool) {
 //     earlier run left it, removed after unless o.Keep), of the factory
 //     repository's main clone, which holds every commit its copies made,
 //     else of the clone a posted case's replay takes (clone); the head and
-//     the base are fetched there by id when it lacks them;
+//     the base are fetched there by id when it lacks them; the worktree is
+//     prepared as a per-PR review checkout of the repository for the
+//     round's synthetic number, and torn down before it goes
+//     (addCaseWorktree), a setup that fails being the case's
+//     eval.OutcomeEnvironment;
 //   - a LocalCase of the frozen inputs in that worktree, with the
 //     environment a posted replay's per-PR worktree has for the round's
 //     synthetic number (slots.PerPREnv: WT_BRANCH=magnum-pr-<N> and the
@@ -188,26 +191,11 @@ func (d Deps) replayLocal(ctx context.Context, cfg *config.Config, w *config.Wat
 				tilde(mainClone), err))
 		}
 	}
-	wt := caseWorktree(d, o, ec.Name)
-	if err := os.MkdirAll(filepath.Dir(wt), 0o700); err != nil {
-		return fail(OutcomeError, err)
-	}
-	if _, err := os.Stat(wt); err == nil {
-		if err := git.WorktreeRemove(ctx, mainClone, wt, true); err != nil {
-			return fail(OutcomeError, fmt.Errorf("replace the previous worktree %s: %w", tilde(wt), err))
-		}
-	}
-	if err := git.WorktreeAdd(ctx, mainClone, wt, in.HeadSHA, true, ""); err != nil {
-		return fail(OutcomeError, err)
-	}
-	if !o.Keep {
-		defer func() {
-			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
-			defer cancel()
-			if err := git.WorktreeRemove(cctx, mainClone, wt, true); err != nil {
-				d.warn("removing worktree %s: %v", tilde(wt), err)
-			}
-		}()
+	wt, done, outcome, err := d.addCaseWorktree(ctx, cfg, git, run, o, ec.Name, in.Repo, in.Number(), mainClone, in.HeadSHA,
+		cmp.Or(in.Base, config.DefaultFactoryBase))
+	defer done()
+	if err != nil {
+		return fail(outcome, err)
 	}
 	if !o.NoNotes {
 		cr.Notes = notesHashes(d.Layout, ec.Owner, ec.Repo) // the live notes the round copies as it starts

@@ -35,6 +35,11 @@ const (
 	// configuration problem (no gh identity to run as): not scored, and
 	// running it again changes nothing until the config does.
 	OutcomeConfigError = "config_error"
+	// OutcomeEnvironment: the case's worktree could not be prepared as a
+	// review checkout of its repository is (its copy_files, its setup):
+	// what the round would have found is unknown, so it is not scored,
+	// never a miss; the error names the command and its first error line.
+	OutcomeEnvironment = "environment"
 )
 
 // RunIDFormat is a run id's time part: sortable, to the second.

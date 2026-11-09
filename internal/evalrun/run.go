@@ -134,6 +134,35 @@ type Deps struct {
 	// localRound replaces a local round's engine (RunLocal; nil = the
 	// real one, runLocalRound): the tests' seam.
 	localRound localRoundFunc
+	// evalRound replaces a posted case's engine (RunCase; nil = the real
+	// one, runEvalRound): the tests' seam.
+	evalRound evalRoundFunc
+	// lookPath finds mise for a case worktree's commands
+	// (slots.Deps.LookPath; nil = exec.LookPath): the tests' seam.
+	lookPath func(file string) (string, error)
+}
+
+// evalRoundFunc runs a posted case's round: the engine of app a (on the
+// case's scratch layout) replays c, then its agents are released. name is
+// the case's, for the warnings. Deps.evalRound replaces it in tests.
+type evalRoundFunc func(ctx context.Context, a *app.App, name string, c engine.EvalCase) (pipeline.RoundResult, error)
+
+// runEvalRound is a posted case's engine (evalRoundFunc): a's engine's
+// RunEval of c, then the close of the round's agents and workspace,
+// whatever it answered (a judge still at work is interrupted first).
+func (d Deps) runEvalRound(ctx context.Context, a *app.App, name string, c engine.EvalCase) (pipeline.RoundResult, error) {
+	e := engine.FromApp(a)
+	res, pr, err := e.RunEval(ctx, c)
+	if pr.ID != 0 {
+		// A judge still at work is interrupted, then the workspace closed;
+		// the error names each workspace that stays open.
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ReleaseTimeout)
+		if rerr := e.ReleaseEval(rctx, pr); rerr != nil {
+			d.warn("%s: closing the eval agents: %v (close the herdr workspace by hand)", name, rerr)
+		}
+		cancel()
+	}
+	return res, err
 }
 
 // Options are a case's settings, the run's.
@@ -376,24 +405,18 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
 		}()
 	}
 
-	e := engine.FromApp(a)
+	round := d.evalRound
+	if round == nil {
+		round = d.runEvalRound
+	}
 	d.progress("reviewing in herdr workspace \"eval %s#%d\", agents tagged %s (blind, nothing is posted)", ec.Repo, ec.Number, a.AgentTag)
-	res, pr, runErr := e.RunEval(ctx, engine.EvalCase{
+	res, runErr := round(ctx, a, ec.Name, engine.EvalCase{
 		Owner: ec.Owner, Repo: ec.Repo, Number: ec.Number, URL: cmp.Or(pd.URL, fmt.Sprintf("https://github.com/%s/pull/%d", full, ec.Number)),
 		Head: ec.Head, BaseRef: cmp.Or(ec.Base, pd.BaseRefName), DefaultBranch: cmp.Or(ec.Base, pd.BaseRefName),
 		Title: pd.Title, Author: pd.AuthorLogin, AuthorType: pd.AuthorType,
 		Checkout: wt, Worktrees: worktrees, MainClone: mainClone, Watch: *w, Identity: w.Identity, Notes: notes,
 		JudgeOnly: o.JudgeOnly, Reports: reports,
 	})
-	if pr.ID != 0 {
-		// A judge still at work is interrupted, then the workspace closed;
-		// the error names each workspace that stays open.
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ReleaseTimeout)
-		if err := e.ReleaseEval(rctx, pr); err != nil {
-			d.warn("%s: closing the eval agents: %v (close the herdr workspace by hand)", ec.Name, err)
-		}
-		cancel()
-	}
 	cr.ReportDir = res.ReportDir
 	cr.Outcome = cmp.Or(res.Outcome, pipeline.OutcomeError)
 	if runErr != nil {
