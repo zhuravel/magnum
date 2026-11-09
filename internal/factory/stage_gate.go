@@ -330,8 +330,9 @@ func (e *Engine) reportRoles(t registry.Task) []string {
 }
 
 // QuestionKey is how a question is told from the questions the task asked,
-// here and in the CLI (registry.QuestionKey, the rule answers.md keeps the
-// newest answer of a question asked again by).
+// here and in the CLI: registry.QuestionKey (its text, lowercased, without
+// its marks, spaces and end punctuation), the rule by which answers.md
+// keeps only the newest answer of a question asked again.
 func QuestionKey(text string) string { return registry.QuestionKey(text) }
 
 // withRole is raisedBy with role added, when it is not one of its roles

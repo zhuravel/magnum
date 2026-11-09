@@ -21617,6 +21617,48 @@ skill versions); people add theirs to the sections before it, at the end of the 
   ticket file holds the answers too, and those of `engine.LocalRound.Env`, `engine.RunLocal`, the engine's
   `slotEnv` and `evalrun.LocalCase` that the round's env is the caller's (the copy's for the factory's rounds, the
   per-PR env of the synthetic number for a replay). No new dependencies; the factory's code did not change.
+- **`eval add` rebuilds a round's answers as they stood when it began, rather than refusing the round** (R36's
+  follow-up, 2026-11-09). R36 froze a local round's answers from its ticket file when it held them, else from the
+  task's `answers.md` only when no answer came and the file was not written after the round began, and refused the
+  round otherwise. That refusal blocked the first real use: a round that ran after three of its task's questions
+  were answered, with a fourth asked and answered after it, so `answers.md` holds an answer the round never saw,
+  and nothing kept the file it read.
+  - The renderer. `answersMarkdown`, with `answerKind`, `normLabel` and the question key by which it keeps only the
+    newest answer of a question asked again, moves from `internal/factory` into its registry as
+    `registry.AnswersMarkdown`, `NormLabel` and `QuestionKey`, over `registry.Question` rows, its output byte for
+    byte the same; `internal/factory` keeps `answersMarkdown`, `normLabel` and `QuestionKey` as thin wrappers, so no
+    other caller changed. A rebuilt `answers.md` is the one the factory would have written then, which `evalrun`'s
+    `operatorAnswers` reads as before.
+  - The rebuild. `factoryread.LocalReview` reads, in its one read transaction, the task's answered questions (the
+    fields the renderer uses) and every answer each had (`question_answers`, oldest first), in place of the answer
+    times (`LocalTask.Answered` and `AnsweredAfter` go). `LocalTask.AnswersAt(at)` keeps each question answered
+    before `at` with its newest answer before `at` (a row from before the history counts with its answer at its
+    `answered_at`) and whether that answer took the recommendation (the registry's rule, the recommended label
+    trimmed of spaces; the stored flag when it is the current answer), and counts the answers given at `at` or
+    later, first answers and revisions alike, which it leaves out. `FreezeLocal` (`answersAt`) rebuilds when the
+    round's ticket file did not hold the answers and an answer was given at the round's start
+    (`review_cycles.started_at`) or later, or `answers.md` was written after it, and renders the rows with
+    `registry.AnswersMarkdown`, so a question asked again across the start keeps its newest answer before it.
+    Without either it freezes `answers.md` as before. `LocalInputs.AnswersAsOf` (the start) and `AnswersLeftOut`
+    (the count) go into `inputs.json`, omitted when nothing was rebuilt, and `eval add` prints them.
+  - The refusal that stays: `answers.md` written since the round began when the registry holds no answered question
+    of the task, so there is nothing to rebuild from. Every other refusal stays.
+  Rejected: rebuilding even when nothing was answered or written since (the file the round read is better evidence
+  than a rebuild while it is known unchanged); the answers as they stand now (the case would carry an answer to the
+  very question the round missed, perhaps); an answer given at the start's instant (the round may not have read it);
+  a renderer of evalrun's own (it would drift from the file the factory writes). Tests: registry's
+  TestAnswersMarkdownRendersTheAnswersThatStandByteForByte (the old renderer's output over a varied set: the
+  recommended option, another option, own words with and without a recommendation, one of the options with none
+  recommended, a secret, open, voided, asked again and answered, asked again and waiting; checked against the old
+  function before the move) and TestQuestionKeyTellsAQuestionAskedAgainFromAnother; factoryread's
+  TestLocalReviewReadsATasksAnswersAsTheyStoodAtATime, and TestLocalReviewReadsATasksRoundsTheirRolesAndItsAnswerTimes
+  now reads the questions; evalrun's TestFreezeLocalRebuildsTheAnswersAsTheyStoodWhenTheRoundBegan (answers before,
+  at and after the start, a revision and a question asked again across it, `answers.md` written since, nothing
+  since), and TestFreezeLocalRefusesARoundItCannotFreezeWhole's "written since" case has no registry rows (its
+  "answer given since" case goes); the cli's TestEvalAddSaysTheAnswersWereRebuiltAsOfTheRoundsStart.
+  `internal/factory`'s tests, the end-to-end TestTheLocalRoundsTicketFileJoinsTheTasksTicketAndAnswers among them,
+  pass unchanged. No new dependencies; factoryread imports `internal/factory/registry` for its types, and evalrun
+  for the renderer.
 
 ## Learned rules
 

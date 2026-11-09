@@ -51,7 +51,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [registrytest](#registrytest) | Package registrytest gives tests a factory registry without migrating one for each of them: the first call in a test binary migrates a template database in memory, and every call starts from a copy of its bytes. |
 | [runtime](#runtime) | Package runtime is the factory's agent runtime: the owner rows of its tasks in the factory's own agents store, the launches it records before any workspace exists, the prompt ledger that never sends a prompt of unknown delivery twice, the pauses that are not failures, and a watchdog with its recovery steps (docs/superpowers/specs/2026-11-03-factory-design.md, sections 4.3, 10 and 10.1). |
 | [stats](#stats) | Package stats measures how much the factory still asks of the operator: per task, the messages typed, the messages that only start a step, the answer batches, the card decisions, the operator's time on cards and the time a task waited on them, computed from the factory registry's evidence records alone (spans, inputs, questions, decisions and review rounds) and set against the baseline frozen before the first task (milestone 1's exit test); and, for a task with a published PR, the PR's quality: what the local review missed at magnum's first posted round (the escape checks) and the PR's CI failures after the publish (its CI checks). |
-| [factoryread](#factoryread) | Package factoryread is the review side's read of what the factory keeps: the local review round of a pull request the factory published, from its registry (factory.db), and the task's plan, ticket and answers, from the task's directory, for the review retro (DECISIONS "The review retro tags factory-origin misses and their stage"); and a task's local review rounds, their heads, roles and the times of its answers, for the replay of a round as an eval case (LocalReview, `magnum eval add --local-task`), and a task's Codex mark and published PR before its replay (TaskCodex). |
+| [factoryread](#factoryread) | Package factoryread is the review side's read of what the factory keeps: the local review round of a pull request the factory published, from its registry (factory.db), and the task's plan, ticket and answers, from the task's directory, for the review retro (DECISIONS "The review retro tags factory-origin misses and their stage"); and a task's local review rounds, their heads and roles and its answered questions with every answer they had, for the replay of a round as an eval case (LocalReview, `magnum eval add --local-task`), and a task's Codex mark and published PR before its replay (TaskCodex). |
 | [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a replacement without disk syncs, a size-limited read of a regular file, plain or inside an os.Root, the check of a file holding a secret, an existence check and a canonical path. |
 | [github](#github) | Package github is magnum's GitHub access layer. |
 | [gitx](#gitx) | Package gitx holds every git operation magnum needs: fetching PR heads into refs/magnum/pr/N, detached switches and placeholder resets in review slots, worktree management, dirty/unpushed guards and the diff queries behind "did this PR touch db/". |
@@ -12814,8 +12814,9 @@ func FreezeLocal(ctx context.Context, d Deps, taskID int64, round, cycle int) (L
         round diffed from and whose head must be the cycle's;
       - the operator's answers: those under their heading in the round's ticket
         file when it has them, else the task's answers.md ("" when there is
-        none) when no question was answered and the file was not written after
-        the round began, a round that could not read them.
+        none) when no answer was given at the round's start or later and the
+        file was not written after it began; else the answers rebuilt from the
+        factory's registry as they stood when the round began (answersAt).
 
     The base branch is the [[factory.repo]]'s (default master). What cannot be
     frozen whole is an error that says what is missing; it returns the round's
@@ -13040,6 +13041,9 @@ type LocalInputs struct {
 	// added: a replay whose roles run Codex is refused on it (Refused).
 	CodexNever bool `json:"codex_never,omitempty"`
 
+	AnswersAsOf    time.Time `json:"answers_as_of,omitzero"`
+	AnswersLeftOut int       `json:"answers_left_out,omitempty"`
+
 	Body      string `json:"-"`
 	TicketMD  string `json:"-"`
 	AnswersMD string `json:"-"`
@@ -13054,7 +13058,10 @@ type LocalInputs struct {
     the ticket (TicketMD) and the operator's answers (AnswersMD) its ticket file
     joins (LocalTicket), and the round's roles; Frozen is when it was added.
     The texts are files of their own beside inputs.json (plan.md, ticket.md,
-    answers.md).
+    answers.md). AnswersAsOf is set when the answers are not a file the round
+    read but rebuilt from the factory's registry as they stood when the round
+    began (its cycle's start), and AnswersLeftOut counts the answers given at
+    that start or later, which the rebuild left out.
 
 func LoadLocalInputs(dir string) (LocalInputs, error)
     LoadLocalInputs reads the frozen inputs in dir (SaveLocalInputs). A file
@@ -13796,10 +13803,9 @@ func PromptNames(cfg *config.Config) []string
 
 func QuestionKey(text string) string
     QuestionKey is how a question is told from the questions the task asked,
-    here and in the CLI: its text, lowercased, without backticks and double
-    quotes, its runs of spaces made one and its end punctuation trimmed (an
-    agent's copy of a question changes those), so that a question two roles
-    raise in the same words is one question, whichever role raised it.
+    here and in the CLI: registry.QuestionKey (its text, lowercased, without its
+    marks, spaces and end punctuation), the rule by which answers.md keeps only
+    the newest answer of a question asked again.
 
 func ReadDrain(l paths.Layout) (string, error)
     ReadDrain is the drain asked of the factory daemon of layout l ("" for
@@ -15323,9 +15329,31 @@ var ErrStaleRevision = errors.New("factory registry: stale question revision")
 
 FUNCTIONS
 
+func AnswersMarkdown(qs []Question) string
+    AnswersMarkdown is a task's answers.md, rendered from its question rows qs
+    (by revision and position, as Questions returns them): each answered one,
+    by revision and position, with whether the answer took the recommended
+    option, another option or the operator's own words, its secrets redacted
+    (execx.Redact); a question asked again (the same text, QuestionKey) shows
+    only its newest answer, the one that stands; "" when none is answered. The
+    factory writes it into the task's directory, and `magnum eval add` renders
+    the answers a local round read with it when it rebuilds them from the rows
+    as they stood when the round began.
+
 func LatestSchemaVersion() int
     LatestSchemaVersion is the highest migration version embedded in this
     binary.
+
+func NormLabel(s string) string
+    NormLabel is an option's label as answers are matched to it: trimmed,
+    lowercased, without a final period.
+
+func QuestionKey(text string) string
+    QuestionKey is how a question is told from the questions the task asked, in
+    the factory, its CLI and answers.md: its text, lowercased, without backticks
+    and double quotes, its runs of spaces made one and its end punctuation
+    trimmed (an agent's copy of a question changes those), so that a question
+    two roles raise in the same words is one question, whichever role raised it.
 
 
 TYPES
@@ -17248,15 +17276,17 @@ Package factoryread is the review side's read of what the factory keeps:
 the local review round of a pull request the factory published, from its
 registry (factory.db), and the task's plan, ticket and answers, from the task's
 directory, for the review retro (DECISIONS "The review retro tags factory-origin
-misses and their stage"); and a task's local review rounds, their heads,
-roles and the times of its answers, for the replay of a round as an eval case
-(LocalReview, `magnum eval add --local-task`), and a task's Codex mark and
-published PR before its replay (TaskCodex). It only reads: the registry is
-opened read only (mode=ro, never created, so nothing writes its file or its
-WAL), with a busy timeout, and closed after each read; a task's files are read
-inside an os.Root of its directory. It knows the factory's schema only as far
-as these reads need (pr_links, review_findings, review_cycles, tasks, events,
-questions) and never migrates it: internal/factory/registry owns it.
+misses and their stage"); and a task's local review rounds, their heads and
+roles and its answered questions with every answer they had, for the replay
+of a round as an eval case (LocalReview, `magnum eval add --local-task`),
+and a task's Codex mark and published PR before its replay (TaskCodex).
+It only reads: the registry is opened read only (mode=ro, never created,
+so nothing writes its file or its WAL), with a busy timeout, and closed after
+each read; a task's files are read inside an os.Root of its directory. It knows
+the factory's schema only as far as these reads need (pr_links, review_findings,
+review_cycles, tasks, events, questions, question_answers) and never migrates
+it: internal/factory/registry owns it, whose types (registry.Question) the
+questions are read into.
 
 CONSTANTS
 
@@ -17297,6 +17327,18 @@ func TaskCodex(ctx context.Context, path string, taskID int64) (never bool, pr s
 
 TYPES
 
+type LocalQuestion struct {
+	registry.Question
+	History []registry.AnswerEdit
+}
+    LocalQuestion is one of a task's answered questions: its row, with the
+    fields answers.md renders (registry.AnswersMarkdown: its revision, position,
+    text, options, recommendation, answer, who raised it, when it was first
+    answered and whether its answer takes the recommendation), and every answer
+    it had (History, question_answers, oldest first). A row from before the
+    registry kept them has none: its one answer is the one given when it was
+    answered.
+
 type LocalRound struct {
 	Cycle   int
 	Round   int
@@ -17316,26 +17358,31 @@ type LocalTask struct {
 	Repo, Branch, Title, JiraKey string
 	CodexNever                   bool
 	Rounds                       []LocalRound
-	Answered                     []time.Time
+	Questions                    []LocalQuestion
 }
     LocalTask is a task of the factory as the replay of a round of its
     local review needs it (`magnum eval add --local-task`): its repository
     (owner/name), branch, title and Jira key, whether Codex never works on it
     again (CodexNever, tasks.codex_never: Codex refused it), each cycle of its
-    local review the registry records (Rounds, by cycle), and when each of its
-    answered questions was answered (Answered, oldest first).
+    local review the registry records (Rounds, by cycle), and its answered
+    questions (Questions, by revision and position), from which the answers a
+    round could read are rebuilt (AnswersAt).
 
 func LocalReview(ctx context.Context, path string, taskID int64) (LocalTask, error)
     LocalReview reads task taskID of the registry at path, read only and in
-    one transaction (one snapshot of what the factory writes): the task, its
-    review cycles with their round and roles (LocalRound), and its answer times.
-    A registry that does not exist is ErrNoRegistry, a task it does not hold
-    ErrNoTask; one that cannot be read is another error.
+    one transaction (one snapshot of what the factory writes): the task,
+    its review cycles with their round and roles (LocalRound), and its answered
+    questions with their answers (LocalQuestion). A registry that does not exist
+    is ErrNoRegistry, a task it does not hold ErrNoTask; one that cannot be read
+    is another error.
 
-func (t LocalTask) AnsweredAfter(at time.Time) int
-    AnsweredAfter counts t's questions answered after at: answers the operator
-    gave once a round that began at at was under way, which that round could not
-    read.
+func (t LocalTask) AnswersAt(at time.Time) (qs []registry.Question, left int)
+    AnswersAt are t's questions as they stood at at (a round's start),
+    by revision and position, for registry.AnswersMarkdown: each one answered
+    before at, with its newest answer before at and whether that answer takes
+    the recommendation (as the factory decides it: the recommended label,
+    spaces trimmed). left counts the answers given at at or later, first answers
+    and revisions alike, which are not there.
 
 type Task struct {
 	ID           int64

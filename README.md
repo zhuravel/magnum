@@ -6889,14 +6889,17 @@ review cycle reviewed and the roles the round's begin event names; from the roun
 directory (`local-review-<cycle>.json`) its scratch directory, whose `description.md` gives the title and the
 plan, whose `ticket.md` the ticket, and whose report directory's `prepass.json` the base commit the round diffed
 from; and your answers as the round could read them: those under their heading in its ticket file, else the
-task's `answers.md` when no question was answered and the file was not written after the round began. The base
-branch is the `[[factory.repo]]`'s. They go to the case's own directory beside the learned corpus
+task's `answers.md` when no answer was given at the round's start or later and the file was not written after it
+began, else your answers rebuilt from the factory's registry as they stood when the round began (each question
+answered before its review cycle's start, with its newest answer before it, rendered as the factory renders
+`answers.md`), so an answer given at the start or later never enters the case; `eval add` then says so, with how
+many answers it left out. The base branch is the `[[factory.repo]]`'s. They go to the case's own directory beside the learned corpus
 (`~/.local/share/magnum/learn/local/<name>/`: `inputs.json`, `plan.md`, `ticket.md`, `answers.md`, the name
 `task-<id>-round-<n>` unless `--name`), so its replays never read the task's directory, which can be cleaned. A
 round it cannot freeze whole is refused, saying what is missing: no such task or round (`--cycle <n>` picks the
 cycle when the task's loops ran the round more than once), a round that never ended, its scratch directory or
-its `prepass.json` gone, no begin event naming its roles, answers given or written since it began that its
-ticket file did not hold; and so is a name the corpus or the local cases have already. It prints the round's
+its `prepass.json` gone, no begin event naming its roles, an `answers.md` written since it began when its
+ticket file did not hold the answers and the registry holds none to rebuild them from; and so is a name the corpus or the local cases have already. It prints the round's
 findings and the case to add to the local cases' corpus, `~/.local/share/magnum/learn/local/cases.toml` (create it
 with the first case), with the defects the round should have found, in the posted cases' syntax: `kind = "local"`,
 `pr` the round's synthetic number (`example/example#900011` for round 1 of task 1: 900000 + task × 10 + round, no
