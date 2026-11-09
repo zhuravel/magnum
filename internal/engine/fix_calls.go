@@ -99,13 +99,15 @@ func (n needsYouEntry) name() string {
 
 // threadOwners says whose the threads of the review a fix report answers
 // are, from the files beside the report: magnums are the first comments of
-// magnum's threads (the threads file), listed whether that file was read
-// (then a thread neither in it nor of the review's own comments is another
-// reviewer's), comments the review's own comments (the review file), whose
-// threads the threads file predates, and others the first comments of the
-// open threads other reviewers started (the external file).
+// magnum's threads (the threads file), and places where each one is
+// (path:line), listed whether that file was read (then a thread neither in
+// it nor of the review's own comments is another reviewer's), comments the
+// review's own comments (the review file), whose threads the threads file
+// predates, and others the first comments of the open threads other
+// reviewers started (the external file).
 type threadOwners struct {
 	magnums  map[int64]bool
+	places   map[int64]string
 	listed   bool
 	comments []ownComment
 	others   map[int64]bool
@@ -121,7 +123,7 @@ type ownComment struct {
 // readThreadOwners reads the threads file and the review file in dir; a
 // file that is missing or cannot be read says nothing.
 func readThreadOwners(dir string) threadOwners {
-	o := threadOwners{magnums: map[int64]bool{}, others: map[int64]bool{}}
+	o := threadOwners{magnums: map[int64]bool{}, places: map[int64]string{}, others: map[int64]bool{}}
 	if x, ok := readExternalFile(dir); ok {
 		for _, t := range x.Threads {
 			o.others[t.CommentID] = true
@@ -132,7 +134,7 @@ func readThreadOwners(dir string) threadOwners {
 		if json.Unmarshal(b, &threads) == nil {
 			o.listed = true
 			for _, t := range threads {
-				o.magnums[t.CommentID] = true
+				o.magnums[t.CommentID], o.places[t.CommentID] = true, t.Location
 			}
 		}
 	}

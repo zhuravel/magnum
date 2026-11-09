@@ -85,15 +85,15 @@ func (e *Engine) setOptionalCalls(ctx context.Context, prID int64, calls []optio
 // optional. The P3s are recorded as the PR's optional calls, merged by
 // thread with those recorded before, and a fix.optional event names their
 // links, never the fixer's words. read is the settle's one read of the
-// PR's threads (threadsReader). It returns needs and the threads of the
-// run's optional calls (the first comment's id of each), which liftDecided
-// counts against the calls of the PR's earlier attention.
-func (e *Engine) settleOptional(ctx context.Context, job *fixJob, entries, needs []string, read func() ([]github.Thread, error)) ([]string, map[int64]bool) {
+// PR's threads (threadsReader). It returns needs and the places (path:line)
+// of the run's optional calls by thread (the first comment's id of each),
+// which liftDecided counts against the calls of the PR's earlier attention.
+func (e *Engine) settleOptional(ctx context.Context, job *fixJob, entries, needs []string, read func() ([]github.Thread, error)) ([]string, map[int64]string) {
 	if len(entries) == 0 {
 		return needs, nil
 	}
 	var found []optionalCall
-	threads := map[int64]bool{}
+	threads := map[int64]string{}
 	for _, entry := range entries {
 		n, ok := readNeedsYouEntry(entry)
 		id, err := strconv.ParseInt(n.id, 10, 64)
@@ -101,7 +101,7 @@ func (e *Engine) settleOptional(ctx context.Context, job *fixJob, entries, needs
 			needs = append(needs, entry)
 			continue
 		}
-		found, threads[id] = append(found, optionalCall{Thread: id, URL: job.pr.URL + "#discussion_r" + n.id, At: e.now().UTC()}), true
+		found, threads[id] = append(found, optionalCall{Thread: id, URL: job.pr.URL + "#discussion_r" + n.id, At: e.now().UTC()}), n.place
 	}
 	if len(found) == 0 {
 		return needs, nil
@@ -135,11 +135,16 @@ func optionalBody(body string) bool {
 // ends with the author's call: its comment in the review file beside the
 // job's report (the review the fixer was handed, by path and line), else
 // the first comment of that thread as GitHub shows it (read), started by
-// one of magnum's logins (an earlier review's P3 kept open). A read that
-// fails, or a thread it does not list, shows nothing.
+// one of magnum's logins (an earlier review's P3 kept open). The id is the
+// fixer's word, which the review file, placing its comments by path and
+// line alone, cannot check: for an id of another reviewer's thread (the
+// external file), or one the threads file places elsewhere, the review file
+// shows nothing, and GitHub's first comment of that thread decides. A read
+// that fails, or a thread it does not list, shows nothing.
 func (e *Engine) optionalFinding(ctx context.Context, job *fixJob, n needsYouEntry, id int64, read func() ([]github.Thread, error)) bool {
 	owners := readThreadOwners(filepath.Dir(deref(job.run.ReportPath)))
-	if i := strings.LastIndexByte(n.place, ':'); i > 0 {
+	at, listed := owners.places[id]
+	if i := strings.LastIndexByte(n.place, ':'); i > 0 && !owners.others[id] && (!listed || at == n.place) {
 		path, line := n.place[:i], n.place[i+1:]
 		if slices.ContainsFunc(owners.comments, func(c ownComment) bool { return c.Path == path && strconv.Itoa(c.Line) == line && optionalBody(c.Body) }) {
 			return true

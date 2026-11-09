@@ -1,15 +1,20 @@
 package engine
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -27,10 +32,18 @@ const optionalP3 = "**[P3] The cap stays at 10 (optional, no reply needed)**\n\n
 
 // writeOptionalReview writes, beside the fix report at report, the files
 // of the review whose P3 at app/models/offer.rb:42 has body (its threads
-// file names optionalThread, magnum's).
+// file names optionalThread, magnum's, at that place).
 func writeOptionalReview(t *testing.T, report, body string) {
 	t.Helper()
 	writeFixReviewFiles(t, report, []int64{optionalThread}, []fixReviewComment{{Path: "app/models/offer.rb", Line: 42, Body: body}})
+	b, err := json.Marshal([]agents.ReviewThread{{ID: "PRRT_x", CommentID: optionalThread, Finding: "**[P3] The cap stays at 10 (optional, no reply needed)**",
+		Location: "app/models/offer.rb:42", Replies: []agents.ThreadReply{}}})
+	if err == nil {
+		err = os.WriteFile(filepath.Join(filepath.Dir(report), pipeline.ThreadsFile), b, 0o600)
+	}
+	if err != nil {
+		t.Error(err)
+	}
 }
 
 // withOptional is a fix report with an "## Optional calls" section of
@@ -427,6 +440,51 @@ func TestAnOptionalCallLiftsTheEarlierAttentionOfItsP3(t *testing.T) {
 		}
 		if ev, ok := h.fixEvent("fix.optional_lifted"); ok {
 			t.Errorf("fix.optional_lifted = %q over a call the run did not cover", ev.Message)
+		}
+	})
+	// The entry's id is the fixer's word, and magnum's comment is checked by
+	// the entry's place: another reviewer's thread at the P3's place is no
+	// optional call (it holds the PR as a Needs you entry does), and an
+	// optional call covers only the call to decide magnum's P3 in its thread
+	// at its place, so neither rev-ann's decline nor a call at another place
+	// goes on the fixer's id.
+	t.Run("another call's id at the P3's place lifts nothing", func(t *testing.T) {
+		wrongID := func(_ *harness, run store.Run) string {
+			return withOptional(fixReport(run.ID, "nothing", noReplies, "none"), optionalEntry,
+				"4322458360 P3 app/models/offer.rb:42: option A keeps the cap, option B lifts it")
+		}
+		h, pr := heldByAnEarlierP3(t, earlierP3Entry+"\n"+leftDecision, wrongID, extThread(decideThread, "lib/sandbox.rb", 185,
+			time.Date(2026, 10, 5, 6, 0, 0, 0, time.UTC), "MINOR: `run` drops stderr", "rev-ann"))
+		h.fix(FixPayload{})
+		h.handle()
+		if msg := deref(h.wantState(2, store.PRNeedsAttention).LastError); !strings.HasPrefix(msg, "fix: 1 finding needs your call: ") {
+			t.Errorf("last_error = %q, want the entry held as a Needs you entry", msg)
+		}
+		if ev, ok := h.fixEvent("fix.optional_lifted"); ok {
+			t.Errorf("fix.optional_lifted = %q on another call's id", ev.Message)
+		}
+		if calls := h.e.optionalCalls(h.ctx, pr.ID); len(calls) != 1 || calls[0].Thread != optionalThread {
+			t.Errorf("the PR's optional calls = %+v, want the P3's alone", calls)
+		}
+	})
+	t.Run("an optional call covers only magnum's P3 at its place", func(t *testing.T) {
+		const elsewhere = "- 4302866801 P2 lib/x.rb:7: not fixed. the fixer would not"
+		wrongID := func(_ *harness, run store.Run) string {
+			return withOptional(fixReport(run.ID, "nothing", noReplies, "none"), optionalEntry,
+				"4302866801 P3 app/models/offer.rb:42: option A keeps the cap, option B lifts it")
+		}
+		h, _ := heldByAnEarlierP3(t, earlierP3Entry+"\n"+elsewhere, wrongID)
+		before := deref(h.pr(2).LastError)
+		if !strings.Contains(before, "on lib/x.rb:7: the fixer declined it") {
+			t.Fatalf("last_error = %q, want the call at lib/x.rb:7 beside the P3's", before)
+		}
+		h.fix(FixPayload{})
+		h.handle()
+		if msg := deref(h.wantState(2, store.PRNeedsAttention).LastError); msg != before {
+			t.Errorf("last_error = %q, want the attention as it was", msg)
+		}
+		if ev, ok := h.fixEvent("fix.optional_lifted"); ok {
+			t.Errorf("fix.optional_lifted = %q over a call at another place", ev.Message)
 		}
 	})
 	// A run that could not read the threads wrote no external file, so it

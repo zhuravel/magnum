@@ -3497,7 +3497,8 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   counts what it built and what went back); a loop that built every decision its attention asked for, and
   left nothing, puts the PR back to reviewed (`fix.decisions_built`), and so does one that left a call's P3 as an
   optional call in place of building it (a fixer from before optional calls left magnum's P3 author's call as a call
-  to decide: `fix.optional_lifted`, and the merge names the optional call), once it covered every call of the
+  to decide: `fix.optional_lifted`, and the merge names the optional call; only the call to decide magnum's P3 in
+  that thread at that place counts), once it covered every call of the
   attention and read the threads (your decision in that thread still goes back to you); and a run that fails, or
   the cap, keeps the decision calls of the attention it replaces after its own words, made when they were (one GitHub shows
   a fix-marked reply of the fixer's in since goes: it was built), so the next `magnum fix` still builds

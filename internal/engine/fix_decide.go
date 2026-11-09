@@ -401,19 +401,23 @@ func (e *Engine) decisionsLeft(ctx context.Context, job *fixJob, entries []strin
 // nothing pushed and nothing left to the author, when the PR's attention is
 // the fixer's decision calls alone and this run covered every one: it built
 // the call's decision (built, decisionsLeft: you decided the call, and
-// GitHub shows the fixer's reply that builds it), or it left the call's
-// thread as an optional call (optional, settleOptional: magnum's own
-// comment shows a P3 whose Fix ends with the author's call, which holds
-// nothing; a fixer from before optional calls left such a P3 as a call to
-// decide). An optional call closes no decision of yours: one you made in
-// its thread is in the run's external file, and decisionsLeft put it back
-// under Needs you unless the fixer built it; so a run without that file (the
-// other reviewers' items unread: no decision was read) counts no optional
-// call here. The compare-and-set holds the head, the reviewed head and the
-// attention's words, as `magnum fix --done` does; the attention's rows go,
-// and a fix.decisions_built event says so, or fix.optional_lifted when an
-// optional call covered a call.
-func (e *Engine) liftDecided(ctx context.Context, job *fixJob, built, optional map[int64]bool) {
+// GitHub shows the fixer's reply that builds it), or the call is to decide
+// magnum's P3 at the place where the run left the call's thread as an
+// optional call (optional, by thread, settleOptional: magnum's own comment
+// shows a P3 whose Fix ends with the author's call, which holds nothing; a
+// fixer from before optional calls left such a P3 as a call to decide).
+// The optional call's thread is the fixer's word, so it covers no other
+// call: not another reviewer's, not one of magnum's P0 to P2, not one at
+// another place (attention.MagnumsDecision). An optional call closes no
+// decision of yours: one you made in its thread is in the run's external
+// file, and decisionsLeft put it back under Needs you unless the fixer
+// built it; so a run without that file (the other reviewers' items unread:
+// no decision was read) counts no optional call here. The compare-and-set
+// holds the head, the reviewed head and the attention's words, as `magnum
+// fix --done` does; the attention's rows go, and a fix.decisions_built
+// event says so, or fix.optional_lifted when an optional call covered a
+// call.
+func (e *Engine) liftDecided(ctx context.Context, job *fixJob, built map[int64]bool, optional map[int64]string) {
 	if len(optional) > 0 {
 		if _, ok := readExternalFile(filepath.Dir(deref(job.run.ReportPath))); !ok {
 			optional = nil
@@ -430,15 +434,19 @@ func (e *Engine) liftDecided(ctx context.Context, job *fixJob, built, optional m
 		return
 	}
 	msg := deref(pr.LastError)
-	left := 0 // the attention's calls the run left as optional calls, not built
-	if !callsDecided(msg, func(id int64) bool {
-		if !built[id] && optional[id] {
-			left++
+	covered := map[int64]bool{} // the attention's calls the run left as optional calls, not built
+	if calls, ok := attention.FixDecisionCalls(msg); ok {
+		for _, c := range calls {
+			id, err := strconv.ParseInt(c.Thread, 10, 64)
+			if place, ok := optional[id]; err == nil && ok && !built[id] && attention.MagnumsDecision(c, "P3", place) {
+				covered[id] = true
+			}
 		}
-		return built[id] || optional[id]
-	}) {
+	}
+	if !callsDecided(msg, func(id int64) bool { return built[id] || covered[id] }) {
 		return
 	}
+	left := len(covered)
 	err = e.st.TransitionPR(ctx, pr.ID, []string{store.PRNeedsAttention}, store.PRReviewed, func(u *store.PRUpdate) {
 		u.Set("last_error", nil)
 		u.Where("head_sha", pr.HeadSHA)

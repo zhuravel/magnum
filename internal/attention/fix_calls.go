@@ -145,6 +145,13 @@ func DecisionCall(c FixCall) bool {
 	return false
 }
 
+// MagnumsDecision reports whether c is the call to decide one of magnum's
+// findings of priority at place, in magnum's thread: a DeclinedCall or an
+// AuthorsCall ("decide magnum's P3 on app/models/offer.rb:42: …").
+func MagnumsDecision(c FixCall, priority, place string) bool {
+	return c.Thread != "" && strings.HasPrefix(c.Action, "decide magnum's "+priority+" on "+place+": ")
+}
+
 // maxConflictPaths bounds the paths a conflict call names, as the fix
 // prompt bounds its own: the call is one sentence of the message, the card
 // and `magnum status`.

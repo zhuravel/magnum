@@ -84,3 +84,36 @@ func TestAnAuthorsCallLeavesTheChoiceToYou(t *testing.T) {
 		t.Errorf("FixDecisionCalls = %+v, %v; want both author's calls as decisions", calls, ok)
 	}
 }
+
+// A call to decide names whose finding it is, its priority and its place:
+// the engine counts an optional call of magnum's P3 against an earlier
+// attention's call only when the call is the one to decide magnum's P3 at
+// that place, so another reviewer's decline, magnum's P2 or a call at
+// another place is never taken for it.
+func TestMagnumsDecisionIsTheCallOfItsFindingAtItsPlace(t *testing.T) {
+	const (
+		url   = "https://github.com/talkable/talkable/pull/2#discussion_r4302866759"
+		place = "app/models/offer.rb:42"
+		ref   = "talkable/talkable#2"
+	)
+	for _, c := range []FixCall{
+		DeclinedCall("4302866759", url, "P3", place, ref, true),
+		AuthorsCall("4302866759", url, "P3", place, ref, true),
+	} {
+		if !MagnumsDecision(c, "P3", place) {
+			t.Errorf("MagnumsDecision(%q) = false, want magnum's P3 at %s", c.Action, place)
+		}
+	}
+	for name, c := range map[string]FixCall{
+		"another reviewer's": DeclinedCall("4302866759", url, "P3", place, ref, false),
+		"a P2":               DeclinedCall("4302866759", url, "P2", place, ref, true),
+		"another place":      DeclinedCall("4302866759", url, "P3", place+"2", ref, true),
+		"a fixed call":       FixedCall("4302866759", url, "b2b2b2b", true),
+		"a resolution":       ResolveCall("4302866759", url),
+		"no thread":          {URL: url, Action: "decide magnum's P3 on " + place + ": the fixer declined it"},
+	} {
+		if MagnumsDecision(c, "P3", place) {
+			t.Errorf("%s: MagnumsDecision(%q) = true", name, c.Action)
+		}
+	}
+}

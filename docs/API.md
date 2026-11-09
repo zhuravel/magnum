@@ -3918,6 +3918,11 @@ func LaunchRole(msg string) (role string, ok bool)
     (the engine's "start <role>: …"), whose CLI a CLIChange note may name;
     ok is false for any other error.
 
+func MagnumsDecision(c FixCall, priority, place string) bool
+    MagnumsDecision reports whether c is the call to decide one of magnum's
+    findings of priority at place, in magnum's thread: a DeclinedCall or an
+    AuthorsCall ("decide magnum's P3 on app/models/offer.rb:42: …").
+
 func OnMagnumsSide(kind string) bool
     OnMagnumsSide reports whether kind (a Reason's Kind) is a failure on
     magnum's side rather than in the PR: a setup or round that failed,
