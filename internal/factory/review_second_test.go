@@ -3,6 +3,7 @@ package factory
 import (
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -475,8 +476,8 @@ func TestASecondOpinionThatEndedUnavailableRunsAgain(t *testing.T) {
 }
 
 // A pending second opinion whose judge can no longer run at the clean
-// round's head (second_judge "never", or no judge_fallback of another kind)
-// does not start: one event says why, the stage ends clean on that round
+// round's head (second_judge "never", no judge_fallback of another kind, or
+// a watch's judge that runs on Claude now) does not start: one event says why, the stage ends clean on that round
 // with the summary it would have written, no further round runs, the task
 // never needs you for it, and the wait the pending opinion had (on magnum's
 // real round) is gone with it.
@@ -487,6 +488,9 @@ func TestAPendingSecondOpinionWithoutItsJudgeEndsTheStageClean(t *testing.T) {
 	}{
 		{"never", "second_judge is never now", func(r *reviewRig) { r.cfg.Factory.LocalReview.SecondJudge = config.FactorySecondJudgeNever }},
 		{"no fallback", "judge_fallback names no judge of another kind", func(r *reviewRig) { r.cfg.Pipeline.JudgeFallback = "" }},
+		{"a claude judge now", "the review's judge claude-judge runs on claude", func(r *reviewRig) {
+			r.cfg.Watches[0].Roles = []string{"claude-judge", "claude-review", "codex-review"}
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newReviewRig(t, result(nitFinding), result())
@@ -614,5 +618,72 @@ func TestACutSecondOpinionThatLostItsJudgeEndsTheStageClean(t *testing.T) {
 	if sum := r.summary(task.ID); sum.Exit != registry.ExitClean || sum.Rounds != 1 || sum.SecondJudge != "" ||
 		!slices.ContainsFunc(sum.Leftovers, func(i ReviewItem) bool { return i.Title == nitFinding.Title }) {
 		t.Fatalf("summary %+v, want the clean round's", sum)
+	}
+}
+
+// A new round is the second opinion only while the task's newest cycle is
+// the clean round it follows, ended with the loop going on, at that round's
+// head: a newest cycle that ended at the cap, or another head, is no second
+// opinion; a task without a head (no stage proved one) keeps it, as the
+// void of a moved head (settleSecond) does.
+func TestANewRoundIsTheSecondOpinionOnlyAfterItsCleanCycle(t *testing.T) {
+	r := newReviewRig(t, rounds(2, result())...)
+	task, head := r.wideReviewTask("PR-12410")
+	r.run(6, func() bool { return r.firstDecided(task.ID) })
+	w := r.cfg.WatchFor(task.Repo)
+	for _, tc := range []struct {
+		head   string
+		second bool
+	}{{head, true}, {"", true}, {strings.Repeat("e", 40), false}} {
+		at := r.reload(task.ID)
+		at.HeadSHA = tc.head
+		if _, second, ended, err := r.e.secondRound(r.ctx, at, w, nil); err != nil || ended || second != tc.second {
+			t.Errorf("at head %q: second %v, ended %v, %v; want second %v", tc.head, second, ended, err, tc.second)
+		}
+	}
+	if err := r.reg.CloseLoop(r.ctx, r.cycles(task.ID)[0].ID, registry.ExitCap); err != nil {
+		t.Fatal(err)
+	}
+	if _, second, _, err := r.e.secondRound(r.ctx, r.reload(task.ID), w, nil); err != nil || second {
+		t.Errorf("after a newest cycle at the cap: second %v, %v; want no second opinion", second, err)
+	}
+}
+
+// A stop inside dropCut after the record's write (dropped, dropped_at the
+// cut cycle) and before that cycle's end is finished at the next pass, from
+// the record alone, whatever the config says now: the cut cycle ends clean
+// with one drop event, and no further round runs.
+func TestADropCutStoppedAfterItsRecordFinishesAtTheNextPass(t *testing.T) {
+	r := newReviewRig(t, result(nitFinding), result())
+	task, head := r.wideReviewTask("PR-12411")
+	r.run(6, func() bool { return r.firstDecided(task.ID) })
+	r.rv.mu.Lock()
+	r.rv.block = make(chan struct{})
+	r.rv.mu.Unlock()
+	deadline := time.Now().Add(10 * time.Second)
+	for len(r.rv.calls()) < 2 && time.Now().Before(deadline) {
+		r.tick()
+		time.Sleep(time.Millisecond)
+	}
+	r.e.stopBackground() // a stop cuts the second opinion
+	r.rv.mu.Lock()
+	r.rv.block = nil
+	r.rv.mu.Unlock()
+	so := r.readSecond(task.ID)
+	so.Dropped, so.DroppedAt = "second_judge is never now", so.cycle()
+	if err := writeJSON(filepath.Join(r.layout.FactoryTaskDir(task.ID), secondOpinionFile), so); err != nil {
+		t.Fatal(err)
+	}
+	r.restart()
+	r.run(10, func() bool { return !isLive(r.reload(task.ID)) || r.reload(task.ID).Stage != "local_review" })
+	if got := r.reload(task.ID); got.Stage != "pr_body" || len(r.rv.calls()) != 2 {
+		t.Fatalf("task %s at %s waits %q after rounds %v, want pr_body with no third round", got.State, got.Stage, got.WaitsWhat,
+			roundsOf(r.rv.calls()))
+	}
+	if cs := r.cycles(task.ID); len(cs) != 2 || cs[1].Exit != registry.ExitClean || cs[1].HeadBefore != head {
+		t.Fatalf("cycles %+v, want the cut cycle clean at %s", cs, head)
+	}
+	if dropped := r.reviewEvents(task.ID, registry.PhaseInfo, "does not run again"); len(dropped) != 1 {
+		t.Fatalf("events %+v, want one drop of the cut second opinion", dropped)
 	}
 }

@@ -4788,14 +4788,16 @@ round skip it with one event that says why (`no second opinion after round 1 (cy
 branch moves before it starts (a commit of yours while it waits), it is void (`the second opinion after round 1
 (cycle 1) is void: the branch moved from ... to ...`), the clean round's loop ends there, and a fresh loop of up to
 `cycles` rounds starts at the new head from round 1. A pending one whose judge can no longer run at that head
-(`second_judge` is `"never"` now, or `judge_fallback` names no judge of another kind any more) does not start either:
+(`second_judge` is `"never"` now, the watch's judge no longer runs on Codex, or `judge_fallback` names no judge of
+another kind any more, as the decision checks them) does not start either:
 an event says why, and the stage ends clean on the round it followed, with that round's own summary, no further
 round and no wait on you; one that began, was cut (a stop, `install --now`) and lost its judge before it runs again
 ends the same way, its cut round's cycle clean at its own head. Only a second opinion whose round ended clean or
 with findings is the task's one; one that was void, or whose round ended unavailable (the task needed you, and you let
 it go on), runs again at the next clean round of a wide change, and its event says `runs again`. The decision is
 written (`review-second.json` in the task's directory) before its event and the end of the clean round's cycle, so a
-restart in between runs the second opinion once and says it once. Each round's begin event names its judge and that
+restart in between runs the second opinion once and says it once, unless `second_judge` is `"never"` after the
+restart: then it is dropped, as above. Each round's begin event names its judge and that
 judge's agent kind (`...: claude-judge, claude-review, codex-review; judge claude-judge (claude), a second opinion in
 place of codex-judge (codex)`), which `magnum factory stats` reads.
 

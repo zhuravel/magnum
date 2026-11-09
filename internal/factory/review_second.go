@@ -106,7 +106,7 @@ func (e *Engine) secondRound(ctx context.Context, t registry.Task, w *config.Wat
 	case cy != nil && cy.N != so.cycle(), cy != nil && so.Dropped != "" && so.DroppedAt != cy.N:
 		return so, false, false, nil // a fresh loop's round after a void or a pending drop
 	case cy != nil:
-		why := cmp.Or(so.Dropped, e.secondJudgeGone(w, so))
+		why := cmp.Or(so.Dropped, e.secondJudgeGone(w))
 		if why == "" {
 			return so, true, false, nil
 		}
@@ -119,10 +119,10 @@ func (e *Engine) secondRound(ctx context.Context, t registry.Task, w *config.Wat
 		return so, false, false, err
 	}
 	newest := cs[len(cs)-1]
-	if newest.N != so.After || newest.Ended.IsZero() || newest.Exit != "" || t.HeadSHA != so.Head {
+	if newest.N != so.After || newest.Ended.IsZero() || newest.Exit != "" || t.HeadSHA != "" && t.HeadSHA != so.Head {
 		return so, false, false, nil
 	}
-	return so, e.secondJudgeGone(w, so) == "", false, nil
+	return so, e.secondJudgeGone(w) == "", false, nil
 }
 
 // dropCut ends cut second opinion so, whose round runs again in its own
@@ -163,16 +163,33 @@ func (e *Engine) clearWait(ctx context.Context, t registry.Task) {
 }
 
 // secondJudgeGone says why second opinion so can no longer run for watch w
-// ("" when it can): second_judge is "never" now, or w's judge_fallback is
-// of no other kind than Codex any more.
-func (e *Engine) secondJudgeGone(w *config.Watch, so secondOpinion) string {
+// ("" when it can): second_judge is "never" now, or the judges it needs are
+// gone (secondJudges: w's judge is not on Codex any more, or its
+// judge_fallback is of no other kind).
+func (e *Engine) secondJudgeGone(w *config.Watch) string {
 	if e.cfg.Factory.LocalReview.SecondJudge == config.FactorySecondJudgeNever {
 		return "second_judge is " + config.FactorySecondJudgeNever + " now"
 	}
-	if _, ok := e.otherJudge(w); !ok {
-		return fmt.Sprintf("[pipeline] judge_fallback names no judge of another kind than %s's any more", so.Replaces)
+	_, _, why := e.secondJudges(w)
+	return why
+}
+
+// secondJudges are watch w's judge and the judge of another kind that takes
+// its place in a second opinion (otherJudge), with why none can run ("" when
+// one can): the watch's judge does not run on Codex, or its judge_fallback
+// names no judge of another kind. The decision (decideSecond) and the run
+// (secondJudgeGone) ask it alike.
+func (e *Engine) secondJudges(w *config.Watch) (judge, other config.Role, why string) {
+	judge = e.cfg.JudgeFor(w)
+	other, ok := e.otherJudge(w)
+	switch {
+	case judge.AgentKind() != config.KindCodex:
+		why = fmt.Sprintf("the review's judge %s runs on %s, and a second opinion follows a Codex judge's round only", judge.Name,
+			cmp.Or(judge.AgentKind(), "no agent"))
+	case !ok:
+		why = fmt.Sprintf("[pipeline] judge_fallback names no judge of another kind than %s's (codex)", judge.Name)
 	}
-	return ""
+	return judge, other, why
 }
 
 // settleSecond settles task t's pending second opinion at a pass of its
@@ -203,7 +220,7 @@ func (e *Engine) settleSecond(ctx context.Context, t registry.Task, last registr
 func (e *Engine) dropSecond(ctx context.Context, t registry.Task, last registry.Cycle, so secondOpinion) (dropped bool, err error) {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	if so.Dropped == "" {
-		why := e.secondJudgeGone(e.cfg.WatchFor(t.Repo), so)
+		why := e.secondJudgeGone(e.cfg.WatchFor(t.Repo))
 		if why == "" {
 			return false, nil
 		}
@@ -388,15 +405,10 @@ func (e *Engine) decideSecond(ctx context.Context, t registry.Task, c Copy, cy r
 	if w == nil {
 		return false, nil // startRound needed one: no round ran without it
 	}
-	judge := e.cfg.JudgeFor(w)
-	fb, ok := e.otherJudge(w)
+	judge, fb, why := e.secondJudges(w)
 	switch {
-	case judge.AgentKind() != config.KindCodex:
-		return skip(fmt.Sprintf("the review's judge %s runs on %s, and a second opinion follows a Codex judge's round only", judge.Name,
-			cmp.Or(judge.AgentKind(), "no agent")))
-	case !ok:
-		return skip(fmt.Sprintf("[pipeline] judge_fallback names no judge of another kind than %s's (codex): set it, or the watch's, to one",
-			judge.Name))
+	case why != "":
+		return skip(why)
 	case t.CodexNever:
 		return skip(fmt.Sprintf("Codex never works on %s again, so its rounds ran with %s already", TaskKey(t), fb.Name))
 	case round >= config.MaxFactoryCycles:
