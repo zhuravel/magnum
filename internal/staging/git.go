@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/execx"
@@ -58,6 +59,9 @@ type execGit struct {
 	url func(repo string) string
 	// home is the operator's HOME, for gh alone (ghHelper).
 	home string
+	// version is `git version`'s answer once it was read (gitVersion).
+	mu      sync.Mutex
+	version string
 }
 
 // NewGit returns the real Git: a mirror is a treeless bare clone of

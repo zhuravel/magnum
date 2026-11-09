@@ -79,7 +79,8 @@ import (
 // ref. No command of the hand-off in the mirror fetches lazily. A merge
 // whose tree differs changed a path beyond the conflicts: it is refused,
 // naming the paths, nothing pushed. It needs git 2.51 or later (cat-file's
-// %(objectmode)); an older git ends the effect at once.
+// %(objectmode)): an older git, by its `git version` (or, unread, by
+// cat-file's failure), ends the effect at once.
 
 // EffectID names a deploy effect: <env>-<pr>-<time>-<random>, lower-case
 // letters, digits and dashes.

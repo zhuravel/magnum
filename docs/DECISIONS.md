@@ -22162,10 +22162,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
   rebuilt tree is merge-tree's with the conflicted paths alone swapped (checked, since `update-index` would let a
   file take a directory's place without a word), so a resolver's tree that differs anywhere changed a path beyond
   the conflicts, and is refused at the merge step, naming the paths as verify did ("differs from merge-tree's merge
-  of the tip and the head beyond the conflicted paths: app/a.rb"); verify keeps its own check of the same. A
+  of the tip and the head beyond the conflicted paths: app/a.rb"); verify keeps its own check of the same. The walk
+  that names them lists only subtrees whose ids differ, the resolver's from its root (`ls-tree --full-tree`, which a
+  clone's `core.worktree` cannot shift), and at most 256 lists, so a tampered tree of empty subtrees holds the
+  mirror's flock no longer ("and more" past that); a conflicted path the walk names alone is one whose content the
+  resolver's repository lacks (cat-file answers "missing" for it as for a removed path), and the words say so. A
   directory or a submodule at a conflicted path, and a resolved file over execx's 8 MiB output cap, are refused too.
-  The batch check's `%(objectmode)` needs git 2.51 or later; an older git ends the deploy at once, saying so, rather
-  than after 15 minutes of tries. Rejected: the fetch with lazy fetching on (index-pack would fetch each missing
+  The batch check's `%(objectmode)` needs git 2.51 or later: `git version`, read once per client (30 seconds at
+  most, the mirror's scrubbed env), ends the deploy at once on an older git, saying so, rather than after 15 minutes
+  of tries; when the version cannot be read, cat-file's own failure does, told by the atom's name, which every git
+  echoes in every locale ("unknown format element: objectmode" in 2.42 to 2.44, "bad cat-file format:
+  %(objectmode)" in 2.45 to 2.50). Matching an error text alone was rejected: round 1 matched 2.44's and missed
+  every release just before 2.51. Rejected: the fetch with lazy fetching on (index-pack would fetch each missing
   base from origin one by one, and the mirror would take whatever objects the clone's upload-pack chose), a pack
   without deltas (git's fetch has no switch for it, and it still brings the clone's choice of objects), building
   the trees with `mktree` per directory (more code than the index, which merge-tree's trees already make cheap),
@@ -22181,11 +22189,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   path, an executable file, a symlink), TestAHandOffCutAfterItsBlobsResumesAndLeavesNoIndex (killed after the blob
   writes with the index and its lock left: the next Step hands it off, one ref, no index, one push),
   TestAnIndexAKilledHandOffLeftGoesWhenTheEffectEnds (the same kill, then a cancel),
-  TestAGitWithoutObjectmodeFailsTheHandOffAtOnce and TestTreeChangesNamesEachDifferingPath (the walk that names
-  the paths and checks the swap); TestAResolvedMergeTheMirrorHoldsAlreadyIsHeldByItsRef replaces the failed-fetch
-  case, and TestAResolversMergeOutsideTheRulesIsNeverPushed's parents cases now end at the merge step. Taking out
-  the tree check, the parents check, the modes, the removal, the clean-up before, after or at the end, or the
-  no-lazy-fetch of the src reads or of read-tree each fails one of them.
+  TestAGitWithoutObjectmodeFailsTheHandOffAtOnce (a fake 2.50.1, and with the version unreadable 2.44's and 2.50's
+  words), TestTheGitVersionIsReadOnceAndComparedByItsNumbers,
+  TestTheResolversTreeIsListedFromItsRootWhateverItsWorkTree, TestAConflictedPathWhoseContentTheResolverLacksIsNamedSo,
+  TestTreeChangesNamesEachDifferingPath (the walk that names the paths and checks the swap) and
+  TestTreeChangesStopsAtItsBudgetOfLists (400 empty subtrees);
+  TestAResolvedMergeTheMirrorHoldsAlreadyIsHeldByItsRef replaces the failed-fetch case, and
+  TestAResolversMergeOutsideTheRulesIsNeverPushed's parents cases now end at the merge step. Taking out the tree
+  check, the parents check, the modes, the removal, the clean-up before, after or at the end, the no-lazy-fetch of
+  the src reads or of read-tree, the version check, the atom match, `--full-tree` or the walk's budget each fails
+  one of them.
 
 ## Learned rules
 

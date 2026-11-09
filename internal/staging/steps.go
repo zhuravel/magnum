@@ -596,6 +596,9 @@ func (r *stepRun) resolution(ctx context.Context) error {
 // that differs is refused, naming the paths. refused says why the merge is
 // refused; err is a passing failure. The caller holds the mirror's flock.
 func (r *stepRun) handOver(ctx context.Context, env map[string]string, src, sha string) (string, error) {
+	if v := r.g.gitVersion(ctx, r.dir); gitAtLeast(v, 2, 51) < 0 {
+		return oldGit(v), nil // cat-file's %(objectmode) came in 2.51
+	}
 	typ, err := r.g.srcType(ctx, src, r.dir, sha)
 	switch {
 	case err != nil:
@@ -661,7 +664,7 @@ func (r *stepRun) handOver(ctx context.Context, env map[string]string, src, sha 
 		return "", err
 	}
 	inMirror := func(ctx context.Context, t string) ([]treeEntry, error) { return r.g.lsTree(ctx, r.dir, t) }
-	changed, err := treeChanges(ctx, inMirror, inMirror, base, built, len(conflicts)+1)
+	changed, _, err := treeChanges(ctx, inMirror, inMirror, base, built, len(conflicts)+1, 0)
 	if err != nil {
 		return "", err
 	}
@@ -669,17 +672,8 @@ func (r *stepRun) handOver(ctx context.Context, env map[string]string, src, sha 
 		return "the resolver's entries at the conflicted paths also change merge-tree's " + listed(extra), nil
 	}
 	if built != tree {
-		why := "the resolver's merge differs from merge-tree's merge of the tip and the head beyond the conflicted paths"
 		inSrc := func(ctx context.Context, t string) ([]treeEntry, error) { return r.g.srcTree(ctx, src, r.dir, t) }
-		switch paths, err := treeChanges(ctx, inMirror, inSrc, built, tree, maxListed+1); {
-		case err != nil || len(paths) == 0:
-			why += " (its tree " + short(tree) + ", rebuilt " + short(built) + ")"
-		case len(paths) > maxListed:
-			why += ": " + listed(paths[:maxListed]) + " and more"
-		default:
-			why += ": " + listed(paths)
-		}
-		return why, nil
+		return mismatch(treeChanges(ctx, inMirror, inSrc, built, tree, maxListed+1, maxTreeReads))(tree, built, conflicts), nil
 	}
 	id, err := r.g.writeObject(ctx, r.dir, "commit", raw)
 	switch {
@@ -692,23 +686,60 @@ func (r *stepRun) handOver(ctx context.Context, env map[string]string, src, sha 
 	return "", r.g.keepMerge(ctx, r.dir, resolvedRef(r.j.ID), sha)
 }
 
+// mismatch is the why of a resolver's tree that is not the rebuilt one,
+// from treeChanges' walk of the two (rebuilt, the resolver's): the paths
+// beyond the conflicted ones it found, at most maxListed, "and more" when
+// there were more or the walk was cut; the conflicted paths alone when
+// only they differ (cat-file answered "missing" for them: the resolver's
+// repository lacks their content); the two trees' ids when the walk named
+// nothing or failed.
+func mismatch(paths []string, cut bool, err error) func(tree, built string, conflicts []string) string {
+	return func(tree, built string, conflicts []string) string {
+		beyond := "the resolver's merge differs from merge-tree's merge of the tip and the head beyond the conflicted paths"
+		more := cut || len(paths) > maxListed
+		paths = paths[:min(len(paths), maxListed)]
+		extra := without(paths, conflicts)
+		switch {
+		case err == nil && len(extra) > 0 && more:
+			return beyond + ": " + listed(extra) + " and more"
+		case err == nil && len(extra) > 0:
+			return beyond + ": " + listed(extra)
+		case err == nil && len(paths) > 0 && !more:
+			return "the resolver's repository lacks the content of the conflicted paths its merge names: " + listed(paths)
+		}
+		return beyond + " (its tree " + short(tree) + ", rebuilt " + short(built) + ")"
+	}
+}
+
+// maxTreeReads bounds the lists of a walk of the resolver's tree, which
+// runs under the mirror's flock: a tree tampered with to hold hundreds of
+// empty subtrees, which name nothing, costs no more than these.
+const maxTreeReads = 256
+
 // treeChanges walks the trees a and b from their roots, listing each with
 // its own lister, descending only where the ids differ, and returns the
 // paths whose entries differ, at most limit: a file, a symlink or a
 // submodule is named; a tree on one side alone is walked against nothing,
 // so each path under it is named (a directory that the removal of its last
-// file took away names that file).
-func treeChanges(ctx context.Context, listA, listB func(context.Context, string) ([]treeEntry, error), a, b string, limit int) ([]string, error) {
+// file took away names that file). It makes at most budget lists (0: no
+// bound); cut reports that the budget stopped it.
+func treeChanges(ctx context.Context, listA, listB func(context.Context, string) ([]treeEntry, error), a, b string, limit, budget int) ([]string, bool, error) {
+	lists, cut := 0, false
 	list := func(l func(context.Context, string) ([]treeEntry, error), t string) ([]treeEntry, error) {
 		if t == "" {
 			return nil, nil
 		}
+		lists++
 		return l(ctx, t)
 	}
 	var out []string
 	var walk func(a, b, prefix string) error
 	walk = func(a, b, prefix string) error {
-		if a == b || len(out) >= limit {
+		if a == b || len(out) >= limit || cut {
+			return nil
+		}
+		if budget > 0 && lists+2 > budget {
+			cut = true
 			return nil
 		}
 		ea, err := list(listA, a)
@@ -733,7 +764,7 @@ func treeChanges(ctx context.Context, listA, listB func(context.Context, string)
 		slices.Sort(names)
 		for _, name := range names {
 			x, y := pairs[name][0], pairs[name][1]
-			if x == y || len(out) >= limit {
+			if x == y || len(out) >= limit || cut {
 				continue
 			}
 			if x.Type != "tree" && y.Type != "tree" {
@@ -756,7 +787,8 @@ func treeChanges(ctx context.Context, listA, listB func(context.Context, string)
 		}
 		return nil
 	}
-	return out, walk(a, b, "")
+	err := walk(a, b, "")
+	return out, cut, err
 }
 
 // checked is what checkMerge found: ok, why it fails the effect, why it

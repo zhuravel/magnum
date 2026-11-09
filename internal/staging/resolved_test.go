@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/zhuravel/magnum/internal/execx"
 )
 
 // bigText is a file of 2000 lines, the same for every word but its line
@@ -433,26 +435,149 @@ func TestAnIndexAKilledHandOffLeftGoesWhenTheEffectEnds(t *testing.T) {
 	}
 }
 
-// A git without cat-file's %(objectmode) (before 2.51) cannot read the
-// resolver's entries: the deploy fails at once, saying it needs git 2.51 or
-// later, rather than trying again for 15 minutes; nothing is pushed.
+// A git before 2.51, which lacks cat-file's %(objectmode), cannot read the
+// resolver's entries: the deploy fails at once, saying it needs git 2.51
+// or later, rather than trying again for 15 minutes; nothing is pushed.
+// The version (`git version`, here a fake 2.50.1) decides before any read;
+// when it cannot be read, cat-file's own failure does, in the words of
+// git 2.42 to 2.44 and of git 2.45 to 2.50.
 func TestAGitWithoutObjectmodeFailsTheHandOffAtOnce(t *testing.T) {
 	t.Parallel()
-	w := newResolvedWorld(t)
-	w.run.mu.Lock()
-	w.run.failArg, w.run.failStderr = "%(objectmode)", "fatal: unknown format element: objectmode\n"
-	w.run.mu.Unlock()
-	w.resolve(func(dir string) {
-		writeIn(t, dir, "app/big.rb", bigText("theirs, resolved"))
-		writeIn(t, dir, "app/wide.rb", bigText("wide theirs, resolved"))
-	})
-	if err := w.c.Step(context.Background()); err != nil {
+	for _, tc := range []struct {
+		name, version, stderr string
+	}{
+		{"git 2.50 by its version", "git version 2.50.1", ""},
+		{"git 2.44's words, the version unreadable", "", "fatal: unknown format element: objectmode\n"},
+		{"git 2.50's words, the version unreadable", "", "fatal: bad cat-file format: %(objectmode)\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := newResolvedWorld(t)
+			w.run.mu.Lock()
+			if tc.version != "" {
+				w.run.version = tc.version
+			} else {
+				w.run.fail = map[string]bool{"version": true}
+				w.run.failArg, w.run.failStderr = "%(objectmode)", tc.stderr
+			}
+			w.run.mu.Unlock()
+			w.resolve(func(dir string) {
+				writeIn(t, dir, "app/big.rb", bigText("theirs, resolved"))
+				writeIn(t, dir, "app/wide.rb", bigText("wide theirs, resolved"))
+			})
+			if err := w.c.Step(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			e := w.effect(w.c, w.id)
+			if e.State != EffectFailed || e.Step != StepMerge || !strings.Contains(e.Why, "git 2.51 or later") ||
+				!strings.Contains(e.Why, "nothing was pushed") {
+				t.Errorf("after one Step: %+v, want failed at merge, needing git 2.51 or later", e)
+			}
+			w.noPushSince(0, w.tip)
+			if tc.version != "" && slices.ContainsFunc(w.run.started(), func(c execx.Cmd) bool { return slices.Contains(c.Args, "-Z") }) {
+				t.Error("the batch check ran on a git its version says is too old")
+			}
+		})
+	}
+}
+
+// The git version is read once per client (its Git), with the mirror's
+// scrubbed env and a bound of its own, and parsed by its numbers: Apple's
+// and Windows' suffixes, 2.51 and later pass, earlier ones do not, and a
+// version that cannot be read is no answer.
+func TestTheGitVersionIsReadOnceAndComparedByItsNumbers(t *testing.T) {
+	t.Parallel()
+	run := &countingRunner{inner: hermetic(t)}
+	g := newGit(run, func(string) string { return "file:///origin" }).(*execGit)
+	mirror := filepath.Join(t.TempDir(), "acme", "app.git")
+	if err := os.MkdirAll(mirror, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	e := w.effect(w.c, w.id)
-	if e.State != EffectFailed || e.Step != StepMerge || !strings.Contains(e.Why, "git 2.51 or later") ||
-		!strings.Contains(e.Why, "nothing was pushed") {
-		t.Errorf("after one Step: %+v, want failed at merge, needing git 2.51 or later", e)
+	first := g.gitVersion(context.Background(), mirror)
+	if !strings.HasPrefix(first, "git version 2.") || g.gitVersion(context.Background(), mirror) != first {
+		t.Fatalf("version %q, then again", first)
+	}
+	var reads []execx.Cmd
+	for _, c := range run.started() {
+		if subcommand(c.Args) == "version" {
+			reads = append(reads, c)
+		}
+	}
+	if len(reads) != 1 || reads[0].Timeout == 0 || reads[0].Env["GIT_CONFIG_GLOBAL"] != "/dev/null" || !slices.Contains(reads[0].Unset, "GIT_DIR") {
+		t.Errorf("version reads: %+v, want one, bounded, with the scrubbed env", reads)
+	}
+	for v, want := range map[string]int{
+		"git version 2.51.0": 1, "git version 2.56.0": 1, "git version 3.0.0": 1, "git version 2.54.0 (Apple Git-154)": 1,
+		"git version 2.50.1": -1, "git version 2.45.1.windows.1": -1, "git version 1.9.5": -1,
+		"": 0, "git version": 0, "git version x.y": 0, "hub version 2.14.2": 0,
+	} {
+		if got := gitAtLeast(v, 2, 51); got != want {
+			t.Errorf("gitAtLeast(%q, 2.51) = %d, want %d", v, got, want)
+		}
+	}
+}
+
+// The resolver's tree is listed from its root, whatever the repository's
+// own config says of its work tree: a core.worktree above the git dir's
+// directory makes ls-tree list a subdirectory without --full-tree.
+func TestTheResolversTreeIsListedFromItsRootWhateverItsWorkTree(t *testing.T) {
+	t.Parallel()
+	r := hermetic(t)
+	wt := t.TempDir()
+	writeIn(t, wt, "top.rb", "top\n")
+	writeIn(t, wt, "sub/in.rb", "in\n")
+	gitIn(t, r, wt, "init", "-q", "-b", "master")
+	gitIn(t, r, wt, "add", "-A")
+	gitIn(t, r, wt, "commit", "-qm", "c")
+	tree := gitIn(t, r, wt, "rev-parse", "HEAD^{tree}")
+	src := filepath.Join(wt, "sub", ".git")
+	if err := os.Rename(filepath.Join(wt, ".git"), src); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, r, filepath.Join(wt, "sub"), "config", "core.worktree", wt)
+	g := newGit(r, func(string) string { return "file:///origin" }).(*execGit)
+	entries, err := g.srcTree(context.Background(), src, filepath.Join(t.TempDir(), "acme", "app.git"), tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Path)
+	}
+	if !slices.Equal(names, []string{"sub", "top.rb"}) {
+		t.Errorf("the resolver's root tree lists %q, want [sub top.rb]", names)
+	}
+}
+
+// A conflicted path whose entry the resolver's merge holds but whose content
+// its repository lacks (cat-file answers "missing", as for a removed path) is
+// named as such, not as a path beyond the conflicts.
+func TestAConflictedPathWhoseContentTheResolverLacksIsNamedSo(t *testing.T) {
+	t.Parallel()
+	w := newDeployWorld(t)
+	res := w.withResolver()
+	c := w.client()
+	defer c.Close()
+	id := w.deploy(c, 2)
+	w.drive(c, id, func(e Effect) bool { return len(res.requests()) == 1 || ended(e) })
+	dir, right := w.resolverRepo(2, []string{w.tip, w.heads[2]}, map[string]string{"app/s.rb": "resolved\n"})
+	index := filepath.Join(t.TempDir(), "index")
+	in := func(args ...string) string {
+		t.Helper()
+		res, err := w.r.Run(context.Background(), execx.Cmd{Name: "git", Args: append([]string{"-C", dir}, args...), Env: map[string]string{"GIT_INDEX_FILE": index}})
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return strings.TrimSpace(res.Out())
+	}
+	in("read-tree", right+"^{tree}")
+	in("update-index", "--cacheinfo", "100644,"+strings.Repeat("e", 40)+",app/s.rb")
+	merge := in("commit-tree", in("write-tree", "--missing-ok"), "-p", w.tip, "-p", w.heads[2], "-m", "Merge")
+	res.answer(ResolveResult{State: ResolveDone, MergeSHA: merge, Dir: dir})
+	e := w.drive(c, id, ended)
+	if e.State != EffectFailed || e.Step != StepMerge || !strings.Contains(e.Why, "lacks the content of the conflicted paths its merge names: app/s.rb") ||
+		strings.Contains(e.Why, "beyond") {
+		t.Errorf("ended: %+v, want failed at merge, app/s.rb named as content the resolver lacks", e)
 	}
 	w.noPushSince(0, w.tip)
 }
@@ -493,9 +618,9 @@ func TestTreeChangesNamesEachDifferingPath(t *testing.T) {
 		}
 		return entries, nil
 	}
-	got, err := treeChanges(context.Background(), list, list, oid('1'), oid('9'), 100)
-	if err != nil {
-		t.Fatal(err)
+	got, cut, err := treeChanges(context.Background(), list, list, oid('1'), oid('9'), 100, 0)
+	if err != nil || cut {
+		t.Fatal(err, cut)
 	}
 	if want := []string{"app/s.rb", "d", "d/k.rb", "lib/only.rb", "new/n.rb"}; !slices.Equal(got, want) {
 		t.Errorf("changes: %q, want %q", got, want)
@@ -503,7 +628,35 @@ func TestTreeChangesNamesEachDifferingPath(t *testing.T) {
 	if slices.Contains(read, oid('4')) || slices.Contains(read, oid('6')) {
 		t.Errorf("read a subtree the same on both sides: %q", read)
 	}
-	if got, err := treeChanges(context.Background(), list, list, oid('1'), oid('9'), 2); err != nil || len(got) != 2 {
+	if got, _, err := treeChanges(context.Background(), list, list, oid('1'), oid('9'), 2, 0); err != nil || len(got) != 2 {
 		t.Errorf("with a limit of 2: %q, %v", got, err)
+	}
+}
+
+// The walk of two trees makes at most budget lists: a tree tampered with
+// to hold hundreds of empty subtrees on one side names nothing, and the
+// walk stops at its budget, saying it was cut, rather than holding the
+// mirror's flock for a list each.
+func TestTreeChangesStopsAtItsBudgetOfLists(t *testing.T) {
+	t.Parallel()
+	oid := func(i int) string { return fmt.Sprintf("%040x", i) }
+	empty := oid(0)
+	wide := make([]treeEntry, 400)
+	for i := range wide {
+		wide[i] = treeEntry{Mode: "040000", Type: "tree", OID: empty, Path: fmt.Sprintf("d%03d", i)}
+	}
+	trees := map[string][]treeEntry{oid(1): nil, oid(2): wide, empty: nil}
+	reads := 0
+	list := func(_ context.Context, tree string) ([]treeEntry, error) {
+		reads++
+		return trees[tree], nil
+	}
+	got, cut, err := treeChanges(context.Background(), list, list, oid(1), oid(2), maxListed+1, maxTreeReads)
+	if err != nil || len(got) != 0 || !cut || reads > maxTreeReads {
+		t.Errorf("walk: %q, cut %v, %v after %d lists; want nothing named, cut, at most %d lists", got, cut, err, reads, maxTreeReads)
+	}
+	reads = 0
+	if _, cut, err := treeChanges(context.Background(), list, list, oid(1), oid(2), maxListed+1, 0); err != nil || cut || reads != 402 {
+		t.Errorf("without a budget: cut %v, %v after %d lists; want all 402", cut, err, reads)
 	}
 }

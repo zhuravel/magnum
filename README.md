@@ -5371,8 +5371,8 @@ tree is the merge's: the same commit, the same sha, which verify and the push th
 hand-off fetches. A merge that changed any other path comes out with another tree and fails the deploy, naming the
 paths ("differs from merge-tree's merge of the tip and the head beyond the conflicted paths: app/a.rb"), with
 nothing pushed; so does one with other parents, a conflicted path the merge turned into a directory or a submodule,
-and a resolved file over 8 MiB. The hand-off needs git 2.51 or later (`git cat-file`'s `%(objectmode)`); an older
-git fails the deploy at once, saying so.
+and a resolved file over 8 MiB. The hand-off needs git 2.51 or later (`git cat-file`'s `%(objectmode)`): magnum
+reads `git version` once, and an older git fails the deploy at once, saying so.
 
 The deploys dir (`<mirror_dir>/<owner>/<repo>.deploys`) is operator-level state, like the registry and
 `~/.config/magnum`: magnum alone writes it, never a hand and never an agent's pane. A journal written there is a

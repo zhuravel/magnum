@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,7 +53,64 @@ var errObjectTooLarge = fmt.Errorf("the object is over %d MiB", execx.MaxOutput>
 
 // errGitTooOld is srcEntries' error when git's cat-file lacks -Z (git 2.42)
 // or the %(objectmode) atom (git 2.51): no try with this git can pass.
-var errGitTooOld = errors.New("the hand-off needs git 2.51 or later (cat-file's %(objectmode)); this git is older")
+var errGitTooOld = errors.New(oldGit(""))
+
+// oldGit is the why of a git too old for the hand-off, version its `git
+// version` ("" when it could not be read).
+func oldGit(version string) string {
+	this := "this git is older"
+	if v, ok := strings.CutPrefix(version, "git version "); ok {
+		this = "this git is " + oneLine(v)
+	}
+	return "the hand-off needs git 2.51 or later (cat-file's %(objectmode)); " + this
+}
+
+// versionTimeout bounds `git version`.
+const versionTimeout = 30 * time.Second
+
+// gitVersion is `git version`'s answer, read once per Git with the
+// mirror's scrubbed env (base, beside mirror) and versionTimeout; "" when
+// it cannot be read, which the next call tries again.
+func (g *execGit) gitVersion(ctx context.Context, mirror string) string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.version != "" {
+		return g.version
+	}
+	parent := filepath.Dir(mirror)
+	c := g.base(parent, filepath.Dir(parent), "version", versionTimeout, false, false, nil)
+	c.Args = []string{"version"}
+	res, err := g.run.Run(ctx, c)
+	if v := strings.TrimSpace(res.Out()); err == nil && strings.HasPrefix(v, "git version ") && !strings.Contains(v, "\n") {
+		g.version = v
+	}
+	return g.version
+}
+
+// gitAtLeast compares version, as `git version` prints it ("git version
+// 2.54.0 (Apple Git-154)", "git version 2.45.1.windows.1"), with
+// major.minor: 1 when it is that or later, -1 when earlier, 0 when its
+// numbers cannot be read.
+func gitAtLeast(version string, major, minor int) int {
+	v, ok := strings.CutPrefix(version, "git version ")
+	f := strings.Fields(v)
+	if !ok || len(f) == 0 {
+		return 0
+	}
+	parts := strings.SplitN(f[0], ".", 3)
+	if len(parts) < 2 {
+		return 0
+	}
+	ma, errA := strconv.Atoi(parts[0])
+	mi, errB := strconv.Atoi(parts[1])
+	switch {
+	case errA != nil || errB != nil:
+		return 0
+	case ma > major || ma == major && mi >= minor:
+		return 1
+	}
+	return -1
+}
 
 // treeEntry is a path's entry in a commit's tree: its mode, type and id;
 // an empty Type is a path the tree does not have.
@@ -103,8 +161,12 @@ type deployGit interface {
 	// in paths' order; a path the tree lacks has no Type. errGitTooOld when
 	// git cannot answer.
 	srcEntries(ctx context.Context, src, mirror, sha string, paths []string) ([]treeEntry, error)
-	// srcTree lists the tree tree in src (its entries, Path a name).
+	// srcTree lists the tree tree in src (its entries, Path a name), from
+	// the root whatever src's config says of its work tree.
 	srcTree(ctx context.Context, src, mirror, tree string) ([]treeEntry, error)
+	// gitVersion is `git version`'s answer, read once (beside mirror); ""
+	// when it cannot be read.
+	gitVersion(ctx context.Context, mirror string) string
 	// lsTree lists the tree tree in the mirror (its entries, Path a name),
 	// never fetching it.
 	lsTree(ctx context.Context, dir, tree string) ([]treeEntry, error)
@@ -399,9 +461,13 @@ func (g *execGit) srcEntries(ctx context.Context, src, mirror, sha string, paths
 	c := g.srcCmd(src, mirror, "resolver entries", "cat-file", "-Z", "--batch-check=%(objectmode) %(objecttype) %(objectname)")
 	c.Stdin = in.Bytes()
 	res, err := g.run.Run(ctx, c)
+	// The atom's and the switch's names, which every git echoes in every
+	// locale: "unknown format element: objectmode" (git 2.42 to 2.44), "bad
+	// cat-file format: %(objectmode)" (2.45 to 2.50), "unknown switch `Z'".
+	// gitVersion decides first; this is for a git whose version is unread.
 	ee, exited := errors.AsType[*execx.ExitError](err)
 	switch {
-	case exited && (strings.Contains(ee.Stderr, "unknown format element: objectmode") || strings.Contains(ee.Stderr, "unknown switch `Z'")):
+	case exited && ee.Code == 128 && strings.Contains(ee.Stderr, "objectmode"), exited && strings.Contains(ee.Stderr, "`Z'"):
 		return nil, errGitTooOld
 	case err != nil:
 		return nil, err
@@ -434,7 +500,9 @@ func (g *execGit) srcTree(ctx context.Context, src, mirror, tree string) ([]tree
 	if err := checkSrc(src, tree); err != nil {
 		return nil, err
 	}
-	res, err := g.run.Run(ctx, g.srcCmd(src, mirror, "resolver tree", "ls-tree", "-z", "--end-of-options", tree))
+	// --full-tree: a core.worktree above src's directory would otherwise
+	// make ls-tree list the subdirectory that directory is of the work tree.
+	res, err := g.run.Run(ctx, g.srcCmd(src, mirror, "resolver tree", "ls-tree", "-z", "--full-tree", "--end-of-options", tree))
 	if err != nil {
 		return nil, err
 	}

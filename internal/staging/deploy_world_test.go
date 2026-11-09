@@ -28,6 +28,8 @@ type countingRunner struct {
 	// failArg, when set, fails each command with an argument that holds it,
 	// as git exiting 128 with failStderr.
 	failArg, failStderr string
+	// version, when set, is what `git version` prints, without running it.
+	version string
 	// cmds are the commands started, in order.
 	cmds []execx.Cmd
 }
@@ -63,10 +65,14 @@ func (r *countingRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, er
 	if r.failArg != "" && slices.ContainsFunc(c.Args, func(a string) bool { return strings.Contains(a, r.failArg) }) {
 		failed, stderr = true, r.failStderr
 	}
+	version := r.version
 	r.cmds = append(r.cmds, c)
 	r.mu.Unlock()
 	if failed {
 		return execx.Result{Code: 128}, &execx.ExitError{Cmd: c, Code: 128, Stderr: stderr}
+	}
+	if sub == "version" && version != "" {
+		return execx.Result{Stdout: []byte(version + "\n")}, nil
 	}
 	if before != nil {
 		before()
