@@ -370,10 +370,12 @@ func (w *resolveWork) lastWhy(ctx context.Context) string {
 	return oneLine(why, 300)
 }
 
-// stagingPaneSpec is the resolver's pane agent for role.
+// stagingPaneSpec is the resolver's pane agent for role. Its Close ends an
+// agent still at work with its own workspace (closeBusy): the job's slot goes
+// back right after, and nothing may write there then.
 func stagingPaneSpec(role config.Role) paneSpec {
 	return paneSpec{what: "staging resolver", workspace: stagingWorkspace, owner: learnRepoOwner, name: "staging",
-		role: func(*config.Config) config.Role { return role }}
+		role: func(*config.Config) config.Role { return role }, closeBusy: true}
 }
 
 // paneStagingAgents is Deps.stagingAgents for the pane agent.

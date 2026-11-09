@@ -135,12 +135,17 @@ func (d paneDeps) withDefaults() paneDeps {
 // paneSpec says which pane agent a paneAgent is: what it is called in logs
 // and errors, the label of its herdr workspace, the scratch row its session
 // hangs on (with LearnAgentTag they make its herdr name, the same for every
-// run) and the role it runs as.
+// run) and the role it runs as. closeBusy: an agent that neither Park nor
+// Quit ends at Close, still at work after its interrupt, is ended by closing
+// its workspace when that is its own (ownWorkspace: the spec's label, its
+// pane alone): the staging resolver's, whose slot goes back right after its
+// Close. The retro, the curator, the critic and the editor never force it.
 type paneSpec struct {
 	what        string
 	workspace   string
 	owner, name string
 	role        func(*config.Config) config.Role
+	closeBusy   bool
 }
 
 // retroPane is the retro's classifier.
@@ -818,8 +823,10 @@ func (c *paneAgent) detach() {
 // watched until it shows the agent idle (release), then the agent is parked
 // with its workspace (agents.Manager.Park); when Park refuses a busy agent,
 // the agent, which is ours by its tagged name, is quit and its workspace
-// closed. Only then is the scratch registry removed; if the agent stays,
-// the registry stays too, where its session is recorded, and the error says
+// closed; when Quit refuses too, a spec with closeBusy (the staging
+// resolver's) closes the agent's own workspace with it (closeOwn). Only then
+// is the scratch registry removed; if the agent stays, the registry stays
+// too, where its session is recorded, and the error says why first, then
 // where. The run directory keeps the inputs and the answers either way.
 func (c *paneAgent) Close(ctx context.Context) error {
 	if c.stopObserving != nil {
@@ -835,7 +842,8 @@ func (c *paneAgent) Close(ctx context.Context) error {
 		_ = c.st.Close()
 		c.d.Logger.Warn(c.spec.what+": the agent was not closed; its scratch registry stays", "registry", c.scratch,
 			"workspace", c.spec.workspace, "err", err)
-		return fmt.Errorf("the %q workspace may still run the agent (its registry stays at %s): %w", c.spec.workspace, c.scratch, err)
+		// Why first: a caller that clips the words (the resolver's Why) keeps it.
+		return fmt.Errorf("%w; the %q workspace may still run the agent, and its registry stays at %s", err, c.spec.workspace, c.scratch)
 	}
 	var errs []error
 	if err := c.st.Close(); err != nil {
@@ -882,8 +890,16 @@ func (c *paneAgent) release(ctx context.Context) error {
 	if err != nil {
 		return errors.Join(perr, err)
 	}
-	if err := c.mgr.Quit(ctx, s); err != nil {
-		return errors.Join(perr, err)
+	if qerr := c.mgr.Quit(ctx, s); qerr != nil {
+		if !c.spec.closeBusy {
+			return errors.Join(perr, qerr)
+		}
+		if cerr := c.closeOwn(ctx, s); cerr != nil {
+			return errors.Join(perr, qerr, cerr)
+		}
+		c.d.Logger.Warn(c.spec.what+": the agent neither parked nor quit; it was ended with its own workspace",
+			"workspace", store.Deref(s.HerdrWorkspaceID), "err", errors.Join(perr, qerr))
+		return nil
 	}
 	ws := store.Deref(s.HerdrWorkspaceID)
 	if ws == "" || c.d.CloseWorkspace == nil {
@@ -894,6 +910,35 @@ func (c *paneAgent) release(ctx context.Context) error {
 	}
 	if err := c.d.CloseWorkspace(ctx, ws); err != nil && !herdrGone(err) {
 		return err
+	}
+	return nil
+}
+
+// closeOwn ends session s's agent, which neither Park nor Quit ended, by
+// closing its workspace when that is its own (ownWorkspace: labelled the
+// spec's workspace, holding the agent's pane alone), and closes the session;
+// otherwise it says why the agent stays. Only a spec with closeBusy calls it.
+func (c *paneAgent) closeOwn(ctx context.Context, s store.Session) error {
+	ws := store.Deref(s.HerdrWorkspaceID)
+	if ws == "" || c.d.Herdr == nil || c.d.CloseWorkspace == nil {
+		return errors.New("no workspace of the agent's is known to close")
+	}
+	snap, err := c.d.Herdr.Snapshot(ctx)
+	if err != nil {
+		return fmt.Errorf("its workspace %s stays open: %w", ws, err)
+	}
+	switch {
+	case !slices.ContainsFunc(snap.Workspaces, func(w herdr.Workspace) bool { return w.ID == ws && w.Label == c.spec.workspace }):
+		return fmt.Errorf("herdr shows no %q workspace %s to close", c.spec.workspace, ws)
+	case !ownWorkspace(snap, ws, store.Deref(s.HerdrPaneID), c.spec.workspace):
+		return fmt.Errorf("its workspace %s holds a pane beside the agent's, so it stays open", ws)
+	}
+	if err := c.d.CloseWorkspace(ctx, ws); err != nil && !herdrGone(err) {
+		return fmt.Errorf("close its workspace %s: %w", ws, err)
+	}
+	if err := c.st.TransitionSession(ctx, s.ID, []string{store.SessionLive, store.SessionStarting}, store.SessionClosed, nil); err != nil &&
+		!errors.Is(err, store.ErrConflict) {
+		c.d.Logger.Warn(c.spec.what+": close the session of the agent its workspace ended with", "session", s.ID, "err", err)
 	}
 	return nil
 }

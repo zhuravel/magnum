@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -156,7 +157,7 @@ func TestTheStagingResolversPaneAgentWorksInTheSlotWithTheJobsEnv(t *testing.T) 
 
 // laggingHerdr is a fakeHerdr seen through herdr's lag: the agent named
 // name, at work, still shows working in the lag snapshots after its esc,
-// then idle; a deaf one shows working through any key.
+// then idle; a deaf one (a lag below 0) shows working through any key.
 type laggingHerdr struct {
 	*fakeHerdr
 	mu   sync.Mutex
@@ -167,7 +168,7 @@ type laggingHerdr struct {
 }
 
 func newLaggingHerdr(hd *fakeHerdr, lag int) *laggingHerdr {
-	return &laggingHerdr{fakeHerdr: hd, lag: lag, left: -1}
+	return &laggingHerdr{fakeHerdr: hd, lag: lag, left: -1, deaf: lag < 0}
 }
 
 func (l *laggingHerdr) Snapshot(ctx context.Context) (herdr.Snapshot, error) {
@@ -231,7 +232,8 @@ func (l *laggingHerdr) shows(ctx context.Context) bool {
 // work in herdr (through lh, lag snapshots behind an esc, in its own
 // "staging merge" workspace w1, with a pane of yours beside it when foreign),
 // Park and Quit refusing while herdr shows it so, and its Wait cut by the
-// Cancel. It returns the agent, its manager and the herdr lh.
+// Cancel. A lag below 0 keeps it at work through the esc. It returns the
+// agent, its manager and the herdr lh.
 func cancelledResolver(t *testing.T, h *harness, lag int, foreign bool) (*paneStagingAgent, *fakePaneAgents, *laggingHerdr) {
 	t.Helper()
 	var ag *fakePaneAgents
@@ -293,5 +295,52 @@ func TestTheStagingResolversCloseParksAnAgentHerdrStillShowsWorkingAfterTheEsc(t
 	}
 	if len(h.hd.closed) != 0 {
 		t.Errorf("closed workspaces %v: a parked agent's workspace is Park's", h.hd.closed)
+	}
+}
+
+// An agent that stays at work through its esc, the wait and Quit is ended
+// by the resolver's Close closing its own "staging merge" workspace (the
+// job's slot goes back right after: nothing may still write there), and
+// only that: with a pane of yours in the workspace, it stays, and Close says
+// why first, before where the registry stays; a pane agent that never
+// forces (the retro, the curator, the critic, the editor) leaves even its
+// own workspace to you.
+func TestTheStagingResolversCloseEndsAnAgentThatStaysAtWorkByClosingItsOwnWorkspace(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		foreign, never bool
+		closes         bool
+	}{
+		{name: "its own workspace", closes: true},
+		{name: "a pane of yours beside it", foreign: true},
+		{name: "a pane agent that never forces", never: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			a, _, _ := cancelledResolver(t, h, -1, tc.foreign)
+			if tc.never {
+				a.spec.closeBusy = false
+			}
+			scratch := filepath.Join(a.dir, learnScratch)
+			err := a.Close(context.WithoutCancel(h.ctx))
+			_, serr := os.Stat(scratch)
+			if !tc.closes {
+				msg := fmt.Sprint(err)
+				cause, at := strings.Index(msg, "claude-fix is working"), strings.Index(msg, scratch)
+				if err == nil || cause < 0 || at < 0 || cause > at || !strings.Contains(msg, stagingWorkspace) {
+					t.Fatalf("Close = %v; want why the agent stays (it works), then its workspace and where its registry stays", err)
+				}
+				if len(h.hd.closed) != 0 || serr != nil {
+					t.Fatalf("closed %v, registry %v; want the workspace open and the registry kept", h.hd.closed, serr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Close = %v, want the agent ended with its workspace", err)
+			}
+			if !slices.Equal(h.hd.closed, []string{"w1"}) || !errors.Is(serr, os.ErrNotExist) {
+				t.Fatalf("closed %v, registry %v; want its workspace w1 closed and the registry gone", h.hd.closed, serr)
+			}
+		})
 	}
 }

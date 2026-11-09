@@ -262,6 +262,7 @@ type fakeStagingAgent struct {
 	resumed  int
 	closed   int
 	detached int
+	closeErr error // what Close fails with (the agent stays)
 }
 
 func (a *fakeStagingAgent) Prompt(_ context.Context, text string) (stagingAgentAt, error) {
@@ -296,7 +297,7 @@ func (a *fakeStagingAgent) Close(context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.closed++
-	return nil
+	return a.closeErr
 }
 
 func (a *fakeStagingAgent) Detach() {
@@ -675,6 +676,33 @@ func TestTheStagingResolverCancelsAJob(t *testing.T) {
 		t.Error("the PR's reservation was not let go")
 	}
 	f.h.e.endEviction(pr.ID)
+}
+
+// A Cancel whose agent stays (its Close fails: herdr shows it at work, and
+// a pane of yours keeps its workspace open) fails the job saying so, with
+// the agent's pane and why it stays, ahead of the long words of where its
+// scratch registry stays, which the Why's clip would otherwise keep alone.
+func TestACancelledResolverJobWhoseAgentStaysNamesItsPaneAndWhy(t *testing.T) {
+	f := newResolveFixture(t)
+	f.reviewed()
+	f.resolves("a = 2\nb = 1\n")
+	started, _ := f.working()
+	id := f.start(1)
+	awaitSignal(t, started, "the agent's turn")
+	f.agent.mu.Lock()
+	f.agent.closeErr = fmt.Errorf("agents: park pr 1: claude-fix is working: agent busy\n"+
+		"agents: quit session 1: claude-fix is working before its ctrl+c, no key sent: agent busy\n"+
+		"its workspace w26 holds a pane beside the agent's, so it stays open; the %q workspace may still run the agent, "+
+		"and its registry stays at %s", stagingWorkspace, filepath.Join(f.h.e.resolveDir(id), learnScratch))
+	f.agent.mu.Unlock()
+	if err := f.r.Cancel(f.h.ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	res := f.await(id)
+	if res.State != staging.ResolveFailed || !strings.HasPrefix(res.Why, whyCancelled+";") ||
+		!strings.Contains(res.Why, "claude-fix is working") || !strings.Contains(res.Why, "pane p-resolve") {
+		t.Fatalf("the cancelled job = %+v; want failed, cancelled, naming the agent's pane p-resolve and why it stays", res)
+	}
 }
 
 // A restart goes on with a job whose agent still runs: it holds its PR

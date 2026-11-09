@@ -712,7 +712,12 @@ func (w *resolveWork) release(ctx context.Context) string {
 	}
 	if w.agent != nil {
 		if err := w.agent.Close(ctx); err != nil {
-			notes = append(notes, "its agent may still run: "+oneLine(err.Error(), 200))
+			where := ""
+			if job.Pane != "" {
+				where = " in pane " + job.Pane
+			}
+			// Close says why first, so the clip keeps it.
+			notes = append(notes, "its agent may still run"+where+": "+oneLine(err.Error(), 200))
 		}
 	}
 	if job.SlotID != 0 && !w.keepSlot {
