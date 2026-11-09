@@ -25,6 +25,7 @@ type fakeStaging struct {
 	refreshes  []fakeRefresh
 	gate       chan struct{}
 	err        error
+	panics     bool // Refresh panics
 	status     map[int][]staging.EnvStatus
 	statusOf   []staging.PR // every Status call's PR
 	busy       int          // Refreshes running now
@@ -48,6 +49,9 @@ func (f *fakeStaging) Refresh(ctx context.Context, repo string, open []staging.O
 	}
 	f.mu.Unlock()
 	defer func() { f.mu.Lock(); f.busy--; f.mu.Unlock() }()
+	if f.panics {
+		panic("staging: a bug")
+	}
 	if gate != nil {
 		select {
 		case <-gate:
@@ -501,5 +505,48 @@ func TestAStagingRecordsWordsAreClean(t *testing.T) {
 	raw := StagingRecord{Head: "aaa1111", Envs: []StagingEnv{{Env: "void", State: "latest", Why: "a\x07b", RunURL: "https://github.com/x\x1b]8;;"}}}
 	if e := StagingShown(raw, true, []staging.Env{{Name: "void"}}, "aaa1111", time.Now(), time.Now())[0]; e.Why != "a b" || e.RunURL != "" {
 		t.Errorf("read %+v", e)
+	}
+}
+
+// A Refresh that panics is contained (the daemon goes on) and the
+// repository's next one waits a backoff, a minute after the first panic in
+// a row and twice as long after each next one, at most 30 minutes, so a
+// bug costs no panic event per tick; a Refresh that returns ends it.
+func TestAPanickingStagingRefreshIsRetriedAfterABackoff(t *testing.T) {
+	f := &fakeStaging{panics: true}
+	h := newHarness(t, withStagings(f))
+	h.open(prSpec{n: 1, head: "aaa1111"})
+	tick := func() int {
+		t.Helper()
+		h.stagingTick()
+		h.e.stagingWG.Wait()
+		return len(f.calls())
+	}
+	if n := tick(); n != 1 {
+		t.Fatalf("%d Refreshes, want 1", n)
+	}
+	if n := tick(); n != 1 {
+		t.Fatalf("a tick right after a panic started another Refresh: %d", n)
+	}
+	h.advance(time.Minute)
+	if n := tick(); n != 2 {
+		t.Fatalf("a minute after the first panic: %d Refreshes, want 2", n)
+	}
+	h.advance(time.Minute)
+	if n := tick(); n != 2 {
+		t.Fatalf("a minute after the second panic (its backoff is 2): %d Refreshes, want 2", n)
+	}
+	h.advance(time.Minute)
+	f.mu.Lock()
+	f.panics = false
+	f.mu.Unlock()
+	if n := tick(); n != 3 {
+		t.Fatalf("two minutes after the second panic: %d Refreshes, want 3", n)
+	}
+	if n := tick(); n != 4 {
+		t.Fatalf("after a Refresh that returned, the next tick waits no backoff: %d Refreshes, want 4", n)
+	}
+	if got := len(h.events("engine.panic")); got != 2 {
+		t.Fatalf("%d panic events, want 2", got)
 	}
 }

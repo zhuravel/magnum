@@ -800,14 +800,18 @@ type Engine struct {
 	// daemon, by lower-case name, and the cause of each one's failed
 	// Refresh last logged, under stagingMu; stagingWG waits for the
 	// Refreshes in flight, which stagingStop ends (the stop, before the
-	// tick's context ends under Options.Once).
-	stagingMu     sync.Mutex
-	stagingBusy   map[string]bool
-	stagingRead   map[string]bool
-	stagingLogged map[string]string
-	stagingWG     sync.WaitGroup
-	stagingCtx    context.Context
-	stagingStop   context.CancelFunc
+	// tick's context ends under Options.Once). stagingPanics counts each
+	// repository's Refreshes in a row that panicked, and stagingRetryAt is
+	// when its next may start.
+	stagingMu      sync.Mutex
+	stagingBusy    map[string]bool
+	stagingRead    map[string]bool
+	stagingLogged  map[string]string
+	stagingPanics  map[string]int
+	stagingRetryAt map[string]time.Time
+	stagingWG      sync.WaitGroup
+	stagingCtx     context.Context
+	stagingStop    context.CancelFunc
 }
 
 // New returns an engine over d.
@@ -855,6 +859,8 @@ func New(d Deps) *Engine {
 		stagingBusy:       map[string]bool{},
 		stagingRead:       map[string]bool{},
 		stagingLogged:     map[string]string{},
+		stagingPanics:     map[string]int{},
+		stagingRetryAt:    map[string]time.Time{},
 	}
 	if e.agentHooks == nil {
 		e.agentHooks = &hookRouter{}

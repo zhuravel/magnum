@@ -49,6 +49,15 @@ type Staging interface {
 // a fetch and GitHub's reads.
 const stagingRefreshTimeout = 10 * time.Minute
 
+// The backoff of a repository whose Refresh panicked: a minute after the
+// first panic in a row, twice as long after each next one, at most
+// stagingPanicMax (the factory daemon's rule), so a bug costs no panic
+// event per tick.
+const (
+	stagingPanicFirst = time.Minute
+	stagingPanicMax   = 30 * time.Minute
+)
+
 // stagingEnvTimeout bounds the poll identity's git env of a fetch (an App
 // mints a token for it).
 const stagingEnvTimeout = time.Minute
@@ -220,7 +229,7 @@ func (e *Engine) tellStagings(ctx context.Context, s Staging, repo string, prs [
 func (e *Engine) startStagingRefresh(ctx context.Context, s Staging, repo string, prs []store.PR) {
 	k := strings.ToLower(repo)
 	e.stagingMu.Lock()
-	if e.stagingBusy[k] || ctx.Err() != nil || e.stagingCtx.Err() != nil {
+	if e.stagingBusy[k] || ctx.Err() != nil || e.stagingCtx.Err() != nil || e.now().Before(e.stagingRetryAt[k]) {
 		e.stagingMu.Unlock()
 		return
 	}
@@ -237,12 +246,25 @@ func (e *Engine) startStagingRefresh(ctx context.Context, s Staging, repo string
 			e.stagingRead[k] = true
 			e.stagingMu.Unlock()
 		}()
-		e.safely(ctx, "staging refresh", repo, func() {
+		panicked := e.safely(ctx, "staging refresh", repo, func() {
 			rctx, cancel := context.WithTimeout(ctx, stagingRefreshTimeout)
 			defer cancel()
 			defer context.AfterFunc(e.stagingCtx, cancel)()
 			e.noteStagingRefresh(rctx, repo, s.Refresh(rctx, repo, open))
 		}, nil)
+		e.stagingMu.Lock()
+		defer e.stagingMu.Unlock()
+		if !panicked {
+			delete(e.stagingPanics, k)
+			delete(e.stagingRetryAt, k)
+			return
+		}
+		e.stagingPanics[k]++
+		wait := stagingPanicMax
+		if n := e.stagingPanics[k]; n <= 6 {
+			wait = min(stagingPanicFirst<<(n-1), stagingPanicMax)
+		}
+		e.stagingRetryAt[k] = e.now().Add(wait)
 	})
 }
 

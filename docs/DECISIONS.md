@@ -20583,7 +20583,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   git. Status in the tick rather than after each Refresh, so a Refresh that hangs still lets Status's own staleness
   (10 minutes) reach the board. Readers go through `engine.StagingShown`: a record of an older head, an env it
   lacks, or a daemon whose last tick is more than `staging.StaleAfter` old reads `unknown` saying why, so a stopped
-  daemon's last answer never stands; the record's words are kept free of control characters (a failing job's paths
+  daemon's last answer never stands; a Refresh that panics is contained (`safely`) and the repository's next one
+  waits a backoff, a minute after the first panic in a row and twice as long after each next, at most 30 minutes
+  (the factory daemon's rule), so a bug costs no panic event per tick; the record's words are kept free of control characters (a failing job's paths
   are the PR's) and a run only as an https page, written and read. The stop ends the Refreshes (its own context, as
   `--once` cancels the tick's after the stop), waits for them 10 s, then calls `Close`, which ends the background
   clone. The board's STAGE column, after CI and the third to give way, draws one one-cell glyph per env in the
@@ -20597,7 +20599,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   Tests: TestNoStagingEntryForAWatchedRepositoryMakesNoStagingClient, TestWithoutStagingsNothingOfStagingRuns,
   TestTheTickRunsEachStagingRefreshOffTheTickOneAtATime, TestEveryOpenPRsStagingStatusIsStoredForTheBoardAndTheCLI,
   TestAFailedStagingRefreshStillTellsTheStatuses, TestTheDaemonsStopWaitsForTheStagingRefreshThenClosesTheClient,
-  TestAOnceRunsStopEndsItsStagingRefresh, TestStagingShownIsTheRecordWhileItHoldsElseUnknownSayingWhy,
+  TestAOnceRunsStopEndsItsStagingRefresh, TestAPanickingStagingRefreshIsRetriedAfterABackoff,
+  TestStagingShownIsTheRecordWhileItHoldsElseUnknownSayingWhy,
   TestAStagingRecordsWordsAreClean, the tui's TestTheStageColumnDrawsOneGlyphPerStagingEnv,
   TestNoStagingsNoStageColumn, TestTheCardShowsWhereThePRStandsOnEachStaging and
   TestTheHelpExplainsTheStageColumn, the cli's TestTheBoardReadsEachOpenPRsStagingStatusFromItsRecord and the
