@@ -26,6 +26,15 @@ const (
 	// run hit a usage limit, needed a login or reached the Codex budget, or
 	// the run was interrupted; `magnum eval run` records it so.
 	OutcomeSkipped = "skipped"
+	// OutcomeMissingRole: a local case's round went without a reviewer's
+	// report (a lost pane, a timeout), or its frozen roles name one the
+	// config no longer has: what it would have found is unknown, so it is
+	// not scored, never a miss.
+	OutcomeMissingRole = "missing_role"
+	// OutcomeConfigError: a local case's round cannot run for a
+	// configuration problem (no gh identity to run as): not scored, and
+	// running it again changes nothing until the config does.
+	OutcomeConfigError = "config_error"
 )
 
 // RunIDFormat is a run id's time part: sortable, to the second.

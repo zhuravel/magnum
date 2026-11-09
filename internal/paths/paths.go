@@ -454,6 +454,12 @@ func (l Layout) Learn() string { return filepath.Join(l.data(), "learn") }
 // operator's corpus.
 func (l Layout) LearnCorpus() string { return filepath.Join(l.Learn(), "corpus.toml") }
 
+// LearnLocalCases is where the eval corpus's local cases keep their frozen
+// inputs, one directory per case, LearnLocalCases()/<case name>
+// (`magnum eval add --local-task`, evalrun.LocalCaseDir): beside the learned
+// corpus, outside any checkout, since they hold a task's ticket and answers.
+func (l Layout) LearnLocalCases() string { return filepath.Join(l.Learn(), "local") }
+
 // Eval is where the eval runs live, Eval()/<run id>/ (`magnum eval run`
 // and the gate of a skill proposal), with the flagged cases and the cases'
 // worktrees (wt/).
