@@ -21,7 +21,10 @@ entries and the reverts of skill versions), and keeping out of it keeps its land
   test or an agent task, never run git, mysql, herdr or launchctl against real directories or sockets.
   Tests are hermetic: fakes for git, gh, herdr and MySQL; the live tests are read-only and opt-in by
   environment variable (`MAGNUM_LIVE_GITHUB`, `MAGNUM_LIVE_HERDR`, `MAGNUM_LIVE_MYSQL`,
-  `MAGNUM_LIVE_INVENTORY`, `MAGNUM_LIVE_ENGINE`, each `=1`), never set in the gate.
+  `MAGNUM_LIVE_INVENTORY`, `MAGNUM_LIVE_ENGINE`, `MAGNUM_LIVE_JIRA`, each `=1`), never set in the gate.
+  `MAGNUM_LIVE_JIRA`'s probe of the changelog's order (`internal/jira`) also reads the site, the account, its token
+  file and an issue with more than 100 changelog entries from `MAGNUM_LIVE_JIRA_URL`, `MAGNUM_LIVE_JIRA_USER`,
+  `MAGNUM_LIVE_JIRA_TOKEN_FILE` and `MAGNUM_LIVE_JIRA_KEY`.
 - **Prompts are loaded at daemon startup.** The daemon reads `prompts/*.md` and copies
   `skills/magnum-review/SKILL.md` and `skills/magnum-fix/SKILL.md` (to `<state dir>/skill/<hash>/`; a
   binary without a checkout uses the prompts and skills it embeds) once, when it starts, right after

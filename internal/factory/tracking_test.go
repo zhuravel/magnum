@@ -879,3 +879,46 @@ func TestAPublishedTasksFirstReadComesFirst(t *testing.T) {
 		t.Errorf("reads %q, want the published task's first", reads)
 	}
 }
+
+// The batch's answers never wait for good: batches whose answers find the
+// place of the loop's next pass taken (started past the guard of one at a
+// time, as a bug would) give up after a short wait, say so once, and drop
+// them, so neither the loop nor a batch hangs, and their reads come due
+// again for the next batch.
+func TestABatchWhoseAnswersCannotBeTakenDropsThem(t *testing.T) {
+	r := newTrackRig(t)
+	r.e.trackSendWait = 20 * time.Millisecond
+	one := r.task("PR-12360", registry.TaskNeedsYou, "investigate")
+	two := r.task("PR-12361", registry.TaskNeedsYou, "investigate")
+	three := r.task("PR-12362", registry.TaskNeedsYou, "investigate")
+	r.e.startTrackBatch([]trackJob{{t: one, key: one.JiraKey}})
+	r.e.waitBackground() // its answers wait for the next pass
+	r.e.startTrackBatch([]trackJob{{t: two, key: two.JiraKey}})
+	r.e.startTrackBatch([]trackJob{{t: three, key: three.JiraKey}})
+	ended := make(chan struct{})
+	go func() {
+		r.e.waitBackground()
+		close(ended)
+	}()
+	select {
+	case <-ended:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a batch whose answers had no place hangs")
+	}
+	if n := strings.Count(r.log.String(), "answers were dropped"); n != 1 {
+		t.Errorf("two drops logged %d times, want once:\n%s", n, r.log.String())
+	}
+	r.e.takeTracking(r.ctx) // the loop takes the answers that found their place
+	if _, ok := r.tracking(one.ID); !ok {
+		t.Fatal("the answers that found their place were not taken")
+	}
+	for range 2 { // the next batches read the dropped ones' tasks again, one a tick
+		r.clock.Add(45 * time.Second)
+		r.pass()
+	}
+	for _, task := range []registry.Task{two, three} {
+		if _, ok := r.tracking(task.ID); !ok {
+			t.Errorf("%s was not read again", task.JiraKey)
+		}
+	}
+}

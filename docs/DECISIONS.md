@@ -20740,7 +20740,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     deadline of 2 minutes and each read 30 seconds; the drain cancels a batch within its budget, and a read it cut
     records nothing. A batch reads what the tick's `jiraLeft` leaves after the intake's tries, which stay on the
     loop as they were; a read Jira did not answer ends the batch, and a batch whose every read Jira did not answer
-    holds the next one back 1, 2, 4, 8, then at most 15 minutes, which a batch Jira answers ends.
+    holds the next one back 1, 2, 4, 8, then at most 15 minutes, which a batch Jira answers ends. A batch's answers
+    wait 10 seconds at most for their place on the next pass (a buffer of one), then are dropped, logged once, and
+    read again by the next batch: the guard of one batch at a time only saves reads, and no batch waits for good.
   - What is due. A task that holds a Jira issue's key (not another tracker's), has not ended and does not wait for
     Jira itself, once 10 minutes passed since its last try: those never read first (the published ones first of
     them), then the longest unread, at most the tracked tasks over the ticks in 10 minutes a tick, rounded up (one
@@ -20779,7 +20781,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestOnlyATasksJiraIssueIsTracked, TestTheJiraReadsKeepWithinTheTicksBudget, TestAnEndedTaskGetsOneLastJiraRead,
   TestAFailedJiraReadIsLoggedOnceAndFailsNothing, TestTheScreenCarriesATasksJiraStatus,
   TestThePRStatusFileCarriesTheIssuesJiraStatus, TestAnEndedTasksLastStatusWriteWaitsForItsLastRead,
-  TestAPRStatusFileSaysNoJiraWithoutAReadAndUnknownAfterFailedOnes and TestAPublishedTasksFirstReadComesFirst; tui's
+  TestAPRStatusFileSaysNoJiraWithoutAReadAndUnknownAfterFailedOnes, TestAPublishedTasksFirstReadComesFirst and
+  TestABatchWhoseAnswersCannotBeTakenDropsThem; tui's
   TestATasksJiraStatusReachesTheFactoryScreensModel. Each guard was taken out once, and a test failed.
 
 ## Learned rules

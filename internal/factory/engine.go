@@ -398,13 +398,15 @@ type Engine struct {
 	// jiraLeft is how many of those tries the tick may still make
 	// (jiraTriesPerTick, none after a try Jira did not answer); the batch of
 	// reads of the tasks' issues takes what the tries leave (trackJira).
-	// trk is that tracking (the loop's own, but for its batch's answers),
-	// and trackReadBound and trackBatchBound bound one read and one batch
-	// (trackBound, batchBound; a test's seams).
+	// trk is that tracking (the loop's own, but for its batch's answers and
+	// marks); trackReadBound and trackBatchBound bound one read and one
+	// batch, and trackSendWait how long a batch's answers wait for their
+	// place (trackBound, batchBound, sendWait; a test's seams).
 	jiraLeft        int
 	trk             trackState
 	trackReadBound  time.Duration
 	trackBatchBound time.Duration
+	trackSendWait   time.Duration
 	// overlaps are the overlap lines the new-task previews read, by
 	// repository and key, and jiraReads Jira's answers to their reads of a
 	// key, a failure included, both kept for previewOverlapTTL
@@ -584,7 +586,6 @@ func New(d Deps) *Engine {
 		debts:        map[int64]*releaseDebt{},
 		statusErrs:   map[int64]bool{},
 		statusFinal:  map[int64]bool{},
-		trk:          trackState{done: make(chan trackBatch, 1)},
 		stg:          newStagingReads(),
 		agentRuns:    map[int64]*agentsRun{},
 		qaSessions:   map[int64]*qaSession{},
@@ -604,7 +605,9 @@ func New(d Deps) *Engine {
 
 		trackReadBound:  trackBound,
 		trackBatchBound: batchBound,
+		trackSendWait:   sendWait,
 	}
+	e.trk.done = make(chan trackBatch, 1)
 	e.drainerAlive, e.procStart = e.liveDrainer, processStart
 	e.runners[config.FactoryStageAgents] = e.runAgents
 	e.runners[config.FactoryStageGate] = e.runGate

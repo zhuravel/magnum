@@ -37,6 +37,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/execx"
@@ -62,6 +63,9 @@ const (
 	// lastReadBound how long after the end it is owed at most.
 	lastReadAfter = 2 * time.Minute
 	lastReadBound = 5 * time.Minute
+	// sendWait is how long a batch's answers wait for their place on the
+	// loop's next pass before the batch drops them.
+	sendWait = 10 * time.Second
 )
 
 // trackBackoff is the hold after n batches in a row whose reads Jira did
@@ -71,11 +75,16 @@ func trackBackoff(n int) time.Duration {
 }
 
 // trackState is the tracking of the tasks' Jira issues: the loop's own,
-// but for done, which the batch sends its answers on (a buffer of one: one
-// batch runs at a time, and the loop takes its answers before it starts
-// the next).
+// but for done, which a batch sends its answers on (a buffer of one, which
+// the loop's next pass empties), running, which the loop sets as it starts
+// a batch and the batch clears as it ends, and dropped, whether a batch's
+// drop of its answers was logged (once, until answers find their place
+// again). The loop starts no batch while one runs or answers wait, which
+// saves reads; a batch whose answers find no place within trackSendWait
+// drops them, so a batch never waits for good either way.
 type trackState struct {
-	running bool // a batch runs: its answers are not taken yet
+	running atomic.Bool
+	dropped atomic.Bool
 	done    chan trackBatch
 	// down counts the batches in a row whose reads Jira did not answer, and
 	// next is when the next batch may start (the backoff).
@@ -130,11 +139,11 @@ type trackBatch struct {
 }
 
 // trackJira hands one batch off the loop the reads that are due (see the
-// file's comment), within the tick's Jira budget, unless a batch runs, the
-// site's backoff holds, or the daemon drains.
+// file's comment), within the tick's Jira budget, unless a batch runs or
+// its answers wait, the site's backoff holds, or the daemon drains.
 func (e *Engine) trackJira(ctx context.Context, tasks []registry.Task) {
 	now := e.now()
-	if e.d.Jira == nil || e.jiraLeft <= 0 || e.draining.Load() || e.trk.running || now.Before(e.trk.next) {
+	if e.d.Jira == nil || e.jiraLeft <= 0 || e.draining.Load() || e.trk.running.Load() || len(e.trk.done) > 0 || now.Before(e.trk.next) {
 		return
 	}
 	rows, err := e.reg.Trackings(ctx)
@@ -186,11 +195,31 @@ func (e *Engine) trackJira(ctx context.Context, tasks []registry.Task) {
 		return
 	}
 	e.jiraLeft -= len(jobs)
-	e.trk.running = true
-	done, readBound, batchBound := e.trk.done, e.trackReadBound, e.trackBatchBound
+	e.startTrackBatch(jobs)
+}
+
+// startTrackBatch starts the batch of jobs off the loop, on the engine's
+// context: it reads them in order and sends its answers to the loop's next
+// pass, on done, within trackSendWait (or drops them, logged once), then
+// marks itself ended (running). Even after a panic it sends what it read.
+func (e *Engine) startTrackBatch(jobs []trackJob) {
+	e.trk.running.Store(true)
+	done, readBound, batchBound, wait := e.trk.done, e.trackReadBound, e.trackBatchBound, e.trackSendWait
 	e.goBackground("the tasks' Jira statuses", func(bg context.Context) {
 		var b trackBatch
-		defer func() { done <- b }() // a panic sends what was read: the loop's next pass frees the batch's place
+		defer e.trk.running.Store(false)
+		defer func() {
+			select {
+			case done <- b:
+				e.trk.dropped.Store(false)
+			case <-bg.Done(): // the daemon stops: nobody takes them
+			case <-time.After(wait):
+				if e.trk.dropped.CompareAndSwap(false, true) {
+					e.log.Warn("a batch of the tasks' Jira reads found no place on the loop: its answers were dropped, and the next batch reads them again",
+						"reads", len(b.reads), "wait", wait)
+				}
+			}
+		}()
 		ctx, cancel := context.WithTimeout(bg, batchBound)
 		defer cancel()
 		for _, j := range jobs {
@@ -239,7 +268,6 @@ func (e *Engine) takeTracking(ctx context.Context) {
 	default:
 		return
 	}
-	e.trk.running = false
 	if len(b.reads) == 0 {
 		return
 	}
