@@ -51,7 +51,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [registrytest](#registrytest) | Package registrytest gives tests a factory registry without migrating one for each of them: the first call in a test binary migrates a template database in memory, and every call starts from a copy of its bytes. |
 | [runtime](#runtime) | Package runtime is the factory's agent runtime: the owner rows of its tasks in the factory's own agents store, the launches it records before any workspace exists, the prompt ledger that never sends a prompt of unknown delivery twice, the pauses that are not failures, and a watchdog with its recovery steps (docs/superpowers/specs/2026-11-03-factory-design.md, sections 4.3, 10 and 10.1). |
 | [stats](#stats) | Package stats measures how much the factory still asks of the operator: per task, the messages typed, the messages that only start a step, the answer batches, the card decisions, the operator's time on cards and the time a task waited on them, computed from the factory registry's evidence records alone (spans, inputs, questions, decisions and review rounds) and set against the baseline frozen before the first task (milestone 1's exit test); and, for a task with a published PR, the PR's quality: what the local review missed at magnum's first posted round (the escape checks) and the PR's CI failures after the publish (its CI checks). |
-| [factoryread](#factoryread) | Package factoryread is the review side's read of what the factory keeps: the local review round of a pull request the factory published, from its registry (factory.db), and the task's plan, ticket and answers, from the task's directory, for the review retro (DECISIONS "The review retro tags factory-origin misses and their stage"). |
+| [factoryread](#factoryread) | Package factoryread is the review side's read of what the factory keeps: the local review round of a pull request the factory published, from its registry (factory.db), and the task's plan, ticket and answers, from the task's directory, for the review retro (DECISIONS "The review retro tags factory-origin misses and their stage"); and a task's local review rounds, their heads, roles and the times of its answers, for the replay of a round as an eval case (LocalReview, `magnum eval add --local-task`). |
 | [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a replacement without disk syncs, a size-limited read of a regular file, plain or inside an os.Root, the check of a file holding a secret, an existence check and a canonical path. |
 | [github](#github) | Package github is magnum's GitHub access layer. |
 | [gitx](#gitx) | Package gitx holds every git operation magnum needs: fetching PR heads into refs/magnum/pr/N, detached switches and placeholder resets in review slots, worktree management, dirty/unpushed guards and the diff queries behind "did this PR touch db/". |
@@ -11065,9 +11065,11 @@ type LocalRound struct {
     whose Checkout is the task's copy at Head (the change's head, on its branch)
     and whose PR is on no GitHub, with the change's base (BaseSHA, the commit
     its diff starts at) and the files the judge reads in place of GitHub's PR:
-    DescriptionFile (the title and body, description.md) and TicketFile (the
-    task's ticket, ticket.md; "" = none). The factory writes both before the
-    round (evalrun.RunLocal).
+    DescriptionFile (the title and body, description.md) and TicketFile
+    (ticket.md: the task's ticket, then the operator's answers to the factory's
+    questions under "## The operator's answers to the factory's questions",
+    evalrun.LocalTicket; "" = neither). The factory writes both before the round
+    (evalrun.RunLocal).
 
 type MachineGroup struct {
 	Repo string // owner/name
@@ -12236,6 +12238,13 @@ it is told about.
 CONSTANTS
 
 const (
+	KindPosted = ""
+	KindLocal  = "local"
+)
+    The kinds of case (Case.Kind): a pull request's posted round, and a round of
+    the factory's local review.
+
+const (
 	ExpectFound  = "found"
 	ExpectAbsent = "absent"
 )
@@ -12255,6 +12264,15 @@ const (
 	// run hit a usage limit, needed a login or reached the Codex budget, or
 	// the run was interrupted; `magnum eval run` records it so.
 	OutcomeSkipped = "skipped"
+	// OutcomeMissingRole: a local case's round went without a reviewer's
+	// report (a lost pane, a timeout), or its frozen roles name one the
+	// config no longer has: what it would have found is unknown, so it is
+	// not scored, never a miss.
+	OutcomeMissingRole = "missing_role"
+	// OutcomeConfigError: a local case's round cannot run for a
+	// configuration problem (no gh identity to run as): not scored, and
+	// running it again changes nothing until the config does.
+	OutcomeConfigError = "config_error"
 )
     Case outcomes of a replay besides the round's (pipeline.Outcome*), which
     evalrun.RunCase records (OutcomeSkipped: `magnum eval run`) and the daemon's
@@ -12263,6 +12281,12 @@ const (
 const FlaggedFile = "flagged.json"
     FlaggedFile holds the flagged cases (Flagged by case name) under the runs'
     root.
+
+const LocalNumberBase = 900000
+    LocalNumberBase is where the synthetic PR numbers of the factory's local
+    rounds start (evalrun.LocalNumber: LocalNumberBase + task id × 10 + round),
+    far above any PR number of the repositories magnum reviews. A local case's
+    PR number is one of them.
 
 const RunIDFormat = "20060102-150405"
     RunIDFormat is a run id's time part: sortable, to the second.
@@ -12319,6 +12343,10 @@ func SaveRun(dir string, r Run) error
     SaveRun writes dir/run.json atomically (a temporary file in dir, then a
     rename), mode 0600; dir is created with mode 0700.
 
+func ValidName(name string) bool
+    ValidName reports whether name may name a case (and a defect):
+    [a-z0-9][a-z0-9-]{0,47}.
+
 func WriteCorpus(path string, c Corpus) error
     WriteCorpus writes c to path as TOML that LoadCorpus reads back as c,
     atomically (a temporary file, then a rename) with mode 0600, creating
@@ -12371,11 +12399,13 @@ func JudgeBaselines(runs []Run, inputs string, c Case, reports string) []Baselin
     full replays out of the comparison.
 
 type Case struct {
-	Name    string   `toml:"name"`           // unique, [a-z0-9][a-z0-9-]{0,47}
-	PR      string   `toml:"pr"`             // owner/repo#N
-	Head    string   `toml:"head"`           // the reviewed head, 40 lower-case hex
-	Base    string   `toml:"base,omitempty"` // base branch name, optional
-	Why     string   `toml:"why,omitempty"`  // why the case is in the corpus, optional
+	Name string `toml:"name"`           // unique, [a-z0-9][a-z0-9-]{0,47}
+	Kind string `toml:"kind,omitempty"` // KindPosted ("", every case before kinds) or KindLocal
+	PR   string `toml:"pr"`             // owner/repo#N
+	Head string `toml:"head"`           // the reviewed head, 40 lower-case hex
+	Base string `toml:"base,omitempty"` // base branch name, optional; never on a local case
+	Why  string `toml:"why,omitempty"`  // why the case is in the corpus, optional
+
 	Defects []Defect `toml:"defect"`
 
 	// Owner, Repo and Number are parsed from PR.
@@ -12383,8 +12413,19 @@ type Case struct {
 	Repo   string `toml:"-"`
 	Number int    `toml:"-"`
 }
-    Case is one pull request pinned to the head that is reviewed, with the
-    defects a review must find.
+    Case is one pull request pinned to the head that is reviewed,
+    with the defects a review must find. A local case (Kind KindLocal) is
+    one round of the factory's local review instead, before any PR existed:
+    its PR is the round's synthetic number (LocalNumberBase + task × 10 + round,
+    as the round ran under), its head the one the round reviewed, and the rest
+    of what the round read (its base commit, branch, title, plan, ticket, the
+    operator's answers and roles) is frozen in a directory of its own beside the
+    learned corpus when it is added (`magnum eval add`, evalrun.LocalCaseDir),
+    never read from the factory's task directory again.
+
+func (cs Case) Local() bool
+    Local reports whether cs is a round of the factory's local review
+    (KindLocal).
 
 func (cs *Case) Validate() error
     Validate reports every rule cs breaks, as LoadCorpus does for a corpus that
@@ -12392,6 +12433,7 @@ func (cs *Case) Validate() error
 
 type CaseRun struct {
 	Case       string    `json:"case"`
+	Kind       string    `json:"kind,omitempty"` // the case's kind (Case.Kind): "" posted, KindLocal
 	PR         string    `json:"pr"`
 	Head       string    `json:"head"`
 	Outcome    string    `json:"outcome"` // dry_run, error, needs_attention, usage_limit, skipped, ...
@@ -12413,6 +12455,10 @@ type CaseRun struct {
 	// the newest full replay of it at the same head (FullReplayFor; `magnum eval run --judge-only`).
 	JudgeOnly  bool   `json:"judge_only,omitempty"`
 	ReportsRun string `json:"reports_run,omitempty"`
+	// Findings are what a local case was scored on: its round's findings as the factory acts on
+	// them (evalrun.LocalResult's, a question marked), then the review's body; Rescore scores them
+	// again. A posted case's are re-read from ResultFile, so they are not kept.
+	Findings []Finding `json:"findings,omitempty"`
 }
     CaseRun is one case of a replay: what became of the review round and,
     when it left a result, the score.
@@ -12455,6 +12501,11 @@ type Defect struct {
 	Match    []string `toml:"match,omitempty"`  // case-insensitive regexps on the finding body
 	Body     bool     `toml:"body,omitempty"`   // a mention in the review body also counts; needs Match
 	Expect   string   `toml:"expect,omitempty"` // ExpectFound ("" too) or ExpectAbsent
+	// Question asks that the finding be a question for the operator (a local round's provenance
+	// marks it, Finding.Question) at Severity or stronger: a weaker question goes to the task's
+	// leftovers, never to the operator, and a finding that is no question has the writer decide.
+	// Only a local case's defect to find may ask it.
+	Question bool `toml:"question,omitempty"`
 
 	// Has unexported fields.
 }
@@ -12472,6 +12523,7 @@ type DefectResult struct {
 	By         []int  `json:"by,omitempty"`       // indexes into Result.Findings that matched
 	Severity   string `json:"severity,omitempty"` // the strongest among matching inline findings, "" if none
 	SeverityOK bool   `json:"severity_ok"`        // found, and at Want or stronger (or no Want)
+	Question   bool   `json:"question,omitempty"` // the defect wants a question for the operator (Defect.Question)
 }
     DefectResult is the outcome for one defect of a case.
 
@@ -12483,6 +12535,9 @@ type Finding struct {
 	Severity       string `json:"severity,omitempty"`       // P0..P3 or ""
 	Simplification bool   `json:"simplification,omitempty"` // an optional suggestion, never a defect
 	InBody         bool   `json:"in_body,omitempty"`        // the review body rather than an inline comment
+	// Question: the judge marked it a question for the operator (a local round's provenance,
+	// evalrun.LocalFinding.Question); ParseResult never sets it, since a posted round asks none.
+	Question bool `json:"question,omitempty"`
 }
     Finding is one thing the review reported: an inline comment, or the review
     body as a whole.
@@ -12590,7 +12645,10 @@ func Rescore(r Run, c *Corpus, read func(path string) ([]byte, error)) Run
     keeps its score (the defects name the new head's lines), and so does a
     result that cannot be read or parsed; either sets Error to say so when the
     case has a score or no other error. A rescore that succeeds clears an Error
-    an earlier one set.
+    an earlier one set. A local case (CaseRun.Kind KindLocal) that was scored
+    is scored again on the findings the run kept (CaseRun.Findings), its result
+    file unread; one the corpus now has as another kind of case keeps its score
+    and says so.
 
 func RunsBefore(runs []Run, t time.Time) []Run
     RunsBefore is runs as they stood at t: each run with only the cases it
@@ -12642,7 +12700,9 @@ func ScoreCase(c Case, r Result) Score
     (Score.AbsentHits) when the defect has no severity or the finding is at it
     or stronger (or has none to compare); a weaker one is the finding ranked as
     it should be. Neither is noise, and absent defects count in neither Found
-    nor Total.
+    nor Total. A question defect (question = true) is found only by a question
+    for the operator at its severity or stronger (asks); a finding on it that is
+    not one is neither found nor noise.
 
 func (s Score) SeverityOK() int
     SeverityOK counts the found defects that were reported at the wanted
@@ -12719,6 +12779,32 @@ var ErrNoFullReplay = errors.New("no full replay to take the reviewers' reports 
 
 FUNCTIONS
 
+func FreezeLocal(ctx context.Context, d Deps, taskID int64, round, cycle int) (LocalInputs, LocalResult, error)
+    FreezeLocal reads what round `round` of task taskID's local review read, for
+    its eval case (`magnum eval add --local-task`), from the round's own records
+    wherever they are kept, and from nothing that changed since it began;
+    cycle picks the review cycle when the task's loops ran that round in several
+    (0 = the only one). It reads, read only:
+
+      - the factory's registry (factoryread.LocalReview): the task's repository
+        and branch, the cycle's head and start, and the round's roles from its
+        begin event;
+      - the round's result in the task's directory (LocalResultFile),
+        which must be this round's and names the round's scratch directory,
+        inside the task's local review (LocalRoot);
+      - in that scratch directory, the description.md the judge read (the title
+        and the plan), its ticket.md (the ticket; "" when the round had none)
+        and the report directory's prepass.json, whose base is the commit the
+        round diffed from and whose head must be the cycle's;
+      - the operator's answers: those under their heading in the round's ticket
+        file when it has them, else the task's answers.md ("" when there is
+        none) when no question was answered and the file was not written after
+        the round began, a round that could not read them.
+
+    The base branch is the [[factory.repo]]'s (default master). What cannot be
+    frozen whole is an error that says what is missing; it returns the round's
+    result too, whose findings `eval add` prints.
+
 func Inputs(cfg *config.Config) string
     Inputs is a hash (12 hex) of what a replay's review reads besides the PR
     and the notes (eval.Run.Inputs): every role's config with the model it
@@ -12736,6 +12822,15 @@ func Inputs(cfg *config.Config) string
     has its inputs (a landed candidate's replays are the next baseline).
     magnum's own code is not part of it. "" without a config.
 
+func LocalCaseDir(l paths.Layout, name string) string
+    LocalCaseDir is where local case name keeps its frozen inputs:
+    paths.Layout.LearnLocalCases()/<name>, beside the learned corpus, outside
+    any checkout (a case name is a file name: eval's idPattern).
+
+func LocalCaseName(taskID int64, round int) string
+    LocalCaseName is the name `magnum eval add` gives the case of round `round`
+    of task taskID unless told another: task-<id>-round-<n>.
+
 func LocalIdentity(cfg *config.Config, w *config.Watch) (string, error)
     LocalIdentity is the name of the identity a local round runs as: the watch's
     when it is a gh identity, else the first gh identity configured. An App's
@@ -12747,6 +12842,11 @@ func LocalNumber(taskID int64, round int) int
     LocalNumber is the synthetic PR number of round n of task taskID's
     local review: 900000 + task id × 10 + round. A round of the loop is 1 to
     config.MaxFactoryCycles, so no two tasks' rounds share one.
+
+func LocalResultFile(n int) string
+    LocalResultFile is the file in a task's directory where the factory keeps
+    the result of review cycle n's round (an evalrun.LocalResult as JSON),
+    as the factory names it (internal/factory's reviewRoundFile).
 
 func LocalRoot(l paths.Layout, taskID int64) string
     LocalRoot is where task taskID's local rounds keep their scratch
@@ -12784,13 +12884,21 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
     or whose candidate is no candidate. One replay of a case runs at a time,
     whoever starts it (`magnum eval run`, eval-at.sh through it, the daemon's
     gate): it holds the case's lock (lockCase) from its first check to the end
-    of its cleanup, a second replay of the case waiting for it, and Started is
-    when it took the lock.
+    of its cleanup, a second replay of the case waiting for it, and Started
+    is when it took the lock. A local case (eval.KindLocal) replays its round
+    from its frozen inputs (replayLocal) after the same checks, the budget's
+    included.
 
 func RunsRoot(l paths.Layout) string
     RunsRoot is where a layout's eval runs live: <state>/eval/<run id>/,
     with the flagged cases (eval.FlaggedFile) and the cases' worktrees (wt/)
     (paths.Layout.Eval).
+
+func SaveLocalInputs(dir string, in LocalInputs) error
+    SaveLocalInputs writes in to the new directory dir (0700, its files 0600):
+    inputs.json and the three texts, all in a directory beside dir that is
+    renamed into place at the end, so a case is either whole or not there.
+    A dir that exists is refused: a frozen case is never overwritten.
 
 func WithCandidate(cfg *config.Config, dir string) (*config.Config, error)
     WithCandidate is the config a replay of candidate dir reviews with
@@ -12855,6 +12963,8 @@ type LocalCase struct {
 	TaskID                                                               int64
 	Repo, Base                                                           string
 	Env                                                                  map[string]string
+	ScratchRoot                                                          string
+	NoNotes                                                              bool
 }
     LocalCase is one round of the factory's local review: magnum's full
     review of a change in the task's copy, as a blind dry run, before
@@ -12862,16 +12972,20 @@ type LocalCase struct {
     section 6.5). Checkout is the copy, BaseSHA and HeadSHA the change's ends,
     Branch its branch, Title (with the Jira key), Body and TicketMD what the
     judge reads from files instead of GitHub; Body is the factory's own plan,
-    not a person's description, and AnswersMD the operator's answers to the
-    factory's questions (the task's answers.md, "" when it has none), the only
-    statement of intent a person made: they follow the ticket in the ticket file
-    under one fixed heading. Watch is the repository's [[watch]], whose review
-    roles round 1 runs, Roles the roles of this round and Round its number,
-    from 1. TaskID is the task whose change it is and Repo its repository
-    (owner/name): the round's synthetic PR number (LocalNumber) and its scratch
-    directory (LocalRoot) come from them. Base is the base branch ("" = master),
-    Env the copy's environment, the one the factory's agents get in it
-    (engine.LocalRound.Env). The factory's LocalReviewer takes it.
+    not a person's description, and AnswersMD the operator's answers to
+    the factory's questions (the task's answers.md, "" when it has none),
+    the only statement of intent a person made: they follow the ticket in the
+    ticket file under one fixed heading. Watch is the repository's [[watch]],
+    whose review roles round 1 runs, Roles the roles of this round and Round
+    its number, from 1. TaskID is the task whose change it is and Repo its
+    repository (owner/name): the round's synthetic PR number (LocalNumber) and
+    its scratch directory (LocalRoot) come from them. Base is the base branch
+    ("" = master), Env the copy's environment, the one the factory's agents
+    get in it (engine.LocalRound.Env). The factory's LocalReviewer takes it.
+    A replay of the round as an eval case (RunCase of a local case) sets
+    ScratchRoot, where the round's scratch directory goes instead of the task's
+    directory (LocalRoot), and NoNotes, which withholds the repository notes
+    (Options.NoNotes); the factory sets neither.
 
 type LocalFinding struct {
 	Severity, Title, Path    string
@@ -12883,6 +12997,48 @@ type LocalFinding struct {
     a simplification), Title, Path and Line (0 for one in the review's body),
     its Body, and whether it is a simplification or a question for the operator
     (the judge's provenance marks it, the skill's Local round).
+
+type LocalInputs struct {
+	Task    int64     `json:"task"`
+	Round   int       `json:"round"`
+	Cycle   int       `json:"cycle"`
+	Repo    string    `json:"repo"`
+	BaseSHA string    `json:"base_sha"`
+	HeadSHA string    `json:"head_sha"`
+	Branch  string    `json:"branch"`
+	Base    string    `json:"base"`
+	Title   string    `json:"title"`
+	Roles   []string  `json:"roles"`
+	Frozen  time.Time `json:"frozen"`
+
+	Body      string `json:"-"`
+	TicketMD  string `json:"-"`
+	AnswersMD string `json:"-"`
+}
+    LocalInputs are what one round of the factory's local review read, frozen
+    when its eval case is added (`magnum eval add --local-task`, FreezeLocal)
+    in the case's own directory (LocalCaseDir), so that its replay never reads
+    the factory's task directory, which can be cleaned: the task and the loop's
+    round (Cycle the review cycle it ran in), the repository (owner/name),
+    the change's base and head commits, its branch and base branch,
+    the title (with the Jira key), the plan as the judge's description (Body),
+    the ticket (TicketMD) and the operator's answers (AnswersMD) its ticket file
+    joins (LocalTicket), and the round's roles; Frozen is when it was added.
+    The texts are files of their own beside inputs.json (plan.md, ticket.md,
+    answers.md).
+
+func LoadLocalInputs(dir string) (LocalInputs, error)
+    LoadLocalInputs reads the frozen inputs in dir (SaveLocalInputs). A file
+    missing, or inputs that cannot be replayed, are an error that says how to
+    freeze the round again.
+
+func (in LocalInputs) Number() int
+    Number is the synthetic PR number the round ran under (LocalNumber),
+    which its replay runs under again.
+
+func (in LocalInputs) PR() string
+    PR is the round's synthetic PR, owner/repo#Number: the local case's pr in
+    the corpus (eval.Case.PR).
 
 type LocalResult struct {
 	Outcome, ReportDir, Verdict string
@@ -12926,20 +13082,20 @@ func ParseLocalResult(data []byte) LocalResult
 func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error)
     RunLocal runs local round c and reads its judge's result (ParseLocalResult).
     Each round is its own: a fresh scratch directory under the task's
-    (LocalRoot/<round>-<tag>) with its registry, reports and a copy of the
-    repository notes, a new agent tag, and the synthetic PR number LocalNumber,
-    so two rounds never share an agent, a herdr workspace label or an eval case
-    lock (it holds the case lock "local-<number>" for the round). It writes
-    the title and body (description.md) and the ticket with the operator's
-    answers after it (ticket.md, when c has either: LocalTicket) there,
-    and runs engine.RunLocal in the task's copy at c.HeadSHA, always with
-    c.BaseSHA (post-review's --local-base), as a gh identity (the watch's,
-    else the first configured: an App's token would be minted from GitHub),
-    with the branch as the head ref and the title with the Jira key. The round's
-    config is d.Config (the factory's review candidate, config.WithCandidate).
-    A case it cannot run is an error and nothing starts; a round that ran is a
-    result, whatever its outcome, and only the end of ctx (a drain) is an error
-    after it started.
+    (LocalRoot/<round>-<tag>; c.ScratchRoot/<round>-<tag> when set) with its
+    registry, reports and a copy of the repository notes (none with c.NoNotes),
+    a new agent tag, and the synthetic PR number LocalNumber, so two rounds
+    never share an agent, a herdr workspace label or an eval case lock (it holds
+    the case lock "local-<number>" for the round). It writes the title and
+    body (description.md) and the ticket with the operator's answers after it
+    (ticket.md, when c has either: LocalTicket) there, and runs engine.RunLocal
+    in the task's copy at c.HeadSHA, always with c.BaseSHA (post-review's
+    --local-base), as a gh identity (the watch's, else the first configured:
+    an App's token would be minted from GitHub), with the branch as the head
+    ref and the title with the Jira key. The round's config is d.Config (the
+    factory's review candidate, config.WithCandidate). A case it cannot run
+    is an error and nothing starts; a round that ran is a result, whatever its
+    outcome, and only the end of ctx (a drain) is an error after it started.
 
 type Options struct {
 	// Candidate replays a candidate directory's prompts and skill
@@ -17045,14 +17201,16 @@ package factoryread // import "github.com/zhuravel/magnum/internal/factoryread"
 
 Package factoryread is the review side's read of what the factory keeps:
 the local review round of a pull request the factory published, from its
-registry (factory.db), and the task's plan, ticket and answers, from the
-task's directory, for the review retro (DECISIONS "The review retro tags
-factory-origin misses and their stage"). It only reads: the registry is opened
-read only (mode=ro, never created, so nothing writes its file or its WAL),
-with a busy timeout, and closed after each read; a task's files are read inside
-an os.Root of its directory. It knows the factory's schema only as far as these
-reads need (pr_links, review_findings, review_cycles) and never migrates it:
-internal/factory/registry owns it.
+registry (factory.db), and the task's plan, ticket and answers, from the task's
+directory, for the review retro (DECISIONS "The review retro tags factory-origin
+misses and their stage"); and a task's local review rounds, their heads,
+roles and the times of its answers, for the replay of a round as an eval case
+(LocalReview, `magnum eval add --local-task`). It only reads: the registry is
+opened read only (mode=ro, never created, so nothing writes its file or its
+WAL), with a busy timeout, and closed after each read; a task's files are read
+inside an os.Root of its directory. It knows the factory's schema only as far
+as these reads need (pr_links, review_findings, review_cycles, tasks, events,
+questions) and never migrates it: internal/factory/registry owns it.
 
 CONSTANTS
 
@@ -17073,8 +17231,50 @@ var ErrNoRegistry = errors.New("the factory's registry does not exist")
     ErrNoRegistry is Published's error when the factory's registry does not
     exist: no factory ever ran on this machine.
 
+var ErrNoTask = errors.New("the factory's registry has no such task")
+    ErrNoTask is LocalReview's error when the factory's registry holds no task
+    of that id.
+
 
 TYPES
+
+type LocalRound struct {
+	Cycle   int
+	Round   int
+	Head    string
+	Started time.Time
+	Roles   []string
+}
+    LocalRound is one cycle of a task's local review (review_cycles):
+    its number, the head it reviewed (head_before) and when it began,
+    with the loop's round and the roles the cycle's newest begin event names
+    (the factory's "round 1 (cycle 1) at <short head>: <role>, <role>"; a round
+    that ran again in its cycle names the roles of its last run). Round is 0 and
+    Roles nil when no begin event of the cycle reads so for its head.
+
+type LocalTask struct {
+	ID                           int64
+	Repo, Branch, Title, JiraKey string
+	Rounds                       []LocalRound
+	Answered                     []time.Time
+}
+    LocalTask is a task of the factory as the replay of a round of its
+    local review needs it (`magnum eval add --local-task`): its repository
+    (owner/name), branch, title and Jira key, each cycle of its local review the
+    registry records (Rounds, by cycle), and when each of its answered questions
+    was answered (Answered, oldest first).
+
+func LocalReview(ctx context.Context, path string, taskID int64) (LocalTask, error)
+    LocalReview reads task taskID of the registry at path, read only and in
+    one transaction (one snapshot of what the factory writes): the task, its
+    review cycles with their round and roles (LocalRound), and its answer times.
+    A registry that does not exist is ErrNoRegistry, a task it does not hold
+    ErrNoTask; one that cannot be read is another error.
+
+func (t LocalTask) AnsweredAfter(at time.Time) int
+    AnsweredAfter counts t's questions answered after at: answers the operator
+    gave once a round that began at at was under way, which that round could not
+    read.
 
 type Task struct {
 	ID           int64
@@ -20917,6 +21117,11 @@ const (
 	SkipNotInCorpus = "not in the corpus"
 	SkipFlagged     = "flagged: never replayed"
 	SkipNotWatched  = "not watched"
+	// SkipLocal is a local case (a round of the factory's local review,
+	// eval.KindLocal), which `magnum eval run` replays and no gate does:
+	// a local round runs every role, and a gate of a skill change replays
+	// its cases judge-only.
+	SkipLocal = "a local case: eval run replays it, no gate does"
 	// SkipFoundAtBaseline and SkipNotReportedAtBaseline are a target the
 	// baseline covers already: its input retires (store.LearnTargetBaseline).
 	SkipFoundAtBaseline       = store.LearnDismissedFound
@@ -21381,7 +21586,7 @@ func SelectCases(corpus *eval.Corpus, targets []string, watched func(pr string) 
     a target), then the newest other cases (the corpus's last first: the learned
     ones come after the operator's, oldest first) whose PR is watched and not
     flagged, until limit targets and others can run. A flagged PR is never
-    replayed, watched or not.
+    replayed, watched or not, and a local case (SkipLocal) never by a gate.
 
 type GateRow struct {
 	Case      string      `json:"case"`
@@ -23050,6 +23255,12 @@ func (l Layout) LearnEvalWorktrees() string
     so a `magnum eval run` of the same case (Eval()/wt/<case>) never removes the
     gate's.
 
+func (l Layout) LearnLocalCases() string
+    LearnLocalCases is where the eval corpus's local cases keep their frozen
+    inputs, one directory per case, LearnLocalCases()/<case name> (`magnum
+    eval add --local-task`, evalrun.LocalCaseDir): beside the learned corpus,
+    outside any checkout, since they hold a task's ticket and answers.
+
 func (l Layout) LearnSkill() string
     LearnSkill holds the skill editor's run directories, LearnSkill()/<run>/:
     its inputs, the pins and a copy of its answer.
@@ -23674,9 +23885,11 @@ type Local struct {
 	DescriptionFile, TicketFile string
 }
     Local is what a local round (RoundInput.Local) hands its roles as files
-    in place of GitHub's PR: DescriptionFile, the change's title and body
-    as its PR will carry them (description.md), and TicketFile, the task's
-    ticket (ticket.md: its Jira issue, or the operator's request; "" = none).
+    in place of GitHub's PR: DescriptionFile, the change's title and body as
+    its PR will carry them (description.md), and TicketFile, the task's ticket
+    (ticket.md: its Jira issue, or the operator's request) followed by the
+    operator's answers to the factory's questions under "## The operator's
+    answers to the factory's questions" (evalrun.LocalTicket; "" = neither).
     Both are absolute paths, written before the round; their text is data and
     never reaches a prompt.
 
