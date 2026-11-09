@@ -31,7 +31,11 @@ import (
 // exists (docs/superpowers/specs/2026-11-03-factory-design.md, section 6.5).
 // Checkout is the copy, BaseSHA and HeadSHA the change's ends, Branch its
 // branch, Title (with the Jira key), Body and TicketMD what the judge reads
-// from files instead of GitHub; Watch is the repository's [[watch]], whose
+// from files instead of GitHub; Body is the factory's own plan, not a
+// person's description, and AnswersMD the operator's answers to the
+// factory's questions (the task's answers.md, "" when it has none), the only
+// statement of intent a person made: they follow the ticket in the ticket
+// file under one fixed heading. Watch is the repository's [[watch]], whose
 // review roles round 1 runs, Roles the roles of this round and Round its
 // number, from 1. TaskID is the task whose change it is and Repo its
 // repository (owner/name): the round's synthetic PR number (LocalNumber) and
@@ -39,13 +43,13 @@ import (
 // ("" = master), Env the copy's environment, the one the factory's agents
 // get in it (engine.LocalRound.Env). The factory's LocalReviewer takes it.
 type LocalCase struct {
-	Checkout, BaseSHA, HeadSHA, Branch, Title, Body, TicketMD string
-	Watch                                                     config.Watch
-	Roles                                                     []string
-	Round                                                     int
-	TaskID                                                    int64
-	Repo, Base                                                string
-	Env                                                       map[string]string
+	Checkout, BaseSHA, HeadSHA, Branch, Title, Body, TicketMD, AnswersMD string
+	Watch                                                                config.Watch
+	Roles                                                                []string
+	Round                                                                int
+	TaskID                                                               int64
+	Repo, Base                                                           string
+	Env                                                                  map[string]string
 }
 
 // ConfigError is a local round that cannot run for a configuration problem
@@ -111,11 +115,37 @@ func LocalRoot(l paths.Layout, taskID int64) string {
 
 // LocalDescriptionFile and LocalTicketFile are the files a local round
 // writes in its scratch directory for the judge: the change's title and
-// body, and its ticket.
+// body, and its ticket with the operator's answers after it.
 const (
 	LocalDescriptionFile = "description.md"
 	LocalTicketFile      = pipeline.TicketFile
 )
+
+// localAnswersHeading is the one heading over the operator's answers in the
+// ticket file. The judge's skill and the factory's docs name it, so it is
+// fixed: the engine reads the ticket file as data and needs no field for
+// the answers.
+const localAnswersHeading = "## The operator's answers to the factory's questions"
+
+// localTicket is the text of a local round's ticket file: the ticket, then,
+// when the operator answered anything, localAnswersHeading and the answers;
+// the answers alone under their heading when the change has no ticket, the
+// ticket and a newline when it has no answers, "" when it has neither.
+func localTicket(ticketMD, answersMD string) string {
+	ticket, answers := strings.TrimRight(ticketMD, "\n"), strings.TrimSpace(answersMD)
+	if strings.TrimSpace(ticket) == "" {
+		ticket = ""
+	}
+	switch {
+	case answers == "" && ticket == "":
+		return ""
+	case answers == "":
+		return ticket + "\n"
+	case ticket == "":
+		return localAnswersHeading + "\n\n" + answers + "\n"
+	}
+	return ticket + "\n\n" + localAnswersHeading + "\n\n" + answers + "\n"
+}
 
 // localRoundFunc runs a local round's engine: an app of cfg on layout (the
 // round's scratch layout) whose agents carry tag, its engine's RunLocal of
@@ -132,7 +162,7 @@ var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 // LocalNumber, so two rounds never share an agent, a herdr workspace label
 // or an eval case lock (it holds the case lock "local-<number>" for the
 // round). It writes the title and body (description.md) and the ticket
-// (ticket.md, when c has one) there, and runs engine.RunLocal in the task's
+// (ticket.md, when c has a ticket or answers: localTicket) there, and runs engine.RunLocal in the task's
 // copy at c.HeadSHA, always with c.BaseSHA (post-review's --local-base), as
 // a gh identity (the watch's, else the first configured: an App's token
 // would be minted from GitHub), with the branch as the head ref and the
@@ -186,9 +216,9 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error) {
 		return LocalResult{}, fmt.Errorf("evalrun: local round %d: %w", c.Round, err)
 	}
 	ticket := ""
-	if strings.TrimSpace(c.TicketMD) != "" {
+	if text := localTicket(c.TicketMD, c.AnswersMD); text != "" {
 		ticket = filepath.Join(scratch, LocalTicketFile)
-		if err := fsx.WriteFileAtomic(ticket, []byte(strings.TrimRight(c.TicketMD, "\n")+"\n"), 0o600); err != nil {
+		if err := fsx.WriteFileAtomic(ticket, []byte(text), 0o600); err != nil {
 			return LocalResult{}, fmt.Errorf("evalrun: local round %d: %w", c.Round, err)
 		}
 	}

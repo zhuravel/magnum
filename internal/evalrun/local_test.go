@@ -171,6 +171,69 @@ func TestRunLocalWritesTheTitleBodyAndTicketAsFiles(t *testing.T) {
 	}
 }
 
+// The operator's answers to the factory's questions reach the judge in the
+// ticket file, after the ticket text, under one fixed heading: the engine
+// reads that file as data and needs no field of its own for them. The
+// answers are the only statement of intent a person made, so a judge that
+// weighs the factory's plan against them reads them in the same place as
+// the ticket.
+func TestRunLocalAppendsTheOperatorsAnswersToTheTicketFileUnderOneHeading(t *testing.T) {
+	d, runs := localFixture(t, cleanResult)
+	c := localCase(t, 1)
+	c.AnswersMD = "# Your answers\n\n## Should a refund take back the points it gave?\n\nAsked by fx-judge (revision 1, question 1). The answer is the recommended option.\n\nkeep them\n"
+	if _, err := RunLocal(t.Context(), d, c); err != nil {
+		t.Fatal(err)
+	}
+	ticket, err := os.ReadFile((*runs)[0].round.TicketFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := c.TicketMD + "\n\n## The operator's answers to the factory's questions\n\n" + strings.TrimSpace(c.AnswersMD) + "\n"
+	if string(ticket) != want {
+		t.Fatalf("ticket.md = %q, want the ticket, the heading and the answers, in that order: %q", ticket, want)
+	}
+	if strings.Count(string(ticket), "## The operator's answers to the factory's questions") != 1 {
+		t.Errorf("ticket.md holds the heading %d times, want once", strings.Count(string(ticket), "## The operator's answers to the factory's questions"))
+	}
+}
+
+// A task the operator answered nothing has no answers.md: its ticket file is
+// the ticket's text and a newline, as it was before the answers travelled in
+// it, with no heading over nothing. Answers of only blank lines are none.
+func TestRunLocalWithoutAnswersWritesTheTicketFileAsBefore(t *testing.T) {
+	d, runs := localFixture(t, cleanResult)
+	for i, answers := range []string{"", " \n\n"} {
+		c := localCase(t, i+1)
+		c.AnswersMD = answers
+		if _, err := RunLocal(t.Context(), d, c); err != nil {
+			t.Fatal(err)
+		}
+		ticket, err := os.ReadFile((*runs)[i].round.TicketFile)
+		if err != nil || string(ticket) != c.TicketMD+"\n" {
+			t.Errorf("answers %q: ticket.md = %q, %v; want %q", answers, ticket, err, c.TicketMD+"\n")
+		}
+	}
+}
+
+// A task with answers and no ticket (a request typed to the factory, no
+// Jira issue) still hands the judge the answers: the ticket file then holds
+// the heading and the answers alone.
+func TestRunLocalWithAnswersAndNoTicketWritesTheHeadingAndTheAnswers(t *testing.T) {
+	d, runs := localFixture(t, cleanResult)
+	c := localCase(t, 1)
+	c.TicketMD = "  \n"
+	c.AnswersMD = "# Your answers\n\n## Count refunds?\n\nno\n\n"
+	if _, err := RunLocal(t.Context(), d, c); err != nil {
+		t.Fatal(err)
+	}
+	lr := (*runs)[0].round
+	ticket, err := os.ReadFile(lr.TicketFile)
+	want := "## The operator's answers to the factory's questions\n\n# Your answers\n\n## Count refunds?\n\nno\n"
+	if lr.TicketFile == "" || err != nil || string(ticket) != want {
+		t.Fatalf("ticket file %q = %q, %v; want %q", lr.TicketFile, ticket, err, want)
+	}
+}
+
 // A round reads its judge's result into the factory's terms: the verdict
 // and the counts (store.ParseReviewResult), each posted finding with its
 // severity, title, path and line (the planned review's comments and the
