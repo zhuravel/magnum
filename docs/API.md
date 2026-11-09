@@ -15805,6 +15805,14 @@ func (r *Registry) ClassifyInput(ctx context.Context, id int64, class string) er
 func (r *Registry) Close() error
     Close closes the database.
 
+func (r *Registry) CloseLoop(ctx context.Context, id int64, exit string) error
+    CloseLoop ends the loop at round id after all: a round that ended with the
+    loop going on (exit "") takes exit, and keeps its heads, its end and its
+    tokens (the round the local review's second opinion was to follow, once that
+    opinion is void). A round with exit already is fine; a running round or one
+    that ended with another exit is ErrConflict, a missing one ErrNotFound,
+    and exit must be one of the exits.
+
 func (r *Registry) CompleteRequest(ctx context.Context, id int64, state, result string) error
     CompleteRequest marks a pending request done or failed with a result
     message. Completing a request twice is ErrConflict.

@@ -302,6 +302,11 @@ func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.Facto
 	var last *registry.Cycle
 	if len(cycles) > 0 {
 		last = &cycles[len(cycles)-1]
+		if ended, err := e.voidMoved(ctx, t, *last); err != nil {
+			return false, err
+		} else if ended {
+			last.Exit = registry.ExitClean // the clean round's loop ended there after all
+		}
 	}
 	if last != nil && !last.Ended.IsZero() && (last.Exit == registry.ExitClean || last.Exit == registry.ExitOscillation) &&
 		last.HeadBefore == t.HeadSHA {
@@ -414,7 +419,7 @@ func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *re
 	if w == nil {
 		return e.stageFailed(ctx, t, needsYou{"no [[watch]] covers " + t.Repo + ": the local review runs its review roles"})
 	}
-	so, second, err := e.secondRound(ctx, t, cy)
+	so, second, err := e.secondRound(ctx, t, w, cy)
 	if err != nil {
 		return err
 	}
@@ -657,7 +662,8 @@ func (e *Engine) codexUsage(ctx context.Context) (usage.Snapshot, error) {
 // after round 1. On a task Codex never works on again, no Codex role runs,
 // and magnum's judge_fallback takes the Codex judge's place; in a second
 // opinion (second), the fallback takes it too, and the Codex reviewers
-// stay. A judge that cannot be replaced so is a needsYou.
+// stay. A Codex-never task's judge that cannot be replaced so is a
+// needsYou.
 func (e *Engine) reviewRoles(t registry.Task, w *config.Watch, round int, second bool) ([]string, error) {
 	var out []string
 	for _, r := range e.cfg.RolesFor(w) {
@@ -670,14 +676,12 @@ func (e *Engine) reviewRoles(t registry.Task, w *config.Watch, round int, second
 			}
 			fb, ok := e.otherJudge(w)
 			switch {
-			case !ok && t.CodexNever:
+			case ok:
+				r = fb
+			case t.CodexNever:
 				return nil, needsYou{"Codex never works on " + TaskKey(t) + " again and the review's judge " + r.Name +
 					" runs on Codex: set [pipeline] judge_fallback (or the watch's) to a judge of another kind"}
-			case !ok:
-				return nil, needsYou{"the second opinion of " + TaskKey(t) + "'s local review runs a judge of another kind in place of " + r.Name +
-					": set [pipeline] judge_fallback (or the watch's) to one"}
-			}
-			r = fb
+			} // a second opinion without its judge keeps the judge: secondRound drops it before
 		}
 		if !slices.Contains(out, r.Name) {
 			out = append(out, r.Name)

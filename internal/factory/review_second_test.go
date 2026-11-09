@@ -11,6 +11,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/pipeline"
 )
 
 // The roles of the rig's watch: round 1's, a later round's, and a later
@@ -306,24 +307,34 @@ func TestARestartBeforeTheSecondOpinionStartsItOnce(t *testing.T) {
 			t.Fatalf("rounds %v; cycles %+v", roundsOf(calls), r.cycles(task.ID))
 		}
 	})
-	t.Run("before the clean cycle ends", func(t *testing.T) {
-		r := newReviewRig(t, rounds(2, result())...)
-		r.e.beforeSecond = func() error { return errors.New("the daemon stops here") }
-		task, _ := r.wideReviewTask("PR-12400")
-		r.run(6, func() bool { return fileIn(r.layout.FactoryTaskDir(task.ID), secondOpinionFile) })
-		if cs := r.cycles(task.ID); len(cs) != 1 || !cs[0].Ended.IsZero() {
-			t.Fatalf("cycles %+v, want round 1's still open", cs)
-		}
-		r.restart()
-		r.run(8, func() bool { return r.reload(task.ID).Stage != "local_review" })
-		calls := r.rv.calls()
-		if len(calls) != 2 || !slices.Equal(calls[1].Roles, secondRoles) || len(r.cycles(task.ID)) != 2 {
-			t.Fatalf("rounds %v; cycles %+v", roundsOf(calls), r.cycles(task.ID))
-		}
-		if decided := r.reviewEvents(task.ID, registry.PhaseInfo, "a second opinion"); len(decided) != 1 {
-			t.Fatalf("events %+v, want the decision said once", decided)
-		}
-	})
+	for _, step := range []string{"event", "end"} {
+		// "event": the decision is written, its event is not, the clean
+		// cycle is open; "end": the event is written too.
+		t.Run("stopped before its "+step, func(t *testing.T) {
+			r := newReviewRig(t, rounds(2, result())...)
+			r.e.beforeSecond = func(at string) error {
+				if at == step {
+					return errors.New("the daemon stops here")
+				}
+				return nil
+			}
+			task, _ := r.wideReviewTask("PR-12400")
+			r.run(6, func() bool { return fileIn(r.layout.FactoryTaskDir(task.ID), secondOpinionFile) })
+			if cs := r.cycles(task.ID); len(cs) != 1 || !cs[0].Ended.IsZero() {
+				t.Fatalf("cycles %+v, want round 1's still open", cs)
+			}
+			r.restart()
+			r.run(8, func() bool { return r.reload(task.ID).Stage != "local_review" })
+			calls := r.rv.calls()
+			if len(calls) != 2 || !slices.Equal(calls[1].Roles, secondRoles) || len(r.cycles(task.ID)) != 2 {
+				t.Fatalf("rounds %v; cycles %+v", roundsOf(calls), r.cycles(task.ID))
+			}
+			if decided := r.reviewEvents(task.ID, registry.PhaseInfo, "a second opinion"); len(decided) != 1 ||
+				!strings.Contains(decided[0].Text, "round 1 (cycle 1) is clean") {
+				t.Fatalf("events %+v, want the decision said once", decided)
+			}
+		})
+	}
 	t.Run("the second opinion cut", func(t *testing.T) {
 		r := newReviewRig(t, rounds(2, result())...)
 		task, _ := r.wideReviewTask("PR-12401")
@@ -350,4 +361,149 @@ func TestARestartBeforeTheSecondOpinionStartsItOnce(t *testing.T) {
 			t.Fatalf("cycles %+v, want the second opinion's one cycle, clean", cs)
 		}
 	})
+}
+
+// moveHead is a commit of yours on the task's branch, which the factory's
+// checks then pass at: the task's head is the new one.
+func (r *reviewRig) moveHead(task registry.Task) string {
+	r.t.Helper()
+	r.clock.Add(time.Minute)
+	head := r.commit(task.JiraKey+" your change", map[string]string{"app/points.rb": "class Points\n  # yours\nend\n"})
+	if err := r.reg.TransitionTask(r.ctx, task.ID, nil, registry.TaskActive, func(u *registry.TaskUpdate) {
+		u.Set("stage", "local_review")
+		u.Set("head_sha", head)
+	}); err != nil {
+		r.t.Fatal(err)
+	}
+	return head
+}
+
+// A pending second opinion holds only at the head its clean round
+// reviewed: when the branch moves before it starts, it is void (once, with
+// an event), the clean round's loop ends there, and a fresh loop runs at
+// the new head from round 1 with round 1's roles and every one of cycles.
+// The void one is not the task's second opinion: the fresh loop's clean
+// round gets it.
+func TestASecondOpinionIsVoidWhenTheHeadMovesBeforeItStarts(t *testing.T) {
+	r := newReviewRig(t, rounds(3, result())...)
+	r.cfg.Factory.LocalReview.Cycles = 1
+	r.cfg.Usage.CodexSoft = 80
+	task, head := r.wideReviewTask("PR-12404")
+	r.run(6, func() bool { return r.firstDecided(task.ID) })
+	r.used = 85 // the second opinion waits at codex_soft
+	r.run(2, nil)
+	if n := len(r.rv.calls()); n != 1 {
+		t.Fatalf("%d rounds before the head moved, want 1", n)
+	}
+	moved := r.moveHead(task)
+	r.run(2, nil)
+	r.used = 40
+	r.run(10, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	got := r.reload(task.ID)
+	calls := r.rv.calls()
+	if got.Stage != "pr_body" || len(calls) != 3 {
+		t.Fatalf("task %s at %s waits %q after %d rounds, want pr_body after 3", got.State, got.Stage, got.WaitsWhat, len(calls))
+	}
+	if !slices.Equal(calls[1].Roles, firstRoles) || calls[1].Round != 1 || calls[1].HeadSHA != moved ||
+		!slices.Equal(calls[2].Roles, secondRoles) || calls[2].Round != 2 || calls[2].HeadSHA != moved {
+		t.Fatalf("rounds %v (%d at %s, %d at %s), want round 1 of a fresh loop at %s, then its second opinion",
+			roundsOf(calls), calls[1].Round, calls[1].HeadSHA, calls[2].Round, calls[2].HeadSHA, moved)
+	}
+	cs := r.cycles(task.ID)
+	if len(cs) != 3 || cs[0].Exit != registry.ExitClean || cs[0].HeadBefore != head || cs[1].Exit != "" || cs[2].Exit != registry.ExitClean {
+		t.Fatalf("cycles %+v, want round 1's loop ended clean at %s, then a fresh loop", cs, head)
+	}
+	void := r.reviewEvents(task.ID, registry.PhaseInfo, "is void")
+	if len(void) != 1 || !strings.Contains(void[0].Text, "the branch moved from "+short(head)+" to "+short(moved)) {
+		t.Fatalf("events %+v, want one that says the second opinion is void and why", void)
+	}
+	if sum := r.summary(task.ID); sum.Rounds != 2 || sum.SecondJudge != "claude-judge" || sum.SecondRound != 2 || sum.Head != moved {
+		t.Fatalf("summary %+v, want the fresh loop's 2 rounds with its second opinion", sum)
+	}
+}
+
+// A clean round that holds a doubt (a finding back twice after its fix,
+// which its counts leave out) keeps it through its second opinion: the
+// final summary still names it, though the second judge did not raise it.
+func TestASecondOpinionKeepsTheCleanRoundsDoubts(t *testing.T) {
+	uncounted := func(c evalrun.LocalCase) evalrun.LocalResult {
+		return evalrun.LocalResult{Outcome: pipeline.OutcomeDryRun, Verdict: "clean", Findings: []evalrun.LocalFinding{refundFinding}}
+	}
+	r := newReviewRig(t, append(rounds(2, result(refundFinding)), uncounted, result())...)
+	task, _ := r.wideReviewTask("PR-12405")
+	for n := 1; n <= 2; n++ {
+		r.run(6, func() bool {
+			return fileIn(r.layout.FactoryTaskDir(task.ID), reviewFile(n)) && len(r.rt.promptsTo("fx-writer")) >= n
+		})
+		r.writerFixes(task, n, fixedCredit(n), nil)
+	}
+	r.run(10, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	calls := r.rv.calls()
+	if got := r.reload(task.ID); got.Stage != "pr_body" || len(calls) != 4 || !slices.Equal(calls[3].Roles, secondRoles) {
+		t.Fatalf("task at %s waits %q after rounds %v, want pr_body after a second opinion", got.Stage, got.WaitsWhat, roundsOf(calls))
+	}
+	sum := r.summary(task.ID)
+	if sum.Exit != registry.ExitClean || sum.SecondRound != 4 || len(sum.Doubts) != 1 || sum.Doubts[0].Title != refundFinding.Title {
+		t.Fatalf("summary %+v, want round 3's doubt kept after the second opinion", sum)
+	}
+}
+
+// A second opinion counts as the task's one only once its cycle ends clean
+// or with findings: one that ended unavailable runs again at the next clean
+// round of a wide change, after your go on, and its event says so.
+func TestASecondOpinionThatEndedUnavailableRunsAgain(t *testing.T) {
+	r := newReviewRig(t, result(nitFinding), outcome(pipeline.OutcomeError), outcome(pipeline.OutcomeTimeout), result(),
+		outcome(pipeline.OutcomeDryRun))
+	task, _ := r.wideReviewTask("PR-12406")
+	r.run(10, func() bool { return !isLive(r.reload(task.ID)) })
+	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou || !strings.HasPrefix(got.WaitsWhat, "review unavailable") || len(r.rv.calls()) != 3 {
+		t.Fatalf("task %s waits %q after %d rounds, want the second opinion unavailable", got.State, got.WaitsWhat, len(r.rv.calls()))
+	}
+	r.letGoOn(task.ID)
+	r.run(10, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	calls := r.rv.calls()
+	if want := [][]string{firstRoles, secondRoles, secondRoles, firstRoles, secondRoles}; !slices.EqualFunc(roundsOf(calls), want, slices.Equal) {
+		t.Fatalf("rounds %v, want %v", roundsOf(calls), want)
+	}
+	if cs := r.cycles(task.ID); len(cs) != 4 || cs[1].Exit != registry.ExitUnavailable || cs[3].Exit != registry.ExitClean {
+		t.Fatalf("cycles %+v", cs)
+	}
+	again := r.reviewEvents(task.ID, registry.PhaseInfo, "a second opinion runs again")
+	if len(again) != 1 || !strings.Contains(again[0].Text, "round 1 (cycle 3) is clean") || !strings.Contains(again[0].Text, "cycle 2's ended unavailable") {
+		t.Fatalf("events %+v, want one that says the second opinion runs again and why", again)
+	}
+}
+
+// A pending second opinion whose judge can no longer run (second_judge
+// "never", or no judge_fallback of another kind) does not start: one event
+// says why, the next round runs as a usual round, and the task never needs
+// you for it.
+func TestAPendingSecondOpinionWithoutItsJudgeRunsAUsualRound(t *testing.T) {
+	for _, tc := range []struct {
+		name, why string
+		set       func(r *reviewRig)
+	}{
+		{"never", "second_judge is never now", func(r *reviewRig) { r.cfg.Factory.LocalReview.SecondJudge = config.FactorySecondJudgeNever }},
+		{"no fallback", "judge_fallback names no judge of another kind", func(r *reviewRig) { r.cfg.Pipeline.JudgeFallback = "" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newReviewRig(t, rounds(2, result())...)
+			task, _ := r.wideReviewTask("PR-12407")
+			r.run(6, func() bool { return r.firstDecided(task.ID) })
+			tc.set(r)
+			r.run(10, func() bool { return !isLive(r.reload(task.ID)) || r.reload(task.ID).Stage != "local_review" })
+			got := r.reload(task.ID)
+			calls := r.rv.calls()
+			if got.Stage != "pr_body" || len(calls) != 2 || !slices.Equal(calls[1].Roles, laterRoles) {
+				t.Fatalf("task %s at %s waits %q after rounds %v, want pr_body after a usual round 2", got.State, got.Stage, got.WaitsWhat, roundsOf(calls))
+			}
+			dropped := r.reviewEvents(task.ID, registry.PhaseInfo, "does not run")
+			if len(dropped) != 1 || !strings.Contains(dropped[0].Text, tc.why) || !strings.Contains(dropped[0].Text, "round 2 runs as a usual round") {
+				t.Fatalf("events %+v, want one saying %q", dropped, tc.why)
+			}
+			if sum := r.summary(task.ID); sum.SecondJudge != "" || sum.Rounds != 2 {
+				t.Fatalf("summary %+v, want no second opinion named", sum)
+			}
+		})
+	}
 }

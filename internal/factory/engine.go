@@ -545,10 +545,11 @@ type Engine struct {
 	// there (a test's seam: the daemon stopping in between). nil in a
 	// daemon.
 	beforeStop func() error
-	// beforeSecond runs between the write of a second opinion
-	// (secondOpinionFile) and the end of the clean round's cycle it follows;
-	// an error stops there (a test's seam). nil in a daemon.
-	beforeSecond func() error
+	// beforeSecond runs after the write of a second opinion
+	// (secondOpinionFile) before its step: "event" (the decision's event)
+	// and "end" (the end of the clean round's cycle it follows); an error
+	// stops there (a test's seam). nil in a daemon.
+	beforeSecond func(step string) error
 
 	// alerts is the delivery of the alerts (alerts.go): the loop's own.
 	// screenLive says whether a focus report is of a screen that still runs

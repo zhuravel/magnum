@@ -102,6 +102,40 @@ func (r *Registry) EndCycle(ctx context.Context, id int64, headAfter, delta, exi
 	})
 }
 
+// CloseLoop ends the loop at round id after all: a round that ended with
+// the loop going on (exit "") takes exit, and keeps its heads, its end and
+// its tokens (the round the local review's second opinion was to follow,
+// once that opinion is void). A round with exit already is fine; a running
+// round or one that ended with another exit is ErrConflict, a missing one
+// ErrNotFound, and exit must be one of the exits.
+func (r *Registry) CloseLoop(ctx context.Context, id int64, exit string) error {
+	if exit == "" || !cycleExits[exit] {
+		return fmt.Errorf("close the loop at review cycle %d: unknown exit %q", id, exit)
+	}
+	return r.tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, "UPDATE review_cycles SET exit = ? WHERE id = ? AND exit = '' AND ended_at IS NOT NULL", exit, id)
+		if err != nil {
+			return fmt.Errorf("close the loop at review cycle %d: %w", id, err)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			return nil
+		}
+		var cur string
+		var ended sql.NullString
+		if err := tx.QueryRowContext(ctx, "SELECT exit, ended_at FROM review_cycles WHERE id = ?", id).Scan(&cur, &ended); err != nil {
+			return notFound(err, "review cycle", id)
+		}
+		if cur == exit {
+			return nil
+		}
+		why := "it ended " + cur
+		if !ended.Valid {
+			why = "it runs"
+		}
+		return fmt.Errorf("close the loop at review cycle %d: %w: %s", id, ErrConflict, why)
+	})
+}
+
 // Cycles returns a task's review rounds in order.
 func (r *Registry) Cycles(ctx context.Context, taskID int64) ([]Cycle, error) {
 	rows, err := r.db.QueryContext(ctx, "SELECT "+cycleColumns+" FROM review_cycles WHERE task_id = ? ORDER BY n", taskID)

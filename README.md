@@ -4777,17 +4777,25 @@ against the base; `"always"` on every change; `"never"`): one more round of the 
 (cycle 1) is clean, and the change touches 3 files: a second opinion runs, round 2 with claude-judge (claude) in
 place of codex-judge (codex), once for PR-12345`), and the card's wait while it runs (`review: round 2 of the local
 review runs (a second opinion: claude-judge, on claude, in place of codex-judge)`). Its clean result ends the stage
-clean, keeping the first round's leftovers at that head beside its own, and the ready card says which round it was
-and its judge; one with a P0 to P2 goes to the writer like any round's, and the next round, with the usual roles,
-follows. It runs outside `cycles`, so a clean last round still gets it, and one that then finds a P2 has no round
-left: the task needs you at the cap. Its Codex reviewers keep the round's wait at `[usage] codex_soft`, as any round
-with a Codex role waits. A watch whose judge is not on Codex, a `judge_fallback` of no other kind, a task Codex never
-works on again (its rounds ran with the fallback already) and a loop at its tenth round skip it with one event that
-says why (`no second opinion after round 1 (cycle 1): ...`); a narrow change and `"never"` skip it without a word.
-The decision is written (`review-second.json` in the task's directory) before the clean round's cycle ends, so a
-restart in between runs the second opinion once. Each round's begin event names its judge and that judge's agent
-kind (`...: claude-judge, claude-review, codex-review; judge claude-judge (claude), a second opinion in place of
-codex-judge (codex)`), which `magnum factory stats` reads.
+clean, keeping the first round's leftovers and doubts at that head beside its own, and the ready card says which
+round it was and its judge; one with a P0 to P2 goes to the writer like any round's, and the next round, with the
+usual roles, follows. It runs outside `cycles`, so a clean last round still gets it, and one that then finds a P2
+has no round left: the task needs you at the cap. Its Codex reviewers keep the round's wait at `[usage]
+codex_soft`, as any round with a Codex role waits. A watch whose judge is not on Codex, a `judge_fallback` of no
+other kind, a task Codex never works on again (its rounds ran with the fallback already) and a loop at its tenth
+round skip it with one event that says why (`no second opinion after round 1 (cycle 1): ...`); a narrow change and
+`"never"` skip it without a word. The second opinion holds only at the head its clean round reviewed: when the
+branch moves before it starts (a commit of yours while it waits), it is void (`the second opinion after round 1
+(cycle 1) is void: the branch moved from ... to ...`), the clean round's loop ends there, and a fresh loop of up to
+`cycles` rounds starts at the new head from round 1. A pending one whose judge can no longer run (`second_judge` is
+`"never"` now, or `judge_fallback` names no judge of another kind any more) does not start either: an event says why,
+and the next round runs as a usual round, never a wait on you. Only a second opinion whose round ended clean or with
+findings is the task's one; one that was void, or whose round ended unavailable (the task needed you, and you let
+it go on), runs again at the next clean round of a wide change, and its event says `runs again`. The decision is
+written (`review-second.json` in the task's directory) before its event and the end of the clean round's cycle, so a
+restart in between runs the second opinion once and says it once. Each round's begin event names its judge and that
+judge's agent kind (`...: claude-judge, claude-review, codex-review; judge claude-judge (claude), a second opinion in
+place of codex-judge (codex)`), which `magnum factory stats` reads.
 
 Before the card, the judge drafts the PR's body (`pr_body`, `factory-pr-body.md`): its prompt names
 `report.md`, `acceptance.json`, `proof.json`, the factory's proof, `review-summary.json` and the repository's PR

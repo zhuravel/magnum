@@ -540,6 +540,51 @@ func TestBeginCycleNumbersPerTaskAndEndCycleOnce(t *testing.T) {
 	}
 }
 
+// A round after which the loop went on (exit "") can end its loop after
+// all, once: its exit becomes the one given, its other columns stay. A
+// running round, one that ended with an exit, an unknown or empty exit and
+// a missing round are refused; the same close twice is fine.
+func TestCloseLoopEndsTheLoopAtARoundThatLetItGoOn(t *testing.T) {
+	t.Parallel()
+	r, clk := openAt(t)
+	ctx := t.Context()
+	task := createTask(t, r, "PR-12301")
+	running, _ := r.BeginCycle(ctx, task.ID, "h0", "s")
+	if err := r.CloseLoop(ctx, running.ID, registry.ExitClean); !errors.Is(err, registry.ErrConflict) {
+		t.Errorf("CloseLoop of a running round = %v, want ErrConflict", err)
+	}
+	clk.Add(time.Minute)
+	if err := r.EndCycle(ctx, running.ID, "h0", "", "", 7); err != nil {
+		t.Fatal(err)
+	}
+	clk.Add(time.Minute)
+	for range 2 {
+		if err := r.CloseLoop(ctx, running.ID, registry.ExitClean); err != nil {
+			t.Fatalf("CloseLoop = %v", err)
+		}
+	}
+	got, err := r.Cycles(ctx, task.ID)
+	if err != nil || len(got) != 1 || got[0].Exit != registry.ExitClean || !got[0].Ended.Equal(t0.Add(time.Minute)) || got[0].Tokens != 7 ||
+		got[0].HeadAfter != "h0" {
+		t.Fatalf("Cycles = %+v, %v; want the round clean, ended when it ended", got, err)
+	}
+	capped, _ := r.BeginCycle(ctx, task.ID, "h1", "s")
+	if err := r.EndCycle(ctx, capped.ID, "h1", "", registry.ExitCap, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CloseLoop(ctx, capped.ID, registry.ExitClean); !errors.Is(err, registry.ErrConflict) {
+		t.Errorf("CloseLoop of a round that ended at the cap = %v, want ErrConflict", err)
+	}
+	for _, exit := range []string{"", "wedged"} {
+		if err := r.CloseLoop(ctx, running.ID, exit); err == nil || errors.Is(err, registry.ErrConflict) {
+			t.Errorf("CloseLoop with exit %q = %v, want it refused", exit, err)
+		}
+	}
+	if err := r.CloseLoop(ctx, 9999, registry.ExitClean); !errors.Is(err, registry.ErrNotFound) {
+		t.Errorf("CloseLoop of a missing round = %v, want ErrNotFound", err)
+	}
+}
+
 func TestSeeFindingReopensAFixedFinding(t *testing.T) {
 	t.Parallel()
 	r := registrytest.Open(t)

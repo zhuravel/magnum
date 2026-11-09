@@ -5,10 +5,12 @@ package factory
 // 4 PRs), and the same judge again mostly repeats itself. So after a clean
 // round whose judge runs on Codex, on a wide change ([factory.local_review]
 // second_judge: "wide", "always" or "never"), one more round runs before the
-// stage ends: the same roles with the watch's judge_fallback in the judge's
-// place (reviewRoles), once per task. Its clean result ends the stage clean;
-// one with findings goes to the writer like any round's, within cycles,
-// which do not count it.
+// stage ends, at the head the clean round reviewed: the same roles with the
+// watch's judge_fallback in the judge's place (reviewRoles), once per task.
+// Its clean result ends the stage clean; one with findings goes to the
+// writer like any round's, within cycles, which do not count it. One that
+// never ran (the head moved first, its judge went) or ended without a
+// result (unavailable, at the operator) is not the task's one.
 
 import (
 	"cmp"
@@ -25,28 +27,53 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry"
 )
 
-// secondOpinion is review-second.json in the task's directory, written
-// once, before the clean round's cycle it follows ends (decideSecond): that
-// cycle's number (the second opinion runs in the next), the head it
-// reviewed, the judge the second opinion runs and its agent kind, the judge
-// it takes the place of and its kind, and what the clean round left that
-// does not block, which the loop's end keeps at that head (withSecond).
+// secondOpinion is review-second.json in the task's directory, the task's
+// newest second opinion, written before the clean round's cycle it follows
+// ends (decideSecond): that cycle's number (the second opinion runs in the
+// next) and its round of the loop, the head it reviewed and why it gets one
+// (because), the cycle of an earlier second opinion that ended without a
+// result and how (again, againExit), the judge the second opinion runs and
+// its agent kind, the judge it takes the place of and its kind, and what the
+// clean round left that does not block and its doubts, which the loop's end
+// keeps at that head (withSecond). Moved is the head the branch moved to
+// before it began (voidMoved), Dropped why it did not start (secondRound);
+// either makes it void.
 type secondOpinion struct {
 	After        int          `json:"after"`
+	Round        int          `json:"round"`
 	Head         string       `json:"head"`
+	Because      string       `json:"because"`
+	Again        int          `json:"again,omitempty"`
+	AgainExit    string       `json:"again_exit,omitempty"`
 	Judge        string       `json:"judge"`
 	Kind         string       `json:"kind"`
 	Replaces     string       `json:"replaces"`
 	ReplacesKind string       `json:"replaces_kind"`
 	Leftovers    []ReviewItem `json:"leftovers,omitempty"`
+	Doubts       []ReviewItem `json:"doubts,omitempty"`
+	Moved        string       `json:"moved,omitempty"`
+	Dropped      string       `json:"dropped,omitempty"`
 }
 
 // cycle is the number of the second opinion's own cycle.
 func (so secondOpinion) cycle() int { return so.After + 1 }
 
+// live reports whether the second opinion is not void: it runs, or ran.
+func (so secondOpinion) live() bool { return so.Moved == "" && so.Dropped == "" }
+
+// decided is the event of the decision for task key.
+func (so secondOpinion) decided(key string) string {
+	runs := "a second opinion runs"
+	if so.Again > 0 {
+		runs = fmt.Sprintf("a second opinion runs again (cycle %d's ended %s)", so.Again, so.AgainExit)
+	}
+	return fmt.Sprintf("round %d (cycle %d) is clean, and %s: %s, round %d with %s (%s) in place of %s (%s), once for %s", so.Round, so.After,
+		so.Because, runs, so.Round+1, so.Judge, so.Kind, so.Replaces, so.ReplacesKind, key)
+}
+
 // readSecondOpinion reads the task's second opinion in dir; ok is false when
-// the task has none. One that does not parse counts as one that ran at no
-// known cycle: the task gets no other.
+// the task has none. One that does not parse is one of no cycle: none runs
+// for it, and the next decision writes another.
 func readSecondOpinion(dir string) (so secondOpinion, ok bool) {
 	b, err := os.ReadFile(filepath.Join(dir, secondOpinionFile))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -60,27 +87,88 @@ func readSecondOpinion(dir string) (so secondOpinion, ok bool) {
 
 // secondRound reports whether the round to start in cycle cy (nil: a new
 // one, numbered after task t's newest) is the task's second opinion, with
-// that opinion.
-func (e *Engine) secondRound(ctx context.Context, t registry.Task, cy *registry.Cycle) (secondOpinion, bool, error) {
-	so, ok := readSecondOpinion(e.d.Layout.FactoryTaskDir(t.ID))
-	switch {
-	case !ok:
+// that opinion. One whose judge can no longer run there (second_judge is
+// "never" now, watch w's judge_fallback is of no other kind any more) is
+// dropped: void, with an event, and the round runs as a usual round.
+func (e *Engine) secondRound(ctx context.Context, t registry.Task, w *config.Watch, cy *registry.Cycle) (secondOpinion, bool, error) {
+	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	so, ok := readSecondOpinion(dir)
+	if !ok || !so.live() {
 		return so, false, nil
-	case cy != nil:
-		return so, cy.N == so.cycle(), nil
 	}
-	cs, err := e.reg.Cycles(ctx, t.ID)
-	if err != nil {
+	if cy != nil && cy.N != so.cycle() {
+		return so, false, nil
+	}
+	if cy == nil {
+		cs, err := e.reg.Cycles(ctx, t.ID)
+		if err != nil || len(cs) == 0 || cs[len(cs)-1].N != so.After {
+			return so, false, err
+		}
+	}
+	var why string
+	if e.cfg.Factory.LocalReview.SecondJudge == config.FactorySecondJudgeNever {
+		why = "second_judge is " + config.FactorySecondJudgeNever + " now"
+	} else if _, ok := e.otherJudge(w); !ok {
+		why = fmt.Sprintf("[pipeline] judge_fallback names no judge of another kind than %s's any more", so.Replaces)
+	}
+	if why == "" {
+		return so, true, nil
+	}
+	so.Dropped = why
+	if err := writeJSON(filepath.Join(dir, secondOpinionFile), so); err != nil {
 		return so, false, err
 	}
-	return so, len(cs) > 0 && cs[len(cs)-1].N == so.After, nil
+	e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("the second opinion after round %d (cycle %d) does not run: %s, so round %d "+
+		"runs as a usual round", so.Round, so.After, why, so.Round+1))
+	return so, false, nil
 }
 
-// secondIn is the index in loop of the second opinion's cycle, -1 when the
-// loop has none.
+// voidMoved voids task t's pending second opinion when the branch moved
+// since the clean round it follows (last, the task's newest cycle, which
+// ended with the loop going on) reviewed it: a second opinion holds at that
+// head only. The void is written first, its event next, and last that
+// round's loop ends clean after all (CloseLoop), so a fresh loop starts at
+// the new head from round 1; a stop between the steps finishes them at the
+// next pass. ended reports that the loop ended at last.
+func (e *Engine) voidMoved(ctx context.Context, t registry.Task, last registry.Cycle) (ended bool, err error) {
+	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	so, ok := readSecondOpinion(dir)
+	if !ok || so.After != last.N || last.Ended.IsZero() || last.Exit != "" {
+		return false, nil
+	}
+	if so.Moved == "" {
+		if t.HeadSHA == "" || t.HeadSHA == so.Head {
+			return false, nil
+		}
+		so.Moved = t.HeadSHA
+		if err := writeJSON(filepath.Join(dir, secondOpinionFile), so); err != nil {
+			return false, err
+		}
+	}
+	e.eventOnce(ctx, t, fmt.Sprintf("the second opinion after round %d (cycle %d) is void: the branch moved from %s to %s before it began, "+
+		"so a fresh loop of the local review starts at round 1", so.Round, so.After, short(so.Head), short(so.Moved)))
+	if err := e.reg.CloseLoop(ctx, last.ID, registry.ExitClean); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// eventOnce writes the review event text for task t unless the task has one
+// that says it already: what a stop between a write and its event left
+// unsaid, said once. A read that fails writes it.
+func (e *Engine) eventOnce(ctx context.Context, t registry.Task, text string) {
+	evs, err := e.reg.TaskEvents(ctx, t.ID, "review", 0)
+	if err == nil && slices.ContainsFunc(evs, func(ev registry.Event) bool { return ev.Text == text }) {
+		return
+	}
+	e.event(ctx, t.ID, "review", registry.PhaseInfo, text)
+}
+
+// secondIn is the index in loop of the cycle of the task's live second
+// opinion, -1 when the loop has none.
 func secondIn(dir string, loop []registry.Cycle) int {
 	so, ok := readSecondOpinion(dir)
-	if !ok {
+	if !ok || !so.live() {
 		return -1
 	}
 	return slices.IndexFunc(loop, func(c registry.Cycle) bool { return c.N == so.cycle() })
@@ -88,7 +176,7 @@ func secondIn(dir string, loop []registry.Cycle) int {
 
 // withSecond is sum, the end of a loop, with the loop's second opinion
 // (secondIn): its judge and its round, and at the head the clean round it
-// followed reviewed, that round's leftovers sum lacks.
+// followed reviewed, that round's leftovers and doubts sum lacks.
 func withSecond(dir string, loop []registry.Cycle, sum ReviewSummary) ReviewSummary {
 	i := secondIn(dir, loop)
 	if i < 0 {
@@ -96,21 +184,26 @@ func withSecond(dir string, loop []registry.Cycle, sum ReviewSummary) ReviewSumm
 	}
 	so, _ := readSecondOpinion(dir)
 	sum.SecondJudge, sum.SecondRound = so.Judge, i+1
-	if so.Head != sum.Head {
-		return sum
-	}
-	for _, l := range so.Leftovers {
-		if !slices.ContainsFunc(sum.Leftovers, func(x ReviewItem) bool { return x.Fingerprint == l.Fingerprint }) {
-			sum.Leftovers = append(sum.Leftovers, l)
-		}
+	if so.Head == sum.Head {
+		sum.Leftovers, sum.Doubts = mergeItems(sum.Leftovers, so.Leftovers), mergeItems(sum.Doubts, so.Doubts)
 	}
 	return sum
+}
+
+// mergeItems is to with each item of from whose fingerprint it lacks.
+func mergeItems(to, from []ReviewItem) []ReviewItem {
+	for _, f := range from {
+		if !slices.ContainsFunc(to, func(x ReviewItem) bool { return x.Fingerprint == f.Fingerprint }) {
+			to = append(to, f)
+		}
+	}
+	return to
 }
 
 // endClean ends the loop clean on cycle cy, the last of loop, with sum,
 // after the task's second opinion when one runs first (decideSecond).
 func (e *Engine) endClean(ctx context.Context, t registry.Task, c Copy, cy registry.Cycle, loop []registry.Cycle, sum ReviewSummary) (bool, error) {
-	if second, err := e.decideSecond(ctx, t, c, cy, len(loop), sum.Leftovers); err != nil || second {
+	if second, err := e.decideSecond(ctx, t, c, cy, len(loop), sum); err != nil || second {
 		return false, err
 	}
 	return e.endLoop(ctx, t, cy, withSecond(e.d.Layout.FactoryTaskDir(t.ID), loop, sum))
@@ -128,29 +221,60 @@ func (e *Engine) atCap(dir string, loop []registry.Cycle, round int) bool {
 	return counted >= max(1, e.cfg.Factory.LocalReview.Cycles) || round >= config.MaxFactoryCycles
 }
 
-// decideSecond decides, at the clean end of round `round` (cycle cy, which
-// left leftovers) of task t's local review in copy c, whether the task's
-// second opinion runs before the stage ends. It runs once per task, on a
-// change the round reviewed that is wide (changeWidth) unless second_judge
-// is "always" ("never": none), when the watch's judge runs on Codex, a
-// judge of another kind takes its place (otherJudge), Codex works on the
-// task (else its rounds ran with that judge already) and the round is not
-// the last a loop numbers; each of these that fails is an event saying so,
-// and a narrow change or "never" none. The opinion is written first, an
-// event says it, and cy ends with the loop going on: the next round is the
-// second opinion (secondRound). A daemon that stopped between the write and
-// the end of cy ends cy now.
-func (e *Engine) decideSecond(ctx context.Context, t registry.Task, c Copy, cy registry.Cycle, round int, leftovers []ReviewItem) (bool, error) {
+// secondSpent reports whether task t's second opinion so is spent at clean
+// cycle cy: it is live, and its cycle is cy (it ends clean now) or ended
+// clean or with findings. A void one is not, nor one whose cycle ended
+// unavailable or at the operator: unfinished is that cycle, with its exit.
+func (e *Engine) secondSpent(ctx context.Context, t registry.Task, so secondOpinion, cy registry.Cycle) (spent bool, unfinished registry.Cycle, err error) {
+	switch {
+	case !so.live():
+		return false, unfinished, nil
+	case cy.N == so.cycle():
+		return true, unfinished, nil
+	}
+	cs, err := e.reg.Cycles(ctx, t.ID)
+	if err != nil {
+		return false, unfinished, err
+	}
+	i := slices.IndexFunc(cs, func(c registry.Cycle) bool { return c.N == so.cycle() })
+	switch {
+	case i < 0:
+		return false, unfinished, nil
+	case cs[i].Exit == registry.ExitUnavailable || cs[i].Exit == registry.ExitOperator:
+		return false, cs[i], nil
+	}
+	return true, unfinished, nil
+}
+
+// decideSecond decides, at the clean end of round `round` (cycle cy; sum its
+// summary) of task t's local review in copy c, whether the task's second
+// opinion runs before the stage ends. It runs while the task has none spent
+// (secondSpent), on a change the round reviewed that is wide (changeWidth)
+// unless second_judge is "always" ("never": none), when the watch's judge
+// runs on Codex, a judge of another kind takes its place (otherJudge), Codex
+// works on the task (else its rounds ran with that judge already) and the
+// round is not the last a loop numbers; each of these that fails is an
+// event saying so, and a narrow change or "never" none. The opinion is
+// written first, its event next, and cy ends with the loop going on: the
+// next round is the second opinion (secondRound). A daemon that stopped
+// after the write ends cy now, and writes the event if it did not.
+func (e *Engine) decideSecond(ctx context.Context, t registry.Task, c Copy, cy registry.Cycle, round int, sum ReviewSummary) (bool, error) {
 	setting := e.cfg.Factory.LocalReview.SecondJudge
 	if setting == config.FactorySecondJudgeNever {
 		return false, nil
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	var unfinished registry.Cycle
 	if so, ok := readSecondOpinion(dir); ok {
-		if so.After != cy.N {
-			return false, nil // once per task
+		if so.live() && so.After == cy.N { // written before a stop
+			e.eventOnce(ctx, t, so.decided(TaskKey(t)))
+			return true, e.endCycle(ctx, cy, cy.HeadBefore, "")
 		}
-		return true, e.endCycle(ctx, cy, cy.HeadBefore, "") // written before a stop
+		spent, u, err := e.secondSpent(ctx, t, so, cy)
+		if err != nil || spent {
+			return false, err
+		}
+		unfinished = u
 	}
 	skip := func(why string) (bool, error) {
 		e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("no second opinion after round %d (cycle %d): %s", round, cy.N, why))
@@ -182,19 +306,28 @@ func (e *Engine) decideSecond(ctx context.Context, t registry.Task, c Copy, cy r
 	case round >= config.MaxFactoryCycles:
 		return skip(fmt.Sprintf("round %d would pass the %d rounds of a loop", round+1, config.MaxFactoryCycles))
 	}
-	so := secondOpinion{After: cy.N, Head: cy.HeadBefore, Judge: fb.Name, Kind: fb.AgentKind(), Replaces: judge.Name,
-		ReplacesKind: judge.AgentKind(), Leftovers: leftovers}
+	so := secondOpinion{After: cy.N, Round: round, Head: cy.HeadBefore, Because: because, Again: unfinished.N, AgainExit: unfinished.Exit,
+		Judge: fb.Name, Kind: fb.AgentKind(), Replaces: judge.Name, ReplacesKind: judge.AgentKind(), Leftovers: sum.Leftovers, Doubts: sum.Doubts}
 	if err := writeJSON(filepath.Join(dir, secondOpinionFile), so); err != nil {
 		return false, err
 	}
-	e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("round %d (cycle %d) is clean, and %s: a second opinion runs, round %d with %s (%s) "+
-		"in place of %s (%s), once for %s", round, cy.N, because, round+1, so.Judge, so.Kind, so.Replaces, so.ReplacesKind, TaskKey(t)))
-	if e.beforeSecond != nil {
-		if err := e.beforeSecond(); err != nil {
-			return false, err
-		}
+	if err := e.stopBeforeSecond("event"); err != nil {
+		return false, err
+	}
+	e.event(ctx, t.ID, "review", registry.PhaseInfo, so.decided(TaskKey(t)))
+	if err := e.stopBeforeSecond("end"); err != nil {
+		return false, err
 	}
 	return true, e.endCycle(ctx, cy, cy.HeadBefore, "")
+}
+
+// stopBeforeSecond is the test's seam before step of decideSecond
+// (beforeSecond); nil in a daemon.
+func (e *Engine) stopBeforeSecond(step string) error {
+	if e.beforeSecond == nil {
+		return nil
+	}
+	return e.beforeSecond(step)
 }
 
 // reviewedWidth is the width (changeWidth) of the change task t's round
