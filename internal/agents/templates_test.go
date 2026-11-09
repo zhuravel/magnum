@@ -252,6 +252,25 @@ type skillEditData struct {
 	Cap                                                  int
 }
 
+// stagingResolveFixture has the shape of the engine's staging resolver
+// data (internal/engine resolveData); the engine checks the shipped prompt
+// against the real type (CheckPrompts).
+type stagingResolveData struct {
+	Ref, Target, TargetTip, Head, Checkout string
+	Conflicts                              []string
+	DBLockCommand, ResultFile              string
+	Try                                    int
+	LastWhy                                string
+}
+
+func stagingResolveFixture(try int, lastWhy string) stagingResolveData {
+	return stagingResolveData{Ref: "talkable/talkable#11920", Target: "staging-void", TargetTip: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+		Head: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3", Checkout: "/Users/bohdan/Projects/talkable.review3",
+		Conflicts:     []string{"app/models/concerns/featurable.rb", "db/schema.rb"},
+		DBLockCommand: "/usr/local/bin/magnum db-lock --checkout /Users/bohdan/Projects/talkable.review3 --role staging-resolve --",
+		ResultFile:    "/state/staging-resolve/void-11920-20261009t070000-abcd.r1.0a1b2c3d/result.json", Try: try, LastWhy: lastWhy}
+}
+
 func skillEditFixture() skillEditData {
 	dir, wt := "/data/learn/skill/20261009-070000", "/state/learn/wt/20261009-070000"
 	return skillEditData{Dir: dir, Worktree: wt, Inputs: dir + "/inputs.json", Pins: dir + "/pins.json", Changes: wt + "/changes.json",
@@ -792,6 +811,8 @@ func TestRenderGolden(t *testing.T) {
 		{"retro_threads", "retro.md", retroThreads},
 		{"retro_factory", "retro.md", retroFactory},
 		{"skill_edit", "skill-edit.md", skillEditFixture()},
+		{"staging_resolve", "staging-resolve.md", stagingResolveFixture(1, "")},
+		{"staging_resolve_second_try", "staging-resolve.md", stagingResolveFixture(2, "the agent gave up: spec/models/featurable_spec.rb fails after the merge")},
 		{"model_fallback_no_report", FallbackPromptName, FallbackData{Model: "sonnet", Previous: "opus", Role: "claude-simplify",
 			URL: "https://github.com/talkable/talkable/pull/11920", HeadSHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3"}},
 	}
@@ -906,7 +927,7 @@ func checkGolden(t *testing.T, golden, got string) {
 func TestEveryDefaultPromptHasAGolden(t *testing.T) {
 	want := []string{"claude-rereview.md", "claude-restart.md", "claude-review-local.md", "claude-review.md", "claude-simplify.md", "codex-review.sh", "fix.md", "judge-continue.md",
 		"judge-initial.md", "judge-nudge.md", "judge-own-pass.md", "judge-recovery.md", "judge-rereview.md", "model-fallback.md", "notes-critic.md", "notes-curate.md", "retro.md",
-		"skill-edit.md", "triage.md", "whiteboard.md"}
+		"skill-edit.md", "staging-resolve.md", "triage.md", "whiteboard.md"}
 	// The factory's prompts (factory-*.md) render with the factory's own data
 	// (internal/factory), not the review pipeline's three shapes, and are
 	// tested there.

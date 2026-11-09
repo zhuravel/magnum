@@ -5,8 +5,10 @@
 // cheap model answers about which reviewers a small diff needs, retro.md,
 // the classification of other reviewers' comments a retro asks for
 // ([learn]), notes-curate.md, the curation of a repository's notes
-// ([notes]), and skill-edit.md, the self-improving loop's edit of the judge
-// skill and these prompts ([learn] editor_*), and factory-*.md, the prompts
+// ([notes]), skill-edit.md, the self-improving loop's edit of the judge
+// skill and these prompts ([learn] editor_*), staging-resolve.md, the
+// staging resolver's agent, which resolves a staging deploy's merge
+// conflicts in a review slot, and factory-*.md, the prompts
 // of the factory's roles ([[factory.role]]). The same files are also read from disk: a prompt name
 // resolves to <pipeline.prompts_dir>/<name> when that file exists
 // (prompts_dir defaults to this directory), else to the embedded copy of
@@ -36,7 +38,7 @@ const Shared = "judge-shared.md"
 // mode's rules among them). Names leaves it out, Read returns it.
 const FactoryShared = "factory-shared.md"
 
-//go:embed judge-*.md claude-*.md codex-*.sh factory-*.md fix.md whiteboard.md model-fallback.md triage.md retro.md notes-curate.md notes-critic.md skill-edit.md
+//go:embed judge-*.md claude-*.md codex-*.sh factory-*.md fix.md whiteboard.md model-fallback.md triage.md retro.md notes-curate.md notes-critic.md skill-edit.md staging-resolve.md
 var embedded embed.FS
 
 // Names lists the embedded default prompts, sorted: every embedded file but

@@ -1,0 +1,562 @@
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/staging"
+	"github.com/zhuravel/magnum/internal/store"
+)
+
+// resolveFixture is a harness whose staging resolver works with real git:
+// talkable/talkable's main clone (the pool's, HOME/talkable) and its slot
+// review1 (a worktree of it, HOME/talkable.review1), where staging-void's
+// tip and PR #2's head both change app/a.rb's line (a conflict), the tip
+// also README.md and the head also db/schema.rb (no conflict). PR #2 is
+// the operator's, reviewed at its head, which slot review1 holds; the
+// fixer App's bot commits. The agent is fake.
+type resolveFixture struct {
+	h          *harness
+	r          *stagingResolver
+	run        *execx.Real
+	git        *gitx.Client
+	origin     string
+	clone      string
+	slot       string
+	base       string
+	tip, head  string
+	agent      *fakeStagingAgent
+	agentJobs  []stagingAgentJob
+	agentsMu   sync.Mutex
+	agentsDown error // stagingAgents fails with it
+}
+
+// gitSlots is the harness's fake slots whose Resync really switches the
+// slot's work tree (after aborting a merge in progress, as slots.Resync
+// does) before it records the commit, and whose Release resets it.
+type gitSlots struct {
+	*fakeSlots
+	f *resolveFixture
+}
+
+func (g *gitSlots) Resync(ctx context.Context, slot store.Slot, sha string) error {
+	if _, err := g.f.run.Run(ctx, execx.Cmd{Name: "git", Args: []string{"-C", slot.Path, "rev-parse", "-q", "--verify", "MERGE_HEAD"}}); err == nil {
+		g.f.gitIn(slot.Path, "merge", "--abort")
+	}
+	g.f.gitIn(slot.Path, "switch", "--quiet", "--detach", "--discard-changes", sha)
+	return g.fakeSlots.Resync(ctx, slot, sha)
+}
+
+func newResolveFixture(t *testing.T, mods ...func(*harness)) *resolveFixture {
+	t.Helper()
+	f := &resolveFixture{run: editGitRunner(t), agent: &fakeStagingAgent{}}
+	if _, err := f.run.Run(context.Background(), execx.Cmd{Name: "git", Args: []string{"--version"}}); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+	f.git = gitx.New(f.run)
+	f.r = &stagingResolver{git: f.git}
+	all := append([]func(*harness){withStagings(&fakeStaging{}), withFixerApp, func(h *harness) {
+		h.d.Slots = &gitSlots{fakeSlots: h.sl, f: f}
+		h.d.stagingResolver = f.r
+		h.d.stagingAgents = func(j stagingAgentJob) (stagingAgent, error) {
+			f.agentsMu.Lock()
+			defer f.agentsMu.Unlock()
+			if f.agentsDown != nil {
+				return nil, f.agentsDown
+			}
+			f.agentJobs = append(f.agentJobs, j)
+			f.agent.job = j
+			return f.agent, nil
+		}
+	}}, mods...)
+	f.h = newHarness(t, all...)
+	t.Cleanup(f.h.e.stagingStop) // before the harness's own stop waits for the worker
+	home := f.h.cfg.Pools[0].MainClone
+	f.clone, f.slot = home, f.h.cfg.Pools[0].Path(1)
+	f.origin = filepath.Join(filepath.Dir(home), "origin")
+	if err := os.MkdirAll(f.origin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.gitIn(f.origin, "init", "--quiet", "-b", "master")
+	writeFile(t, f.origin, "app/a.rb", "a = 1\n")
+	writeFile(t, f.origin, "README.md", "hello\n")
+	f.gitIn(f.origin, "add", ".")
+	f.gitIn(f.origin, "commit", "--quiet", "-m", "base")
+	f.base = f.gitIn(f.origin, "rev-parse", "HEAD")
+	f.gitIn(f.origin, "checkout", "--quiet", "-b", "staging-void")
+	writeFile(t, f.origin, "app/a.rb", "a = 2\n")
+	writeFile(t, f.origin, "README.md", "hello staging\n")
+	f.gitIn(f.origin, "commit", "--quiet", "-am", "staging moves")
+	f.tip = f.gitIn(f.origin, "rev-parse", "HEAD")
+	f.gitIn(f.origin, "checkout", "--quiet", "-b", "feature", f.base)
+	writeFile(t, f.origin, "app/a.rb", "a = 1\nb = 1\n")
+	writeFile(t, f.origin, "db/schema.rb", "version 2\n")
+	f.gitIn(f.origin, "add", ".")
+	f.gitIn(f.origin, "commit", "--quiet", "-m", "the PR")
+	f.head = f.gitIn(f.origin, "rev-parse", "HEAD")
+	f.gitIn(f.origin, "checkout", "--quiet", "master")
+	f.gitIn(filepath.Dir(home), "clone", "--quiet", "--no-checkout", f.origin, home)
+	f.gitIn(home, "fetch", "--quiet", "origin", "staging-void", "feature")
+	f.gitIn(home, "worktree", "add", "--quiet", "--detach", f.slot, f.head)
+	return f
+}
+
+// gitIn runs git in dir and returns its output.
+func (f *resolveFixture) gitIn(dir string, args ...string) string {
+	f.h.t.Helper()
+	res, err := f.run.Run(context.Background(), execx.Cmd{Name: "git", Args: append([]string{"-C", dir}, args...)})
+	if err != nil {
+		f.h.t.Fatalf("git %v: %v", args, err)
+	}
+	return res.Out()
+}
+
+// reviewed has PR #2 reviewed at the head, slot review1 holding it.
+func (f *resolveFixture) reviewed() store.PR {
+	f.h.t.Helper()
+	f.h.open(prSpec{n: 1, head: "base1"})
+	f.h.startup()
+	f.h.tick()
+	f.h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: f.head, author: "zhuravel"})
+	f.h.tick()
+	f.h.advance(5 * time.Minute)
+	f.h.tick()
+	pr := f.h.wantState(2, store.PRReviewed)
+	if sl := f.h.slot("review1"); deref(sl.PRID) != pr.ID || deref(sl.CheckedOutSHA) != f.head {
+		f.h.t.Fatalf("slot review1 is PR %d's at %s, want PR #2's at its head", deref(sl.PRID), deref(sl.CheckedOutSHA))
+	}
+	return pr
+}
+
+// request is the deploy's request of the conflict, try try.
+func (f *resolveFixture) request(try int) staging.ResolveRequest {
+	return staging.ResolveRequest{Repo: "talkable/talkable", Ref: "talkable/talkable#2", Target: "staging-void", TargetTip: f.tip,
+		Head: f.head, Effect: "void-2-20261005t100000-abcd", Try: try}
+}
+
+// start starts a job for f.request(try).
+func (f *resolveFixture) start(try int) string {
+	f.h.t.Helper()
+	id, err := f.r.Start(f.h.ctx, f.request(try))
+	if err != nil {
+		f.h.t.Fatalf("Start: %v", err)
+	}
+	return id
+}
+
+// await waits until job id is no longer running, and returns its result.
+func (f *resolveFixture) await(id string) staging.ResolveResult {
+	f.h.t.Helper()
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(2 * time.Millisecond) {
+		res, err := f.r.Result(f.h.ctx, id)
+		if err != nil {
+			f.h.t.Fatal(err)
+		}
+		f.r.mu.Lock()
+		idle := !f.r.working
+		f.r.mu.Unlock()
+		if res.State != staging.ResolveRunning && idle {
+			return res
+		}
+		if time.Now().After(deadline) {
+			f.h.t.Fatalf("job %s still %s: %s", id, res.State, res.Why)
+		}
+	}
+}
+
+// awaitIdle waits until the worker stopped.
+func (f *resolveFixture) awaitIdle() {
+	f.h.t.Helper()
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(2 * time.Millisecond) {
+		f.r.mu.Lock()
+		idle := !f.r.working
+		f.r.mu.Unlock()
+		if idle {
+			return
+		}
+		if time.Now().After(deadline) {
+			f.h.t.Fatal("the resolver's worker still runs")
+		}
+	}
+}
+
+// job is job id's row.
+func (f *resolveFixture) job(id string) resolveJob {
+	f.h.t.Helper()
+	j, ok, err := f.h.e.resolveJob(f.h.ctx, id)
+	if err != nil || !ok {
+		f.h.t.Fatalf("job %s: %v, %v", id, ok, err)
+	}
+	return j
+}
+
+// resolves makes the fake agent resolve app/a.rb with text and write a
+// result that ran spec/a_spec.rb, passed.
+func (f *resolveFixture) resolves(text string) {
+	f.agent.onPrompt = func(a *fakeStagingAgent, n int, prompt string) {
+		if n == 1 {
+			writeFile(f.h.t, a.job.Cwd, "app/a.rb", text)
+		}
+		a.result(f.h.t, resolveResultFile{Outcome: resolveOutcomeResolved, Specs: []string{"spec/a_spec.rb"}, SpecsResult: resolveSpecsPassed})
+	}
+}
+
+// fakeStagingAgent is a job's agent: each prompt is recorded and handed to
+// onPrompt (the n-th, from 1), Wait answers at once (after wait, when set),
+// and Close and Detach are counted.
+type fakeStagingAgent struct {
+	mu       sync.Mutex
+	job      stagingAgentJob
+	prompts  []string
+	onPrompt func(a *fakeStagingAgent, n int, prompt string)
+	wait     func(until time.Time) (bool, error)
+	alive    bool // Resume finds the agent at work
+	resumed  int
+	closed   int
+	detached int
+}
+
+func (a *fakeStagingAgent) Prompt(_ context.Context, text string) (stagingAgentAt, error) {
+	a.mu.Lock()
+	a.prompts = append(a.prompts, text)
+	n, fn := len(a.prompts), a.onPrompt
+	a.mu.Unlock()
+	if fn != nil {
+		fn(a, n, text)
+	}
+	return stagingAgentAt{Name: "magnum-staging-agent", Pane: "p-resolve", Run: fmt.Sprintf("run-%d", n)}, nil
+}
+
+func (a *fakeStagingAgent) Wait(_ context.Context, _ string, until time.Time) (bool, error) {
+	a.mu.Lock()
+	fn := a.wait
+	a.mu.Unlock()
+	if fn != nil {
+		return fn(until)
+	}
+	return false, nil
+}
+
+func (a *fakeStagingAgent) Resume(context.Context) (bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.resumed++
+	return a.alive, nil
+}
+
+func (a *fakeStagingAgent) Close(context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.closed++
+	return nil
+}
+
+func (a *fakeStagingAgent) Detach() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.detached++
+}
+
+// result writes r as the agent's result file.
+func (a *fakeStagingAgent) result(t *testing.T, r resolveResultFile) {
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(a.job.Dir, resolveResultName), b, 0o600); err != nil {
+		t.Error(err)
+	}
+}
+
+func (a *fakeStagingAgent) counts() (prompts, closed, detached, resumed int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.prompts), a.closed, a.detached, a.resumed
+}
+
+// The review daemon's staging client resolves a conflict: Start answers at
+// once with a job, which works in the PR's own slot (no round holds it):
+// detached at the tip with the head merged in, the agent (the fix role's,
+// with no GitHub env) resolves the conflicted path, and the daemon makes
+// the merge as the bot, [tip, head], on merge-tree's tree with the
+// resolution, keeps it at refs/magnum/staging-resolved/<effect> in the
+// slot's main clone (Dir) and answers done. The slot goes back to the
+// PR's head, clean, with no merge in progress and no hold, and the PR's
+// rounds are no longer held.
+func TestTheStagingResolverResolvesAConflictInThePRsSlotAndCommitsAsTheBot(t *testing.T) {
+	f := newResolveFixture(t)
+	pr := f.reviewed()
+	f.resolves("a = 2\nb = 1\n")
+	id := f.start(1)
+	res := f.await(id)
+	if res.State != staging.ResolveDone || !fullSHA.MatchString(res.MergeSHA) {
+		t.Fatalf("Result = %+v, want done with a merge", res)
+	}
+	if res.Dir != f.clone {
+		t.Errorf("Dir = %q, want the slot's main clone %q", res.Dir, f.clone)
+	}
+	for _, want := range []string{"app/a.rb", "review1", "spec/a_spec.rb", "parents [tip, head]", "only in the conflicted paths", fixerAppLogin} {
+		if !strings.Contains(res.Why, want) {
+			t.Errorf("Why %q does not say %q", res.Why, want)
+		}
+	}
+	m := res.MergeSHA
+	if got := f.gitIn(f.clone, "rev-parse", resolveRefPrefix+f.request(1).Effect); got != m {
+		t.Errorf("the ref holds %s, want the merge", got)
+	}
+	if got := f.gitIn(f.clone, "log", "-1", "--format=%P|%an|%cn|%s", m); got != f.tip+" "+f.head+"|"+fixerAppLogin+"|"+fixerAppLogin+"|Merge pull request #2 into staging-void" &&
+		got != f.tip+" "+f.head+"|"+fixerAppLogin+"|"+fixerAppLogin+"|Merge branch 'feature' into staging-void" {
+		t.Errorf("the merge is %q, want [tip, head] by the bot with the clean merge's message", got)
+	}
+	if got := f.gitIn(f.clone, "show", m+":app/a.rb"); got != "a = 2\nb = 1" {
+		t.Errorf("the merge's app/a.rb = %q, want the resolution", got)
+	}
+	mt, _, err := f.git.MergeTreeWrite(f.h.ctx, f.clone, f.tip, f.head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := f.git.ChangedBetween(f.h.ctx, f.clone, mt, m); err != nil || !slices.Equal(changed, []string{"app/a.rb"}) {
+		t.Errorf("the merge differs from merge-tree's tree in %v, %v; want app/a.rb alone", changed, err)
+	}
+	if got := f.gitIn(f.slot, "rev-parse", "HEAD"); got != f.head {
+		t.Errorf("slot review1's HEAD is %s, want the PR's head back", got)
+	}
+	if got := f.gitIn(f.slot, "status", "--porcelain", "--untracked-files=no"); got != "" {
+		t.Errorf("slot review1 is not clean: %q", got)
+	}
+	if _, err := f.run.Run(f.h.ctx, execx.Cmd{Name: "git", Args: []string{"-C", f.slot, "rev-parse", "-q", "--verify", "MERGE_HEAD"}}); err == nil {
+		t.Error("a merge is still in progress in slot review1")
+	}
+	sl := f.h.slot("review1")
+	if deref(sl.CheckedOutSHA) != f.head || sl.HoldReason != nil || deref(sl.PRID) != pr.ID {
+		t.Errorf("slot review1 = %s for PR %d, hold %v; want the PR's at its head, no hold", deref(sl.CheckedOutSHA), deref(sl.PRID), sl.HoldReason)
+	}
+	if why := f.h.e.heldReason(pr.ID); why == resolveHeld {
+		t.Error("the PR is still held for the resolver")
+	}
+	if !f.h.e.reserveSlotWork(pr.ID, "test") {
+		t.Error("the PR's reservation was not let go")
+	}
+	f.h.e.endEviction(pr.ID)
+	if _, closed, _, _ := f.agent.counts(); closed != 1 {
+		t.Errorf("the agent was closed %d times, want once", closed)
+	}
+	j := f.agentJobs[0]
+	switch {
+	case j.Cwd != f.slot:
+		t.Errorf("the agent works in %q, want the slot", j.Cwd)
+	case j.Role.Name != "claude-fix" || j.Role.Model != f.h.fixRole().Model || j.Role.Effort != f.h.fixRole().Effort:
+		t.Errorf("the agent's role is %s %s %s, want the fix role's name, model and effort", j.Role.Name, j.Role.Model, j.Role.Effort)
+	case j.Role.Identity != "" || j.Role.Fix:
+		t.Errorf("the agent's role acts as %q (fix %v): its pane would get a GitHub env", j.Role.Identity, j.Role.Fix)
+	case j.Role.Timeout.Duration > resolveRunFor:
+		t.Errorf("the agent's role times out after %s, over the job's %s", j.Role.Timeout.Duration, resolveRunFor)
+	}
+	for _, k := range []string{"GH_TOKEN", "GITHUB_TOKEN", "SSH_AUTH_SOCK"} {
+		if v, ok := j.Env[k]; !ok || v != "" {
+			t.Errorf("the agent's pane env %s = %q, %v; want it set empty", k, v, ok)
+		}
+	}
+	if j.Env["GIT_CONFIG_GLOBAL"] != "/dev/null" || !strings.HasPrefix(j.Env["GH_CONFIG_DIR"], j.Dir) || j.Env["WT_BRANCH"] != "review1" {
+		t.Errorf("the agent's pane env = %v, want no git or gh config of yours and the slot's env", j.Env)
+	}
+	if prompts, _, _, _ := f.agent.counts(); prompts != 1 {
+		t.Errorf("%d prompts, want 1", prompts)
+	}
+	p := f.agent.prompts[0]
+	for _, want := range []string{"talkable/talkable#2", "staging-void", f.tip, f.head, "app/a.rb", "db-lock", filepath.Join(j.Dir, resolveResultName)} {
+		if !strings.Contains(p, want) {
+			t.Errorf("the prompt does not name %q:\n%s", want, p)
+		}
+	}
+	if ev := f.h.events("staging.resolve"); len(ev) != 1 {
+		t.Errorf("%d staging.resolve events, want the job's end", len(ev))
+	}
+}
+
+// Result of a job the journal does not hold (or of no id at all) answers
+// failed, "unknown job"; a second Start of a live job's effect and try (a
+// deploy cut between its Start and its journal) answers that job; a request
+// the resolver cannot take is refused.
+func TestTheStagingResolverAnswersUnknownJobsAndRefusesBadRequests(t *testing.T) {
+	f := newResolveFixture(t)
+	for _, id := range []string{"void-2-20261005t100000-abcd.r1.0badf00d", "--all", ""} {
+		res, err := f.r.Result(f.h.ctx, id)
+		if err != nil || res.State != staging.ResolveFailed || res.Why != whyUnknownJob {
+			t.Errorf("Result(%q) = %+v, %v; want failed, unknown job", id, res, err)
+		}
+		if err := f.r.Cancel(f.h.ctx, id); err != nil {
+			t.Errorf("Cancel(%q) = %v, want nothing to stop", id, err)
+		}
+	}
+	f.agentsMu.Lock()
+	f.agentsDown = errors.New("no herdr")
+	f.agentsMu.Unlock()
+	a, b := f.start(1), f.start(1)
+	if a != b {
+		t.Errorf("a second Start of the same effect and try made job %s beside %s", b, a)
+	}
+	f.awaitIdle()
+	for name, req := range map[string]staging.ResolveRequest{
+		"no staging repository": {Repo: "zhuravel/other", Ref: "zhuravel/other#2", Target: "staging-void", TargetTip: f.tip, Head: f.head, Effect: "void-2-x", Try: 1},
+		"another PR's repo":     {Repo: "talkable/talkable", Ref: "zhuravel/other#2", Target: "staging-void", TargetTip: f.tip, Head: f.head, Effect: "void-2-x", Try: 1},
+		"no staging branch":     {Repo: "talkable/talkable", Ref: "talkable/talkable#2", Target: "master", TargetTip: f.tip, Head: f.head, Effect: "void-2-x", Try: 1},
+		"a short tip":           {Repo: "talkable/talkable", Ref: "talkable/talkable#2", Target: "staging-void", TargetTip: "abc", Head: f.head, Effect: "void-2-x", Try: 1},
+		"no effect":             {Repo: "talkable/talkable", Ref: "talkable/talkable#2", Target: "staging-void", TargetTip: f.tip, Head: f.head, Effect: "../x", Try: 1},
+		"a third try":           {Repo: "talkable/talkable", Ref: "talkable/talkable#2", Target: "staging-void", TargetTip: f.tip, Head: f.head, Effect: "void-2-x", Try: 3},
+	} {
+		if id, err := f.r.Start(f.h.ctx, req); err == nil {
+			t.Errorf("%s: Start answered job %s", name, id)
+		}
+	}
+}
+
+// Before FromApp binds it to the engine, the resolver refuses everything;
+// the staging client of a daemon with staging envs has it as its Resolver.
+func TestTheStagingClientsResolverRefusesUntilTheEngineIsBound(t *testing.T) {
+	r := &stagingResolver{}
+	if _, err := r.Start(context.Background(), staging.ResolveRequest{}); !errors.Is(err, errStagingUnbound) {
+		t.Errorf("Start before the bind: %v", err)
+	}
+	if _, err := r.Result(context.Background(), "x"); !errors.Is(err, errStagingUnbound) {
+		t.Errorf("Result before the bind: %v", err)
+	}
+	if err := r.Cancel(context.Background(), "x"); !errors.Is(err, errStagingUnbound) {
+		t.Errorf("Cancel before the bind: %v", err)
+	}
+}
+
+// The daemon's checks fail a job, nothing committed and no ref kept, and
+// the slot goes back as it was all the same: the agent gave up (its why
+// carried), conflict markers left in a conflicted path, the work tree
+// changing a path outside the conflicts (the specs ran on what the merge
+// would not hold), or a result file that stays invalid after a nudge.
+func TestTheStagingResolversChecksFailAJobAndPutTheSlotBack(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		agent  func(f *resolveFixture) func(a *fakeStagingAgent, n int, prompt string)
+		want   string
+		nudged bool
+	}{
+		{"gave up", func(f *resolveFixture) func(*fakeStagingAgent, int, string) {
+			return func(a *fakeStagingAgent, _ int, _ string) {
+				a.result(f.h.t, resolveResultFile{Outcome: resolveOutcomeGaveUp, Why: "spec/a_spec.rb fails after the merge", Specs: []string{"spec/a_spec.rb"},
+					SpecsResult: resolveSpecsFailed})
+			}
+		}, "the agent gave up: spec/a_spec.rb fails after the merge", false},
+		{"markers left", func(f *resolveFixture) func(*fakeStagingAgent, int, string) {
+			return func(a *fakeStagingAgent, _ int, _ string) {
+				a.result(f.h.t, resolveResultFile{Outcome: resolveOutcomeResolved, Specs: []string{"spec/a_spec.rb"}, SpecsResult: resolveSpecsPassed})
+			}
+		}, "conflict markers are left in app/a.rb", false},
+		{"a path outside the conflicts", func(f *resolveFixture) func(*fakeStagingAgent, int, string) {
+			return func(a *fakeStagingAgent, _ int, _ string) {
+				writeFile(f.h.t, a.job.Cwd, "app/a.rb", "a = 2\nb = 1\n")
+				writeFile(f.h.t, a.job.Cwd, "README.md", "the agent's own change\n")
+				a.result(f.h.t, resolveResultFile{Outcome: resolveOutcomeResolved, Specs: []string{"spec/a_spec.rb"}, SpecsResult: resolveSpecsPassed})
+			}
+		}, "also changes README.md, outside the conflicts", false},
+		{"no valid result", func(f *resolveFixture) func(*fakeStagingAgent, int, string) {
+			return func(a *fakeStagingAgent, _ int, _ string) {
+				writeFile(f.h.t, a.job.Dir, resolveResultName, `{"outcome": "resolved", "specs": [], "specs_result": "passed"}`)
+			}
+		}, "no valid result after a nudge: a resolution needs the specs it ran, passed", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newResolveFixture(t)
+			f.reviewed()
+			f.agent.onPrompt = tc.agent(f)
+			res := f.await(f.start(1))
+			if res.State != staging.ResolveFailed || !strings.Contains(res.Why, tc.want) {
+				t.Fatalf("Result = %+v, want failed: %s", res, tc.want)
+			}
+			if res.MergeSHA != "" || res.Dir != "" {
+				t.Errorf("a failed job answers merge %q in %q", res.MergeSHA, res.Dir)
+			}
+			if _, err := f.run.Run(f.h.ctx, execx.Cmd{Name: "git", Args: []string{"-C", f.clone, "rev-parse", "-q", "--verify",
+				resolveRefPrefix + f.request(1).Effect}}); err == nil {
+				t.Error("a failed job kept a ref")
+			}
+			if got := f.gitIn(f.slot, "rev-parse", "HEAD"); got != f.head {
+				t.Errorf("slot review1's HEAD is %s, want the PR's head", got)
+			}
+			if got := f.gitIn(f.slot, "status", "--porcelain", "--untracked-files=no"); got != "" {
+				t.Errorf("slot review1 is not clean: %q", got)
+			}
+			if prompts, closed, _, _ := f.agent.counts(); closed != 1 || (prompts == 2) != tc.nudged {
+				t.Errorf("%d prompts and %d closes; want the agent closed once, nudged %v", prompts, closed, tc.nudged)
+			}
+		})
+	}
+}
+
+// A job never takes a slot a round holds, nor waits on it: while PR #2's
+// round runs, the job stays queued, "waits for a slot", and the worker
+// stops; the tick after the round looks again, and the job runs. A PR
+// with no slot gets a free one of the pool, which goes back to the pool
+// at the end.
+func TestTheStagingResolverWaitsForASlotARoundHolds(t *testing.T) {
+	f := newResolveFixture(t)
+	pr := f.reviewed()
+	f.resolves("a = 2\nb = 1\n")
+	h := f.h
+	cancel := func() {}
+	h.e.mu.Lock()
+	h.e.rounds[pr.ID] = &roundHandle{cancel: cancel}
+	h.e.mu.Unlock()
+	id := f.start(1)
+	f.awaitIdle()
+	res, err := f.r.Result(h.ctx, id)
+	if err != nil || res.State != staging.ResolveRunning || !strings.Contains(res.Why, "waits for a slot") || !strings.Contains(res.Why, "round in progress") {
+		t.Fatalf("Result while a round holds the PR = %+v, %v; want running, waits for a slot", res, err)
+	}
+	if prompts, _, _, _ := f.agent.counts(); prompts != 0 {
+		t.Fatalf("the agent was prompted while a round held the slot")
+	}
+	if c := h.sl.all(); slices.ContainsFunc(c, func(s string) bool { return strings.HasPrefix(s, "resync:") }) {
+		t.Errorf("the slot was touched while a round held it: %v", c)
+	}
+	h.e.mu.Lock()
+	delete(h.e.rounds, pr.ID)
+	h.e.mu.Unlock()
+	h.tick()
+	if res := f.await(id); res.State != staging.ResolveDone {
+		t.Fatalf("Result after the round = %+v, want done", res)
+	}
+}
+
+// A PR whose slot the pool took back gets a free slot of the pool for the
+// job, reserved for it, and handed back to the pool at the end.
+func TestTheStagingResolverClaimsAFreeSlotAndHandsItBack(t *testing.T) {
+	f := newResolveFixture(t)
+	pr := f.reviewed()
+	h := f.h
+	sl := h.slot("review1")
+	if err := h.st.ReleaseSlot(h.ctx, sl.ID, []string{store.SlotClaimed, store.SlotHeld}, store.SlotFree, "test"); err != nil {
+		t.Fatal(err)
+	}
+	f.resolves("a = 2\nb = 1\n")
+	res := f.await(f.start(1))
+	if res.State != staging.ResolveDone {
+		t.Fatalf("Result = %+v, want done", res)
+	}
+	calls := h.sl.all()
+	if !slices.Contains(calls, fmt.Sprintf("reserve:%d", pr.ID)) || !slices.ContainsFunc(calls, func(s string) bool { return strings.HasPrefix(s, "release:review1:") }) {
+		t.Errorf("slot calls %v; want the free slot reserved for the PR and released at the end", calls)
+	}
+	if got := h.slot("review1"); got.State != store.SlotFree {
+		t.Errorf("slot review1 is %s, want free again", got.State)
+	}
+}

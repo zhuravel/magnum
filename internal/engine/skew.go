@@ -124,6 +124,16 @@ func CheckPrompts(cfg *config.Config) (int, error) {
 		render("skill editor prompt", p, sampleData[editData](true))
 		render("skill editor prompt", p, editData{})
 	}
+	if p, err := cfg.ResolvePrompt(StagingResolvePrompt); err != nil {
+		errs = append(errs, fmt.Errorf("staging resolver prompt: %w", err))
+	} else {
+		d := sampleData[resolveData](true)
+		for _, try := range []int{1, 2} {
+			d.Try = try
+			render("staging resolver prompt", p, d)
+		}
+		render("staging resolver prompt", p, resolveData{})
+	}
 	for _, id := range cfg.Identities {
 		tmpl := id.Footer()
 		if tmpl == "" {

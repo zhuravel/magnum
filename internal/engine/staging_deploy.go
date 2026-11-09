@@ -34,10 +34,18 @@ var errStagingUnbound = errors.New("staging: the review daemon is not ready yet"
 type stagingBound struct {
 	e      atomic.Pointer[Engine]
 	mirror func(repo string) (dir string, ok bool) // staging.MirrorDir over [staging] mirror_dir
+	// resolver is the client's Resolver (staging_resolve.go), bound with
+	// the engine.
+	resolver *stagingResolver
 }
 
 // bind makes e the engine the parts act as.
-func (b *stagingBound) bind(e *Engine) { b.e.Store(e) }
+func (b *stagingBound) bind(e *Engine) {
+	b.e.Store(e)
+	if b.resolver != nil {
+		b.resolver.bind(e)
+	}
+}
 
 // commitIdentity is Deps.CommitIdentity: the fixer App's bot
 // (Engine.CommitIdentity).
@@ -64,11 +72,16 @@ func (b *stagingBound) pushEnv(ctx context.Context, repo, merge, target string) 
 // and the fetch's git env as each repository's poll identity, the envs from
 // config.Stagings, Step's and Cancel's scan of mirror_dir (MirrorRoot), and
 // b's engine parts: the merges by the fixer App's bot, its pushes with the
-// bot's env. No resolver: a conflict ends the deploy, nothing pushed.
+// bot's env, and the resolver of a conflict (staging_resolve.go), whose
+// jobs work in the review slots with the App's git (a.Git).
 func stagingDepsOf(a *app.App, b *stagingBound) staging.Deps {
 	cfg := a.Config
 	ids := &stagingIDs{a: a, warned: map[string]string{}}
 	b.mirror = staging.MirrorDir(cfg.Staging.MirrorDir)
+	b.resolver = &stagingResolver{}
+	if a.Git != nil {
+		b.resolver.git = a.Git
+	}
 	return staging.Deps{
 		Git:            staging.NewGit(stagingRunner{a.Runner}),
 		GitHub:         staging.NewGitHub(ids.client),
@@ -78,6 +91,7 @@ func stagingDepsOf(a *app.App, b *stagingBound) staging.Deps {
 		Stagings:       func(repo string) []staging.Env { return StagingEnvs(cfg, repo) },
 		CommitIdentity: b.commitIdentity,
 		PushEnv:        b.pushEnv,
+		Resolver:       b.resolver,
 		Event:          b.event,
 		Log:            a.Logger,
 	}

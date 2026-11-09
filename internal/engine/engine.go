@@ -435,6 +435,12 @@ type Deps struct {
 	// serves (hooks.go), which FromApp makes before the pane agents'
 	// deps that register in it; nil = New makes one.
 	agentHooks *hookRouter
+	// stagingResolver is the staging client's Resolver (staging_resolve.go),
+	// which New binds to the engine; nil without a staging client.
+	// stagingAgents makes a resolver job's agent (the pane agent: nil
+	// without herdr, and a job then fails).
+	stagingResolver *stagingResolver
+	stagingAgents   func(stagingAgentJob) (stagingAgent, error)
 }
 
 // Options tune Run.
@@ -879,6 +885,9 @@ func New(d Deps) *Engine {
 		// batch; its summary title counts each kind.
 		e.batch = &notify.Batcher{Notifier: d.Notifier, Key: "info", Now: d.Now}
 	}
+	if d.stagingResolver != nil {
+		d.stagingResolver.bind(e)
+	}
 	return e
 }
 
@@ -936,6 +945,7 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 		d.Curator = paneCurators(pd)
 		d.Critic = paneCritics(pd)
 		d.Editor = paneEditors(pd)
+		d.stagingAgents = paneStagingAgents(pd) // staging_resolve_agent.go: the staging resolver's agent
 	}
 	if a.Layout.Home != "" && !a.DryRun && a.AgentTag == "" && a.Git != nil && a.Runner != nil && a.Config != nil {
 		// The skill editor works on the checkout the daemon runs from.
@@ -964,6 +974,7 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 	bound := &stagingBound{}
 	if s := stagingFromApp(a, bound); s != nil {
 		d.Staging = s
+		d.stagingResolver = bound.resolver // staging_resolve.go
 	}
 	if a.Runner != nil && a.Config != nil {
 		// The session revealed is the panes': it shows the PR's agents.
@@ -1327,9 +1338,10 @@ func (e *Engine) startup(ctx context.Context) {
 	e.recoverRows(ctx)
 	// open_hold.go: a lasting pin of an earlier open becomes a hold.
 	e.convertOpenPins(ctx)
-	e.recoverFixes(ctx)   // fix.go: a fixer at work never survives a restart
-	e.startHeldFixes(ctx) // fix_held.go: the `magnum fix` requests a drain held for this start
-	e.retryParked(ctx)    // retry_parked.go: what failed rounds parked under another build, config or prompts
+	e.recoverFixes(ctx)           // fix.go: a fixer at work never survives a restart
+	e.recoverStagingResolves(ctx) // staging_resolve.go: a resolver's job holds its PR again before any round
+	e.startHeldFixes(ctx)         // fix_held.go: the `magnum fix` requests a drain held for this start
+	e.retryParked(ctx)            // retry_parked.go: what failed rounds parked under another build, config or prompts
 	e.reclassifyIneligible(ctx)
 	e.recoverWhiteboards(ctx)
 	// whiteboard_pending.go: the whiteboards the drain this start ended skipped.

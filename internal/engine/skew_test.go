@@ -134,6 +134,8 @@ func TestCheckPromptsCatchesFieldsThisBuildLacks(t *testing.T) {
 		{"triage.md", `{{range .Roles}}{{.Detail}}{{end}}`},
 		{"retro.md", `{{if .ReviewedSHAs}}{{.Comments}}{{end}}`},
 		{"retro.md", `{{range .ReviewedSHAs}}{{.Short}}{{end}}`},
+		{"staging-resolve.md", `{{if eq .Try 2}}{{.NewTemplateField}}{{end}}`},
+		{"staging-resolve.md", `{{range .Conflicts}}{{.Path}}{{end}}`},
 	} {
 		t.Run(tc.file, func(t *testing.T) {
 			h := newHarness(t)

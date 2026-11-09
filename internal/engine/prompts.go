@@ -62,7 +62,7 @@ func (e *Engine) loadPrompts(ctx context.Context) error {
 		skillDir = SkillCopyDir(e.d.Layout.State())
 	}
 	snap, err := e.cfg.SnapshotPrompts(skillDir, e.now(), agents.FallbackPromptName, e.cfg.Triage.Prompt, e.cfg.Learn.Prompt, e.cfg.Notes.Prompt,
-		e.cfg.Notes.CriticPrompt)
+		e.cfg.Notes.CriticPrompt, StagingResolvePrompt)
 	if err != nil {
 		return fmt.Errorf("engine: %w", err)
 	}

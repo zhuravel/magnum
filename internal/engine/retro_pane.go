@@ -170,8 +170,10 @@ type paneAgent struct {
 	dir  string // the run's directory: the scratch registry is in it, the agent works in its parent
 	id   string // the run's id
 	// cwd, when set, is where the agent works instead of dir's parent (the
-	// skill editor: its worktree).
+	// skill editor: its worktree). env, when set, is its workspace's env
+	// (the staging resolver's: the slot's, with no credentials).
 	cwd string
+	env map[string]string
 
 	scratch string // the scratch registry's directory
 	cfg     *config.Config
@@ -389,7 +391,7 @@ func (c *paneAgent) ensureAgent(ctx context.Context) (*pipeline.Pause, error) {
 		return nil, err
 	}
 	cwd := cmp.Or(c.cwd, filepath.Dir(c.dir))
-	ws, err := c.mgr.EnsureWorkspace(ctx, c.pr, cwd, nil, c.spec.workspace, []config.Role{c.role})
+	ws, err := c.mgr.EnsureWorkspace(ctx, c.pr, cwd, c.env, c.spec.workspace, []config.Role{c.role})
 	if err != nil {
 		return nil, err
 	}
@@ -787,6 +789,25 @@ func (c *paneAgent) currentModel(ctx context.Context) string {
 	}
 	m, _ := c.sessionModel(ctx, &s)
 	return m
+}
+
+// detach stops observing and taking hook events and closes the scratch
+// registry, and leaves the agent as it is, at work or not, with the
+// registry's file that records it: a daemon that stops lets go of the
+// staging resolver's agent so, and its next start finds it again (setup
+// reopens the registry).
+func (c *paneAgent) detach() {
+	if c.stopObserving != nil {
+		c.stopObserving()
+		<-c.observed
+		c.stopObserving, c.observed = nil, nil
+	}
+	c.d.Hooks.remove(c.hook)
+	c.hook = nil
+	if c.st != nil {
+		_ = c.st.Close()
+	}
+	c.mgr, c.st, c.obs = nil, nil, nil
 }
 
 // Close stops observing and taking hook events and closes the agent: a turn still in flight (a

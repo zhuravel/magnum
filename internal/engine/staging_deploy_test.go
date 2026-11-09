@@ -29,9 +29,9 @@ func awaitSteps(t *testing.T, f *fakeStaging, n int) {
 // merges are the bot's (CommitIdentity), its pushes go with the bot's env
 // and the bot's rules (StagingPushEnv, which never pushes to master), Step
 // and Cancel find every effect under mirror_dir (MirrorRoot), the envs are
-// the config's, and no resolver is configured yet (a conflict ends the
-// effect). The engine's parts are bound once the engine exists: before
-// that they refuse.
+// the config's, and a conflict goes to the engine's resolver
+// (staging_resolve.go). The engine's parts are bound once the engine
+// exists: before that they refuse, the resolver too.
 func TestTheStagingClientDeploysAsTheFixerApp(t *testing.T) {
 	h := newHarness(t, withStagings(nil), withFixerApp, withMirrors)
 	h.open(prSpec{n: 2, head: fixHead, author: "zhuravel"})
@@ -40,8 +40,8 @@ func TestTheStagingClientDeploysAsTheFixerApp(t *testing.T) {
 	bound := &stagingBound{}
 	d := stagingDepsOf(a, bound)
 	switch {
-	case d.Resolver != nil:
-		t.Error("the staging client has a resolver: a conflict must end the effect until one comes")
+	case d.Resolver == nil || d.Resolver != staging.Resolver(bound.resolver):
+		t.Error("the staging client has no resolver of the engine's: a conflict would end the effect")
 	case d.MirrorRoot == nil || d.PushEnv == nil || d.CommitIdentity == nil || d.Stagings == nil || d.GitEnv == nil || d.Mirror == nil || d.Event == nil:
 		t.Fatal("the staging client lacks a part of the deploy: mirror root, push env, commit identity, envs, git env, mirror or events")
 	}
@@ -57,6 +57,9 @@ func TestTheStagingClientDeploysAsTheFixerApp(t *testing.T) {
 	if _, err := d.PushEnv(h.ctx, "talkable/talkable", stagingMerge, "staging-void"); err == nil {
 		t.Error("PushEnv answered before the engine was bound")
 	}
+	if _, err := d.Resolver.Result(h.ctx, "void-2-x.r1.00000000"); err == nil {
+		t.Error("the resolver answered before the engine was bound")
+	}
 	d.Event(testEffect(1, staging.StepClaim, staging.EffectRunning), staging.StepClaim, staging.PhaseOK, "")
 	if got := len(h.events("staging.deploy")); got != 0 {
 		t.Errorf("%d events before the engine was bound", got)
@@ -71,6 +74,9 @@ func TestTheStagingClientDeploysAsTheFixerApp(t *testing.T) {
 	}
 	if _, err := d.PushEnv(h.ctx, "talkable/talkable", stagingMerge, "master"); err == nil || !strings.Contains(err.Error(), "never pushes to master") {
 		t.Errorf("PushEnv to master: %v", err)
+	}
+	if res, err := d.Resolver.Result(h.ctx, "void-2-x.r1.00000000"); err != nil || res.State != staging.ResolveFailed || res.Why != whyUnknownJob {
+		t.Errorf("the bound resolver's Result of no job = %+v, %v; want failed, unknown job", res, err)
 	}
 }
 
