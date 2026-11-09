@@ -21319,7 +21319,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the operator's levels** (R41, R43, R44, 2026-11-09). The audit's report C (F5, F6) counted one model per role.
   talkable#12213 had a narrow plan, so it skipped the critic (`when = "wide"`), and the posted round then found a P2.
   - The critic on every plan (R41). A stage's `when` takes `"narrow"` next to `"wide"`: such a stage is skipped for a
-    wide plan. Each built-in kind has two critic stages right after the judge. `critic` (`when = "wide"`) runs
+    wide plan. Only an agents stage takes a `when`: `validateStage` refuses one on a gate, a review, a decision or an
+    effect (as it already did on a qa stage), since those run for every plan and a questions gate skipped for a width
+    would never ask its questions, and `nextStage` applies a width to agents stages alone, as `runTurn` does. Each built-in kind has two critic stages right after the judge. `critic` (`when = "wide"`) runs
     fx-critic, Codex at xhigh, as before. `narrow_critic` (`when = "narrow"`) runs fx-critic-narrow, a new role on
     Codex at high with the same `factory-critic.md`. Both end on `critic`, so exactly one of them runs. A Codex refusal
     hands either one to fx-critic-claude (Claude, high), which already ran at high, so no new Claude role was needed.
@@ -21333,8 +21335,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     width-gated stage (from before the upgrade, or a report the move could not read) is still skipped by the stage's
     own pass (`skipByWidth`).
   - The card. A skipped critic says which width skipped it only when the task's `<stage> skipped` event names that
-    stage (`widthSkipped`, read once per card and only for such a stage); a task from before the narrow critic, with
-    no such event for it, shows it as plain "skipped" and invents no width.
+    stage (`widthSkipped`, once per card, only for such a stage, and over the task's newest 200 stage events alone:
+    the screen refreshes every 3 seconds); a task from before the narrow critic, with no such event for it, shows it
+    as plain "skipped" and invents no width.
   - A Codex twin of fx-points (R44), as a trial. The feature's investigate stage runs fx-points and fx-points-codex
     (Codex, high, the same `factory-points.md` and the same hour) in one workspace. The points prompt now keeps each
     reader from the other's findings file, as the cause finder's prompt does. The twin's `codex_fallback` is fx-points,
@@ -21344,7 +21347,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
       which the gate's text match (R11) cannot merge. Its open questions stay in its findings' `## Open questions`.
       The judge reads `questions-fx-points.json` first, as its questions block says, and asks in `questions.json`
       what the twin's questions add, once, and none the other files ask. A `questions-fx-points-codex.json` the twin
-      writes anyway is never asked (`asksNoOne`) and never holds up its end, even malformed (`endOf`).
+      writes anyway is never asked (`asksNoOne`), never holds up its end, even malformed (`endOf`), and is set aside as
+      `<name>.unasked` when the stage passes (`setAsideUnasked`), before the judge reads the questions files, whose
+      shared block says every `questions-<role>.json` reaches the operator. The judge's prompt says the second
+      reader's questions are in its findings only and a questions file it wrote is dropped.
     - The judge's prompt merges two readings of one thing: a point or a fact both raise is one, and what only one
       names, or what they read differently, it checks against the code. A question from an investigator's findings
       cites that findings file in its `evidence`.
@@ -21352,15 +21358,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
       starts, and fx-points' run stands for both. What the refused run wrote (its findings, perhaps partial, and a
       questions file) is set aside as `<name>.refused`, which no glob of the agents' files matches, so the judge never
       reads a truncated reading as a second opinion (removed from its inputs, rather than marked: a marked file would
-      still cost the judge a check of each of its claims). The `<role> left the <stage> stage` event names what it set
-      aside. It is written once: after the Codex quit of the same pass, and also when a restart's rebuild leaves the
-      twin out (`leaveStage`, guarded by the task's stage events).
+      still cost the judge a check of each of its claims). The rename keeps the words, so it can be undone. It waits
+      for a pass whose quit of the task's Codex sessions went through (`agentsRun.left`, kept while `quitCodex` is
+      still set), so a refused session still alive cannot write the file after it, and the stage does not pass
+      while a role is left to set aside. The `<role> left the <stage> stage` event names what it set aside, once,
+      on the pass that took the refusal and on a restart's rebuild alike (`leaveStage`, guarded by the task's
+      stage events, read by kind). A twin whose run the runtime verified before the refusal did its work: its
+      findings stay, on both paths, and it leaves no event.
     - The screen counts a role as done by its fallback's run only on a task Codex never works on, because fx-points
       done beside a twin still at work had read "2 of 2 done".
-    - The measure. `magnum factory stats` counts each task's questions once, and by source (`questionSources`): each
-      role their `raised_by` names and each investigator whose findings file their `evidence` names. The twin's
-      share is the questions whose evidence names `findings-fx-points-codex.md`. No migration: the questions records
-      already keep both. The trial runs on 5 feature tasks. It is judged on that share against the plans it changed
+    - The measure. `magnum factory stats` counts each task's questions once, and by source (`questionSources`): a
+      question's sources are the investigators whose findings files its `evidence` names (the judge only relays
+      them), else the roles its `raised_by` names. A question of one source counts for that source alone
+      (`questions_from`); one of several counts apart, by its sources joined with `+` (`questions_shared`). The
+      twin's share is its `questions_from` count: the questions whose evidence names its findings and no other
+      reader's; what both readers raise is `fx-points+fx-points-codex`, which the twin does not add. No migration:
+      the questions records already keep both fields. A question the judge raises from the twin's reading without
+      citing its file counts as the judge's, which undercounts the twin. The trial runs on 5 feature tasks. It is judged on that share against the plans it changed
       (task 6 asked 28, 13 of them from fx-points) and on the take rate (`magnum factory stats`, R19). The twin is
       kept if the plans get better without more questions, and dropped (the role and its kind entry) if it only adds
       questions. The twin makes every feature's investigation wait on Codex as well: a Codex usage pause or login
@@ -21397,7 +21411,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   event once), TestTheSecondReaderAsksNoOneAndEndsOnItsFindings, TestASecondReadersQuestionsFileIsNeverAsked,
   TestARoleIsDoneByItsFallbacksRunOnlyOnATaskCodexNeverWorksOn, TestTheCardSaysWhichCriticThePlansWidthSkipped
   (a task from before included), TestTwoReadersOfTheTicketsPointsKeepApartAndTheJudgeMergesThem, and
-  TestInvestigationLaunchesTheRolesOfItsKind with the twin; stats' TestStatsCountTheQuestionsBySource; tui's
+  TestInvestigationLaunchesTheRolesOfItsKind with the twin, TestAQuestionsGateIsNeverSkippedByWidth,
+  TestASecondReadersStrayQuestionsFileIsSetAsideBeforeTheJudge, TestARefusedTwinsFilesWaitForTheCodexQuit and
+  TestATwinThatPassedBeforeARefusalKeepsItsFindings; config's TestAMovedSecondReadersWarningSaysItStillAsksNoOne
+  (a second reader moved to Claude is still one: `magnum config` says so in place of "its fallback is not used");
+  registry's TestTaskEventsReadsOneTasksKindUpToItsNewestLimit (the card reads a task's newest 200 stage events,
+  `TaskEvents`, not its whole log, each refresh); stats' TestStatsCountTheQuestionsBySource; tui's
   TestTheHelpListsOnlyWhatExists with the narrow critic's gloss. No new dependencies.
 
 - Broken copies repair themselves on a backoff while the factory daemon runs, and every copy of a repository broken

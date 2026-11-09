@@ -39,9 +39,15 @@ const (
 func findingsFile(role string) string { return "findings-" + role + ".md" }
 
 // refusedSuffix ends the name of a file a role's refused run left, set aside
-// when the role leaves its stage (setAsideRefused): no glob of the agents' files
+// when the role leaves its stage (setAsideAs): no glob of the agents' files
 // (findings-*.md, questions-*.json) matches it.
 const refusedSuffix = ".refused"
+
+// unaskedSuffix ends the name of a questions file a second reader wrote
+// although it asks no one (secondReader), set aside when its stage passes:
+// no questions-*.json glob matches it, so the judge never takes it for
+// questions that reach the operator.
+const unaskedSuffix = ".unasked"
 
 // roleQuestionsFile is the questions file of a role other than the judge's
 // (the critic's, an investigator's that cannot go on): questions-<role>.json,

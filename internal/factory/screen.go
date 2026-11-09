@@ -301,17 +301,24 @@ func (s *screen) read(t registry.Task) (*taskView, error) {
 	return v, nil
 }
 
+// stageEventsRead is how many of a task's newest stage events the card
+// reads for its skips (widthSkipped), on every refresh: a task writes a
+// few of them per stage, so its skips are among them.
+const stageEventsRead = 200
+
 // widthSkipped are the stages of task t whose skip a "<stage> skipped: "
-// stage event records (engine's nextStage and skipByWidth write them); an
-// unreadable log is none, so the card claims no width it cannot show.
+// stage event records (engine's nextStage and skipByWidth write them), among
+// its newest stageEventsRead stage events (a read bounded by the task's
+// index, its kind and the limit); an unreadable log is none, so the card
+// claims no width it cannot show.
 func (s *screen) widthSkipped(t registry.Task) map[string]bool {
 	out := map[string]bool{}
-	evs, err := s.reg.Events(s.ctx, t.ID, 0)
+	evs, err := s.reg.TaskEvents(s.ctx, t.ID, "stage", stageEventsRead)
 	if err != nil {
 		return out
 	}
 	for _, ev := range evs {
-		if stage, _, ok := strings.Cut(ev.Text, " skipped: "); ok && ev.Kind == "stage" {
+		if stage, _, ok := strings.Cut(ev.Text, " skipped: "); ok {
 			out[stage] = true
 		}
 	}

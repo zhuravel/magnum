@@ -2017,8 +2017,9 @@ type stageSkip struct{ stage, why string }
 // nextStage is the stage after stage i of kind for task t, and the stages
 // it skips on the way: a qa stage of a repository without
 // [factory.repo.qa] (or with no [[factory.repo]] at all, as qaProblem has
-// it), and a stage for one width of plan (When) whose report's Files are a
-// change of the other (wideChange), so no tick spends its pass on a skip. A
+// it), and an agents stage for one width of plan (When) whose report's Files
+// are a change of the other (wideChange), so no tick spends its pass on a
+// skip; a gate, a review, a decision or an effect runs for every plan. A
 // report that cannot be read skips nothing: the stage's own pass says why
 // it cannot tell (skipByWidth). "" when every stage after i is skipped.
 func (e *Engine) nextStage(t registry.Task, kind config.FactoryKind, i int) (name string, skipped []stageSkip) {
@@ -2028,7 +2029,7 @@ func (e *Engine) nextStage(t registry.Task, kind config.FactoryKind, i int) (nam
 			skipped = append(skipped, stageSkip{st.Name, t.Repo + " has no [factory.repo.qa]"})
 			continue
 		}
-		if st.When != "" {
+		if st.Type == config.FactoryStageAgents && st.When != "" { // as runTurn: a gate runs for every plan
 			if b, err := os.ReadFile(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), reportFile)); err == nil {
 				if wide, why := wideChange(parseReport(string(b)).files); wide != (st.When == config.FactoryWhenWide) {
 					skipped = append(skipped, stageSkip{st.Name, why})

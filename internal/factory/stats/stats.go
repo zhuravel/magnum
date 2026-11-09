@@ -54,9 +54,11 @@ const cardCap = 30 * time.Minute
 // (nil: not counted, SetFixLoops), and Quality what the PR said of the
 // factory's work after the publish (nil for a task without a PR).
 // Questions counts the questions the task asked, each once whatever
-// revisions carried it, and QuestionsFrom them by source (questionSources):
-// how much each role, a second reader of the ticket's points among them,
-// adds to what the operator is asked.
+// revisions carried it; QuestionsFrom counts those of one source by that
+// source, and QuestionsShared those of several by the sources joined with
+// "+" (questionSources): what each role, a second reader of the ticket's
+// points among them, adds alone to what the operator is asked, and what two
+// readers raise both.
 type TaskStats struct {
 	TaskID   int64
 	Key      string
@@ -68,7 +70,7 @@ type TaskStats struct {
 	UnknownOrigin                                     int
 	AnswerBatches, Decisions, ReviewRounds            int
 	Questions                                         int
-	QuestionsFrom                                     map[string]int
+	QuestionsFrom, QuestionsShared                    map[string]int
 
 	OperatorSecs time.Duration //nolint:staticcheck // ST1011: the spec's name for the measure ("the operator's seconds per task")
 	WaitedOnYou  time.Duration
@@ -195,28 +197,29 @@ func startsTask(in registry.Input) bool {
 // whole seconds.
 func (t TaskStats) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		Task          int64          `json:"task"`
-		Key           string         `json:"key"`
-		Typed         int            `json:"typed"`
-		StepStarts    int            `json:"step_starts"`
-		Approvals     int            `json:"approvals"`
-		Corrections   int            `json:"corrections"`
-		Access        int            `json:"access"`
-		UnknownOrigin int            `json:"unknown_origin"`
-		AnswerBatches int            `json:"answer_batches"`
-		Decisions     int            `json:"decisions"`
-		ReviewRounds  int            `json:"review_rounds"`
-		OperatorSecs  int64          `json:"operator_secs"`
-		WaitedOnYou   int64          `json:"waited_on_you_secs"`
-		StartToReady  int64          `json:"start_to_ready_secs"`
-		Questions     int            `json:"questions,omitempty"`
-		QuestionsFrom map[string]int `json:"questions_from,omitempty"`
-		PR            string         `json:"pr,omitempty"`
-		FixLoops      *FixLoops      `json:"fix_loops,omitempty"`
-		Quality       *Quality       `json:"quality,omitempty"`
+		Task            int64          `json:"task"`
+		Key             string         `json:"key"`
+		Typed           int            `json:"typed"`
+		StepStarts      int            `json:"step_starts"`
+		Approvals       int            `json:"approvals"`
+		Corrections     int            `json:"corrections"`
+		Access          int            `json:"access"`
+		UnknownOrigin   int            `json:"unknown_origin"`
+		AnswerBatches   int            `json:"answer_batches"`
+		Decisions       int            `json:"decisions"`
+		ReviewRounds    int            `json:"review_rounds"`
+		OperatorSecs    int64          `json:"operator_secs"`
+		WaitedOnYou     int64          `json:"waited_on_you_secs"`
+		StartToReady    int64          `json:"start_to_ready_secs"`
+		Questions       int            `json:"questions,omitempty"`
+		QuestionsFrom   map[string]int `json:"questions_from,omitempty"`
+		QuestionsShared map[string]int `json:"questions_shared,omitempty"`
+		PR              string         `json:"pr,omitempty"`
+		FixLoops        *FixLoops      `json:"fix_loops,omitempty"`
+		Quality         *Quality       `json:"quality,omitempty"`
 	}{t.TaskID, t.Key, t.Typed, t.StepStarts, t.Approvals, t.Corrections, t.Access, t.UnknownOrigin, t.AnswerBatches, t.Decisions,
 		t.ReviewRounds, seconds(t.OperatorSecs), seconds(t.WaitedOnYou), seconds(t.StartToReady), t.Questions, t.QuestionsFrom,
-		t.PR.String(), t.FixLoops, t.Quality})
+		t.QuestionsShared, t.PR.String(), t.FixLoops, t.Quality})
 }
 
 func seconds(d time.Duration) int64 { return int64(d.Round(time.Second) / time.Second) }
@@ -432,9 +435,9 @@ func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now
 		return TaskStats{}, err
 	}
 	batches, onQuestions := answeredBatches(questions)
-	asked, from := questionSources(questions)
+	asked, from, shared := questionSources(questions)
 	ts := TaskStats{TaskID: t.ID, Key: taskKey(t), PR: pr, Quality: quality, AnswerBatches: batches, Decisions: len(decisions),
-		Questions: asked, QuestionsFrom: from,
+		Questions: asked, QuestionsFrom: from, QuestionsShared: shared,
 		ReviewRounds: len(cycles), OperatorSecs: onQuestions + onDecisions(decisions), WaitedOnYou: waitedOnYou(spans, t, now),
 		StartToReady: startToReady(spans)}
 	for _, in := range inputs {
@@ -547,13 +550,21 @@ func classOf(in registry.Input) string {
 var findingsRef = regexp.MustCompile(`findings-([A-Za-z0-9_.-]+?)\.md\b`)
 
 // questionSources counts the task's questions qs once each, by their text
-// (a revision carries an open question over word for word), and each by
-// source: every role its raised_by names ("fx-judge, fx-points" when two
-// roles raised it) and every investigator whose findings file its evidence
-// names (the judge cites the findings a question comes from), each source
-// once per question. from is nil when there are none.
-func questionSources(qs []registry.Question) (asked int, from map[string]int) {
+// (a revision carries an open question over word for word), and each by its
+// sources: the investigators whose findings files its evidence names (the
+// judge cites the findings a question comes from, and only relays it),
+// else the roles its raised_by names ("fx-judge, fx-points" when two roles
+// raised it). A question of one source counts in from for that source; one
+// of several counts in shared for the sources sorted and joined with "+".
+// The keys are role names only. from and shared are nil when empty.
+func questionSources(qs []registry.Question) (asked int, from, shared map[string]int) {
 	seen := map[string]bool{}
+	count := func(m *map[string]int, key string) {
+		if *m == nil {
+			*m = map[string]int{}
+		}
+		(*m)[key]++
+	}
 	for _, q := range qs {
 		if seen[q.Text] {
 			continue
@@ -561,22 +572,25 @@ func questionSources(qs []registry.Question) (asked int, from map[string]int) {
 		seen[q.Text] = true
 		asked++
 		roles := map[string]bool{}
-		for r := range strings.SplitSeq(q.RaisedBy, ",") {
-			if r = strings.TrimSpace(r); r != "" {
-				roles[r] = true
-			}
-		}
 		for _, m := range findingsRef.FindAllStringSubmatch(q.Evidence, -1) {
 			roles[m[1]] = true
 		}
-		for r := range roles {
-			if from == nil {
-				from = map[string]int{}
+		if len(roles) == 0 {
+			for r := range strings.SplitSeq(q.RaisedBy, ",") {
+				if r = strings.TrimSpace(r); r != "" {
+					roles[r] = true
+				}
 			}
-			from[r]++
+		}
+		switch names := slices.Sorted(maps.Keys(roles)); len(names) {
+		case 0:
+		case 1:
+			count(&from, names[0])
+		default:
+			count(&shared, strings.Join(names, "+"))
 		}
 	}
-	return asked, from
+	return asked, from, shared
 }
 
 // answeredBatches counts the answered batches of questions: one for each
@@ -726,18 +740,27 @@ func (r Report) questionsMarkdown(b *strings.Builder) {
 			continue
 		}
 		if !head {
-			b.WriteString("\n## Questions by source\n\n| Task | Questions | By source |\n|---|---|---|\n")
+			b.WriteString("\n## Questions by source\n\n| Task | Questions | From one source | Shared |\n|---|---|---|---|\n")
 			head = true
 		}
-		var parts []string
-		for _, role := range slices.Sorted(maps.Keys(t.QuestionsFrom)) {
-			parts = append(parts, fmt.Sprintf("%s %d", role, t.QuestionsFrom[role]))
-		}
-		fmt.Fprintf(b, "| %s | %d | %s |\n", t.Key, t.Questions, strings.Join(parts, ", "))
+		fmt.Fprintf(b, "| %s | %d | %s | %s |\n", t.Key, t.Questions, countsLine(t.QuestionsFrom), countsLine(t.QuestionsShared))
 	}
 	if head {
-		b.WriteString("\nA question counts once per task, for each role that raised it and each investigator whose findings file its evidence names.\n")
+		b.WriteString("\nA question counts once per task. Its sources are the investigators whose findings file its evidence names, else the roles " +
+			"that raised it: one source counts for that role alone (what it adds), several count apart as shared.\n")
 	}
+}
+
+// countsLine is counts as "key n" by key, comma-separated; "-" for none.
+func countsLine(counts map[string]int) string {
+	if len(counts) == 0 {
+		return "-"
+	}
+	parts := make([]string, 0, len(counts))
+	for _, k := range slices.Sorted(maps.Keys(counts)) {
+		parts = append(parts, fmt.Sprintf("%s %d", k, counts[k]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // fixLoopsMarkdown is the section of the fix loops magnum started on the

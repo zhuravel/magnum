@@ -106,3 +106,36 @@ func TestEventsAfterReadsTheNewerEventsOfItsKindsOldestFirst(t *testing.T) {
 		t.Errorf("plan %q, want the index events_kind", plan)
 	}
 }
+
+// TaskEvents reads one task's events of one kind, oldest first, at most the
+// newest limit of them: the screen's per-card read and the engine's checks
+// of a task's own stage events stay bounded however long the task's log
+// grows, and go by the task's index.
+func TestTaskEventsReadsOneTasksKindUpToItsNewestLimit(t *testing.T) {
+	t.Parallel()
+	r, _ := openAt(t)
+	ctx := t.Context()
+	task, other := createTask(t, r, "PR-12301"), createTask(t, r, "PR-12302")
+	for _, e := range []struct {
+		task       int64
+		kind, text string
+	}{{task.ID, "stage", "s1"}, {task.ID, "push", "p1"}, {other.ID, "stage", "o1"}, {task.ID, "stage", "s2"}, {task.ID, "stage", "s3"}} {
+		if err := r.AppendEvent(ctx, e.task, e.kind, registry.PhaseInfo, e.text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := r.TaskEvents(ctx, task.ID, "stage", 0)
+	if err != nil || len(got) != 3 || got[0].Text != "s1" || got[2].Text != "s3" {
+		t.Fatalf("TaskEvents(stage) = %+v, %v; want s1, s2, s3", got, err)
+	}
+	if got, _ := r.TaskEvents(ctx, task.ID, "stage", 2); len(got) != 2 || got[0].Text != "s2" || got[1].Text != "s3" {
+		t.Errorf("TaskEvents(stage, limit 2) = %+v, want the newest two, s2 and s3", got)
+	}
+	if got, _ := r.TaskEvents(ctx, task.ID, "nothing", 0); len(got) != 0 {
+		t.Errorf("TaskEvents of a kind it has none of = %+v", got)
+	}
+	plan := queryPlan(t, r.DBForTest(), "EXPLAIN QUERY PLAN SELECT id FROM events WHERE task_id = 1 AND kind = 'stage' ORDER BY id DESC LIMIT 100")
+	if joined := strings.Join(plan, "; "); !strings.Contains(joined, "events_task") && !strings.Contains(joined, "events_kind") {
+		t.Errorf("the query plan %q uses no index of events", joined)
+	}
+}

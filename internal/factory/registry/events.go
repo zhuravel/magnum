@@ -77,6 +77,27 @@ func (r *Registry) Events(ctx context.Context, taskID int64, limit int) ([]Event
 	return evs, nil
 }
 
+// TaskEvents returns task taskID's events of kind, oldest first; limit > 0
+// keeps only the newest limit of them. A read that a screen repeats, or a
+// check of a task's own stage events, stays bounded by its kind and limit
+// however long the task's log grows.
+func (r *Registry) TaskEvents(ctx context.Context, taskID int64, kind string, limit int) ([]Event, error) {
+	q := "SELECT id, at, task_id, kind, phase, text FROM events WHERE task_id = ? AND kind = ? ORDER BY id DESC"
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	rows, err := r.db.QueryContext(ctx, q, taskID, kind)
+	if err != nil {
+		return nil, fmt.Errorf("%s events of task %d: %w", kind, taskID, err)
+	}
+	evs, err := collect(rows, scanEvent)
+	if err != nil {
+		return nil, fmt.Errorf("%s events of task %d: %w", kind, taskID, err)
+	}
+	slices.Reverse(evs)
+	return evs, nil
+}
+
 // RecentEvents returns the newest limit events of the given kinds, of
 // every task and of the daemon itself, newest first (limit <= 0: all).
 // No kind is no event.

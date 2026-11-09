@@ -6279,10 +6279,11 @@ type FactoryStage struct {
     When "wide" skips the stage unless the plan touches 3 or more files,
     the database or security, and "narrow" skips it for such a plan: two stages,
     one of each, run one role on a wide plan and another on a narrow one (the
-    built-in critic at xhigh, the narrow critic at high). Prompt, for an agents
-    stage, is the prompt file every role of the stage gets in place of its
-    own role's (a stage that asks a role for another file than its usual one,
-    such as the judge's PR body); empty, each role's own.
+    built-in critic at xhigh, the narrow critic at high); only an agents stage
+    takes one. Prompt, for an agents stage, is the prompt file every role of the
+    stage gets in place of its own role's (a stage that asks a role for another
+    file than its usual one, such as the judge's PR body); empty, each role's
+    own.
 
 type FactoryStaging struct {
 	Name   string `toml:"name"`
@@ -16000,6 +16001,12 @@ func (r *Registry) TaskByRequest(ctx context.Context, id int64) (Task, error)
     TaskByRequest returns the task start request id made (Task.RequestID); none,
     and an id under 1, are ErrNotFound.
 
+func (r *Registry) TaskEvents(ctx context.Context, taskID int64, kind string, limit int) ([]Event, error)
+    TaskEvents returns task taskID's events of kind, oldest first; limit >
+    0 keeps only the newest limit of them. A read that a screen repeats,
+    or a check of a task's own stage events, stays bounded by its kind and limit
+    however long the task's log grows.
+
 func (r *Registry) Tasks(ctx context.Context) ([]Task, error)
     Tasks returns every task, oldest first.
 
@@ -17191,7 +17198,7 @@ type TaskStats struct {
 	UnknownOrigin                                     int
 	AnswerBatches, Decisions, ReviewRounds            int
 	Questions                                         int
-	QuestionsFrom                                     map[string]int
+	QuestionsFrom, QuestionsShared                    map[string]int
 
 	OperatorSecs time.Duration //nolint:staticcheck // ST1011: the spec's name for the measure ("the operator's seconds per task")
 	WaitedOnYou  time.Duration
@@ -17200,29 +17207,31 @@ type TaskStats struct {
     TaskStats is what one task asked of the operator. Typed counts the messages
     the operator typed (the task's text, typed in a pane, said in one line,
     the start's guidance, the note of a send-back); StepStarts, Approvals,
-    Corrections and Access count those of them by class (a retry is a step the
-    operator started by hand, so it counts as a step start and not as a typed
-    message; the message that starts the task, however it is recorded, is the
-    one the factory needs, so it is typed and never a step start, whatever
-    its words say); a message of another class, or of none, is only typed.
-    UnknownOrigin counts apart the turns typed in a pane that nothing proves
-    the operator typed (any origin but registry.OriginHerdr: a turn counts
-    as the operator's only with positive proof): kept for evaluation only,
-    they are never a typed message, a step start or any class. AnswerBatches
-    counts the revisions of questions that were answered, and Decisions the
-    decisions on cards; both are counted apart. OperatorSecs is the operator's
-    time on cards: for each decision, from the card shown to the decision,
-    and for each answered revision of questions, from the questions shown to
-    the first answer, each at most cardCap (a card never shown has no time to
-    measure). WaitedOnYou is how long the task waited on the operator, asleep
-    or not (its spans that wait on "you"). StartToReady is how long it took to
-    reach the ready card (zero before it does). PR is the task's PR (zero before
-    it has one), FixLoops the fix loops magnum started on it (nil: not counted,
-    SetFixLoops), and Quality what the PR said of the factory's work after the
-    publish (nil for a task without a PR). Questions counts the questions the
-    task asked, each once whatever revisions carried it, and QuestionsFrom them
-    by source (questionSources): how much each role, a second reader of the
-    ticket's points among them, adds to what the operator is asked.
+    Corrections and Access count those of them by class (a retry is a step
+    the operator started by hand, so it counts as a step start and not as a
+    typed message; the message that starts the task, however it is recorded,
+    is the one the factory needs, so it is typed and never a step start,
+    whatever its words say); a message of another class, or of none,
+    is only typed. UnknownOrigin counts apart the turns typed in a pane that
+    nothing proves the operator typed (any origin but registry.OriginHerdr:
+    a turn counts as the operator's only with positive proof): kept for
+    evaluation only, they are never a typed message, a step start or any class.
+    AnswerBatches counts the revisions of questions that were answered, and
+    Decisions the decisions on cards; both are counted apart. OperatorSecs is
+    the operator's time on cards: for each decision, from the card shown to the
+    decision, and for each answered revision of questions, from the questions
+    shown to the first answer, each at most cardCap (a card never shown has no
+    time to measure). WaitedOnYou is how long the task waited on the operator,
+    asleep or not (its spans that wait on "you"). StartToReady is how long it
+    took to reach the ready card (zero before it does). PR is the task's PR
+    (zero before it has one), FixLoops the fix loops magnum started on it (nil:
+    not counted, SetFixLoops), and Quality what the PR said of the factory's
+    work after the publish (nil for a task without a PR). Questions counts
+    the questions the task asked, each once whatever revisions carried it;
+    QuestionsFrom counts those of one source by that source, and QuestionsShared
+    those of several by the sources joined with "+" (questionSources): what each
+    role, a second reader of the ticket's points among them, adds alone to what
+    the operator is asked, and what two readers raise both.
 
 func (t TaskStats) MarshalJSON() ([]byte, error)
     MarshalJSON writes the task's stats with fixed keys and the durations in

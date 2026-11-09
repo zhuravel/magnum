@@ -222,8 +222,16 @@ func TestTheFeatureKindInvestigatesWithACodexTwinOfThePointsReader(t *testing.T)
 	}
 }
 
-// A stage's when is empty, "wide" or "narrow"; anything else is refused.
+// A stage's when is empty, "wide" or "narrow", and only an agents stage
+// takes one: a gate, a review, a decision or an effect runs for every plan
+// (a questions gate skipped for a width would never ask its questions), so
+// a when on one is refused, saying why; anything but the three is refused.
 func TestAStageRunsForAWideOrANarrowPlan(t *testing.T) {
+	for _, stage := range []string{"questions", "reproduction", "local_review", "ready", "publish"} {
+		cfg := validFactoryConfig()
+		editKind(cfg, "bug", func(s []FactoryStage) []FactoryStage { s[findStage(s, stage)].When = FactoryWhenWide; return s })
+		wantError(t, cfg.Validate(), `stage "`+stage+`"`, `when "wide" is for agents stages only`, "runs for every plan")
+	}
 	for _, when := range []string{"", FactoryWhenWide, FactoryWhenNarrow} {
 		cfg := validFactoryConfig()
 		editKind(cfg, "bug", func(s []FactoryStage) []FactoryStage { s[findStage(s, "critic")].When = when; return s })
@@ -709,6 +717,27 @@ func TestFactoryCodexFallbackMustNameAClaudeRole(t *testing.T) {
 	delete(cfg.Factory.CodexFallback, "fx-critic")
 	if w := cfg.Warnings(); !slices.ContainsFunc(w, func(s string) bool { return strings.Contains(s, "fx-critic") && strings.Contains(s, "codex_fallback") }) {
 		t.Errorf("warnings = %q, want one for fx-critic", w)
+	}
+}
+
+// A role moved to Claude whose codex_fallback runs beside it in a stage (the
+// points twin moved to Claude) keeps being that stage's second reader: the
+// warning says so, and how to give it a questions file of its own, instead
+// of calling the entry unused.
+func TestAMovedSecondReadersWarningSaysItStillAsksNoOne(t *testing.T) {
+	cfg, err := loadCommittedWithLocal(t, testLocalConfig+`
+[[factory.role]]
+name = "fx-points-codex"
+kind = "claude"
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `factory.codex_fallback key fx-points-codex is a claude role: no refusal hands its work to fx-points, but fx-points runs ` +
+		`beside it in the feature kind's investigate stage, so it stays that stage's second reader and asks no one itself ` +
+		`(fx-points-codex = "" in codex_fallback gives it a questions file of its own)`
+	if w := cfg.Warnings(); !slices.Contains(w, want) {
+		t.Errorf("warnings = %q, want %q", w, want)
 	}
 }
 

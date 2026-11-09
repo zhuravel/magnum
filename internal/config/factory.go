@@ -313,10 +313,11 @@ const (
 // When "wide" skips the stage unless the plan touches 3 or more files, the
 // database or security, and "narrow" skips it for such a plan: two stages,
 // one of each, run one role on a wide plan and another on a narrow one (the
-// built-in critic at xhigh, the narrow critic at high). Prompt, for an
-// agents stage, is the prompt file every role of the stage gets in place of
-// its own role's (a stage that asks a role for another file than its usual
-// one, such as the judge's PR body); empty, each role's own.
+// built-in critic at xhigh, the narrow critic at high); only an agents
+// stage takes one. Prompt, for an agents stage, is the prompt file every
+// role of the stage gets in place of its own role's (a stage that asks a
+// role for another file than its usual one, such as the judge's PR body);
+// empty, each role's own.
 type FactoryStage struct {
 	Name     string   `toml:"name"`
 	Type     string   `toml:"type"`
@@ -908,9 +909,13 @@ func (c *Config) validateStage(where string, st FactoryStage, roles map[string]R
 		return errs
 	}
 	switch {
-	case st.Type == FactoryStageQA && st.When != "":
+	case st.When == "":
+	case st.Type == FactoryStageQA:
 		bad("when %q is not for a qa stage (the repository's qa.when says whether a change shows pages)", st.When)
-	case st.When != "" && st.When != FactoryWhenWide && st.When != FactoryWhenNarrow:
+	case st.Type != FactoryStageAgents:
+		bad("when %q is for agents stages only: a %s stage runs for every plan (a questions gate skipped for a width would never ask its questions)",
+			st.When, st.Type)
+	case st.When != FactoryWhenWide && st.When != FactoryWhenNarrow:
 		bad("when %q must be empty, %q or %q", st.When, FactoryWhenWide, FactoryWhenNarrow)
 	}
 	switch {
@@ -1293,11 +1298,26 @@ func validateFactoryStaging(where string, r FactoryRepo) []error {
 	return errs
 }
 
+// factoryStageWith is the first kind (by name) and stage that run both role
+// and other, false for none.
+func (c *Config) factoryStageWith(role, other string) (kind, stage string, ok bool) {
+	for _, name := range slices.Sorted(maps.Keys(c.Factory.Kinds)) {
+		for _, st := range c.Factory.Kinds[name].Stages {
+			if slices.Contains(st.Roles, role) && slices.Contains(st.Roles, other) {
+				return name, st.Name, true
+			}
+		}
+	}
+	return "", "", false
+}
+
 // factoryWarnings lists what is valid but probably not what you meant: a
 // Codex factory role with no fallback (after a Codex refusal its task waits
 // for you), a codex_fallback entry for a role that is not on Codex (the
-// entry is not used), and, once a repository is configured, a later_without
-// role no [[role]] has.
+// entry hands it no work, but one whose fallback runs beside it in a stage
+// still makes it that stage's second reader, which asks no one itself),
+// and, once a repository is configured, a later_without role no [[role]]
+// has.
 func (c *Config) factoryWarnings() []string {
 	var out []string
 	for _, r := range c.Factory.Roles {
@@ -1306,9 +1326,18 @@ func (c *Config) factoryWarnings() []string {
 		}
 	}
 	for _, key := range slices.Sorted(maps.Keys(c.Factory.CodexFallback)) {
-		if r, ok := c.FactoryRole(key); ok && r.AgentKind() != KindCodex {
-			out = append(out, fmt.Sprintf("factory.codex_fallback key %s is a %s role: its fallback is not used", key, r.AgentKind()))
+		r, ok := c.FactoryRole(key)
+		if !ok || r.AgentKind() == KindCodex {
+			continue
 		}
+		fb := c.Factory.CodexFallback[key]
+		if kind, stage, beside := c.factoryStageWith(key, fb); beside {
+			out = append(out, fmt.Sprintf("factory.codex_fallback key %s is a %s role: no refusal hands its work to %s, but %s runs beside it "+
+				"in the %s kind's %s stage, so it stays that stage's second reader and asks no one itself (%s = \"\" in codex_fallback gives "+
+				"it a questions file of its own)", key, r.AgentKind(), fb, fb, kind, stage, key))
+			continue
+		}
+		out = append(out, fmt.Sprintf("factory.codex_fallback key %s is a %s role: its fallback is not used", key, r.AgentKind()))
 	}
 	if len(c.Factory.Repos) > 0 {
 		for _, name := range c.Factory.LocalReview.LaterWithout {

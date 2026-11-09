@@ -160,7 +160,7 @@ func TestStatsCountsTypedMessagesPerTask(t *testing.T) {
 	want := stats.TaskStats{TaskID: a.ID, Key: "PR-12301", Typed: 9, StepStarts: 1, Approvals: 1, Corrections: 2, Access: 1,
 		AnswerBatches: 2, Decisions: 2, ReviewRounds: 2}
 	got.OperatorSecs, got.WaitedOnYou, got.StartToReady = 0, 0, 0
-	got.Questions, got.QuestionsFrom = 0, nil // counted apart (TestStatsCountTheQuestionsBySource)
+	got.Questions, got.QuestionsFrom, got.QuestionsShared = 0, nil, nil // counted apart (TestStatsCountTheQuestionsBySource)
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("task A\n got %+v\nwant %+v", got, want)
 	}
@@ -200,11 +200,13 @@ func askRevision(t *testing.T, r *registry.Registry, clk *clock, taskID int64, r
 }
 
 // The questions a task asked are counted once each (a question an open
-// revision carries over is the same question), and by source: each role
-// its raised_by names (two roles that raised it both count) and each
-// investigator whose findings file its evidence names, so a second
-// reader's share shows even when the judge asked its questions. The JSON
-// and the markdown carry them; a task that asked nothing shows none.
+// revision carries over is the same question), and by source: the
+// investigators whose findings file its evidence names (the judge cites the
+// findings a question comes from), else the roles its raised_by names. A
+// question of one source counts for that source alone, so a second reader's
+// count is what it adds; one of several sources (both readers raised it)
+// counts apart, as shared by those roles. The JSON and the markdown carry
+// them; a task that asked nothing shows none.
 func TestStatsCountTheQuestionsBySource(t *testing.T) {
 	t.Parallel()
 	r := openRegistry(t)
@@ -216,6 +218,7 @@ func TestStatsCountTheQuestionsBySource(t *testing.T) {
 	if err := r.ReplaceQuestions(ctx, a.ID, 1, []registry.Question{
 		{Text: "Can a merchant turn it off?", Recommended: -1, RaisedBy: "fx-judge", Evidence: "findings-fx-points-codex.md: Point 3"},
 		{Text: "When does it go out?", Recommended: -1, RaisedBy: "fx-points", Evidence: "app/models/credit.rb:12"},
+		{Text: "Does it reuse the credit template?", Recommended: -1, RaisedBy: "fx-judge", Evidence: "app/mailers/credit_mailer.rb:40"},
 		both,
 	}); err != nil {
 		t.Fatal(err)
@@ -229,22 +232,25 @@ func TestStatsCountTheQuestionsBySource(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := only(t, rep, "PR-12390")
-	want := map[string]int{"fx-judge": 2, "fx-points": 2, "fx-points-codex": 2, "fx-critic": 1}
-	if got.Questions != 4 || !maps.Equal(got.QuestionsFrom, want) {
-		t.Fatalf("questions %d from %v, want 4 from %v", got.Questions, got.QuestionsFrom, want)
+	from := map[string]int{"fx-judge": 1, "fx-points": 1, "fx-points-codex": 1, "fx-critic": 1}
+	shared := map[string]int{"fx-points+fx-points-codex": 1}
+	if got.Questions != 5 || !maps.Equal(got.QuestionsFrom, from) || !maps.Equal(got.QuestionsShared, shared) {
+		t.Fatalf("questions %d from %v, shared %v; want 5 from %v, shared %v", got.Questions, got.QuestionsFrom, got.QuestionsShared, from, shared)
 	}
-	if q := only(t, rep, "PR-12391"); q.Questions != 0 || len(q.QuestionsFrom) != 0 {
-		t.Fatalf("a task that asked nothing: %d from %v", q.Questions, q.QuestionsFrom)
+	if q := only(t, rep, "PR-12391"); q.Questions != 0 || len(q.QuestionsFrom) != 0 || len(q.QuestionsShared) != 0 {
+		t.Fatalf("a task that asked nothing: %d from %v, shared %v", q.Questions, q.QuestionsFrom, q.QuestionsShared)
 	}
 	js, err := json.Marshal(got)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(js), `"questions":4,"questions_from":{"fx-critic":1,"fx-judge":2,"fx-points":2,"fx-points-codex":2}`) {
+	if !strings.Contains(string(js), `"questions":5,"questions_from":{"fx-critic":1,"fx-judge":1,"fx-points":1,"fx-points-codex":1},`+
+		`"questions_shared":{"fx-points+fx-points-codex":1}`) {
 		t.Errorf("the task's JSON lacks its questions by source:\n%s", js)
 	}
 	md := rep.Markdown()
-	for _, want := range []string{"## Questions by source", "| PR-12390 | 4 | fx-critic 1, fx-judge 2, fx-points 2, fx-points-codex 2 |"} {
+	for _, want := range []string{"## Questions by source", "| Task | Questions | From one source | Shared |",
+		"| PR-12390 | 5 | fx-critic 1, fx-judge 1, fx-points 1, fx-points-codex 1 | fx-points+fx-points-codex 1 |"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("the markdown lacks %q:\n%s", want, md)
 		}

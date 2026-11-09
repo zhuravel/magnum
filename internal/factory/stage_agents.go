@@ -149,8 +149,10 @@ type agentsRun struct {
 	// (Runtime.QuitCodex), tried again each pass until it went through.
 	quitCodex bool
 	// left are the roles the stage's run of their fallback covers
-	// (coveredIn) that a rebuild of the run left out, each to leave the
-	// stage (leaveStage) once the pass quit the task's Codex sessions.
+	// (coveredIn), out of roles, each to leave the stage (leaveStage) once
+	// a pass confirmed the quit of the task's Codex sessions (quitCodex
+	// false): a refused session still alive could write its files after
+	// they were set aside. The stage does not pass while any is left.
 	left []leaving
 	// turn is how this pass runs the attempt (runTurn).
 	turn agentsTurn
@@ -357,7 +359,7 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 	if agentWait(t.WaitsWho) {
 		e.waitOn(ctx, t, "", "")
 	}
-	if slices.ContainsFunc(run.roles, func(r *stageRole) bool { return !r.ok }) {
+	if slices.ContainsFunc(run.roles, func(r *stageRole) bool { return !r.ok }) || len(run.left) > 0 {
 		return false, nil
 	}
 	return true, e.passStage(ctx, t, st, a, dir, run.proven)
@@ -479,6 +481,10 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 	// the loop kept only in memory. QuitCodex quits only the sessions that
 	// start or run, so a quit done already does nothing again.
 	run := &agentsRun{attempt: a.ID, turn: turn, quitCodex: t.CodexNever}
+	done, err := e.reg.RoleRuns(ctx, a.ID)
+	if err != nil {
+		return nil, nil, err
+	}
 	for _, name := range st.Roles {
 		role, ok := e.cfg.FactoryRole(name)
 		if !ok {
@@ -489,16 +495,17 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 			return nil, nil, cannotRun(role, err)
 		}
 		if coveredIn(st, role, runAs) {
-			run.left = append(run.left, leaving{role, runAs})
+			// A run of it the runtime verified did its work before the
+			// refusal: its files stay for the judge, as on the pass that
+			// took the refusal (onAgentEvent relaunches no role that is ok).
+			if !slices.ContainsFunc(done, func(rr registry.RoleRun) bool { return rr.Role == role.Name && rr.Outcome == "verified" }) {
+				run.left = append(run.left, leaving{role, runAs})
+			}
 			continue
 		}
 		run.roles = append(run.roles, &stageRole{role: role, runAs: asStageRuns(st, runAs), runs: map[string]bool{}})
 	}
 	entries, err := e.reg.LedgerOf(ctx, t.ID)
-	if err != nil {
-		return nil, nil, err
-	}
-	done, err := e.reg.RoleRuns(ctx, a.ID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -607,9 +614,10 @@ func (e *Engine) lastRunEvent(ctx context.Context, t registry.Task, r *stageRole
 type leaving struct{ role, runAs config.Role }
 
 // leaveStage has role, which the stage's run of its fallback runAs covers
-// (coveredIn), leave stage st of task t: what a refused run of it left in
+// (coveredIn), leave stage st of task t, once a pass confirmed the quit of
+// the task's Codex sessions (agentsRun.left): what a refused run of it left in
 // the task's directory (its findings and its questions file, perhaps
-// partial) is set aside as <name>.refused (setAsideRefused), out of every glob of
+// partial) is set aside as <name>.refused (setAsideAs), out of every glob of
 // the agents' files, so the judge never reads it as a second reading; an
 // event says so, once for the role and the stage (a restart's rebuild
 // leaves it again, finding nothing to set aside and the event written). A
@@ -618,7 +626,7 @@ type leaving struct{ role, runAs config.Role }
 // the task.
 func (e *Engine) leaveStage(ctx context.Context, t registry.Task, st config.FactoryStage, role, runAs config.Role) {
 	lead := role.Name + " left the " + st.Name + " stage"
-	moved, err := setAsideRefused(e.d.Layout.FactoryTaskDir(t.ID), findingsFile(role.Name), roleQuestionsFile(role.Name))
+	moved, err := setAsideAs(e.d.Layout.FactoryTaskDir(t.ID), refusedSuffix, findingsFile(role.Name), roleQuestionsFile(role.Name))
 	if err != nil {
 		e.log.Warn("set aside the files of a role that left its stage", "task", t.ID, "role", role.Name, "err", err)
 		e.event(ctx, t.ID, "stage", registry.PhaseFail, lead+": its files were not set aside: "+textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200))
@@ -633,23 +641,24 @@ func (e *Engine) leaveStage(ctx context.Context, t registry.Task, st config.Fact
 	e.event(ctx, t.ID, "stage", registry.PhaseInfo, text)
 }
 
-// saidOnce reports whether one of task t's stage events starts with lead (a
-// failed read counts as said: a second event costs less than a missed one
-// never would, but the read is retried at the next rebuild anyway).
+// saidOnce reports whether one of task t's stage events starts with lead. A
+// failed read counts as not said: the event is written again, as a repeat
+// costs less than an event never written.
 func (e *Engine) saidOnce(ctx context.Context, t registry.Task, lead string) bool {
-	evs, err := e.reg.Events(ctx, t.ID, 0)
+	evs, err := e.reg.TaskEvents(ctx, t.ID, "stage", 0)
 	if err != nil {
-		e.log.Warn("read a task's events", "task", t.ID, "err", err)
+		e.log.Warn("read a task's stage events", "task", t.ID, "err", err)
 		return false
 	}
-	return slices.ContainsFunc(evs, func(ev registry.Event) bool { return ev.Kind == "stage" && strings.HasPrefix(ev.Text, lead) })
+	return slices.ContainsFunc(evs, func(ev registry.Event) bool { return strings.HasPrefix(ev.Text, lead) })
 }
 
-// setAsideRefused renames each of names in dir that exists to <name>.refused
-// (refusedSuffix), over an earlier one, and returns the new names. A name
-// already set aside (no file left) is nothing to do, so a second call
-// changes nothing.
-func setAsideRefused(dir string, names ...string) ([]string, error) {
+// setAsideAs renames each of names in dir that exists to <name><suffix>
+// (refusedSuffix, unaskedSuffix), over an earlier one, and returns the new
+// names. A name already set aside (no file left) is nothing to do, so a
+// second call changes nothing; the file keeps its words, so a rename back
+// undoes it.
+func setAsideAs(dir, suffix string, names ...string) ([]string, error) {
 	var moved []string
 	var errs []error
 	for _, name := range names {
@@ -657,11 +666,11 @@ func setAsideRefused(dir string, names ...string) ([]string, error) {
 		if !fsx.Exists(from) {
 			continue
 		}
-		if err := os.Rename(from, from+refusedSuffix); err != nil {
+		if err := os.Rename(from, from+suffix); err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		moved = append(moved, name+refusedSuffix)
+		moved = append(moved, name+suffix)
 	}
 	return moved, errors.Join(errs...)
 }
@@ -1107,15 +1116,20 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 			run.quitCodex = false
 		}
 	}
-	for _, l := range run.left {
-		e.leaveStage(ctx, t, st, l.role, l.runAs)
-	}
-	run.left = nil
 	entries, err := e.reg.LedgerOf(ctx, t.ID)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { run.roles = slices.DeleteFunc(run.roles, func(r *stageRole) bool { return r.covered }) }()
+	defer func() {
+		run.roles = slices.DeleteFunc(run.roles, func(r *stageRole) bool { return r.covered })
+		if run.quitCodex { // the quit failed: the next pass tries it again first
+			return
+		}
+		for _, l := range run.left {
+			e.leaveStage(ctx, t, st, l.role, l.runAs)
+		}
+		run.left = nil
+	}()
 	for _, r := range run.roles {
 		if r.ok || r.failed != "" || r.asking || r.covered {
 			continue
@@ -1137,7 +1151,7 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 			}
 			if coveredIn(st, r.role, runAs) {
 				r.covered = true
-				e.leaveStage(ctx, t, st, r.role, runAs)
+				run.left = append(run.left, leaving{r.role, runAs})
 				continue
 			}
 			runAs = asStageRuns(st, runAs)
@@ -1327,6 +1341,7 @@ func (e *Engine) outputs(t registry.Task, st config.FactoryStage, role config.Ro
 // again, once).
 func (e *Engine) passStage(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt, dir, proven string) error {
 	delete(e.agentRuns, t.ID)
+	e.setAsideUnasked(ctx, t, st, dir)
 	switch {
 	case st.End == config.FactoryEndPRBody:
 		if err := e.appendKnown(ctx, t); err != nil {
@@ -1356,6 +1371,29 @@ func (e *Engine) passStage(ctx context.Context, t registry.Task, st config.Facto
 		}
 	}
 	return nil
+}
+
+// setAsideUnasked sets aside, as <name>.unasked, the questions file each
+// second reader of stage st (secondReader) wrote although it asks no one,
+// as the stage passes and before a later stage's judge reads the task's
+// questions files: its open questions are in its findings, and no file
+// that looks like questions that reach the operator stays behind. An event
+// names each; a rename that fails is a warning, and the gate still never
+// asks the file (asksNoOne).
+func (e *Engine) setAsideUnasked(ctx context.Context, t registry.Task, st config.FactoryStage, dir string) {
+	for _, role := range st.Roles {
+		if !secondReader(e.cfg, st, role) {
+			continue
+		}
+		moved, err := setAsideAs(dir, unaskedSuffix, roleQuestionsFile(role))
+		if err != nil {
+			e.log.Warn("set aside a second reader's questions file", "task", t.ID, "role", role, "err", err)
+		}
+		if len(moved) > 0 {
+			e.event(ctx, t.ID, "stage", registry.PhaseInfo, "set aside "+strings.Join(moved, ", ")+": "+role+
+				" is the "+st.Name+" stage's second reader and asks no one (its open questions are in its findings)")
+		}
+	}
 }
 
 // renderRole renders the prompt of role (as the stage names it) for task t

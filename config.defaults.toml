@@ -1078,10 +1078,10 @@ doing = "talking with you"
 #             and waits on you after the cap or a decline; a state the walker could not reach, a run past its cap or
 #             one that reached no page waits on you. At most one per kind, after a review stage and before the
 #             ready_push decision; no prompt and no when (a repository without [factory.repo.qa] skips it)
-# `when = "wide"` skips a stage unless the plan touches 3 or more files, the database or security, and `when =
-# "narrow"` skips it for such a plan: every plan gets a critic, fx-critic at xhigh on a wide one and fx-critic-narrow
-# at high on a narrow one. A publish effect must come after a ready_push decision: nothing leaves the Mac without
-# your y.
+# `when = "wide"` skips an agents stage unless the plan touches 3 or more files, the database or security, and
+# `when = "narrow"` skips it for such a plan (no other stage type takes a when: it runs for every plan): every plan
+# gets a critic, fx-critic at xhigh on a wide one and fx-critic-narrow at high on a narrow one. A publish effect must
+# come after a ready_push decision: nothing leaves the Mac without your y.
 
 [factory.kinds.bug]
 stages = [

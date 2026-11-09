@@ -373,7 +373,8 @@ func TestTwoReadersOfTheTicketsPointsKeepApartAndTheJudgeMergesThem(t *testing.T
 	judge := renderFactory(t, cfg, "factory-judge.md", d)
 	for _, want := range []string{"Two investigators may read the same thing on their own (a feature's points, read twice)",
 		"a point or a fact both raise is one", "check against the code",
-		"An investigator that wrote no questions file of its own", "asks the operator nothing itself",
+		"An investigator that has no questions file of its own (a second reader) puts its open questions in its findings only",
+		"a questions file it wrote anyway is dropped, never asked", "asks the operator nothing itself",
 		"what its open questions add to the questions files the other roles wrote, once, and none they ask already",
 		"names that findings file (`findings-<role>.md`) in its `evidence`"} {
 		if !strings.Contains(judge, want) {
@@ -941,6 +942,27 @@ func TestANarrowPlansJudgeLeadsStraightToTheNarrowCritic(t *testing.T) {
 	}
 }
 
+// A plan's width skips agents stages only, as the config allows `when` on
+// them alone: a questions gate that names a width anyway (a config the
+// check would refuse) still asks its questions after a narrow critic.
+func TestAQuestionsGateIsNeverSkippedByWidth(t *testing.T) {
+	h := newHarness(t)
+	k := h.cfg.Factory.Kinds["chore"]
+	k.Stages = slices.Clone(k.Stages)
+	k.Stages[stageIndex(k, "questions")].When = config.FactoryWhenWide
+	h.cfg.Factory.Kinds["chore"] = k
+	task := h.kindTask("PR-12328", "chore", "narrow_critic")
+	h.taskFile(task.ID, "report.md", reportNaming("app/models/campaign.rb"))
+	h.taskFile(task.ID, "questions.json", questionsJSON(t, whenQuestion))
+	h.startStage(task)
+	h.taskFile(task.ID, "critic.md", "The plan never says what happens to a campaign with no rules.\n")
+	h.ended(task, "fx-critic-narrow")
+	h.tick()
+	if got := h.reload(task.ID); got.Stage != "questions" || got.QuestionRev != 1 {
+		t.Fatalf("task at %q with revision %d, want at the questions gate with the judge's question asked", got.Stage, got.QuestionRev)
+	}
+}
+
 // Review Focus 4: a role that ends without its file gets one nudge, and
 // then the task waits on you, naming the role and the file.
 func TestAMissingFindingsFileGetsOneNudgeThenNeedsYou(t *testing.T) {
@@ -1321,6 +1343,73 @@ func TestACodexRefusalOfThePointsTwinLeavesFxPointsToEndTheStage(t *testing.T) {
 	}
 }
 
+// A refused twin's files are set aside only once the task's Codex sessions
+// are confirmed quit: while the quit fails (it is tried again each pass),
+// the files stay and the stage does not pass, even with fx-points done, so
+// a refused session still alive cannot write a findings file after the
+// rename; once the quit goes through, they are set aside and the stage
+// passes.
+func TestARefusedTwinsFilesWaitForTheCodexQuit(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12335", "feature", "investigate")
+	h.startStage(task)
+	h.taskFile(task.ID, "findings-fx-points-codex.md", "## Point 1\nThe export")
+	h.rt.mu.Lock()
+	h.rt.quitErr = errors.New("herdr: no answer")
+	h.rt.mu.Unlock()
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-points-codex", RunID: h.lastRun("fx-points-codex"),
+		Kind: runtime.EventRefused, Reason: "codex: flagged for possible cybersecurity risk"})
+	h.taskFile(task.ID, "findings-fx-points.md", "## Point 1\nThe export exists in app/models/coupon_export.rb:12.\n")
+	h.ended(task, "fx-points")
+	h.tick()
+	dir := h.layout.FactoryTaskDir(task.ID)
+	if !fsx.Exists(filepath.Join(dir, "findings-fx-points-codex.md")) {
+		t.Fatal("the twin's findings were set aside while the quit of its session failed")
+	}
+	if got := h.reload(task.ID); got.Stage != "investigate" {
+		t.Fatalf("task at %q, want the stage held until the twin's files are set aside", got.Stage)
+	}
+
+	h.rt.mu.Lock()
+	h.rt.quitErr = nil
+	h.rt.mu.Unlock()
+	h.tick()
+	if fsx.Exists(filepath.Join(dir, "findings-fx-points-codex.md")) || !fsx.Exists(filepath.Join(dir, "findings-fx-points-codex.md"+refusedSuffix)) {
+		t.Fatal("the twin's findings were not set aside once the quit went through")
+	}
+	if got := h.reload(task.ID); got.Stage != "judge" {
+		t.Fatalf("task at %q, want the investigation passed once the twin's files are set aside", got.Stage)
+	}
+}
+
+// A twin whose run passed its end fact before a refusal did its work: its
+// findings stay for the judge, in the pass that took the refusal and after
+// a restart alike, and it leaves no event of leaving.
+func TestATwinThatPassedBeforeARefusalKeepsItsFindings(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12336", "feature", "investigate")
+	h.startStage(task)
+	h.taskFile(task.ID, "findings-fx-points-codex.md", "## Point 1\nThe export exists in app/models/coupon_export.rb:12.\n")
+	h.ended(task, "fx-points-codex")
+	h.tick()
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-points-codex", RunID: h.lastRun("fx-points-codex"),
+		Kind: runtime.EventRefused, Reason: "codex: flagged for possible cybersecurity risk"})
+	h.tick()
+	dir := h.layout.FactoryTaskDir(task.ID)
+	for _, restart := range []bool{false, true} {
+		if restart {
+			h.restart()
+			h.startStage(task)
+		}
+		if !fsx.Exists(filepath.Join(dir, "findings-fx-points-codex.md")) {
+			t.Fatalf("restart %v: the findings of the twin's verified run were set aside", restart)
+		}
+	}
+	if left := slices.DeleteFunc(h.events(task.ID, "stage"), func(ev registry.Event) bool { return !strings.Contains(ev.Text, "left the") }); len(left) != 0 {
+		t.Errorf("stage events %+v, want no leaving for a twin that had done its work", left)
+	}
+}
+
 // The second reader of a stage (fx-points-codex, whose codex_fallback is
 // fx-points beside it) is told to ask no one: its prompt names no questions
 // file, fx-points' names its own, and a questions file the twin wrote
@@ -1346,6 +1435,33 @@ func TestTheSecondReaderAsksNoOneAndEndsOnItsFindings(t *testing.T) {
 	}
 	if vs := h.rt.verifies(); len(vs) != 1 || !vs[0].OK {
 		t.Fatalf("Verify calls %+v, want the twin's run verified", vs)
+	}
+}
+
+// A questions file the second reader wrote anyway is set aside as
+// <name>.unasked when its stage passes, before the judge runs, so no file in
+// the task's folder looks like questions that reach the operator: its open
+// questions are in its findings, which the judge reads. An event says so.
+func TestASecondReadersStrayQuestionsFileIsSetAsideBeforeTheJudge(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12334", "feature", "investigate")
+	h.startStage(task)
+	h.taskFile(task.ID, "findings-fx-points.md", "## Point 1\nThe export exists.\n")
+	h.taskFile(task.ID, "findings-fx-points-codex.md", "## Point 1\nThe export exists.\n\n## Open questions\n- Who gets it?\n")
+	h.taskFile(task.ID, "questions-fx-points-codex.json", questionsJSON(t, whoQuestion))
+	h.ended(task, "fx-points", "fx-points-codex")
+	h.tick()
+	if got := h.reload(task.ID); got.Stage != "judge" {
+		t.Fatalf("task at %q, want at the judge", got.Stage)
+	}
+	dir := h.layout.FactoryTaskDir(task.ID)
+	if fsx.Exists(filepath.Join(dir, "questions-fx-points-codex.json")) || !fsx.Exists(filepath.Join(dir, "questions-fx-points-codex.json"+unaskedSuffix)) {
+		t.Fatalf("the second reader's questions file is still where the judge reads questions files, or not set aside as %s", unaskedSuffix)
+	}
+	if !slices.ContainsFunc(h.events(task.ID, "stage"), func(ev registry.Event) bool {
+		return strings.Contains(ev.Text, "questions-fx-points-codex.json"+unaskedSuffix) && strings.Contains(ev.Text, "asks no one")
+	}) {
+		t.Errorf("stage events %+v, want one naming the file set aside", h.events(task.ID, "stage"))
 	}
 }
 
