@@ -12721,6 +12721,14 @@ func LocalRoot(l paths.Layout, taskID int64) string
     LocalRoot is where task taskID's local rounds keep their scratch
     directories: local-review/ in the task's directory.
 
+func LocalTicket(ticketMD, answersMD string) string
+    LocalTicket is the text of a local round's ticket file: the ticket, then,
+    when the operator answered anything, localAnswersHeading and the answers
+    (operatorAnswers); the answers alone under their heading when the change
+    has no ticket, the ticket and a newline when it has no answers, "" when it
+    has neither. RunLocal writes it as ticket.md; it is exported so that the
+    factory's tests read what a task's ticket.md and answers.md become.
+
 func Refused(ctx context.Context, d Deps, ec eval.Case) string
     Refused says why case ec is not replayed ("" = it may be): an earlier
     replay of it or of its PR, under any case name, was refused (the runs root's
@@ -12892,7 +12900,7 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error)
     so two rounds never share an agent, a herdr workspace label or an eval case
     lock (it holds the case lock "local-<number>" for the round). It writes
     the title and body (description.md) and the ticket with the operator's
-    answers after it (ticket.md, when c has either: localTicket) there,
+    answers after it (ticket.md, when c has either: LocalTicket) there,
     and runs engine.RunLocal in the task's copy at c.HeadSHA, always with
     c.BaseSHA (post-review's --local-base), as a gh identity (the watch's,
     else the first configured: an App's token would be minted from GitHub),

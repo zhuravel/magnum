@@ -632,12 +632,12 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // `suggestion` block (22) and the reproduction's place (2), section 3's
 // `environment` code (7), magnum's re-review line (10), the re-post sentence
 // (5) and the verdict's count (18); 3 bytes are left.
-// Then 39,414 (2026-11-09, R15 of the 2026-11-07 audit: 220 bytes, less the 3
-// the cap had left) for the Local round section's sentence that the
-// description is the factory's plan, not a person's: a behaviour it calls
-// intended that neither the ticket nor the operator's answers decide is a
-// product question, never intent; 3 bytes are left, and the ceiling below
-// leaves 586.
+// Then 39,414 (2026-11-09, R15 of the 2026-11-07 audit: 220 bytes, the cap
+// raised by all of them, so the 3 it had left stay) for the Local round
+// section's sentence that the description is the factory's plan, not a
+// person's: a behaviour it calls intended that neither the ticket nor the
+// operator's answers decide is a product question, never intent; 3 bytes
+// are left, and the ceiling below leaves 586.
 // Every rule added must replace or shorten text.
 const skillMaxBytes = 39414
 

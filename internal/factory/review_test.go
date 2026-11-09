@@ -645,6 +645,37 @@ func TestTheLocalRoundGetsTheOperatorsAnswersFromTheTasksAnswersFile(t *testing.
 	}
 }
 
+// End to end, from the task's folder to the judge's ticket file: the round
+// is handed the task's ticket.md and the answers.md the factory wrote
+// (answersMarkdown, here from two answered questions), and the file the
+// round writes holds the ticket, the fixed heading and the operator's
+// questions and answers, without answers.md's own title or the line that
+// tells the factory's agents to weigh the answers against their prompt, the
+// question headings one level below the fixed heading.
+func TestTheLocalRoundsTicketFileJoinsTheTasksTicketAndAnswers(t *testing.T) {
+	r := newReviewRig(t, result())
+	task, _ := r.reviewTask("PR-12369")
+	r.taskFile(task.ID, ticketFile, "# PR-12369\n\n## Summary\n\nCredit points count the activities.\n\n\n")
+	r.taskFile(task.ID, answersFile, answersMarkdown([]registry.Question{
+		{Text: "Should a refund take back the points it gave?", RaisedBy: "fx-judge", Revision: 1, Index: 0, State: registry.QuestionAnswered,
+			Options: []registry.Option{{Label: "keep them"}, {Label: "take them back"}}, Recommended: 0, TookRecommendation: true, Answer: "keep them"},
+		{Text: "Do guest orders count?", RaisedBy: "local_review", Revision: 2, Index: 0, State: registry.QuestionAnswered, Recommended: -1,
+			Answer: "only paid ones"},
+	}))
+	r.run(4, func() bool { return len(r.rv.calls()) > 0 })
+	calls := r.rv.calls()
+	if len(calls) == 0 {
+		t.Fatal("no round ran")
+	}
+	want := "# PR-12369\n\n## Summary\n\nCredit points count the activities.\n\n" +
+		"## The operator's answers to the factory's questions\n\n" +
+		"### Should a refund take back the points it gave?\n\nAsked by fx-judge (revision 1, question 1). The answer is the recommended option.\n\nkeep them\n\n" +
+		"### Do guest orders count?\n\nAsked by local_review (revision 2, question 1). The answer is the operator's own words; no option was recommended.\n\nonly paid ones\n"
+	if got := evalrun.LocalTicket(calls[0].TicketMD, calls[0].AnswersMD); got != want {
+		t.Errorf("the ticket file = %q, want %q", got, want)
+	}
+}
+
 // A product question you answered "change it" that the next round raises
 // again was not changed: it is a live finding the writer gets to fix, never
 // a leftover that lets the loop end clean. One answered "keep it" is a

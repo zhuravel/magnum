@@ -126,12 +126,36 @@ const (
 // engine reads the ticket file as data and needs no field for the answers.
 const localAnswersHeading = "## The operator's answers to the factory's questions"
 
-// localTicket is the text of a local round's ticket file: the ticket, then,
-// when the operator answered anything, localAnswersHeading and the answers;
-// the answers alone under their heading when the change has no ticket, the
-// ticket and a newline when it has no answers, "" when it has neither.
-func localTicket(ticketMD, answersMD string) string {
-	ticket, answers := strings.TrimRight(ticketMD, "\n"), strings.TrimSpace(answersMD)
+// answeredQuestion is the heading of one answered question in answers.md as
+// the factory writes it (answersMarkdown, internal/factory/answers.go):
+// "## <question>", a blank line, then "Asked by <role> (revision N, question
+// M). ...". A line of an answer that starts with "## " is not one.
+var answeredQuestion = regexp.MustCompile(`(?m)^## (.+)\n\nAsked by `)
+
+// operatorAnswers is answers.md as the judge reads it under
+// localAnswersHeading: only the questions and the answers. The file's own
+// title ("# Your answers") and the line that tells the factory's agents to
+// weigh the answers against their prompt come before the first question and
+// are dropped, and each question's heading goes one level down, below the
+// fixed heading. A text without that shape (no title, or no question
+// section) is kept whole.
+func operatorAnswers(answersMD string) string {
+	text := strings.TrimSpace(answersMD)
+	first := answeredQuestion.FindStringIndex(text)
+	if first == nil || !strings.HasPrefix(text, "# ") {
+		return text
+	}
+	return answeredQuestion.ReplaceAllString(text[first[0]:], "### ${1}\n\nAsked by ")
+}
+
+// LocalTicket is the text of a local round's ticket file: the ticket, then,
+// when the operator answered anything, localAnswersHeading and the answers
+// (operatorAnswers); the answers alone under their heading when the change
+// has no ticket, the ticket and a newline when it has no answers, "" when it
+// has neither. RunLocal writes it as ticket.md; it is exported so that the
+// factory's tests read what a task's ticket.md and answers.md become.
+func LocalTicket(ticketMD, answersMD string) string {
+	ticket, answers := strings.TrimRight(ticketMD, "\n"), operatorAnswers(answersMD)
 	if strings.TrimSpace(ticket) == "" {
 		ticket = ""
 	}
@@ -161,14 +185,15 @@ var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 // LocalNumber, so two rounds never share an agent, a herdr workspace label
 // or an eval case lock (it holds the case lock "local-<number>" for the
 // round). It writes the title and body (description.md) and the ticket with
-// the operator's answers after it (ticket.md, when c has either: localTicket)
-// there, and runs engine.RunLocal in the task's copy at c.HeadSHA, always
-// with c.BaseSHA (post-review's --local-base), as a gh identity (the
-// watch's, else the first configured: an App's token would be minted from
-// GitHub), with the branch as the head ref and the title with the Jira key. The round's config is d.Config (the factory's
-// review candidate, config.WithCandidate). A case it cannot run is an
-// error and nothing starts; a round that ran is a result, whatever its
-// outcome, and only the end of ctx (a drain) is an error after it started.
+// the operator's answers after it (ticket.md, when c has either:
+// LocalTicket) there, and runs engine.RunLocal in the task's copy at
+// c.HeadSHA, always with c.BaseSHA (post-review's --local-base), as a gh
+// identity (the watch's, else the first configured: an App's token would be
+// minted from GitHub), with the branch as the head ref and the title with the
+// Jira key. The round's config is d.Config (the factory's review candidate,
+// config.WithCandidate). A case it cannot run is an error and nothing
+// starts; a round that ran is a result, whatever its outcome, and only the
+// end of ctx (a drain) is an error after it started.
 func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error) {
 	owner, name, ok := strings.Cut(c.Repo, "/")
 	switch {
@@ -215,7 +240,7 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error) {
 		return LocalResult{}, fmt.Errorf("evalrun: local round %d: %w", c.Round, err)
 	}
 	ticket := ""
-	if text := localTicket(c.TicketMD, c.AnswersMD); text != "" {
+	if text := LocalTicket(c.TicketMD, c.AnswersMD); text != "" {
 		ticket = filepath.Join(scratch, LocalTicketFile)
 		if err := fsx.WriteFileAtomic(ticket, []byte(text), 0o600); err != nil {
 			return LocalResult{}, fmt.Errorf("evalrun: local round %d: %w", c.Round, err)

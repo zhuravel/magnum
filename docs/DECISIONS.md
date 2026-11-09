@@ -21231,12 +21231,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   operator's answers to the factory's questions (`answers.md`), the only statement of intent a person made.
   - The answers. `evalrun.LocalCase` has `AnswersMD`; the factory's `localCase` fills it from the task's `answers.md`
     (empty when the operator answered nothing). `evalrun.RunLocal` appends it to the round's `ticket.md`, after the
-    ticket's text, under the one fixed heading `## The operator's answers to the factory's questions` (`localTicket`).
+    ticket's text, under the one fixed heading `## The operator's answers to the factory's questions` (`evalrun.LocalTicket`).
     With no answers the file is the ticket and a newline, as before; with answers and no ticket it is the heading and
     the answers (the ticket file is then written, where it was not); with neither there is no file. The engine did not
     change: it already hands the judge the ticket file as data (`engine.LocalRound.TicketFile`), so the answers reach it
-    in the place it reads the ticket. Everything after the heading is the answers, which keep their own `#` and `##`
-    headings (answers.md's title and one section per question).
+    in the place it reads the ticket. Only the questions and the answers go under the heading: answers.md's title
+    (`# Your answers`) and the line after it that tells the factory's agents to weigh the answers against their
+    prompt (`answersMarkdown` writes both, before the first question) are dropped, since the judge is no agent of the
+    task and reads the file as data, and each question's heading (`## <question>`, a blank line, `Asked by `) goes
+    one level down, to `###`, so the structure sits inside the fixed heading. Only a heading of that shape moves: a
+    line of an answer that starts with `## ` stays, and a text that has no title or no such heading is kept whole.
   - The skill. One sentence ends the "Local round" section: `The description is the factory's plan, not a person's: a
     behaviour it calls intended that neither the ticket nor the operator's answers (both in `ticket`) decide is a product
     question (`"question": true`), never intent.` It is 220 bytes, and the cap had 3 left, so `skillMaxBytes` goes from
@@ -21249,16 +21253,22 @@ skill versions); people add theirs to the sections before it, at the end of the 
     findings leave open, for each doubt that can change what a user sees while neither the ticket nor the operator's
     answers decide it: it goes to the operator as a question, never into the plan as a choice. A choice the plan makes
     there is what the local review would later read as intent.
-  Rejected: a field of its own for the answers in `engine.LocalRound` (the engine is another session's, and the ticket
-  file is already data the judge reads); the answers in the description file, below the plan (the skill says the
+  Rejected: the answers as the factory's agents read them, title and instruction line included (an `# ` heading
+  inside the fixed `##` one, and "weigh them against your prompt", written for another reader); a field of its own
+  for the answers in `engine.LocalRound` (the engine is another session's, and the ticket file is already data the
+  judge reads); the answers in the description file, below the plan (the skill says the
   description is the plan, and the answers would be read as part of the guess); a rule in section 2 or 4 of the skill,
   which every round reads (a GitHub review has no factory plan; the sentence is in the section only a local round
   reads); shortening other unpinned wording to keep the cap (it is shared with the skill editor, whose landings rebase
   on it).
   Tests: evalrun's TestRunLocalAppendsTheOperatorsAnswersToTheTicketFileUnderOneHeading,
-  TestRunLocalWithoutAnswersWritesTheTicketFileAsBefore and
+  TestRunLocalPutsOnlyTheQuestionsAndAnswersUnderTheHeading, TestRunLocalKeepsAnswersOfAnotherShapeWhole,
+  TestRunLocalCutsATicketsTrailingBlankLinesBeforeTheHeading,
+  TestRunLocalWithoutAnswersWritesTheTicketFileAsBefore (a ticket ending in blank lines too) and
   TestRunLocalWithAnswersAndNoTicketWritesTheHeadingAndTheAnswers; the factory's
   TestTheLocalRoundGetsTheOperatorsAnswersFromTheTasksAnswersFile (the same file missing gives none),
+  TestTheLocalRoundsTicketFileJoinsTheTasksTicketAndAnswers (the task's ticket.md and an answers.md made by
+  `answersMarkdown`, through `localCase` and `evalrun.LocalTicket`),
   TestThePlanJudgeAsksADoubtThatChangesWhatAUserSeesAndNobodyDecidedInsteadOfChoosing and
   TestAQuestionFindingJoinsTheQuestionBatch (unchanged: the path still holds); agents'
   TestTheSkillReadsTheFactorysPlanAsItsGuessNotThePersonsIntent (a pin, in the Local round section only) with
