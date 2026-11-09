@@ -13,7 +13,7 @@ package engine
 // what the question did not name, and starts the effects, which Step
 // advances. An env whose merge conflicts takes the deploy too: the merge
 // step hands the conflict to the resolver (staging_resolve.go, at most
-// StagingResolveTries jobs), and the question says so. Own PRs only for now; a request of kind staging_cancel stops an
+// 2 jobs: internal/staging's bound), and the question says so. Own PRs only for now; a request of kind staging_cancel stops an
 // effect. The answer is StagingDeployAnswer as JSON on its first line and
 // its words on the last.
 
@@ -114,11 +114,6 @@ type StagingPlanEnv struct {
 	Workflows  bool     `json:"workflows,omitempty"`
 	Why        string   `json:"why,omitempty"`
 }
-
-// StagingResolveTries is how many resolver jobs a deploy's conflict gets
-// at most (internal/staging's bound): a conflict that comes back after a
-// moved tip gets one more.
-const StagingResolveTries = maxResolveTry
 
 // Deployable reports whether the env takes the merge: nothing stops it,
 // and it is clean or the resolver merges its conflicts.
@@ -393,7 +388,8 @@ func listedPaths(ps []string) string {
 }
 
 // StagingResolverWords say, in a few words, what becomes of a conflict at
-// a deploy: the question and the plan name them.
+// a deploy (the 2 tries are internal/staging's bound, maxResolveTry): the
+// question and the plan name them.
 const StagingResolverWords = "the resolver merges it first (at most 2 tries)"
 
 // stagingPlanRefusal says why a deploy of envs does not run as asked: an
