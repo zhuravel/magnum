@@ -21364,8 +21364,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `[[repo]]` env). The copy's env, the factory's own choice, would point the replay's roles at a copy's databases
     that a task may be using. `RunLocal` also takes the `local-<N>` lock, so a replay never meets the factory
     running the same round. Its findings are scored on what the factory acts on (`LocalResult.Findings`, title
-    before body so a defect's words match either, and the planned review's body as an `InBody` finding) with
-    `eval.ScoreCase`: one score shape for both kinds. `CaseRun.Kind` and `CaseRun.Findings` keep them, and `eval
+    before body so a defect's words match either, and the planned review's body as an `InBody` finding, which the
+    result's own finding of the body gives way to, so the body is never noise) with `eval.ScoreCase`: one score
+    shape for both kinds. `CaseRun.Kind` and `CaseRun.Findings` keep them, and `eval
     score` re-scores a local case from them (`Rescore`), not from the result file, which `eval.ParseResult` would read
     without the question marks; a run whose case changed kind keeps its score and says so. A round that went without
     a reviewer's report is `missing_role`, a refused one is flagged (`eval.MarkFlagged`), and a local case's live
@@ -21392,7 +21393,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestLocalReviewLeavesACycleWithoutItsBeginEventUnnamed and TestLocalReviewSaysWhatIsMissingAndWritesNothing;
   evalrun's TestFreezeLocalFreezesWhatTheRoundRead, TestFreezeLocalTakesTheAnswersTheRoundsTicketFileHeld,
   TestFreezeLocalOfARoundWithoutATicketFile, TestFreezeLocalRefusesARoundItCannotFreezeWhole,
-  TestRunCaseReplaysALocalCaseFromItsFrozenInputs and TestRunCaseReportsALocalCaseItCannotScore; the cli's
+  TestRunCaseReplaysALocalCaseFromItsFrozenInputs, TestRunCaseReportsALocalCaseItCannotScore,
+  TestALocalCasesReviewBodyIsNeverNoise and TestALocalCaseWithoutInputsNamesTheAddThatFreezesIt; the cli's
   TestEvalAddFreezesALocalRoundAndPrintsItsCase, TestEvalAddRefusesWhatItCannotFreeze and
   TestEvalRunNamesALocalCaseAndItsMissingInputs; learn's TestSelectCasesLeavesLocalCasesToEvalRun. The comments of
   `engine.LocalRound` and `pipeline.Local` now say the ticket file holds the answers too. No new dependencies; the
