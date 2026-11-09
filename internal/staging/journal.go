@@ -86,10 +86,11 @@ type journal struct {
 	Fails        int       `json:"fails,omitempty"`
 	FailingSince time.Time `json:"failing_since"`
 	RetryAt      time.Time `json:"retry_at"`
-	// BusySince starts a run of waits for the mirror's flock; BusyFor is the
-	// time of the runs before it (busyBudget caps the sum).
-	BusySince time.Time     `json:"busy_since"`
-	BusyFor   time.Duration `json:"busy_for,omitempty"`
+	// BusyAt is the last try of a run of waits for the mirror's flock (zero
+	// = none runs); BusyFor sums the tries' waits, each its own wait or at
+	// most busyGap since the try before (busyBudget caps the sum).
+	BusyAt  time.Time     `json:"busy_at"`
+	BusyFor time.Duration `json:"busy_for,omitempty"`
 	// PushedAt is when the branch first held the merge.
 	PushedAt time.Time `json:"pushed_at"`
 	// RunURL is ci.yml's run on the merge; CIAt when watch let it go, CINote
@@ -99,10 +100,11 @@ type journal struct {
 	CINote string    `json:"ci_note,omitempty"`
 	// Deploys is the last read of the env's deployments, with its ETag.
 	Deploys *deployEntry `json:"deploys,omitempty"`
-	// Pending are the events of the last write not yet known delivered:
-	// they are written with the state they record and delivered after the
-	// write, so a crash between the two delivers them on the next load (at
-	// least once).
+	// Pending is the outbox: the events of the writes that the client that
+	// last wrote had not delivered, each with its write's Seq. They are
+	// written with the state they record and delivered after the write, and
+	// a later write by that client drops what it delivered; a crash, or
+	// another client's load, delivers them again (at least once).
 	Pending []pendingEvent `json:"pending,omitempty"`
 	// Seq counts the journal's writes: a client that delivered a write's
 	// events remembers its Seq.
@@ -113,9 +115,13 @@ type journal struct {
 
 // pendingEvent is an event a journal write records, for Deps.Event.
 type pendingEvent struct {
-	Step  string `json:"step"`
-	Phase string `json:"phase"`
-	Text  string `json:"text"`
+	// Seq is the write that recorded it, Effect the effect as that write
+	// left it (0 and none until the write).
+	Seq    int    `json:"seq"`
+	Effect Effect `json:"effect"`
+	Step   string `json:"step"`
+	Phase  string `json:"phase"`
+	Text   string `json:"text"`
 }
 
 // live reports whether the effect still runs or waits: queued or running.
@@ -322,19 +328,19 @@ func (c *Client) release(dir, env string) {
 	}
 }
 
-// delivered records that this client delivered write seq of effect id's
-// journal.
+// delivered records that this client delivered the events of effect id's
+// journal up to write seq.
 func (c *Client) delivered(id EffectID, seq int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.sent[id] = seq
+	c.sent[id] = max(c.sent[id], seq)
 }
 
-// wasDelivered reports whether this client delivered write seq of id.
-func (c *Client) wasDelivered(id EffectID, seq int) bool {
+// sentUpTo is the highest write of id whose events this client delivered.
+func (c *Client) sentUpTo(id EffectID) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.sent[id] == seq
+	return c.sent[id]
 }
 
 // releaseAll lets every env flock of this client go (Close): the effects

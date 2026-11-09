@@ -312,7 +312,12 @@ var errMirrorBusy = errors.New("the mirror's lock is busy (a Refresh's fetch or 
 // GitHub, the resolver, PushEnv or CommitIdentity, which would hold up
 // every Refresh.
 func (c *Client) underMirror(ctx context.Context, dir string, fn func() error) error {
-	lctx, cancel := context.WithTimeout(ctx, cmp.Or(c.lockWait, lockWait))
+	return c.underMirrorFor(ctx, dir, cmp.Or(c.lockWait, lockWait), fn)
+}
+
+// underMirrorFor is underMirror waiting at most wait.
+func (c *Client) underMirrorFor(ctx context.Context, dir string, wait time.Duration, fn func() error) error {
+	lctx, cancel := context.WithTimeout(ctx, wait)
 	unlock, err := lockMirror(lctx, dir, nil)
 	cancel()
 	switch {
@@ -638,7 +643,10 @@ func (c *Client) writeEffects(ctx context.Context, root *os.Root, plan DeployPla
 		if old != nil {
 			// A fresh start on the same id: the operator's new word.
 			kept := *old
-			j = &journal{V: journalVersion, ID: old.ID, Repo: old.Repo, Env: old.Env, PR: pr, Started: old.Started}
+			// Its Seq goes on (no event of the new run repeats a key of the
+			// old one's), and so does its outbox.
+			j = &journal{V: journalVersion, ID: old.ID, Repo: old.Repo, Env: old.Env, PR: pr, Started: old.Started,
+				Seq: old.Seq, Pending: slices.Clone(old.Pending)}
 			old = &kept
 		}
 		if !validID(j.ID) {
@@ -753,7 +761,7 @@ func (c *Client) claimed(ctx context.Context, repo, dir string, root *os.Root, e
 		return nil, err
 	}
 	r := &stepRun{c: c, repo: repo, dir: dir, root: root, j: j}
-	r.redeliver() // a crash may have cut them
+	r.loaded() // a crash may have cut them
 	if j.State == EffectQueued {
 		if err := r.begin(StepClaim, false, "claiming "+env); err != nil {
 			return r, err
@@ -919,7 +927,7 @@ func (c *Client) advanceLocked(ctx context.Context, repo, dir string, root *os.R
 		return nil, true, err
 	}
 	r := &stepRun{c: c, repo: repo, dir: dir, root: root, g: g, j: j}
-	r.redeliver()
+	r.loaded()
 	if env, n, ok := idOf(j.ID); !ok || env != j.Env.Name || n != j.PR.Number {
 		err = r.end(ctx, EffectFailed, fmt.Sprintf("the journal's env %s or PR #%d is not its id's: nothing was pushed", oneLine(j.Env.Name), j.PR.Number))
 	} else {
@@ -1020,7 +1028,7 @@ func (c *Client) cancelLocked(ctx context.Context, repo, dir string, root *os.Ro
 	}
 	_, g, _ := c.deployDeps(repo)
 	r := &stepRun{c: c, repo: repo, dir: dir, root: root, g: g, j: j}
-	r.redeliver()
+	r.loaded()
 	err = r.end(ctx, EffectCancelled, why)
 	if err == nil && j.Held {
 		r.dropRefs(ctx) // when the mirror's lock is busy, the refs wait for the next end of a step

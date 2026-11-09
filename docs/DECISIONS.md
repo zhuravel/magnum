@@ -20387,6 +20387,27 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `.deploys`), TestNoEventIsDeliveredUnderTheDirOrEffectFlock, TestAResolvedMergeAcceptedAfterAFailedFetchIsHeldByItsRef,
   TestAWaitForTheMirrorsLockIsNoFailure and TestLockWaitsEndTheEffectAfterAnHour (at verify and at confirm, on the
   fake clock).
+- **A deploy's events wait in its journal's outbox until delivered, and a resumed needs-you carries its Seq on**
+  (2026-11-09, R46 follow-up, fix round 1 after its review: 2 Important, 4 Minor). Moving delivery out of the flocks
+  had lost every event of a run but its last write's on a kill before the flush (the review's R1: verify's begin was
+  never delivered; master had delivered it). Now each write stamps its new events with its Seq and the effect as it
+  leaves it, keeps them in `Pending` next to the ones this client has not delivered, and drops only what this
+  client delivered (up to its highest delivered Seq), so the list never holds more than one effect's undelivered
+  events; delivery is after the unlock, in Seq order, and a load (a restart, the other daemon, a Cancel) delivers
+  every pending event again: at least once, deduped by (effect id, Seq, step, phase), ordered by Seq, never by
+  arrival (`Deps.Event`'s doc says so). A failed write changes nothing on disk, and its events go with the next
+  write that lands. A needs-you effect deployed again keeps its id, its Seq and its outbox (its Seq had started at 0
+  again, and four keys of the second run, by liaison, repeated the first run's, by cli). The lock waits: an edited
+  `BusyFor` is clamped to [0, 60 min] where read; each try after the first adds at most `busyGap` (its retry and a
+  tick) since the try before, so time with no Step (a sleeping laptop, a daemon down) is no lock wait (`BusyAt`, the
+  last try of a run, replaces `BusySince`); and once a run of waits began a try waits only `busyLockWait` (5 s) for
+  the lock, so a busy mirror holds up the other repositories' Steps once, not at each try. Tests (from the review's
+  probes R1 to R6; each failed first but the cap at the push and the order, which pinned what held):
+  TestEveryEventOfACutRunIsDeliveredFromTheOutbox, TestTheOutboxDropsWhatWasDelivered,
+  TestAResumedNeedsYouCarriesItsSeqOn, TestAnEditedBusyForCannotDefeatTheLockCap,
+  TestTheLockCapAtThePushPushesNothingAfter, TestTimeWithoutStepsIsNoLockWait,
+  TestABusyMirrorWaitsTheWholeLockWaitOnlyOnce and TestEachFlushDeliversInSeqOrder;
+  TestEveryEventCarriesItsJournalWritesSeq now checks that each repeated key is the same event.
 
 ## Learned rules
 

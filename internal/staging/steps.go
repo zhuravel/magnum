@@ -25,16 +25,12 @@ type stepRun struct {
 	root *os.Root
 	g    deployGit
 	j    *journal
-	// out are the events of the run's writes, delivered by flush once the
-	// caller let the dir's and the effect's flocks go.
-	out []delivery
-}
-
-// delivery is an event with the effect as the write that recorded it left
-// it.
-type delivery struct {
-	e  Effect
-	ev pendingEvent
+	// waited is how long the last git waited for the mirror's flock.
+	waited time.Duration
+	// written is the journal's outbox as its last write (or its load) left
+	// it on disk: flush delivers it once the caller let the dir's and the
+	// effect's flocks go.
+	written []pendingEvent
 }
 
 // run runs the effect's step.
@@ -56,17 +52,20 @@ func (r *stepRun) run(ctx context.Context) error {
 	return r.end(ctx, EffectFailed, "the journal names an unknown step "+strconv.Quote(oneLine(r.j.Step)))
 }
 
-// git runs fn, the step's git, under the mirror's flock. Once it has the
-// flock, a run of waits for it ends, and its time joins BusyFor.
+// git runs fn, the step's git, under the mirror's flock. In a run of
+// waits for the flock (BusyAt), a try waits only busyLockWait for it, so a
+// busy mirror holds up the Steps once, not at each try; once it has the
+// flock, the run of waits ends.
 func (r *stepRun) git(ctx context.Context, fn func() error) error {
-	err := r.c.underMirror(ctx, r.dir, func() error {
-		if !r.j.BusySince.IsZero() {
-			r.j.BusyFor += max(0, r.c.d.Now().Sub(r.j.BusySince))
-			r.j.BusySince = time.Time{}
-		}
+	wait := cmp.Or(r.c.lockWait, lockWait)
+	if !r.j.BusyAt.IsZero() {
+		wait = min(wait, cmp.Or(r.c.busyLockWait, busyLockWait))
+	}
+	r.waited = wait
+	return r.c.underMirrorFor(ctx, r.dir, wait, func() error {
+		r.j.BusyAt = time.Time{}
 		return fn()
 	})
-	return err
 }
 
 // at runs the test's hook at a point of step.
@@ -77,62 +76,75 @@ func (r *stepRun) at(step, point string) error {
 	return r.c.hook(r.j.ID, step, point)
 }
 
-// event records step's phase: it goes with the journal's next write
-// (Pending), and is delivered after it.
+// event records step's phase in the journal's outbox (Pending): the next
+// write stamps it with its Seq and the effect as it leaves it, and it is
+// delivered after that write.
 func (r *stepRun) event(step, phase, text string) {
 	r.j.Pending = append(r.j.Pending, pendingEvent{Step: step, Phase: phase, Text: text})
 }
 
-// save writes the journal, then takes its pending events for flush.
+// save writes the journal: its Seq one more, the outbox's new events
+// stamped with it, and the events this client delivered dropped (each
+// write keeps only what it has not delivered: at most one effect's
+// undelivered events). A failed write changes nothing on disk, and its
+// events go with the next write that lands.
 func (r *stepRun) save() error {
+	prev, prevSeq, prevAt := r.j.Pending, r.j.Seq, r.j.Updated
 	r.j.Updated = r.c.d.Now()
 	r.j.Seq++
-	if err := writeJournal(r.root, r.j); err != nil {
-		return err
-	}
-	if n := len(r.j.Pending); n > 0 {
-		if err := r.at(r.j.Pending[n-1].Step, "saved"); err != nil {
-			return err
+	sent := r.c.sentUpTo(r.j.ID)
+	snap := r.j.effect()
+	var box []pendingEvent
+	stamped := ""
+	for _, ev := range prev {
+		if ev.Seq == 0 {
+			ev.Seq, ev.Effect = r.j.Seq, snap
+			stamped = ev.Step
+		}
+		if ev.Seq > sent {
+			box = append(box, ev)
 		}
 	}
-	r.take()
+	r.j.Pending = box
+	if err := writeJournal(r.root, r.j); err != nil {
+		r.j.Pending, r.j.Seq, r.j.Updated = prev, prevSeq, prevAt
+		return err
+	}
+	r.written = slices.Clone(box)
+	if stamped != "" {
+		return r.at(stamped, "saved")
+	}
 	return nil
 }
 
-// take moves the journal's pending events to the run's out, with the
-// effect as this write left it (the next write drops them from the
-// journal).
-func (r *stepRun) take() {
-	e := r.j.effect()
-	for _, ev := range r.j.Pending {
-		r.out = append(r.out, delivery{e: e, ev: ev})
-	}
-	r.j.Pending = nil
-}
+// loaded takes the outbox of a journal just read: a process that stopped
+// between a write and its delivery, or another client, left those events,
+// which flush delivers again (at least once; a repeat has the same key).
+func (r *stepRun) loaded() { r.written = slices.Clone(r.j.Pending) }
 
-// flush hands the run's events to Deps.Event, the caller holding neither
-// the deploys dir's flock nor the effect's, and remembers each write it
-// delivered.
+// flush hands the outbox's events this client has not delivered to
+// Deps.Event, in Seq order, the caller holding neither the deploys dir's
+// flock nor the effect's, and remembers the highest Seq it delivered.
 func (r *stepRun) flush() {
-	for _, d := range r.out {
-		r.c.d.Log.Debug("staging: deploy", "repo", r.repo, "effect", d.e.ID, "seq", d.e.Seq, "by", d.e.By, "step", d.ev.Step, "phase", d.ev.Phase, "text", d.ev.Text)
-		if r.c.d.Event != nil {
-			r.c.d.Event(d.e, d.ev.Step, d.ev.Phase, d.ev.Text)
+	sent := r.c.sentUpTo(r.j.ID)
+	box := slices.Clone(r.written)
+	slices.SortStableFunc(box, func(a, b pendingEvent) int { return cmp.Compare(a.Seq, b.Seq) })
+	for _, ev := range box {
+		if ev.Seq <= sent {
+			continue
 		}
-		r.c.delivered(d.e.ID, d.e.Seq)
+		e := ev.Effect
+		if e.ID == "" {
+			e = r.j.effect()
+		}
+		e.Seq = ev.Seq
+		r.c.d.Log.Debug("staging: deploy", "repo", r.repo, "effect", e.ID, "seq", e.Seq, "by", e.By, "step", ev.Step, "phase", ev.Phase, "text", ev.Text)
+		if r.c.d.Event != nil {
+			r.c.d.Event(e, ev.Step, ev.Phase, ev.Text)
+		}
+		r.c.delivered(r.j.ID, ev.Seq)
 	}
-	r.out = nil
-}
-
-// redeliver takes for flush the pending events of a journal just loaded,
-// unless this client delivered that write already: a process that stopped
-// between a write and its delivery left them (at least once; another
-// client that delivered them makes this a repeat, with the same key).
-func (r *stepRun) redeliver() {
-	if len(r.j.Pending) > 0 && !r.c.wasDelivered(r.j.ID, r.j.Seq) {
-		r.take()
-	}
-	r.j.Pending = nil
+	r.written = nil
 }
 
 // begin writes step's begin, then runs the test's hook. A polling step (a
@@ -179,7 +191,7 @@ func (r *stepRun) retry(ctx context.Context, step, why string) error {
 	now := r.c.d.Now()
 	if r.j.FailingSince.After(now) {
 		// An edit, or a clock stepped back: the budget counts from now.
-		r.c.noteOnce("future "+string(r.j.ID), "staging: a deploy's first failure lies in the future; taken as now",
+		r.c.noteKey("future "+string(r.j.ID), "staging: a deploy's first failure lies in the future; taken as now",
 			"effect", r.j.ID, "failing_since", r.j.FailingSince)
 		r.j.FailingSince = now
 	}
@@ -319,6 +331,15 @@ const busyRetry = 30 * time.Second
 // next wait ends the effect, as a failure would.
 const busyBudget = 60 * time.Minute
 
+// busyGap bounds the time one try after the first adds to the lock waits:
+// the try's own wait plus its busyRetry and a tick, never the time with no
+// Step (a sleeping laptop, a daemon down).
+const busyGap = busyRetry + time.Minute
+
+// busyLockWait is how long a try waits for the mirror's flock once a run of
+// waits began: the retry, not the Step, does the waiting.
+const busyLockWait = 5 * time.Second
+
 // busy is a step that waited for the mirror's flock in vain: no failure
 // (the failure budget neither counts it nor starts again), the step runs
 // again after busyRetry, Why says so. Once the effect has waited for the
@@ -326,10 +347,13 @@ const busyBudget = 60 * time.Minute
 // confirmed, after it (the push stands).
 func (r *stepRun) busy(ctx context.Context) error {
 	now := r.c.d.Now()
-	if r.j.BusySince.IsZero() || r.j.BusySince.After(now) {
-		r.j.BusySince = now
+	waited := r.waited // the first try of a run: the wait it spent
+	if !r.j.BusyAt.IsZero() && !r.j.BusyAt.After(now) {
+		waited = min(now.Sub(r.j.BusyAt), busyGap)
 	}
-	if r.j.BusyFor+now.Sub(r.j.BusySince) >= busyBudget {
+	r.j.BusyAt = now
+	r.j.BusyFor = min(max(r.j.BusyFor, 0), busyBudget) + waited // an edit cannot defeat the cap
+	if r.j.BusyFor >= busyBudget {
 		gave := "the mirror stayed busy for " + strconv.Itoa(int(busyBudget.Minutes())) + " min (a Refresh's fetch or a clone held its lock)"
 		r.j.RetryAt = time.Time{}
 		if !r.j.PushedAt.IsZero() {

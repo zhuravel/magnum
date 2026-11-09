@@ -44,10 +44,10 @@ type seqEvent struct {
 }
 
 // Minor 8. Every event carries the journal write it records (Effect.Seq):
-// a second client that delivers the same write again (its Cancel loads the
-// journal the first one wrote) repeats the key, so the registry can drop
-// the repeat by (effect id, Seq, step, phase); distinct events never share
-// a key.
+// a second client that delivers the outbox again (its Cancel loads the
+// journal the first one wrote) repeats the keys, each with the same event,
+// so the registry can drop the repeats by (effect id, Seq, step, phase);
+// distinct events never share a key.
 func TestEveryEventCarriesItsJournalWritesSeq(t *testing.T) {
 	t.Parallel()
 	w := newDeployWorld(t)
@@ -69,22 +69,23 @@ func TestEveryEventCarriesItsJournalWritesSeq(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	seen := map[seqEvent]int{}
+	texts := map[seqEvent]string{}
+	repeats := 0
 	for _, ev := range got {
 		if ev.seq <= 0 {
 			t.Errorf("an event without its write: %+v", ev)
 		}
-		seen[seqEvent{id: ev.id, seq: ev.seq, step: ev.step, phase: ev.phase}]++
-	}
-	repeats := 0
-	for k, n := range seen {
-		if n > 1 {
+		k := seqEvent{id: ev.id, seq: ev.seq, step: ev.step, phase: ev.phase}
+		if text, ok := texts[k]; ok {
 			repeats++
-			t.Logf("delivered %d times: %+v", n, k)
+			if text != ev.txt {
+				t.Errorf("key %+v delivered as %q and as %q: two events share it", k, text, ev.txt)
+			}
 		}
+		texts[k] = ev.txt
 	}
-	if repeats != 1 {
-		t.Errorf("keys delivered twice: %d, want the one write b loaded again; events %+v", repeats, got)
+	if repeats == 0 {
+		t.Errorf("no repeat after b loaded a's journal: %+v", got)
 	}
 }
 

@@ -243,6 +243,17 @@ func (c *Client) prepareClone(repo, dir string, open []OpenPR, prev *state, why 
 	return st, true
 }
 
+// noteKey logs msg once in this client's life per key, the key unlogged.
+func (c *Client) noteKey(key, msg string, args ...any) {
+	c.mu.Lock()
+	seen := c.noted[key]
+	c.noted[key] = true
+	c.mu.Unlock()
+	if !seen {
+		c.d.Log.Warn(msg, args...)
+	}
+}
+
 // noteOnce logs msg about dir once in this client's life.
 func (c *Client) noteOnce(dir, msg string, args ...any) {
 	c.mu.Lock()

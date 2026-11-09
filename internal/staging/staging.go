@@ -322,8 +322,11 @@ type Deps struct {
 	// only ever tried, may be held), so a crash between the two hands it on
 	// when the effect next loads: at least once. A repeat (a crash, or another
 	// client loading the same write) has the same key, (e.ID, e.Seq, step,
-	// phase), which the registry dedupes on. A failure the step tries again
-	// records none; the end it leads to records one.
+	// phase), which the registry dedupes on; e is the effect as that write
+	// left it. Each client delivers in Seq order, but two clients' deliveries
+	// may interleave: order a deploy's events by Seq, never by arrival. A
+	// failure the step tries again records none; the end it leads to records
+	// one.
 	Event func(e Effect, step, phase, text string)
 }
 
@@ -350,8 +353,9 @@ type Client struct {
 	sent     map[EffectID]int
 	// lockWait, when set, is how long a step waits for the mirror's flock
 	// (lockWait's default; tests shorten it).
-	lockWait time.Duration
-	stepping sync.Mutex
+	lockWait     time.Duration
+	busyLockWait time.Duration // busyLockWait's, when set (tests shorten it)
+	stepping     sync.Mutex
 	// hook, in tests, runs at the named points of a step; an error it
 	// returns ends the Step there, as a killed process would.
 	hook func(id EffectID, step, point string) error

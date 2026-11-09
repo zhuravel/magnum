@@ -5051,8 +5051,9 @@ recorded step and checks it again first: a push whose answer was lost is never p
 holds the merge). A cancel stops a deploy at once and nothing is pushed after it. A cancel during watch or confirm
 stops only the watching: **a deploy never reverts a push**, and neither does a failed CI or a missing deployment
 (revert by hand if you must). Every deploy records who asked (`cli`, `liaison` or `factory`) and each step's
-events, at least once (an event a crash cut is recorded when the deploy resumes; a repeat carries the same effect,
-journal write, step and phase, which the registry dedupes on).
+events, at least once: each event waits in the deploy's journal until it is delivered, so an event a crash cut
+is recorded when the deploy resumes; a repeat carries the same effect, journal write, step and phase, which the
+registry dedupes on, and the journal write's number, not the arrival, orders them.
 
 No deploy holds its env for ever. A passing failure at a step (a fetch, a git command, a read of GitHub or of the
 resolver, a push) tries again after 30 seconds, then 1, 2, 4 and 8 minutes, and the deploy's why names the next
@@ -5060,8 +5061,9 @@ try's time; a step still failing 15 minutes after its first failure ends the dep
 `pushed, not confirmed` after it (so a short GitHub or network outage costs no redeploy). A definite failure ends it
 at once: a merge the mirror lacks, that is no sha or that verify refuses, the allowlist, the commit identity, the
 push's refusal. A wait for the mirror's lock (a Refresh's fetch, a clone) is no failure: the step tries again 30
-seconds later, and only after 60 minutes of such waits in all does the deploy end ("the mirror stayed busy for 60
-min": failed before the push, `pushed, not confirmed` after it). A resolver that works over 2 hours fails it. Either daemon resumes a deploy the other started, from
+seconds later, waiting a few seconds for the lock instead of minutes, and only after 60 minutes of such waits in
+all does the deploy end ("the mirror stayed busy for 60 min": failed before the push, `pushed, not confirmed` after
+it); time with no try (a sleeping Mac, a daemon down) does not count. A resolver that works over 2 hours fails it. Either daemon resumes a deploy the other started, from
 the journals under `mirror_dir`, at its next tick; a journal whose env name is no slug is passed over (logged once;
 cancel it by its id).
 
