@@ -75,8 +75,10 @@ func localCaseInputs(d Deps, cfg *config.Config, w *config.Watch, ec eval.Case, 
 //     using; its scratch directory under the run's case directory, never the
 //     factory's task directory; the notes as o says;
 //   - RunLocal, then the round's findings (LocalResult.Findings, a
-//     question marked, and the planned review's body) scored as a posted
-//     case's (eval.ScoreCase), kept on the record (eval.CaseRun.Findings).
+//     question marked, and the planned review's body from the result file
+//     of the judge the round ran, LocalResult.ResultFile) scored as a
+//     posted case's (eval.ScoreCase), kept on the record
+//     (eval.CaseRun.Findings).
 //
 // A refused round is flagged as a posted one is (eval.MarkFlagged); one
 // that went without a reviewer's report is eval.OutcomeMissingRole and one
@@ -161,7 +163,7 @@ func (d Deps) replayLocal(ctx context.Context, cfg *config.Config, w *config.Wat
 		cr.Error = cmp.Or(cr.Error, "no judge result to score")
 		return cr
 	}
-	cr.ResultFile = filepath.Join(res.ReportDir, judgeReport(cfg, w))
+	cr.ResultFile = res.ResultFile // the frozen roles' judge's, which may not be the watch's
 	result := localScoreResult(res, cr.ResultFile)
 	score := eval.ScoreCase(ec, result)
 	cr.Score, cr.Findings = &score, result.Findings

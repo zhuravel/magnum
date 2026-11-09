@@ -43,6 +43,9 @@ type replayFixture struct {
 	mu     sync.Mutex
 	// answer is the fake engine's round result beyond its outcome and report directory.
 	answer pipeline.RoundResult
+	// judgeFile is the report file the fake engine writes the judge's result to: the one of the
+	// judge among the round's roles (codex-judge.json for the fixture's frozen roles).
+	judgeFile string
 }
 
 func newReplayFixture(t *testing.T, result string) *replayFixture {
@@ -55,7 +58,7 @@ func newReplayFixture(t *testing.T, result string) *replayFixture {
 	if err := SaveLocalInputs(LocalCaseDir(ff.d.Layout, "task-1-round-1"), in); err != nil {
 		t.Fatal(err)
 	}
-	f := &replayFixture{in: in, clone: t.TempDir(), git: &execx.Fake{}}
+	f := &replayFixture{in: in, clone: t.TempDir(), git: &execx.Fake{}, judgeFile: "codex-judge.json"}
 	cfg := ff.d.Config
 	cfg.Identities = []config.Identity{{Name: "zhuravel", Kind: "gh", Login: "zhuravel"}}
 	cfg.Watches = []config.Watch{{Owner: "example", Include: []string{"*"}, Identity: "zhuravel", PollIdentity: "zhuravel"}}
@@ -73,7 +76,7 @@ func newReplayFixture(t *testing.T, result string) *replayFixture {
 		f.rounds = append(f.rounds, localRun{layout: l, tag: tag, round: lr})
 		f.mu.Unlock()
 		dir := l.ReviewDir(lr.Owner, lr.Repo, lr.Number, lr.Head)
-		writeFile(t, filepath.Join(dir, "codex-judge.json"), result)
+		writeFile(t, filepath.Join(dir, f.judgeFile), result)
 		res := f.answer
 		res.Outcome, res.ReportDir = cmpOr(res.Outcome, pipeline.OutcomeDryRun), dir
 		return res, nil
@@ -278,5 +281,38 @@ func TestALocalCaseWithoutInputsNamesTheAddThatFreezesIt(t *testing.T) {
 	cr := RunCase(context.Background(), f.d, localEvalCase(t), Options{RunDir: filepath.Join(RunsRoot(f.d.Layout), "20261109-120000"), AgentTag: "eval-test"})
 	if !strings.Contains(cr.Error, "magnum eval add --local-task 1 --round 1 --name task-1-round-1") {
 		t.Fatalf("case run %+v", cr)
+	}
+}
+
+// A local case is scored on the result of the judge its round ran with, its frozen roles' judge, not
+// the watch's: a round the factory ran with another judge (judge_fallback's, on a task Codex never
+// works on again) is scored on that judge's result, the review's body included, and the run records
+// that file.
+func TestALocalCaseIsScoredOnItsFrozenJudgesResult(t *testing.T) {
+	const bodyOnly = `{"status":"dry_run","verdict":"blocking","findings":{"P0":0,"P1":1,"P2":0,"P3":0},"provenance":[],
+"planned_review":{"event":"REQUEST_CHANGES","body":"Blocking: the refund keeps its points, which the plan calls deliberate.","comments":[]}}`
+	f := newReplayFixture(t, bodyOnly)
+	f.in.Roles, f.judgeFile = []string{"claude-review", "second-judge"}, "second-judge.json"
+	for i := range f.d.Config.Roles {
+		if f.d.Config.Roles[i].Name == "second-judge" {
+			f.d.Config.Roles[i].Output = f.judgeFile // a file of its own, not the watch's judge's
+		}
+	}
+	dir := LocalCaseDir(f.d.Layout, "task-1-round-1")
+	mustRemoveAll(t, dir)
+	if err := SaveLocalInputs(dir, f.in); err != nil {
+		t.Fatal(err)
+	}
+	ec := localEvalCase(t)
+	ec.Defects[0].Question, ec.Defects[0].Body = false, true
+	cr := RunCase(context.Background(), f.d, ec, Options{RunDir: filepath.Join(RunsRoot(f.d.Layout), "20261109-120000"), AgentTag: "eval-test"})
+	if cr.Score == nil || cr.Score.Found != 1 || cr.Score.Event != "REQUEST_CHANGES" {
+		t.Fatalf("case run %+v (score %+v), want the body's defect found", cr, cr.Score)
+	}
+	if filepath.Base(cr.ResultFile) != "second-judge.json" {
+		t.Fatalf("result file %s, want the frozen judge's", cr.ResultFile)
+	}
+	if _, err := os.Stat(cr.ResultFile); err != nil {
+		t.Fatalf("the recorded result file: %v", err)
 	}
 }

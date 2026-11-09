@@ -69,7 +69,9 @@ func (e *ConfigError) Error() string { return e.Key + ": " + e.Why }
 
 // LocalResult is what a local round found: the round's Outcome (dry_run
 // when it finished), its ReportDir, the judge's Verdict ("" when its result
-// file is missing or does not parse), the findings' counts by priority (P0
+// file is missing or does not parse) and ResultFile, the judge's result file
+// it read (that of the judge among the round's roles, "" without a report
+// directory), the findings' counts by priority (P0
 // to P3) and, for a later round, the counts of the earlier findings still
 // open, the findings themselves, and the round's number. Number, Tag and
 // Scratch are the round's synthetic PR number, its agents' tag and its
@@ -79,6 +81,7 @@ func (e *ConfigError) Error() string { return e.Key + ": " + e.Why }
 // Error why a round that did not finish ended, in the round's words.
 type LocalResult struct {
 	Outcome, ReportDir, Verdict string
+	ResultFile                  string
 	Counts                      [4]int
 	OpenCounts                  *[4]int
 	Findings                    []LocalFinding
@@ -298,7 +301,8 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error) {
 	if res.ReportDir == "" {
 		return out, nil
 	}
-	data, err := os.ReadFile(filepath.Join(res.ReportDir, judgeReport(d.Config, &w)))
+	out.ResultFile = filepath.Join(res.ReportDir, judgeReport(d.Config, &w)) // the round's judge's, of c.Roles
+	data, err := os.ReadFile(out.ResultFile)
 	if err != nil {
 		out.Error = cmp.Or(out.Error, "no judge result: "+err.Error())
 		return out, nil
