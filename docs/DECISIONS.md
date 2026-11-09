@@ -21128,24 +21128,36 @@ skill versions); people add theirs to the sections before it, at the end of the 
     and the fixer bot's pushes stay in one place. A second deployer in the factory daemon would need all of it
     twice, and two loops would race for the same envs' claims. `factory.NewStaging`'s client stays read only by
     design: the fetch clock that wraps the git hides the deploy's git, so its Plan and Deploy answer staging's
-    refusal; its doc says so now, and a test pins it (review finding "NewStaging's client can never deploy").
-  - The key, on home's rows and on the task card. It refuses with a note and no request, before any chooser: a row
-    without a PR in magnum's registry (`E acts on a PR in magnum's registry: PR-12302 has none there`), a PR whose
-    row has no staging cells (the board's words: its repository has no staging envs), a merged or closed one (the
-    board's refusal, from the facts the screen reads), a screen without actions (`noActions`) and an action in
-    flight. Your own PR's row has no staging cells, since the factory reads the staging servers of its tasks' PRs
-    alone; its refusal says this screen reads none of it and names `magnum staging <ref> --deploy <envs>`, rather
-    than claim the repository has no staging envs.
+    refusal; its doc says so now, and a test pins it, failing loudly if the client loses its Plan and Deploy (review
+    finding "NewStaging's client can never deploy").
+  - The key, on home's rows and on the task card, and in the right-click menu (dimmed where it refuses; its run opens
+    the chooser); home's hints offer it on a row it deploys, as the first hint a narrow line drops. It refuses with a
+    note and no request, before any chooser: a row without a PR in magnum's registry (`E acts on a PR in magnum's
+    registry: PR-12302 has none there`), a PR whose repository has no staging envs in the config (the board's
+    words), a merged or closed one (the board's refusal, from the facts the screen reads), a screen without actions
+    (`noActions`) and an action in flight.
+  - The envs. The chooser lists the row's staging cells, each in the factory's own words as the row and the card
+    say it (`stagingWords`: `latest`, `CI 12/41`, `CI ✗`, `deploying`, `outdated`, `none`), not the board's
+    `pushed`. A row with a PR but no cells (a task between its publish and the factory daemon's next staging write,
+    every task under a factory daemon started before the envs were configured, and your own PR's row, whose servers
+    the factory never reads) lists the envs the config names for the PR's repository (`FactoryPR.StagingEnvs`, which
+    the cli source reads from `config.Stagings` alone, before it opens magnum's registry), each `not read yet`: the
+    review daemon plans them all the same. So "no staging envs" is said only when the config has none.
   - The chooser is the board's `stagingChoice` and its line, on the footer's rule (home's and the card's); its keys
     are one function for both bars (`stagingChoice.press`: 1 to 9 toggle, a all, enter plans, enter with none says
-    to choose one first, any other key cancels). It is fed from the row's cells converted to the board's states
-    (`stagingInfosOf`, `factory.stagingState` the other way round: CI, CI ✗ and deploying are pushed; a state it does
-    not know is unknown), and it is part of the frame's key (`stagingChoice.key`). A click closes it.
-  - The plan's question is the factory's own (`res.nextFactory`, as P's) with a new `wrap` flag: on home it takes
-    the body's last lines above the rule, as on the board (up to half the screen); on the card it wraps over the
-    footer, past the three lines other questions keep. The bar now cleans every plan's question when it goes up
-    (P's too), since it is the daemon's text. y runs `StagingDeploy` bound to the plan's envs, head and what it
-    named.
+    to choose one first, any other key cancels), and the screen's words go in its `words` (the board passes none).
+    It is part of the frame's key (`stagingChoice.key`). A click closes it.
+  - The plan's question is the factory's own (`res.nextFactory`, as P's) with a `wrap` flag: on home it takes the
+    body's last lines above the rule, as on the board (up to half the screen); on the task card it wraps over the
+    footer (up to half of it). It is cleaned when it arrives (P's too: the daemon's text). It goes up only where it
+    is drawn whole and nothing else asks (`raiseHeld`): home, its filter not typed, or the task card, the menu
+    closed and no other question, chooser or action. Anywhere else the bar holds it (`factoryBar.held`), the footer
+    says that its y/N comes up on home or the task card, and it does once the operator is back: the recap draws its
+    own "Send 2 answers?", the question and ready cards and the form cut a question to three lines (the ready card
+    adds its push's "It frees"), the form and the filter take a y as text, the help and the log draw one cut line.
+    Before, a plan that answered on the recap took the bar under the recap's own question, and y deployed (or, for
+    P, on master too, merged the parent) instead of sending the answers. The ready card adds what its push frees to
+    its own decision's question alone. y runs `StagingDeploy` bound to the plan's envs, head and what it named.
   - Following the deploy. The factory bar re-reads no request, and the daemon plans again before it answers, which
     can take minutes; a deploy still pending ends its text saying that it is queued and that `magnum staging <ref>`
     (the PR's own reference) follows it. The task card shows the PR's staging deploys under STAGINGS, from the
@@ -21153,19 +21165,29 @@ skill versions); people add theirs to the sections before it, at the end of the 
     row (`stagingDeployValues` before `prFacts`' loop, `stagingDeploysOf` per row) onto `FactoryPR.StagingDeploys`;
     the card draws them with the board card's painter (`stagingDeployLines`, split out of `stagingLines`), cleaned
     (`cleanStagingDeploys`). Home's rows draw none.
+  - Your own PRs. With `[board] own_prs = "factory"` the board lists them nowhere, so this screen's E is the only
+    key that deploys them, and it knows their envs from the config alone: their states are never read here (`not
+    read yet`). Follow-up: give your own PRs' rows the review daemon's `pr.<id>.staging` record (the board's
+    states), as cells or for the chooser's words, so that you choose on what each env holds.
   Rejected: a deployer in the factory daemon (above); a second chooser for the factory screen (two key maps to keep
-  in step); staging cells for your own PRs' rows, from the review daemon's `pr.<id>.staging` record (it would change
-  home's rows, which this change leaves as they are: a follow-up); following the deploy's request on the factory
-  bar (it follows none, by design, and the card's deploy lines show the effect once the daemon answers).
+  in step); the plan's question raised on every view and drawn whole there (each card, the help, the log and the
+  form would need the wrap, and the recap a second question beside its own), or dropped with a note (the plan run
+  again for nothing); staging cells for your own PRs' rows now (it changes home's rows: the follow-up above);
+  following the deploy's request on the factory bar (it follows none, by design, and the card's deploy lines show
+  the effect once the daemon answers).
   Tests: tui's TestFactoryEOnAHomeRowChoosesTheEnvsThenDeploysAfterThePlan,
   TestFactoryEOnATaskCardDeploysAfterThePlan, TestFactoryERefusesWhatItCannotDeploy,
+  TestFactoryEOnARowWithoutCellsChoosesTheConfigsEnvs, TestFactoryEsChooserKeepsTheFactorysStateWords,
   TestFactoryEsChooserCancelsOnAnyOtherKey, TestFactoryEsPlanErrorAsksNothing,
   TestFactoryEsPendingDeploySaysHowToFollowIt, TestFactoryEsQuestionShowsTheMigrationsAndTheWarningWhole,
-  TestFactoryEsQuestionIsCleaned, TestTheTaskCardShowsItsPRsStagingDeploys, TestTheFactoryHelpNamesE and
-  TestFactoryEsChooserSaysTheCellsInTheBoardsStates (the board's E tests pass unchanged on the shared keys); the
-  cli's TestTheFactoryScreensStagingDeployIsTheBoards and TestTheFactoryScreenReadsItsPRsStagingDeploys; the
-  factory's TestTheFactoryStagingClientCannotDeploy, which fails once the fetch clock passes the deploy's git
-  through.
+  TestFactoryEsQuestionIsCleaned, TestTheTaskCardShowsItsPRsStagingDeploys, TestTheFactoryHelpNamesE,
+  TestTheMenuAndTheHintsOfferE, TestFactoryEsChooserSaysTheCellsInTheBoardsStates,
+  TestAStagingPlansQuestionNeverTakesTheRecapsY, TestAMergePlansQuestionNeverTakesTheRecapsY,
+  TestAPlansQuestionWaitsForAViewThatShowsItWhole, TestAPlansQuestionWaitsWhileTheFilterIsTyped and
+  TestTheReadyCardFreesOnlyItsOwnPushsQuestion (the board's E tests pass unchanged on the shared keys); the cli's
+  TestTheFactoryScreensStagingDeployIsTheBoards, TestTheFactoryScreenReadsItsPRsStagingDeploys and
+  TestTheFactoryScreenGivesItsPRsTheConfigsStagingEnvs; the factory's TestTheFactoryStagingClientCannotDeploy,
+  which fails once the fetch clock passes the deploy's git through.
 
 ## Learned rules
 

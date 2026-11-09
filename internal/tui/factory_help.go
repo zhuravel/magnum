@@ -98,8 +98,8 @@ var factoryKeyHelp = []struct {
 		{"b t", "the row's PR, its Jira issue in the browser (asks nothing)"},
 		{"f F K P", "on a row with a PR magnum read, yours or a task's: magnum fixes what is open, fix off (or on again), stop its fix loop, " +
 			"merge its parent as the fixer App's bot (the daemon's plan first; y/N)"},
-		{"E", "on a task's row with a PR and staging servers: deploy to staging (choose, y/N): 1-9 toggle a server, a all, enter " +
-			"asks magnum's daemon for its plan, y deploys"},
+		{"E", "on a row with a PR whose repository has staging servers: deploy to staging (choose, y/N): 1-9 toggle a server, " +
+			"a all, enter asks magnum's daemon for its plan, y deploys"},
 		{"r R", "on a row with a PR: magnum reviews it now, or afresh in new agent sessions, as the board's r and R (y/N)"},
 		{"z", "on a row with a PR: snooze its automatic reviews for 2h, or lift the snooze (y/N)"},
 		{"M U", "on a row with a PR: mute its automatic reviews, unmute them (y/N); a task's PR's question says what it does to its fix loop"},
