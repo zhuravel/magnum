@@ -239,25 +239,38 @@ func (s *screenActions) Fix(ctx context.Context, ref string) (tui.ActionResult, 
 	})
 }
 
-// MergeParent merges the PR's parent into it as the fixer App's bot
-// (magnum merge-parent). With dry it asks the daemon in a dry run and
-// returns its plan as the result's Ask ("Merge the parent of <ref>: magnum
-// merges <base> at <tip> into <branch> as <bot>, with no conflict?"), the
-// y/N the screen puts before the merge; an answer that is no plan (nothing
-// to merge) has none. Without dry the screen asked that question first.
-func (s *screenActions) MergeParent(ctx context.Context, ref string, dry bool) (tui.ActionResult, error) {
+// MergeParentPlan asks the daemon in a dry run what a merge of the PR's
+// parent into it as the fixer App's bot would do (magnum merge-parent
+// --dry-run) and returns its plan as the result's Ask ("Merge the parent of
+// <ref>: magnum merges <base> at <tip> into <branch> as <bot>, with no
+// conflict?"), the y/N the screen puts before the merge, and what the plan
+// asks about as Parent; an answer that is no plan (nothing to merge) has
+// neither.
+func (s *screenActions) MergeParentPlan(ctx context.Context, ref string) (tui.ActionResult, error) {
 	res, err := s.do(ctx, "merge-parent", func(ctx context.Context, c *Context, d *actDeps) int {
-		return fixMain(ctx, c, d, ref, fixOpts{merge: true, dryRun: dry, yes: true})
+		return fixMain(ctx, c, d, ref, fixOpts{merge: true, dryRun: true, yes: true})
 	})
-	if err != nil || !dry {
+	if err != nil {
 		return res, err
 	}
 	for _, r := range res.Requests {
 		if plan, ok := engine.ParseMergePlan(r.Result); ok && r.State == tui.RequestDone {
-			res.Ask = mergeParentQuestion(plan)
+			a := plan.Asked
+			res.Ask, res.Parent = mergeParentQuestion(plan), &tui.MergeAsked{Head: a.Head, Base: a.Base, Tip: a.Tip, Conflicts: a.Conflicts, At: a.At}
 		}
 	}
 	return res, nil
+}
+
+// MergeParent merges the PR's parent into it as the fixer App's bot
+// (magnum merge-parent), bound to asked, what the plan's question the
+// screen asked y/N for named (MergeParentPlan's Parent): the daemon
+// refuses the merge when that moved since.
+func (s *screenActions) MergeParent(ctx context.Context, ref string, asked tui.MergeAsked) (tui.ActionResult, error) {
+	a := engine.MergeAsked{Head: asked.Head, Base: asked.Base, Tip: asked.Tip, Conflicts: asked.Conflicts, At: asked.At}
+	return s.do(ctx, "merge-parent", func(ctx context.Context, c *Context, d *actDeps) int {
+		return fixMain(ctx, c, d, ref, fixOpts{merge: true, yes: true, asked: &a})
+	})
 }
 
 // FixOff takes the PR out of autofix (off) or puts it back (magnum fix --off

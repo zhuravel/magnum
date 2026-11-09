@@ -115,8 +115,8 @@ type fakeFactoryActions struct {
 	aborts    []string        // the PRs Abort was asked for
 	openPRs   []string        // the PRs OpenPR stepped into magnum's pane of
 	acceptsQA []int64         // the tasks AcceptQA was asked for
-	plans     []string        // the PRs MergeParent's dry run was asked for
-	merges    []string        // the PRs MergeParent merged the parent of
+	plans     []string        // the PRs MergeParentPlan was asked for
+	merges    []string        // the merges MergeParent sent (mergeCall: the PR and its binding)
 	// stagingPlans are StagingPlan's calls ("<ref> <env,env>"),
 	// stagingDeploys StagingDeploy's ("<ref> <env,env> at <head> seen
 	// <migration>"); stagingAsk, when set, is the plan's question,

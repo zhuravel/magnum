@@ -26,12 +26,15 @@ type ActionResult struct {
 	Requests []Request
 	// Ask is the question an action that only planned asks before its
 	// next step, ending in "?": the daemon's plan of a merge of the parent
-	// (MergeParent's dry run), which the screen puts as y/N before it
-	// merges. "" for none.
+	// (MergeParentPlan), which the screen puts as y/N before it merges.
+	// "" for none.
 	Ask string
 	// Staging is what a staging deploy's plan (StagingPlan) binds its
 	// deploy to, which y sends (StagingDeploy); nil for none.
 	Staging *StagingAsked
+	// Parent is what a merge of the parent's plan (MergeParentPlan) binds
+	// its merge to, which y sends (MergeParent); nil for none.
+	Parent *MergeAsked
 	// next and nextFactory are that next step on the board and the
 	// dashboard (actionRun), and on the factory screen (prKey): the screen
 	// asks Ask y/N, and y runs it.

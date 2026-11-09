@@ -2,45 +2,70 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
-// mergePlanAsk is what the fake MergeParent's dry run asks: the daemon's
-// plan names the base, its tip, the branch and the bot's login.
+// mergePlanAsk is what the fake MergeParentPlan asks: the daemon's plan
+// names the base, its tip, the branch and the bot's login.
 func mergePlanAsk(ref string) string {
 	return "Merge the parent of " + ref + ": magnum merges master at c0c0c0c into feature as fixer-app[bot], with no conflict?"
 }
 
-func (f *fakeActions) MergeParent(_ context.Context, ref string, dry bool) (ActionResult, error) {
-	if !dry {
-		return f.record("merge-parent " + ref)
-	}
+// mergePlanAsked is what the fake plan's question asked about: the PR's
+// head, master at c0c0c0c, no conflict.
+var mergePlanAsked = MergeAsked{Head: "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", Base: "master",
+	Tip: "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0", At: time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)}
+
+// mergeCall is how the fakes record a merge of ref's parent bound to a:
+// "merge-parent talkable/talkable#5 bound to master at c0c0c0c, head
+// a1a1a1a, 0 conflicts, planned 10:00".
+func mergeCall(ref string, a MergeAsked) string {
+	return fmt.Sprintf("merge-parent %s bound to %s at %s, head %s, %d conflicts, planned %s", ref, a.Base, textx.ShortSHA(a.Tip),
+		textx.ShortSHA(a.Head), a.Conflicts, a.At.UTC().Format("15:04"))
+}
+
+func (f *fakeActions) MergeParentPlan(_ context.Context, ref string) (ActionResult, error) {
 	res, err := f.record("merge-parent --dry-run " + ref)
 	if err == nil {
-		res.Ask = mergePlanAsk(ref)
+		asked := mergePlanAsked
+		res.Ask, res.Parent = mergePlanAsk(ref), &asked
 	}
 	return res, err
 }
 
-func (a *fakeFactoryActions) MergeParent(_ context.Context, ref string, dry bool) (ActionResult, error) {
+func (f *fakeActions) MergeParent(_ context.Context, ref string, asked MergeAsked) (ActionResult, error) {
+	return f.record(mergeCall(ref, asked))
+}
+
+func (a *fakeFactoryActions) MergeParentPlan(_ context.Context, ref string) (ActionResult, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if !dry {
-		a.merges = append(a.merges, ref)
-		return ActionResult{Text: "merging the parent of " + ref}, nil
-	}
 	a.plans = append(a.plans, ref)
-	return ActionResult{Text: "dry run", Ask: mergePlanAsk(ref)}, nil
+	asked := mergePlanAsked
+	return ActionResult{Text: "dry run", Ask: mergePlanAsk(ref), Parent: &asked}, nil
+}
+
+func (a *fakeFactoryActions) MergeParent(_ context.Context, ref string, asked MergeAsked) (ActionResult, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.merges = append(a.merges, mergeCall(ref, asked))
+	return ActionResult{Text: "merging the parent of " + ref}, nil
 }
 
 // P merges the PR's parent as the fixer App's bot. Its y/N names who
 // merges which tip of which base into which branch, and as whom, which only
 // the daemon knows: P first asks it in a dry run (it changes nothing),
-// then puts the daemon's plan as the question; only y sends the merge.
+// then puts the daemon's plan as the question; only y sends the merge, and
+// it sends it bound to what the plan asked about (the head, the base, its
+// tip, the conflicts, when), which the daemon checks again: the bug was a y
+// that bound nothing, so the daemon merged whatever tip the base had then.
 func TestPAsksWithTheDaemonsPlanBeforeMergingTheParent(t *testing.T) {
 	m, act := fixBoard(t, nil)
 	m, _ = boardAct(t, m, "P")
@@ -56,8 +81,8 @@ func TestPAsksWithTheDaemonsPlanBeforeMergingTheParent(t *testing.T) {
 		t.Errorf("n acted or left the question up: %v", act.calls)
 	}
 	m, _ = boardAct(t, m, "y")
-	if !slices.Equal(act.calls, []string{"merge-parent --dry-run talkable/talkable#5", "merge-parent talkable/talkable#5"}) {
-		t.Errorf("y called %v, want the merge after its plan", act.calls)
+	if !slices.Equal(act.calls, []string{"merge-parent --dry-run talkable/talkable#5", mergeCall("talkable/talkable#5", mergePlanAsked)}) {
+		t.Errorf("y called %v, want the merge bound to its plan", act.calls)
 	}
 	if m.confirm != nil {
 		t.Errorf("a question is left up: %+v", m.confirm)
@@ -106,13 +131,13 @@ func TestDashboardPMergesTheParentAfterThePlan(t *testing.T) {
 	if want := mergePlanAsk("talkable#7"); m.confirm == nil || m.confirm.question != want {
 		t.Fatalf("P asked %+v (calls %v), want %q", m.confirm, act.calls, want)
 	}
-	if _, _ = dashAct(t, m, "y"); !slices.Equal(act.calls, []string{"merge-parent --dry-run talkable#7", "merge-parent talkable#7"}) {
-		t.Errorf("calls %v, want the plan and the merge", act.calls)
+	if _, _ = dashAct(t, m, "y"); !slices.Equal(act.calls, []string{"merge-parent --dry-run talkable#7", mergeCall("talkable#7", mergePlanAsked)}) {
+		t.Errorf("calls %v, want the plan and the merge bound to it", act.calls)
 	}
 }
 
 // The factory screen's P on your PR's row asks the daemon's plan, puts it
-// as the question, and only y merges.
+// as the question, and only y merges, bound to the plan.
 func TestFactoryPOnAnOwnPRRowMergesTheParentAfterThePlan(t *testing.T) {
 	h := testYours(t, 140, 40)
 	h.press("g")
@@ -130,8 +155,8 @@ func TestFactoryPOnAnOwnPRRowMergesTheParentAfterThePlan(t *testing.T) {
 	h.act.mu.Lock()
 	merges = slices.Clone(h.act.merges)
 	h.act.mu.Unlock()
-	if !slices.Equal(merges, []string{"example/talkable#4602"}) {
-		t.Errorf("merges %v, want the row's PR", merges)
+	if !slices.Equal(merges, []string{mergeCall("example/talkable#4602", mergePlanAsked)}) {
+		t.Errorf("merges %v, want the row's PR bound to its plan", merges)
 	}
 }
 

@@ -48,8 +48,10 @@ const fixEventWindow = 200
 type fixOpts struct {
 	off, on, done, wait, dryRun, json, yes bool
 	// merge is `magnum merge-parent`: a merge of the PR's parent alone
-	// (engine.FixModeMerge), asked y/N with the daemon's plan.
+	// (engine.FixModeMerge), asked y/N with the daemon's plan. asked is the
+	// plan a screen's y/N named (its P), which the merge is bound to.
 	merge   bool
+	asked   *engine.MergeAsked
 	timeout time.Duration // --timeout: stop following after this long (0 = no limit)
 	// decide are the --decide values as typed, decisions what they say
 	// (parseDecide).
@@ -241,7 +243,7 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 	}
 	payload := engine.FixPayload{PRTarget: t.prTarget(), DryRun: o.dryRun, Off: o.off, On: o.on, Decide: o.decisions}
 	if o.merge {
-		payload.Mode = engine.FixModeMerge
+		payload.Mode, payload.Asked = engine.FixModeMerge, o.asked
 	}
 	if !o.json {
 		for _, d := range o.decisions { // what goes out as you, before the y/N

@@ -275,14 +275,22 @@ func (a *factoryActions) Fix(ctx context.Context, ref string) (tui.ActionResult,
 	return a.board.Fix(ctx, ref)
 }
 
-// MergeParent merges the parent of your PR ref into it as the fixer App's
-// bot, as the board's P does: the plan with dry, then the merge the screen
-// asked y/N for.
-func (a *factoryActions) MergeParent(ctx context.Context, ref string, dry bool) (tui.ActionResult, error) {
+// MergeParentPlan asks the daemon's plan of a merge of the parent of your
+// PR ref into it as the fixer App's bot, as the board's P does.
+func (a *factoryActions) MergeParentPlan(ctx context.Context, ref string) (tui.ActionResult, error) {
 	if a.board == nil {
 		return tui.ActionResult{}, errNoBoard
 	}
-	return a.board.MergeParent(ctx, ref, dry)
+	return a.board.MergeParentPlan(ctx, ref)
+}
+
+// MergeParent sends the merge the screen asked y/N for, bound to its plan
+// (asked), as the board's P does.
+func (a *factoryActions) MergeParent(ctx context.Context, ref string, asked tui.MergeAsked) (tui.ActionResult, error) {
+	if a.board == nil {
+		return tui.ActionResult{}, errNoBoard
+	}
+	return a.board.MergeParent(ctx, ref, asked)
 }
 
 // FixOff switches your PR ref out of autofix (off) or back in, as the

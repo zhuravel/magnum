@@ -279,11 +279,12 @@ func (m *factoryModel) prKey(k string, r FactoryRow) tea.Cmd {
 		}
 		view := m.view
 		return m.bar.start("Plan the merge of the parent of "+key, func(ctx context.Context) (ActionResult, error) {
-			res, err := act.MergeParent(ctx, pr.Ref, true)
-			if err == nil && res.Ask != "" {
+			res, err := act.MergeParentPlan(ctx, pr.Ref)
+			if err == nil && res.Ask != "" && res.Parent != nil { // y sends the merge bound to what the plan asked about
+				asked := *res.Parent
 				res.nextFactory = &factoryQuestion{sentence: res.Ask, label: "Merge the parent of " + key, wrap: true, // "with no conflict" shows before y
 					plan: &planOf{row: r.ID, view: view, key: "P", name: key, ref: pr.Ref},
-					run:  func(ctx context.Context) (ActionResult, error) { return act.MergeParent(ctx, pr.Ref, false) }}
+					run:  func(ctx context.Context) (ActionResult, error) { return act.MergeParent(ctx, pr.Ref, asked) }}
 			}
 			return res, err
 		})

@@ -78,7 +78,8 @@ func (h *factoryHarness) expireNote() {
 	h.feed(factoryExpireMsg{seq: h.m.bar.flashSeq})
 }
 
-// merges are the PRs MergeParent merged the parent of.
+// merges are the merges MergeParent sent (mergeCall: the PR and the plan
+// it is bound to).
 func (a *fakeFactoryActions) mergesOf() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -138,7 +139,8 @@ func TestAStagingPlansQuestionNeverTakesTheRecapsY(t *testing.T) {
 }
 
 // P's plan waits the same way: y on the recap sends the answers and merges
-// nothing, nothing asks after it, and P on its row asks the merge.
+// nothing, nothing asks after it, and P on its row asks the merge, which y
+// sends bound to the held plan.
 func TestAMergePlansQuestionNeverTakesTheRecapsY(t *testing.T) {
 	h := testPlanned(t, 140, 40)
 	plan := h.startHeld("P")
@@ -161,8 +163,8 @@ func TestAMergePlansQuestionNeverTakesTheRecapsY(t *testing.T) {
 	h.press("P")
 	mustContain(t, h.view(), mergePlanAsk("example/talkable#4545")+" y/N")
 	h.press("y")
-	if got := h.act.mergesOf(); !slices.Equal(got, []string{"example/talkable#4545"}) {
-		t.Errorf("merges %v, want the row's PR", got)
+	if got, want := h.act.mergesOf(), []string{mergeCall("example/talkable#4545", mergePlanAsked)}; !slices.Equal(got, want) {
+		t.Errorf("merges %v, want the row's PR bound to its plan %v", got, want)
 	}
 }
 

@@ -749,17 +749,8 @@ func actionRun(a rowAct, r actRow) (what string, fn actionFunc) {
 		}
 	case actWhiteboard:
 		return what, on(DashboardActions.OpenWhiteboard)
-	case actMergeParent: // the daemon's plan first (a dry run changes nothing); its question puts the merge behind y
-		return what + " plan", func(ctx context.Context, act DashboardActions) (ActionResult, error) {
-			res, err := act.MergeParent(ctx, target, true)
-			if err == nil && res.Ask != "" {
-				res.next = &pendingAction{question: res.Ask, what: what, target: target,
-					fn: func(ctx context.Context, act DashboardActions) (ActionResult, error) {
-						return act.MergeParent(ctx, target, false)
-					}}
-			}
-			return res, err
-		}
+	case actMergeParent: // the daemon's plan first (a dry run changes nothing); its question puts the merge, bound to it, behind y
+		return mergeParentRun(target)
 	case actFixDone:
 		seen := r.seen
 		return what, func(ctx context.Context, act DashboardActions) (ActionResult, error) {

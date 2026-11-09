@@ -233,11 +233,15 @@ type DashboardActions interface {
 	// start no loop.
 	Fix(ctx context.Context, ref string) (ActionResult, error)
 	FixOff(ctx context.Context, ref string, off bool) (ActionResult, error)
-	// MergeParent merges the PR's parent, its base branch, into the
-	// operator's own PR as the fixer App's bot (magnum merge-parent); with
-	// dry, it only asks the daemon what would happen and returns the plan
-	// as the result's Ask, the y/N the screen puts before the merge.
-	MergeParent(ctx context.Context, ref string, dry bool) (ActionResult, error)
+	// MergeParentPlan asks the daemon what a merge of the PR's parent, its
+	// base branch, into the operator's own PR as the fixer App's bot would
+	// do (magnum merge-parent --dry-run) and returns the plan as the
+	// result's Ask, the y/N the screen puts before the merge, and what it
+	// asks about as Parent. MergeParent sends the merge bound to that, once
+	// the screen's y/N said yes (P): the daemon refuses it when what the
+	// question named moved since.
+	MergeParentPlan(ctx context.Context, ref string) (ActionResult, error)
+	MergeParent(ctx context.Context, ref string, asked MergeAsked) (ActionResult, error)
 	// StagingPlan asks the daemon's plan of a staging deploy of the
 	// operator's own PR to envs (magnum staging --deploy --dry-run) and
 	// returns its y/N as the result's Ask and its binding as Staging (the

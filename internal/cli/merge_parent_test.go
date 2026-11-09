@@ -191,10 +191,11 @@ func TestMergeParentWaitSaysTheParentWasMerged(t *testing.T) {
 	actContains(t, h.out.String(), "talkable#5: merged master at c0c0c0c with no conflict: the head is e7e7e7e")
 }
 
-// The screens' P runs the command's own path: its dry run hands back the
-// daemon's plan as the result's question (Ask), and the merge the screen
-// then asked y/N for queues the merge alone, never asking again; a plan
-// the daemon refuses is the screen's error, with no question.
+// The screens' P runs the command's own path: its plan hands back the
+// daemon's plan as the result's question (Ask) and what it asks about
+// (Parent), and the merge the screen then asked y/N for queues the merge
+// alone, bound to that plan, never asking again; a plan the daemon refuses
+// is the screen's error, with no question.
 func TestScreenMergeParentPlansThenMerges(t *testing.T) {
 	h := newActHarness(t)
 	h.pid = 4242
@@ -204,21 +205,31 @@ func TestScreenMergeParentPlansThenMerges(t *testing.T) {
 	defer acts.Close()
 	ctx := context.Background()
 
-	res, err := acts.MergeParent(ctx, "talkable#5", true)
+	res, err := acts.MergeParentPlan(ctx, "talkable#5")
 	if want := "Merge the parent of talkable/talkable#5: magnum merges master at c0c0c0c into feature as fixer-app[bot], with no conflict?"; err != nil || res.Ask != want {
 		t.Fatalf("the plan = %q, %v; want the question %q", res.Ask, err, want)
 	}
-	if res, err = acts.MergeParent(ctx, "talkable#5", false); err != nil || res.Ask != "" || !strings.Contains(res.Text, mergeAnswer) {
+	a := mergeAsked
+	if p := res.Parent; p == nil || p.Head != a.Head || p.Base != a.Base || p.Tip != a.Tip || p.Conflicts != a.Conflicts || !p.At.Equal(a.At) {
+		t.Fatalf("the plan binds %+v, want %+v", res.Parent, a)
+	}
+	if strings.Contains(res.Text, `{"ref"`) {
+		t.Errorf("the plan's text shows its JSON line:\n%s", res.Text)
+	}
+	if res, err = acts.MergeParent(ctx, "talkable#5", *res.Parent); err != nil || res.Ask != "" || !strings.Contains(res.Text, mergeAnswer) {
 		t.Fatalf("the merge = %+v, %v", res, err)
 	}
 	reqs := h.requests()
 	if len(reqs) != 2 || !actDecode[engine.FixPayload](t, reqs[0].Payload).DryRun || actDecode[engine.FixPayload](t, reqs[1].Payload).DryRun {
 		t.Fatalf("requests = %+v, want the plan and the merge", reqs)
 	}
+	if p := actDecode[engine.FixPayload](t, reqs[1].Payload); p.Asked == nil || !sameAsked(*p.Asked, mergeAsked) {
+		t.Errorf("the merge is bound to %+v, want the plan's %+v", p.Asked, mergeAsked)
+	}
 	h.onSleep = func(h *actHarness) {
 		h.completePending(store.RequestFailed, "PR #5 is alice's, not yours: magnum merges the parent of your own PRs alone")
 	}
-	if res, err := acts.MergeParent(ctx, "talkable#5", true); err == nil || res.Ask != "" {
+	if res, err := acts.MergeParentPlan(ctx, "talkable#5"); err == nil || res.Ask != "" || res.Parent != nil {
 		t.Errorf("a refused plan = %+v, %v; want the error and no question", res, err)
 	}
 }
