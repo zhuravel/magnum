@@ -64,9 +64,10 @@ func localRoundOnDisk(t *testing.T, l paths.Layout) {
 }
 
 // `magnum eval add --local-task 1 --round 1` freezes what that round read in the case's own
-// directory beside the learned corpus and prints the case for the operator's corpus, with the
-// round's findings and a defect to fill in: the printed case, given a defect, is a valid local case
-// of the round's synthetic PR. The same case is never frozen twice.
+// directory beside the learned corpus and prints the case for the local cases' corpus beside it
+// (never eval.toml, which builds from before local cases refuse whole), with the round's findings and
+// a defect to fill in: the printed case, given a defect, is a valid local case of the round's
+// synthetic PR. The same case is never frozen twice.
 func TestEvalAddFreezesALocalRoundAndPrintsItsCase(t *testing.T) {
 	f := newInspFixture(t)
 	f.Ctx.Layout.UserConfig = filepath.Join(f.Home, "user", "config.toml") // the operator's corpus is beside it, never the real one
@@ -77,7 +78,7 @@ func TestEvalAddFreezesALocalRoundAndPrintsItsCase(t *testing.T) {
 	out := f.Out.String()
 	for _, want := range []string{"round 1 (cycle 1) of factory task 1", "codex-review, codex-judge", "P3 question app/models/credit.rb:7 Is rounding down wanted?",
 		`name = "task-1-round-1"`, `kind = "local"`, `pr = "talkable/talkable#900011"`, `head = "` + addHead + `"`, "# [[case.defect]]", "# question = true",
-		"magnum eval run --case task-1-round-1", "eval.toml"} {
+		"magnum eval run --case task-1-round-1", filepath.Join("learn", "local", "cases.toml"), "not eval.toml"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -147,6 +148,15 @@ func TestEvalAddRefusesWhatItCannotFreeze(t *testing.T) {
 	if code := execute(f.Ctx, []string{"eval", "add", "--local-task", "1", "--round", "1"}); code != 1 || !strings.Contains(f.Err.String(), "already") {
 		t.Fatalf("a name the corpus has: exit %d; stderr %s", code, f.Err)
 	}
+	if err := os.Remove(corpus); err != nil {
+		t.Fatal(err)
+	}
+	writeEvalFile(t, f.Ctx.Layout.LearnLocalCorpus(), "[[case]]\nname = \"task-1-round-1\"\nkind = \"local\"\npr = \"talkable/talkable#900011\"\nhead = \""+addHead+
+		"\"\n\n[[case.defect]]\nid = \"d\"\ntitle = \"t\"\nquestion = true\nmatch = [\"x\"]\n")
+	f.Err.Reset()
+	if code := execute(f.Ctx, []string{"eval", "add", "--local-task", "1", "--round", "1"}); code != 1 || !strings.Contains(f.Err.String(), "already") {
+		t.Fatalf("a name the local cases have: exit %d; stderr %s", code, f.Err)
+	}
 	if _, err := os.Stat(evalrun.LocalCaseDir(f.Ctx.Layout, "task-1-round-1")); !os.IsNotExist(err) {
 		t.Fatalf("a refused add froze the round: %v", err)
 	}
@@ -200,6 +210,22 @@ func TestEvalAddSaysATasksCodexMark(t *testing.T) {
 		t.Fatalf("exit %d; stderr %s", code, f.Err)
 	}
 	if out := f.Out.String(); !strings.Contains(out, "Codex never works on task 1 again") || !strings.Contains(out, "codex-review, codex-judge") {
+		t.Fatalf("output:\n%s", out)
+	}
+}
+
+// `eval run` reads the local cases' corpus beside the learned one, without --corpus, and names it on
+// its start line.
+func TestEvalRunReadsTheLocalCasesCorpus(t *testing.T) {
+	f := newInspFixture(t)
+	writeEvalFile(t, f.Ctx.Layout.LearnLocalCorpus(), "[[case]]\nname = \"task-1-round-1\"\nkind = \"local\"\npr = \"talkable/talkable#900011\"\nhead = \""+addHead+
+		"\"\n\n[[case.defect]]\nid = \"d\"\ntitle = \"t\"\nquestion = true\nmatch = [\"x\"]\n")
+	if code := execute(f.Ctx, []string{"eval", "run"}); code != 0 {
+		t.Fatalf("exit %d; stderr %s", code, f.Err)
+	}
+	out := f.Out.String()
+	if !strings.Contains(out, "1 case(s) (1 local)") || !strings.Contains(out, "cases.toml") ||
+		!strings.Contains(out, "task-1-round-1 talkable/talkable#900011 (local round 1 of task 1)") {
 		t.Fatalf("output:\n%s", out)
 	}
 }

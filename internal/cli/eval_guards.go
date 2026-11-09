@@ -55,7 +55,7 @@ func runEvalGuards(c *Context, corpusFlag string, n int) int {
 	if err := c.LoadConfig(); err != nil {
 		return cmdFail(c, "eval guards", fmt.Errorf("%w (fix config.toml; `magnum config` validates it)", err))
 	}
-	user, learned := evalCorpusPath(c, corpusFlag)
+	user, learned, _ := evalCorpusPath(c, corpusFlag) // the gate takes no local case
 	if corpusFlag == "" && user != "" && !fsx.Exists(user) {
 		user = ""
 	}

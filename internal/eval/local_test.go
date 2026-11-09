@@ -234,19 +234,40 @@ func TestRescoreScoresALocalCaseFromItsRecordedFindings(t *testing.T) {
 	}
 }
 
-// The example corpus shows a local case: a round of the factory's local review named by its
-// synthetic PR, whose defect a P2 question for the operator finds and a P3 one does not.
-func TestTheExampleCorpusHasALocalCaseThatWantsAQuestion(t *testing.T) {
-	c, err := LoadCorpus(filepath.Join("..", "..", "eval.toml.example"))
+// The example corpus shows a local case, a round of the factory's local review named by its synthetic
+// PR, whose defect a P2 question for the operator finds and a P3 one does not, commented out: it goes
+// in the local cases' corpus, never in eval.toml, which builds from before local cases refuse whole.
+func TestTheExampleCorpusShowsALocalCaseForItsOwnFile(t *testing.T) {
+	path := filepath.Join("..", "..", "eval.toml.example")
+	c, err := LoadCorpus(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	i := slices.IndexFunc(c.Cases, func(k Case) bool { return k.Local() })
-	if i < 0 {
-		t.Fatal("the example corpus has no local case")
+	if slices.ContainsFunc(c.Cases, func(k Case) bool { return k.Local() }) {
+		t.Fatal("the example corpus, a template of eval.toml, holds a local case")
 	}
-	k := c.Cases[i]
-	if k.Owner != "example" || k.Number < LocalNumberBase || len(k.Defects) != 1 || !k.Defects[0].Question || k.Defects[0].Severity != "P2" {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(b)
+	at := strings.Index(text, "# [[case]]\n# name = \"task-1-round-1\"\n# kind = \"local\"")
+	if at < 0 {
+		t.Fatal("the example corpus shows no local case")
+	}
+	var block []string
+	for line := range strings.SplitSeq(text[at:], "\n") {
+		if !strings.HasPrefix(line, "#") {
+			break
+		}
+		block = append(block, strings.TrimPrefix(strings.TrimPrefix(line, "#"), " "))
+	}
+	lc, err := parseCorpus("", []byte(strings.Join(block, "\n")))
+	if err != nil {
+		t.Fatalf("the example's local case: %v", err)
+	}
+	k := lc.Cases[0]
+	if !k.Local() || k.Owner != "example" || k.Number < LocalNumberBase || len(k.Defects) != 1 || !k.Defects[0].Question || k.Defects[0].Severity != "P2" {
 		t.Fatalf("case %+v: want one P2 question defect on a synthetic PR of an example repository", k)
 	}
 	for _, tc := range []struct {
@@ -258,5 +279,48 @@ func TestTheExampleCorpusHasALocalCaseThatWantsAQuestion(t *testing.T) {
 		if s := ScoreCase(k, Result{Findings: []Finding{f}}); s.Found != map[bool]int{true: 1}[tc.found] || s.Noise != 0 {
 			t.Errorf("a %s question: %+v, want found %v and no noise", tc.severity, s, tc.found)
 		}
+	}
+}
+
+// The local cases have a corpus file of their own (paths.Layout.LearnLocalCorpus), read after the
+// operator's and the learned one: builds from before local cases refuse a whole corpus that holds one
+// (kind and question are unknown keys to them), and the daemon's skill gate and eval-at.sh's older
+// builds read eval.toml. A local file that is not there adds nothing, and a case name in it and in
+// another file is refused naming both files.
+func TestLoadCorporaReadsTheLocalCasesFileAfterTheOthers(t *testing.T) {
+	dir := t.TempDir()
+	user, learned, local := filepath.Join(dir, "eval.toml"), filepath.Join(dir, "learn", "corpus.toml"), filepath.Join(dir, "learn", "local", "cases.toml")
+	for path, text := range map[string]string{user: validCorpus, local: localCorpus} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	names := func(c *Corpus) []string {
+		var out []string
+		for _, cs := range c.Cases {
+			out = append(out, cs.Name)
+		}
+		return out
+	}
+	c, err := LoadCorpora(user, learned, local)
+	if err != nil || !slices.Equal(names(c), []string{"oauth-hmac", "sandbox", "task-1-round-1"}) || !c.Cases[2].Local() {
+		t.Fatalf("the user's and the local cases: %v, %v", c, err)
+	}
+	if c, err := LoadCorpora("", learned, local); err != nil || !slices.Equal(names(c), []string{"task-1-round-1"}) {
+		t.Fatalf("the local cases alone: %v, %v", c, err)
+	}
+	if c, err := LoadCorpora(user, learned, filepath.Join(dir, "none.toml")); err != nil || len(c.Cases) != 2 {
+		t.Fatalf("no local file: %v, %v", c, err)
+	}
+	clash := strings.Replace(localCorpus, `name = "task-1-round-1"`, `name = "sandbox"`, 1)
+	if err := os.WriteFile(local, []byte(clash), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = LoadCorpora(user, learned, local)
+	if err == nil || !strings.Contains(err.Error(), `"sandbox"`) || !strings.Contains(err.Error(), user) || !strings.Contains(err.Error(), local) {
+		t.Fatalf("a name in both: %v, want an error naming the case and both files", err)
 	}
 }

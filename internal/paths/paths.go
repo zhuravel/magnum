@@ -460,6 +460,14 @@ func (l Layout) LearnCorpus() string { return filepath.Join(l.Learn(), "corpus.t
 // corpus, outside any checkout, since they hold a task's ticket and answers.
 func (l Layout) LearnLocalCases() string { return filepath.Join(l.Learn(), "local") }
 
+// LearnLocalCorpus is the eval corpus of the local cases,
+// LearnLocalCases()/cases.toml (no case name has a dot), which the operator
+// writes from what `magnum eval add` prints and `magnum eval run` reads
+// after the learned corpus: never the operator's eval.toml, which builds
+// from before local cases (the daemon's skill gate on one, eval-at.sh's
+// older builds) read and refuse whole for a key they do not know.
+func (l Layout) LearnLocalCorpus() string { return filepath.Join(l.LearnLocalCases(), "cases.toml") }
+
 // Eval is where the eval runs live, Eval()/<run id>/ (`magnum eval run`
 // and the gate of a skill proposal), with the flagged cases and the cases'
 // worktrees (wt/).

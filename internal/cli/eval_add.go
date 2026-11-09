@@ -4,9 +4,10 @@ package cli
 // local review as an eval case. It freezes what the round read
 // (evalrun.FreezeLocal, read only: the factory's registry and the round's
 // own files) in the case's directory beside the learned corpus
-// (evalrun.LocalCaseDir) and prints the case for the operator's corpus,
-// where the operator gives it the defects the round should have found, in
-// the syntax of a posted case's.
+// (evalrun.LocalCaseDir) and prints the case for the local cases' corpus
+// beside it (paths.Layout.LearnLocalCorpus), where the operator gives it
+// the defects the round should have found, in the syntax of a posted
+// case's.
 
 import (
 	"cmp"
@@ -39,15 +40,19 @@ func newEvalAddCmd(c *Context) *cobra.Command {
 		"Freeze round N of factory task ID's local review as a local eval case, so that `magnum eval run` replays it: "+
 			"a change to the review skill or the judge prompts can then be proven on a round that missed. It reads, read "+
 			"only, the factory's registry (the task's repository and branch, the head the round's cycle reviewed, the roles "+
-			"its begin event names, when each answer was given) and the round's own files (its result in the task's "+
+			"its begin event names, when each answer was given, whether Codex never works on the task again) and the "+
+			"round's own files (its result in the task's "+
 			"directory; the description.md, ticket.md and prepass.json of its scratch directory: the title and plan, the "+
 			"ticket, the base it diffed from), and the operator's answers as the round could read them (those its "+
 			"ticket file held, else answers.md when nothing was answered or written since the round began). It copies "+
 			"them to the case's own directory beside the learned corpus (learn/local/<name>/ in the data directory), "+
 			"never to read the task's directory again, and refuses a round it cannot freeze whole, saying what is "+
-			"missing. Then it prints the round's findings and the [[case]] to add to ~/.config/magnum/"+evalCorpusFile+
-			" with the defects the round should have found (the posted cases' syntax; question = true asks that the "+
-			"finding be a question for you, at the defect's severity or stronger). --cycle picks the review cycle when "+
+			"missing. Then it prints the round's findings and the [[case]] to add to the local cases' corpus, "+
+			"learn/local/cases.toml in the data directory (not "+evalCorpusFile+": builds from before local cases, the "+
+			"daemon's skill gate among them until it restarts on one, refuse a corpus that holds one), with the defects "+
+			"the round should have found (the posted cases' syntax; question = true asks that the finding be a question "+
+			"for you, at the defect's severity or stronger, P2 when it gives none). `eval run` reads that file after the "+
+			"learned corpus, and refuses a case whose round ran Codex on a task Codex never works on again. --cycle picks the review cycle when "+
 			"the task's loops ran round N more than once; --name names the case (default task-<id>-round-<n>).",
 		func(pos []string) int {
 			switch {
@@ -80,8 +85,8 @@ func runEvalAdd(c *Context, f evalAddFlags) int {
 	if name == "" {
 		name = evalrun.LocalCaseName(f.task, f.round)
 	}
-	user, learned := evalCorpusPath(c, "")
-	if corpus, err := eval.LoadCorpora(user, learned); err == nil && slices.ContainsFunc(corpus.Cases, func(cs eval.Case) bool { return cs.Name == name }) {
+	user, learned, local := evalCorpusPath(c, "")
+	if corpus, err := eval.LoadCorpora(user, learned, local); err == nil && slices.ContainsFunc(corpus.Cases, func(cs eval.Case) bool { return cs.Name == name }) {
 		return cmdFail(c, "eval add", fmt.Errorf("a case named %s is already in the corpus: give the round another --name", name))
 	}
 	ctx, stop := signalContext()
@@ -119,8 +124,9 @@ func runEvalAdd(c *Context, f evalAddFlags) int {
 	for _, lf := range res.Findings {
 		fmt.Fprintf(w, "  %s\n", evalLocalFinding(lf))
 	}
-	fmt.Fprintf(w, "\nAdd the case to %s with the defects the round should have found (eval.toml.example has the syntax), "+
-		"then replay it with `magnum eval run --case %s`:\n\n", inspTilde(evalDefaultCorpus(c)), name)
+	fmt.Fprintf(w, "\nAdd the case to %s (the local cases' corpus: not %s, which builds from before local cases refuse whole) "+
+		"with the defects the round should have found (eval.toml.example has the syntax), then replay it with "+
+		"`magnum eval run --case %s`:\n\n", inspTilde(c.Layout.LearnLocalCorpus()), evalCorpusFile, name)
 	fmt.Fprintf(w, "[[case]]\nname = %q\nkind = %q\npr = %q   # round %d of factory task %d: %d + task × 10 + round, no PR on GitHub\nhead = %q\n"+
 		"why = %q\n\n", name, eval.KindLocal, in.PR(), in.Round, in.Task, eval.LocalNumberBase, in.HeadSHA,
 		fmt.Sprintf("round %d of factory task %d", in.Round, in.Task))
@@ -160,8 +166,7 @@ func evalLocalFinding(lf evalrun.LocalFinding) string {
 }
 
 // evalDefaultCorpus is the operator's corpus file: eval.toml in the user
-// config's directory (~/.config/magnum), where a local case goes once its
-// defects are written.
+// config's directory (~/.config/magnum).
 func evalDefaultCorpus(c *Context) string {
 	dir := c.Layout.ConfigDir()
 	if dir == "" {

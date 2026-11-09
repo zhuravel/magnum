@@ -114,48 +114,71 @@ func LoadCorpus(path string) (*Corpus, error) {
 	return parseCorpus(path, data)
 }
 
-// LoadCorpora reads the operator's corpus at user ("" = none) and the learned corpus the daemon
-// writes at learned (paths.Layout.LearnCorpus; "" or a file that does not exist adds nothing) and
-// returns their cases, the user's first. A case name in both files is an error that names it.
-// Without a user corpus and without learned cases the error is the learned file's. One path given
-// as both (a run given the learned corpus as --corpus, scored again) is read once.
-func LoadCorpora(user, learned string) (*Corpus, error) {
-	if user != "" && learned != "" && filepath.Clean(user) == filepath.Clean(learned) {
-		learned = ""
-	}
+// LoadCorpora reads the operator's corpus at user ("" = none), then the corpora kept beside it, in
+// the order given: the learned corpus the daemon writes (paths.Layout.LearnCorpus) and the local cases'
+// corpus (paths.Layout.LearnLocalCorpus), each "" or a file that does not exist adding nothing, and
+// returns their cases in that order. A case name in two files is an error that names it and both
+// files. Without a user corpus and without any of the others the error is the first other file's. A
+// path given twice (a run given the learned corpus as --corpus, scored again) is read once.
+func LoadCorpora(user string, others ...string) (*Corpus, error) {
 	var out Corpus
-	if user != "" {
-		c, err := LoadCorpus(user)
-		if err != nil {
+	from := map[string]string{} // a case's name → the file that holds it
+	seen := map[string]bool{}   // the files read, cleaned
+	var missing error           // the first other file's absence
+	read := 0
+	for i, path := range append([]string{user}, others...) {
+		if path == "" || seen[filepath.Clean(path)] {
+			continue
+		}
+		seen[filepath.Clean(path)] = true
+		c, err := LoadCorpus(path)
+		switch {
+		case i > 0 && errors.Is(err, fs.ErrNotExist):
+			if missing == nil {
+				missing = err
+			}
+			continue
+		case err != nil:
 			return nil, err
 		}
-		out.Cases = c.Cases
-	}
-	if learned == "" {
-		if user == "" {
-			return nil, errors.New("eval: no corpus")
+		if err := corporaClash(from, user, path, c.Cases); err != nil {
+			return nil, err
 		}
-		return &out, nil
+		out.Cases = append(out.Cases, c.Cases...)
+		read++
 	}
-	lc, err := LoadCorpus(learned)
 	switch {
-	case errors.Is(err, fs.ErrNotExist) && user != "":
+	case read > 0:
 		return &out, nil
-	case err != nil:
-		return nil, err
+	case missing != nil:
+		return nil, missing
 	}
+	return nil, errors.New("eval: no corpus")
+}
+
+// corporaClash is the error of the cases of the corpus at path whose names a corpus read before it
+// holds (from: a name's file; user the operator's corpus, where a clash is renamed), nil when there
+// is none; then it adds the cases' names to from.
+func corporaClash(from map[string]string, user, path string, cases []Case) error {
 	var both []string
-	for _, cs := range lc.Cases {
-		if slices.ContainsFunc(out.Cases, func(u Case) bool { return u.Name == cs.Name }) {
+	other := ""
+	for _, cs := range cases {
+		if f, ok := from[cs.Name]; ok && (other == "" || f == other) {
+			other = f
 			both = append(both, strconv.Quote(cs.Name))
 		}
 	}
 	if len(both) > 0 {
-		return nil, fmt.Errorf("eval: case %s is in both %s and the learned corpus %s: rename it in %s",
-			strings.Join(both, ", "), user, learned, user)
+		rename := path
+		if other == user {
+			rename = user
+		}
+		return fmt.Errorf("eval: case %s is in both %s and %s: rename it in %s", strings.Join(both, ", "), other, path, rename)
 	}
-	out.Cases = append(out.Cases, lc.Cases...)
-	return &out, nil
+	for _, cs := range cases {
+		from[cs.Name] = path
+	}
+	return nil
 }
 
 // WriteCorpus writes c to path as TOML that LoadCorpus reads back as c, atomically (a temporary file,

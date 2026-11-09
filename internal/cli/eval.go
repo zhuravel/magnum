@@ -47,7 +47,7 @@ const (
 	// (evalrun.Refused).
 	evalFlagged = evalrun.OutcomeFlagged
 	// evalCorpusFlagUsage describes --corpus (evalCorpusPath).
-	evalCorpusFlagUsage = "this corpus file alone (default: " + evalCorpusFile + " next to config.toml, then the learned corpus)"
+	evalCorpusFlagUsage = "this corpus file alone (default: " + evalCorpusFile + " next to config.toml, then the learned corpus and the local cases')"
 )
 
 // evalRunsRoot is where runs live: state/eval/<run id>/ (evalrun.RunsRoot).
@@ -83,10 +83,12 @@ func newEvalCmd(c *Context) *cobra.Command {
 			"seeded defects the planned review found, at what severity, and how many other findings it made.\n\n"+
 			"The corpus is ~/.config/magnum/"+evalCorpusFile+" (a checkout's eval.local.toml still works; see eval.toml.example), "+
 			"then the learned corpus the daemon writes after each retro (learn/corpus.toml in the data directory: a case per general "+
-			"miss and per finding an author declined as wrong or ranked too high; a case name in both is an error); --corpus FILE "+
-			"reads that file alone. `run` says how many of its cases are learned ones. A local case (kind = \"local\") is a "+
+			"miss and per finding an author declined as wrong or ranked too high), then the local cases' corpus "+
+			"(learn/local/cases.toml; a case name in two files is an error); --corpus FILE "+
+			"reads that file alone. `run` says how many of its cases are learned and local ones. A local case (kind = \"local\") is a "+
 			"round of the factory's local review instead of a PR's: `magnum eval add --local-task ID --round N` freezes what the "+
-			"round read and prints its [[case]], and `run` replays it from those inputs, scored as a posted case. Each case runs "+
+			"round read and prints its [[case]] for the local cases' corpus (never "+evalCorpusFile+", which builds from before "+
+			"local cases refuse whole), and `run` replays it from those inputs, scored as a posted case. Each case runs "+
 			"in a scratch registry and report tree under state/eval/<run>/ and a detached worktree of the repository's "+
 			"clone, with agents named apart from the PR's own and from every other run's, in a herdr workspace "+
 			"\"eval <repo>#<N>\" that is closed when the case ends (a judge still at work is interrupted first) and "+
@@ -176,67 +178,86 @@ func newEvalShowCmd(c *Context) *cobra.Command {
 }
 
 // evalCorpusPath resolves --corpus to the operator's corpus and returns it
-// with the learned corpus the daemon writes (paths.Layout.LearnCorpus),
-// which eval reads after it (eval.LoadCorpora). A flag names the corpus
-// alone: learned is "" then, so the learned cases, which grow with every
-// retro, are replayed only with the default corpus. user is "" when no flag
-// names one, the default file is not there and the learned one is: the
-// learned cases are the corpus then.
-func evalCorpusPath(c *Context, flag string) (user, learned string) {
+// with the learned corpus the daemon writes (paths.Layout.LearnCorpus) and
+// the local cases' corpus (paths.Layout.LearnLocalCorpus), which eval reads
+// after it, in that order (eval.LoadCorpora). A flag names the corpus
+// alone: learned and local are "" then, so the learned cases, which grow
+// with every retro, and the local ones are replayed only with the default
+// corpus. user is "" when no flag names one, the default file is not there
+// and the learned or the local one is: they are the corpus then.
+func evalCorpusPath(c *Context, flag string) (user, learned, local string) {
 	if flag != "" {
-		return flag, ""
+		return flag, "", ""
 	}
-	learned = c.Layout.LearnCorpus()
+	learned, local = c.Layout.LearnCorpus(), c.Layout.LearnLocalCorpus()
 	user = evalDefaultCorpus(c)
 	if legacy := filepath.Join(c.Layout.Home, evalLegacyCorpusFile); c.Layout.Home != "" && !fsx.Exists(user) && fsx.Exists(legacy) {
-		return legacy, learned
+		return legacy, learned, local
 	}
-	if !fsx.Exists(user) && fsx.Exists(learned) {
-		return "", learned
+	if !fsx.Exists(user) && (fsx.Exists(learned) || fsx.Exists(local)) {
+		return "", learned, local
 	}
-	return user, learned
+	return user, learned, local
 }
 
-// evalCorpusNames is how a run's start line names the corpus files it read.
-func evalCorpusNames(user, learned string) string {
-	switch {
-	case learned == "" || !fsx.Exists(learned):
-		return inspTilde(user)
-	case user == "":
-		return inspTilde(learned)
+// evalCorpusNames is how a run's start line names the corpus files it read:
+// the operator's, then the learned and the local cases' ones that are there.
+func evalCorpusNames(user string, others ...string) string {
+	var names []string
+	if user != "" {
+		names = append(names, inspTilde(user))
 	}
-	return inspTilde(user) + " and " + inspTilde(learned)
+	for _, p := range others {
+		if p != "" && fsx.Exists(p) {
+			names = append(names, inspTilde(p))
+		}
+	}
+	if len(names) == 0 {
+		return inspTilde(user)
+	}
+	if len(names) > 2 {
+		return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+	}
+	return strings.Join(names, " and ")
 }
 
 // evalLearnedCases is how a run's start line counts the cases of the learned
-// corpus at learned among cases: " (N learned)", "" when there are none (a
-// name is in one of the two files only, eval.LoadCorpora).
+// corpus at learned among cases and the local cases among them: " (N
+// learned)", " (N local)" or " (N learned, M local)", "" when there are none
+// (a name is in one of the files only, eval.LoadCorpora).
 func evalLearnedCases(learned string, cases []eval.Case) string {
-	if learned == "" {
-		return ""
+	n, local := 0, 0
+	var lc *eval.Corpus
+	if learned != "" {
+		lc, _ = eval.LoadCorpus(learned)
 	}
-	lc, err := eval.LoadCorpus(learned)
-	if err != nil {
-		return ""
-	}
-	n := 0
 	for _, c := range cases {
-		if slices.ContainsFunc(lc.Cases, func(l eval.Case) bool { return l.Name == c.Name }) {
+		switch {
+		case c.Local():
+			local++
+		case lc != nil && slices.ContainsFunc(lc.Cases, func(l eval.Case) bool { return l.Name == c.Name }):
 			n++
 		}
 	}
-	if n == 0 {
+	var parts []string
+	if n > 0 {
+		parts = append(parts, fmt.Sprintf("%d learned", n))
+	}
+	if local > 0 {
+		parts = append(parts, fmt.Sprintf("%d local", local))
+	}
+	if len(parts) == 0 {
 		return ""
 	}
-	return fmt.Sprintf(" (%d learned)", n)
+	return " (" + strings.Join(parts, ", ") + ")"
 }
 
 func runEvalRun(c *Context, f evalRunFlags) int {
 	if err := c.LoadConfig(); err != nil {
 		return cmdFail(c, "eval run", fmt.Errorf("%w (fix config.toml; `magnum config` validates it)", err))
 	}
-	path, learned := evalCorpusPath(c, f.corpus)
-	corpus, err := eval.LoadCorpora(path, learned)
+	path, learned, local := evalCorpusPath(c, f.corpus)
+	corpus, err := eval.LoadCorpora(path, learned, local)
 	if err != nil {
 		if missing := cmp.Or(path, learned); errors.Is(err, fs.ErrNotExist) {
 			return cmdFail(c, "eval run", fmt.Errorf("no corpus at %s\nfix: copy eval.toml.example to %s and describe PRs with known defects", inspTilde(missing), inspTilde(missing)))
@@ -287,7 +308,7 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 	opts := evalrun.Options{Candidate: f.candidate, JudgeOnly: f.judgeOnly, NoNotes: f.noNotes, Keep: f.keep, Force: f.force, AgentTag: evalAgentTag(run.ID), RunDir: dir}
 	run.Commit, run.Dirty = evalMagnumCommit(ctx, c)
 	fmt.Fprintf(c.Stdout, "eval run %s: %d case(s)%s, corpus %s, results in %s\n", run.ID, len(cases), evalLearnedCases(learned, cases),
-		evalCorpusNames(path, learned), inspTilde(dir))
+		evalCorpusNames(path, learned, local), inspTilde(dir))
 	if _, err := eval.LoadFlagged(evalRunsRoot(c.Layout)); err != nil { // eval/flagged.go: refused replays are never run again
 		return cmdFail(c, "eval run", err)
 	}
@@ -431,14 +452,14 @@ func runEvalScore(c *Context, corpusFlag string, pos []string) int {
 	if err != nil {
 		return cmdFail(c, "eval score", err)
 	}
-	user, learned := evalCorpusPath(c, corpusFlag)
+	user, learned, local := evalCorpusPath(c, corpusFlag)
 	if corpusFlag == "" {
 		user = cmp.Or(run.Corpus, user)
 		if run.CorpusAlone { // the run read its --corpus file alone, and so does its score
-			learned = ""
+			learned, local = "", ""
 		}
 	}
-	corpus, err := eval.LoadCorpora(user, learned)
+	corpus, err := eval.LoadCorpora(user, learned, local)
 	if err != nil {
 		return cmdFail(c, "eval score", err)
 	}

@@ -64,7 +64,7 @@ func daemonGate(c *Context, a *app.App) func(*engine.Deps) {
 		}
 		d.EvalRuns = func() ([]eval.Run, error) { return eval.ListRuns(evalrun.RunsRoot(a.Layout)) }
 		d.EvalCorpus = func() (*eval.Corpus, string, error) {
-			user, learned := evalCorpusPath(c, "")
+			user, learned, _ := evalCorpusPath(c, "") // the gate takes no local case: its corpus file stays eval run's
 			if user != "" && !fsx.Exists(user) {
 				user = ""
 			}
