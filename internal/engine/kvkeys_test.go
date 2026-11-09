@@ -165,6 +165,7 @@ func TestEveryKVKeyTheEngineWritesKeepsItsString(t *testing.T) {
 		{"kvPRWhiteboardPending", kvPRWhiteboardPending(id), "pr.7.whiteboard_pending"},
 		{"kvPRComplete", kvPRComplete(id), "pr.7.complete"},
 		{"KVKindVersion", KVKindVersion("codex"), "kind.codex.version"},
+		{"kvRepoDetailsEpoch", kvRepoDetailsEpoch(id), "repo.7.details_epoch"},
 	}
 	byKey := map[string]string{}
 	for _, c := range cases {

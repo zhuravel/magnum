@@ -684,6 +684,48 @@ func TestAContinuedTurnSettlesTheStalemateItsPausedRoundFlagged(t *testing.T) {
 	}
 }
 
+// The live cases (2026-11-09): replies in magnum's threads that an earlier
+// build could not read (the timeline never lists them) came on PRs whose
+// Details that build read after them, and nothing changed on GitHub since,
+// so no poll read those Details again. The first poll of a repository on a
+// build whose Details read more (detailsEpoch) reads them once for every
+// open PR magnum reviewed at its head, unchanged or not: the reply that
+// waited is pending and starts the wait for its reply round. A PR magnum
+// never reviewed is not read again, and the next poll reads nothing more.
+func TestTheFirstPollOfABuildThatReadsMoreDetailsReReadsTheReviewedPRsOnce(t *testing.T) {
+	h := newHarness(t)
+	pr := h.reviewedPR(2, "b1")
+	h.e.delKV(h.ctx, kvRepoDetailsEpoch(pr.RepoID)) // a registry an earlier build polled
+	// Neither PR changed on GitHub since that build last read them.
+	poll := func(remarks ...github.Remark) {
+		t.Helper()
+		h.open(prSpec{n: 1, head: "base1", updated: deref(h.pr(1).GHUpdatedAt)},
+			prSpec{n: 2, head: "b1", updated: deref(pr.GHUpdatedAt), remarks: remarks})
+		h.tick()
+	}
+	h.advance(10 * time.Minute)
+	reply := threadReply(h, "alice")
+	h.advance(time.Minute)
+	before := h.gh.count("details:")
+	poll(reply)
+	if n, two := h.gh.count("details:")-before, h.gh.count("details:talkable/talkable:[2]"); n != 1 || two == 0 {
+		t.Fatalf("details read %d times (of the reviewed PR alone: %d), want once, of it alone", n, two)
+	}
+	if got := h.wantState(2, store.PRRereviewPending); len(got.PendingReplies()) != 1 {
+		t.Fatalf("pending replies = %d, want the one that waited", len(got.PendingReplies()))
+	}
+	if v := mustKV(t, h, kvRepoDetailsEpoch(pr.RepoID)); v != detailsEpoch {
+		t.Fatalf("details epoch = %q, want %q", v, detailsEpoch)
+	}
+
+	h.advance(time.Minute)
+	before = h.gh.count("details:")
+	poll(reply, threadReply(h, "alice"))
+	if n := h.gh.count("details:") - before; n != 0 {
+		t.Fatalf("the next poll read the unchanged PRs' details again (%d)", n)
+	}
+}
+
 // reply_debounce = 0 turns reply rounds off: the replies are kept and
 // counted, nothing starts.
 func TestReplyDebounceZeroStartsNoReplyRound(t *testing.T) {

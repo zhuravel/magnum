@@ -267,7 +267,7 @@ func (e *Engine) pollRepo(ctx context.Context, w config.Watch, gh GitHub, rr git
 	// GitHub fields only from here on, and applyRadarPRs decides on the rows
 	// its upserts read.
 	awaited := e.awaitCIRuns(e.betweenCalls(ctx), w, full, rr.PRs, byNode, now) // fix_open_ci.go
-	details, needed := e.fetchDetails(e.betweenCalls(ctx), gh, full, rr.PRs, byNode, awaited)
+	details, needed := e.fetchDetails(e.betweenCalls(ctx), gh, repo.ID, full, rr.PRs, byNode, awaited)
 	errs, inRadar := e.applyRadarPRs(ctx, w, gh, repo, rr.PRs, byNode, details, needed, firstSync, now)
 
 	var missing []store.PR
@@ -304,6 +304,22 @@ func (e *Engine) pollRows(ctx context.Context, repoID int64, radar []github.PRRa
 	return e.st.ListPRs(ctx, store.PRFilter{RepoID: repoID, GHOpen: true, OrNodeIDs: nodes})
 }
 
+// detailsEpoch names what a PR's Details read that an earlier build's did
+// not, in a way the rows that build wrote cannot show: the first poll of
+// each repository on a build with a new epoch reads the Details of every
+// open PR magnum reviewed at its head once, changed or not
+// (kvRepoDetailsEpoch), so what the earlier build missed on them is read.
+// "1" (2026-11-09): a reply in a thread, which the timeline never lists
+// (DECISIONS "A reply in a thread is read from the PR's reviews, not its
+// timeline"). Bump it only for such a change: each bump costs one Details
+// batch per repository.
+const detailsEpoch = "1"
+
+// kvRepoDetailsEpoch holds the detailsEpoch of the last poll of the
+// repository that read the Details of every open PR magnum reviewed at its
+// head.
+func kvRepoDetailsEpoch(repoID int64) string { return fmt.Sprintf("repo.%d.details_epoch", repoID) }
+
 // fetchDetails fetches the Details of the radar PRs that are new or changed
 // (or never had them) in one call; needed lists every PR asked for. A
 // failure is reported once per distinct error (the next poll asks again).
@@ -314,8 +330,12 @@ func (e *Engine) pollRows(ctx context.Context, repoID int64, radar []github.PRRa
 // check that fails on a head whose rollup failed already leaves the state
 // as it was. A PR whose start of the CI workflow waits for its run
 // (awaited, awaitCIRuns) has its checks fetched on every poll, whatever
-// the rollup says.
-func (e *Engine) fetchDetails(ctx context.Context, gh GitHub, full string, prs []github.PRRadar, byNode map[string]store.PR, awaited map[int]bool) (map[int]github.PRDetails, map[int]bool) {
+// the rollup says. Until a poll of the repository on this build read them
+// (kvRepoDetailsEpoch), every open PR magnum reviewed at its head is
+// fetched too.
+func (e *Engine) fetchDetails(ctx context.Context, gh GitHub, repoID int64, full string, prs []github.PRRadar, byNode map[string]store.PR, awaited map[int]bool) (map[int]github.PRDetails, map[int]bool) {
+	epoch, _ := e.getKV(ctx, kvRepoDetailsEpoch(repoID))
+	reread := epoch != detailsEpoch
 	var need []int
 	needed := map[int]bool{}
 	for _, p := range prs {
@@ -330,13 +350,16 @@ func (e *Engine) fetchDetails(ctx context.Context, gh GitHub, full string, prs [
 			cur.CI == nil || !cur.CI.ByWorkflowFile || cur.CI.SHA != p.HeadRefOid || (p.CIKnown && cur.CI.State != p.CIState) ||
 			(p.CIKnown && ciCountsMoved(cur.CI.Rollup, p.CICounts)) ||
 			cur.GHState != store.GHOpen || cur.GHUpdatedAt == nil || !cur.GHUpdatedAt.Equal(p.UpdatedAt) ||
-			awaited[p.Number] {
+			awaited[p.Number] || (reread && p.HeadRefOid != "" && deref(cur.ReviewedSHA) == p.HeadRefOid) {
 			need = append(need, p.Number)
 			needed[p.Number] = true
 		}
 	}
 	details := map[int]github.PRDetails{}
 	if len(need) == 0 {
+		if reread {
+			e.setKV(ctx, kvRepoDetailsEpoch(repoID), detailsEpoch)
+		}
 		return details, needed
 	}
 	owner, name, _ := strings.Cut(full, "/")
@@ -348,6 +371,9 @@ func (e *Engine) fetchDetails(ctx context.Context, gh GitHub, full string, prs [
 		return details, needed
 	}
 	e.changed("details:"+full, "")
+	if reread {
+		e.setKV(ctx, kvRepoDetailsEpoch(repoID), detailsEpoch)
+	}
 	e.resolveAnswers(ctx, gh, full, d, byNode) // replies.go
 	return d, needed
 }
