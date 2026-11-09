@@ -16962,6 +16962,36 @@ skill versions); people add theirs to the sections before it, at the end of the 
   gains the optional-only cases, and TestNeedsMePRsListsThePRsWaitingForTheOperator's non-clean round now has
   a P2, so it still means "left something to fix".
 
+- **A project config declined only for files a round left in the slot does not hold auto-approval**
+  (2026-11-09, amends "Auto-approval never approves a change to the review agents' instructions or hooks",
+  2026-10-07, after an audit of PRs waiting on the operator). The agent-config gate withdrew its approval of a
+  talkable PR that changes no agent config, and its posted review said "Claude ran without the PR's .claude/
+  changes", which was false. The cause was a pool slot: a review of an earlier PR that adds a skill had run
+  `python3 -m py_compile` on its script, and the `__pycache__/*.pyc` that wrote is ignored by the operator's
+  global gitignore, so neither the slot's switch nor its reset and `clean -fd` removed it. Every later
+  Claude launch in that slot compared the work tree with the merge base (`gitx.WorkTreeChanges`, which lists
+  ignored files on purpose), found "1 file differs", left the project config out, and wrote the PR's record;
+  the gate read any record of the head as the PR's change. When the PR got a record depended on whether a
+  round launched a fresh session, not on what it changed. Now a decline that git compared also lists what
+  the commits since the merge base change over the same paths (`gitx.ChangedUnder` mb...HEAD, a root link's
+  target mapped to the link as for the work tree): when none of the differing files is one of them, the
+  record says `residue` (`agents.ProjectNote.Residue`), and the gate skips that record, so the head's
+  complete file list decides. The card, the review's Checks and the event say "Claude ran without the
+  checkout's .claude/ files, which the PR's commits do not change". What stays: the session declines exactly
+  as before (`--exclude-standard` is still not used for literal paths, and only logs are skipped), so a
+  leftover settings.local.json, skill or `.pyc` keeps the checkout's config out of the session; and the gate
+  still refuses on a record that git could not compare, one whose commits' diff failed, one written before
+  the field, a committed change (directly or through a root link's target) mixed with leftovers, and on
+  every path in the file list. Accepted gap: a PR whose setup script writes an untracked file into the
+  project config no longer holds auto-approval for that file alone; the session still declines it, the
+  script's change is in the reviewed diff, and the written file never merges. Not done here: the slot's own
+  hygiene (removing ignored files under the project paths when a slot changes PRs), which would give later
+  PRs the team's config back. Tests, failing first: TestAClaudeDeclineForFilesLeftInTheSlotIsRecordedAsResidue
+  (an ignored `.pyc`, an uncommitted edit, the PR's settings with a leftover, a link's committed target, a
+  commits' diff that fails; the card, Checks and event words) and TestAutoApprovalIgnoresAgentConfigLeftInTheSlot
+  (residue approves; no residue, and a record without the field, refuse). TestADirectorysClaudeMDDeclinesClaudeOnly
+  now counts the work tree's comparison alone.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is

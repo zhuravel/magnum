@@ -134,7 +134,10 @@ func TestADirectorysClaudeMDDeclinesClaudeOnly(t *testing.T) {
 			if want := slices.Concat(claudeLaunchArgs, userSettingsOnly); !slices.Equal(claude, want) {
 				t.Fatalf("claude args = %q\nwant %q", claude, want)
 			}
-			if calls := e.run.CallsWithPrefix("git", "-C", dir, "diff"); len(calls) != 1 || !slices.Contains(calls[0].Args, ":(top,icase,glob)**/CLAUDE.md") {
+			// The work tree's comparison (the commits' one follows a decline,
+			// over the same paths).
+			if calls := e.run.CallsWithPrefix("git", "-C", dir, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff"); len(calls) != 1 ||
+				!slices.Contains(calls[0].Args, ":(top,icase,glob)**/CLAUDE.md") {
 				t.Fatalf("diff calls = %v, want Claude's alone, naming CLAUDE.md in any directory", calls)
 			}
 			if _, ok := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindCodex); ok {

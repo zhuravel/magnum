@@ -1752,7 +1752,10 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   `CLAUDE.md` or `CLAUDE.local.md` at any depth and in any case, nothing under `.claude/` or `.codex/`
   and no `.mcp.json` (the head's file list, as the poller read it), and no session of the head ran
   without the PR's project config (they steer the review agents, and their hooks run on every
-  teammate's machine once merged). A PR of more files than GitHub lists (100) is not approved either;
+  teammate's machine once merged). A session that left the config out only for files none of the PR's
+  commits change (an ignored `__pycache__/*.pyc` an earlier PR's round left in the slot, an uncommitted
+  edit) does not count: the file list speaks for the PR then. A PR of more files than GitHub lists (100)
+  is not approved either;
 - it changes none of its own workflows or actions: nothing under `.github/workflows/` or `.github/actions/`
   (in any case; the same file list). A workflow the PR adds may declare the CI workflow's name, and one
   that edits the CI workflow or an action it runs controls what the checks below say, so such a PR waits
@@ -2621,7 +2624,12 @@ the root links to as well. An ignored instruction file below the root (a package
 "Claude ran without the PR's CLAUDE.md changes (its sessions loaded your user settings only)", naming the
 files, and so does the review's Checks of a round with a Claude role. Untracked logs under `.claude/` are no change, as
 for Codex (a team hook's gitignored `.claude/log/tool_use.log` would otherwise decline every later
-session); a gitignored `settings.local.json`, skill or anything else still declines. A PR that leaves both alone keeps the team's project config. Claude Code reloads
+session); a gitignored `settings.local.json`, skill or anything else still declines. A slot keeps the files
+git ignores, so one an earlier PR's round left there (Python's `__pycache__/*.pyc` under a skill it ran)
+declines every later session in that slot: when none of the files that differ is one the PR's commits change
+(an untracked or ignored file, an uncommitted edit), for either CLI, the session declines all the same, but the
+card and the Checks say "Claude ran without the checkout's .claude/ files, which the PR's commits do not
+change", and auto-approval does not hold the PR for it. A PR that leaves both alone keeps the team's project config. Claude Code reloads
 its settings and skills while it runs, and loads a `.claude/settings.json` a later commit adds, so a
 Claude session that started with the project config loaded is quit (its conversation parked) before
 Magnum moves the checkout to a new head that changes it, at a round's start and at a restart after a push,

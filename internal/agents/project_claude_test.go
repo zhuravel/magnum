@@ -2,7 +2,11 @@ package agents
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -436,5 +440,88 @@ func TestCodexProjectAndThePRsFileListMatchInAnyCase(t *testing.T) {
 		if ProjectTouched(KindClaude, []string{p}) {
 			t.Errorf("%s touches no Claude project config", p)
 		}
+	}
+}
+
+// A slot keeps the files git ignores, and an earlier PR's round can leave
+// some in the project config (Python's __pycache__/*.pyc under a skill it
+// ran): the session still leaves the config out, as for any untracked file,
+// but the record says the difference is residue, files none of the PR's
+// commits since the merge base change, so the auto-approval's gate does not
+// blame the PR for it. A change the PR commits there, directly or through
+// the target of a root instruction file's link, is no residue, with or
+// without leftovers; an uncommitted edit of a tracked file is; and a
+// committed diff git cannot list counts as the PR's.
+func TestAClaudeDeclineForFilesLeftInTheSlotIsRecordedAsResidue(t *testing.T) {
+	const pyc = ".claude/skills/x/scripts/__pycache__/r.cpython-315.pyc"
+	committed := func(e *env, dir string, res execx.Result, err error) {
+		rule := execx.Rule{Prefix: []string{"git", "-C", dir, "diff", "--name-only", "-z", "--no-renames", projectMergeBase + "...HEAD"}, Result: res, Err: err}
+		e.run.Rules = append([]execx.Rule{rule}, e.run.Rules...)
+	}
+	for _, c := range []struct {
+		name               string
+		files              map[string]string
+		changed, untracked []string
+		setup              func(t *testing.T, e *env, dir string)
+		residue            bool
+	}{
+		{name: "an ignored .pyc an earlier round left", untracked: []string{pyc}, residue: true},
+		{name: "the PR's settings and a leftover", changed: []string{".claude/settings.json"}, untracked: []string{pyc}},
+		{name: "an uncommitted edit", changed: []string{".claude/settings.json"}, residue: true,
+			setup: func(_ *testing.T, e *env, dir string) { committed(e, dir, execx.Result{}, nil) }},
+		{name: "a committed change through CLAUDE.md's link", files: map[string]string{"docs/agents.md": "x\n"}, changed: []string{"docs/agents.md"},
+			setup: func(t *testing.T, _ *env, dir string) {
+				if err := os.Symlink("docs/agents.md", filepath.Join(dir, "CLAUDE.md")); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		{name: "a committed diff git cannot list", untracked: []string{pyc},
+			setup: func(_ *testing.T, e *env, dir string) { committed(e, dir, execx.Result{}, errors.New("git broke")) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			files := map[string]string{".claude/settings.json": "{}"}
+			maps.Copy(files, c.files)
+			e, dir, ws := projectEnv(t, files, c.changed, c.untracked)
+			if c.setup != nil {
+				c.setup(t, e, dir)
+			}
+			if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], ""); err != nil {
+				t.Fatal(err)
+			}
+			if got, want := e.h.starts[0].Args, slices.Concat(claudeLaunchArgs, userSettingsOnly); !slices.Equal(got, want) {
+				t.Fatalf("args = %q\nwant %q: the session still leaves the config out", got, want)
+			}
+			raw, _, err := e.st.GetKV(e.ctx, store.KVPRProject(e.pr.ID, KindClaude))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var note map[string]any
+			if err := json.Unmarshal([]byte(raw), &note); err != nil {
+				t.Fatalf("record %q: %v", raw, err)
+			}
+			if got := note["residue"] == true; got != c.residue || note["compared"] != true {
+				t.Fatalf("record %s: want residue %v", raw, c.residue)
+			}
+			// What the card, the review's Checks and the event say: residue is
+			// the checkout's files, never the PR's changes.
+			card, evs := ProjectSentences(e.ctx, e.st, e.pr.ID, projectHead), claudeProjectEvents(t, e)
+			var jd JudgeData
+			NoteDeclinedProjects(e.ctx, e.st, e.pr.ID, projectHead, []string{KindClaude}, &jd)
+			if len(evs) != 1 {
+				t.Fatalf("events %+v", evs)
+			}
+			if c.residue {
+				const check = "Claude ran without the checkout's .claude/ files, which the PR's commits do not change"
+				if card != check+" (its sessions loaded your user settings only)" || jd.ProjectChecks != check ||
+					!strings.Contains(evs[0].Message, "claude-review runs without the checkout's .claude/ files: 1 file differs from the merge base, but not in the PR's commits") {
+					t.Fatalf("residue: card %q, checks %q, event %q", card, jd.ProjectChecks, evs[0].Message)
+				}
+				return
+			}
+			if !strings.HasPrefix(card, "Claude ran without the PR's") || !strings.HasPrefix(jd.ProjectChecks, "Claude ran without the PR's") ||
+				!strings.Contains(evs[0].Message, "runs without the PR's") {
+				t.Fatalf("card %q, checks %q, event %q", card, jd.ProjectChecks, evs[0].Message)
+			}
+		})
 	}
 }

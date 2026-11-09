@@ -329,6 +329,46 @@ func TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions(t *testing.T) {
 	}
 }
 
+// A session of the head that ran without the checkout's project config
+// only because of files the PR's commits do not change (an ignored .pyc an
+// earlier PR's round left in the slot, an uncommitted edit: the record's
+// residue) says nothing of the PR: its complete file list, which names no
+// agent config, decides, and magnum approves it as the operator. A record
+// without residue, or one written before it was recorded, still refuses
+// (TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions).
+func TestAutoApprovalIgnoresAgentConfigLeftInTheSlot(t *testing.T) {
+	for _, tc := range []struct {
+		name, note string
+		refused    bool
+	}{
+		{"files left in the slot", `{"head":"b1","files":1,"compared":true,"paths":[".claude/"],"residue":true}`, false},
+		{"the PR's commits", `{"head":"b1","files":1,"compared":true,"paths":[".claude/"],"residue":false}`, true},
+		{"a record without the field", `{"head":"b1","files":1,"compared":true,"paths":[".claude/"]}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newAutoHarness(t)
+			h.open(prSpec{n: 1, head: "base1"})
+			h.startup()
+			h.tick()
+			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: []string{"app/x.rb"}})
+			h.tick()
+			h.e.setKV(h.ctx, store.KVPRProject(h.pr(2).ID, agents.KindClaude), tc.note)
+			h.reviewTo(2, "b1")
+			h.flush()
+			if tc.refused {
+				h.wantRefused(2, "it changes the review agents' instructions or hooks (.claude/)")
+				return
+			}
+			if got := h.created(); len(got) != 1 || !strings.HasPrefix(got[0], "APPROVE@b1:") {
+				t.Fatalf("posted = %q, want the approval as the operator", got)
+			}
+			if got := h.autoRefused(2); got != "" {
+				t.Fatalf("held back: %q", got)
+			}
+		})
+	}
+}
+
 // A result that gives the earlier findings' priorities decides without the
 // review's body: an open P1 with no new finding is no approval, and GitHub
 // is not even asked; open P3s alone are clean whatever the verdict line.

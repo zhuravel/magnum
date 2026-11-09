@@ -211,6 +211,10 @@ type projectScope struct {
 	// kind has project_docs_off, which the session gets instead of
 	// project_untrust (paths stays empty).
 	docsOff bool
+	// residue: compared, and none of those files is one the commits since
+	// the merge base change (committedChanges): they are untracked or
+	// ignored files a round left in the slot, or uncommitted edits.
+	residue bool
 	servers []config.ProjectServer // the MCP servers of the checkout's unchanged Codex config.toml (project_mcp "off")
 }
 
@@ -261,7 +265,7 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 		ctx, cancel := context.WithTimeout(ctx, projectTimeout)
 		defer cancel()
 		g := gitx.New(m.d.Runner)
-		files, err := m.projectChanges(ctx, g, dir, base, pc.logFile, disk.git)
+		files, mb, err := m.projectChanges(ctx, g, dir, base, pc.logFile, disk.git)
 		changed := pc.changed(files, disk.links)
 		if err != nil || len(changed) > 0 {
 			switch {
@@ -281,6 +285,7 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 					}
 				}
 				s.docsOff = len(k.ProjectDocsOff) > 0 && !slices.ContainsFunc(changed, func(p projectPath) bool { return !p.docs })
+				s.residue = !m.committedChanges(ctx, g, role, dir, mb, pc, disk)
 			}
 			if s.head = head; s.head == "" && m.d.Runner != nil && !errors.Is(err, errNoCheckout) {
 				s.head, _ = g.RevParse(ctx, dir, "HEAD")
@@ -562,23 +567,40 @@ func inGitCheckout(dir string) bool {
 }
 
 // projectChanges lists the files paths name in dir that differ from the
-// merge base of HEAD and base, but the untracked ones skip reports. It
-// answers errNoBase or errNoCheckout, without running git, for a launch
-// that has no base ref or a dir that is no git checkout.
-func (m *Manager) projectChanges(ctx context.Context, g *gitx.Client, dir, base string, skip func(string) bool, paths []string) ([]string, error) {
+// merge base of HEAD and base, but the untracked ones skip reports, with
+// that merge base. It answers errNoBase or errNoCheckout, without running
+// git, for a launch that has no base ref or a dir that is no git checkout.
+func (m *Manager) projectChanges(ctx context.Context, g *gitx.Client, dir, base string, skip func(string) bool, paths []string) ([]string, string, error) {
 	switch {
 	case m.d.Runner == nil:
-		return nil, errors.New("no command runner")
+		return nil, "", errors.New("no command runner")
 	case base == "":
-		return nil, errNoBase
+		return nil, "", errNoBase
 	case !inGitCheckout(dir):
-		return nil, errNoCheckout
+		return nil, "", errNoCheckout
 	}
 	mb, err := g.MergeBase(ctx, dir, "HEAD", base)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return g.WorkTreeChanges(ctx, dir, mb, skip, paths...)
+	files, err := g.WorkTreeChanges(ctx, dir, mb, skip, paths...)
+	return files, mb, err
+}
+
+// committedChanges reports whether the commits from the merge base mb to
+// HEAD change the project config disk names (git diff mb...HEAD over the
+// same paths, a root link's target mapped to the link as for the work
+// tree), which a PR's file list shows; false when only the work tree
+// differs (untracked or ignored files, uncommitted edits: what a round left
+// in the slot). A git that cannot tell counts as a change, so the record
+// keeps blaming the PR (it is only a warning).
+func (m *Manager) committedChanges(ctx context.Context, g *gitx.Client, role config.Role, dir, mb string, pc projectConfig, disk diskPaths) bool {
+	files, err := g.ChangedUnder(ctx, dir, mb, "HEAD", disk.git...)
+	if err != nil {
+		m.logErr(ctx, err, "agents: %s: cannot list the commits' changes of %s since the merge base, so they count as the PR's: %v", role.Name, pc.labels(nil), err)
+		return true
+	}
+	return len(pc.changed(files, disk.links)) > 0
 }
 
 // logFile reports whether path (relative to the checkout's root), an
@@ -672,6 +694,12 @@ type ProjectNote struct {
 	// DocsOnly: they were all instruction files, kept out by the kind's
 	// project_docs_off while the rest of the project config loaded.
 	DocsOnly bool `json:"docs_only,omitempty"`
+	// Residue: git compared them, and none is a file the PR's commits
+	// since the merge base change: they are untracked or ignored files a
+	// round left in the slot, or uncommitted edits, so they say nothing of
+	// the PR (the auto-approval's gate reads its file list instead). False
+	// when git could not tell, and in a record written before it was kept.
+	Residue bool `json:"residue,omitempty"`
 }
 
 // ProjectDeclined reads the PR's record of a session of kind launched
@@ -702,7 +730,9 @@ func declinedOf(ctx context.Context, st *store.Store, prID int64, kind, head str
 // sentence per CLI whose sessions of that head ran without the PR's
 // project configuration, in projectKinds' order, naming the files and how
 // ("Codex ran without the PR's AGENTS.md changes (its sessions loaded no
-// AGENTS.md)"); "" when none did.
+// AGENTS.md)"; for a record of residue, "Claude ran without the checkout's
+// .claude/ files, which the PR's commits do not change (…)": projectCheckOf);
+// "" when none did.
 func ProjectSentences(ctx context.Context, st *store.Store, prID int64, head string) string {
 	var out []string
 	for _, kind := range projectKinds {
@@ -712,7 +742,7 @@ func ProjectSentences(ctx context.Context, st *store.Store, prID int64, head str
 			if n.DocsOnly {
 				how = pc.docsHow
 			}
-			out = append(out, projectCheck(pc.cli, pc.labels(n.Paths))+" ("+how+")")
+			out = append(out, projectCheckOf(n, pc.cli, pc.labels(n.Paths))+" ("+how+")")
 		}
 	}
 	return strings.Join(out, " ")
@@ -732,7 +762,7 @@ func NoteDeclinedProjects(ctx context.Context, st *store.Store, prID int64, head
 		}
 		if n, ok := declinedOf(ctx, st, prID, kind, head); ok {
 			pc := projectConfigs[kind]
-			checks = append(checks, projectCheck(pc.cli, pc.labels(n.Paths)))
+			checks = append(checks, projectCheckOf(n, pc.cli, pc.labels(n.Paths)))
 		}
 	}
 	jd.ProjectChecks = projectChecks(checks)
@@ -756,7 +786,8 @@ func (m *Manager) recordProject(ctx context.Context, prID int64, role config.Rol
 		}
 		return
 	}
-	note, _ := json.Marshal(ProjectNote{Head: s.head, At: m.now().UTC(), Files: s.files, Compared: s.compared, Paths: s.names, DocsOnly: s.docsOff})
+	note, _ := json.Marshal(ProjectNote{Head: s.head, At: m.now().UTC(), Files: s.files, Compared: s.compared, Paths: s.names, DocsOnly: s.docsOff,
+		Residue: s.residue})
 	if err := m.d.Store.SetKV(ctx, key, string(note)); err != nil {
 		m.logErr(ctx, err, "agents: %s: record %s: %v", role.Name, key, err)
 	}
@@ -773,8 +804,11 @@ func (m *Manager) recordProject(ctx context.Context, prID int64, role config.Rol
 		kept = pc.docsKept
 	}
 	msg := fmt.Sprintf("%s runs without the PR's %s changes: %s, so %s", role.Name, names, why, kept)
+	if s.residue {
+		msg = fmt.Sprintf("%s runs without the checkout's %s files: %s, but not in the PR's commits, so %s", role.Name, names, why, kept)
+	}
 	data, _ := json.Marshal(map[string]any{"role": role.Name, "checkout": dir, "files": s.files, "compared": s.compared, "head": s.head,
-		"paths": s.names, "docs_only": s.docsOff})
+		"paths": s.names, "docs_only": s.docsOff, "residue": s.residue})
 	subject := m.prSubject(ctx, prID)
 	if _, err := m.d.Store.AppendEvent(ctx, store.Event{Level: "info", Subject: &subject, Kind: pc.event,
 		Message: execx.Redact(msg), Data: data}); err != nil {

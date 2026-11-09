@@ -663,6 +663,17 @@ func projectCheck(cli, paths string) string {
 	return cli + " ran without the PR's " + paths + " changes"
 }
 
+// projectCheckOf is projectCheck for record n, whose residue was no change
+// of the PR's (ProjectNote.Residue: files left in the slot, uncommitted
+// edits): "Claude ran without the checkout's .claude/ files, which the PR's
+// commits do not change".
+func projectCheckOf(n ProjectNote, cli, paths string) string {
+	if n.Residue {
+		return cli + " ran without the checkout's " + paths + " files, which the PR's commits do not change"
+	}
+	return projectCheck(cli, paths)
+}
+
 // projectChecks is JudgeData.ProjectChecks: the CLIs' projectCheck
 // sentences as one Checks line.
 func projectChecks(checks []string) string {
