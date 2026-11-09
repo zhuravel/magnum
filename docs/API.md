@@ -10583,6 +10583,7 @@ type FixPayload struct {
 	Seen   string        `json:"seen,omitempty"`
 	Decide []FixDecision `json:"decide,omitempty"`
 	Mode   string        `json:"mode,omitempty"`
+	Asked  *MergeAsked   `json:"asked,omitempty"`
 }
     FixPayload is a `magnum fix` request: start a fix loop on the PR (DryRun:
     answer what would happen and do nothing), or switch the fix job off for it
@@ -10594,7 +10595,9 @@ type FixPayload struct {
     fixer left you, as you, then starts the loop, whose fixer builds them
     as your decisions (fix_decide.go); it goes without Off, On and Done.
     Mode FixModeMerge merges the PR's parent alone (fix_parent.go), with DryRun
-    and nothing else.
+    and nothing else; a merge names Asked, what the y/N of its plan asked about
+    (fix_parent_bind.go: a merge whose head, base, tip or conflicts moved since
+    is refused), or nil when nothing was asked (`magnum merge-parent --yes`).
 
 type FixReport struct {
 	// Pushed are the commits on GitHub, none for "nothing".
@@ -11118,6 +11121,34 @@ type MemorySwap struct {
 	TotalBytes int64 `json:"total_bytes"`
 }
     MemorySwap is the swap in use and the swap files' size, in bytes.
+
+type MergeAsked struct {
+	Head      string    `json:"head"`
+	Base      string    `json:"base"`
+	Tip       string    `json:"tip"`
+	Conflicts int       `json:"conflicts,omitempty"`
+	At        time.Time `json:"at"`
+}
+    MergeAsked is what the y/N of a merge of the parent asked about, which the
+    merge it confirms is bound to: the PR's head, the parent (the PR's base
+    branch), the tip of it the plan read, how many files the merge of that tip
+    conflicts in (0: none, a merge the daemon makes) and when the daemon planned
+    it.
+
+type MergePlan struct {
+	Ref   string     `json:"ref"`
+	Asked MergeAsked `json:"asked"`
+	Text  string     `json:"text"`
+}
+    MergePlan is the daemon's answer to a dry run of a merge of the parent:
+    the PR (owner/name#N), what its y/N asks about, and the plan in words (Text,
+    the answer's last line: "dry run: would merge the parent of <PR>: magnum
+    merges master at c0c0c0c into feature as fixer-app[bot], with no conflict").
+
+func ParseMergePlan(result string) (MergePlan, bool)
+    ParseMergePlan reads the answer to a dry run of a merge of the parent (its
+    first line); false when it is none: "nothing to merge", or another answer's
+    words.
 
 type NotPreservedError struct {
 	ID       int64
@@ -30638,12 +30669,15 @@ type ActionResult struct {
 	Requests []Request
 	// Ask is the question an action that only planned asks before its
 	// next step, ending in "?": the daemon's plan of a merge of the parent
-	// (MergeParent's dry run), which the screen puts as y/N before it
-	// merges. "" for none.
+	// (MergeParentPlan), which the screen puts as y/N before it merges.
+	// "" for none.
 	Ask string
 	// Staging is what a staging deploy's plan (StagingPlan) binds its
 	// deploy to, which y sends (StagingDeploy); nil for none.
 	Staging *StagingAsked
+	// Parent is what a merge of the parent's plan (MergeParentPlan) binds
+	// its merge to, which y sends (MergeParent); nil for none.
+	Parent *MergeAsked
 
 	// Has unexported fields.
 }
@@ -30973,11 +31007,15 @@ type DashboardActions interface {
 	// start no loop.
 	Fix(ctx context.Context, ref string) (ActionResult, error)
 	FixOff(ctx context.Context, ref string, off bool) (ActionResult, error)
-	// MergeParent merges the PR's parent, its base branch, into the
-	// operator's own PR as the fixer App's bot (magnum merge-parent); with
-	// dry, it only asks the daemon what would happen and returns the plan
-	// as the result's Ask, the y/N the screen puts before the merge.
-	MergeParent(ctx context.Context, ref string, dry bool) (ActionResult, error)
+	// MergeParentPlan asks the daemon what a merge of the PR's parent, its
+	// base branch, into the operator's own PR as the fixer App's bot would
+	// do (magnum merge-parent --dry-run) and returns the plan as the
+	// result's Ask, the y/N the screen puts before the merge, and what it
+	// asks about as Parent. MergeParent sends the merge bound to that, once
+	// the screen's y/N said yes (P): the daemon refuses it when what the
+	// question named moved since.
+	MergeParentPlan(ctx context.Context, ref string) (ActionResult, error)
+	MergeParent(ctx context.Context, ref string, asked MergeAsked) (ActionResult, error)
 	// StagingPlan asks the daemon's plan of a staging deploy of the
 	// operator's own PR to envs (magnum staging --deploy --dry-run) and
 	// returns its y/N as the result's Ask and its binding as Staging (the
@@ -31082,9 +31120,10 @@ type FactoryActions interface {
 	Diff(taskID int64) *exec.Cmd
 	Fix(ctx context.Context, ref string) (ActionResult, error)
 	FixOff(ctx context.Context, ref string, off bool) (ActionResult, error)
-	// MergeParent is DashboardActions.MergeParent: the factory's P on a
-	// PR row, the plan first (dry), then the merge.
-	MergeParent(ctx context.Context, ref string, dry bool) (ActionResult, error)
+	// MergeParentPlan and MergeParent are DashboardActions': the factory's
+	// P on a PR row, the plan first, then the merge bound to it.
+	MergeParentPlan(ctx context.Context, ref string) (ActionResult, error)
+	MergeParent(ctx context.Context, ref string, asked MergeAsked) (ActionResult, error)
 	Abort(ctx context.Context, ref string) (ActionResult, error)
 	OpenPR(ctx context.Context, ref string) (ActionResult, error)
 	Review(ctx context.Context, ref string, o ReviewOpts) (ActionResult, error)
@@ -31499,6 +31538,15 @@ type ManualRow struct {
 	Folder, Branch, PRRef, GitHub, DBs, Agents, Disk string
 }
     ManualRow is a manual worktree (read-only, not selectable).
+
+type MergeAsked struct {
+	Head, Base, Tip string
+	Conflicts       int
+	At              time.Time
+}
+    MergeAsked is what a merge of the parent's y/N binds its merge to: the PR's
+    head, the parent (its base branch) and the tip of it the plan read, how many
+    files the merge conflicts in (0: none) and when the daemon planned it.
 
 type NewTaskForm struct {
 	Text string

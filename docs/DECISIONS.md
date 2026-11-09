@@ -16811,6 +16811,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAPushMagnumMadeStartsTheCIWorkflowOnceAfterAGrace, TestAPushMagnumMadeWaitsForTheBranchsRunAndSkipsAHeadThatRan,
   TestAPushMagnumMadeKeepsR47sRefusals and TestAFixersPushStartsTheCIWorkflow in engine;
   TestRecentRunsListsAWorkflowsNewestRunsWithTheirBranch in github.
+- **The y of a merge of the parent binds the merge to its plan** (2026-11-09, found by a review of the merge
+  mode; amends "Every fix merges the PR's parent first, and magnum merges a parent by itself" (2026-11-08)). `P`
+  and `magnum merge-parent` asked y/N with the daemon's dry run, but the y sent a merge that named nothing:
+  `requestMerge` fetched the base again and merged whatever its tip was then, so a base or a head that moved
+  between the question and the y merged a tip the operator never saw, even one that conflicts and goes to the
+  fix role. Now the merge is bound as a staging deploy is (staging_request.go): the plan answers
+  `engine.MergePlan` as JSON on its first line and its words on the last, with `MergeAsked` (the PR's head, the
+  base, the tip the plan read, how many files conflict, when it planned), and the y of the CLI and of the
+  screens (`ActionResult.Parent`, `MergeParentPlan`, then `MergeParent` with the binding) sends it back as
+  `FixPayload.Asked`. `requestMerge` refuses, after its fetch, a binding that names no plan, one 10 minutes old
+  (`mergeAskedWait`, a staging deploy's wait) and one whose head, base (a retarget), tip or conflicts moved, in
+  words that say what moved and "nothing was merged; ask again"; the job carries the binding to its guard, which
+  fetches the base again (after a slot's claim, minutes later) and ends the job the same way, quietly
+  (`fixAskedMoved`, `fix.ended`). The plan fetches the base first now (it read the base as last fetched): its
+  question named a stale tip otherwise, and the first y after any move of the base was refused. `magnum
+  merge-parent --yes` binds nothing and merges the tip its fetch brings, as before; without a terminal the
+  command needs `--yes`, as `magnum staging --deploy` does (it merged unasked). Rejected: merging the tip the
+  question named after the base moved past it (the PR would stay behind the base the operator meant to merge; a
+  staging deploy refuses a moved head the same way), and comparing the conflicting paths themselves (the same
+  head and tip give the same paths, and the question names their count). Tests, failing first:
+  TestAMergePlanAnswersTheHeadTheParentAndTheTipItAsksAbout, TestAMergeBoundToItsQuestionMergesWhatItAskedAbout,
+  TestAMergeBoundToItsQuestionIsRefusedWhenWhatItAskedAboutMoved,
+  TestAMergeWhoseBaseMovesBeforeItsJobMergesNothing and TestAFixWithAMergesBindingIsRefused in engine;
+  TestMergeParentAsksWithTheDaemonsPlanThenQueuesTheMerge,
+  TestMergeParentWithYesSendsTheMergeAloneAndADryRunAsksNothing, TestMergeParentWithoutATerminalNeedsYes and
+  TestScreenMergeParentPlansThenMerges in cli; TestPAsksWithTheDaemonsPlanBeforeMergingTheParent,
+  TestDashboardPMergesTheParentAfterThePlan and TestFactoryPOnAnOwnPRRowMergesTheParentAfterThePlan in tui.
 
 ## The factory (2026-11-03)
 
