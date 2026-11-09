@@ -36,8 +36,15 @@ type EvalCase struct {
 	HeadRef       string // the PR's head branch ("" = not known)
 	Checkout      string // absolute path of the worktree at Head
 	MainClone     string // the clone the worktree belongs to
-	Watch         config.Watch
-	Identity      string // the posting identity whose rights the judge checks (it posts nothing)
+	// CheckoutEnv is the environment the caller prepared Checkout with
+	// (evalrun: the case worktree's per-PR env under its own workspace
+	// name, a pool's env included), which every pane and the readiness
+	// step get, so the roles use the databases its setup made; nil = the
+	// per-PR worktree env of Number (slots.PerPREnv). A local round's is
+	// LocalRound.Env.
+	CheckoutEnv map[string]string
+	Watch       config.Watch
+	Identity    string // the posting identity whose rights the judge checks (it posts nothing)
 	// Worktrees is the directory that holds every replay's worktree,
 	// Checkout among them (magnum eval: state/eval/wt). A workspace
 	// labelled as a replay of this PR whose panes all work under it is one
@@ -400,7 +407,7 @@ func (e *Engine) seedEval(ctx context.Context, c EvalCase) (*roundJob, error) {
 	}
 	return &roundJob{
 		pr: pr, repo: repo, watch: c.Watch, slot: sl, hasSlot: true, kind: pipeline.KindInitial,
-		evalHead: c.Head, evalNotes: c.Notes, evalStored: c.JudgeOnly,
+		evalHead: c.Head, evalNotes: c.Notes, evalStored: c.JudgeOnly, evalEnv: maps.Clone(c.CheckoutEnv),
 	}, nil
 }
 

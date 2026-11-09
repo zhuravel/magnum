@@ -88,6 +88,48 @@ func TestRunEvalRunsABlindDryRunAtThePinnedHead(t *testing.T) {
 	}
 }
 
+// A replay's panes and its readiness step run with the env its caller
+// prepared the checkout with (EvalCase.CheckoutEnv: evalrun's case
+// worktree under its own workspace name, with the pool's env), the one the
+// checkout's setup made its databases with; a replay without one gets the
+// per-PR worktree env of its number, as before.
+func TestAReplaysPanesRunWithTheEnvItsCheckoutWasPreparedWith(t *testing.T) {
+	for name, tc := range map[string]struct {
+		env  map[string]string
+		want map[string]string
+	}{
+		"prepared": {map[string]string{"WT_BRANCH": "magnum-eval-7-abc123", "FAKE_AWS": "1"},
+			map[string]string{"WT_BRANCH": "magnum-eval-7-abc123", "FAKE_AWS": "1"}},
+		"none": {nil, map[string]string{"WT_BRANCH": "magnum-pr-7", "FAKE_AWS": ""}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, func(h *harness) {
+				h.layout = paths.Layout{Home: h.layout.Home, Scratch: t.TempDir()}
+				h.d.Layout = h.layout
+			})
+			h.rd.script = func(pipeline.RoundInput) (pipeline.RoundResult, error) {
+				return pipeline.RoundResult{Outcome: pipeline.OutcomeDryRun}, nil
+			}
+			c := evalCase(h, t.TempDir(), false)
+			c.CheckoutEnv = tc.env
+			if _, _, err := h.e.RunEval(h.ctx, c); err != nil {
+				t.Fatal(err)
+			}
+			envs := map[string]map[string]string{"the readiness step": h.rd.inputs[0].Readiness.Env}
+			for _, role := range []string{"claude-review", "codex-judge"} {
+				envs["the "+role+" pane"] = h.ag.paneEnv(role)
+			}
+			for what, env := range envs {
+				for k, v := range tc.want {
+					if env[k] != v {
+						t.Errorf("%s's env %v, want %s=%q", what, env, k, v)
+					}
+				}
+			}
+		})
+	}
+}
+
 // TestRunEvalObservesHerdrDuringTheRound: outside the daemon loop nothing
 // else marks a turn ended or an interrupted agent idle, so a replay observes
 // herdr itself while its round runs, and stops when the round ends.

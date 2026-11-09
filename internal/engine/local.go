@@ -30,9 +30,9 @@ type LocalRound struct {
 	// round get, as the caller gives it: the engine derives none from the
 	// checkout. The factory gives the env of the copy the round works in,
 	// the one its own agents get there (its WT_BRANCH and env); the replay
-	// of a local eval case (evalrun.RunCase) gives the env a posted replay's
-	// per-PR worktree has for the synthetic number, so its roles never use
-	// a copy's databases.
+	// of a local eval case (evalrun.RunCase) gives the env its case
+	// worktree was prepared with (the per-PR env under the worktree's own
+	// workspace name), so its roles never use a copy's databases.
 	Env map[string]string
 }
 
@@ -57,7 +57,7 @@ var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 // so the judge reads the title, the body and the ticket from them and
 // nothing from GitHub, and the round reads no Jira issue; its panes and its
 // readiness step get c.Env, the caller's (the factory's copy's env, or an
-// eval replay's per-PR env of the synthetic number: LocalRound.Env), never
+// eval replay's case worktree's: LocalRound.Env), never
 // one derived from the checkout. A case without a full base commit or a
 // description file, or a judge-only one, never starts.
 func (e *Engine) RunLocal(ctx context.Context, c LocalRound) (pipeline.RoundResult, store.PR, error) {

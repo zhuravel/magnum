@@ -123,10 +123,13 @@ type roundJob struct {
 	// it out in the slot, the round is blind and never restarts. evalNotes
 	// gives that round the scratch layout's notes. evalStored: a judge-only
 	// replay (EvalCase.JudgeOnly): the judge alone on the reviewers' stored
-	// reports of round evalReportsRound.
+	// reports of round evalReportsRound. evalEnv is the env the replay's
+	// caller prepared the checkout with (EvalCase.CheckoutEnv; nil = the
+	// per-PR worktree env of the number).
 	evalHead   string
 	evalNotes  bool
 	evalStored bool
+	evalEnv    map[string]string
 	// local is set for the factory's local round of a change before its PR
 	// exists (RunLocal, with evalHead): its base and the files the judge
 	// reads in place of GitHub's PR (pipeline.RoundInput.Local).

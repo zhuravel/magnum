@@ -160,10 +160,16 @@ func DBSlug(name string) string {
 }
 
 // PerPREnv is the environment of per-PR worktree number (path, main clone
-// clone) for its hooks and its agents: WT_BRANCH=PRSlug(number), every
-// WorkspaceNameVars entry blank, then the [[repo]] env (rc may be nil) on top.
+// clone) for its hooks and its agents: WorktreeEnv under PRSlug(number).
 func PerPREnv(rc *config.Repo, number int, path, clone string) map[string]string {
-	slug := PRSlug(number)
+	return WorktreeEnv(rc, PRSlug(number), path, clone)
+}
+
+// WorktreeEnv is the per-PR environment of a worktree (path, main clone
+// clone) under workspace name slug: WT_BRANCH=slug, every
+// WorkspaceNameVars entry blank, then the [[repo]] env (rc may be nil) with
+// {slug} as slug on top.
+func WorktreeEnv(rc *config.Repo, slug, path, clone string) map[string]string {
 	env := map[string]string{"WT_BRANCH": slug}
 	for _, k := range WorkspaceNameVars {
 		env[k] = ""
@@ -233,10 +239,10 @@ func templateVars(slug, repo, path, clone, base string) map[string]string {
 
 // PerPRPlan is what magnum runs for one per-PR worktree (PlanPerPR): the
 // commands' Source ("[[repo]] owner/name", WTConfigFile or "" for none),
-// the workspace name Slug (PRSlug of the number), the Setup and Teardown
-// hooks (templates expanded), the [[repo]] copy_files (Copy), the keys
-// dropped from the rendered local mise file (Strip: StripKeys of the
-// [[repo]] strip_env) and the hooks' and agents' Env (PerPREnv).
+// the workspace name Slug (PRSlug of the number for a PR's own), the Setup
+// and Teardown hooks (templates expanded), the [[repo]] copy_files (Copy),
+// the keys dropped from the rendered local mise file (Strip: StripKeys of
+// the [[repo]] strip_env) and the hooks' and agents' Env (WorktreeEnv).
 type PerPRPlan struct {
 	Source          string
 	Slug            string
@@ -256,18 +262,20 @@ func (m *Manager) repoConfig(repo string) *config.Repo {
 }
 
 // planPerPR is PlanPerPR of per-PR worktree number of sl.RepoFullName
-// (path sl.Path, main clone sl.MainClone) with its [[repo]] block of
-// Deps.Repos.
+// (path sl.Path, main clone sl.MainClone) under PRSlug(number), with its
+// [[repo]] block of Deps.Repos.
 func (m *Manager) planPerPR(sl store.Slot, number int, base string) (PerPRPlan, error) {
-	return PlanPerPR(m.repoConfig(sl.RepoFullName), sl.RepoFullName, number, sl.Path, sl.MainClone, base)
+	return PlanPerPR(m.repoConfig(sl.RepoFullName), sl.RepoFullName, PRSlug(number), sl.Path, sl.MainClone, base)
 }
 
 // PlanPerPR resolves the setup/teardown commands, files and environment of
-// per-PR worktree number of repo (owner/name, its [[repo]] block rc, nil
-// for none; path the worktree, clone its main clone) for a PR based on
-// base. A wt.toml that cannot be read, parsed or templated is ErrHook.
-func PlanPerPR(rc *config.Repo, repo string, number int, path, clone, base string) (PerPRPlan, error) {
-	p := PerPRPlan{Slug: PRSlug(number), Env: PerPREnv(rc, number, path, clone), Strip: StripKeys(nil)}
+// a per-PR worktree of repo (owner/name, its [[repo]] block rc, nil for
+// none; path the worktree, clone its main clone) under workspace name slug
+// (PRSlug of the number for a PR's own worktree; the env is WorktreeEnv's,
+// and wt.toml's {{ branch }} is slug) for a PR based on base. A wt.toml
+// that cannot be read, parsed or templated is ErrHook.
+func PlanPerPR(rc *config.Repo, repo, slug, path, clone, base string) (PerPRPlan, error) {
+	p := PerPRPlan{Slug: slug, Env: WorktreeEnv(rc, slug, path, clone), Strip: StripKeys(nil)}
 	if rc != nil {
 		p.Copy = slices.Clone(rc.CopyFiles)
 		p.Strip = StripKeys(rc.StripEnv)
