@@ -153,21 +153,22 @@ func OpenHoldPhrase(hold time.Duration) string {
 }
 
 // verdictQuestion asks before posting the reviewer's verdict on ref: it
-// says on which head and what magnum's review f concluded, its new findings
-// and the earlier ones still open (the FINDINGS cell's "3 open"), so the
-// decision is an informed one. A head that moved since is refused before
-// asking (actionRefusal): the screens cannot pass --force. as names the
-// operator's own account an approval goes as on a row GitHub blocks on them
-// ("" = the PR's posting identity): their approval is the one that counts,
-// and with lift it lifts their own changes request.
-func verdictQuestion(ref string, approve bool, f *FindingsInfo, as string, lift bool) string {
+// says on which head (at, the commit the daemon posts on: actRow.verdictHead)
+// and what magnum's review f concluded, its new findings and the earlier ones
+// still open (the FINDINGS cell's "3 open"), so the decision is an informed
+// one. A head that moved past the reviewed one is refused before asking
+// (actionRefusal): the screens cannot pass --force. as names the operator's
+// own account an approval goes as on a row GitHub blocks on them ("" = the
+// PR's posting identity): their approval is the one that counts, and with
+// lift it lifts their own changes request.
+func verdictQuestion(ref string, approve bool, at string, f *FindingsInfo, as string, lift bool) string {
 	verb := "Request changes on"
 	if approve {
 		verb = "Approve"
 	}
 	q := verb + " " + ref
-	if f != nil && f.SHA != "" {
-		q += " at " + f.SHA[:min(7, len(f.SHA))]
+	if at != "" {
+		q += " at " + textx.ShortSHA(at)
 	}
 	var says []string
 	if as != "" {

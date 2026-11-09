@@ -5001,6 +5001,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   offer it: its rows do not know the attention's kind. Tests, failing first: TestDMarksWhatTheFixerLeftDone,
   TestScreenFixDone, TestTheBoardRowCarriesTheAttentionKind (the digest).
 
+- **`A` and `C` take a head that kept the review's verdict as reviewed** (2026-11-09, after an audit of
+  PRs waiting on the operator). A push that only merges the base moves the PR's reviewed head to the new
+  commit (`settleTrivial`: "no re-review, the review stands") and posts nothing, so magnum's last posted
+  review stays on the older commit. The board then showed "needs you: approve", the daemon would have
+  taken the approval (`requestVerdict` and the operator's approval check the reviewed head), but `A`
+  refused "the head moved since magnum reviewed f446d06: review again first", because its check compared
+  the head with the review's commit (`FindingsInfo.SHA`). `C` refused the same way. `f` had been relaxed for
+  the same case on 2026-10-13; `A` and `C` now are too: a head that is the reviewed one passes, and the
+  daemon stays the judge of the rest. A head past both is still refused. The question names the commit the
+  verdict goes on (`actRow.verdictHead`: the reviewed head when it is the head, else the review's commit),
+  so it reads "Approve talkable#5 at e88f4b3 as zhuravel?", not the older commit. Test, failing first:
+  TestAAndCOnAHeadThatOnlyMergedTheBaseAskOnThatHead.
+
 ## Operations
 
 - **The daemon exits when the schema was migrated under it** (another binary ran a newer migration);

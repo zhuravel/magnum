@@ -291,6 +291,20 @@ func onlyYourApproval(browser string) string {
 	return "GitHub counts only your approval: " + browser + " opens the PR"
 }
 
+// verdictHead is the commit A and C post on: the reviewed head, which can be
+// past the commit of magnum's last posted review when that head kept its
+// verdict (a push that only merged the base), else that review's commit
+// ("" when neither is known).
+func (r actRow) verdictHead() string {
+	if r.head != "" && sameSHA(r.head, r.reviewed) {
+		return r.head
+	}
+	if r.findings != nil {
+		return r.findings.SHA
+	}
+	return ""
+}
+
 // orKey is note with the key that runs a on the row's screen, or "" when the
 // screen has no key for it ("; K kills it").
 func (r actRow) orKey(a rowAct, note string) string {
@@ -389,7 +403,9 @@ func actionRefusal(a rowAct, r actRow) string {
 			return "magnum has not reviewed this PR: nothing to " + verb
 		case r.merged() || r.closed() || r.ended():
 			return l + " is " + cmp.Or(r.ghWord(), r.state) + ": nothing to " + verb
-		case f.SHA != "" && r.head != "" && !sameSHA(r.head, f.SHA):
+		// A reviewed head the review is not on kept its verdict (a push that
+		// only merged the base): the daemon posts the verdict on it.
+		case f.SHA != "" && r.head != "" && !sameSHA(r.head, f.SHA) && !sameSHA(r.head, r.reviewed):
 			return l + ": the head moved since magnum reviewed " + textx.ShortSHA(f.SHA) + r.orKey(actReview, ": review again first (%k)")
 		case a != actApprove || r.needsMe == "": // the PR's posting identity's verdict
 		case r.approveAs == nil:
@@ -521,7 +537,7 @@ func actionQuestion(a rowAct, r actRow) string {
 		if a == actApprove && r.asOperator() {
 			as = r.approveAs.Login
 		}
-		return verdictQuestion(l, a == actApprove, r.findings, as, as != "" && r.needsMe == NeedsMeLift)
+		return verdictQuestion(l, a == actApprove, r.verdictHead(), r.findings, as, as != "" && r.needsMe == NeedsMeLift)
 	case actUnapprove:
 		return unapproveQuestion(l, r.auto)
 	case actUnpin: // a pin goes at once; a hold takes the slot's HEAD as the checkout, so it asks

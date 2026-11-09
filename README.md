@@ -5553,8 +5553,9 @@ approval `A` approves as you (below); `b` opens the browser;
 `t` opens the PR's issue in its tracker (below); `tab` switches to the status dashboard; `,` opens the settings screen over the board (the status dashboard has the same key), and `esc` there brings the board back as you left it. Every action that stops or starts work asks y/N first,
 and only when `y` will do what it asks: a key that cannot act on the row says why at once instead (`x` on a
 pinned PR: unpin first, or with no slot: nothing to release, or on a slot held `head_drift` or `unpushed_commits`: "held: head_drift, acknowledge it with u" (the release would skip it), while a round runs or is paused (`K` kills
-it) or inside a closed PR's close grace (the slot is released when it ends); `A`/`C` after the head moved: review again
-first, since a screen cannot force a verdict; `r`, `R`, `i` while a round runs: `K` kills it; `f` on a PR Magnum has not reviewed, a merged or closed one, a head that moved past the review (one that kept its verdict counts as reviewed), or while a round runs (on a review that found nothing it asks, and the daemon looks for another reviewer's item to answer); `w` on a PR without a whiteboard; `I` on a
+it) or inside a closed PR's close grace (the slot is released when it ends); `A`/`C` after the head moved past the
+review (one that kept its verdict, such as a push that only merged the base, counts as reviewed, and the question names
+it as the commit the verdict goes on): review again first, since a screen cannot force a verdict; `r`, `R`, `i` while a round runs: `K` kills it; `f` on a PR Magnum has not reviewed, a merged or closed one, a head that moved past the review (one that kept its verdict counts as reviewed), or while a round runs (on a review that found nothing it asks, and the daemon looks for another reviewer's item to answer); `w` on a PR without a whiteboard; `I` on a
 merged PR; `K` with no review running or waiting; `U` on a PR that is not muted; `z` on a merged or closed
 PR; `D` on a merged or closed PR), and the right-click
 menu dims and the card's ACTIONS leave out the same actions; the status dashboard and `magnum pick` refuse

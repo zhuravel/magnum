@@ -105,3 +105,41 @@ func TestAOnARowThatDoesNotNeedYouApprovesAsThePR(t *testing.T) {
 		t.Fatalf("y called %q", act.last())
 	}
 }
+
+// A head that kept the verdict of magnum's last posted review (a push that
+// only merged the base: the daemon moved the reviewed head, the review stays
+// on the older commit) is the reviewed head for A and C, as it is for f: the
+// row that needs the operator asks to approve as them, and both questions
+// name the head the daemon posts on, not the review's commit. A head past
+// both is still refused (TestActionRefusalSaysWhyBeforeAsking).
+func TestAAndCOnAHeadThatOnlyMergedTheBaseAskOnThatHead(t *testing.T) {
+	kept := func(r *PRBoardRow) {
+		r.HeadSHA, r.LastReview.CommitSHA = "e88f4b32b0", "e88f4b32b0"
+		r.Findings.SHA = "f446d068be"
+		r.Findings.Posted = "COMMENT"
+	}
+	for _, c := range []struct {
+		act  rowAct
+		key  string
+		want string
+		call string
+	}{
+		{actApprove, "A", "Approve talkable#5 at e88f4b3 as zhuravel? Your approval counts; magnum found no findings",
+			"approve talkable/talkable#5 as zhuravel"},
+		{actRequestChanges, "C", "Request changes on talkable#5 at e88f4b3? magnum found no findings",
+			"request-changes talkable/talkable#5"},
+	} {
+		row := needsYou(NeedsMeApprove, kept)
+		if why := actionRefusal(c.act, boardActRow(row, "talkable#5", boardNow)); why != "" {
+			t.Fatalf("%s on a head that kept the verdict: refused %q", c.key, why)
+		}
+		m, _, act := newBoard(t, 200, 24, PRBoardOptions{})
+		m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{row}}, keyMsg(c.key))
+		if m.confirm == nil || m.confirm.question != c.want {
+			t.Fatalf("%s asked %+v (flashed %q), want %q", c.key, m.confirm, m.flash, c.want)
+		}
+		if _, _ = boardAct(t, m, "y"); act.last() != c.call {
+			t.Fatalf("%s: y called %q, want %q", c.key, act.last(), c.call)
+		}
+	}
+}
