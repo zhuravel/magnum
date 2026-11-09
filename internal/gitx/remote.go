@@ -354,7 +354,9 @@ func (c *Client) PushLeaseVia(ctx context.Context, dir, url, sha, branch, expect
 // PushLeaseViaAs is PushLeaseVia with env over the push, never over a key
 // of gitx's own: the daemon's push as a fixer App, whose GH_CONFIG_DIR
 // (with GH_TOKEN and GITHUB_TOKEN blanked, identity.Source.Env) holds the
-// token gh answers git with. No value of env is ever logged.
+// token gh answers git with, or whose GH_TOKEN is the daemon's own push
+// token (identity.App.DaemonPushEnv), which gh answers with first. No
+// value of env is ever logged.
 func (c *Client) PushLeaseViaAs(ctx context.Context, dir, url, sha, branch, expect string, env map[string]string) error {
 	if err := checkURL(url); err != nil {
 		return err
