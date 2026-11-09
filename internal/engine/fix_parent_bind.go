@@ -10,8 +10,11 @@ package engine
 // request refuses, after its own fetch, a plan that names nothing, one as
 // old as mergeAskedWait and one whose head, base, tip or conflicts moved
 // since; the job's guard, which fetches the base again (after a slot's
-// claim, minutes later), ends the job on a move too (fixAskedMoved).
-// Nothing is merged then, and the words say what moved. A merge without a
+// claim, minutes later), ends the job on a move too (fixAskedMoved), and
+// the daemon pushes a fixer's merge that `magnum push` handed over only
+// when it merges the tip the question named (pushHanded). Nothing is
+// merged then, and the words say what moved. A daemon run with --dry-run
+// fetches nothing and answers each merge with its plan. A merge without a
 // binding (`magnum merge-parent --yes`) merges the tip its fetch brings.
 
 import (

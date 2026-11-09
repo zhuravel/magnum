@@ -369,9 +369,11 @@ func (e fixHandRefused) Error() string { return e.why }
 // has the job's head, and head is one merge, by the fix identity's bot, of
 // a commit of the PR's base into it that changes workflow files. The
 // daemon pushes it as any merge of the parent (pushMerge: only with every
-// workflow file as that commit has it, with its own Workflows token).
-// Any other head is left to confirmPush. It returns why it pushed nothing
-// (fixHandRefused's words).
+// workflow file as that commit has it, with its own Workflows token),
+// and, for a merge bound to its y/N (job.asked), only when that commit is
+// the tip the question named (fix_parent_bind.go): nobody was asked about
+// another. Any other head is left to confirmPush. It returns why it pushed
+// nothing (fixHandRefused's words).
 func (e *Engine) pushHanded(ctx context.Context, job *fixJob, head string) (string, error) {
 	pg, ok := e.d.Git.(parentGit)
 	id, who, app := e.fixerSignature(job.role.Identity)
@@ -382,6 +384,9 @@ func (e *Engine) pushHanded(ctx context.Context, job *fixJob, head string) (stri
 	tip, handed := e.handedMerge(ctx, job, pg, who, head)
 	if !handed {
 		return "", nil
+	}
+	if a := job.asked; a != nil && !strings.EqualFold(tip, a.Tip) {
+		return fmt.Sprintf("it merges %s at %s, not the tip %s you were asked about", base, textx.ShortSHA(tip), textx.ShortSHA(a.Tip)), nil
 	}
 	// the tip GitHub names is in the slot's git after this fetch, whose
 	// forced refspec also writes over any ref of the base the pane wrote
@@ -572,14 +577,16 @@ func (e *Engine) parentPushed(ctx context.Context, job *fixJob, head, needs stri
 // a conflict. A head that has the base's tip already is answered so, with
 // no job. A dry run, the plan its y/N names (fix_parent_bind.go), fetches
 // the base too, so that it names the tip the base has now, and answers
-// what would run as a MergePlan. A merge bound to its y/N (asked; nil for
-// none) is refused after the fetch when what it asked about moved
-// (askedRefusal), and its job carries the binding to its guard.
+// what would run as a MergePlan; a daemon run with --dry-run fetches
+// nothing (Deps.DryRun) and answers every merge so. A merge bound to its
+// y/N (asked; nil for none) is refused after the fetch when what it asked
+// about moved (askedRefusal), and its job carries the binding to its guard
+// and to the daemon's push of a merge the fixer handed over (pushHanded).
 func (e *Engine) requestMerge(ctx context.Context, pr store.PR, dry bool, asked *MergeAsked) (string, error) {
 	if e.draining(ctx) {
 		return "", errors.New("the daemon drains for a restart: ask again after it")
 	}
-	job, nothing, err := e.prepareMerge(ctx, pr, true)
+	job, nothing, err := e.prepareMerge(ctx, pr, !e.d.DryRun)
 	switch {
 	case err != nil:
 		return "", err

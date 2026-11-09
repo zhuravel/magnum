@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -217,5 +218,70 @@ func TestAFixWithAMergesBindingIsRefused(t *testing.T) {
 	const want = "magnum fix: a merge's plan (asked) goes with magnum merge-parent alone"
 	if r := h.request(id); r.State != store.RequestFailed || deref(r.Result) != want {
 		t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), want)
+	}
+}
+
+// A daemon run with --dry-run changes nothing outside its registry
+// (Deps.DryRun): the plan of a merge of the parent fetches no base then,
+// and a merge asked of it, bound to its question or not, is answered with
+// the plan, merges nothing and fetches nothing either.
+func TestADryRunDaemonsMergeOfTheParentFetchesNothing(t *testing.T) {
+	h, mg := mergeHarness(t, withFixerApp)
+	fixablePR(h, "zhuravel", nil)
+	mg.behind = true
+	h.e.d.DryRun = true
+	asked := h.planMerge().Asked
+	if r := h.mergeBound(asked); r.State != store.RequestDone {
+		t.Fatalf("the bound merge: %s %q", r.State, deref(r.Result))
+	} else if _, ok := ParseMergePlan(deref(r.Result)); !ok {
+		t.Errorf("the bound merge's answer = %q, want the plan", deref(r.Result))
+	}
+	id := h.fix(FixPayload{Mode: FixModeMerge})
+	h.handle()
+	h.wantPlan(id)
+	if fetches, _ := mg.calls(); len(fetches) != 0 {
+		t.Errorf("fetches = %v, want none", fetches)
+	}
+	if commits, pushes := mg.made(); len(commits)+len(pushes) != 0 {
+		t.Errorf("merged: %v %v", commits, pushes)
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("a loop started")
+	}
+}
+
+// The binding holds for the daemon's own push too. The question named
+// master at c0c0c0c with a conflict, and the fixer merged master at
+// d1d1d1d instead (it fetched the base again); its merge brings the
+// base's workflow files, so magnum push handed it to the daemon. The
+// daemon does not push it with its Workflows token, though d1d1d1d is on
+// master as GitHub has it: nobody was asked about that tip.
+func TestABoundMergesHandedMergeOfAnotherTipIsNotPushed(t *testing.T) {
+	h, mg := handedMerge(t)
+	other := gitx.CommitIdentity{SHA: fixMergeHead, Parents: []string{fixHead, fixMovedTip}, AuthorEmail: fixerAppEmail, CommitterEmail: fixerAppEmail}
+	mg.mu.Lock()
+	mg.handed = &other
+	mg.mu.Unlock()
+	fixer(h, mg.fixGit, fixMergeHead, func(run store.Run) string {
+		h.gh.mu.Lock()
+		h.gh.baseOid = fixMovedTip // master moved on GitHub while the fixer ran
+		h.gh.mu.Unlock()
+		return fixReport(run.ID, "d3d3d3d Merge d1d1d1d: not run: environment", "0 threads (0 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "none")
+	})
+	asked := h.planMerge().Asked
+	if r := h.mergeBound(asked); r.State != store.RequestDone {
+		t.Fatalf("the bound merge: %s %q", r.State, deref(r.Result))
+	}
+	if _, pushes := mg.made(); len(pushes) != 0 {
+		t.Errorf("pushes = %v, want none", pushes)
+	}
+	if mints, _ := h.ids[fixerAppName].daemonPushes(); len(mints) != 0 {
+		t.Errorf("daemon push tokens minted: %v", mints)
+	}
+	pr := h.wantState(2, store.PRNeedsAttention)
+	const want = "fix: magnum did not push claude-fix's merge of the parent of talkable/talkable#2: it merges master at d1d1d1d, not the tip " +
+		"c0c0c0c you were asked about; merge master into feature by hand and resolve app/models/offer.rb (GitHub offers no Update branch on a conflict)"
+	if got := deref(pr.LastError); got != want {
+		t.Errorf("attention = %q, want %q", got, want)
 	}
 }

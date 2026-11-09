@@ -180,7 +180,8 @@ type fixJob struct {
 	// it merged so, whose merge is then the job's head (the prompt says so).
 	// asked is what the y/N of a merge of the parent asked about
 	// (FixPayload.Asked; nil for none): the guard ends a job whose base
-	// moved since (fix_parent_bind.go).
+	// moved since, and the daemon pushes no handed merge of another tip
+	// (fix_parent_bind.go).
 	mode           string
 	behind, merged fixConflict
 	asked          *MergeAsked
