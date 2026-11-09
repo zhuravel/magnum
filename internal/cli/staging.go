@@ -111,9 +111,10 @@ func runStaging(c *Context, o stagingOpts, pos []string) int {
 // stagingJSON is one PR of `magnum staging --json`: its ref, the head its
 // stagings are told for, and its state per env in the config's order.
 type stagingJSON struct {
-	Ref      string           `json:"ref"` // owner/name#N
-	Head     string           `json:"head"`
-	Stagings []prsJSONStaging `json:"stagings"`
+	Ref      string                 `json:"ref"` // owner/name#N
+	Head     string                 `json:"head"`
+	Stagings []prsJSONStaging       `json:"stagings"`
+	Deploys  []prsJSONStagingDeploy `json:"deploys"` // the staging deploys magnum runs, or ran in the last day
 }
 
 // stagingPR is a PR as the command prints it.
@@ -122,16 +123,19 @@ type stagingPR struct {
 	number   int
 	head     string
 	stagings []tui.StagingInfo
+	deploys  []tui.StagingDeploy
 }
 
 func stagingMain(ctx context.Context, c *Context, d *actDeps, pos []string, o stagingOpts) int {
 	now := d.now()
 	lastTick := daemonLastTick(ctx, d.Store)
+	deploys := stagingDeployValues(ctx, d.Store, d.Cfg)
 	if len(pos) == 1 {
 		p, err := stagingOfRef(ctx, d, pos[0], lastTick, now)
 		if err != nil {
 			return cmdFail(c, "staging", err)
 		}
+		p.deploys = stagingDeploysOf(deploys, p.full, p.number)
 		if o.json {
 			return stagingWriteJSON(c, stagingJSONOf(p))
 		}
@@ -147,8 +151,9 @@ func stagingMain(ctx context.Context, c *Context, d *actDeps, pos []string, o st
 		}
 		envs := engine.StagingEnvs(d.Cfg, repo)
 		for _, pr := range prs {
-			p := stagingPR{full: repo, number: pr.Number, head: pr.HeadSHA, stagings: stagingShown(ctx, d.Store, envs, pr, lastTick, now)}
-			if slices.ContainsFunc(p.stagings, onStaging) {
+			p := stagingPR{full: repo, number: pr.Number, head: pr.HeadSHA, stagings: stagingShown(ctx, d.Store, envs, pr, lastTick, now),
+				deploys: stagingDeploysOf(deploys, repo, pr.Number)}
+			if slices.ContainsFunc(p.stagings, onStaging) || slices.ContainsFunc(p.deploys, func(d tui.StagingDeploy) bool { return d.Live }) {
 				on = append(on, p)
 			}
 		}
@@ -234,7 +239,8 @@ func stagingShown(ctx context.Context, st *store.Store, envs []staging.Env, pr s
 }
 
 func stagingJSONOf(p stagingPR) stagingJSON {
-	return stagingJSON{Ref: fmt.Sprintf("%s#%d", p.full, p.number), Head: p.head, Stagings: mapList(p.stagings, prsJSONStagingOf)}
+	return stagingJSON{Ref: fmt.Sprintf("%s#%d", p.full, p.number), Head: p.head, Stagings: mapList(p.stagings, prsJSONStagingOf),
+		Deploys: mapList(p.deploys, prsJSONStagingDeployOf)}
 }
 
 func stagingWriteJSON(c *Context, v any) int {
@@ -261,6 +267,20 @@ func stagingPrint(w io.Writer, d *actDeps, p stagingPR, now time.Time) {
 		}
 		if s.RunURL != "" {
 			fmt.Fprintf(w, "%srun %s\n", indent, s.RunURL)
+		}
+		for _, dep := range p.deploys {
+			if dep.Env != s.Env {
+				continue
+			}
+			fmt.Fprintf(w, "%sdeploy %s: %s\n", indent, dep.Effect, tui.StagingDeploySummary(dep, now))
+			for _, words := range []string{dep.Text, dep.Why} {
+				if words != "" {
+					fmt.Fprintf(w, "%s  %s\n", indent, words)
+				}
+			}
+			if dep.RunURL != "" {
+				fmt.Fprintf(w, "%s  run %s\n", indent, dep.RunURL)
+			}
 		}
 	}
 }

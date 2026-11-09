@@ -125,3 +125,27 @@ func TestStagingCommandWithoutStagingsSaysTheFeatureIsOff(t *testing.T) {
 	_, errOut = h.stagingRun(2, "talkable#5", "talkable#6")
 	actContains(t, errOut, "one PR at a time", "usage: magnum staging")
 }
+
+// `magnum staging <pr>` says under each env the deploys magnum runs or ran
+// there in the last day, with the step of its last event and its words;
+// --json carries them. Without a PR, a PR on no staging that deploys to one
+// is listed too.
+func TestStagingCommandShowsEachDeploysStepAndLastEvent(t *testing.T) {
+	h, prs := stagingHarness(t)
+	h.d.Now = func() time.Time { return h.now }
+	h.setDeployRecord(engine.StagingDeployRecord{Effect: "bart-6-20261005t100000-abcd", Repo: "talkable/talkable", Number: 6, Head: prs[6].HeadSHA,
+		Env: "bart", Step: "push", Phase: "begin", State: "running", Text: "push of 6b6b6b6 to staging-bart", Seq: 4, At: h.now.Add(-3 * time.Minute)})
+	out, _ := h.stagingRun(0, "talkable#6")
+	actContains(t, out, "bart  not there", "deploy bart-6-20261005t100000-abcd: running · push begin · 3m ago", "push of 6b6b6b6 to staging-bart")
+	if strings.Index(out, "deploy bart-6") < strings.Index(out, "bart  not there") {
+		t.Errorf("the deploy is not under its env:\n%s", out)
+	}
+	raw, _ := h.stagingRun(0, "talkable#6", "--json")
+	var got stagingJSON
+	if err := json.Unmarshal([]byte(raw), &got); err != nil || len(got.Deploys) != 1 || got.Deploys[0].Effect != "bart-6-20261005t100000-abcd" ||
+		got.Deploys[0].Step != "push" || !got.Deploys[0].Live {
+		t.Fatalf("--json %+v (%v)\n%s", got, err, raw)
+	}
+	out, _ = h.stagingRun(0)
+	actContains(t, out, "talkable#6 at abc1234", "deploy bart-6-20261005t100000-abcd")
+}

@@ -343,6 +343,20 @@ type PRBoardRow struct {
 	// glyphs and the card's STAGINGS block. nil for a repository without
 	// staging envs and for a PR that is not open.
 	Stagings []StagingInfo
+	// StagingDeploys are the staging deploys of the PR magnum runs, or ran
+	// in the last day, live ones first, each as its newest event left it
+	// (engine.StagingDeployRecord): the card's lines under each env.
+	StagingDeploys []StagingDeploy
+}
+
+// StagingDeploy is a staging deploy of a PR on one env: its effect, the
+// step and phase of its last event, its state (queued, running, done,
+// failed, cancelled, needs you), why it ended, that event's words, ci.yml's
+// run on its merge, when the event came, and whether it still runs.
+type StagingDeploy struct {
+	Effect, Env, Step, Phase, State, Why, Text, RunURL string
+	At                                                 time.Time
+	Live                                               bool
 }
 
 // StagingInfo is where a PR stands on one staging env.
@@ -909,7 +923,26 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 		r.Progress = &g
 	}
 	r.Stagings = cleanStagings(r.Stagings)
+	r.StagingDeploys = cleanStagingDeploys(r.StagingDeploys)
 	return r
+}
+
+// cleanStagingDeploys is a copy of ds with its text cleaned and a run page
+// that is no web address left out; nil for nil.
+func cleanStagingDeploys(ds []StagingDeploy) []StagingDeploy {
+	if ds == nil {
+		return nil
+	}
+	out := make([]StagingDeploy, len(ds))
+	for i, d := range ds {
+		d.Effect, d.Env, d.Step, d.Phase, d.State = cleanText(d.Effect), cleanText(d.Env), cleanText(d.Step), cleanText(d.Phase), cleanText(d.State)
+		d.Why, d.Text, d.RunURL = cleanText(d.Why), cleanText(d.Text), ""
+		if l := cleanLinks([]CheckLink{{URL: ds[i].RunURL}}); len(l) == 1 {
+			d.RunURL = l[0].URL
+		}
+		out[i] = d
+	}
+	return out
 }
 
 // cleanStagings is a copy of ss with its text cleaned and a run page that

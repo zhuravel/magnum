@@ -456,7 +456,7 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	}
 	if len(r.Stagings) > 0 {
 		add("", p.st.Section.Render(p.g.headed("STAGINGS")))
-		for _, l := range p.stagingLines(r.Stagings, max(inner-2, 10)) {
+		for _, l := range p.stagingLines(r.Stagings, r.StagingDeploys, max(inner-2, 10)) {
 			add("  " + l)
 		}
 	}
@@ -1061,10 +1061,40 @@ func stagingParts(s StagingInfo, state string, now time.Time) []string {
 	return parts
 }
 
+// StagingDeploySummary is d in the words of the card's STAGINGS block,
+// without its effect: its state, the step and phase of its last event, and
+// how long ago that came ("running · push begin · 3m ago").
+func StagingDeploySummary(d StagingDeploy, now time.Time) string {
+	parts := []string{cmp.Or(d.State, "unknown")}
+	if d.Step != "" {
+		parts = append(parts, strings.TrimSpace(d.Step+" "+d.Phase))
+	}
+	if !d.At.IsZero() {
+		parts = append(parts, shortAge(max(now.Sub(d.At), 0))+" ago")
+	}
+	return strings.Join(parts, " · ")
+}
+
+// stagingDeployStyle is how a deploy's line is drawn: a live one as
+// pending, a failed one as a failure, a done one as passed, the rest dim.
+func (p *prbPainter) stagingDeployStyle(d StagingDeploy) lipgloss.Style {
+	switch {
+	case d.Live:
+		return p.pal.yellow
+	case d.State == "failed" || d.State == "needs you":
+		return p.pal.red
+	case d.State == "done":
+		return p.pal.green
+	}
+	return p.st.Dim
+}
+
 // stagingLines are the card's STAGINGS block, width cells wide: per env
 // its glyph, its name and its words (stagingParts); under it, why it
-// cannot be told and the CI run's page.
-func (p *prbPainter) stagingLines(ss []StagingInfo, width int) []string {
+// cannot be told and the CI run's page, then each of the env's deploys
+// (ds): its effect and words (StagingDeploySummary), its last event's
+// words or why it ended, and its CI run's page.
+func (p *prbPainter) stagingLines(ss []StagingInfo, ds []StagingDeploy, width int) []string {
 	nameW := 0
 	for _, s := range ss {
 		nameW = max(nameW, ansi.StringWidth(s.Env))
@@ -1083,6 +1113,23 @@ func (p *prbPainter) stagingLines(ss []StagingInfo, width int) []string {
 		}
 		if s.RunURL != "" {
 			out = append(out, indent+"run "+p.st.Accent.Render(s.RunURL))
+		}
+		for _, d := range ds {
+			if d.Env != s.Env {
+				continue
+			}
+			out = append(out, indent+p.stagingDeployStyle(d).Render("deploy "+d.Effect+": "+StagingDeploySummary(d, p.now)))
+			for _, words := range []string{d.Text, d.Why} {
+				if words == "" {
+					continue
+				}
+				for l := range strings.SplitSeq(lipgloss.NewStyle().Width(max(width-len(indent)-2, 10)).Render(words), "\n") {
+					out = append(out, indent+"  "+p.st.Dim.Render(strings.TrimRight(l, " ")))
+				}
+			}
+			if d.RunURL != "" {
+				out = append(out, indent+"  run "+p.st.Accent.Render(d.RunURL))
+			}
 		}
 	}
 	return out

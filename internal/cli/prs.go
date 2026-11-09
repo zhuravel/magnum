@@ -384,6 +384,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 		}
 		notes := map[string]bool{}
 		stagingTick := daemonLastTick(ctx, st)        // the staging records hold while the daemon ticks
+		deploys := stagingDeployValues(ctx, st, cfg)  // every staging deploy's record, in one read
 		required := map[string]store.RequiredChecks{} // per repository, for this load
 		ignored := map[string][]string{}              // per repository, for this load
 		trackers := map[string][]config.Tracker{}     // per repository, for this load
@@ -491,6 +492,9 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			}
 			row.ProjectNote = agents.ProjectSentences(ctx, st, r.PRID, r.HeadSHA)
 			row.Stagings = boardStagings(ctx, st, cfg, r, stagingTick, inspNow())
+			if row.Stagings != nil {
+				row.StagingDeploys = stagingDeploysOf(deploys, r.Owner+"/"+r.Name, r.Number)
+			}
 			out = append(out, row)
 		}
 		// Every star in one read (star.go), before the board filters and
@@ -637,6 +641,31 @@ func boardStagings(ctx context.Context, st *store.Store, cfg *config.Config, r s
 	for i, s := range shown {
 		out[i] = tui.StagingInfo{Env: s.Env, State: s.State, Detail: s.Detail, InTip: s.InTip, Behind: s.Behind,
 			PushedAt: s.PushedAt, DeployedAt: s.DeployedAt, RunURL: s.RunURL, Why: s.Why}
+	}
+	return out
+}
+
+// stagingDeployValues is every staging deploy's record (engine.KVStagingDeploys)
+// in one read; none without a repository with staging envs, or when the
+// registry cannot say.
+func stagingDeployValues(ctx context.Context, st *store.Store, cfg *config.Config) map[string]string {
+	if len(engine.StagingRepos(cfg)) == 0 {
+		return nil
+	}
+	values, err := st.KVValues(ctx, engine.KVStagingDeploys)
+	if err != nil {
+		return nil
+	}
+	return values
+}
+
+// stagingDeploysOf is repo#number's staging deploys among values
+// (stagingDeployValues), the live ones first, as the screens show them.
+func stagingDeploysOf(values map[string]string, repo string, number int) []tui.StagingDeploy {
+	var out []tui.StagingDeploy
+	for _, r := range engine.StagingDeploysOf(values, repo, number) {
+		out = append(out, tui.StagingDeploy{Effect: r.Effect, Env: r.Env, Step: r.Step, Phase: r.Phase, State: r.State, Why: r.Why,
+			Text: r.Text, RunURL: r.RunURL, At: r.At, Live: r.Live()})
 	}
 	return out
 }

@@ -125,6 +125,31 @@ type prsJSONRow struct {
 	// envs, in the config's order, as the daemon last told it; [] for a
 	// repository without staging envs and a PR that is not open.
 	Stagings []prsJSONStaging `json:"stagings"`
+	// StagingDeploys are the PR's staging deploys magnum runs, or ran in
+	// the last day, live ones first; [] for none.
+	StagingDeploys []prsJSONStagingDeploy `json:"staging_deploys"`
+}
+
+// prsJSONStagingDeploy is a staging deploy of a PR as its newest event
+// left it: its effect and env, the step and phase of that event, its state
+// (queued, running, done, failed, cancelled, needs you), why, the event's
+// words, ci.yml's run, when the event came and whether it still runs.
+type prsJSONStagingDeploy struct {
+	Effect string    `json:"effect"`
+	Env    string    `json:"env"`
+	Step   string    `json:"step"`
+	Phase  string    `json:"phase"`
+	State  string    `json:"state"`
+	Why    string    `json:"why"`
+	Text   string    `json:"text"`
+	RunURL string    `json:"run_url"`
+	At     time.Time `json:"at,omitzero"`
+	Live   bool      `json:"live"`
+}
+
+func prsJSONStagingDeployOf(d tui.StagingDeploy) prsJSONStagingDeploy {
+	return prsJSONStagingDeploy{Effect: d.Effect, Env: d.Env, Step: d.Step, Phase: d.Phase, State: d.State, Why: d.Why, Text: d.Text,
+		RunURL: d.RunURL, At: d.At, Live: d.Live}
 }
 
 // prsJSONStaging is a PR's state on one staging env: latest (live),
@@ -384,7 +409,8 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		Open: mapPtr(r.Open, func(o tui.PROpen) prsJSONOpen {
 			return prsJSONOpen{Verdict: o.Verdict, Why: o.Why, Head: o.Head, Stale: o.Stale}
 		}),
-		Stagings: mapList(r.Stagings, prsJSONStagingOf),
+		Stagings:       mapList(r.Stagings, prsJSONStagingOf),
+		StagingDeploys: mapList(r.StagingDeploys, prsJSONStagingDeployOf),
 	}
 }
 

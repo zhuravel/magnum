@@ -82,3 +82,52 @@ func TestTheBoardReadsEachOpenPRsStagingStatusFromItsRecord(t *testing.T) {
 		t.Fatalf("a record of an older head: %+v", s)
 	}
 }
+
+// setDeployRecord stores a staging deploy's record as the daemon writes it.
+func (h *actHarness) setDeployRecord(rec engine.StagingDeployRecord) {
+	h.t.Helper()
+	b, err := json.Marshal(rec)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if err := h.st.SetKV(h.ctx, engine.KVStagingDeploy(rec.Effect), string(b)); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// The board's rows carry each PR's staging deploys from their records, the
+// live ones first, read once for every row; a PR of a repository without
+// staging envs carries none; tui --json prints them.
+func TestTheBoardReadsEachPRsStagingDeploysFromTheirRecords(t *testing.T) {
+	h := newActHarness(t)
+	stagingConfig(h.d.Cfg)
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.seedPR("talkable/talkable", 6, store.PRReviewed)
+	at := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	h.setDeployRecord(engine.StagingDeployRecord{Effect: "void-5-20261005t090000-abcd", Repo: "talkable/talkable", Number: 5, Head: pr.HeadSHA,
+		Env: "void", Step: "watch", Phase: "fail", State: "failed", Why: "ci.yml failed on the merge", Seq: 9, At: at})
+	h.setDeployRecord(engine.StagingDeployRecord{Effect: "bart-5-20261005t100000-abcd", Repo: "talkable/talkable", Number: 5, Head: pr.HeadSHA,
+		Env: "bart", Step: "push", Phase: "begin", State: "running", Text: "push of 6b6b6b6", Seq: 4, At: at.Add(50 * time.Minute)})
+	out, err := prsSource(h.st, h.d.Cfg, store.BoardFilter{}, nil, h.d.Layout)(h.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := map[int]tui.PRBoardRow{}
+	for _, r := range out {
+		by[r.Number] = r
+	}
+	ds := by[5].StagingDeploys
+	if len(ds) != 2 || ds[0].Effect != "bart-5-20261005t100000-abcd" || !ds[0].Live || ds[0].Step != "push" || ds[0].Text != "push of 6b6b6b6" ||
+		ds[1].Env != "void" || ds[1].Live || ds[1].Why != "ci.yml failed on the merge" || !ds[1].At.Equal(at) {
+		t.Fatalf("#5's deploys %+v", ds)
+	}
+	if ds := by[6].StagingDeploys; len(ds) != 0 {
+		t.Fatalf("#6's deploys %+v", ds)
+	}
+	if js := prsJSONOf(by[5]); len(js.StagingDeploys) != 2 || js.StagingDeploys[0].Effect != "bart-5-20261005t100000-abcd" || !js.StagingDeploys[0].Live {
+		t.Fatalf("tui --json staging_deploys %+v", js.StagingDeploys)
+	}
+	if js := prsJSONOf(by[6]); js.StagingDeploys == nil {
+		t.Fatal("tui --json prints null for no deploys, want []")
+	}
+}
