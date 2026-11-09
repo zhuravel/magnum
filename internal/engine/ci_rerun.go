@@ -97,10 +97,10 @@ func (r ciRerun) asked() bool { return !r.At.IsZero() && r.Failed == "" && r.Run
 func (r ciRerun) decided() bool { return !r.At.IsZero() || r.Refused != "" }
 
 // readDue reports whether the look reads the runs of head (again) at now:
-// none read at the head, or settle_max (max) passed since a read that
-// found a run still queued or that failed.
-func (r ciRerun) readDue(head string, now time.Time, max time.Duration) bool {
-	return r.Head != head || (r.Queued != 0 || r.Unread) && !now.Before(r.ReadAt.Add(max))
+// none read at the head, or settleMax passed since a read that found a run
+// still queued or that failed.
+func (r ciRerun) readDue(head string, now time.Time, settleMax time.Duration) bool {
+	return r.Head != head || (r.Queued != 0 || r.Unread) && !now.Before(r.ReadAt.Add(settleMax))
 }
 
 // named is the run in the verdict's words: "run 42673098082 of ci.yml".
@@ -204,7 +204,7 @@ func noJobRunAt(ctx context.Context, gh GitHub, owner, name, sha string) (*ciNoJ
 			continue
 		}
 		seen[key] = true
-		if found != nil || !run.Done() {
+		if found != nil || queued != 0 || !run.Done() { // nothing is re-run beside a queued run: no jobs to read
 			continue
 		}
 		noJob, err := noJobStarted(ctx, gh, owner, name, run)
@@ -361,9 +361,9 @@ func (e *Engine) openCIRerun(ctx context.Context, repo store.Repo, w config.Watc
 
 // rerunWaits reports whether the poll reads the head's runs for r, the
 // look's re-run (awaitCIRuns) at now: GitHub took it, and it is less than
-// settle_max (max) old or its new attempt had not ended at the last read.
-func (r ciRerun) rerunWaits(now time.Time, max time.Duration) bool {
-	return r.asked() && (now.Before(r.At.Add(max)) || r.Seen.running())
+// settleMax old or its new attempt had not ended at the last read.
+func (r ciRerun) rerunWaits(now time.Time, settleMax time.Duration) bool {
+	return r.asked() && (now.Before(r.At.Add(settleMax)) || r.Seen.running())
 }
 
 // seeRerun is the poll's read of the new attempt of r's run (awaitCIRuns):
