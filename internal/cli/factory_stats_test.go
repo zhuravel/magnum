@@ -773,7 +773,7 @@ func TestFactoryStatsShowsTheQualityOfThePublishedPRs(t *testing.T) {
 		rep.Tasks[0].FixLoops.Commits != 2 || rep.Tasks[1].Quality == nil || rep.Tasks[1].Quality.Escapes != nil {
 		t.Errorf("the JSON's tasks:\n%s", dt.stdout)
 	}
-	if q := rep.Quality; q == nil || q.Checked != 1 || q.NotYet != 1 || q.Escapes != 1 || q.P2 != 1 || q.CIFailed != 1 || q.FixPushes == nil ||
+	if q := rep.Quality; q == nil || q.Checked != 1 || q.NotYet != 1 || q.EscapesTotal != 1 || q.P2 != 1 || q.CIFailed != 1 || q.FixPushes == nil ||
 		*q.FixPushes != 1 || *q.FixCommits != 2 {
 		t.Errorf("the JSON's totals %+v:\n%s", q, dt.stdout)
 	}

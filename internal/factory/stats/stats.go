@@ -93,16 +93,33 @@ type FixLoops struct {
 	Commits   int `json:"commits"`
 }
 
+// The states of a task's escapes (Quality.EscapesState).
+const (
+	// EscapesChecked: the task's check is stored.
+	EscapesChecked = "checked"
+	// EscapesUnrecorded: the check is stored, but magnum recorded none of
+	// the P0 to P2 findings its round's result counts: the escapes are
+	// unknown.
+	EscapesUnrecorded = "unrecorded"
+	// EscapesNotYet: the task is published and magnum has posted no round
+	// since the publish (or its check is still to run).
+	EscapesNotYet = "not_yet"
+	// EscapesNotChecked: the task ended (done, stopped, failed) without a
+	// check, which only a published task gets: none will come.
+	EscapesNotChecked = "not_checked"
+)
+
 // Quality is what a task's published PR said of the factory's work after
-// the publish: Escapes what the local review missed at magnum's first
-// posted round on the PR (nil: not yet, magnum has posted no round since
-// the publish), CIFailed the failed CI on the PR's heads (GitHub's ci
+// the publish: EscapesState whether its local review was checked
+// (EscapesChecked and the others), Escapes what the check found (nil
+// without a check), CIFailed the failed CI on the PR's heads (GitHub's ci
 // checks, one per head and result) but those marked not ours, and
 // CINotOurs those apart.
 type Quality struct {
-	Escapes   *Escapes `json:"escapes"`
-	CIFailed  int      `json:"ci_failed"`
-	CINotOurs int      `json:"ci_failed_not_ours"`
+	EscapesState string   `json:"escapes_state"`
+	Escapes      *Escapes `json:"escapes"`
+	CIFailed     int      `json:"ci_failed"`
+	CINotOurs    int      `json:"ci_failed_not_ours"`
 }
 
 // Escapes counts what the local review missed at magnum's first posted
@@ -110,9 +127,14 @@ type Quality struct {
 // P0 to P2 findings that round posted, P0, P1 and P2 the escapes by
 // priority (the P0 to P2 findings no local finding caught), and Unplaced
 // those of them with no line any local finding could be near (a finding of
-// the review's body, say).
+// the review's body, say). SameHeadOnly counts the files of the posted
+// findings the check compared at the same head only (git could not compare
+// them at two heads, so a local finding at another head caught nothing
+// there), and Unrecorded the P0 to P2 findings the round's result counts
+// that magnum recorded no row of (the escapes are then unknown).
 type Escapes struct {
 	Posted, P0, P1, P2, Unplaced int
+	SameHeadOnly, Unrecorded     int
 }
 
 // Total is the escapes of every priority.
@@ -121,13 +143,15 @@ func (e Escapes) Total() int { return e.P0 + e.P1 + e.P2 }
 // MarshalJSON writes the counts with fixed keys, and their total.
 func (e Escapes) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		Posted   int `json:"posted"`
-		P0       int `json:"p0"`
-		P1       int `json:"p1"`
-		P2       int `json:"p2"`
-		Unplaced int `json:"unplaced"`
-		Total    int `json:"total"`
-	}{e.Posted, e.P0, e.P1, e.P2, e.Unplaced, e.Total()})
+		Posted       int `json:"posted"`
+		P0           int `json:"p0"`
+		P1           int `json:"p1"`
+		P2           int `json:"p2"`
+		Unplaced     int `json:"unplaced"`
+		SameHeadOnly int `json:"same_head_only"`
+		Unrecorded   int `json:"unrecorded"`
+		Total        int `json:"total"`
+	}{e.Posted, e.P0, e.P1, e.P2, e.Unplaced, e.SameHeadOnly, e.Unrecorded, e.Total()})
 }
 
 // IsTyped reports whether an input of the kind holds the operator's own
@@ -249,26 +273,32 @@ func (r Report) MarshalJSON() ([]byte, error) {
 }
 
 // QualityTotals are the quality numbers over a report's tasks with a PR:
-// how many PRs, how many were checked for escapes and how many are not yet,
-// the P0 to P2 findings the checked ones' first posted rounds posted, the
-// escapes in all and by priority with those with no line apart, the CI
-// failures after the publish with those not ours apart, and, when
-// SetFixLoops read them, the fixers' pushes and their commits (nil: not
-// read).
+// how many PRs; how many were checked for escapes (Checked, those whose
+// round's findings magnum recorded), how many are not yet, not checked, or
+// checked with their findings unrecorded (ChecksUnrecorded), and how many
+// of the checked ones compared some files at the same head only
+// (ChecksSameHeadOnly); the P0 to P2 findings the checked ones' first
+// posted rounds posted, the escapes in all and by priority with those with
+// no line apart; the CI failures after the publish with those not ours
+// apart; and, when SetFixLoops read them, the fixers' pushes and their
+// commits (nil: not read).
 type QualityTotals struct {
-	PRs        int  `json:"prs"`
-	Checked    int  `json:"checked"`
-	NotYet     int  `json:"not_yet"`
-	Posted     int  `json:"posted"`
-	Escapes    int  `json:"escapes"`
-	P0         int  `json:"p0"`
-	P1         int  `json:"p1"`
-	P2         int  `json:"p2"`
-	Unplaced   int  `json:"unplaced"`
-	CIFailed   int  `json:"ci_failed"`
-	CINotOurs  int  `json:"ci_failed_not_ours"`
-	FixPushes  *int `json:"fix_pushes,omitempty"`
-	FixCommits *int `json:"fix_commits,omitempty"`
+	PRs                int  `json:"prs"`
+	Checked            int  `json:"checked"`
+	NotYet             int  `json:"not_yet"`
+	NotChecked         int  `json:"not_checked"`
+	ChecksUnrecorded   int  `json:"checks_unrecorded"`
+	ChecksSameHeadOnly int  `json:"checks_same_head_only"`
+	Posted             int  `json:"posted"`
+	EscapesTotal       int  `json:"escapes_total"`
+	P0                 int  `json:"p0"`
+	P1                 int  `json:"p1"`
+	P2                 int  `json:"p2"`
+	Unplaced           int  `json:"unplaced"`
+	CIFailed           int  `json:"ci_failed"`
+	CINotOurs          int  `json:"ci_failed_not_ours"`
+	FixPushes          *int `json:"fix_pushes,omitempty"`
+	FixCommits         *int `json:"fix_commits,omitempty"`
 }
 
 // Quality totals the report's tasks with a PR (Quality); nil when no task
@@ -288,13 +318,26 @@ func (r Report) Quality() *QualityTotals {
 			commits += t.FixLoops.Commits
 		}
 		e := t.Quality.Escapes
-		if e == nil {
+		switch t.Quality.EscapesState {
+		case EscapesNotYet:
 			q.NotYet++
+			continue
+		case EscapesNotChecked:
+			q.NotChecked++
+			continue
+		case EscapesUnrecorded:
+			q.ChecksUnrecorded++
+			continue
+		}
+		if e == nil {
 			continue
 		}
 		q.Checked++
+		if e.SameHeadOnly > 0 {
+			q.ChecksSameHeadOnly++
+		}
 		q.Posted += e.Posted
-		q.Escapes += e.Total()
+		q.EscapesTotal += e.Total()
 		q.P0, q.P1, q.P2, q.Unplaced = q.P0+e.P0, q.P1+e.P1, q.P2+e.P2, q.Unplaced+e.Unplaced
 	}
 	if q.PRs == 0 {
@@ -373,7 +416,7 @@ func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now
 	var quality *Quality
 	if pr.Number <= 0 {
 		pr = PR{}
-	} else if quality, err = qualityOf(ctx, reg, t.ID); err != nil {
+	} else if quality, err = qualityOf(ctx, reg, t); err != nil {
 		return TaskStats{}, err
 	}
 	batches, onQuestions := answeredBatches(questions)
@@ -408,18 +451,28 @@ func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now
 	return ts, nil
 }
 
-// qualityOf is what task id's PR said of the factory's work after the
+// qualityOf is what task t's PR said of the factory's work after the
 // publish, from the registry: its escape check and escapes (none stored:
-// not yet), and its failed CI checks of GitHub's, those not ours apart.
-func qualityOf(ctx context.Context, reg *registry.Registry, id int64) (*Quality, error) {
-	q := &Quality{}
+// not yet while it is published, else not checked, as only a published
+// task is checked), and its failed CI checks of GitHub's, those not ours
+// apart.
+func qualityOf(ctx context.Context, reg *registry.Registry, t registry.Task) (*Quality, error) {
+	id := t.ID
+	q := &Quality{EscapesState: EscapesNotChecked}
+	if t.State == registry.TaskPublished {
+		q.EscapesState = EscapesNotYet
+	}
 	switch c, err := reg.EscapeCheck(ctx, id); {
 	case err == nil:
 		es, err := reg.Escapes(ctx, id)
 		if err != nil {
 			return nil, err
 		}
-		q.Escapes = &Escapes{Posted: c.Posted}
+		q.EscapesState = EscapesChecked
+		if c.Unrecorded > 0 {
+			q.EscapesState = EscapesUnrecorded
+		}
+		q.Escapes = &Escapes{Posted: c.Posted, SameHeadOnly: c.SameHeadOnly, Unrecorded: c.Unrecorded}
 		for _, e := range es {
 			switch e.Priority {
 			case "P0":
@@ -661,14 +714,28 @@ func (r Report) qualityMarkdown(b *strings.Builder) {
 		if r.FixLoopsRead && t.FixLoops != nil {
 			pushes = fmt.Sprintf("%d (%s)", t.FixLoops.Pushes, plural(t.FixLoops.Commits, "commit"))
 		}
-		fmt.Fprintf(b, "| %s | %s | %s | %s | %s |\n", t.Key, t.PR, escapesWords(t.Quality.Escapes), pushes,
+		fmt.Fprintf(b, "| %s | %s | %s | %s | %s |\n", t.Key, t.PR, escapesWords(*t.Quality), pushes,
 			ciWords(t.Quality.CIFailed, t.Quality.CINotOurs))
 	}
-	fmt.Fprintf(b, "\nIn total over %s: %s at %d checked %s", plural(q.PRs, "PR"), plural(q.Escapes, "escape"), q.Checked, word(q.Checked, "PR"))
-	if q.Escapes > 0 {
-		fmt.Fprintf(b, " (%s)", byPriority(q.P0, q.P1, q.P2, q.Unplaced))
+	fmt.Fprintf(b, "\nIn total over %s: %s at %d checked %s", plural(q.PRs, "PR"), plural(q.EscapesTotal, "escape"), q.Checked, word(q.Checked, "PR"))
+	var notes []string
+	if q.EscapesTotal > 0 {
+		notes = append(notes, byPriority(q.P0, q.P1, q.P2, q.Unplaced))
 	}
-	fmt.Fprintf(b, ", %d not yet; ", q.NotYet)
+	if q.ChecksSameHeadOnly > 0 {
+		notes = append(notes, plural(q.ChecksSameHeadOnly, "PR")+" with files compared at the same head only")
+	}
+	if len(notes) > 0 {
+		fmt.Fprintf(b, " (%s)", strings.Join(notes, "; "))
+	}
+	fmt.Fprintf(b, ", %d not yet", q.NotYet)
+	if q.NotChecked > 0 {
+		fmt.Fprintf(b, ", %d not checked", q.NotChecked)
+	}
+	if q.ChecksUnrecorded > 0 {
+		fmt.Fprintf(b, ", %d whose findings magnum did not record", q.ChecksUnrecorded)
+	}
+	b.WriteString("; ")
 	if q.FixPushes != nil {
 		fmt.Fprintf(b, "%s (%s); ", plural(*q.FixPushes, "fix push"), plural(*q.FixCommits, "commit"))
 	} else {
@@ -680,20 +747,36 @@ func (r Report) qualityMarkdown(b *strings.Builder) {
 	}
 	b.WriteString(".\n\nAn escape is a P0 to P2 finding of magnum's first round on the PR that posted a review after the publish, which no " +
 		"finding of the local review caught: none on its file within 3 lines, at a head where the file reads the same (a P3 is optional and " +
-		"never an escape). Not yet: magnum has posted no round on the PR since the publish. The fix pushes are those of magnum's fixers on " +
+		"never an escape). A file compared at the same head only is one git could not compare at the local finding's head and the posted " +
+		"round's (no copy of the repository on disk, git failing, or its bound running out, at the last of a check's tries): a local " +
+		"finding at another head caught nothing there. Not yet: magnum has posted no round on the PR since the publish. Not checked: the task " +
+		"ended without a check, which only a published task gets. Unknown: magnum recorded none of the findings its round's result counts. " +
+		"The fix pushes are those of magnum's fixers on " +
 		"the PR, counted from magnum's events; the CI failures are the failed heads of the PR's CI as magnum last read it, one per head.\n")
 }
 
-// escapesWords is a task's escapes in the quality table: "not yet" before
-// a check, "none of 4 posted", or "2 of 4 posted (P0 0, P1 1, P2 1)".
-func escapesWords(e *Escapes) string {
+// escapesWords is a task's escapes in the quality table: "not yet" or
+// "not checked" without a check, "unknown: ..." for a check whose round's
+// findings magnum did not record, "none of 4 posted", or "2 of 4 posted
+// (P0 0, P1 1, P2 1)", with the files compared at the same head only after.
+func escapesWords(q Quality) string {
+	e := q.Escapes
 	switch {
+	case q.EscapesState == EscapesNotChecked:
+		return "not checked"
 	case e == nil:
 		return "not yet"
-	case e.Total() == 0:
-		return fmt.Sprintf("none of %d posted", e.Posted)
+	case q.EscapesState == EscapesUnrecorded:
+		return fmt.Sprintf("unknown: magnum recorded none of the %s its round counts", plural(e.Unrecorded, "P0 to P2 finding"))
 	}
-	return fmt.Sprintf("%d of %d posted (%s)", e.Total(), e.Posted, byPriority(e.P0, e.P1, e.P2, e.Unplaced))
+	s := fmt.Sprintf("none of %d posted", e.Posted)
+	if e.Total() > 0 {
+		s = fmt.Sprintf("%d of %d posted (%s)", e.Total(), e.Posted, byPriority(e.P0, e.P1, e.P2, e.Unplaced))
+	}
+	if e.SameHeadOnly > 0 {
+		s += "; " + plural(e.SameHeadOnly, "file") + " compared at the same head only"
+	}
+	return s
 }
 
 // byPriority is escapes by priority, those with no line after.
