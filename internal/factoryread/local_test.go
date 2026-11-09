@@ -121,3 +121,35 @@ func TestLocalReviewSaysWhatIsMissingAndWritesNothing(t *testing.T) {
 		t.Error("the read changed the WAL")
 	}
 }
+
+// A task's Codex mark is read with its rounds (LocalTask.CodexNever, frozen with a local case), and
+// TaskCodex reads it alone with the task's published PR, for the replay's check: none until the
+// factory marks it and publishes it; ErrNoTask and ErrNoRegistry as LocalReview says them.
+func TestTaskCodexReadsTheFactorysCodexMarkAndThePublishedPR(t *testing.T) {
+	path := fixture(t, localTask("1"), localTask("2"), startedCycle("1", "1", opened, "2026-11-05T09:00:00Z"))
+	ctx := context.Background()
+	if never, pr, err := TaskCodex(ctx, path, 1); err != nil || never || pr != "" {
+		t.Fatalf("unmarked: %v, %q, %v", never, pr, err)
+	}
+	if lt, err := LocalReview(ctx, path, 1); err != nil || lt.CodexNever {
+		t.Fatalf("unmarked task %+v, %v", lt, err)
+	}
+	path = fixture(t, localTask("1"), localTask("2"), startedCycle("1", "1", opened, "2026-11-05T09:00:00Z"),
+		`UPDATE tasks SET codex_never = 1 WHERE id = 1`,
+		`INSERT INTO pr_links (task_id, repo, number, opened_at) VALUES (1, 'example/example', 7, '2026-11-05T12:00:00Z')`)
+	if never, pr, err := TaskCodex(ctx, path, 1); err != nil || !never || pr != "example/example#7" {
+		t.Fatalf("marked and published: %v, %q, %v", never, pr, err)
+	}
+	if lt, err := LocalReview(ctx, path, 1); err != nil || !lt.CodexNever {
+		t.Fatalf("marked task %+v, %v", lt, err)
+	}
+	if never, pr, err := TaskCodex(ctx, path, 2); err != nil || never || pr != "" {
+		t.Fatalf("the other task: %v, %q, %v", never, pr, err)
+	}
+	if _, _, err := TaskCodex(ctx, path, 9); !errors.Is(err, ErrNoTask) {
+		t.Errorf("task 9: %v, want ErrNoTask", err)
+	}
+	if _, _, err := TaskCodex(ctx, filepath.Join(t.TempDir(), "factory.db"), 1); !errors.Is(err, ErrNoRegistry) {
+		t.Errorf("no registry: %v, want ErrNoRegistry", err)
+	}
+}

@@ -2,6 +2,8 @@ package evalrun
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +20,8 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/pipeline"
+	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // questionResult is a local judge's result whose provenance raises the plan's deliberate choice as
@@ -419,4 +423,114 @@ func TestALocalReplayFetchesAMissingCommitByID(t *testing.T) {
 			t.Errorf("not fetchable: case run %+v, worktree adds %d, rounds %d", cr, len(add), len(f.rounds))
 		}
 	}
+}
+
+// factoryExec runs q on the factory's registry of layout l.
+func factoryExec(t *testing.T, l paths.Layout, q string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", l.FactoryDB()+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(q); err != nil {
+		t.Fatalf("%v\n%s", err, q)
+	}
+}
+
+// A local case whose round ran a Codex role is never replayed on a task Codex must never see again:
+// the factory marked it (Codex refused it, and the account is at stake) when the case was added or
+// since, its registry cannot say, or the PR the task published is flagged (an earlier replay of it
+// refused, or the live registry's Codex flag). Nothing is checked out and no agent starts. A round
+// that ran without Codex replays whatever the mark says.
+func TestALocalCaseOfATaskCodexMustNotSeeIsNotReplayedWithCodex(t *testing.T) {
+	o := func(f *replayFixture) Options {
+		return Options{RunDir: filepath.Join(RunsRoot(f.d.Layout), "20261109-120000"), AgentTag: "eval-test"}
+	}
+	refused := func(t *testing.T, f *replayFixture, want string) {
+		t.Helper()
+		cr := RunCase(context.Background(), f.d, localEvalCase(t), o(f))
+		if cr.Outcome != OutcomeFlagged || cr.Score != nil || !strings.Contains(cr.Error, want) || len(f.git.Calls) > 0 || len(f.rounds) > 0 {
+			t.Fatalf("case run %+v (%d git calls, %d rounds), want it refused naming %q", cr, len(f.git.Calls), len(f.rounds), want)
+		}
+		if why := Refused(context.Background(), f.d, localEvalCase(t)); !strings.Contains(why, want) {
+			t.Fatalf("Refused = %q, want %q", why, want)
+		}
+	}
+	resave := func(t *testing.T, f *replayFixture) {
+		t.Helper()
+		dir := LocalCaseDir(f.d.Layout, "task-1-round-1")
+		mustRemoveAll(t, dir)
+		if err := SaveLocalInputs(dir, f.in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("the factory's mark", func(t *testing.T) {
+		f := newReplayFixture(t, questionResult)
+		factoryExec(t, f.d.Layout, "UPDATE tasks SET codex_never = 1 WHERE id = 1")
+		refused(t, f, "Codex never works on task 1 again")
+	})
+	t.Run("the mark frozen with the case", func(t *testing.T) {
+		f := newReplayFixture(t, questionResult)
+		f.in.CodexNever = true
+		resave(t, f)
+		for _, p := range []string{f.d.Layout.FactoryDB(), f.d.Layout.FactoryDB() + "-wal", f.d.Layout.FactoryDB() + "-shm"} {
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+		}
+		refused(t, f, "Codex never works on task 1 again")
+	})
+	t.Run("a registry that cannot say", func(t *testing.T) {
+		f := newReplayFixture(t, questionResult)
+		for _, p := range []string{f.d.Layout.FactoryDB() + "-wal", f.d.Layout.FactoryDB() + "-shm"} {
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+		}
+		writeFile(t, f.d.Layout.FactoryDB(), "not a database")
+		refused(t, f, "cannot say")
+	})
+	t.Run("the published PR's live flag", func(t *testing.T) {
+		f := newReplayFixture(t, questionResult)
+		factoryExec(t, f.d.Layout, "INSERT INTO pr_links (task_id, repo, number, opened_at) VALUES (1, 'example/example', 7, '2026-11-05T12:00:00Z')")
+		st := storetest.OpenFile(t, f.d.Layout.DB())
+		ctx := context.Background()
+		repo, err := st.UpsertRepo(ctx, store.Repo{NodeID: "R_example", Owner: "example", Name: "example", Mode: store.RepoModePerPR})
+		if err != nil {
+			t.Fatal(err)
+		}
+		up, err := st.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: repo.ID, NodeID: "PR_7", Number: 7, URL: "https://github.com/example/example/pull/7",
+			HeadSHA: frozenHead, GHState: store.GHOpen, InitialState: store.PRIneligible, Identity: "zhuravel"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(engine.CodexFlag{Kind: "codex", Role: "codex-judge", Run: "r-1", At: time.Date(2026, 11, 6, 9, 30, 0, 0, time.UTC)})
+		if err := st.SetKV(ctx, store.KVPRCodexFlag(up.PR.ID), string(b)); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, f, "Codex flagged this PR")
+	})
+	t.Run("the published PR's refused replay", func(t *testing.T) {
+		f := newReplayFixture(t, questionResult)
+		factoryExec(t, f.d.Layout, "INSERT INTO pr_links (task_id, repo, number, opened_at) VALUES (1, 'example/example', 7, '2026-11-05T12:00:00Z')")
+		if err := eval.MarkFlagged(RunsRoot(f.d.Layout), eval.Flagged{Case: "published-7", PR: "example/example#7", Run: "20261107-100000", Reason: "Codex refused"}); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, f, "flagged in run 20261107-100000")
+	})
+	t.Run("a round without Codex", func(t *testing.T) {
+		f := newReplayFixture(t, questionResult)
+		factoryExec(t, f.d.Layout, "UPDATE tasks SET codex_never = 1 WHERE id = 1")
+		f.in.Roles, f.in.CodexNever, f.judgeFile = []string{"claude-review", "second-judge"}, true, "second-judge.json"
+		for i := range f.d.Config.Roles {
+			if f.d.Config.Roles[i].Name == "second-judge" {
+				f.d.Config.Roles[i].Kind, f.d.Config.Roles[i].Output = config.KindClaude, f.judgeFile
+			}
+		}
+		resave(t, f)
+		if cr := RunCase(context.Background(), f.d, localEvalCase(t), o(f)); cr.Score == nil || len(f.rounds) != 1 {
+			t.Fatalf("case run %+v, want it replayed without Codex", cr)
+		}
+	})
 }

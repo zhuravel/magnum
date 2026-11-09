@@ -98,6 +98,19 @@ func runEvalAdd(c *Context, f evalAddFlags) int {
 	w := c.Stdout
 	fmt.Fprintf(w, "froze round %d (cycle %d) of factory task %d on %s (%s, head %s, base %s; roles %s) in %s\n", in.Round, in.Cycle, in.Task,
 		in.Repo, in.Branch, textx.ShortSHA(in.HeadSHA), textx.ShortSHA(in.BaseSHA), strings.Join(in.Roles, ", "), inspTilde(dir))
+	if in.CodexNever {
+		var codex []string
+		for _, role := range in.Roles {
+			if r, ok := c.Config.RoleByNameOrAlias(nil, role); ok && r.AgentKind() == config.KindCodex {
+				codex = append(codex, role)
+			}
+		}
+		if len(codex) > 0 {
+			fmt.Fprintf(w, "Codex never works on task %d again (the factory's mark), and the round ran %s: eval run refuses the case\n", in.Task, strings.Join(codex, ", "))
+		} else {
+			fmt.Fprintf(w, "Codex never works on task %d again (the factory's mark); the round ran without Codex, so eval run replays it\n", in.Task)
+		}
+	}
 	verdict := ""
 	if res.Verdict != "" {
 		verdict = " (verdict " + res.Verdict + ")"

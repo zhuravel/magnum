@@ -181,3 +181,25 @@ func TestEvalCaseWhatNamesTheLastRoundOfItsTask(t *testing.T) {
 		t.Fatalf("evalCaseWhat = %q", got)
 	}
 }
+
+// `eval add` of a round of a task the factory marked never for Codex again says that its replay is
+// refused while the round's roles run Codex.
+func TestEvalAddSaysATasksCodexMark(t *testing.T) {
+	f := newInspFixture(t)
+	f.Ctx.Layout.UserConfig = filepath.Join(f.Home, "user", "config.toml")
+	localRoundOnDisk(t, f.Ctx.Layout)
+	db, err := sql.Open("sqlite", f.Ctx.Layout.FactoryDB()+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("UPDATE tasks SET codex_never = 1 WHERE id = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if code := execute(f.Ctx, []string{"eval", "add", "--local-task", "1", "--round", "1"}); code != 0 {
+		t.Fatalf("exit %d; stderr %s", code, f.Err)
+	}
+	if out := f.Out.String(); !strings.Contains(out, "Codex never works on task 1 again") || !strings.Contains(out, "codex-review, codex-judge") {
+		t.Fatalf("output:\n%s", out)
+	}
+}

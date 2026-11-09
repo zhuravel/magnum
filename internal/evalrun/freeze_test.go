@@ -274,3 +274,21 @@ func sameInputs(a, b LocalInputs) bool {
 		a.Repo == b.Repo && a.BaseSHA == b.BaseSHA && a.HeadSHA == b.HeadSHA && a.Branch == b.Branch && a.Base == b.Base &&
 		a.Title == b.Title && a.Body == b.Body && a.TicketMD == b.TicketMD && a.AnswersMD == b.AnswersMD
 }
+
+// A round of a task the factory marked never for Codex again is frozen with the mark, which its
+// replay then reads even if the factory's registry is gone.
+func TestFreezeLocalFreezesTheTasksCodexMark(t *testing.T) {
+	f := newFreezeFixture(t, "UPDATE tasks SET codex_never = 1 WHERE id = 1")
+	in, _, err := FreezeLocal(context.Background(), f.d, 1, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := LocalCaseDir(f.d.Layout, "task-1-round-1")
+	if err := SaveLocalInputs(dir, in); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadLocalInputs(dir)
+	if err != nil || !in.CodexNever || !got.CodexNever {
+		t.Fatalf("frozen %+v, loaded %+v, %v; want the mark", in, got, err)
+	}
+}

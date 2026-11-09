@@ -42,6 +42,10 @@ type LocalInputs struct {
 	Title   string    `json:"title"`
 	Roles   []string  `json:"roles"`
 	Frozen  time.Time `json:"frozen"`
+	// CodexNever is the factory's mark that Codex never works on the task
+	// again (factoryread.LocalTask.CodexNever) as it was when the case was
+	// added: a replay whose roles run Codex is refused on it (Refused).
+	CodexNever bool `json:"codex_never,omitempty"`
 
 	Body      string `json:"-"`
 	TicketMD  string `json:"-"`
@@ -163,8 +167,8 @@ func LoadLocalInputs(dir string) (LocalInputs, error) {
 // in several (0 = the only one). It reads, read only:
 //
 //   - the factory's registry (factoryread.LocalReview): the task's
-//     repository and branch, the cycle's head and start, and the round's
-//     roles from its begin event;
+//     repository and branch, whether Codex never works on it again, the
+//     cycle's head and start, and the round's roles from its begin event;
 //   - the round's result in the task's directory (LocalResultFile), which
 //     must be this round's and names the round's scratch directory, inside
 //     the task's local review (LocalRoot);
@@ -261,7 +265,7 @@ func FreezeLocal(ctx context.Context, d Deps, taskID int64, round, cycle int) (L
 		}
 	}
 	in := LocalInputs{Task: taskID, Round: r.Round, Cycle: r.Cycle, Repo: lt.Repo, BaseSHA: pp.BaseSHA, HeadSHA: r.Head, Branch: lt.Branch, Base: base,
-		Title: strings.TrimSpace(title), Roles: r.Roles, Frozen: d.now(), Body: strings.TrimSpace(body), TicketMD: ticket, AnswersMD: answers}
+		Title: strings.TrimSpace(title), Roles: r.Roles, Frozen: d.now(), CodexNever: lt.CodexNever, Body: strings.TrimSpace(body), TicketMD: ticket, AnswersMD: answers}
 	if err := in.check(); err != nil {
 		return fail("%v", err)
 	}

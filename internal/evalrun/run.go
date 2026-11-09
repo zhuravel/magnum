@@ -195,7 +195,10 @@ func (d Deps) warn(format string, args ...any) {
 // Refused says why case ec is not replayed ("" = it may be): an earlier
 // replay of it or of its PR, under any case name, was refused (the runs
 // root's eval.FlaggedFile, which cannot be read refuses too), or the live
-// registry holds a Codex flag for its PR (liveFlag).
+// registry holds a Codex flag for its PR (liveFlag). A local case, whose
+// synthetic PR is in no registry, is refused for Codex's sake instead when
+// its round ran a Codex role on a task Codex must not see again
+// (localCodexRefusal).
 func Refused(ctx context.Context, d Deps, ec eval.Case) string {
 	flagged, err := eval.LoadFlagged(RunsRoot(d.Layout))
 	if err != nil {
@@ -203,6 +206,9 @@ func Refused(ctx context.Context, d Deps, ec eval.Case) string {
 	}
 	if f, ok := eval.FlaggedCase(flagged, ec); ok {
 		return f.Refusal()
+	}
+	if ec.Local() {
+		return localCodexRefusal(ctx, d, ec, flagged)
 	}
 	return liveFlag(ctx, d, ec)
 }
@@ -583,9 +589,6 @@ func notesHashes(scratch paths.Layout, owner, repo string) map[string]string {
 // file is opened read-only, never created; a registry that is not there,
 // or does not know the PR, holds no flag.
 func liveFlag(ctx context.Context, d Deps, ec eval.Case) string {
-	if ec.Local() {
-		return "" // its synthetic PR is in no registry: only its own refused replays flag it
-	}
 	cannot := func(err error) string {
 		return "the registry cannot say whether Codex flagged " + ec.PR + " (" + err.Error() + "), so the case is not replayed"
 	}

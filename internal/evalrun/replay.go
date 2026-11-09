@@ -13,12 +13,14 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/eval"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/factoryread"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/slots"
@@ -58,6 +60,81 @@ func localCaseInputs(d Deps, cfg *config.Config, w *config.Watch, ec eval.Case, 
 		return in, eval.OutcomeConfigError, err
 	}
 	return in, "", nil
+}
+
+// localCodexRefusal says why local case ec is not replayed for Codex's sake
+// ("" = it may be): its round ran a Codex role (its frozen roles as d's
+// config declares them) on a task Codex must not see again. That is a task
+// the factory marked never for Codex again (Codex refused it, and the
+// account is at stake), when the case was added (LocalInputs.CodexNever)
+// or since (factoryread.TaskCodex, read only), or one whose published PR is
+// flagged: an earlier replay of it was refused (flagged, by its PR) or the
+// live registry holds a Codex flag for it (liveFlag). A factory registry
+// that cannot say refuses the case too, as liveFlag's does; one that is not
+// there, or does not hold the task, adds no mark to the frozen one. Inputs
+// it cannot read are RunCase's to report (localCaseInputs), before
+// anything starts.
+func localCodexRefusal(ctx context.Context, d Deps, ec eval.Case, flagged map[string]eval.Flagged) string {
+	in, err := LoadLocalInputs(LocalCaseDir(d.Layout, ec.Name))
+	if err != nil {
+		return ""
+	}
+	codex := codexRoles(d.Config, in.Roles)
+	if len(codex) == 0 {
+		return "" // no Codex works on the replay
+	}
+	ran := fmt.Sprintf("round %d of task %d ran %s: the case is not replayed", in.Round, in.Task, strings.Join(codex, ", "))
+	if in.CodexNever {
+		return fmt.Sprintf("Codex never works on task %d again (the factory's mark when the case was added), and %s", in.Task, ran)
+	}
+	never, pr, err := factoryread.TaskCodex(ctx, d.Layout.FactoryDB(), in.Task)
+	switch {
+	case errors.Is(err, factoryread.ErrNoRegistry), errors.Is(err, factoryread.ErrNoTask):
+		return ""
+	case err != nil:
+		return fmt.Sprintf("the factory's registry cannot say whether Codex may work on task %d (%v), and %s", in.Task, err, ran)
+	case never:
+		return fmt.Sprintf("Codex never works on task %d again (the factory's mark), and %s", in.Task, ran)
+	}
+	published, ok := prCase(pr)
+	if !ok {
+		return ""
+	}
+	if f, ok := eval.FlaggedCase(flagged, published); ok {
+		return fmt.Sprintf("task %d's PR %s was %s, and %s", in.Task, pr, f.Refusal(), ran)
+	}
+	if why := liveFlag(ctx, d, published); why != "" {
+		return fmt.Sprintf("%s; task %d published it, and %s", why, in.Task, ran)
+	}
+	return ""
+}
+
+// codexRoles are the roles among names that run on Codex as cfg declares
+// them (a Codex agent, or a shell role whose tool is Codex); every name
+// without a config to tell.
+func codexRoles(cfg *config.Config, names []string) []string {
+	if cfg == nil {
+		return slices.Clone(names)
+	}
+	var out []string
+	for _, name := range names {
+		if r, ok := cfg.RoleByNameOrAlias(nil, name); ok && r.AgentKind() == config.KindCodex {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// prCase is the posted case of pr (owner/repo#N) that Refused's checks of
+// a PR read: its PR, owner, repository and number, no name.
+func prCase(pr string) (eval.Case, bool) {
+	repo, num, ok := strings.Cut(pr, "#")
+	owner, name, ok2 := strings.Cut(repo, "/")
+	n, err := strconv.Atoi(num)
+	if !ok || !ok2 || owner == "" || name == "" || err != nil || n <= 0 {
+		return eval.Case{}, false
+	}
+	return eval.Case{PR: pr, Owner: owner, Repo: name, Number: n}, true
 }
 
 // replayLocal replays local case ec from its frozen inputs in, after

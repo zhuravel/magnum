@@ -19,12 +19,14 @@ var ErrNoTask = errors.New("the factory's registry has no such task")
 
 // LocalTask is a task of the factory as the replay of a round of its local
 // review needs it (`magnum eval add --local-task`): its repository
-// (owner/name), branch, title and Jira key, each cycle of its local review
-// the registry records (Rounds, by cycle), and when each of its answered
-// questions was answered (Answered, oldest first).
+// (owner/name), branch, title and Jira key, whether Codex never works on it
+// again (CodexNever, tasks.codex_never: Codex refused it), each cycle of its
+// local review the registry records (Rounds, by cycle), and when each of
+// its answered questions was answered (Answered, oldest first).
 type LocalTask struct {
 	ID                           int64
 	Repo, Branch, Title, JiraKey string
+	CodexNever                   bool
 	Rounds                       []LocalRound
 	Answered                     []time.Time
 }
@@ -84,8 +86,8 @@ func LocalReview(ctx context.Context, path string, taskID int64) (LocalTask, err
 		return out, fmt.Errorf("read the factory's registry: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }() // a read: nothing to keep
-	err = tx.QueryRowContext(ctx, "SELECT repo, branch, title, jira_key FROM tasks WHERE id = ?", taskID).
-		Scan(&out.Repo, &out.Branch, &out.Title, &out.JiraKey)
+	err = tx.QueryRowContext(ctx, "SELECT repo, branch, title, jira_key, codex_never FROM tasks WHERE id = ?", taskID).
+		Scan(&out.Repo, &out.Branch, &out.Title, &out.JiraKey, &out.CodexNever)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return out, fmt.Errorf("task %d: %w", taskID, ErrNoTask)
@@ -102,6 +104,41 @@ func LocalReview(ctx context.Context, path string, taskID int64) (LocalTask, err
 		return out, fmt.Errorf("read the factory's registry: %w", err)
 	}
 	return out, nil
+}
+
+// TaskCodex is what the factory's registry at path says of Codex and task
+// taskID, read only: whether Codex never works on the task again
+// (tasks.codex_never, which the factory sets when Codex refuses it: the
+// account is at stake) and the PR the task published (pr_links,
+// "owner/repo#N"; "" before its publish). The replay of a local case reads
+// it before anything starts (evalrun.Refused). A registry that does not
+// exist is ErrNoRegistry, a task it does not hold ErrNoTask; one that cannot
+// be read is another error.
+func TaskCodex(ctx context.Context, path string, taskID int64) (never bool, pr string, err error) {
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		return false, "", ErrNoRegistry
+	} else if err != nil {
+		return false, "", fmt.Errorf("the factory's registry: %w", err)
+	}
+	db, err := sql.Open("sqlite", dsn(path))
+	if err != nil {
+		return false, "", fmt.Errorf("open the factory's registry: %w", err)
+	}
+	defer db.Close()
+	var repo sql.NullString
+	var number sql.NullInt64
+	err = db.QueryRowContext(ctx, "SELECT t.codex_never, l.repo, l.number FROM tasks t LEFT JOIN pr_links l ON l.task_id = t.id WHERE t.id = ?", taskID).
+		Scan(&never, &repo, &number)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, "", fmt.Errorf("task %d: %w", taskID, ErrNoTask)
+	case err != nil:
+		return false, "", fmt.Errorf("read the factory's registry: %w", err)
+	}
+	if repo.Valid && repo.String != "" && number.Int64 > 0 {
+		pr = fmt.Sprintf("%s#%d", repo.String, number.Int64)
+	}
+	return never, pr, nil
 }
 
 // cycles are task taskID's review cycles, by number.

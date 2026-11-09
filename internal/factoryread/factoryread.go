@@ -4,7 +4,8 @@
 // task's directory, for the review retro (DECISIONS "The review retro tags
 // factory-origin misses and their stage"); and a task's local review rounds,
 // their heads, roles and the times of its answers, for the replay of a round
-// as an eval case (LocalReview, `magnum eval add --local-task`). It only
+// as an eval case (LocalReview, `magnum eval add --local-task`), and a
+// task's Codex mark and published PR before its replay (TaskCodex). It only
 // reads: the registry is opened read only (mode=ro, never created, so
 // nothing writes its file or its WAL), with a busy timeout, and closed after
 // each read; a task's files are read inside an os.Root of its directory. It
