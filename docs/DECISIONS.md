@@ -21853,15 +21853,27 @@ skill versions); people add theirs to the sections before it, at the end of the 
   agents' TestTheSkillReadsTheFactorysPlanAsItsGuessNotThePersonsIntent pins the new sentence; the proof is the
   same eval case replayed on this skill.
 
-- **The factory's Codex roles yield to magnum's real reviews at the Codex soft cap, a usage limit hands a Codex
-  role to its fallback at once, and four fixes of the failed-quit wait** (2026-11-09, the operator's call at
-  Codex 95% with about 5 points left, and the re-review of the refused-files round; fix round 1 of its review
-  folded in).
+- **A staging deploy counts every db migrate directory's files as migrations, not only db/migrate's** (2026-11-09).
+  Before the first real deploy (talkable#12204, which carries #12203), its dry run named no migration, although
+  #12203 adds `db/sharded_migrate/20261105011921_add_metric_indexes_to_custom_activities.rb`, which changes indexes
+  of a shared table. `isMigration` matched only `db/migrate/`, so the y/N under-reported what Jenkins would run on the
+  shared databases, and the refusal of a merge that now brings a migration the question did not name missed sharded
+  ones too. A migration is now any file the merge adds under a `db/` directory's child whose name holds `migrate`
+  (`db/migrate`, `db/sharded_migrate`, `db/data_migrate`), the root's or an engine's: Jenkins runs each kind, so a name
+  too many in the question is safe and a missing one is not. Rejected: a configurable glob per repository (no
+  repository needs another shape today; the default covers both talkable's kinds). Tests: staging's
+  TestAMigrationIsAnyFileUnderADbMigrateDirectory and TestThePlanNamesAShardedMigration (a PR in the deploy world that
+  adds only a sharded migration).
+
+- **The factory's Codex roles yield to magnum's real reviews at the Codex soft cap, a usage limit hands a Codex role
+  to its fallback at once, and four fixes of the failed-quit wait** (2026-11-09, the operator's call at Codex 95%
+  with about 5 points left, and the re-review of the refused-files round; fix rounds 1 and 2 of its review folded
+  in).
   - Why. The local review already yields at `[usage] codex_soft` (`codexSoft`), and the runtime's launch gate made a
-    stage with a Codex role wait at that cap, but a wait is all it did: the whole stage stood still until the
-    window reset, and a stage launched under the cap spent Codex to the end. Today a critic follows every plan and
-    a Codex twin reads every feature's points, so a factory task could spend the week's last points, which the
-    operator's reviews need, or stall for days on the weekly window.
+    stage with a Codex role wait at that cap, but a wait is all it did: the whole stage stood still until the window
+    reset, and a stage launched under the cap spent Codex to the end. Today a critic follows every plan and a Codex
+    twin reads every feature's points, so a factory task could spend the week's last points, which the operator's
+    reviews need, or stall for days on the weekly window.
   - The yield. Before an agents stage launches, `yieldAtLaunch` asks `codexYield`: Codex paused on a usage limit a
     run hit (the runtime's pause, `Runtime.Paused`, which its reset lifts), or the budget at or past `codex_soft`
     (`codexUsage`, the read `codexSoft` now shares). Then each Codex role with a Claude `codex_fallback` runs as it
@@ -21869,49 +21881,65 @@ skill versions); people add theirs to the sections before it, at the end of the 
     runs already sits out (fx-points-codex: fx-points ends the stage alone), its files of an earlier attempt set
     aside as `<name>.stale` so the judge never reads them as this attempt's. Nothing marks the task: the yield is
     the attempt's, and a later stage or attempt launches Codex again once the budget is below the cap. A Codex role
-    with no Claude fallback holds the launch, the task waiting on the budget in the local review's words
-    (`codex at 95%, at or past [usage] codex_soft 80%, and magnum's reviews come first; fx-x has no codex_fallback to
-    run in its place, so the investigate stage waits`). A read that fails launches as before (the runtime's gate
-    reads again) and logs once until a read goes through. A launch a hold of the machine refuses reads no budget
-    (it waits on the hold anyway).
-  - The attempt's record. The choice is made once per attempt, and its stage events are its record: each yield's
-    is written before anything launches (`sayYield`), and the rebuild reads them back (`attemptYields`). An attempt
-    that recorded a yield, or started a role (a role run of it), never decides again (`agentsRun.decided`), so a
-    launch that failed part-way and is tried again after the budget crossed the cap never starts a Codex role beside
-    its fallback on the same file. Before (the review's M2), the rebuild worked the yield out from the role runs:
-    a lost launch record rebuilt the yielded role on Codex, waiting forever on a session that would never come, and
-    a part-launch tried again could flip. A yielded role whose fallback the attempt cannot prove it launched (a role
-    run or a prompt) is relaunched by the rebuild, which adopts an agent already live.
+    with no Claude fallback holds the launch, the task waiting on the budget in the local review's words (`codex at
+    95%, at or past [usage] codex_soft 80%, and magnum's reviews come first; fx-x has no codex_fallback to run in
+    its place, so the investigate stage waits`). A read that fails launches as before (the runtime's gate reads
+    again) and logs once until a read goes through. A launch a hold of the machine refuses reads no budget (it waits
+    on the hold anyway).
+  - The attempt's record. A yield is the attempt's for good, and its stage event is its record: written before
+    anything launches (`sayYield`), read back by a launch tried again and by the rebuild (`attemptYields`), whatever
+    the budget says then. A record that fails to write holds the launch (its error fails the pass, and the next one
+    writes it), so no restart rebuilds a yielded role on Codex with no session to prompt. A Codex role with no
+    record is decided again at each try of the launch, since no prompt has gone to anyone while the attempt
+    launches: a launch cut part-way under the cap and tried again at it yields the role, and the Codex session it
+    started before the cut (a role run of it) is quit, idle, so the stage never waits for the budget's reset while a
+    fallback exists. Before, round 1's rule held the attempt decided once any role had a role run, a Claude role's
+    too, and the retry at the cap waited on the runtime's gate until the window reset (the second review's R2-M1);
+    and a record that failed to write left a rebuilt role on Codex prompted for good (R2-M2). Round 0 worked the
+    yield out from the role runs, so a lost launch record or a part-launch could flip it (the first review's M2). A
+    yielded role whose fallback the attempt cannot prove it launched (a role run or a prompt) is relaunched by the
+    rebuild, which adopts an agent already live. A launch that waits (`ErrHeld`) keeps the stage's state; one that
+    failed is rebuilt from the role runs (R2-N2).
   - A usage limit mid-run. Before, a Codex run that ended on its limit (health `usage_limit`, or a model limit no
     fallback model took) paused its role: the run abandoned as paused, the kind paused until the named reset (else
-    an hour), and the role's prompt to go on sent then. No work was lost, but the stage stalled until the reset,
-    for the weekly window days. The pause stays (every other Codex launch and prompt waits on it, and a new stage
-    yields to it), and the role is handed over at once (`handOver`): its fallback launches with its first prompt,
-    which names what the role's own run wrote in the attempt as its work so far, to go on from (`limitNote`), or
-    the twin sits out. A Codex role whose next prompt waits on that pause (another run's limit) is handed over the
-    same way, never left waiting for the reset (the review's M3). The handover's event is written at once, so a
-    restart before the fallback's launch keeps it, also for a limit Codex showed as a dialog, whose run stays in
-    flight (M1). No refusal: the files stay where they are, nothing is set aside, the task is not marked and no
-    quit holds the stage. The limited session is quit once (`QuitRole`), its runs in flight abandoned first with
-    the pause as their reason, also when you are in its pane (`quitSessions` abandons before it looks for you: the
-    abandon is the agents store's, no key in your pane), so the watchdog takes no step of them when the pause
-    lifts; a quit that fails is a fail event only. A run of the role on Codex is no run of it any more: a late end
-    of one is no end of the role. A Codex role with no fallback still pauses until the reset, and a login lapse or
-    an overload pauses as before.
-  - The fallback's own end (the review's I1). The limited run's file stays, but it is no end of the fallback's
-    turn: a role whose fallback runs in its place for Codex's budget holds its end only on files written after the
+    an hour), and the role's prompt to go on sent then. No work was lost, but the stage stalled until the reset, for
+    the weekly window days. The pause stays (every other Codex launch and prompt waits on it, and a new stage yields
+    to it), and the role is handed over at once (`handOver`): its fallback launches with its first prompt, which
+    names what the role's own run wrote in the attempt as its work so far, to go on from (`limitNote`), or the twin
+    sits out, its files of an earlier attempt set aside as `<name>.stale` and its event claiming no work it did not
+    write in the attempt (R2-N1). A Codex role whose next prompt waits on that pause (another run's limit) is handed
+    over the same way, never left waiting for the reset (the review's M3). The handover's event is written at once,
+    so a restart before the fallback's launch keeps it, also for a limit Codex showed as a dialog, whose run stays
+    in flight (M1). No refusal: the files stay where they are, nothing is set aside, the task is not marked and no
+    quit holds the stage. The limited session is quit once (`QuitRole`), its runs in flight abandoned first with the
+    pause as their reason, also when you are in its pane (`quitSessions` abandons before it looks for you: the
+    abandon is the agents store's, no key in your pane), so the watchdog takes no step of them when the pause lifts;
+    a quit that fails is a fail event only. A run of the role on Codex is no run of it any more: a late end of one
+    is no end of the role, and a late event of the session the handover left (its limit shown again by a dialog's
+    new spell or a restart) reaches no fallback, where it was the fallback's "go on" prompt (R2-M4). The abandon at
+    a quit also reaches a sibling Codex role at a refusal's first try with you in a pane (the cooldown is the
+    task's): its run is abandoned and it runs again as its fallback, its files set aside as refused, as `QuitCodex`
+    says a Codex agent at work on the task must stop; only a stage of two Codex roles, which no built-in kind has,
+    meets it (R2-N3). A Codex role with no fallback still pauses until the reset, and a login lapse or an overload
+    pauses as before.
+  - The fallback's own end (the review's I1). The limited run's file stays, but it is no end of the fallback's turn:
+    a role whose fallback runs in its place for Codex's budget holds its end only on files written after the
     fallback's first prompt (`roleEnd`, `stageRole.placeSince`, rebuilt from the ledger's first prompt to the
     fallback), so a fallback that ends without writing gets its one nudge, which says the file is what the Codex run
     left (`write it whole in your turn`), and the stage does not pass on a half-checked cause or a half-written
-    critique. A twin that sits out after its limit has no turn of a fallback to hold: its file stays for the judge,
-    whose prompt now says that such a second reader's findings may be unfinished, so it relies only on what it
-    checked against the code.
+    critique. Its first prompt names every file the role's own run wrote in the attempt, its questions file included
+    (`limitNote` over `refusedFiles`), and its questions count from that prompt too (`roleAsks` reads them from
+    `endSince`), so a question the cut run wrote is never asked of you, and the nudge for a questions file says `[]`
+    for none (R2-M3). A twin that sits out after its limit has no turn of a fallback to hold: its file stays for the
+    judge, whose prompt names it (`PromptData.SatOut`: the findings file of each second reader that sat out the
+    newest attempt of a findings stage, and is still there) as left as it stood, perhaps unfinished, so the judge
+    relies only on what of it it checked against the code; a task none of whose readers sat out reads no such line.
   - What it says. `<fallback> runs in <role>'s place in attempt <n> of the <stage> stage: <why>` or `<role> sits out
-    attempt <n> of the <stage> stage: <why>`, once per role and attempt (`sayYield`, `saidOnce`), and the task card's
-    AGENTS line (`AgentsNote`, `yieldNote`, from the stage events of a task at work or waiting on you) names who ran
-    in whose place, or sat out, and why, in each stage's newest attempt (a retried stage that now runs on Codex says
-    nothing of the attempt it replaced), those of one cause under it once. The row counts a role done by its
-    fallback's run when the current attempt's events record its yield, a handover after the role itself launched
+    attempt <n> of the <stage> stage: <why>`, once per role and attempt (`sayYield`, `saidOnce`), and the task
+    card's AGENTS line (`AgentsNote`, `yieldNote`, from the stage events of a task at work or waiting on you) names
+    who ran in whose place, or sat out, and why, in each stage's newest attempt (a retried stage that now runs on
+    Codex says nothing of the attempt it replaced), those of one cause under it once. The row counts a role done by
+    its fallback's run when the current attempt's events record its yield, a handover after the role itself launched
     too, and a role that yielded is no role still to run. The questions gate names questions.json's raiser by the
     role runs whether or not the task is marked (`reportRan`), so a Codex judge that yielded raises its questions
     under its fallback's name.
@@ -21935,42 +21963,38 @@ skill versions); people add theirs to the sections before it, at the end of the 
   limited run's files as a refused run's (they are its own work, which the fallback goes on from); letting the
   fallback's end hold on them (an unfinished investigation passed as finished, unseen); leaving the twin's
   unfinished file out of the judge's reading (the file stays where it is, and the judge is told instead); deciding
-  the yield again at each try of a launch, or reading it back from the role runs (a part-launch could start Codex
-  beside its fallback, and a lost launch record rebuilt the role on Codex); waiting for the limited session's quit
-  before the fallback launches (it stopped at its limit and writes nothing more, so a failed quit would only stall
-  the task); yielding a role whose fallback is on Codex too (it spends the same budget). Tests: the factory's
-  TestAtTheCodexSoftCapFxCauseClaudeRunsInFxCausesPlace (under, at and past the cap, a restart),
-  TestAtTheCodexSoftCapFxCriticClaudeRunsInEachCriticsPlace, TestAtTheCodexSoftCapTheTwinSitsOutAndFxPointsEndsTheStage
-  (with and without a restart), TestAtTheCodexSoftCapACodexRoleWithoutAFallbackWaits,
-  TestAFailedCodexBudgetReadLaunchesAsBeforeAndLogsOnce, TestALaunchAHoldRefusesReadsNoCodexBudget,
-  TestWhileCodexIsPausedOnItsUsageLimitANewStagesCodexRoleYields, TestACodexUsageLimitHandsTheRoleToItsFallback (an
-  investigation and a critic, a restart before the handover and after the fallback's prompt: the files kept, no
-  mark, no refusal's quit, the fallback's nudge for a file it did not write, its pass on one it did; it replaces the
-  first round's TestACodexUsageLimitHandsFxCauseToItsFallback, which passed the stage on the limited run's file),
-  TestACodexUsageLimitOfTheTwinLeavesFxPointsToEndTheStage, TestADialogsUsageLimitKeepsItsHandoverAcrossARestart,
-  TestAnAttemptKeepsItsYieldAcrossARestartAndARetriedLaunch (a lost launch record, a part-launch either way),
-  TestAPromptThatWaitsOnCodexsUsagePauseHandsTheRoleOver, TestAYieldTakesNoEarlierAttemptsFileForThisOnes,
-  TestTheJudgeIsToldASecondReadersFindingsMayBeUnfinished,
-  TestATwinsFailedQuitWaitsOutTheCooldownFromWhenItHoldsTheStage, TestAFailedQuitCountsAgainAfterTheHerdrHold (a
-  real hold: a `HerdrUp` that fails, then lifts; it replaces TestAFailedQuitNeverGoesToYouUnderTheHerdrHold),
-  TestARefusalInAPassThatGoesToYouSetsItsFilesAsideAtOnce,
+  the yield again at each try of a launch for a role it was recorded for, or reading it back from the role runs (a
+  part-launch could start Codex beside its fallback, and a lost launch record rebuilt the role on Codex); keeping
+  the attempt decided once any role started (round 1: a part-launch retried at the cap waited for the reset);
+  inferring a lost record from the role runs (a record the launch waits for leaves nothing to infer); a fixed line
+  in the judge's prompt (it named no file, and spoke of readers that never sat out); waiting for the limited
+  session's quit before the fallback launches (it stopped at its limit and writes nothing more, so a failed quit
+  would only stall the task); yielding a role whose fallback is on Codex too (it spends the same budget). Tests: the
+  factory's TestAtTheCodexSoftCapFxCauseClaudeRunsInFxCausesPlace (under, at and past the cap, a restart),
+  TestAtTheCodexSoftCapFxCriticClaudeRunsInEachCriticsPlace,
+  TestAtTheCodexSoftCapTheTwinSitsOutAndFxPointsEndsTheStage (with and without a restart),
+  TestAtTheCodexSoftCapACodexRoleWithoutAFallbackWaits, TestAFailedCodexBudgetReadLaunchesAsBeforeAndLogsOnce,
+  TestALaunchAHoldRefusesReadsNoCodexBudget, TestWhileCodexIsPausedOnItsUsageLimitANewStagesCodexRoleYields,
+  TestACodexUsageLimitHandsTheRoleToItsFallback (an investigation and a critic, a restart before the handover and
+  after the fallback's prompt: the files kept, no mark, no refusal's quit, the fallback's nudge for a file it did
+  not write, its pass on one it did; it replaces the first round's TestACodexUsageLimitHandsFxCauseToItsFallback,
+  which passed the stage on the limited run's file), TestACodexUsageLimitOfTheTwinLeavesFxPointsToEndTheStage,
+  TestADialogsUsageLimitKeepsItsHandoverAcrossARestart, TestAnAttemptKeepsItsYieldAcrossARestartAndARetriedLaunch (a
+  lost launch record, a yield then the budget below the cap, a Claude role or the Codex role started under the cap
+  then the budget at it; the fake launch holds a Codex role at the cap with the runtime's own rule,
+  `runtime.CodexBudgetWait`), TestAPromptThatWaitsOnCodexsUsagePauseHandsTheRoleOver,
+  TestAYieldTakesNoEarlierAttemptsFileForThisOnes (a twin handed over before it wrote too),
+  TestTheJudgeIsToldWhichSecondReadersFindingsMayBeUnfinished, TestAYieldWhoseRecordFailsToWriteHoldsTheLaunch (a
+  trigger that fails the event's write), TestAHandoverNamesTheQuestionsFileTheCodexRunLeft (the fallback writes its
+  findings only, or nothing), TestALateUsageLimitOfALeftCodexSessionNeverReachesTheFallback (with and without a
+  restart), TestATwinsFailedQuitWaitsOutTheCooldownFromWhenItHoldsTheStage,
+  TestAFailedQuitCountsAgainAfterTheHerdrHold (a real hold: a `HerdrUp` that fails, then lifts; it replaces
+  TestAFailedQuitNeverGoesToYouUnderTheHerdrHold), TestARefusalInAPassThatGoesToYouSetsItsFilesAsideAtOnce,
   TestARefusalInAPassThatSuspendsTheStageSetsItsFilesAsideAtOnce, TestTheCardSaysWhichRoleRanInWhosePlaceAndWhy (a
   replaced attempt says nothing; a handed-over role counts done) and
   TestAJudgeThatRanAsItsFallbackRaisesItsQuestionsUnderThatName (with and without the mark); the runtime's
   TestObserveReportsAUsageLimitAsPausedNotFailed (`Paused`) and TestQuitRoleQuitsOnlyThatRolesSessions (its runs
   abandoned with you in its pane); config's TestACriticStageNamesExactlyOneRole. No new dependencies.
-
-- **A staging deploy counts every db migrate directory's files as migrations, not only db/migrate's** (2026-11-09).
-  Before the first real deploy (talkable#12204, which carries #12203), its dry run named no migration, although
-  #12203 adds `db/sharded_migrate/20261105011921_add_metric_indexes_to_custom_activities.rb`, which changes indexes
-  of a shared table. `isMigration` matched only `db/migrate/`, so the y/N under-reported what Jenkins would run on the
-  shared databases, and the refusal of a merge that now brings a migration the question did not name missed sharded
-  ones too. A migration is now any file the merge adds under a `db/` directory's child whose name holds `migrate`
-  (`db/migrate`, `db/sharded_migrate`, `db/data_migrate`), the root's or an engine's: Jenkins runs each kind, so a name
-  too many in the question is safe and a missing one is not. Rejected: a configurable glob per repository (no
-  repository needs another shape today; the default covers both talkable's kinds). Tests: staging's
-  TestAMigrationIsAnyFileUnderADbMigrateDirectory and TestThePlanNamesAShardedMigration (a PR in the deploy world that
-  adds only a sharded migration).
 
 ## Learned rules
 

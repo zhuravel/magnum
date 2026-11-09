@@ -735,7 +735,7 @@ func (e *Engine) roleAsks(ctx context.Context, t registry.Task, st config.Factor
 	if name == "" || run.turn.gate || (end == nil && e.laterQuestionsGate(t, st)) || (end != nil && end.file == name) {
 		return askNone, nil
 	}
-	qs, p := readQuestions(dir, name, run.since(a))
+	qs, p := readQuestions(dir, name, r.endSince(run.since(a))) // a yielded role's: none its Codex run left before its fallback's turn
 	if p != nil || len(qs) == 0 {
 		return askNone, nil
 	}

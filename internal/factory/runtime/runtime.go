@@ -835,17 +835,30 @@ func (r *Runtime) gate(ctx context.Context, role config.Role) (level int, err er
 		}
 		return level, nil
 	}
+	if w := CodexBudgetWait(u, snap, r.now()); w != nil {
+		return level, w
+	}
+	return level, nil
+}
+
+// CodexBudgetWait is the wait of a launch of a Codex role while Codex's
+// budget snap is at or past [usage] codex_soft (or codex_hard), now being
+// the clock's time ("codex at 96%, waits till 16:00", until the binding
+// window's reset when snap names one); nil below the caps. Runtime.Launch
+// holds every Codex role on it, so a stage's yield (the engine's) comes
+// before the launch.
+func CodexBudgetWait(u config.Usage, snap usage.Snapshot, now time.Time) *WaitError {
 	if usage.Decide(snap, u.CodexSoft, u.CodexHard) == usage.OK {
-		return level, nil
+		return nil
 	}
 	reset := binding(snap).ResetsAt
 	what := fmt.Sprintf("codex at %.0f%%", snap.Used())
 	if !reset.IsZero() {
-		what += ", waits till " + r.clock(reset)
+		what += ", waits till " + clockAt(reset, now)
 	} else {
 		what += fmt.Sprintf(", waits till it is below %.0f%%", u.CodexSoft)
 	}
-	return level, &WaitError{Who: "usage", What: what, Until: reset}
+	return &WaitError{Who: "usage", What: what, Until: reset}
 }
 
 // binding is the window of snap that runs out first.
@@ -858,8 +871,10 @@ func binding(snap usage.Snapshot) usage.Window {
 
 // clock is t as a wait says it: "16:00" today, "Mon 16:00" another day, in
 // the runtime clock's zone.
-func (r *Runtime) clock(t time.Time) string {
-	now := r.now()
+func (r *Runtime) clock(t time.Time) string { return clockAt(t, r.now()) }
+
+// clockAt is t as a wait says it at now (Runtime.clock).
+func clockAt(t, now time.Time) string {
 	t = t.In(now.Location())
 	if y, m, d := t.Date(); y == now.Year() && m == now.Month() && d == now.Day() {
 		return t.Format("15:04")

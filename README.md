@@ -979,9 +979,10 @@ The `[usage]` section watches the Codex budget, which Magnum reads from Codex's 
 (default 80) automatic full re-reviews wait (`re-review · Codex soft cap` on the board), since a full
 re-review costs about twice a first review and finds no more; first reviews, delta checks, re-reviews of
 the same head, reply rounds, a review request and `magnum review` still run. At `codex_hard` (default 95)
-every round that needs Codex waits until the budget is below it again. The factory reads the same budget: at
-`codex_soft` its local review waits, and its stages' Codex roles yield, each running as its Claude
-`codex_fallback` (see [Factory](#factory-writing-code-from-a-jira-key-or-a-prompt), Roles). `magnum status`
+every round that needs Codex waits until the budget is below it again. The factory reads the same budget (at
+each launch of a stage with a Codex role, and each pass of a local review that runs one): at `codex_soft` its
+local review waits, and its stages' Codex roles yield, each running as its Claude `codex_fallback` (see
+[Factory](#factory-writing-code-from-a-jira-key-or-a-prompt), Roles). `magnum status`
 and the tab bar show the gauge (`codex 87%`); `0` turns a cap off. The reading can be stale: after a switch to
 another Codex account the newest session file still carries the old account's limits, and no Codex session runs
 to refresh it while the kind is paused, or at the soft cap while every round waiting is a full re-review.
@@ -4144,32 +4145,36 @@ stages = [
   you itself, and its lift starts the quit's counts again, so the first failed try after it is a wait. The words
   say what to do: leave the task's panes, or close its Codex panes in herdr, then retry the task.
   The Codex roles also yield to magnum's real reviews, which come first on the Codex budget. Before a stage
-  launches, while Codex is at or past `[usage] codex_soft` (read as the local review reads it) or paused on a
-  usage limit one of the factory's runs hit, each Codex role of the stage runs as its `codex_fallback`:
-  `fx-cause-claude` in `fx-cause`'s place, `fx-critic-claude` in either critic's, and the twin `fx-points-codex`
-  sits out, `fx-points` ending the stage alone. Nothing marks the task: a later stage launches its Codex roles
-  again once the budget is below the cap, and a stage launched on Codex keeps its sessions. A Codex role with no
-  Claude fallback holds its stage's launch, and the task waits on the budget (`usage: codex at 95%, at or past
-  [usage] codex_soft 80%, and magnum's reviews come first; fx-x has no codex_fallback to run in its place, so the
-  investigate stage waits`) until it is below the cap. A budget that cannot be read launches as before (the
-  runtime's launch reads it again) and is logged once while the reads fail. The choice is the attempt's, made
-  once: its stage events record it before anything launches, so a launch tried again (one that failed part-way)
-  and a restart keep it, whatever the budget says then, and an attempt that started a role on Codex keeps Codex.
-  A Codex run that hits its usage limit in a stage, or a Codex role whose next prompt waits on that limit's pause,
-  hands its role over the same way, at once, where it used to pause the role until the limit's reset: its fallback
-  launches, and its first prompt names what the role's own run wrote in the attempt as its work so far, to go on
-  from; or the twin sits out. That is no refusal: the files stay where they are, the task is not marked, and no
-  quit holds the stage (the limited session is quit once, its runs abandoned first, also when you are in its pane,
-  and a quit that fails is a fail event only). But they are no end of the fallback's turn: its end holds only on
-  files it writes after its first prompt, so a fallback that ends without writing gets its one nudge, which says
-  the file is what the Codex run left. A twin that sits out leaves what it wrote for the judge, whose prompt says
-  such a second reader's findings may be unfinished, and a twin that sits out a later attempt at the soft cap has
-  its earlier attempt's files set aside as `<name>.stale`. A Codex role with no fallback still pauses at its limit
-  until the reset, and a login lapse or an overload pauses as before. A `<fallback> runs in <role>'s place in
-  attempt <n> of the <stage> stage: <why>` or `<role> sits out attempt <n> of the <stage> stage: <why>` event says
-  each, once per role and attempt, and the task card's AGENTS line names who ran in whose place, or sat out, and
-  why, in each stage's newest attempt (`fx-cause-claude in fx-cause's place: codex at 95%, at or past [usage]
-  codex_soft 80%`); the row counts such a role done once its fallback is.
+  launches, while Codex is at or past `[usage] codex_soft` (read as the local review reads it) or paused on a usage
+  limit one of the factory's runs hit, each Codex role of the stage runs as its `codex_fallback`: `fx-cause-claude`
+  in `fx-cause`'s place, `fx-critic-claude` in either critic's, and the twin `fx-points-codex` sits out, `fx-points`
+  ending the stage alone. Nothing marks the task: a later stage launches its Codex roles again once the budget is
+  below the cap, and a stage launched on Codex keeps its sessions. A Codex role with no Claude fallback holds its
+  stage's launch, and the task waits on the budget (`usage: codex at 95%, at or past [usage] codex_soft 80%, and
+  magnum's reviews come first; fx-x has no codex_fallback to run in its place, so the investigate stage waits`)
+  until it is below the cap. A budget that cannot be read launches as before (the runtime's launch reads it again)
+  and is logged once while the reads fail. A yield is the attempt's for good: its stage event records it before
+  anything launches (a record that fails to write holds the launch until one is written), so a launch tried again
+  and a restart keep it, whatever the budget says then. A Codex role with no yield recorded is decided again at each
+  try of the launch, since no prompt has gone to anyone yet: a launch cut part-way under the cap and tried again at
+  it yields the role and quits the Codex session it started, so the stage never waits for the budget's reset while a
+  fallback exists. A Codex run that hits its usage limit in a stage, or a Codex role whose next prompt waits on that
+  limit's pause, hands its role over the same way, at once, where it used to pause the role until the limit's reset:
+  its fallback launches, and its first prompt names every file the role's own run wrote in the attempt (its
+  findings, its questions file, a critic's `critic.md`) as its work so far, to go on from; or the twin sits out.
+  That is no refusal: the files stay where they are, the task is not marked, and no quit holds the stage (the
+  limited session is quit once, its runs abandoned first, also when you are in its pane, and a quit that fails is a
+  fail event only; a later event of that session, its limit shown again, reaches no fallback). But they are no end
+  of the fallback's turn: its end and its questions count only from its first prompt, so a fallback that ends
+  without writing gets its one nudge, which says the file is what the Codex run left (`[]` for a questions file with
+  none), and no question the cut run wrote is asked of you. A twin that sits out leaves what it wrote for the judge,
+  whose prompt names that findings file as perhaps unfinished, and a twin that sits out, at the soft cap or at a
+  handover, has its earlier attempt's files set aside as `<name>.stale`. A Codex role with no fallback still pauses
+  at its limit until the reset, and a login lapse or an overload pauses as before. A `<fallback> runs in <role>'s
+  place in attempt <n> of the <stage> stage: <why>` or `<role> sits out attempt <n> of the <stage> stage: <why>`
+  event says each, once per role and attempt, and the task card's AGENTS line names who ran in whose place, or sat
+  out, and why, in each stage's newest attempt (`fx-cause-claude in fx-cause's place: codex at 95%, at or past
+  [usage] codex_soft 80%`); the row counts such a role done once its fallback is.
   To run a role on Claude instead, set `kind = "claude"` in a
   `[[factory.role]]` of its name (the entry is then unused and `magnum config` says so), and to drop an
   entry write it with an empty value: `codex_fallback = { fx-cause = "" }`. `fx-liaison` is the one role

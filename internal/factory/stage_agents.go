@@ -122,6 +122,11 @@ type PromptData struct {
 	// which the prompts of the roles that ask the operator questions name;
 	// "" while no read of them went through.
 	MergeMethods string
+	// SatOut are, in a stage that ends on the judge's report, the findings
+	// files of the second readers that sat out the newest attempt of a
+	// findings stage after Codex's usage limit, left as they stood, perhaps
+	// unfinished (satOutFindings), as paths joined with " and "; "" for none.
+	SatOut string
 	// The QA walker's turn of a qa stage (factory-qa.md), each "" (0) in any
 	// other: QARun is the run's folder (qa/<n>-<sha7> in TaskDir), where the
 	// walker saves its pages and console logs; QAURL the copy's server
@@ -160,11 +165,12 @@ type agentsRun struct {
 	// fallback that runs in a refused role's place waits for the quit
 	// too, for the same reason (promptRoles).
 	left []leaving
-	// turn is how this pass runs the attempt (runTurn). decided: the
-	// attempt's yield to Codex's budget is chosen (yieldAtLaunch: recorded,
-	// or a role of it launched before), never chosen again.
+	// turn is how this pass runs the attempt (runTurn). started are the
+	// roles a launch of the attempt started (a role run of each), as the
+	// rebuild read them: a Codex role that yields on a launch tried again has
+	// its idle session quit (yieldAtLaunch).
 	turn    agentsTurn
-	decided bool
+	started map[string]bool
 	// copy is the task's copy, this pass's; proven the head whose proof and
 	// precheck passed (the coding stage's end fact), for the stage's pass.
 	copy   Copy
@@ -360,7 +366,9 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 			err = e.launch(ctx, t, a, c, run.runAsRoles())
 		}
 		if err != nil {
-			delete(e.agentRuns, t.ID) // the next pass rebuilds it: the roles a part-launch started and the yield recorded decide
+			if !errors.Is(err, ErrHeld) {
+				delete(e.agentRuns, t.ID) // a launch that failed may have started some: the next pass rebuilds it from the role runs
+			}
 			return false, err
 		}
 	}
@@ -537,10 +545,13 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 		return ranHere(name) || slices.ContainsFunc(done, func(rr registry.RoleRun) bool { return rr.Role == name })
 	}
 	// The attempt's yields to Codex's budget are its stage events
-	// (attemptYields): once one is recorded, or a role launched, the choice
-	// stands (yieldAtLaunch).
+	// (attemptYields): a recorded one stands for good, and a Codex role with
+	// none is decided again at each try of the launch (yieldAtLaunch).
 	yields := e.attemptYields(ctx, t, st, a)
-	run.decided = len(yields) > 0 || len(done) > 0
+	run.started = map[string]bool{}
+	for _, rr := range done {
+		run.started[rr.Role] = true
+	}
 	yielded := map[string]bool{}
 	for _, name := range st.Roles {
 		role, ok := e.cfg.FactoryRole(name)
@@ -790,8 +801,8 @@ func coveredIn(st config.FactoryStage, role, runAs config.Role) bool {
 // Claude codex_fallback when its prompt, never sent (no run id), waits on
 // Codex's usage pause (serr: another run hit the limit), never leaving it to
 // wait for the reset; it reports whether it did (handOver).
-func (e *Engine) pauseHandOver(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt, r *stageRole, id string,
-	serr error) bool {
+func (e *Engine) pauseHandOver(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt, since time.Time,
+	r *stageRole, id string, serr error) bool {
 	w, ok := errors.AsType[*runtime.WaitError](serr)
 	if !ok || id != "" || w.Who != waitUsage || r.runAs.AgentKind() != config.KindCodex {
 		return false
@@ -799,7 +810,7 @@ func (e *Engine) pauseHandOver(ctx context.Context, t registry.Task, st config.F
 	if _, fb := e.codexFallback(r.role); !fb {
 		return false
 	}
-	e.handOver(ctx, t, st, a, r, "Codex is paused on its usage limit ("+w.What+")", w.What)
+	e.handOver(ctx, t, st, a, since, r, "Codex is paused on its usage limit ("+w.What+")", w.What)
 	return true
 }
 
@@ -824,19 +835,33 @@ func (r *stageRole) firstPrompt(sent time.Time) {
 	}
 }
 
+// endSince is the time role r's files must be newer than to be its end and
+// its questions, since being the attempt's start: for a role whose fallback
+// runs in its place for Codex's budget (yielded), the fallback's first
+// prompt once it went (placeSince), as what the role's own Codex run left is
+// no work of the fallback's turn.
+func (r *stageRole) endSince(since time.Time) time.Time {
+	if r.yielded && r.placeSince.After(since) {
+		return r.placeSince
+	}
+	return since
+}
+
 // roleEnd is role r's end fact in stage st (endOf), its files in dir newer
 // than since, the attempt's start, and, for a role whose fallback runs in
-// its place for Codex's budget (stageRole.yielded), newer than the
-// fallback's first prompt too (placeSince): what the role's own Codex run
-// left is no end of the fallback's turn, which gets its nudge for a file it
-// did not write, in words that say what the file is.
+// its place for Codex's budget, newer than the fallback's first prompt too
+// (endSince): what the role's own Codex run left is no end of the
+// fallback's turn, which gets its nudge for a file it did not write, in
+// words that say what the file is (a questions file `[]` for none).
 func (e *Engine) roleEnd(st config.FactoryStage, dir string, since time.Time, r *stageRole) *endProblem {
 	p := e.endOf(st, dir, since, r.role.Name)
-	if p != nil || !r.yielded || !r.placeSince.After(since) {
-		return p
-	}
-	if p = e.endOf(st, dir, r.placeSince, r.role.Name); p != nil && strings.HasPrefix(p.why, "older than this stage") {
-		p.why = "what " + r.role.Name + "'s run on Codex left before your turn: write it whole in your turn, as your prompt asks"
+	if place := r.endSince(since); p == nil && place.After(since) {
+		if p = e.endOf(st, dir, place, r.role.Name); p != nil && strings.HasPrefix(p.why, "older than this stage") {
+			p.why = "what " + r.role.Name + "'s run on Codex left before your turn: write it whole in your turn, as your prompt asks"
+			if p.file == roleQuestionsFile(r.role.Name) {
+				p.why += " (`[]` when you have no questions)"
+			}
+		}
 	}
 	return p
 }
@@ -890,6 +915,9 @@ func (e *Engine) onAgentEvent(ctx context.Context, t *registry.Task, st config.F
 	if r == nil {
 		return "" // another stage's role
 	}
+	if r.yielded && ev.Role != r.runAs.Name {
+		return "" // the Codex session a handover left: no run the role has any more, nothing for its fallback
+	}
 	name := r.runAs.Name
 	switch ev.Kind {
 	case runtime.EventEnded:
@@ -902,7 +930,7 @@ func (e *Engine) onAgentEvent(ctx context.Context, t *registry.Task, st config.F
 		if _, fb := e.codexFallback(r.role); who == waitUsage && r.runAs.AgentKind() == config.KindCodex && !r.ok && fb {
 			// Codex's usage limit, no refusal: its fallback takes the role
 			// now, never at the limit's reset, and what the run wrote stays.
-			e.handOver(ctx, *t, st, a, r, r.role.Name+"'s run hit Codex's usage limit ("+what+")", what)
+			e.handOver(ctx, *t, st, a, run.since(a), r, r.role.Name+"'s run hit Codex's usage limit ("+what+")", what)
 			return ""
 		}
 		r.next, r.pause = nextContinue, ev.Reason
@@ -1383,7 +1411,7 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 		if serr == nil {
 			continue
 		}
-		if e.pauseHandOver(ctx, t, st, a, r, id, serr) {
+		if e.pauseHandOver(ctx, t, st, a, run.since(a), r, id, serr) {
 			continue
 		}
 		switch w := e.sendRefused(ctx, t, r, serr); {
@@ -1851,6 +1879,9 @@ func (e *Engine) promptData(ctx context.Context, t registry.Task, st config.Fact
 		d.Base = cmp.Or(repo.Base, d.Base)
 	}
 	d.MergeMethods = e.mergeMethods(ctx, t.Repo)
+	if st.End == config.FactoryEndReport {
+		d.SatOut = strings.Join(e.satOutFindings(ctx, t), " and ")
+	}
 	if st.End == config.FactoryEndFindings {
 		d.Findings = in(findingsFile(role.Name))
 	}
@@ -2103,7 +2134,7 @@ func checkData(role config.Role) PromptData {
 		PRTemplate: copyPath + "/.github/pull_request_template.md", SendBack: dir + "/" + sendBackFile(1), SendBackReason: "scope",
 		MergeBase: "origin/master", Conflicts: []string{"app/models/credit.rb"}, HeadMoved: "def5678abcde", HeadWas: "abc1234abcde", ErrorSkill: "error-tracker",
 		PRBodySkill: "example:create-pr", DBLockCommand: agents.DBLockLine("magnum", copyPath, role.Name), Port: 3000, Magnum: "magnum",
-		MergeMethods: "squash", QARun: qaRun, QAURL: "http://app.example.localhost:3000", QACDP: "http://127.0.0.1:9222",
+		MergeMethods: "squash", SatOut: dir + "/findings-fx-points-codex.md", QARun: qaRun, QAURL: "http://app.example.localhost:3000", QACDP: "http://127.0.0.1:9222",
 		QAProbe: qaRun + "/probe.js", QAVerdict: qaRun + "/verdict.json", QAChanged: qaRun + "/changed.txt", QARecheck: qaRun + "/recheck.json",
 		QASignIn: "/dev/sign-in?as=qa@example.com", QASkill: "example:qa", QASession: "magnum-qa-1-1", QAMaxPages: 12,
 		QAMaxShots: 30}

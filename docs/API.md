@@ -14544,6 +14544,11 @@ type PromptData struct {
 	// which the prompts of the roles that ask the operator questions name;
 	// "" while no read of them went through.
 	MergeMethods string
+	// SatOut are, in a stage that ends on the judge's report, the findings
+	// files of the second readers that sat out the newest attempt of a
+	// findings stage after Codex's usage limit, left as they stood, perhaps
+	// unfinished (satOutFindings), as paths joined with " and "; "" for none.
+	SatOut string
 	// The QA walker's turn of a qa stage (factory-qa.md), each "" (0) in any
 	// other: QARun is the run's folder (qa/<n>-<sha7> in TaskDir), where the
 	// walker saves its pages and console logs; QAURL the copy's server
@@ -16875,6 +16880,13 @@ type WaitError struct {
     Codex's budget, the Mac's memory, a usage limit, a login, an overload. It is
     no failure: the task waits with Who and What, as its wait says them ("usage:
     codex at 96%, waits till 16:00"), until Until when it is known.
+
+func CodexBudgetWait(u config.Usage, snap usage.Snapshot, now time.Time) *WaitError
+    CodexBudgetWait is the wait of a launch of a Codex role while Codex's budget
+    snap is at or past usage codex_soft (or codex_hard), now being the clock's
+    time ("codex at 96%, waits till 16:00", until the binding window's reset
+    when snap names one); nil below the caps. Runtime.Launch holds every Codex
+    role on it, so a stage's yield (the engine's) comes before the launch.
 
 func (w *WaitError) Error() string
     Error implements error.

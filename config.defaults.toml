@@ -216,7 +216,9 @@ stale_after = "90s"               # no page for this long makes the stream unhea
                                   # root): while the volume is not mounted every status is unknown, and nothing is
                                   # created in its place
 
-# [usage]                         # the Codex budget, read from Codex's own session files at most once a minute
+# [usage]                         # the Codex budget, read from Codex's own session files: by magnum's daemon at most
+                                  # once a minute, by the factory's at each launch of a stage with a Codex role and
+                                  # each pass of a local review that runs one
 # codex_soft = 80                 # at this % used, full re-reviews wait (first reviews, delta checks, replies,
                                   # review requests and `magnum review` still run; 0 = off); the factory's local
                                   # review waits, and its stages' Codex roles run as their codex_fallback (the twin

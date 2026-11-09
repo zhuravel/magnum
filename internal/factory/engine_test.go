@@ -142,6 +142,11 @@ type fakeRuntime struct {
 	// logs a failed write).
 	pauses   map[string]*runtime.WaitError
 	noRecord map[string]bool
+	// budget reads Codex's budget for Launch's gate, which holds a Codex
+	// role at [usage] codex_soft as the runtime's does
+	// (runtime.CodexBudgetWait); nil: no gate. now is the harness's clock.
+	budget func(ctx context.Context, now time.Time) (usage.Snapshot, error)
+	now    func() time.Time
 }
 
 // Paused is the pause in force of agent kind, nil for none.
@@ -304,10 +309,17 @@ func (f *fakeRuntime) Launch(ctx context.Context, t registry.Task, a registry.At
 		names, prompts = append(names, r.Name), append(prompts, r.Prompt)
 	}
 	f.launchRoles, f.launchPrompts = append(f.launchRoles, names), append(f.launchPrompts, prompts)
-	err, reg, lost := f.launchErr, f.reg, maps.Clone(f.noRecord)
+	err, reg, lost, budget, now := f.launchErr, f.reg, maps.Clone(f.noRecord), f.budget, f.now
 	f.mu.Unlock()
 	if err != nil || reg == nil || a.ID == "" {
 		return err
+	}
+	if budget != nil && slices.ContainsFunc(roles, func(r config.Role) bool { return r.AgentKind() == config.KindCodex }) {
+		if snap, err := budget(ctx, now()); err == nil {
+			if w := runtime.CodexBudgetWait(f.cfg.Usage, snap, now()); w != nil {
+				return w // the runtime's gate: a Codex role waits at the cap, and nothing starts
+			}
+		}
 	}
 	for _, r := range roles { // a failure is the runtime's log line, never the launch's
 		if !lost[r.Name] {
@@ -1078,7 +1090,8 @@ func newHarness(t *testing.T, edit ...func(d *Deps)) *harness {
 	for _, f := range edit {
 		f(&d)
 	}
-	h.reg, h.rt.reg = d.Registry, d.Registry // an edit may give the test a registry of its own, a file's
+	h.reg, h.rt.reg = d.Registry, d.Registry   // an edit may give the test a registry of its own, a file's
+	h.rt.budget, h.rt.now = d.Usage, clock.Now // the fake Launch's gate reads the budget the engine reads
 	h.deps = d
 	h.e = New(d)
 	t.Cleanup(h.e.stopBackground) // no claim or overlap outlives the test
