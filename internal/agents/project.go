@@ -25,13 +25,16 @@ import (
 // each time a Codex session of the PR starts without the PR's changes to
 // the project config Codex loads from the checkout: with the checkout
 // untrusted because the PR changes .codex/, or with no AGENTS.md when it
-// changes only those.
+// changes only those; for its data's residue, the checkout's files there
+// differ though the PR's commits do not change them (ProjectNote.Residue).
 const EventCodexProjectDeclined = "agents.codex_project_declined"
 
 // EventClaudeProjectDeclined is recorded (subject "pr:<owner>/<name>#<N>")
 // each time a Claude session of the PR starts with the user's settings
 // only because the PR changes .claude/, .mcp.json, a CLAUDE.md,
-// CLAUDE.local.md or AGENTS.md.
+// CLAUDE.local.md or AGENTS.md; for its data's residue, the checkout's
+// files there differ though the PR's commits do not change them
+// (ProjectNote.Residue).
 const EventClaudeProjectDeclined = "agents.claude_project_declined"
 
 // projectTimeout bounds the git commands that compare a checkout's project

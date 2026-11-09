@@ -60,9 +60,10 @@ func (s ReviewSummary) OpenProblems() int {
 
 // OnlyOptional reports whether the round left optional findings only: a
 // non-blocking verdict with no P0, P1 or P2, new or still open
-// (OpenProblems: an open finding of unknown priority counts as one). Such a
-// round is one magnum would approve (the engine's roundBlocks), posted as a
-// comment ("No blocking problems").
+// (OpenProblems: an open finding of unknown priority counts as one). Nothing
+// in such a round blocks the operator's approval (the engine's roundBlocks),
+// and every identity posts it as a comment ("No blocking problems"), even
+// one that approves when clean.
 func (s ReviewSummary) OnlyOptional() bool {
 	return s.Verdict == VerdictNonBlocking && s.Counts[0]+s.Counts[1]+s.Counts[2] == 0 && s.OpenProblems() == 0
 }

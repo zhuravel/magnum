@@ -82,7 +82,7 @@ type prsJSONRow struct {
 	FixOff           bool              `json:"fix_off"`                // switched out of autofix (magnum fix --off)
 	Fixer            string            `json:"fixer,omitempty"`        // the login its fixer pushes and replies as (a fixer App's bot, or yours)
 	Note             string            `json:"note"`
-	ProjectNote      string            `json:"project_note"` // the agents ran without the PR's own agent config changes
+	ProjectNote      string            `json:"project_note"` // the agents ran without the PR's own agent config changes or, for a record of residue, the checkout's files the PR's commits do not change (agents.ProjectSentences)
 	RequestedToMe    *prsJSONRequest   `json:"requested_to_me"`
 	LastRequest      *prsJSONRequest   `json:"last_request"`
 	Requests         []prsJSONRequest  `json:"requests"`

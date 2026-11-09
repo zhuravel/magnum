@@ -589,14 +589,16 @@ const EventClaudeProjectDeclined = "agents.claude_project_declined"
     EventClaudeProjectDeclined is recorded (subject "pr:<owner>/<name>#<N>")
     each time a Claude session of the PR starts with the user's settings only
     because the PR changes .claude/, .mcp.json, a CLAUDE.md, CLAUDE.local.md or
-    AGENTS.md.
+    AGENTS.md; for its data's residue, the checkout's files there differ though
+    the PR's commits do not change them (ProjectNote.Residue).
 
 const EventCodexProjectDeclined = "agents.codex_project_declined"
     EventCodexProjectDeclined is recorded (subject "pr:<owner>/<name>#<N>")
     each time a Codex session of the PR starts without the PR's changes to the
     project config Codex loads from the checkout: with the checkout untrusted
     because the PR changes .codex/, or with no AGENTS.md when it changes only
-    those.
+    those; for its data's residue, the checkout's files there differ though the
+    PR's commits do not change them (ProjectNote.Residue).
 
 const EventDefaultModelRestored = "agent.default_model_restored"
     EventDefaultModelRestored is recorded when SwitchModel put the Claude
@@ -1987,13 +1989,17 @@ type JudgeData struct {
 	FailingChecks string
 	// ProjectChecks is the review's Checks line for the round's agent CLIs
 	// whose sessions of its head ran without the PR's changes to the
-	// project config they load from the checkout (the PR's ProjectNote of
-	// the kind names the round's head): "Codex ran without the PR's
-	// AGENTS.md changes; Claude ran without the PR's CLAUDE.md and .claude/
-	// changes" (projectChecks; magnum's names of the paths, never a path
-	// the PR named), rendered as `project_checks` by the initial, rereview
-	// and recovery prompts; "" when none did. Set by NoteDeclinedProjects,
-	// each CLI only in a round with a role of its kind.
+	// project config they load from the checkout or, for a record of
+	// residue (ProjectNote.Residue), without the checkout's files there that
+	// the PR's commits do not change (the PR's ProjectNote of the kind names
+	// the round's head): "Codex ran without the PR's AGENTS.md changes;
+	// Claude ran without the PR's CLAUDE.md and .claude/ changes", for
+	// residue "Claude ran without the checkout's .claude/ files, which the
+	// PR's commits do not change" (projectChecks of projectCheckOf; magnum's
+	// names of the paths, never a path the PR named), rendered as
+	// `project_checks` by the initial, rereview and recovery prompts; ""
+	// when none did. Set by NoteDeclinedProjects, each CLI only in a round
+	// with a role of its kind.
 	ProjectChecks string
 }
     JudgeData feeds every judge prompt (judge-*.md). Fields a template does not
@@ -29659,9 +29665,10 @@ func (s ReviewSummary) Findings() int
 func (s ReviewSummary) OnlyOptional() bool
     OnlyOptional reports whether the round left optional findings only: a
     non-blocking verdict with no P0, P1 or P2, new or still open (OpenProblems:
-    an open finding of unknown priority counts as one). Such a round is one
-    magnum would approve (the engine's roundBlocks), posted as a comment ("No
-    blocking problems").
+    an open finding of unknown priority counts as one). Nothing in such a
+    round blocks the operator's approval (the engine's roundBlocks), and every
+    identity posts it as a comment ("No blocking problems"), even one that
+    approves when clean.
 
 func (s ReviewSummary) OpenProblems() int
     OpenProblems is how many earlier findings the review keeps open that its
@@ -32306,8 +32313,10 @@ type PRBoardRow struct {
 	Note string
 	// ProjectNote says that the agents of the PR's head ran without the
 	// PR's changes to the checkout's own agent config (e.g. the PR changes
-	// .codex/, so Codex ran with the checkout untrusted); the card shows it
-	// under LAST REVIEW. "" = nothing to say.
+	// .codex/, so Codex ran with the checkout untrusted) or, for a record of
+	// residue (agents.ProjectNote.Residue), without the checkout's files
+	// there that the PR's commits do not change; the card shows it under
+	// LAST REVIEW. "" = nothing to say.
 	ProjectNote string
 
 	// RequestedToMe is the latest review request that asked one of the self

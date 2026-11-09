@@ -9,7 +9,9 @@ import (
 // addProjectDeclined tells the judge which of the round's agent CLIs ran
 // without the PR's changes to their project config in the checkout (Codex
 // with it untrusted or with no AGENTS.md, Claude with the user's settings
-// only), and the files: the PR's records, written at each launch, name the
+// only) or, for a record of residue (agents.ProjectNote.Residue), without
+// the checkout's files there that the PR's commits do not change, and the
+// files: the PR's records, written at each launch, name the
 // round's head, and one of the round's roles that run, the judge included,
 // is of that kind (agents.NoteDeclinedProjects). The skill copies the line
 // into the review's Checks.

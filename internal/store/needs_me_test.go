@@ -78,11 +78,14 @@ func TestNeedsMeDecidesWhatTheOperatorsApprovalWouldFix(t *testing.T) {
 			f.LastReviewEvent, f.Verdict, f.CommentWhenClean = "COMMENTED", VerdictNonBlocking, true
 		}, ""},
 		// A round that left optional findings only (no P0 to P2, new or
-		// open) is one magnum would approve: its comment counts as a clean
-		// one does, and only where a clean one does.
+		// open) blocks nothing the operator's approval would: its comment
+		// counts as a clean one does, and only where a clean one does.
 		{"an optional-only comment from that identity", func(f *NeedsMeFacts) {
 			f.LastReviewEvent, f.Verdict, f.Optional, f.CommentWhenClean = "COMMENTED", VerdictNonBlocking, true, true
 		}, NeedsMeApprove},
+		// An identity that approves when clean comments on such a round
+		// too, whether or not it heard every reviewer or held its approval:
+		// the comment stands for no approval NeedsMe can tell.
 		{"an optional-only comment from an identity that approves when clean", func(f *NeedsMeFacts) {
 			f.LastReviewEvent, f.Verdict, f.Optional = "COMMENTED", VerdictNonBlocking, true
 		}, ""},

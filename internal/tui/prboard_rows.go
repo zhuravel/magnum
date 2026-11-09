@@ -265,8 +265,10 @@ type PRBoardRow struct {
 	Note string
 	// ProjectNote says that the agents of the PR's head ran without the
 	// PR's changes to the checkout's own agent config (e.g. the PR changes
-	// .codex/, so Codex ran with the checkout untrusted); the card shows it
-	// under LAST REVIEW. "" = nothing to say.
+	// .codex/, so Codex ran with the checkout untrusted) or, for a record of
+	// residue (agents.ProjectNote.Residue), without the checkout's files
+	// there that the PR's commits do not change; the card shows it under
+	// LAST REVIEW. "" = nothing to say.
 	ProjectNote string
 
 	// RequestedToMe is the latest review request that asked one of the self

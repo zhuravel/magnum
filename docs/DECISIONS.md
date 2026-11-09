@@ -16952,8 +16952,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   still counts as a problem), `NeedsMeFacts.Optional` carries it, and `NeedsMe` takes such a comment wherever
   it takes a clean one: an identity that comments when clean (for the repository or for the PR's author),
   or a comment the approval's gates asked for. Nothing else widens: an optional-only comment from an
-  identity that approves when clean, with no gate's record, is not one (a missing reviewer report or a held
-  approval can cause it), and a round with a P2, new or open, stays off the list. The needs-you toast of a
+  identity that approves when clean, with no gate's record, is not one, and a round with a P2, new or open,
+  stays off the list. Such an identity comments on every round that leaves a P3 (the review skill's event
+  for a non-blocking verdict; `JudgeEvents` changes only the no-findings event), whether or not the round
+  heard every reviewer and whether or not it held its approval for a full pass, and `NeedsMe` reads only
+  the review's event, its verdict and the gates' record: it cannot tell a comment that stands for an
+  approval from one that does not. The gap that leaves: an identity that approves when clean on a
+  repository `auto_approve` does not cover, with `auto_approve_as` set for `A` alone, never shows `needs
+  you` on a round that left optional findings only, and `A` there approves as the posting identity, whose
+  approval GitHub does not count when it is an App. Covering it needs the round's record of its reports
+  and of its hold in `NeedsMe`, which only the engine reads today. The needs-you toast of a
   comment no longer says "magnum approved b1b1b1b", which was already false for a skipped author's clean
   comment: it says "magnum found no blocking problems in b1b1b1b (its review is a comment)"
   (`needsMeToastBody`). Tests, failing first: TestNeedsMePRsTakesAnOptionalOnlyCommentForAnApproval,

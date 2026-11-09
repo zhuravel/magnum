@@ -624,13 +624,17 @@ type JudgeData struct {
 	FailingChecks string
 	// ProjectChecks is the review's Checks line for the round's agent CLIs
 	// whose sessions of its head ran without the PR's changes to the
-	// project config they load from the checkout (the PR's ProjectNote of
-	// the kind names the round's head): "Codex ran without the PR's
-	// AGENTS.md changes; Claude ran without the PR's CLAUDE.md and .claude/
-	// changes" (projectChecks; magnum's names of the paths, never a path
-	// the PR named), rendered as `project_checks` by the initial, rereview
-	// and recovery prompts; "" when none did. Set by NoteDeclinedProjects,
-	// each CLI only in a round with a role of its kind.
+	// project config they load from the checkout or, for a record of
+	// residue (ProjectNote.Residue), without the checkout's files there that
+	// the PR's commits do not change (the PR's ProjectNote of the kind names
+	// the round's head): "Codex ran without the PR's AGENTS.md changes;
+	// Claude ran without the PR's CLAUDE.md and .claude/ changes", for
+	// residue "Claude ran without the checkout's .claude/ files, which the
+	// PR's commits do not change" (projectChecks of projectCheckOf; magnum's
+	// names of the paths, never a path the PR named), rendered as
+	// `project_checks` by the initial, rereview and recovery prompts; ""
+	// when none did. Set by NoteDeclinedProjects, each CLI only in a round
+	// with a role of its kind.
 	ProjectChecks string
 }
 
@@ -674,7 +678,7 @@ func projectCheckOf(n ProjectNote, cli, paths string) string {
 	return projectCheck(cli, paths)
 }
 
-// projectChecks is JudgeData.ProjectChecks: the CLIs' projectCheck
+// projectChecks is JudgeData.ProjectChecks: the CLIs' projectCheckOf
 // sentences as one Checks line.
 func projectChecks(checks []string) string {
 	return strings.Join(checks, "; ")
