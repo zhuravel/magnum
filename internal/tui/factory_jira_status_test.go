@@ -344,3 +344,23 @@ func TestTaskCardSaysJiraIsDoneWhileItsPRIsOpen(t *testing.T) {
 		t.Errorf("a card without an open PR says Jira is done while it is open:\n%s", frame)
 	}
 }
+
+// The help glosses the STATUS column, its marks, the yellow fact and the
+// card's JIRA line.
+func TestTheHelpGlossesTheJiraStatusWords(t *testing.T) {
+	h := testFactory(t, 140, 80)
+	help := ansi.Strip(strings.Join(h.m.helpContent(220), "\n"))
+	mustContain(t, help,
+		"STATUS  the task's Jira status and how long the issue has held it (In Code Review 13h), on a screen of 180 columns or more",
+		"Done, To Do, ?  STATUS's colors: done green, in progress plain, to do dim; ? no read of the issue worked yet (its card says why)",
+		"not you, nobody  after the status: the issue is assigned to someone else, or to nobody",
+		"Jira done  yellow: Jira says done while the task's PR is still open (in STATUS when shown): merge or close it, or move the issue back",
+		"JIRA  on the task card: the issue's key, status and for how long, who has it, the last read's age; now: why the last try failed")
+	for _, l := range strings.Split(ansi.Strip(strings.Join(h.m.helpContent(140), "\n")), "\n") {
+		if strings.HasPrefix(l, "STATUS ") || strings.HasPrefix(l, "Jira done ") || strings.HasPrefix(l, "JIRA ") || strings.HasPrefix(l, "Done, To Do") {
+			if strings.HasSuffix(l, "…") {
+				t.Errorf("at 140 columns the help cuts %q", l)
+			}
+		}
+	}
+}
