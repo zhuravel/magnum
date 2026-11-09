@@ -32525,6 +32525,15 @@ type PRBoardRow struct {
 	// in the last day, live ones first, each as its newest event left it
 	// (engine.StagingDeployRecord): the card's lines under each env.
 	StagingDeploys []StagingDeploy
+	// DeployFirst is staging's line for an open PR whose head changes a
+	// migration that no env of Stagings holds or may hold: "deploy to a
+	// staging before the merge (it changes db/migrate/...)"
+	// (staging.DeployBeforeMergeWords of engine.StagingFirst over the
+	// head's file list); "" otherwise, and for a PR that can never deploy
+	// to a staging (engine.StagingNeverDeploys: a fork's). The card says
+	// it: in yellow where the deploy is your next step (DeployNeedsYou),
+	// else dimmed; the ready view leaves the PR out.
+	DeployFirst string
 }
     PRBoardRow is one pull request on the PR board. Ref is what actions receive;
     Owner, Repo and Number label the row (Ref is parsed when they are empty).
@@ -32546,6 +32555,16 @@ func SortPRBoard(rows []PRBoardRow, by PRSort, desc bool) []PRBoardRow
     The updated sort, the board's default, lists the unstarred PRs that need the
     operator's approval (NeedsMe) first, either way, each part in its order.
 
+func (r PRBoardRow) DeployNeedsYou() bool
+    DeployNeedsYou reports whether r's staging deploy before the merge is the
+    operator's next step: their own PR whose fresh verdict is idle with the
+    merge theirs (PROpen.Merge: approved, or a base that requires no review)
+    while the board's read says the deploy comes first (DeployFirst), as the
+    factory screen puts it on its wait on your merge. Its tag and verdict line
+    then say it needs you. Never on another's PR, whose merge is its author's:
+    a NeedsMe there stays about the approval; nor while anything the verdict
+    names comes first (needs_you, waits).
+
 type PRBoardSource interface {
 	Rows(ctx context.Context) ([]PRBoardRow, error)
 }
@@ -32561,6 +32580,10 @@ func (f PRBoardSourceFunc) Rows(ctx context.Context) ([]PRBoardRow, error)
 type PROpen struct {
 	Verdict, Why, Head string
 	Stale              bool
+	// Merge: the verdict is idle and leaves the merge to you
+	// (engine.OpenMergeIsYours over the PR's review gate: approved, or a
+	// base that requires no review).
+	Merge bool
 }
     PROpen is autofix = "open"'s verdict on your own PR as the board shows it:
     fixing, waits, needs_you, idle, unknown or off, why in magnum's plain
@@ -32618,7 +32641,7 @@ const (
 	ViewAll    PRView = "all"    // every row
 	ViewMagnum PRView = "magnum" // rows magnum reviewed or is reviewing (state not baseline or ineligible), or whose review is requested from a self login
 	ViewMine   PRView = "mine"   // assigned to one of the self logins, or their review is requested
-	ViewReady  PRView = "ready"  // open, not a draft, approved on the head, nothing blocking, required checks passed
+	ViewReady  PRView = "ready"  // open, not a draft, approved on the head, nothing blocking, required checks passed, no staging deploy first
 )
     The board's views, in the order v cycles through them.
 

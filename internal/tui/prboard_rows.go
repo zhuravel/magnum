@@ -349,6 +349,28 @@ type PRBoardRow struct {
 	// in the last day, live ones first, each as its newest event left it
 	// (engine.StagingDeployRecord): the card's lines under each env.
 	StagingDeploys []StagingDeploy
+	// DeployFirst is staging's line for an open PR whose head changes a
+	// migration that no env of Stagings holds or may hold: "deploy to a
+	// staging before the merge (it changes db/migrate/...)"
+	// (staging.DeployBeforeMergeWords of engine.StagingFirst over the
+	// head's file list); "" otherwise, and for a PR that can never deploy
+	// to a staging (engine.StagingNeverDeploys: a fork's). The card says
+	// it: in yellow where the deploy is your next step (DeployNeedsYou),
+	// else dimmed; the ready view leaves the PR out.
+	DeployFirst string
+}
+
+// DeployNeedsYou reports whether r's staging deploy before the merge is
+// the operator's next step: their own PR whose fresh verdict is idle with
+// the merge theirs (PROpen.Merge: approved, or a base that requires no
+// review) while the board's read says the deploy comes first
+// (DeployFirst), as the factory screen puts it on its wait on your merge.
+// Its tag and verdict line then say it needs you. Never on another's PR,
+// whose merge is its author's: a NeedsMe there stays about the approval;
+// nor while anything the verdict names comes first (needs_you, waits).
+func (r PRBoardRow) DeployNeedsYou() bool {
+	o := r.Open
+	return r.DeployFirst != "" && o != nil && !o.Stale && o.Verdict == "idle" && o.Merge
 }
 
 // StagingDeploy is a staging deploy of a PR on one env: its effect, the
@@ -395,6 +417,20 @@ type StagingInfo struct {
 type PROpen struct {
 	Verdict, Why, Head string
 	Stale              bool
+	// Merge: the verdict is idle and leaves the merge to you
+	// (engine.OpenMergeIsYours over the PR's review gate: approved, or a
+	// base that requires no review).
+	Merge bool
+}
+
+// openWord is r's verdict as the board says it: "needs you" while its
+// staging deploy before the merge is yours (DeployNeedsYou), else the
+// verdict's own word.
+func (r PRBoardRow) openWord() string {
+	if r.DeployNeedsYou() {
+		return "needs you"
+	}
+	return r.Open.word()
 }
 
 // word is the verdict as the board says it: "looking" when stale or
@@ -933,6 +969,7 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	}
 	r.Stagings = cleanStagings(r.Stagings)
 	r.StagingDeploys = cleanStagingDeploys(r.StagingDeploys)
+	r.DeployFirst = cleanText(r.DeployFirst)
 	return r
 }
 

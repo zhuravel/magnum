@@ -101,6 +101,9 @@ func TestReadyViewRules(t *testing.T) {
 		{"magnum blocking", func(r *PRBoardRow) { r.Findings = &FindingsInfo{Counts: [4]int{0, 1}, Verdict: "blocking"} }, false},
 		{"magnum non-blocking", func(r *PRBoardRow) { r.Findings = &FindingsInfo{Counts: [4]int{0, 0, 2}, Verdict: "non_blocking"} }, true},
 		{"magnum clean", func(r *PRBoardRow) { r.Findings = &FindingsInfo{Verdict: "clean"} }, true},
+		{"a staging deploy comes before the merge", func(r *PRBoardRow) {
+			r.DeployFirst = "deploy to a staging before the merge (it changes db/migrate/20261109_a.rb)"
+		}, false},
 		// Without required checks CI is shown, never decides.
 		{"CI passed", func(r *PRBoardRow) { r.CI = &CIInfo{State: "passed", Total: 3, Passed: 3} }, true},
 		{"no checks", func(r *PRBoardRow) { r.CI = &CIInfo{State: "none"} }, true},
@@ -124,7 +127,7 @@ func TestReadyViewRules(t *testing.T) {
 	// The help says what ready means.
 	m, _, _ := newBoard(t, 240, 80, PRBoardOptions{})
 	m, _ = send(t, m, keyMsg("?"))
-	mustContain(t, viewOf(m), "ready: approved on the head, no changes requested, magnum not blocking, required checks passed, not a draft")
+	mustContain(t, viewOf(m), "ready: approved on the head, no changes requested, magnum not blocking, required checks passed, not a draft, no staging deploy first")
 }
 
 func TestParsePRView(t *testing.T) {

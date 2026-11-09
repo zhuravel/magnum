@@ -20,7 +20,7 @@ const (
 	ViewAll    PRView = "all"    // every row
 	ViewMagnum PRView = "magnum" // rows magnum reviewed or is reviewing (state not baseline or ineligible), or whose review is requested from a self login
 	ViewMine   PRView = "mine"   // assigned to one of the self logins, or their review is requested
-	ViewReady  PRView = "ready"  // open, not a draft, approved on the head, nothing blocking, required checks passed
+	ViewReady  PRView = "ready"  // open, not a draft, approved on the head, nothing blocking, required checks passed, no staging deploy first
 )
 
 var prViewOrder = []PRView{ViewAll, ViewMagnum, ViewMine, ViewReady}
@@ -78,9 +78,11 @@ func (v PRView) has(r PRBoardRow, self map[string]bool) bool {
 // does not count as passed although GitHub accepts it (a skipped
 // aggregator hides a cancelled or failed dependency), nor does one that
 // never ran. Without required checks CI does not decide: optional checks
-// are often noisy (advisory audits, statuses stuck pending).
+// are often noisy (advisory audits, statuses stuck pending). A PR whose
+// migration must go to a staging before its merge (DeployFirst) is not
+// ready, whoever merges it.
 func readyToMerge(r PRBoardRow) bool {
-	if r.Draft || !isOpen(r) {
+	if r.Draft || !isOpen(r) || r.DeployFirst != "" {
 		return false
 	}
 	approved := false

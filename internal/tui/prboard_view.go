@@ -628,8 +628,9 @@ func (p *prbPainter) titleCell(r PRBoardRow) cell {
 }
 
 // openTag is the tag that marks your own PR with its autofix = "open"
-// verdict ("open: needs you" in yellow, "open: waits", "open: none" for
-// nothing open, "open: looking" for a stale one); none on another's PR,
+// verdict ("open: needs you" in yellow, also for an idle one whose staging
+// deploy before the merge is yours, DeployNeedsYou; "open: waits", "open:
+// none" for nothing open, "open: looking" for a stale one); none on another's PR,
 // on a PR GitHub merged or closed, while the fixer's cell shows (fixing),
 // or for fix off, which its own tag says.
 func (p *prbPainter) openTag(r PRBoardRow) (string, lipgloss.Style, bool) {
@@ -639,8 +640,8 @@ func (p *prbPainter) openTag(r PRBoardRow) (string, lipgloss.Style, bool) {
 		return "", lipgloss.Style{}, false
 	case !o.Stale && o.Verdict == "fixing" && fixingShown(r), !o.Stale && o.Verdict == "off" && r.FixOff:
 		return "", lipgloss.Style{}, false
-	case !o.Stale && o.Verdict == "needs_you":
-		return "open: " + o.word(), p.pal.yellow, true
+	case !o.Stale && o.Verdict == "needs_you", r.DeployNeedsYou():
+		return "open: " + r.openWord(), p.pal.yellow, true
 	}
 	return "open: " + o.word(), p.pal.tag, true
 }

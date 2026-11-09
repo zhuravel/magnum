@@ -95,8 +95,8 @@ func (p *prbPainter) helpContent(width int) []string {
 	lines := strings.Split(keys, "\n")
 	lines = append(lines, "", p.st.Section.Render("Views and filter"))
 	for _, l := range []string{
-		"magnum: reviewed or reviewing, or your review requested · mine: assigned to you or your review requested · " +
-			"ready: approved on the head, no changes requested, magnum not blocking, required checks passed, not a draft",
+		"magnum: reviewed or reviewing, or your review requested · mine: assigned to you or your review requested",
+		"ready: approved on the head, no changes requested, magnum not blocking, required checks passed, not a draft, no staging deploy first",
 		"/ words match fuzzily; state:<s> assignee:<login> author:<login> (@me: you) review:requested narrow it; " +
 			"a,b lists alternatives",
 		"O shows one owner's PRs; the factory screen's O is the same scope: both screens open in the one you left",
@@ -276,7 +276,7 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		add(p.st.Dim.Render(truncate("muted: "+oneLine(r.MuteReason), inner)))
 	}
 	if o := r.Open; o != nil && !mergedOnGitHub(r) && !closedUnmerged(r) {
-		line := "verdict: " + o.word() + p.g.sep + oneLine(o.Why)
+		line := "verdict: " + r.openWord() + p.g.sep + oneLine(o.Why)
 		if o.Stale {
 			line = "verdict: looking" + p.g.sep + "magnum's last word (" + strings.ReplaceAll(oneLine(o.Verdict), "_", " ") +
 				") no longer tells the PR's state"
@@ -318,6 +318,18 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		add(p.pal.yellow.Render(truncate("magnum does not approve it as you: "+oneLine(r.AutoRefused), inner)))
 	} else if r.NeedsMe != "" && r.NeedsMeReason != "" { // its clean review is a comment the approval's gates asked for
 		add(p.pal.yellow.Render(truncate(oneLine(r.NeedsMeReason), inner)))
+	}
+	if r.DeployFirst != "" { // staging's line: yours to act on (E), or a quiet note on a colleague's PR
+		line, style := oneLine(r.DeployFirst), p.st.Dim
+		if r.Open != nil || p.isMine(r.Author, false) { // E deploys your own PRs only: another's merge is its author's
+			line += " (" + rowActDefs[actStaging].key + " deploys it)"
+		}
+		if r.DeployNeedsYou() {
+			style = p.pal.yellow
+		}
+		for l := range strings.SplitSeq(lipgloss.NewStyle().Width(inner).Render(line), "\n") { // wrapped: a migration's path is long, and the offer comes last
+			add(style.Render(l))
+		}
 	}
 	if r.NeedsMe != "" && r.ApproveAs == nil { // A refuses: no auto_approve_as to approve as
 		add(p.pal.yellow.Render(truncate(onlyYourApproval(rowActDefs[actBrowser].key), inner)))
