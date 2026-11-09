@@ -8957,6 +8957,9 @@ const StagingDeployWait = 10 * time.Minute
     waits that long, and a deploy asked longer ago is refused (nobody waits for
     it any more).
 
+const StagingResolvePrompt = "staging-resolve.md"
+    StagingResolvePrompt is the staging resolver's prompt file.
+
 const WhiteboardCommand = "whiteboard"
     WhiteboardCommand is the Whiteboard CLI magnum runs: `whiteboard` on PATH
     (the daemon's LaunchAgent PATH has ~/.local/bin).
@@ -18467,12 +18470,26 @@ func (c *Client) MergeFFOnly(ctx context.Context, repo, base, branch string) err
     are, staged ones staged: the merge never stashes them (--no-autostash,
     whatever merge.autoStash says, as RebaseOnto).
 
+func (c *Client) MergeNoCommit(ctx context.Context, dir, rev string, who Signature) ([]string, error)
+    MergeNoCommit merges rev into the work tree at dir and stops before
+    it commits (`git merge --no-commit --no-ff`): HEAD stays where it is,
+    the merge is in progress (MERGE_HEAD), and the conflicted paths, sorted,
+    are what it returns (nil when the merge applied cleanly). who stands in
+    for the committer git asks for; nothing is committed. Rerere is off,
+    so no recorded resolution resolves a path in the agent's place.
+
 func (c *Client) MergeTree(ctx context.Context, dir, head, base string) (tree string, conflicts []string, err error)
     MergeTree is MergeConflicts with the merge itself: the id of the tree `git
     merge-tree --write-tree head base` writes for a clean merge (no conflicts),
     else no tree and the conflicting paths, sorted. It writes the merge's
     objects and no ref, index or work tree, so CommitTree can make the merge
     commit of that tree with nothing checked out.
+
+func (c *Client) MergeTreeWrite(ctx context.Context, dir, a, b string) (tree string, conflicts []string, err error)
+    MergeTreeWrite is `git merge-tree --write-tree a b` with both its answers:
+    the merged tree (conflict markers in its conflicted files) and the
+    conflicted paths, sorted, nil for a clean merge. It writes objects alone:
+    no ref, index or work tree.
 
 func (c *Client) ModifiedPaths(ctx context.Context, dir, base, head string) ([]string, error)
     ModifiedPaths is ChangedPaths without the files head adds: the paths that
@@ -18507,6 +18524,9 @@ func (c *Client) OwnerUsesSSH(ctx context.Context, cloneRoot, owner string) (boo
     FindClone reads them (".git" required, "__worktrees" skipped, origins cached
     until the clone's config changes), so right after a FindClone miss over the
     same root it costs no subprocess. A missing root is (false, nil).
+
+func (c *Client) Parents(ctx context.Context, dir, rev string) ([]string, error)
+    Parents lists the parents of commit rev, in order.
 
 func (c *Client) PatchID(ctx context.Context, dir, rev string) (string, error)
     PatchID is the stable patch id of commit rev's change from its first
@@ -18690,6 +18710,10 @@ func (c *Client) UntrackedFiles(ctx context.Context, dir string, paths ...string
     ending in /). Relative to the top, sorted. It is read-only and does not take
     the index lock.
 
+func (c *Client) UpdateRef(ctx context.Context, dir, ref, sha string) error
+    UpdateRef points ref, under refs/magnum/, at the commit sha (a full id):
+    `git update-ref --no-deref`. Any other ref is refused.
+
 func (c *Client) UpdateRefDelete(ctx context.Context, mainClone, ref string) error
     UpdateRefDelete deletes a ref under refs/magnum/ (for example PRRef(n)).
     It is idempotent: a missing ref is not an error. Other namespaces are
@@ -18717,6 +18741,11 @@ func (c *Client) WorkTreeChanges(ctx context.Context, dir, base string, skip fun
     (nil skips none), e.g. logs the tool never reads; a tracked change counts
     whatever skip says of its path. Sorted, without duplicates; nil when they
     all match base.
+
+func (c *Client) WorkTreeDiff(ctx context.Context, dir, rev string) ([]string, error)
+    WorkTreeDiff lists the tracked paths whose content in the work tree at
+    dir is not rev's (a commit or a tree), sorted: `git diff --name-only rev`,
+    without rename detection. Untracked files are not listed.
 
 func (c *Client) WorktreeAdd(ctx context.Context, mainClone, path, ref string, detach bool, branch string) error
     WorktreeAdd creates a worktree at the absolute path, checking out ref.
@@ -18753,6 +18782,14 @@ func (c *Client) WorktreeRemove(ctx context.Context, mainClone, path string, for
     WorktreeRemove removes the worktree at path. force also removes a worktree
     with modified or untracked files (git refuses without it); a locked worktree
     is never removed.
+
+func (c *Client) WriteTreeFrom(ctx context.Context, dir, base string, paths []string) (string, error)
+    WriteTreeFrom writes the tree that is base with each of paths as the
+    work tree at dir holds it (added or changed; a path the work tree lacks
+    is left out of it) and returns its id. It goes through an index of its
+    own (GIT_INDEX_FILE in a temporary directory), so the work tree's index,
+    with whatever a merge in progress or an agent left in it, is neither read
+    nor changed.
 
 type CloneOptions struct {
 	// CredentialHelper, when set, is the only credential helper of the clone
