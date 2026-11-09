@@ -827,7 +827,9 @@ answer); it never needs your attention. A changed verdict posts one short review
 meanwhile wins: the re-review of the new head reads the replies too. After two of Magnum's rebuttals in
 a thread, an answer marks the thread `stop`: the judge replies there no more, `post-review` refuses to,
 and the board flags the PR for you (`pr.stalemate`; `reviewed · argued` in STATE) until you act on it
-(`magnum review`, a verdict, a mute). Replies older than the daemon's first start with this build start nothing on their own; the board
+(`magnum review`, a verdict, a mute). The judge still decides the finding, and writes the stopped threads
+whose finding it keeps open as `stops_open` in its result: a thread whose answer it accepts is not
+flagged, and a later round that settles a flagged thread clears the flag. Replies older than the daemon's first start with this build start nothing on their own; the board
 counts them (`↩N`), and `magnum review --replies` (the board's `r` on such a row) re-decides them now.
 
 CI that finishes red after the review gets a round of its own too. The judge reads the head's failing

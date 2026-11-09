@@ -16938,6 +16938,29 @@ skill versions); people add theirs to the sections before it, at the end of the 
   teardown after a wait that ran out or was cut short); engine's
   TestAReplaysPanesRunWithTheEnvItsCheckoutWasPreparedWith; TestARepositoryWithoutSetupOrCopyFilesKeepsTheBareWorktree
   pins what stays. The slots tests pass unchanged.
+- **The judge names the stopped threads it keeps open** (2026-11-09, amends "Replies on magnum's threads get an
+  answer without a push"). Five PRs stayed in NEEDS YOU as `reviewed · argued` with nothing left to decide: each
+  flag was raised, or raised again, by the same round whose posted review accepted the author's last answer in
+  that thread ("Fixed: …", "Answered: … accepted"). A thread is marked `stop` from its replies alone (two
+  rebuttals, then someone else's answer), before the judge's prompt; the prompt says to decide the finding as
+  usual, but the result carried no per-thread decision, only counts, so every stopped thread the operator had
+  not seen was flagged. And `stop` never goes: post-review refuses any reply after two rebuttals, an ack
+  included, so the author's answer stays the last reply and only an operator action cleared the flag. Now the
+  re-review and recovery prompts' stop sentence asks the judge to write the ids of the stopped threads whose
+  finding it keeps open as `stops_open` in its result file (`[]` when the answers settle them all), and a posted
+  or replied round keeps only those in `RoundResult.Stops` (an id that is not a stopped thread adds nothing).
+  The engine is unchanged: its empty-stalemate branch clears a stale flag on the next round that reads the
+  threads and settles them, without a seen mark, so a later round that holds the same answer open flags it
+  again. What stays: the `stop` mark in `review-threads.json`, `.StopThreads` and post-review's refusal; a
+  result without `stops_open`, or with one that is not a list of strings, and a round with no posted or replied
+  verdict (failed, stopped, needs attention) keep every stop as before; the seen rules and the loop's forced
+  re-review leaving flags in place. A flag already in the registry clears on the next such round or an operator
+  action (`r`). SKILL.md is not touched (the prompt carries the instruction). Rejected: dropping resolved threads
+  (one PR's thread was resolved for days while the judge rightly held its P2 open in 12 reviews, and two of the
+  five were unresolved); reading "Fixed:" and "Answered:" in the review body (the judge's own words, in no
+  contract). Tests, failing first: pipeline's TestTheRoundKeepsOnlyTheStopsTheJudgeHoldsOpen (a posted
+  re-review and a reply round; absent and malformed keep both) and TestParseResultReadsTheStopsTheJudgeHoldsOpen;
+  engine's TestAStalemateTheJudgeSettlesClearsWithoutASeenMark pins that the engine half needed no change.
 
 - **A comment that left optional findings only needs the operator as a clean one does** (2026-11-09, amends
   "PRs Magnum approved that still need the operator's approval", 2026-10-06, after an audit of PRs waiting on
