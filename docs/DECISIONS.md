@@ -21018,8 +21018,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   2026-11-09). On 2 of 4 PRs the first posted round found a P2 on the same head the local round passed, and nothing
   counted it.
   - What an escape is. Once per published task, at magnum's first round on its PR that posted a review (a run with
-    outcome posted and a review id) and began after the publish (its first run created at or after
-    `pr_links.opened_at`; a PR's earlier rounds do not count), each P0 to P2 finding the round posted that no finding
+    outcome posted and a review id) and began after the publish (its first run created at or after the first begin of
+    the publish effect, which keeps that time across a resume and a run after a failure, else `pr_links.opened_at`,
+    written only after the PR's read-back; a PR's earlier rounds do not count), each P0 to P2 finding the round posted
+    that no finding
     of the task's local review caught. `internal/escapes` matches: the same path, ranges at most 3 lines apart, at
     comparable heads; a posted finding with no path or no line is an escape of its own (`unplaced`), one with no local
     finding on its path at a comparable head `no_local`, one whose nearest such finding is farther `far`, stored with
@@ -21032,37 +21034,54 @@ skill versions); people add theirs to the sections before it, at the end of the 
     moved the head on before magnum's round, so two different heads compare where the file reads the same at both
     (`escapes.SameCode`): `git diff --name-only <local> <posted> -- <path>` (gitx's `DifferingPaths`, the same answer as
     `git diff --quiet`) through the factory's guarded git runner, read only, memoized per path and heads within one
-    check. It runs in the task's copy while it holds one, else in the first copy of the repository on disk: a published
-    task's copy was released at the publish, and every copy is a worktree of the main clone, whose objects hold every
-    commit a copy made; never the main clone itself, which may be your checkout. Without a copy on disk, where git
-    fails, and past the diffs' minute, findings compare at the same head only, and the check still completes; its event
-    says so.
+    check. It runs in the task's copy while it holds one, else in the copies of the repository on disk, each only with
+    its `.git` (a half provisioned or half removed copy is a bare directory, where git would look above it), the next
+    copy asked when git fails in one: a published task's copy was released at the publish, and every copy is a
+    worktree of the main clone, whose objects hold every commit a copy made; never the main clone itself, which may be
+    your checkout. The copies are read off the loop, in the check.
+  - Complete or not. A check is complete when every comparison of a posted finding's file at two heads ran and magnum
+    recorded the findings its round's result counts. Without a copy on disk, with git failing in every copy, with the
+    diffs past their minute, or with a round whose result counts P0 to P2 findings and whose rows magnum has none of
+    (a result without provenance, or a read between the verdict and the record), the check stores nothing and is
+    tried again after 5 minutes, its cause logged once; only its sixth try stores it, with the files it compared at
+    the same head only (`same_head_only`) and the findings unrecorded (`unrecorded`) counted on the row, which the
+    event and the stats say. A passing failure so never stores a wrong count for good, and one that persists (a head
+    no copy has, a copies volume that stays unplugged) is stored flagged rather than never. Only the comparisons of
+    posted findings' files count: those of the comparable count alone do not.
   - Off the loop. The tick's PR follow starts a task's check once magnum posted a review of the PR
     (`PRState.Review`) while the task has no stored check; the check (the read of magnum's round, one query with its
     findings, `store.FirstPostedReview`; the registry's reads; the diffs) runs in the background within 2 minutes, at
     most one per task, none while the daemon drains. A check that found no round after the publish is not started
     again before magnum posts another review; one that stored nothing for a failure or a panic waits 5 minutes. The
     check and its escapes are one transaction, written once (`RecordEscapeCheck` writes nothing for a task checked
-    before), and a drain that cuts the check records nothing.
+    before), and a stop that cuts the check records nothing (its reads, or the diffs of its last try, whose
+    incomplete result would otherwise be stored).
   - What is kept. `escape_checks` (migration 0007): magnum's run and round, the head, the P0 to P2 findings posted,
-    the local findings placed at a comparable head, the time. `escapes`: magnum's finding id (unique per task), the
+    the local findings placed at a comparable head, the files compared at the same head only, the findings
+    unrecorded, the time. `escapes`: magnum's finding id (unique per task), the
     path and lines, the priority, the factory's `titleHash` of the title, the reason, and for far only the nearest
     local finding and the distance. No title, body or other text of magnum's registry or the PR is stored, logged or
     put in an event (the test reads every column of every table of a file registry for a hostile title).
-  - CI after publish. Each follow writes the PR's CI as magnum last read it (`PRState.CI` at its head) to the task's
-    checks, kind `ci` from source `github`: a passed or failed head only (never pending, skipped or none, nor CI of an
+  - CI after publish. Each follow writes the PR's CI as magnum last read it (`PRState.CI` at its head: the state over
+    every check of the head that `ignore_checks` leaves in, required or not) to the task's checks, kind `ci` from
+    source `github`: a passed or failed head only (never pending, skipped or none, nor CI of an
     older commit than the head), one row per task, head and result (`RecordGitHubCI` looks and writes in one
     transaction), so a head that failed and then passed has both rows. The cause stays empty: nothing magnum reads of
     a PR's own CI says a failure is not ours. The only not-ours reading in the code is the staging status's of the
     staging branch's ci.yml run (R27), and R47 dispatches CI rather than classifying it.
   - Stats. Per task with a PR and in total, in the markdown and in `--json` (`quality`): the escapes by priority (and
-    those with no line), or `not yet` (`escapes: null`) before a check; the fixers' pushes and commits on the PR, from
+    those with no line, and the files compared at the same head only), `unknown` for a check whose findings magnum
+    did not record, `not yet` for a published task without a check and `not checked` for one that ended without one
+    (`escapes_state`; `escapes: null` without a check; the report's total is `escapes_total`, an integer, apart from
+    the per-task object); the fixers' pushes and commits on the PR, from
     magnum's `fix.pushed` events (`FixLoopsOf`, read only; a push that names no count is one commit); and the CI
     failures after the publish, not ours apart. The baseline is untouched.
   Rejected: escapes as `review_findings` rows with `posted` in their sources (a posted finding is no local one, and
   the local review's counts would change); comparing at equal heads only (the local fixes move the head, so nearly
   every local finding would be incomparable); the main clone or a fetch for the diffs (your checkout, and a write);
-  the git calls on the loop; a unique index on `checks` for the CI rows (the existing record of causes writes several
+  the git calls on the loop; storing an incomplete check at once (a slow or briefly failing git would count escapes
+  that are none, for good); retrying an incomplete check forever (a persistent cause would leave it unchecked); checks
+  of ended tasks in this change (`not checked` says so); a unique index on `checks` for the CI rows (the existing record of causes writes several
   GitHub CI rows of one head, and the only writer of these keeps them single in its transaction); reading the
   posted round's findings one query per finding.
   Tests: the registry's TestTheEscapesMigrationAppliesOnTheTemplateAndAVersion6File,
@@ -21070,12 +21089,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestFirstPostedReviewIsTheFirstRoundThatBeganSinceAndPosted; the factory's
   TestFirstPostedRoundReadsMagnumsFirstPostedRoundSinceThePublish, TestAPostedP2NoLocalFindingIsNearIsAnEscape,
   TestALocalFindingThreeLinesAwayCatchesAndFourIsFar, TestDifferentHeadsCompareWhereTheFileDidNotChange,
-  TestWithoutACopyOrGitHeadsCompareOnlyWhenEqual, TestTheEscapeCheckRunsOnce,
+  TestAnIncompleteCheckIsTriedAgainThenStoredWithItsSameHeadFiles,
+  TestADeadlineOfTheDiffsStoresNothingAndTheNextTryCompares, TestACopyWithoutGitIsSkippedAndAFailingCopyGivesWayToTheNext,
+  TestTheFirstPostedRoundCountsFromThePublishsFirstBegin, TestAStopMidCheckWritesNothingAndTheNextDaemonChecksOnce,
+  TestAFailedCheckWaitsItsRetryAndIsLoggedOnce, TestATaskHasOneCheckAtATime,
+  TestARoundWhoseFindingsMagnumDidNotRecordIsStoredUnrecorded, TestTheEscapeCheckRunsOnce,
   TestNoEscapeCheckBeforeAPostedRoundAfterThePublish, TestAPostedTitleNeverReachesTheFactorysRegistry,
   TestThePRsCIAfterThePublishIsCopiedOncePerHeadAndResult and TestFixLoopsCountTheFixersPushesAndCommits; stats'
   TestStatsShowTheQualityOfThePublishedPRs; the CLI's TestFactoryStatsShowsTheQualityOfThePublishedPRs. The follow's
-  call, the P0 to P2 filter, the head rule, the CI's stale guard and its once-per-head rule were each taken out once,
-  and a test failed.
+  call, the P0 to P2 filter, the head rule, the CI's stale guard and its once-per-head rule, the incomplete check's
+  retry, the publish effect's cutoff, the `.git` rule, the next copy, the stop's guard, the one-check guard and the
+  retry's wait were each taken out once, and a test failed.
 
 ## Learned rules
 

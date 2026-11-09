@@ -59,8 +59,10 @@ func newFactoryStatsCmd(c *Context) *cobra.Command {
 			"(the target is zero; read from magnum's registry, never written or migrated, over the events it keeps). "+
 			"For each task with a published PR it also shows the PR's quality, per task and in total: the escapes, the P0 to P2 "+
 			"findings of magnum's first round on the PR that posted a review after the publish which no finding of the local review "+
-			"caught (none on the file within 3 lines, at a head where the file reads the same), by priority, or \"not yet\" before such "+
-			"a round; the commits magnum's fixers pushed on the PR (from magnum's registry); and the PR's CI failures after the "+
+			"caught (none on the file within 3 lines, at a head where the file reads the same), by priority, with the files a check "+
+			"compared at the same head only, or \"not yet\" before such a round, \"not checked\" for a task that ended without a check "+
+			"and \"unknown\" when magnum recorded none of the findings its round counts; the commits magnum's fixers pushed on the PR "+
+			"(from magnum's registry); and the PR's CI failures after the "+
 			"publish, one per head, those not ours apart. "+
 			"The numbers come from the evidence records of the factory's "+
 			"registry, which this command only reads (it never creates one, and it refuses to migrate one while a "+

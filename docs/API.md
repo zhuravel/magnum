@@ -14211,12 +14211,16 @@ type PostedRound struct {
 	ReviewID int64
 	Start    time.Time
 	Findings []PostedFinding
+	Counts   [4]int
+	Counted  bool
 }
     PostedRound is magnum's round on a PR that posted a review
     (Magnum.FirstPostedRound): the run of its judge that posted it (RunID,
     magnum's runs.id), the round's number, the head it reviewed, the review's id
     on GitHub, when the round began (its first run), and the findings it posted,
-    in the judge's order.
+    in the judge's order. Counts are the new findings the round's result counts,
+    P0 to P3 (store.ReviewSummary.Counts), when Counted: a result without
+    provenance counts findings magnum recorded no row of.
 
 type PrecheckResult struct {
 	Passed     bool
@@ -15210,19 +15214,25 @@ type Escape struct {
     lie between them. At is the check's time.
 
 type EscapeCheck struct {
-	TaskID             int64
-	RunID              string
-	Round              int
-	HeadSHA            string
-	Posted, Comparable int
-	At                 time.Time
+	TaskID                   int64
+	RunID                    string
+	Round                    int
+	HeadSHA                  string
+	Posted, Comparable       int
+	SameHeadOnly, Unrecorded int
+	At                       time.Time
 }
     EscapeCheck is the one check of a published task's local review against
     magnum's first round on the task's PR that posted a review and began
     after the publish (migrations/0007_escapes.sql): magnum's run that posted
     the review (RunID, runs.id) and its Round, the head that round reviewed,
-    how many P0 to P2 findings it posted, how many of the task's local findings
-    were placed at a head comparable with it, and when the check ran.
+    how many P0 to P2 findings it posted, how many of the task's local
+    findings were placed at a head comparable with it, and when the check ran.
+    SameHeadOnly counts the files of the posted findings the check compared at
+    the same head only, as git could not compare them at two heads (none means
+    every comparison ran); Unrecorded the P0 to P2 findings the round's result
+    counts that magnum recorded no row of (above zero, the escapes are unknown,
+    not none).
 
 type Event struct {
 	ID     int64
@@ -16570,6 +16580,25 @@ with a published PR, the PR's quality: what the local review missed at magnum's
 first posted round (the escape checks) and the PR's CI failures after the
 publish (its CI checks). Compute only reads the registry.
 
+CONSTANTS
+
+const (
+	// EscapesChecked: the task's check is stored.
+	EscapesChecked = "checked"
+	// EscapesUnrecorded: the check is stored, but magnum recorded none of
+	// the P0 to P2 findings its round's result counts: the escapes are
+	// unknown.
+	EscapesUnrecorded = "unrecorded"
+	// EscapesNotYet: the task is published and magnum has posted no round
+	// since the publish (or its check is still to run).
+	EscapesNotYet = "not_yet"
+	// EscapesNotChecked: the task ended (done, stopped, failed) without a
+	// check, which only a published task gets: none will come.
+	EscapesNotChecked = "not_checked"
+)
+    The states of a task's escapes (Quality.EscapesState).
+
+
 VARIABLES
 
 var ErrBaselineFrozen = errors.New("the baseline is frozen once and never rewritten")
@@ -16708,12 +16737,18 @@ func (d Dist) Where(v float64) string
 
 type Escapes struct {
 	Posted, P0, P1, P2, Unplaced int
+	SameHeadOnly, Unrecorded     int
 }
     Escapes counts what the local review missed at magnum's first posted round
     on a task's PR (the registry's escape check): Posted is how many P0 to P2
     findings that round posted, P0, P1 and P2 the escapes by priority (the P0
-    to P2 findings no local finding caught), and Unplaced those of them with no
-    line any local finding could be near (a finding of the review's body, say).
+    to P2 findings no local finding caught), and Unplaced those of them with
+    no line any local finding could be near (a finding of the review's body,
+    say). SameHeadOnly counts the files of the posted findings the check
+    compared at the same head only (git could not compare them at two heads,
+    so a local finding at another head caught nothing there), and Unrecorded the
+    P0 to P2 findings the round's result counts that magnum recorded no row of
+    (the escapes are then unknown).
 
 func (e Escapes) MarshalJSON() ([]byte, error)
     MarshalJSON writes the counts with fixed keys, and their total.
@@ -16754,36 +16789,43 @@ func (p PR) String() string
     String is "owner/name#N", "" for none.
 
 type Quality struct {
-	Escapes   *Escapes `json:"escapes"`
-	CIFailed  int      `json:"ci_failed"`
-	CINotOurs int      `json:"ci_failed_not_ours"`
+	EscapesState string   `json:"escapes_state"`
+	Escapes      *Escapes `json:"escapes"`
+	CIFailed     int      `json:"ci_failed"`
+	CINotOurs    int      `json:"ci_failed_not_ours"`
 }
     Quality is what a task's published PR said of the factory's work after the
-    publish: Escapes what the local review missed at magnum's first posted round
-    on the PR (nil: not yet, magnum has posted no round since the publish),
+    publish: EscapesState whether its local review was checked (EscapesChecked
+    and the others), Escapes what the check found (nil without a check),
     CIFailed the failed CI on the PR's heads (GitHub's ci checks, one per head
     and result) but those marked not ours, and CINotOurs those apart.
 
 type QualityTotals struct {
-	PRs        int  `json:"prs"`
-	Checked    int  `json:"checked"`
-	NotYet     int  `json:"not_yet"`
-	Posted     int  `json:"posted"`
-	Escapes    int  `json:"escapes"`
-	P0         int  `json:"p0"`
-	P1         int  `json:"p1"`
-	P2         int  `json:"p2"`
-	Unplaced   int  `json:"unplaced"`
-	CIFailed   int  `json:"ci_failed"`
-	CINotOurs  int  `json:"ci_failed_not_ours"`
-	FixPushes  *int `json:"fix_pushes,omitempty"`
-	FixCommits *int `json:"fix_commits,omitempty"`
+	PRs                int  `json:"prs"`
+	Checked            int  `json:"checked"`
+	NotYet             int  `json:"not_yet"`
+	NotChecked         int  `json:"not_checked"`
+	ChecksUnrecorded   int  `json:"checks_unrecorded"`
+	ChecksSameHeadOnly int  `json:"checks_same_head_only"`
+	Posted             int  `json:"posted"`
+	EscapesTotal       int  `json:"escapes_total"`
+	P0                 int  `json:"p0"`
+	P1                 int  `json:"p1"`
+	P2                 int  `json:"p2"`
+	Unplaced           int  `json:"unplaced"`
+	CIFailed           int  `json:"ci_failed"`
+	CINotOurs          int  `json:"ci_failed_not_ours"`
+	FixPushes          *int `json:"fix_pushes,omitempty"`
+	FixCommits         *int `json:"fix_commits,omitempty"`
 }
-    QualityTotals are the quality numbers over a report's tasks with a PR:
-    how many PRs, how many were checked for escapes and how many are not yet,
+    QualityTotals are the quality numbers over a report's tasks with a PR: how
+    many PRs; how many were checked for escapes (Checked, those whose round's
+    findings magnum recorded), how many are not yet, not checked, or checked
+    with their findings unrecorded (ChecksUnrecorded), and how many of the
+    checked ones compared some files at the same head only (ChecksSameHeadOnly);
     the P0 to P2 findings the checked ones' first posted rounds posted,
-    the escapes in all and by priority with those with no line apart, the CI
-    failures after the publish with those not ours apart, and, when SetFixLoops
+    the escapes in all and by priority with those with no line apart; the CI
+    failures after the publish with those not ours apart; and, when SetFixLoops
     read them, the fixers' pushes and their commits (nil: not read).
 
 type Report struct {
@@ -29559,9 +29601,10 @@ func (s *Store) FirstPostedReview(ctx context.Context, prID int64, since time.Ti
     created then; the rounds in the order they began), with the findings it
     posted, every priority, in the judge's order: the round as ReviewedPRs
     reads a posted review (its run is the earliest of the round that carries the
-    review; Summary is left unread), its findings the posted rows of that round
-    (findings.verdict posted). A round that began before since does not count,
-    however late it posted. One query; false when no such round exists yet.
+    review, Summary what that run's result says, OK false for none that parses),
+    its findings the posted rows of that round (findings.verdict posted).
+    A round that began before since does not count, however late it posted.
+    One query; false when no such round exists yet.
 
 func (s *Store) ForgetHerdrIDs(ctx context.Context) (int64, error)
     ForgetHerdrIDs clears the herdr workspace, tab and pane of every session
