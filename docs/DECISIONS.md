@@ -21149,15 +21149,30 @@ skill versions); people add theirs to the sections before it, at the end of the 
     It is part of the frame's key (`stagingChoice.key`). A click closes it.
   - The plan's question is the factory's own (`res.nextFactory`, as P's) with a `wrap` flag: on home it takes the
     body's last lines above the rule, as on the board (up to half the screen); on the task card it wraps over the
-    footer (up to half of it). It is cleaned when it arrives (P's too: the daemon's text). It goes up only where it
-    is drawn whole and nothing else asks (`raiseHeld`): home, its filter not typed, or the task card, the menu
-    closed and no other question, chooser or action. Anywhere else the bar holds it (`factoryBar.held`), the footer
-    says that its y/N comes up on home or the task card, and it does once the operator is back: the recap draws its
-    own "Send 2 answers?", the question and ready cards and the form cut a question to three lines (the ready card
-    adds its push's "It frees"), the form and the filter take a y as text, the help and the log draw one cut line.
-    Before, a plan that answered on the recap took the bar under the recap's own question, and y deployed (or, for
-    P, on master too, merged the parent) instead of sending the answers. The ready card adds what its push frees to
-    its own decision's question alone. y runs `StagingDeploy` bound to the plan's envs, head and what it named.
+    footer (up to half of it). It is cleaned when it arrives (P's too: the daemon's text). y runs `StagingDeploy`
+    bound to the plan's envs, head and what it named.
+  - Where a plan's question goes up (E's and P's, one rule in the factory bar). The plan runs in the background,
+    and the navigation keys work meanwhile, so it can answer anywhere. Its question goes up at once only where its
+    key was pressed (`planHere`): home with its row under the cursor (the filter not typed), or that row's card,
+    the menu closed and no other question or chooser up. Anywhere else the bar holds it (`factoryBar.held`, one per
+    row and key, oldest first), and it never comes up by itself: no y/N appears that the operator did not ask for
+    with a key on that row. E (or P) on its row puts the held question up instead of a new chooser or plan
+    (`raiseHeld`); on another row they act as usual, and the held plan stays. While the footer has nothing else to
+    say, its rule says `plan of PR-12345 ready: E on its row asks` (and how many more): the marker is the footer's
+    last word, after a note and the action in flight, so it never hides another action's outcome or failure; it is
+    in the frame's key. A held plan is dropped (`dropHeld`, before and after each update) once it is `heldPlanFor`
+    old by the screen's clock (the engine's `StagingDeployWait`, 10 minutes, which a test keeps equal: P's y binds
+    nothing of its plan, so its plan must not grow old), once its row leaves home, or once its PR is no longer the
+    row's open PR or magnum's registry says it is merged or closed. The drop's note goes to the action log, and to
+    the footer only while the footer says nothing else.
+  - Why this rule. Round one of the review found that a plan answering on the recap took the bar under the recap's
+    own "Send 2 answers?", and y deployed (or, for P, on master too, merged the parent) instead of sending the
+    answers; and that the question was cut on the other cards, the help, the log and the form (the ready card even
+    added its push's "It frees"). Raising a held question once home or the task card was free fixed those, but
+    round two found that it then came up by itself: in the update that ended another y-confirmed action (a second y
+    deployed), on another task's card, or hours later, when P's y merged a tip the question no longer described; and
+    its "plan is ready" note took the place of every later action's outcome and failure. The ready card adds what
+    its push frees to its own decision's question alone (`askOther`).
   - Following the deploy. The factory bar re-reads no request, and the daemon plans again before it answers, which
     can take minutes; a deploy still pending ends its text saying that it is queued and that `magnum staging <ref>`
     (the PR's own reference) follows it. The task card shows the PR's staging deploys under STAGINGS, from the
@@ -21171,8 +21186,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     states), as cells or for the chooser's words, so that you choose on what each env holds.
   Rejected: a deployer in the factory daemon (above); a second chooser for the factory screen (two key maps to keep
   in step); the plan's question raised on every view and drawn whole there (each card, the help, the log and the
-  form would need the wrap, and the recap a second question beside its own), or dropped with a note (the plan run
-  again for nothing); staging cells for your own PRs' rows now (it changes home's rows: the follow-up above);
+  form would need the wrap, and the recap a second question beside its own); a held question raised by itself once
+  home or the task card is free (round two above); a held plan dropped at once (the plan run again for nothing);
+  staging cells for your own PRs' rows now (it changes home's rows: the follow-up above);
   following the deploy's request on the factory bar (it follows none, by design, and the card's deploy lines show
   the effect once the daemon answers).
   Tests: tui's TestFactoryEOnAHomeRowChoosesTheEnvsThenDeploysAfterThePlan,
@@ -21183,11 +21199,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestFactoryEsQuestionIsCleaned, TestTheTaskCardShowsItsPRsStagingDeploys, TestTheFactoryHelpNamesE,
   TestTheMenuAndTheHintsOfferE, TestFactoryEsChooserSaysTheCellsInTheBoardsStates,
   TestAStagingPlansQuestionNeverTakesTheRecapsY, TestAMergePlansQuestionNeverTakesTheRecapsY,
-  TestAPlansQuestionWaitsForAViewThatShowsItWhole, TestAPlansQuestionWaitsWhileTheFilterIsTyped and
-  TestTheReadyCardFreesOnlyItsOwnPushsQuestion (the board's E tests pass unchanged on the shared keys); the cli's
-  TestTheFactoryScreensStagingDeployIsTheBoards, TestTheFactoryScreenReadsItsPRsStagingDeploys and
-  TestTheFactoryScreenGivesItsPRsTheConfigsStagingEnvs; the factory's TestTheFactoryStagingClientCannotDeploy,
-  which fails once the fetch clock passes the deploy's git through.
+  TestAPlansQuestionWaitsForItsRowsKey, TestAPlansQuestionWaitsWhileTheFilterIsTyped,
+  TestAHeldPlanNeverComesUpOnAnotherTasksCard, TestEAndPOnAnotherRowLeaveAHeldPlan,
+  TestAHeldPlanIsDroppedWhenItCannotHold, TestAHeldPlanNeverHidesAnotherActionsOutcome,
+  TestAHeldPlanWaitsAsLongAsTheEnginesDeployWait and TestTheReadyCardFreesOnlyItsOwnPushsQuestion (the board's E
+  tests pass unchanged on the shared keys); the cli's TestTheFactoryScreensStagingDeployIsTheBoards,
+  TestTheFactoryScreenReadsItsPRsStagingDeploys and TestTheFactoryScreenGivesItsPRsTheConfigsStagingEnvs; the
+  factory's TestTheFactoryStagingClientCannotDeploy, which fails once the fetch clock passes the deploy's git
+  through.
 
 ## Learned rules
 
