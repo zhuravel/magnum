@@ -647,7 +647,7 @@ func TestPsQuestionShowsWholeOnHome(t *testing.T) {
 	h.press("P")
 	v := h.view()
 	asked := ""
-	for _, l := range strings.Split(v, "\n") {
+	for l := range strings.SplitSeq(v, "\n") {
 		if asked == "" && !strings.Contains(l, "Merge the parent of") {
 			continue
 		}
