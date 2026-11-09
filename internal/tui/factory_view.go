@@ -588,8 +588,16 @@ func (p *factoryPainter) whoStyle(w WaitsOn) lipgloss.Style {
 	return p.st.Accent
 }
 
-func (p *factoryPainter) waitsCell(r FactoryRow, form factoryForm) cell {
+// waitsCell is the row's WAITS ON cell in layout l: the yellow fact of
+// Jira done while its PR is open when l has no STATUS column to say it
+// (jiraDoneOpen), the PR's marks (prMarks), then what it waits on, in l's
+// form.
+func (p *factoryPainter) waitsCell(r FactoryRow, l factoryLayout) cell {
+	form := l.waits
 	var c cell
+	if r.jiraDoneOpen() && l.statusW == 0 {
+		c = append(c, seg{"Jira done", p.tone(r, p.st.Warn)}, seg{p.g.sep, p.st.Dim})
+	}
 	for _, m := range p.prMarks(r) {
 		c = append(c, seg{m, p.st.Accent}, seg{p.g.sep, p.st.Dim})
 	}
@@ -730,8 +738,16 @@ func jiraAssignee(js *FactoryJiraStatus) string {
 	return "nobody"
 }
 
+// jiraDoneOpen reports whether Jira says the task's issue is done while
+// its PR is still open (magnum's registry has it open: r.PR), a fact on the
+// operator, drawn yellow: close or merge the PR, or move the issue back.
+func (r FactoryRow) jiraDoneOpen() bool {
+	return r.JiraStatus != nil && r.JiraStatus.Category == "done" && r.PR != nil && !r.yourPR()
+}
+
 // statusText is the row's STATUS cell in w cells (0: whole): its Jira
-// issue's status in its category's style, how long the issue has held it
+// issue's status in its category's style (yellow when it is done while its
+// PR is open: jiraDoneOpen), how long the issue has held it
 // (none when that is not known) and who has it when it is not you, the
 // name cut first; a dim ? when no read of it worked; nothing for a row
 // without a Jira status.
@@ -750,7 +766,11 @@ func (p *factoryPainter) statusText(r FactoryRow, w int) cell {
 	if who := jiraAssignee(js); who != "" {
 		tail = append(tail, seg{" ", noStyle}, seg{who, p.tone(r, p.st.Accent)})
 	}
-	name := cell{{js.Name, p.tone(r, jiraStyle(p.st, js))}}
+	style := jiraStyle(p.st, js)
+	if r.jiraDoneOpen() {
+		style = p.st.Warn
+	}
+	name := cell{{js.Name, p.tone(r, style)}}
 	if w > 0 && name.width()+tail.width() > w {
 		name = name.fit(max(w-tail.width(), 1))
 	}
@@ -878,7 +898,7 @@ func (p *factoryPainter) measure(l factoryLayout) factoryLayout {
 		}
 		l.keyW = max(l.keyW, ansi.StringWidth(r.keyText(l)))
 		l.titleW = max(l.titleW, ansi.StringWidth(r.titleText(l)))
-		l.waitsW = max(l.waitsW, p.waitsCell(r, l.waits).width())
+		l.waitsW = max(l.waitsW, p.waitsCell(r, l).width())
 		l.moveW = max(l.moveW, ansi.StringWidth(r.moveText(l.move)))
 		if r.CI != nil {
 			l.ciW = max(l.ciW, len("CI"), min(p.ciText(r, l.pr).width(), ciCap))
@@ -1102,7 +1122,7 @@ func (p *factoryPainter) rowPieces(r FactoryRow) []placed {
 	if l.statusW > 0 {
 		ps = append(ps, placed{x.status, l.statusW, p.statusText(r, l.statusW)})
 	}
-	ps = append(ps, placed{x.waits, l.waitsW, p.waitsCell(r, l.waits)})
+	ps = append(ps, placed{x.waits, l.waitsW, p.waitsCell(r, l)})
 	if l.ciW > 0 {
 		ps = append(ps, placed{x.ci, l.ciW, p.ciText(r, l.pr)})
 	}

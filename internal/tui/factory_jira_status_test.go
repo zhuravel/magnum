@@ -2,6 +2,7 @@ package tui
 
 import (
 	"cmp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -258,5 +259,88 @@ func TestTaskCardsJiraFailureGoesUnderALineItDoesNotFit(t *testing.T) {
 		if !strings.Contains(colored, want) {
 			t.Errorf("%s: the card lacks %q", what, want)
 		}
+	}
+}
+
+// fixtureJiraDone is the published tasks' home with their open PRs read
+// from magnum's registry: PR-12325's issue is done while its PR is open,
+// PR-12324's is in code review, the merged task's issue is done, and
+// PR-12399 (no PR read yet) has an issue that is done.
+func fixtureJiraDone() factoryFrame {
+	f := fixturePublished()
+	read := factoryAgo(factoryNow, 4*time.Minute)
+	status := func(name, category string, since time.Duration) *FactoryJiraStatus {
+		return &FactoryJiraStatus{Name: name, Category: category, Since: factoryAgo(factoryNow, since), Assigned: true, AssignedToYou: true,
+			ReadAt: read, TriedAt: read}
+	}
+	for i := range f.Rows {
+		if r := &f.Rows[i]; r.Group != GroupDone {
+			r.PR = &FactoryPR{Ref: "example/talkable" + r.GitHub}
+		}
+	}
+	f.Rows[1].JiraStatus = status("In Code Review", "indeterminate", 5*time.Hour)
+	f.Rows[4].JiraStatus = status("Done", "done", 2*time.Hour)
+	f.Rows[5].JiraStatus = status("Done", "done", 40*time.Minute)
+	f.Rows = append(f.Rows, FactoryRow{ID: 7, Key: "PR-12399", Title: "Coupon CSV export", Group: GroupWaits, Mark: MarkWaits,
+		WaitsOn: []WaitsOn{{Who: "magnum", What: "reading #4540"}}, Since: factoryAgo(factoryNow, time.Hour),
+		JiraStatus: status("Done", "done", time.Hour)})
+	f.Cursor = -1
+	return f
+}
+
+// Jira saying an issue is done while its task's PR is still open is a
+// yellow fact on the row: its STATUS cell when the screen draws one, else
+// "Jira done" before what it waits on; an issue done whose PR merged, or
+// whose PR magnum has not read, is no such fact. Before, nothing said it.
+func TestJiraDoneWhileThePRIsOpenIsAYellowFact(t *testing.T) {
+	f := fixtureJiraDone()
+	for _, w := range []int{100, 140} {
+		frame, _ := factoryFrameOf(f, w, factoryHomeHeight, true, IconsUnicode, factoryNow)
+		if n := strings.Count(strings.Join(warnRuns(t, frame), "\n"), "Jira done"); n != 1 {
+			t.Errorf("%d columns: %d yellow \"Jira done\", want 1: %q", w, n, warnRuns(t, frame))
+		}
+		lines := factoryRowLines(t, frame, f.Rows)
+		for i, line := range lines {
+			switch has := strings.Contains(line, "Jira done"); {
+			case f.Rows[i].ID == 5 && (!has || !strings.Contains(line, "Jira done · reviewers:")):
+				t.Errorf("%d columns: PR-12325's row does not say Jira done before what it waits on: %q", w, line)
+			case f.Rows[i].ID != 5 && has:
+				t.Errorf("%d columns: %s's row says Jira done: %q", w, f.Rows[i].Key, line)
+			}
+		}
+	}
+	frame, _ := factoryFrameOf(f, 200, factoryHomeHeight, true, IconsUnicode, factoryNow)
+	cells, ok := statusCells(t, frame, f.Rows)
+	if !ok {
+		t.Fatalf("200 columns draw no STATUS column:\n%s", ansi.Strip(frame))
+	}
+	if cells["PR-12325"] != "Done 2h" || strings.Contains(ansi.Strip(frame), "Jira done") {
+		t.Errorf("200 columns: PR-12325's STATUS reads %q, and the frame says Jira done %v times:\n%s", cells["PR-12325"],
+			strings.Count(ansi.Strip(frame), "Jira done"), ansi.Strip(frame))
+	}
+	if runs := warnRuns(t, frame); !slices.Contains(runs, "Done") {
+		t.Errorf("200 columns: PR-12325's Done is not yellow: %q", runs)
+	}
+	if st := newStyles(true); !strings.Contains(frame, st.OK.Render("Done")) {
+		t.Error("200 columns: PR-12399's Done, whose PR magnum has not read, is not green")
+	}
+}
+
+// The task card says the yellow fact in a short reason after its JIRA line,
+// on a task whose PR is open; one without an open PR says nothing of it.
+func TestTaskCardSaysJiraIsDoneWhileItsPRIsOpen(t *testing.T) {
+	card := fixtureJiraCard()
+	card.JiraStatus.Name, card.JiraStatus.Category = "Done", "done"
+	card.PRInfo = &CardPR{State: "open · head a1b2c3d"}
+	const reason = "Jira says done while #4530 is still open"
+	if runs := warnRuns(t, drawTask(card, 0)(140, 0, true, IconsUnicode)); !slices.Contains(runs, reason) {
+		t.Errorf("the card's yellow runs are %q, want %q", runs, reason)
+	}
+	if l := cardLineWith(t, plainCard(drawTask(card, 0), 140), "JIRA "); !strings.HasSuffix(strings.TrimSpace(l), "last read 12m ago · "+reason) {
+		t.Errorf("the JIRA line is %q, want the reason after it", l)
+	}
+	card.PRInfo = nil
+	if frame := plainCard(drawTask(card, 0), 140); strings.Contains(frame, "Jira says done") {
+		t.Errorf("a card without an open PR says Jira is done while it is open:\n%s", frame)
 	}
 }

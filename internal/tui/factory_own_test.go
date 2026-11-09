@@ -167,7 +167,7 @@ func TestAnOffPRRowIsDim(t *testing.T) {
 		if r.Key != "#4606" {
 			continue
 		}
-		for _, sg := range p.waitsCell(r, formMid) {
+		for _, sg := range p.waitsCell(r, factoryLayout{waits: formMid}) {
 			if sg.st.Render("x") != st.Dim.Render("x") {
 				t.Errorf("the off row's %q is not dim", sg.text)
 			}

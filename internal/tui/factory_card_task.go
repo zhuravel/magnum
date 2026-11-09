@@ -215,8 +215,9 @@ func (p *cardPainter) taskBody(c TaskCard) (lines []string, cursor int) {
 // CI, findings and approvals in the board's cells, as home's columns draw
 // them, the CI with why GitHub blocks the merge and the failed jobs'
 // pages under it (ciLinkRows); then STAGINGS, the PR on each staging
-// server (stagingsText), and JIRA, where its issue stands (jiraText), with
-// or without the PR's lines; a blank line after them.
+// server (stagingsText), and JIRA, where its issue stands (jiraText), why
+// its last read failed and Jira done while the PR is open (jiraDoneOpen),
+// with or without the PR's lines; a blank line after them.
 func (p *cardPainter) prSection(card TaskCard) []string {
 	const x = 1 + len("WAITING FOR") + 2
 	c := card.PRInfo
@@ -251,7 +252,7 @@ func (p *cardPainter) prSection(card TaskCard) []string {
 	}
 	row("STAGINGS", p.stagingsText(card.Stagings))
 	if js := card.JiraStatus; js != nil {
-		cl, under := p.besides(x, p.jiraText(cmp.Or(card.Issue, card.Key), js), p.jiraFailure(js))
+		cl, under := p.besides(x, p.jiraText(cmp.Or(card.Issue, card.Key), js), p.jiraFailure(js), p.jiraDoneOpen(card))
 		row("JIRA", cl)
 		out = append(out, under...)
 	}
@@ -308,6 +309,16 @@ func (p *cardPainter) jiraText(key string, js *FactoryJiraStatus) cell {
 		add("last read "+agoText(p.now.Sub(js.ReadAt)), p.st.Dim)
 	}
 	return out
+}
+
+// jiraDoneOpen is the card's yellow fact when Jira says the issue is done
+// while the task's PR is still open (PRInfo: magnum's registry has it open),
+// as its row says it; none otherwise.
+func (p *cardPainter) jiraDoneOpen(c TaskCard) seg {
+	if c.JiraStatus.Category != "done" || c.PRInfo == nil {
+		return seg{}
+	}
+	return seg{"Jira says done while " + cmp.Or(c.PR, "the PR") + " is still open", p.st.Warn}
 }
 
 // jiraFailure is why the last try of the issue failed ("now: Jira did not
