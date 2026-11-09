@@ -4345,6 +4345,15 @@ func Main(version string, args []string, stdout, stderr io.Writer) int
     Main runs args (without the program name) and returns the exit code:
     0 on success, 1 when a command fails and 2 on a usage error.
 
+func StagingQuestion(label string, ans engine.StagingDeployAnswer) (question string, envs []string, seen []engine.StagingSeen, ok bool)
+    StagingQuestion is the y/N before a staging deploy of label as the daemon
+    planned it (ans): the envs that take the merge and the head, who merges and
+    pushes, the migrations Jenkins then runs on each env's shared database,
+    a merge that changes .github/workflows, the envs left out and why, and the
+    default branch's CI while it runs. It also gives the deploy's binding: those
+    envs and what the question named of each; false when no env takes the merge,
+    the question then saying why for each.
+
 
 TYPES
 
@@ -8669,6 +8678,16 @@ const (
 	LearnAgentTag = "learn"
 )
 const (
+	// ReqStagingDeploy plans (DryRun) or starts a staging deploy of a PR
+	// (StagingDeployPayload); its answer is StagingDeployAnswer.
+	ReqStagingDeploy = "staging_deploy"
+	// ReqStagingCancel stops a staging deploy's effect
+	// (StagingCancelPayload).
+	ReqStagingCancel = "staging_cancel"
+)
+    The request kinds of the staging deploys.
+
+const (
 	DeltaComments   = "comments"
 	DeltaWhitespace = "whitespace"
 	DeltaDocs       = "docs"
@@ -8900,6 +8919,10 @@ const KVRetroRunning = "learn.retro_running"
     request that sees it started, deleted by the first one that sees it ended,
     at a restart for a new build, at shutdown and at every start of the daemon.
 
+const KVStagingDeploys = "staging.deploy.*"
+    KVStagingDeploys matches every staging deploy's record (KVStagingDeploy) in
+    one KVValues read.
+
 const ReqCodexFlag = "codex-flag"
     ReqCodexFlag flags a PR or clears its flag (CodexFlagPayload).
 
@@ -8925,6 +8948,9 @@ const SkipIgnored = "ignored"
     SkipIgnored is the skip_reason `magnum ignore` stores on a muted PR:
     classify keeps it instead of the generic "muted", and the board shows such a
     PR as ignored.
+
+const StagingAll = "all"
+    StagingAll asks for every staging env of the PR's repository.
 
 const WhiteboardCommand = "whiteboard"
     WhiteboardCommand is the Whiteboard CLI magnum runs: `whiteboard` on PATH
@@ -9326,6 +9352,10 @@ func KVPRWhiteboard(prID int64) string
     KVPRWhiteboard holds the whiteboard of a PR's latest written head
     (WhiteboardRecord as JSON).
 
+func KVStagingDeploy(id string) string
+    KVStagingDeploy is effect id's record: StagingDeployRecord as JSON,
+    its event of the newest Seq. The review daemon alone writes it.
+
 func KickDaemon(layout paths.Layout) (int, error)
     KickDaemon asks the running daemon for a tick now (SIGUSR1, `magnum kick`);
     it returns the daemon's pid, or 0 when none runs. The pidfile can outlive
@@ -9536,6 +9566,11 @@ func SkillCopyDir(state string) string
 func StagingEnvs(cfg *config.Config, repo string) []staging.Env
     StagingEnvs is repo's staging environments (config.Stagings) as
     internal/staging names them, in config order; nil for none.
+
+func StagingPlanSays(ep StagingPlanEnv) string
+    StagingPlanSays is what one env's plan says in words: why it takes no merge,
+    its conflicts, or a clean merge with the migrations it adds and its workflow
+    changes.
 
 func StagingRepos(cfg *config.Config) []string
     StagingRepos lists the repositories with staging environments a [[watch]]
@@ -11603,10 +11638,91 @@ type SnoozePayload struct {
 type Staging interface {
 	Refresh(ctx context.Context, repo string, open []staging.OpenPR) error
 	Status(pr staging.PR, envs []staging.Env) []staging.EnvStatus
+	// The deploy side (staging_deploy.go): a plan of a PR's merge per env,
+	// the effects that deploy it on the operator's word, a step of every
+	// live effect, the effects of a repository, and a cancel.
+	Plan(ctx context.Context, pr staging.PR, envs []staging.Env) (staging.DeployPlan, error)
+	Deploy(ctx context.Context, plan staging.DeployPlan, by string) ([]staging.EffectID, error)
+	Step(ctx context.Context) error
+	Effects(repo string) []staging.Effect
+	Cancel(ctx context.Context, id staging.EffectID) error
 	Close()
 }
     Staging is the read side of internal/staging the review daemon runs on:
     *staging.Client.
+
+type StagingCancelPayload struct {
+	Effect string `json:"effect"`
+}
+    StagingCancelPayload stops the staging deploy's effect Effect (its id,
+    as `magnum staging` lists it).
+
+type StagingDeployAnswer struct {
+	Ref      string           `json:"ref"`
+	Head     string           `json:"head"`
+	DryRun   bool             `json:"dry_run,omitempty"`
+	Pusher   string           `json:"pusher"`
+	AskedBy  string           `json:"asked_by"`
+	MasterCI string           `json:"master_ci,omitempty"`
+	Envs     []StagingPlanEnv `json:"envs"`
+	Effects  []string         `json:"effects,omitempty"`
+	Text     string           `json:"text"`
+}
+    StagingDeployAnswer is the daemon's answer to a staging deploy: the PR
+    (owner/name#N) and the head planned, who pushes (the fixer App's bot's
+    login) and who asked (the operator's), the default branch's CI while it runs
+    (MasterCI, a warning: "" otherwise), each env's plan in the config's order,
+    and, for a deploy, the effects it started. Text is the answer in words,
+    the request's last line.
+
+func ParseStagingDeployAnswer(result string) (StagingDeployAnswer, bool)
+    ParseStagingDeployAnswer reads a staging deploy request's answer (its first
+    line); false when it is none (a refusal's words).
+
+type StagingDeployPayload struct {
+	PRTarget
+	Envs   []string      `json:"envs,omitempty"`
+	Head   string        `json:"head,omitempty"`
+	DryRun bool          `json:"dry_run,omitempty"`
+	Seen   []StagingSeen `json:"seen,omitempty"`
+}
+    StagingDeployPayload is a staging deploy of the operator's own PR to Envs
+    (env names, in any order, or StagingAll). DryRun only plans it. A deploy
+    names Head, the head the operator was asked about (a head that moved since
+    is refused), and Seen, what the question named of each env's plan (nil
+    when nothing was asked: --yes), so a merge that now adds a migration or a
+    workflow change it did not name is refused.
+
+type StagingDeployRecord struct {
+	Effect string    `json:"effect"`
+	Repo   string    `json:"repo"`
+	Number int       `json:"number"`
+	Head   string    `json:"head"`
+	Env    string    `json:"env"`
+	By     string    `json:"by,omitempty"`
+	Step   string    `json:"step"`
+	Phase  string    `json:"phase"`
+	State  string    `json:"state"`
+	Why    string    `json:"why,omitempty"`
+	Text   string    `json:"text,omitempty"`
+	Merge  string    `json:"merge,omitempty"`
+	RunURL string    `json:"run,omitempty"`
+	Seq    int       `json:"seq"`
+	At     time.Time `json:"at"`
+}
+    StagingDeployRecord is a staging deploy's effect as its newest event left
+    it: the PR (Repo, Number, Head), the env, who started it (staging's By: cli,
+    liaison or factory), the step and phase of that event, the effect's state
+    and why, the event's words, the merge, ci.yml's run, the Seq of the journal
+    write and when the event came.
+
+func StagingDeploysOf(values map[string]string, repo string, number int) []StagingDeployRecord
+    StagingDeploysOf is the deploy records of repo#number among values (a
+    KVValues read of KVStagingDeploys), the live ones first, each group the
+    newest first; their words made safe for a terminal.
+
+func (r StagingDeployRecord) Live() bool
+    Live reports whether the effect still runs: queued or running.
 
 type StagingEnv struct {
 	Env    string `json:"env"`
@@ -11636,6 +11752,26 @@ func StagingShown(rec StagingRecord, ok bool, envs []staging.Env, head string, l
     tick (lastTick; zero: it never ran) is more than staging.StaleAfter before
     now, so the record no longer follows staging.
 
+type StagingPlanEnv struct {
+	Env        string   `json:"env"`
+	Branch     string   `json:"branch"`
+	Tip        string   `json:"tip,omitempty"`
+	Clean      bool     `json:"clean"`
+	Conflicts  []string `json:"conflicts,omitempty"`
+	Migrations []string `json:"migrations,omitempty"`
+	Workflows  bool     `json:"workflows,omitempty"`
+	Why        string   `json:"why,omitempty"`
+}
+    StagingPlanEnv is one env's plan (staging.EnvPlan): its branch and tip,
+    whether the head merges cleanly, else the conflicted paths, the migrations
+    the merge adds, whether it changes .github/workflows, and why the env takes
+    no merge (the head there already, no branch). The paths are made safe for a
+    terminal.
+
+func (p StagingPlanEnv) Deployable() bool
+    Deployable reports whether the env takes the merge: it is clean and nothing
+    stops it.
+
 type StagingRecord struct {
 	Head string       `json:"head"`
 	Envs []StagingEnv `json:"envs"`
@@ -11646,6 +11782,14 @@ type StagingRecord struct {
 func ParseStagingRecord(v string) (StagingRecord, bool)
     ParseStagingRecord reads a KVPRStaging value; false when it cannot be read
     or names no head.
+
+type StagingSeen struct {
+	Env        string   `json:"env"`
+	Migrations []string `json:"migrations,omitempty"`
+	Workflows  bool     `json:"workflows,omitempty"`
+}
+    StagingSeen is what a deploy's question named of one env's plan: its
+    migrations and whether it changes .github/workflows.
 
 type StaleCheck struct {
 	Stale          bool
@@ -28801,6 +28945,12 @@ func (s *Store) AppendEvent(ctx context.Context, e Event) (int64, error)
     Level to "info"; Kind and Message are required. Callers must redact secrets
     (execx.Redact) before putting command output into Message.
 
+func (s *Store) AppendEventOnce(ctx context.Context, e Event, key string) (bool, error)
+    AppendEventOnce is AppendEvent unless an event of e's subject, kind,
+    step and phase already carries key, in its data's "key" (set here, beside
+    e's own data fields): a delivery that comes at least once is written once.
+    It reports whether it wrote e.
+
 func (s *Store) AssignSlot(ctx context.Context, prID, slotID int64, dbNames ...string) (Assignment, error)
     AssignSlot is ClaimSlot without the PR transition: the slot moves from free
     (unpinned, no hold_reason) to claimed for prID and an open assignment is
@@ -29973,6 +30123,11 @@ func RunWatch(ctx context.Context, fetch WatchFetch, opts WatchOptions) error
 func StageDuration(d time.Duration) string
     StageDuration renders a stage's length: "12s", "18m04s", "1h02m".
 
+func StagingDeploySummary(d StagingDeploy, now time.Time) string
+    StagingDeploySummary is d in the words of the card's STAGINGS block,
+    without its effect: its state, the step and phase of its last event, and how
+    long ago that came ("running · push begin · 3m ago").
+
 func StagingSummary(s StagingInfo, now time.Time) string
     StagingSummary is s in the words of the card's STAGINGS block, without the
     env's name: its state, CI's or Jenkins' part of it, the head in the tip or
@@ -30014,6 +30169,9 @@ type ActionResult struct {
 	// (MergeParent's dry run), which the screen puts as y/N before it
 	// merges. "" for none.
 	Ask string
+	// Staging is what a staging deploy's plan (StagingPlan) binds its
+	// deploy to, which y sends (StagingDeploy); nil for none.
+	Staging *StagingAsked
 
 	// Has unexported fields.
 }
@@ -30348,6 +30506,14 @@ type DashboardActions interface {
 	// dry, it only asks the daemon what would happen and returns the plan
 	// as the result's Ask, the y/N the screen puts before the merge.
 	MergeParent(ctx context.Context, ref string, dry bool) (ActionResult, error)
+	// StagingPlan asks the daemon's plan of a staging deploy of the
+	// operator's own PR to envs (magnum staging --deploy --dry-run) and
+	// returns its y/N as the result's Ask and its binding as Staging (the
+	// envs that take the merge, the head, what the question names); an
+	// answer with nothing to deploy is an error. StagingDeploy sends the
+	// deploy so bound, once the screen's y/N said yes (E).
+	StagingPlan(ctx context.Context, ref string, envs []string) (ActionResult, error)
+	StagingDeploy(ctx context.Context, ref string, asked StagingAsked) (ActionResult, error)
 	// FixDone says that the operator did what a fix loop left them: the PR
 	// goes back from needs attention to reviewed with no review (magnum fix
 	// --done); the board's d, which asked first. seen is the digest of the
@@ -31187,6 +31353,10 @@ type PRBoardRow struct {
 	// glyphs and the card's STAGINGS block. nil for a repository without
 	// staging envs and for a PR that is not open.
 	Stagings []StagingInfo
+	// StagingDeploys are the staging deploys of the PR magnum runs, or ran
+	// in the last day, live ones first, each as its newest event left it
+	// (engine.StagingDeployRecord): the card's lines under each env.
+	StagingDeploys []StagingDeploy
 }
     PRBoardRow is one pull request on the PR board. Ref is what actions receive;
     Owner, Repo and Number label the row (Ref is parsed when they are empty).
@@ -31247,6 +31417,9 @@ type PRRow struct {
 	// fix role's identity: a fixer App's bot, or yours), which f's
 	// question names; "" when the config does not say.
 	Fixer string
+	// Stagings is where the open PR stands on its repository's staging
+	// envs (PRBoardRow.Stagings), which E's chooser lists; nil without.
+	Stagings []StagingInfo
 }
     PRRow is one queued (or closing) PR; Ref is what actions receive.
 
@@ -31930,6 +32103,8 @@ type SlotRow struct {
 	// PR: a PR whose fixer works is reviewed, so it shows on its slot's row
 	// and in no queue.
 	PRFixLoop, PRFixOff bool
+	// PRStagings is PRRow's Stagings for the slot's PR.
+	PRStagings []StagingInfo
 }
     SlotRow is one review slot. Actions on a slot row target PRRef,
     or the slot Name for pin/unpin/release when it holds no PR. SlotState is
@@ -31960,6 +32135,15 @@ type StageTiming struct {
 }
     StageTiming is one stage of a round.
 
+type StagingAsked struct {
+	Envs []string
+	Head string
+	Seen []StagingSeen
+}
+    StagingAsked is what a staging deploy's y/N binds its deploy to: the envs
+    that take the merge, the head the plan merges, and what the question named
+    of each env (a deploy that now adds more is refused).
+
 type StagingCell struct {
 	Name, State, Count string
 	Seen               time.Time
@@ -31975,6 +32159,16 @@ type StagingCell struct {
     ("12/41", "4/9"). Seen is when the factory's read first saw its state:
     a wide screen and the task card show its age, how long the state has stood
     as the reads tell it.
+
+type StagingDeploy struct {
+	Effect, Env, Step, Phase, State, Why, Text, RunURL string
+	At                                                 time.Time
+	Live                                               bool
+}
+    StagingDeploy is a staging deploy of a PR on one env: its effect, the step
+    and phase of its last event, its state (queued, running, done, failed,
+    cancelled, needs you), why it ended, that event's words, ci.yml's run on its
+    merge, when the event came, and whether it still runs.
 
 type StagingInfo struct {
 	Env string
@@ -31994,6 +32188,15 @@ type StagingInfo struct {
 	Why                  string // why it is unknown, or what could not be told
 }
     StagingInfo is where a PR stands on one staging env.
+
+type StagingSeen struct {
+	Env        string
+	Migrations []string
+	Workflows  bool
+}
+    StagingSeen is what a deploy's question named of one env's plan:
+    the migrations Jenkins then runs, and whether the merge changes
+    .github/workflows.
 
 type StatusData struct {
 	Daemon    DaemonInfo

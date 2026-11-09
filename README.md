@@ -3567,7 +3567,7 @@ on one `[[watch]]` first if you like. The switch is config only.
 to you. Autofix never starts a loop on it. A `magnum fix` you ask for still runs, with the note "fix is off
 for this PR: this requested loop runs anyway", as a forced review runs on a muted PR. `magnum fix --on <pr>`
 (the board's `F` again) puts the PR back. Muting a PR stops every automatic round, and `fix off` stops only
-autofix. The status dashboard has the same `f`, `F` and `P` keys, and its `F` reads `fix on` on a PR you took
+autofix. The status dashboard has the same `f`, `F`, `P` and `E` keys, and its `F` reads `fix on` on a PR you took
 out, as the board's does.
 
 **Autofix on anything open.** `autofix = "open"` starts a loop on your own PR whenever something on it is
@@ -5044,8 +5044,8 @@ not mounted"), and magnum creates nothing in its place: nothing above `mirror_di
 ### Staging deploys
 
 On your confirmed word, and only then, magnum deploys a PR to one, two or all of its repository's
-`[[factory.repo.staging]]` environments (`internal/staging`; the daemons, `magnum staging` and the screens wire
-it next): it merges the PR's head into the shared `staging-<name>` branch as the two-parent merge [the branch's
+`[[factory.repo.staging]]` environments (`internal/staging`; the review daemon runs it, `magnum staging --deploy`
+and the screens' `E` ask for it: [Stagings](#stagings)): it merges the PR's head into the shared `staging-<name>` branch as the two-parent merge [the branch's
 tip, the PR's head], with the message `Merge branch '<head branch>' into staging-<name>` ("Merge pull request
 #N into staging-<name>" when the head branch cannot be read), and pushes it with a plain push. Jenkins then runs
 ci.yml's checks, the env's migrations on its shared database and the deploy. Coworkers share these branches, and
@@ -5148,9 +5148,47 @@ STAGINGS
 
 `magnum staging <pr>` prints those lines for one PR (refused for a repository without staging envs and for a PR
 that is not open), and `magnum staging` alone every open PR of the repositories with staging envs that is live,
-pushed or an older head on any of them; `--json` prints `{ref, head, stagings}`, or a list of them (`[]` for none),
-and `magnum tui --json` carries each row's `stagings`. Nothing here deploys: the [staging deploys](#staging-deploys)
-are wired next.
+pushed or an older head on any of them, or deploying to one; `--json` prints `{ref, head, stagings, deploys}`, or a
+list of them (`[]` for none), and `magnum tui --json` carries each row's `stagings` and `staging_deploys`.
+
+**Deploying, on your word.** `magnum staging <pr> --deploy void,bastion` (or `all`), and `E` on the board's and the
+dashboard's row, deploy your own PR (coworkers' PRs get a gate of their own later) through the [staging
+deploys](#staging-deploys), which the review daemon runs:
+
+1. `E` opens a chooser of the PR's envs in the footer, each with its state (`1 [x] void live · 2 [ ] bart not
+   there`): `1`, `2`, `3` toggle one, `a` toggles them all, `enter` asks, any other key cancels.
+2. The daemon plans it (request kind `staging_deploy`, a dry run off its tick: a fetch and a merge in the mirror,
+   nothing pushed) and one y/N names what y does: the envs that take the merge and the PR's head, the bot that
+   merges and pushes (the watch's fixer App), the migrations Jenkins then runs on each env's shared database, a
+   merge that changes `.github/workflows`, each env left out and why (the head is there already; a conflict: no
+   resolver yet, so nothing is pushed and the paths are named), and a warning while the default branch's ci.yml
+   runs (a production deploy may be building, and every staging build slows it):
+
+   ```
+   Deploy talkable#12212's head 398a935 to void and bastion: fixer-app[bot] merges it into staging-void and
+   staging-bastion and pushes; Jenkins then runs db/migrate/20261105_add_coupons.rb on void's and bastion's
+   shared databases; bart is left out (already there: staging-bart holds PR #12212's head)? [y/N]
+   ```
+3. y sends the deploy bound to that head and to what the question named: the daemon plans again and refuses a
+   head that moved since, an env that no longer takes the merge, and a merge that now adds a migration or a
+   workflow change the question did not name ("ask again"). Then each env gets its effect, which the daemon steps
+   every 15 seconds on a goroutine of its own (never in the tick; its stop ends a step in flight before it closes
+   the client), and the deploy is recorded as asked by you (`staging.deploy_asked`).
+
+`--dry-run` prints the plan per env and stops; `--yes` (and a script) asks nothing and binds the deploy to the
+head the registry has; `--json` needs `--yes` on a terminal. `magnum staging --cancel <effect>` (request kind
+`staging_cancel`) stops a deploy: nothing is pushed after it, and a push before it stands. A review agent's pane is
+refused. Each step's begin, ok and fail goes into the registry once (`staging.deploy` events on the PR,
+`magnum logs <pr>`, deduped by effect, journal write, step and phase, ordered by the write), and each deploy's newest
+event is kept for the card and `magnum staging`, under its env:
+
+```
+  ◐ bart     pushed · CI running · head 4f2a9c1 · pushed 3m ago
+             deploy bart-12212-20261109t101500-9f3c: running · watch begin · 1m ago
+               ci.yml's run on 6b6b6b6
+```
+
+A deploy that ended stays there a day.
 
 ## Daily use
 
@@ -5197,7 +5235,8 @@ are wired next.
 | `magnum cleanup [--dry-run] [--pr <ref>] [--slot <name>] [--orphans [--slug X]] [--shrink] [--external --slot repoN]` | Storage cleanup with a reviewable plan: closed PRs, orphan databases, idle slots, manual worktrees. On a terminal the plan opens in a review screen: space toggles an action, `a`/`n` select all or none, enter confirms (`y`, or the slug typed when another slug's databases would be dropped) and applies the selection, `q` cancels. With `--yes`, `--dry-run` or `--json`, or off a terminal, the plan is printed instead and it asks its y/N and typed-slug questions on stderr, only when stdin and stderr are both terminals; otherwise it applies nothing unless you pass `--yes`. `--wait` follows the daemon while it applies the plan, `--shrink --idle` removes only free slots idle longer than `pool.idle_remove_after`, `--slot <name> --remove` removes a managed slot instead of releasing it, and `--force` discards tracked changes, accepts unpushed commits on `--external` and releases inside the close grace. |
 | `magnum slots [list\|provision\|remove\|repair\|adopt\|pin\|unpin]` | Pool management. `slots pin\|unpin <slot>` is `magnum pin\|unpin <slot>`. |
 | `magnum where <ref>` | `cd $(magnum where 123)`. |
-| `magnum staging [<pr>] [--json]` | Where a PR stands on each staging env of its repository (live, pushed and why it is not live yet, an older head and how far behind, not there, unknown and why), or, without a PR, every open PR on any staging, from what the daemon stored: no git, no GitHub (see [Stagings](#stagings)). |
+| `magnum staging [<pr>] [--json]` | Where a PR stands on each staging env of its repository (live, pushed and why it is not live yet, an older head and how far behind, not there, unknown and why) and its deploys' steps, or, without a PR, every open PR on any staging or deploying to one, from what the daemon stored: no git, no GitHub (see [Stagings](#stagings)). |
+| `magnum staging <pr> --deploy <env,env\|all> [--dry-run] [--yes] [--json]`, `magnum staging --cancel <effect>` | Deploy your own PR to its staging envs on your word: y/N from the daemon's plan (the envs, head, bot, migrations, envs left out), then the deploy bound to it; `--cancel` stops a deploy (see [Stagings](#stagings)). |
 | `magnum config`, `magnum version` | `config` validates the configuration (the built-in defaults with `~/.config/magnum/config.toml` over them, or `--config FILE`), renders every prompt file the roles name with this binary and prints the checkout, config, data, state and judge skill paths and the spend level of the review and the factory roles (`spend:   high (codex: low) for the review and the factory roles`); `daemon-restart` and `install` run it with the binary that will run and refuse when it fails. `version` prints the build (`make build` stamps it; `dev` for a plain `go build`). |
 | `magnum pause\|resume`, `magnum logs [<ref>] [-f]`, `magnum doctor`, `magnum identities check`, `magnum kick` | Operations. `pause` holds automatic reviews (`--for 2h` or `--until 15:30` ends it; words after `pause` are the reason, and one that reads as a duration is refused); a review you ask for (`magnum review`, the board, the picker) still runs, and so does the daily retro. Under `autofix = "open"` it also holds the fix loops the look would start (a loop that runs goes on, and `f` still starts one), and a review it holds is not late (`magnum_late_after` counts from its end). `resume` lifts the pause, and its answer names each agent kind still paused or held with the command that lifts it ("resumed; claude is still paused (usage_limit) until 14:00: `magnum resume --tool claude` lifts it", "…; codex is still held (shared launch failure) until 18:38: …"; a refusal for a paused kind, such as `magnum fix`'s, ends the same way); `resume --tool <kind>\|all` lifts the usage-limit, login, Codex-budget or hooks-review pause of an agent kind (or of all), and its hold after a launch failure shared across PRs, and forgets its per-model limits (for codex, and all, it overrules Codex's last reading at either budget cap, a pause or not, until its next reading, and lets new Codex sessions start while hooks in `hooks.json` have no trust entry, until that file changes again), while `resume --watch <owner>` lifts the identity-leak pause of a watch owner. `kick` wakes the daemon for a tick, which polls, schedules and reconciles. The tab bar and `magnum status` show since when it holds them and how many review requests people made wait on it. `logs -n N` sets how many recent lines or events show first (default 50) and `logs --raw` prints the daemon log's lines as written (JSON). `logs notes:<owner>/<repo>` follows the curations and critiques of a repository's notes. |
 | `magnum restart-sessions --tool <kind>\|all [--pr <ref>] [--yes]` | Restart an agent kind's live sessions (every kind's with `all`, one PR's with `--pr`) in new processes after a switch of its account: a running agent keeps the login it started with. Each session parks (its pane closes, its conversation stays), an idle one now and one at work after its turn, and its next prompt resumes the conversation in a new process; no round starts on its PR before, and a pinned PR's sessions are left alone. The daemon does it (refused when none runs); a terminal asks y/N first ("Restart the 3 live codex sessions? They resume in new processes."; `--yes` does not), and the answer counts them ("restarting 3 live codex sessions: 2 park now, 1 after its turn; each resumes in a new process at its next prompt"). A change of Codex login does it for the Codex sessions by itself (see the Codex budget above); `magnum resume --tool` restarts none. The settings screen's `x` on a kind's row does the same. |
@@ -5239,7 +5278,7 @@ to the first and last PR; `a` jumps to what needs you; `ctrl+r` or `F5` refreshe
 filters; `v` cycles the views; `s`/`S` sort (updated, last review, reviewer activity, requested, changes,
 state; the requested sort puts the newest request first, the one the column shows, and PRs nobody asked
 last); `r`, `R`, `i` start review variants (a post-merge review on a
-merged PR, below); `o` opens the pane, at once when it is live; on a row whose pane is parked it asks first, since it restores the PR in a slot and holds it as `magnum open` does ("Restore talkable#12048 in a slot to read it? It holds the PR until 30 minutes after your last input."; only `y` sends it); `p`/`u` pin and unpin (`u` also hands back a slot the guard holds `head_drift` or `unpushed_commits`, pinned or not: it asks "Acknowledge the head_drift hold of slot review3 (takes its HEAD as the checkout)?" and sends the same unpin request, whose answer says it acknowledged the hold; the card names the key "unpin / acknowledge a hold" there); `*` stars the PR or unstars a starred one (below); `x` releases; `M`/`U` mute (on a merged PR, below); `z` snoozes the PR for 2h, or lifts its snooze (`magnum snooze`); `f` fixes the PR's findings as the fixer's login (`magnum fix`, your own PRs), `P` merges its parent as the fixer App's bot behind a y/N of the daemon's plan (`magnum merge-parent`), and `F` takes the PR out of autofix or puts it back (`magnum fix --off`, `--on`); `d`, on a PR whose fix loop left you calls (needs attention, kind fix), says you did them all (`magnum fix --done`: "Mark what the fixer left on talkable#5 done: back to reviewed at a1b2c3d, no review runs?"), and is refused at once on a row that needs nothing of you or needs attention for something else; `w` opens the PR's whiteboard in Whiteboard Desktop (`magnum whiteboard --open`, Whiteboards of reviewed PRs); `K` kills the running review, or drops one that waits in line; `I` ignores the PR (an ignored
+merged PR, below); `o` opens the pane, at once when it is live; on a row whose pane is parked it asks first, since it restores the PR in a slot and holds it as `magnum open` does ("Restore talkable#12048 in a slot to read it? It holds the PR until 30 minutes after your last input."; only `y` sends it); `p`/`u` pin and unpin (`u` also hands back a slot the guard holds `head_drift` or `unpushed_commits`, pinned or not: it asks "Acknowledge the head_drift hold of slot review3 (takes its HEAD as the checkout)?" and sends the same unpin request, whose answer says it acknowledged the hold; the card names the key "unpin / acknowledge a hold" there); `*` stars the PR or unstars a starred one (below); `x` releases; `M`/`U` mute (on a merged PR, below); `z` snoozes the PR for 2h, or lifts its snooze (`magnum snooze`); `f` fixes the PR's findings as the fixer's login (`magnum fix`, your own PRs), `P` merges its parent as the fixer App's bot behind a y/N of the daemon's plan (`magnum merge-parent`), `E` deploys your PR to its staging envs behind a chooser of them and a y/N of the daemon's plan (`magnum staging --deploy`, [Stagings](#stagings)), and `F` takes the PR out of autofix or puts it back (`magnum fix --off`, `--on`); `d`, on a PR whose fix loop left you calls (needs attention, kind fix), says you did them all (`magnum fix --done`: "Mark what the fixer left on talkable#5 done: back to reviewed at a1b2c3d, no review runs?"), and is refused at once on a row that needs nothing of you or needs attention for something else; `w` opens the PR's whiteboard in Whiteboard Desktop (`magnum whiteboard --open`, Whiteboards of reviewed PRs); `K` kills the running review, or drops one that waits in line; `I` ignores the PR (an ignored
 row is greyed with its title struck through, and `U` unmutes it, which stops ignoring it); `A` approves
 and `C` requests changes as the PR's posting identity (see `magnum approve`), and on a row that needs your
 approval `A` approves as you (below); `b` opens the browser;

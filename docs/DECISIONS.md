@@ -20605,6 +20605,67 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestNoStagingsNoStageColumn, TestTheCardShowsWhereThePRStandsOnEachStaging and
   TestTheHelpExplainsTheStageColumn, the cli's TestTheBoardReadsEachOpenPRsStagingStatusFromItsRecord and the
   TestStagingCommand tests.
+- **Staging deploys of your own PRs, on your word: one y/N on the daemon's plan, bound to its head** (2026-11-09,
+  the staging wiring, part 2: deploy on the operator's word; widens R46's deploy to any of your PRs). The review
+  daemon's staging client gains the deploy's parts as master has them: `engine.CommitIdentity` (the watch's fixer
+  App's bot authors and commits every merge) and `engine.StagingPushEnv` over the mirrors (the bot's env, its
+  refusal of master, main, the default branch and a PR's own workflow changes), bound to the engine once FromApp
+  made it (`stagingBound`; before that they refuse), MirrorRoot so Step and Cancel find every journal under
+  `mirror_dir`, whoever started it, and no resolver: a conflict ends the effect with "conflict: resolver not
+  configured", nothing pushed, and the plan already names the conflicted paths (the operator's answer to the stage
+  clash question, "stop and list"; a resolver comes later). A request of kind `staging_deploy`, which the daemon
+  answers on a goroutine of its own (`stagingWG`, cut by the stop: a plan fetches the mirror and merges in it, a
+  cancel waits for a step in flight), plans the PR's head on the envs asked (`all` = the config's) and, in a dry
+  run, answers what each would get (a clean merge and the migrations it adds, the head there already, the
+  conflicted paths made safe), who pushes, who asked, and whether ci.yml runs at the default branch's tip in the
+  mirror (a production deploy may be building, and each staging build on the shared Jenkins slows it): a warning in
+  the question, never a refusal. The question (`StagingQuestion`, one for the CLI and the screens) names the envs
+  that take the merge, the head, the bot that merges and pushes, the migrations Jenkins then runs on each env's
+  shared database, a merge that changes `.github/workflows`, and each env left out and why; y sends the deploy
+  bound to that head and to what the question named (`Seen`), and the daemon plans again and refuses a head that
+  moved since the question (the registry's, and Plan's own check of the remote's pull ref), an env that no longer
+  takes the merge, and a merge that now adds a migration or a workflow change the question did not name ("ask
+  again"): no migration runs on a shared database that the operator did not see. Only then `Deploy` starts the
+  effects; `staging_cancel` stops one. Own PRs only (the board's "mine", `ownPR`): coworkers' PRs come with their own
+  gate (the author-quiet window, a notice). The PR must be open, not a fork, and its head branch not master, main or
+  a staging branch. `Deploy`'s `by` stays `staging.ByCLI` (the operator's terminal, which the library's allowlist
+  of cli, liaison and factory names), and the daemon records the operator's login beside it in a
+  `staging.deploy_asked` event. Step runs on its own goroutine every 15 s from the daemon's start (a restart resumes
+  the effects it left), never in the tick, since its git (a fetch, a merge, a push) can take minutes; a panicking
+  Step is contained and the next waits the Refresh's backoff; the Run loop's stop ends a Step in flight and waits
+  for it before the shutdown closes the client; `--once` runs no Step. Deps.Event writes each step's begin, ok and
+  fail into the registry as `staging.deploy` events on the PR's subject, once per (effect, Seq, step, phase)
+  (`store.AppendEventOnce`, its key in the event's data, checked and written in one transaction): the library
+  delivers at least once from the effect's outbox, also after a restart and for ended effects. Each effect's
+  record (`staging.deploy.<id>`) keeps its event of the newest Seq, so a late repeat of an older write never turns
+  it back (order by Seq, never by arrival), and the tick drops an ended one a day after its last event: the card's
+  STAGINGS block and `magnum staging` show each deploy under its env, its state, the step and phase of its last
+  event and that event's words, from one read of every record, without git. Key E, free on the board and the
+  dashboard (D is the board's withdraw, d its fix --done, P merge parent), opens a chooser of the row's envs with
+  their states in the footer (1, 2, 3 toggle, a all, enter asks, any other key cancels; enter with none chosen says
+  so), then asks the plan and puts its question as the y/N; the factory's task cards are left to the factory
+  session. `magnum staging <pr> --deploy void,bastion|all [--dry-run] [--yes] [--json]` and `--cancel <effect>` are
+  the same paths; a script or `--yes` asks nothing and binds the deploy to the registry's head with nothing seen, as
+  `magnum merge-parent` does, and a review agent's pane is refused. With no `[[factory.repo.staging]]` entry (the
+  operator's config today) there is no client: no Step, no request answered but "staging deploys are off", no E
+  chooser (it refuses a repository without staging envs). Rejected: a deploy straight from the dry run's plan (the
+  tip may move between the question and y: the deploy plans again and checks it against the question); deploying
+  the envs that still take the merge when another no longer does (all or none, as the question named them);
+  refusing while master's CI runs (a warning: the operator decides); recording `by` as the login, which the
+  library refuses; and reading the deploys' live state from the journals in every reader (the registry's records
+  serve the board and the CLI without the mirror's disk). Tests: the engine's
+  TestTheStagingClientDeploysAsTheFixerApp, TestStagingStepsRunOffTheTickAndStopBeforeTheClientCloses,
+  TestAPanickingStagingStepWaitsABackoff, TestWithoutStagingsNoStagingStepRuns,
+  TestAStagingDeployDryRunAnswersWhatEachEnvWouldGet, TestAStagingDeployStartsTheEffectsOfTheEnvsAsked,
+  TestAStagingDeployRefusesWhatItCannotDeployAsAsked, TestAStagingPlanWarnsWhileTheDefaultBranchsCIRuns,
+  TestAStagingCancelStopsTheEffectItNames and TestAStagingDeploysEventsGoIntoTheRegistryOnceInSeqOrder; the store's
+  TestAppendEventOnceWritesAKeyOnce; the cli's TestStagingDeployAsksWithTheDaemonsPlanThenQueuesTheDeploy,
+  TestStagingDeployWithNothingToDeployQueuesNothing, TestStagingDeployDryRunAndYes,
+  TestStagingCancelAndTheFlagsThatGoTogether, TestScreenStagingDeployPlansThenDeploysBoundToThePlan,
+  TestTheDashboardRowsCarryTheirPRsStagings, TestTheBoardReadsEachPRsStagingDeploysFromTheirRecords and
+  TestStagingCommandShowsEachDeploysStepAndLastEvent; the tui's TestEChoosesTheStagingEnvsThenAsksWithTheDaemonsPlan,
+  TestERefusesWhatHasNoStagingToDeployTo, TestDashboardEDeploysAfterTheChooserAndThePlan,
+  TestTheCardShowsEachStagingDeploysStepAndLastEvent and TestStagingDeploySummaryIsTheCardsWords.
 
 ## Learned rules
 
