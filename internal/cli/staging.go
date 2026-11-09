@@ -25,30 +25,72 @@ import (
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
-const stagingUsage = "staging [<pr>] [--json]"
+const stagingUsage = "staging [<pr>] [--json] [--deploy <env,env|all> [--dry-run] [--yes]] [--cancel <effect>]"
 
-type stagingOpts struct{ json bool }
+// stagingOpts are `magnum staging`'s flags: deployOn says --deploy was
+// given (deploy its value: the envs).
+type stagingOpts struct {
+	json, dryRun, yes bool
+	deployOn          bool
+	deploy, cancel    string
+}
 
 func newStagingCmd(c *Context) *cobra.Command {
 	var o stagingOpts
-	cmd := newCommand(groupInspect, stagingUsage, "where open PRs stand on their repository's staging envs",
+	var cmd *cobra.Command
+	cmd = newCommand(groupInspect, stagingUsage, "where open PRs stand on their repository's staging envs; deploy your PR to them",
 		"Print where a PR stands on each staging env of its repository (its [[factory.repo]]'s [[factory.repo.staging]] "+
 			"entries, in their order): live (the env's newest deployment holds the PR's head), pushed (CI running, CI "+
 			"failed on the PR's changes or not, waiting for Jenkins, or no deployment confirms it), an older head (how "+
-			"many commits behind), not there, or unknown and why; when it was deployed or pushed, and the CI run's page. "+
-			"Without a PR, every open PR of the repositories with staging envs that is on any of them. The review daemon "+
+			"many commits behind), not there, or unknown and why; when it was deployed or pushed, and the CI run's page; "+
+			"under it each deploy magnum runs or ran in the last day there, its step and its last event. "+
+			"Without a PR, every open PR of the repositories with staging envs that is on any of them or deploying. The review daemon "+
 			"tells it from a treeless mirror and GitHub's deployments at most once a minute; this command reads only "+
 			"what it stored, so a stopped daemon's statuses read unknown once they are stale. --json prints the PR as "+
-			"an object, or the list (as [] when none). Read only: it deploys nothing.",
-		func(pos []string) int { return runStaging(c, o, pos) })
-	cmd.Flags().BoolVar(&o.json, "json", false, "print the PR (an object) or the PRs on a staging (a list) as JSON")
+			"an object, or the list (as [] when none).\n\n"+
+			"--deploy void,bastion (or all) deploys your own PR to those envs, on your word: the review daemon merges its head "+
+			"into each staging-<env> branch as the fixer App's bot (a two-parent merge, never a force-push, never production, "+
+			"master or main) and follows the env's CI and deployment. A terminal asks y/N first, from the daemon's plan (a "+
+			"dry run that merges in its mirror and pushes nothing): the envs that take the merge, the head, the bot, the "+
+			"migrations Jenkins then runs on each env's shared database, the envs left out and why (the head there already, "+
+			"a conflict: nothing is resolved yet), and a warning while the default branch's CI runs. y sends the deploy bound "+
+			"to that head; a head that moved since, or a merge that now adds what the question did not name, is refused. "+
+			"--dry-run prints the plan alone, --yes asks nothing (there --json needs --yes), and a review agent's pane is "+
+			"refused. --cancel <effect> stops a deploy (an effect `magnum staging <pr>` lists): it never pushes after, and "+
+			"a push before stands.",
+		func(pos []string) int {
+			o.deployOn = cmd.Flags().Changed("deploy")
+			return runStaging(c, o, pos)
+		})
+	fs := cmd.Flags()
+	fs.BoolVar(&o.json, "json", false, "print the PR (an object) or the PRs on a staging (a list) as JSON; with --deploy, the daemon's answer")
+	fs.StringVar(&o.deploy, "deploy", "", "deploy your PR to these staging `envs` (void,bastion or all), asking y/N first")
+	fs.BoolVar(&o.dryRun, "dry-run", false, "with --deploy: print the daemon's plan per env; nothing is deployed")
+	fs.BoolVar(&o.yes, "yes", false, "with --deploy: do not ask for confirmation")
+	fs.StringVar(&o.cancel, "cancel", "", "stop the staging deploy `effect` (its id, as `magnum staging <pr>` lists it)")
 	cmd.ValidArgsFunction = completeFirst(c.completePRs)
 	return cmd
 }
 
 func runStaging(c *Context, o stagingOpts, pos []string) int {
-	if len(pos) > 1 {
+	switch {
+	case len(pos) > 1:
 		return actUsage(c, "staging", "one PR at a time", stagingUsage)
+	case o.cancel != "" && len(pos) == 1:
+		return actUsage(c, "staging", "--cancel names an effect, not a PR", stagingUsage)
+	case o.cancel != "" && (o.deployOn || o.dryRun || o.yes):
+		return actUsage(c, "staging", "--cancel goes without --deploy, --dry-run and --yes", stagingUsage)
+	case o.deployOn && len(pos) == 0:
+		return actUsage(c, "staging", "--deploy needs a PR", stagingUsage)
+	case !o.deployOn && (o.dryRun || o.yes):
+		return actUsage(c, "staging", "--dry-run and --yes go with --deploy", stagingUsage)
+	case o.deployOn && len(stagingEnvsOf(o.deploy)) == 0:
+		return actUsage(c, "staging", "--deploy names the envs: void,bart or all", stagingUsage)
+	}
+	if o.deployOn || o.cancel != "" {
+		if code, refused := refuseInAgentPane(c, "staging"); refused {
+			return code
+		}
 	}
 	d, err := actNewDeps(c, actFull)
 	if err != nil {
@@ -57,6 +99,12 @@ func runStaging(c *Context, o stagingOpts, pos []string) int {
 	defer d.Close()
 	ctx, stop := signalContext()
 	defer stop()
+	switch {
+	case o.cancel != "":
+		return stagingCancelMain(ctx, c, d, o.cancel, o)
+	case o.deployOn:
+		return stagingDeployMain(ctx, c, d, pos[0], o)
+	}
 	return stagingMain(ctx, c, d, pos, o)
 }
 
