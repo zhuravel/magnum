@@ -4347,8 +4347,9 @@ func Main(version string, args []string, stdout, stderr io.Writer) int
 
 func StagingQuestion(label string, ans engine.StagingDeployAnswer) (question string, envs []string, seen []engine.StagingSeen, ok bool)
     StagingQuestion is the y/N before a staging deploy of label as the daemon
-    planned it (ans): the envs that take the merge and the head, who merges and
-    pushes, the migrations Jenkins then runs on each env's shared database,
+    planned it (ans): the envs that take the merge and the head, who merges
+    and pushes, each env whose merge conflicts and that the resolver merges
+    it first, the migrations Jenkins then runs on each env's shared database,
     a merge that changes .github/workflows, the envs left out and why, and the
     default branch's CI while it runs. It also gives the deploy's binding: those
     envs and what the question named of each; false when no env takes the merge,
@@ -8923,6 +8924,11 @@ const KVStagingDeploys = "staging.deploy.*"
     KVStagingDeploys matches every staging deploy's record (KVStagingDeploy) in
     one KVValues read.
 
+const KVStagingResolves = "staging.resolve.*"
+    KVStagingResolves matches every staging resolver job's row
+    (kvStagingResolve) in one KVValues read: StagingResolverSays reads them for
+    the card and `magnum staging`.
+
 const ReqCodexFlag = "codex-flag"
     ReqCodexFlag flags a PR or clears its flag (CodexFlagPayload).
 
@@ -8959,6 +8965,11 @@ const StagingDeployWait = 10 * time.Minute
 
 const StagingResolvePrompt = "staging-resolve.md"
     StagingResolvePrompt is the staging resolver's prompt file.
+
+const StagingResolverWords = "the resolver merges it first (at most 2 tries)"
+    StagingResolverWords say, in a few words, what becomes of a conflict
+    at a deploy (the 2 tries are internal/staging's bound, maxResolveTry):
+    the question and the plan name them.
 
 const WhiteboardCommand = "whiteboard"
     WhiteboardCommand is the Whiteboard CLI magnum runs: `whiteboard` on PATH
@@ -9577,13 +9588,19 @@ func StagingEnvs(cfg *config.Config, repo string) []staging.Env
 
 func StagingPlanSays(ep StagingPlanEnv) string
     StagingPlanSays is what one env's plan says in words: why it takes no merge,
-    its conflicts, or a clean merge with the migrations it adds and its workflow
-    changes.
+    its conflicts (and that the resolver merges them first), or a clean merge,
+    with the migrations it adds and its workflow changes.
 
 func StagingRepos(cfg *config.Config) []string
     StagingRepos lists the repositories with staging environments a [[watch]]
     covers, as their [[factory.repo]] names them, in config order: the ones the
     review daemon tells the staging status of.
+
+func StagingResolverSays(values map[string]string, effect string) string
+    StagingResolverSays is what the newest live resolver job of effect does now,
+    among values (a KVValues read of KVStagingResolves): "try N: " and its
+    Why made safe for a terminal, which names the agent's pane while the agent
+    works; "" when no job of effect is live.
 
 func StagingStale(lastTick, now time.Time) string
     StagingStale is why the daemon's staging records no longer follow staging at
@@ -11772,19 +11789,21 @@ type StagingPlanEnv struct {
 	Tip        string   `json:"tip,omitempty"`
 	Clean      bool     `json:"clean"`
 	Conflicts  []string `json:"conflicts,omitempty"`
+	Resolves   bool     `json:"resolves,omitempty"`
 	Migrations []string `json:"migrations,omitempty"`
 	Workflows  bool     `json:"workflows,omitempty"`
 	Why        string   `json:"why,omitempty"`
 }
     StagingPlanEnv is one env's plan (staging.EnvPlan): its branch and tip,
-    whether the head merges cleanly, else the conflicted paths, the migrations
-    the merge adds, whether it changes .github/workflows, and why the env takes
-    no merge (the head there already, no branch). The paths are made safe for a
-    terminal.
+    whether the head merges cleanly, else the conflicted paths and whether
+    the review daemon's resolver merges them (Resolves: then the env
+    takes the deploy), the migrations the merge adds, whether it changes
+    .github/workflows, and why the env takes no merge (the head there already,
+    no branch). The paths are made safe for a terminal.
 
 func (p StagingPlanEnv) Deployable() bool
-    Deployable reports whether the env takes the merge: it is clean and nothing
-    stops it.
+    Deployable reports whether the env takes the merge: nothing stops it,
+    and it is clean or the resolver merges its conflicts.
 
 type StagingRecord struct {
 	Head string       `json:"head"`
@@ -30305,8 +30324,9 @@ func StagingDeploySummary(d StagingDeploy, now time.Time) string
 
 func StagingDeployWords(d StagingDeploy) []string
     StagingDeployWords are the lines under a deploy on the card and in `magnum
-    staging`: its last event's words, then why it ended, once when they are the
-    same (an end's event says its why).
+    staging`: its last event's words, then why it ended, once when they are
+    the same (an end's event says its why), then what the resolver does for its
+    conflict ("resolver try 1: ...", naming the agent's pane).
 
 func StagingSummary(s StagingInfo, now time.Time) string
     StagingSummary is s in the words of the card's STAGINGS block, without the
@@ -32373,8 +32393,12 @@ type StagingCell struct {
 
 type StagingDeploy struct {
 	Effect, Env, Step, Phase, State, Why, Text, RunURL string
-	At                                                 time.Time
-	Live, Unconfirmed                                  bool
+	// Resolver is what the resolver's job does for the live deploy's
+	// conflict ("try 1: the agent resolves ... pane w3:p1 ..."); "" when
+	// none works on it.
+	Resolver          string
+	At                time.Time
+	Live, Unconfirmed bool
 }
     StagingDeploy is a staging deploy of a PR on one env: its effect,
     the step and phase of its last event, its state (queued, running,

@@ -20909,9 +20909,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   queued; Cancel stops the agent, puts the slot back, lets go of the PR, and the job reads failed "cancelled". A
   job whose agent kind is paused (a usage limit, a logout) fails before it takes a slot, saying so. The
   resolver refuses a coworker's PR as the deploy does. With no `[[factory.repo.staging]]` entry there is no staging
-  client, so no resolver: no job runs, no row is touched. The plan's y/N still refuses an env that conflicts at the
-  plan ("a resolver comes later"): the resolver serves a conflict that appears when the tip moves after the plan,
-  until the words and the plan's refusal change in their own step. Rejected: a worktree of the main clone made for
+  client, so no resolver: no job runs, no row is touched. A conflict the plan already shows goes to the resolver
+  too, and the words say so (the next entry). Rejected: a worktree of the main clone made for
   the job (no databases or gems, so no specs, and a second checkout of a pool's clone the inventory does not know);
   the factory's copies (another daemon's, outside the review daemon's slot rules); evicting an idle PR's slot only
   for the resolver (the pool's own `needSlot` decides, as for fix and open); the agent committing (it would need an
@@ -20932,6 +20931,31 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAStagingMergeIsResolvedInTheWorkTreeAndWrittenApartFromItsIndex,
   TestWriteTreeFromLeavesOutAPathTheWorkTreeDeleted and TestMergeNoCommitOfACleanMergeAndOfNoRevision; the agents'
   TestRenderGolden (staging_resolve, staging_resolve_second_try).
+- **A conflict at the plan goes to the staging resolver, and every word about it says so** (2026-11-09, the staging
+  wiring, part 3: the words; the operator: "Staging conflicts: resolve on any PR"). The plan's y/N refused an env
+  whose merge conflicts ("merge it by hand; a resolver comes later"), so the resolver only served a tip that moved
+  after the plan. Now an env's plan says `resolves` when its merge conflicts and the review daemon has the resolver
+  (`StagingPlanEnv.Resolves`; `Deployable` is "no why, and clean or resolved"), the deploy takes it like a clean env
+  (its migrations and workflow changes still bound by what the question named), and the effect's merge step hands
+  the conflict to the resolver as it hands a later one. The question names each such env and its paths in a few
+  words ("bastion conflicts in db/schema.rb: the resolver merges it first (at most 2 tries)",
+  `engine.StagingResolverWords`), as do the dry run's per-env words and `magnum staging --help`; a daemon without a
+  resolver still refuses the env, naming the paths ("no resolver here to merge it: merge it by hand"). A merge that
+  conflicts where the question showed it clean is not refused: the library sends a conflict after a moved tip to
+  the resolver without asking either, and the operator's answer covers every conflict. While a job works on a live
+  deploy's conflict, the card and `magnum staging` (and `resolver` in their JSON) show what it does now under the
+  deploy, "resolver try 1: ...", which names the agent's pane (`engine.StagingResolverSays` over the jobs' rows,
+  read beside the deploys' records): the deploy's own why says only that the resolver works on it, and the pane is
+  the operator's way to watch or stop the agent. The resolver's prompt now checks the work tree with `git diff
+  --name-only`, not `git status`: a merge left in progress stages its clean changes, which `git status` lists too,
+  so the old check asked the agent to undo the merge's own changes (the daemon's work-tree check would then fail
+  the job). Rejected: refusing a deploy whose merge conflicts where the question said it was clean (a second
+  question for what the library resolves anyway), and the resolver's why in the deploy's journal (internal/staging
+  keeps its own words, and its contract stays as it is). Tests: the engine's TestAConflictAtThePlanGoesToTheResolver
+  and TestStagingResolverSaysWhatTheLiveJobOfAnEffectDoes; the cli's
+  TestTheStagingQuestionSaysTheResolverMergesAConflict, TestStagingHelpSaysTheResolverMergesAConflict and
+  TestTheBoardAndTheStagingCommandSayWhatTheResolverDoes; the tui's
+  TestTheCardSaysWhatTheResolverDoesForAConflictedDeploy; the agents' TestRenderGolden (the two resolver goldens).
 
 ## Learned rules
 

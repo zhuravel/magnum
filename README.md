@@ -5097,9 +5097,9 @@ tip, the PR's head], with the message `Merge branch '<head branch>' into staging
 #N into staging-<name>" when the head branch cannot be read), and pushes it with a plain push. Jenkins then runs
 ci.yml's checks, the env's migrations on its shared database and the deploy. Coworkers share these branches, and
 GitHub does not refuse a force push to them, so every guard is magnum's own. First, the plan shows you, for each
-env, the tip, whether the head merges cleanly (else the conflicted paths), the migrations the merge adds (files
-under `db/migrate/`) and whether it changes `.github/workflows`. Each env you confirm gets an effect, which a
-daemon advances one step a tick:
+env, the tip, whether the head merges cleanly (else the conflicted paths, which the resolver merges first), the
+migrations the merge adds (files under `db/migrate/`) and whether it changes `.github/workflows`. Each env you
+confirm gets an effect, which a daemon advances one step a tick:
 
 | Step | What it does |
 |---|---|
@@ -5146,14 +5146,16 @@ it); time with no try (a sleeping Mac, a daemon down) does not count. A resolver
 the journals under `mirror_dir`, at its next tick; a journal whose env name is no slug is passed over (logged once;
 cancel it by its id).
 
-**The resolver.** A merge that conflicts at the merge step (the plan already refuses an env that conflicts when
-you ask; this is one whose tip moved since) goes to the review daemon's resolver, at most 2 tries per deploy. Each
+**The resolver.** A merge that conflicts at the merge step, whether the plan you confirmed showed the conflict or
+the branch's tip moved since, goes to the review daemon's resolver, at most 2 tries per deploy (the second only
+when the tip moves after the first try's merge). Each
 try is a job in the registry (`staging.resolve.<job>`), so it outlives a restart. It works in a review slot of the
 repository, which has its databases and gems: the PR's own slot when no round, open, fix or whiteboard holds it,
 else a free slot of the pool (a slot a round holds is never taken and never waited on; the job "waits for a slot"
 and the next tick looks again). There, detached at the branch's tip, `git merge --no-commit --no-ff <head>`
 leaves the conflicts, and the fix role's agent (its kind, model and effort, `prompts/staging-resolve.md`) resolves
-them in a magnum pane of the herdr workspace "staging merge", which the job's why names while it works: it keeps
+them in a magnum pane of the herdr workspace "staging merge", which the job's why names while it works (the card
+and `magnum staging` show it under the deploy, `resolver try 1: ...`): it keeps
 both sides' intent, edits only the conflicted paths, runs their specs through the db-lock line and gives up, with
 the reason, when the two sides contradict each other, a file is binary, both sides renamed it, or the specs cannot
 run or stay red. Its pane has no GitHub token and no git credentials: it never commits or pushes. magnum makes the
@@ -5164,7 +5166,8 @@ clean and with no guard hold. One job runs at a time; one runs at most 45 minute
 most an hour for its turn and its slot, so the deploy's own 2-hour wait never ends it first. A restart goes on
 with a job whose agent still runs; one whose agent is gone fails, saying so. The resolver takes your own PRs only,
 as the deploy does. The merge stays at `refs/magnum/staging-resolved/<effect>` in the slot's main clone until the
-deploy ended, a day at most.
+deploy ended, a day at most. A conflict the resolver cannot resolve (it gave up, a check failed, it ran over its
+time) fails the deploy with its why, and nothing is pushed.
 
 The deploys dir (`<mirror_dir>/<owner>/<repo>.deploys`) is operator-level state, like the registry and
 `~/.config/magnum`: magnum alone writes it, never a hand and never an agent's pane. A journal written there is a
@@ -5226,15 +5229,17 @@ deploys](#staging-deploys), which the review daemon runs:
    there`): `1`, `2`, `3` toggle one, `a` toggles them all, `enter` asks, any other key cancels.
 2. The daemon plans it (request kind `staging_deploy`, a dry run off its tick: a fetch and a merge in the mirror,
    nothing pushed) and one y/N names what y does: the envs that take the merge and the PR's head, the bot that
-   merges and pushes (the watch's fixer App), the migrations Jenkins then runs on each env's shared database, a
-   merge that changes `.github/workflows`, each env left out and why (the head is there already; a conflict: no
-   resolver yet, so nothing is pushed and the paths are named), and a warning while the default branch's ci.yml
-   runs (a production deploy may be building, and every staging build slows it):
+   merges and pushes (the watch's fixer App), each env whose merge conflicts and its paths, in a few words (the
+   resolver merges it first, at most 2 tries: [the resolver](#staging-deploys)), the migrations Jenkins then runs
+   on each env's shared database, a merge that changes `.github/workflows`, each env left out and why (the head is
+   there already), and a warning while the default branch's ci.yml runs (a production deploy may be building, and
+   every staging build slows it):
 
    ```
    Deploy talkable#12212's head 398a935 to void and bastion: fixer-app[bot] merges it into staging-void and
-   staging-bastion and pushes; Jenkins then runs db/migrate/20261105_add_coupons.rb on void's and bastion's
-   shared databases; bart is left out (already there: staging-bart holds PR #12212's head)? [y/N]
+   staging-bastion and pushes; bastion conflicts in db/schema.rb: the resolver merges it first (at most 2 tries);
+   Jenkins then runs db/migrate/20261105_add_coupons.rb on void's and bastion's shared databases; bart is left
+   out (already there: staging-bart holds PR #12212's head)? [y/N]
    ```
 
    On the board and the dashboard the question wraps over the footer's lines (up to half the screen) instead of
@@ -5261,6 +5266,16 @@ event is kept for the card and `magnum staging`, under its env:
   ◐ bart     pushed · CI running · head 4f2a9c1 · pushed 3m ago
              deploy bart-12212-20261109t101500-9f3c: running · watch begin · 1m ago
                ci.yml's run on 6b6b6b6
+```
+
+While the resolver works on a deploy's conflict, a line under the deploy says what its job does now (`resolver` in
+`--json`), and names the agent's pane once it works:
+
+```
+  · void     not there
+             deploy void-12212-20261109t103000-1a2b: running · merge begin · 4m ago
+               conflict in 1 paths: the resolver works on it (try 1)
+               resolver try 1: the agent resolves 1 conflicted path in slot review3: pane w7:p2 of the herdr workspace "staging merge"
 ```
 
 A deploy that ended stays there a day; one done without a deployment that holds its merge (the poll App reads no
