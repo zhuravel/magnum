@@ -108,6 +108,9 @@ func TestTheBoardReadsEachPRsStagingDeploysFromTheirRecords(t *testing.T) {
 		Env: "void", Step: "watch", Phase: "fail", State: "failed", Why: "ci.yml failed on the merge", Seq: 9, At: at})
 	h.setDeployRecord(engine.StagingDeployRecord{Effect: "bart-5-20261005t100000-abcd", Repo: "talkable/talkable", Number: 5, Head: pr.HeadSHA,
 		Env: "bart", Step: "push", Phase: "begin", State: "running", Text: "push of 6b6b6b6", Seq: 4, At: at.Add(50 * time.Minute)})
+	h.setDeployRecord(engine.StagingDeployRecord{Effect: "bastion-5-20261005t080000-abcd", Repo: "talkable/talkable", Number: 5, Head: pr.HeadSHA,
+		Env: "bastion", Step: "confirm", Phase: "ok", State: "done", Why: "pushed, not confirmed: deployments not readable", Seq: 11,
+		At: at.Add(-time.Minute)})
 	out, err := prsSource(h.st, h.d.Cfg, store.BoardFilter{}, nil, h.d.Layout)(h.ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -117,14 +120,18 @@ func TestTheBoardReadsEachPRsStagingDeploysFromTheirRecords(t *testing.T) {
 		by[r.Number] = r
 	}
 	ds := by[5].StagingDeploys
-	if len(ds) != 2 || ds[0].Effect != "bart-5-20261005t100000-abcd" || !ds[0].Live || ds[0].Step != "push" || ds[0].Text != "push of 6b6b6b6" ||
-		ds[1].Env != "void" || ds[1].Live || ds[1].Why != "ci.yml failed on the merge" || !ds[1].At.Equal(at) {
+	if len(ds) != 3 || ds[0].Effect != "bart-5-20261005t100000-abcd" || !ds[0].Live || ds[0].Step != "push" || ds[0].Text != "push of 6b6b6b6" ||
+		ds[1].Env != "void" || ds[1].Live || ds[1].Why != "ci.yml failed on the merge" || !ds[1].At.Equal(at) || ds[1].Unconfirmed {
 		t.Fatalf("#5's deploys %+v", ds)
+	}
+	if d := ds[2]; d.Env != "bastion" || d.State != "done" || !d.Unconfirmed {
+		t.Fatalf("a done no deployment confirms: %+v", d)
 	}
 	if ds := by[6].StagingDeploys; len(ds) != 0 {
 		t.Fatalf("#6's deploys %+v", ds)
 	}
-	if js := prsJSONOf(by[5]); len(js.StagingDeploys) != 2 || js.StagingDeploys[0].Effect != "bart-5-20261005t100000-abcd" || !js.StagingDeploys[0].Live {
+	if js := prsJSONOf(by[5]); len(js.StagingDeploys) != 3 || js.StagingDeploys[0].Effect != "bart-5-20261005t100000-abcd" || !js.StagingDeploys[0].Live ||
+		!js.StagingDeploys[2].Unconfirmed {
 		t.Fatalf("tui --json staging_deploys %+v", js.StagingDeploys)
 	}
 	if js := prsJSONOf(by[6]); js.StagingDeploys == nil {

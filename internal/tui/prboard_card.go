@@ -1005,7 +1005,9 @@ var stagingDetails = map[string]string{
 	"ci_failed_ours":     "CI failed on this PR's changes",
 	"ci_failed_not_ours": "CI failed, not on this PR's changes",
 	"waiting_jenkins":    "CI passed, waiting for Jenkins",
-	"not_confirmed":      "CI passed, no deployment confirms it",
+	// not_confirmed claims nothing of CI: ci.yml's run may not have been
+	// read or started, which Why says.
+	"not_confirmed": "no deployment confirms it",
 }
 
 // StagingSummary is s in the words of the card's STAGINGS block, without
@@ -1055,32 +1057,51 @@ func stagingParts(s StagingInfo, state string, now time.Time) []string {
 	}
 	switch {
 	case st == "latest" && !s.DeployedAt.IsZero():
-		parts = append(parts, "deployed "+shortAge(max(now.Sub(s.DeployedAt), 0))+" ago")
+		parts = append(parts, "deployed "+requestAgo(max(now.Sub(s.DeployedAt), 0)))
 	case (st == "latest" || st == "pushed" || st == "outdated") && !s.PushedAt.IsZero():
-		parts = append(parts, "pushed "+shortAge(max(now.Sub(s.PushedAt), 0))+" ago")
+		parts = append(parts, "pushed "+requestAgo(max(now.Sub(s.PushedAt), 0)))
 	}
 	return parts
 }
 
 // StagingDeploySummary is d in the words of the card's STAGINGS block,
-// without its effect: its state, the step and phase of its last event, and
-// how long ago that came ("running · push begin · 3m ago").
+// without its effect: its state ("not confirmed" for a done no deployment
+// confirms), the step and phase of its last event, and how long ago that
+// came ("running · push begin · 3m ago").
 func StagingDeploySummary(d StagingDeploy, now time.Time) string {
-	parts := []string{cmp.Or(d.State, "unknown")}
+	state := cmp.Or(d.State, "unknown")
+	if d.Unconfirmed {
+		state = "not confirmed"
+	}
+	parts := []string{state}
 	if d.Step != "" {
 		parts = append(parts, strings.TrimSpace(d.Step+" "+d.Phase))
 	}
 	if !d.At.IsZero() {
-		parts = append(parts, shortAge(max(now.Sub(d.At), 0))+" ago")
+		parts = append(parts, requestAgo(max(now.Sub(d.At), 0)))
 	}
 	return strings.Join(parts, " · ")
 }
 
+// StagingDeployWords are the lines under a deploy on the card and in
+// `magnum staging`: its last event's words, then why it ended, once when
+// they are the same (an end's event says its why).
+func StagingDeployWords(d StagingDeploy) []string {
+	var out []string
+	for _, w := range []string{d.Text, d.Why} {
+		if w != "" && !slices.Contains(out, w) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
 // stagingDeployStyle is how a deploy's line is drawn: a live one as
-// pending, a failed one as a failure, a done one as passed, the rest dim.
+// pending, a failed one as a failure, a done one as passed when a
+// deployment confirms it and as pending when none does, the rest dim.
 func (p *prbPainter) stagingDeployStyle(d StagingDeploy) lipgloss.Style {
 	switch {
-	case d.Live:
+	case d.Live || (d.State == "done" && d.Unconfirmed):
 		return p.pal.yellow
 	case d.State == "failed" || d.State == "needs you":
 		return p.pal.red
@@ -1120,10 +1141,7 @@ func (p *prbPainter) stagingLines(ss []StagingInfo, ds []StagingDeploy, width in
 				continue
 			}
 			out = append(out, indent+p.stagingDeployStyle(d).Render("deploy "+d.Effect+": "+StagingDeploySummary(d, p.now)))
-			for _, words := range []string{d.Text, d.Why} {
-				if words == "" {
-					continue
-				}
+			for _, words := range StagingDeployWords(d) {
 				for l := range strings.SplitSeq(lipgloss.NewStyle().Width(max(width-len(indent)-2, 10)).Render(words), "\n") {
 					out = append(out, indent+"  "+p.st.Dim.Render(strings.TrimRight(l, " ")))
 				}

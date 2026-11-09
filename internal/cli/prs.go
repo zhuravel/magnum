@@ -666,7 +666,7 @@ func stagingDeploysOf(values map[string]string, repo string, number int) []tui.S
 	var out []tui.StagingDeploy
 	for _, r := range engine.StagingDeploysOf(values, repo, number) {
 		out = append(out, tui.StagingDeploy{Effect: r.Effect, Env: r.Env, Step: r.Step, Phase: r.Phase, State: r.State, Why: r.Why,
-			Text: r.Text, RunURL: r.RunURL, At: r.At, Live: r.Live()})
+			Text: r.Text, RunURL: r.RunURL, At: r.At, Live: r.Live(), Unconfirmed: r.Unconfirmed()})
 	}
 	return out
 }

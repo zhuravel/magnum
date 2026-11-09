@@ -153,3 +153,20 @@ func TestStagingSummaryIsTheCardsWords(t *testing.T) {
 		t.Errorf("waiting for Jenkins: %q", got)
 	}
 }
+
+// not_confirmed claims nothing of CI: internal/staging also sets it when
+// ci.yml's run was never read or never started, and Why says which. A
+// push or a deployment less than a minute old is "just now", never "now
+// ago".
+func TestStagingSummaryClaimsOnlyWhatItKnows(t *testing.T) {
+	s := StagingInfo{Env: "void", State: "pushed", Detail: "not_confirmed", Why: "ci.yml's run on the merge was not read: the Refresh did not have this PR open"}
+	if got := StagingSummary(s, boardNow); got != "pushed · no deployment confirms it" {
+		t.Errorf("not confirmed: %q", got)
+	}
+	if got := StagingSummary(StagingInfo{Env: "void", State: "latest", DeployedAt: ago(30 * time.Second)}, boardNow); got != "live · deployed just now" {
+		t.Errorf("deployed 30s ago: %q", got)
+	}
+	if got := StagingSummary(StagingInfo{Env: "void", State: "pushed", PushedAt: ago(10 * time.Second)}, boardNow); got != "pushed · pushed just now" {
+		t.Errorf("pushed 10s ago: %q", got)
+	}
+}

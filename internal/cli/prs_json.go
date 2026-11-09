@@ -133,23 +133,25 @@ type prsJSONRow struct {
 // prsJSONStagingDeploy is a staging deploy of a PR as its newest event
 // left it: its effect and env, the step and phase of that event, its state
 // (queued, running, done, failed, cancelled, needs you), why, the event's
-// words, ci.yml's run, when the event came and whether it still runs.
+// words, ci.yml's run, when the event came, whether it still runs, and
+// whether it is a done no deployment confirms (pushed, not confirmed).
 type prsJSONStagingDeploy struct {
-	Effect string    `json:"effect"`
-	Env    string    `json:"env"`
-	Step   string    `json:"step"`
-	Phase  string    `json:"phase"`
-	State  string    `json:"state"`
-	Why    string    `json:"why"`
-	Text   string    `json:"text"`
-	RunURL string    `json:"run_url"`
-	At     time.Time `json:"at,omitzero"`
-	Live   bool      `json:"live"`
+	Effect      string    `json:"effect"`
+	Env         string    `json:"env"`
+	Step        string    `json:"step"`
+	Phase       string    `json:"phase"`
+	State       string    `json:"state"`
+	Why         string    `json:"why"`
+	Text        string    `json:"text"`
+	RunURL      string    `json:"run_url"`
+	At          time.Time `json:"at,omitzero"`
+	Live        bool      `json:"live"`
+	Unconfirmed bool      `json:"unconfirmed"`
 }
 
 func prsJSONStagingDeployOf(d tui.StagingDeploy) prsJSONStagingDeploy {
 	return prsJSONStagingDeploy{Effect: d.Effect, Env: d.Env, Step: d.Step, Phase: d.Phase, State: d.State, Why: d.Why, Text: d.Text,
-		RunURL: d.RunURL, At: d.At, Live: d.Live}
+		RunURL: d.RunURL, At: d.At, Live: d.Live, Unconfirmed: d.Unconfirmed}
 }
 
 // prsJSONStaging is a PR's state on one staging env: latest (live),

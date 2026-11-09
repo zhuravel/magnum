@@ -52,3 +52,55 @@ func TestStagingDeploySummaryIsTheCardsWords(t *testing.T) {
 		t.Errorf("sanitized %+v", got)
 	}
 }
+
+// A deploy the library ended done without a deployment that holds its
+// merge (its Why starts "pushed, not confirmed", the poll App reading no
+// deployments) is not drawn as a success: yellow, in its own words, never
+// "done" in green, which only a confirmed deploy is.
+func TestAnUnconfirmedStagingDeployIsNotDrawnAsASuccess(t *testing.T) {
+	pal := newPRBPalette(defaultStyles)
+	p := p0(pal)
+	unconfirmed := StagingDeploy{Effect: "bart-31-20261005t100000-abcd", Env: "bart", Step: "confirm", Phase: "ok", State: "done", Unconfirmed: true,
+		Why: "pushed, not confirmed: deployments not readable (Deployments: read on the poll App)", At: ago(2 * time.Minute)}
+	if got := p.stagingDeployStyle(unconfirmed).GetForeground(); got != pal.yellow.GetForeground() {
+		t.Errorf("an unconfirmed done is drawn %v, want yellow", got)
+	}
+	if got := StagingDeploySummary(unconfirmed, boardNow); got != "not confirmed · confirm ok · 2m ago" {
+		t.Errorf("summary %q", got)
+	}
+	confirmed := unconfirmed
+	confirmed.Unconfirmed, confirmed.Why = false, ""
+	if got := p.stagingDeployStyle(confirmed).GetForeground(); got != pal.green.GetForeground() {
+		t.Errorf("a confirmed done is drawn %v, want green", got)
+	}
+	r := stagingRows()[0]
+	r.StagingDeploys = []StagingDeploy{unconfirmed}
+	m := iconBoard(t, IconsUnicode, 160, 90, r)
+	m, _ = send(t, m, keyMsg("enter"))
+	mustContain(t, viewOf(m), "deploy bart-31-20261005t100000-abcd: not confirmed · confirm ok · 2m ago", "deployments not readable")
+}
+
+// An ended deploy's last event says why it ended, as its Why does: the
+// card and `magnum staging` say it once. A deploy whose event came less
+// than a minute ago says "just now", never "now ago".
+func TestAStagingDeploysWordsAreSaidOnce(t *testing.T) {
+	d := StagingDeploy{Effect: "void-31-20261005t090000-abcd", Env: "void", Step: "watch", Phase: "fail", State: "failed",
+		Why: "ci.yml failed on the merge", Text: "ci.yml failed on the merge", At: ago(20 * time.Second)}
+	if got := StagingDeployWords(d); len(got) != 1 || got[0] != "ci.yml failed on the merge" {
+		t.Errorf("words %q", got)
+	}
+	if got := StagingDeploySummary(d, boardNow); got != "failed · watch fail · just now" {
+		t.Errorf("summary %q", got)
+	}
+	r := stagingRows()[0]
+	r.StagingDeploys = []StagingDeploy{d}
+	m := iconBoard(t, IconsUnicode, 160, 90, r)
+	m, _ = send(t, m, keyMsg("enter"))
+	if v := viewOf(m); strings.Count(v, "ci.yml failed on the merge") != 1 {
+		t.Errorf("the card says it %d times:\n%s", strings.Count(v, "ci.yml failed on the merge"), v)
+	}
+	d.Text = "ci.yml failed"
+	if got := StagingDeployWords(d); len(got) != 2 {
+		t.Errorf("words %q, want the event's and why", got)
+	}
+}

@@ -274,10 +274,8 @@ func stagingPrint(w io.Writer, d *actDeps, p stagingPR, now time.Time) {
 				continue
 			}
 			fmt.Fprintf(w, "%sdeploy %s: %s\n", indent, dep.Effect, tui.StagingDeploySummary(dep, now))
-			for _, words := range []string{dep.Text, dep.Why} {
-				if words != "" {
-					fmt.Fprintf(w, "%s  %s\n", indent, words)
-				}
+			for _, words := range tui.StagingDeployWords(dep) {
+				fmt.Fprintf(w, "%s  %s\n", indent, words)
 			}
 			if dep.RunURL != "" {
 				fmt.Fprintf(w, "%s  run %s\n", indent, dep.RunURL)

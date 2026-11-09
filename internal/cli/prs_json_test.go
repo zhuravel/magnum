@@ -284,6 +284,7 @@ func TestPRsJSONMirrorsEveryBoardRowField(t *testing.T) {
 		{tui.PRWhiteboard{}, prsJSONWhiteboard{}},
 		{tui.PROpen{}, prsJSONOpen{}},
 		{tui.StagingInfo{}, prsJSONStaging{}},
+		{tui.StagingDeploy{}, prsJSONStagingDeploy{}},
 	} {
 		b, o := reflect.TypeOf(p.board), reflect.TypeOf(p.out)
 		if b.NumField() != o.NumField() {

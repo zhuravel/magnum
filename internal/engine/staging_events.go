@@ -71,6 +71,14 @@ func (r StagingDeployRecord) Live() bool {
 	return r.State == staging.EffectQueued || r.State == staging.EffectRunning
 }
 
+// Unconfirmed reports whether the effect is done without a deployment
+// that holds its merge: its Why starts with staging.NotConfirmed (the
+// deployments not readable, or none after ci.yml passed), or it ended as a
+// fail of its step after the push. Pushed, not live for sure.
+func (r StagingDeployRecord) Unconfirmed() bool {
+	return r.State == staging.EffectDone && (r.Phase == staging.PhaseFail || strings.HasPrefix(r.Why, staging.NotConfirmed))
+}
+
 // parseStagingDeployRecord reads a KVStagingDeploy value; false when it
 // cannot be read or names no effect.
 func parseStagingDeployRecord(v string) (StagingDeployRecord, bool) {

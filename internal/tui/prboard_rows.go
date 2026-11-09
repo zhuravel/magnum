@@ -352,11 +352,13 @@ type PRBoardRow struct {
 // StagingDeploy is a staging deploy of a PR on one env: its effect, the
 // step and phase of its last event, its state (queued, running, done,
 // failed, cancelled, needs you), why it ended, that event's words, ci.yml's
-// run on its merge, when the event came, and whether it still runs.
+// run on its merge, when the event came, whether it still runs, and
+// whether it is a done that no deployment confirms (pushed, not
+// confirmed: engine.StagingDeployRecord.Unconfirmed).
 type StagingDeploy struct {
 	Effect, Env, Step, Phase, State, Why, Text, RunURL string
 	At                                                 time.Time
-	Live                                               bool
+	Live, Unconfirmed                                  bool
 }
 
 // StagingInfo is where a PR stands on one staging env.

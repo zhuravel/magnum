@@ -171,3 +171,26 @@ func TestALiveStagingDeploysRecordCatchesUpWithItsJournal(t *testing.T) {
 		t.Fatalf("records %+v, want bart's alone: its journal still runs", r)
 	}
 }
+
+// A done deploy is unconfirmed when no deployment holds its merge: the
+// library's Why starts with staging.NotConfirmed (the deployments not
+// readable, or none after ci.yml passed), or its end was a fail of its step
+// past the push. A done one deployment confirms, and any other state, is
+// not.
+func TestAStagingDeployRecordSaysWhenItsDoneIsUnconfirmed(t *testing.T) {
+	for _, c := range []struct {
+		r    StagingDeployRecord
+		want bool
+	}{
+		{StagingDeployRecord{State: staging.EffectDone, Phase: staging.PhaseOK, Why: staging.NotConfirmed + ": " + staging.WhyNotReadable}, true},
+		{StagingDeployRecord{State: staging.EffectDone, Phase: staging.PhaseFail, Why: staging.NotConfirmed + ": watch gave up; the push stands"}, true},
+		{StagingDeployRecord{State: staging.EffectDone, Phase: staging.PhaseFail}, true},
+		{StagingDeployRecord{State: staging.EffectDone, Phase: staging.PhaseOK}, false},
+		{StagingDeployRecord{State: staging.EffectFailed, Phase: staging.PhaseFail, Why: staging.NotConfirmed}, false},
+		{StagingDeployRecord{State: staging.EffectRunning, Phase: staging.PhaseBegin}, false},
+	} {
+		if got := c.r.Unconfirmed(); got != c.want {
+			t.Errorf("%+v: Unconfirmed %v, want %v", c.r, got, c.want)
+		}
+	}
+}

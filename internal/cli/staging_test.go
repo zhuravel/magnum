@@ -148,4 +148,15 @@ func TestStagingCommandShowsEachDeploysStepAndLastEvent(t *testing.T) {
 	}
 	out, _ = h.stagingRun(0)
 	actContains(t, out, "talkable#6 at abc1234", "deploy bart-6-20261005t100000-abcd")
+
+	// An end's event says its why: printed once. A done no deployment
+	// confirms says so, not "done".
+	h.setDeployRecord(engine.StagingDeployRecord{Effect: "void-6-20261005t090000-abcd", Repo: "talkable/talkable", Number: 6, Head: prs[6].HeadSHA,
+		Env: "void", Step: "confirm", Phase: "ok", State: "done", Why: "pushed, not confirmed: deployments not readable",
+		Text: "pushed, not confirmed: deployments not readable", Seq: 12, At: h.now.Add(-20 * time.Second)})
+	out, _ = h.stagingRun(0, "talkable#6")
+	actContains(t, out, "deploy void-6-20261005t090000-abcd: not confirmed · confirm ok · just now")
+	if n := strings.Count(out, "pushed, not confirmed: deployments not readable"); n != 1 {
+		t.Errorf("the end's words are printed %d times:\n%s", n, out)
+	}
 }
