@@ -4,10 +4,11 @@ package tui
 // no state and reads no clock; the screen model (a later task) feeds it the
 // rows of the factory registry and the key hints of the moment.
 //
-// A row is one line: cursor, mark, repository, key, title, WAITS ON, its
-// PR's CI, FINDINGS and APPR, YOUR MOVE, one column per staging server,
-// WAITED. The PR's columns are drawn when a row has their data, in the PR
-// board's own cells (ciCell, findingsCell). The repository has a column
+// A row is one line: cursor, mark, repository, key, title, STATUS (its
+// Jira issue's, on a wide screen), WAITS ON, its PR's CI, FINDINGS and
+// APPR, YOUR MOVE, one column per staging server, WAITED. The PR's columns
+// are drawn when a row has their data, in the PR board's own cells
+// (ciCell, findingsCell). The repository has a column
 // only when home shows more than one, or one the title does not name, by
 // its name (its owner too only beside another owner's of the same name); it
 // is cut to 11 cells on a narrow screen and to 6 once the staging cells go
@@ -27,7 +28,11 @@ package tui
 // spare width out; from 180 columns the longest blockers give up their
 // ends there, down to 48 cells, before the title goes under 24. From 120
 // columns, at every step, a row with a PR shows its number in a column of
-// its own after the key, which is then the Jira key.
+// its own after the key, which is then the Jira key. From 180 columns,
+// when a task row has a Jira status, a STATUS column after the title says
+// it, in the wide layout or the 140-column one with the title at no less
+// than 24 cells: its room comes from the wide forms, never from another
+// column, and it is the first column the screen gives up.
 
 import (
 	"cmp"
@@ -112,6 +117,9 @@ const (
 	factoryFindLong  = 18  // ... and on a wide one
 	factoryLate      = 30 * time.Minute
 	factoryDefaultW  = 140
+
+	factoryStatusFrom = 180 // the narrowest screen with a STATUS column ...
+	factoryStatusMax  = 26  // ... and its widest cell: "In Code Review 13h not you"
 )
 
 // factoryForm picks which of a text's forms is drawn.
@@ -134,13 +142,14 @@ type factoryLayout struct {
 	stageGap              int
 	repoCap               int // the repository's widest cell
 	hideStaging, hideMove bool
+	status                bool // a STATUS column, when a row has a Jira status
 
 	// measured
 	staging, hasMove                        bool
 	repoW, keyW, ghW, titleW, waitsW, moveW int // repoW 0: no REPO column
 	repoFull                                int // the widest REPO cell uncut (to factoryRepoWide)
 	stageW                                  []int
-	ciW, findW, apprW                       int // 0: no such column
+	ciW, findW, apprW, statusW              int // 0: no such column
 }
 
 func (l factoryLayout) total() int {
@@ -150,6 +159,9 @@ func (l factoryLayout) total() int {
 	}
 	if l.split {
 		n += l.ghW + 2
+	}
+	if l.statusW > 0 {
+		n += l.statusW + 2
 	}
 	if l.hasMove {
 		n += 2 + l.moveW
@@ -385,6 +397,7 @@ func cleanFactoryRow(r FactoryRow) FactoryRow {
 		pr.Ref, pr.Off = cleanText(pr.Ref), cleanText(pr.Off)
 		r.PR = &pr
 	}
+	r.JiraStatus = cleanJiraStatus(r.JiraStatus)
 	r.CI = cleanCI(r.CI)
 	if r.Findings != nil {
 		f := *r.Findings
@@ -397,6 +410,17 @@ func cleanFactoryRow(r FactoryRow) FactoryRow {
 		r.Approvals = &a
 	}
 	return r
+}
+
+// cleanJiraStatus is a copy of js with its words cleaned (nil for nil):
+// the row and its task card share js, which a painter never changes.
+func cleanJiraStatus(js *FactoryJiraStatus) *FactoryJiraStatus {
+	if js == nil {
+		return nil
+	}
+	c := *js
+	c.Name, c.Category, c.LastError = cleanText(c.Name), cleanText(c.Category), cleanText(c.LastError)
+	return &c
 }
 
 // text forms
@@ -682,6 +706,57 @@ func (p *factoryPainter) stageCell(c StagingCell, form factoryForm) cell {
 	return out
 }
 
+// jiraStyle is the style of a Jira status's name by its category, as the
+// screen draws other states: done green, new (to do) dim, any other plain.
+func jiraStyle(st styles, js *FactoryJiraStatus) lipgloss.Style {
+	switch js.Category {
+	case "done":
+		return st.OK
+	case "new":
+		return st.Dim
+	}
+	return noStyle
+}
+
+// jiraAssignee is the STATUS cell's mark of who has the issue: "" for you,
+// "not you" for someone else, "nobody" for nobody.
+func jiraAssignee(js *FactoryJiraStatus) string {
+	switch {
+	case js.AssignedToYou:
+		return ""
+	case js.Assigned:
+		return "not you"
+	}
+	return "nobody"
+}
+
+// statusText is the row's STATUS cell in w cells (0: whole): its Jira
+// issue's status in its category's style, how long the issue has held it
+// (none when that is not known) and who has it when it is not you, the
+// name cut first; a dim ? when no read of it worked; nothing for a row
+// without a Jira status.
+func (p *factoryPainter) statusText(r FactoryRow, w int) cell {
+	js := r.JiraStatus
+	switch {
+	case js == nil:
+		return nil
+	case js.Name == "":
+		return cell{{"?", p.st.Dim}}
+	}
+	var tail cell
+	if !js.Since.IsZero() {
+		tail = append(tail, seg{" " + shortAge(max(p.now.Sub(js.Since), 0)), p.st.Dim})
+	}
+	if who := jiraAssignee(js); who != "" {
+		tail = append(tail, seg{" ", noStyle}, seg{who, p.tone(r, p.st.Accent)})
+	}
+	name := cell{{js.Name, p.tone(r, jiraStyle(p.st, js))}}
+	if w > 0 && name.width()+tail.width() > w {
+		name = name.fit(max(w-tail.width(), 1))
+	}
+	return append(name, tail...)
+}
+
 // stagingNamed is the row's cell for a staging server.
 func stagingNamed(r FactoryRow, name string) (StagingCell, bool) {
 	i := slices.IndexFunc(r.Stagings, func(c StagingCell) bool { return c.Name == name })
@@ -777,7 +852,7 @@ func (p *factoryPainter) measure(l factoryLayout) factoryLayout {
 	l.staging = len(p.names) > 0 && !l.hideStaging
 	l.hasMove = !l.hideMove
 	l.repoW, l.repoFull, l.keyW, l.ghW, l.titleW, l.waitsW, l.moveW, l.stageW = 0, 0, 1, 0, 1, len("WAITS ON"), 0, nil
-	l.ciW, l.findW, l.apprW = 0, 0, 0
+	l.ciW, l.findW, l.apprW, l.statusW = 0, 0, 0, 0
 	ciCap, findCap := factoryCIMid, factoryFindMid
 	if l.pr == formLong {
 		ciCap, findCap = factoryCILong, factoryFindLong
@@ -787,6 +862,11 @@ func (p *factoryPainter) measure(l factoryLayout) factoryLayout {
 	}
 	if p.repos { // never so narrow that two repositories' cells read alike
 		l.repoFull = p.repoFloor
+	}
+	for _, r := range p.rows {
+		if c := p.statusText(r, 0); l.status && c != nil {
+			l.statusW = max(l.statusW, len("STATUS"), min(c.width(), factoryStatusMax))
+		}
 	}
 	for _, r := range p.rows {
 		if p.repos {
@@ -850,21 +930,15 @@ func (p *factoryPainter) grow(l factoryLayout) factoryLayout {
 	return l
 }
 
-// plan picks the fullest layout that fits the width.
+// plan picks the fullest layout that fits the width. From
+// factoryStatusFrom, when a row has a Jira status, it first tries the wide
+// layout and the 140-column one with a STATUS column, the title keeping
+// factoryKeepTitle cells: the column takes its room from the wide forms
+// (which the help line and the card say), never from another column, and
+// it is the first column the screen gives up.
 func (p *factoryPainter) plan() factoryLayout {
-	wide := p.measure(factoryLayout{wide: true, split: p.prs, waits: formLong, move: formMid, stage: formLong, pr: formLong, keyGap: 2,
-		stageGap: 2, repoCap: factoryRepoWide})
-	need, room := min(wide.titleW, factoryKeepTitle), p.width-(wide.total()-wide.titleW)
-	if cut := min(need-room, wide.waitsW-factoryWaitsWide); p.width >= factoryCutFrom && cut > 0 && room+cut >= need {
-		// The longest blockers give up their ends (the help line says them
-		// whole) before the wide layout gives up the PR's columns.
-		wide.waitsW -= cut
-		room += cut
-	}
-	if room >= need {
-		wide.titleW = min(wide.titleW, room)
-		return p.grow(wide)
-	}
+	full := factoryLayout{wide: true, split: p.prs, waits: formLong, move: formMid, stage: formLong, pr: formLong, keyGap: 2,
+		stageGap: 2, repoCap: factoryRepoWide}
 	const mid, short = factoryRepoMid, factoryRepoShort
 	split := p.prs && p.width >= factoryPRFrom
 	steps := []factoryLayout{
@@ -881,17 +955,24 @@ func (p *factoryPainter) plan() factoryLayout {
 		{split: split, waits: formShort, move: formShort, stage: formShort, pr: formShort, prMin: true, keyGap: 1, stageGap: 1,
 			repoCap: short, hideStaging: true, hideMove: true},
 	}
+	if p.width >= factoryStatusFrom && slices.ContainsFunc(p.rows, func(r FactoryRow) bool { return r.JiraStatus != nil }) {
+		wide, mid := full, steps[0]
+		wide.status, mid.status = true, true
+		if l, ok := p.fitWide(wide); ok {
+			return l
+		}
+		if l, ok := p.fitStep(mid, factoryKeepTitle); ok {
+			return l
+		}
+	}
+	if l, ok := p.fitWide(full); ok {
+		return l
+	}
 	var l factoryLayout
 	for _, s := range steps {
-		l = p.measure(s)
-		room := p.width - (l.total() - l.titleW)
-		if room >= min(l.titleW, factoryMinTitle) {
-			l.titleW = min(l.titleW, room)
-			// A cut REPO cell takes its whole name back from a title that
-			// keeps factoryKeepTitle cells.
-			more := min(max(l.repoFull-l.repoW, 0), max(l.titleW-factoryKeepTitle, 0))
-			l.repoW, l.titleW = l.repoW+more, l.titleW-more
-			return p.grow(l)
+		var ok bool
+		if l, ok = p.fitStep(s, factoryMinTitle); ok {
+			return l
 		}
 	}
 	// Nothing left to give up: the title and WAITS ON share what is left.
@@ -899,6 +980,41 @@ func (p *factoryPainter) plan() factoryLayout {
 	l.titleW = max(min(l.titleW, avail*2/5), min(avail, 4))
 	l.waitsW = max(min(l.waitsW, avail-l.titleW), 0)
 	return l
+}
+
+// fitWide is the wide layout s at the screen's width, when it fits with
+// the title squeezed to no less than factoryKeepTitle cells; from
+// factoryCutFrom the longest blockers give up their ends (the help line
+// says them whole) before the wide layout gives up the PR's columns.
+func (p *factoryPainter) fitWide(s factoryLayout) (factoryLayout, bool) {
+	wide := p.measure(s)
+	need, room := min(wide.titleW, factoryKeepTitle), p.width-(wide.total()-wide.titleW)
+	if cut := min(need-room, wide.waitsW-factoryWaitsWide); p.width >= factoryCutFrom && cut > 0 && room+cut >= need {
+		wide.waitsW -= cut
+		room += cut
+	}
+	if room < need {
+		return wide, false
+	}
+	wide.titleW = min(wide.titleW, room)
+	return p.grow(wide), true
+}
+
+// fitStep is step s at the screen's width, when it fits with the title
+// squeezed to no less than floor cells (its own width when narrower); the
+// layout measured when it does not.
+func (p *factoryPainter) fitStep(s factoryLayout, floor int) (factoryLayout, bool) {
+	l := p.measure(s)
+	room := p.width - (l.total() - l.titleW)
+	if room < min(l.titleW, floor) {
+		return l, false
+	}
+	l.titleW = min(l.titleW, room)
+	// A cut REPO cell takes its whole name back from a title that keeps
+	// factoryKeepTitle cells.
+	more := min(max(l.repoFull-l.repoW, 0), max(l.titleW-factoryKeepTitle, 0))
+	l.repoW, l.titleW = l.repoW+more, l.titleW-more
+	return p.grow(l), true
 }
 
 // columns
@@ -910,8 +1026,8 @@ type placed struct {
 
 // xs are the left edges of the columns.
 type factoryXs struct {
-	repo, key, gh, title, waits, ci, find, appr, move, waited int
-	stageAt                                                   []int
+	repo, key, gh, title, status, waits, ci, find, appr, move, waited int
+	stageAt                                                           []int
 }
 
 func (p *factoryPainter) xs() factoryXs {
@@ -928,6 +1044,10 @@ func (p *factoryPainter) xs() factoryXs {
 	}
 	x.title = at
 	x.waits = x.title + l.titleW + 2
+	if l.statusW > 0 {
+		x.status = x.waits
+		x.waits += l.statusW + 2
+	}
 	at = x.waits + l.waitsW + 2
 	for _, c := range []struct {
 		x *int
@@ -978,9 +1098,11 @@ func (p *factoryPainter) rowPieces(r FactoryRow) []placed {
 	if l.split {
 		ps = append(ps, placed{x.gh, l.ghW, cell{{r.GitHub, p.tone(r, p.st.Accent)}}})
 	}
-	ps = append(ps,
-		placed{x.title, l.titleW, cell{{r.titleText(l), p.tone(r, noStyle)}}},
-		placed{x.waits, l.waitsW, p.waitsCell(r, l.waits)})
+	ps = append(ps, placed{x.title, l.titleW, cell{{r.titleText(l), p.tone(r, noStyle)}}})
+	if l.statusW > 0 {
+		ps = append(ps, placed{x.status, l.statusW, p.statusText(r, l.statusW)})
+	}
+	ps = append(ps, placed{x.waits, l.waitsW, p.waitsCell(r, l.waits)})
 	if l.ciW > 0 {
 		ps = append(ps, placed{x.ci, l.ciW, p.ciText(r, l.pr)})
 	}
@@ -1034,9 +1156,16 @@ func (p *factoryPainter) headerLine(label string, columns bool, above int) strin
 		}
 		head = append(head, seg{fmt.Sprintf("%s%s %d more", lead, p.g.up, above), p.st.Dim})
 	}
-	ps := []placed{{1, max(x.waits-3, 1), head}}
+	first := x.waits // the label's room ends before the first named column
+	if l.statusW > 0 {
+		first = x.status
+	}
+	ps := []placed{{1, max(first-3, 1), head}}
 	if columns {
 		head := func(at, w int, s string) placed { return placed{at, w, cell{{s, p.st.Header}}} }
+		if l.statusW > 0 {
+			ps = append(ps, head(x.status, l.statusW, "STATUS"))
+		}
 		ps = append(ps, head(x.waits, l.waitsW, "WAITS ON"))
 		for _, c := range []struct {
 			x, w int
