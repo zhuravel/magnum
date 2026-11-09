@@ -20956,6 +20956,63 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheStagingQuestionSaysTheResolverMergesAConflict, TestStagingHelpSaysTheResolverMergesAConflict and
   TestTheBoardAndTheStagingCommandSayWhatTheResolverDoes; the tui's
   TestTheCardSaysWhatTheResolverDoesForAConflictedDeploy; the agents' TestRenderGolden (the two resolver goldens).
+- **The staging resolver after its review: the slot goes back clean after a person's typing, the pane cannot act
+  or push for the operator, and the daemon enforces the give-up rules it can see** (2026-11-09, the staging wiring,
+  part 3: two reviewers' findings). **The slot:** a job took the PR's own slot without recording it as magnum's
+  checkout (prepare's `Slots.Resync` sets only `checked_out_sha`), so when someone had typed into the PR's magnum
+  panes after the slot's last checkout, the guard of the resync that puts the slot back took the job's own merge
+  (its staged clean changes, the resolution) for a person's changes: it raised a lasting `dirty_worktree` hold and
+  left the slot mid-merge at the staging tip, every later review of the PR refused until `magnum unpin`. Now the
+  job takes the slot as the fixer and the whiteboard writer do: it waits while someone typed into the PR's panes
+  within `human_cooldown` (those panes work in the slot), and once the guard lets it in, the slot's `last_used_at`
+  moves, so only a person who types during the job counts as one. **The wait:** the earlier entries said a job
+  never waits on a running review's slot; it does, for the PR's own round, fix, open or whiteboard, an hour at
+  most, and the words now say so. A free pool slot instead was rejected: a slot is the PR's assignment (one per
+  PR), the job's hold of the PR is the slot-work reservation a round's dispatch refuses (`reserveSlotWork`), and a
+  slot claimed for no PR is no state the pool has; the PR's round is also what moves its head, which the job's
+  merge is of. A job that waits no longer holds back the jobs after it: the worker passes over it until its next
+  wake, one job at a time still. A deploy to three envs whose merges all conflict can still see its third job fail
+  for its hour's wait behind two long ones (the bound that keeps the library's 2-hour wait from ending a job
+  first), which the README says. **The pane:** it now carries `MAGNUM_STAGING_RESOLVE`, which the CLI's
+  `refuseInAgentPane` refuses as it refuses a review agent's markers, so a steered agent cannot deploy, approve or
+  fix for the operator with the binary its db-lock line names. Its env also leaves git no way to push: the
+  credential helpers reset and every GitHub push URL (ssh, https) rewritten to `/nonexistent/` through
+  `GIT_CONFIG_COUNT` (above the checkout's config), and `GIT_SSH_COMMAND=/usr/bin/false`, which the pane's shell does
+  not set again the way an rc file sets `SSH_AUTH_SOCK` again (and `~/.ssh/config`'s `IdentityAgent` reaches ssh
+  whatever the env says). The words are now true about the rest: the agent runs as the operator, with their HOME,
+  files and what their shell's rc files export, as every pane's agent does, so "never push" rests on the prompt and
+  these blocks; a scratch HOME was rejected (the agent CLI's own login and toolchain live there). **The checks:**
+  `git diff --name-only` never lists an untracked file, so a resolution that needed a new file passed the specs in
+  the slot while the commit (the conflicted paths alone) went without it; now prepare notes the slot's untracked
+  files before the merge, the commit is refused when the work tree adds one ("the checkout also adds ..."), and the
+  slot goes back without the files the job added (unless someone typed into the PR's panes meanwhile). A binary
+  file and a file both sides renamed to two paths are refused by the daemon before the agent starts, from
+  merge-tree's messages (`gitx.MergeTreeMessages`, git's stable kinds `CONFLICT (binary)` and `CONFLICT
+  (rename/rename)`): git leaves no marker there (a binary file keeps the tip's version in the work tree and in
+  merge-tree's tree), so an agent that wrote "resolved" would have dropped the PR's change with every check
+  passing. The prompt's rename rule was the opposite of the fix skill's; it now says, as the skill does, to apply
+  the change at the new path, and it tells the agent to delete the files it or the specs added. **The worker:** a
+  panic in a job is settled (released, ended failed with the panic), so it no longer leaks the PR's reservation;
+  the reservation goes by the PR it was taken for, not the job's slot fields, which a take cut short has not set;
+  the worker reads a job's row again under the journal's lock as it starts it, and a save never brings back a row
+  that ended (a Cancel that came between the worker's read and its start is no longer undone); a done job whose
+  ref cannot be dropped no longer stays for good (a repository that is gone lets the row go, and past two days it
+  goes whatever git says). Tests: the engine's TestTheStagingResolverPutsBackASlotWhosePRsPanesSomeoneTypedInto
+  (the fixture's resync applies the guard's rule for a person's changes),
+  TestTheStagingResolverWaitsForASlotTheGuardHoldsOrAPinKeeps,
+  TestTheStagingResolverFailsAMergeWhoseConflictsAreNotMergeTrees,
+  TestTheStagingResolverGivesUpOnABinaryOrARenameRenameConflictItself,
+  TestTheStagingResolverFailsAResolutionThatAddsAFile, TestTheStagingResolverRefusesACoworkersPR,
+  TestAResolverJobThatWaitsForItsSlotDoesNotHoldBackTheNext,
+  TestAPanicInAStagingResolverJobEndsItAndLetsGoOfWhatItHeld,
+  TestAWorkersStaleCopyNeverBringsBackAJobACancelEnded, TestARestartHoldsAResumedResolverJobsPRBeforeAnyRound,
+  TestARestartEndsAResolverJobCancelledWhileTheDaemonWasDown, TestADoneResolverJobWhoseRefCannotBeDroppedStillGoes
+  and TestTheStagingResolversPaneEnvMarksItAndLeavesGitNoWayToPush; the cli's
+  TestAReviewAgentsShellCannotActForTheOperator (the resolver's marker); gitx's
+  TestMergeTreeMessagesNameEachConflictsKindAndPaths; the agents' TestRenderGolden (the two resolver goldens).
+  Taking out the guard, the conflicts' comparison with merge-tree's, the recovery's hold of the PR, the recovery's
+  end of a cancelled job or the own-PR refusal each fails a test; the pinned-slot case alone does not, since the
+  guard refuses a pinned slot too.
 
 ## Learned rules
 

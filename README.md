@@ -5148,26 +5148,36 @@ cancel it by its id).
 
 **The resolver.** A merge that conflicts at the merge step, whether the plan you confirmed showed the conflict or
 the branch's tip moved since, goes to the review daemon's resolver, at most 2 tries per deploy (the second only
-when the tip moves after the first try's merge). Each
-try is a job in the registry (`staging.resolve.<job>`), so it outlives a restart. It works in a review slot of the
-repository, which has its databases and gems: the PR's own slot when no round, open, fix or whiteboard holds it,
-else a free slot of the pool (a slot a round holds is never taken and never waited on; the job "waits for a slot"
-and the next tick looks again). There, detached at the branch's tip, `git merge --no-commit --no-ff <head>`
-leaves the conflicts, and the fix role's agent (its kind, model and effort, `prompts/staging-resolve.md`) resolves
-them in a magnum pane of the herdr workspace "staging merge", which the job's why names while it works (the card
-and `magnum staging` show it under the deploy, `resolver try 1: ...`): it keeps
-both sides' intent, edits only the conflicted paths, runs their specs through the db-lock line and gives up, with
-the reason, when the two sides contradict each other, a file is binary, both sides renamed it, or the specs cannot
-run or stay red. Its pane has no GitHub token and no git credentials: it never commits or pushes. magnum makes the
-merge commit itself, [tip, head] by the fixer App's bot with the clean merge's message, and checks it as verify
-will: no conflict marker left, nothing else changed in the slot, the tree differing from merge-tree's only in the
-conflicted paths. The slot goes back to the commit it held (a slot taken from the pool goes back to the pool),
-clean and with no guard hold. One job runs at a time; one runs at most 45 minutes from its slot on and waits at
-most an hour for its turn and its slot, so the deploy's own 2-hour wait never ends it first. A restart goes on
-with a job whose agent still runs; one whose agent is gone fails, saying so. The resolver takes your own PRs only,
-as the deploy does. The merge stays at `refs/magnum/staging-resolved/<effect>` in the slot's main clone until the
-deploy ended, a day at most. A conflict the resolver cannot resolve (it gave up, a check failed, it ran over its
-time) fails the deploy with its why, and nothing is pushed.
+when the tip moves after the first try's merge). Each try is a job in the registry (`staging.resolve.<job>`), so
+it outlives a restart. It works in a review slot of the repository, which has its databases and gems: the PR's
+own slot, or a free slot of the pool for a PR that has none. It never evicts a round's slot and never touches a
+slot it may not use: while a round (in flight or paused), an open, a fix or a whiteboard holds the PR, while its
+slot is pinned or its guard holds it (a person's agent or process, a moved HEAD, commits on no remote), or while
+someone typed into the PR's panes within `human_cooldown`, the job "waits for a slot" (it names why), the next
+tick looks again, and the jobs after it go on meanwhile; a job waits an hour at most. There, detached at the
+branch's tip, `git merge --no-commit --no-ff <head>` leaves the conflicts. A binary file or a file both sides
+renamed to two paths fails the job at once, naming them: git leaves no marker there for the checks below to find,
+and no merge keeps both sides. Otherwise the fix role's agent (its kind, model and effort,
+`prompts/staging-resolve.md`) resolves them in a magnum pane of the herdr workspace "staging merge", which the
+job's why names while it works (the card and `magnum staging` show it under the deploy, `resolver try 1: ...`): it
+keeps both sides' intent, edits only the conflicted paths, runs their specs through the db-lock line and gives
+up, with the reason, when the two sides contradict each other or the specs cannot run or stay red. Its pane's
+environment carries no GitHub token and no gh login of yours, and leaves git no way to push: no credential
+helper, git's ssh command `/usr/bin/false` and every GitHub push URL a path that does not exist; magnum's commands
+that act for you refuse to run there (`MAGNUM_STAGING_RESOLVE` is set). The agent still runs as you, with your
+HOME, your files and what your shell's rc files export, as every pane's agent does, so that it never commits or
+pushes rests on its prompt and these blocks. magnum makes the merge commit itself, [tip, head] by the fixer App's
+bot with the clean merge's message, and checks it as verify will: no conflict marker left, nothing else changed
+and no file added in the slot (the specs ran on what the merge holds), the tree differing from merge-tree's only
+in the conflicted paths. The slot goes back to the commit it held, without the files the job added (a slot taken
+from the pool goes back to the pool), clean and with no guard hold. One job runs at a time, the oldest first; one
+runs at most 45 minutes from its slot on and waits at most an hour for its turn and its slot, so the deploy's own
+2-hour wait never ends it first (so of a deploy to three envs whose merges all conflict, the third job can fail
+for its wait behind two that take their time). A restart goes on with a job whose agent still runs; one whose
+agent is gone fails, saying so. The resolver takes your own PRs only, as the deploy does. The merge stays at
+`refs/magnum/staging-resolved/<effect>` in the slot's main clone until the deploy ended, a day at most. A conflict
+the resolver cannot resolve (it gave up, a check failed, it ran over its time) fails the deploy with its why, and
+nothing is pushed.
 
 The deploys dir (`<mirror_dir>/<owner>/<repo>.deploys`) is operator-level state, like the registry and
 `~/.config/magnum`: magnum alone writes it, never a hand and never an agent's pane. A journal written there is a
@@ -6629,8 +6639,8 @@ github.com (another host, a mirror or a local path is refused as an origin misma
 without `GH_TOKEN`, `GITHUB_TOKEN`, `GITHUB_PERSONAL_ACCESS_TOKEN`, the App identities' `private_key_env` and the
 variables that point git at another repository (set a value a script needs in `[pool] env` or `[[repo]] env`); and
 `magnum approve --as`, `unapprove`, `mute`, `ignore`, `pause`, `fix`, `whiteboard` and `settings` refuse to run in a
-review agent's pane (where `MAGNUM_REPORT_DIR` or `MAGNUM_PR_URL` is set), so a steered agent cannot act for the
-operator. The other commands have no such guard (`resume`, `snooze`, `star`, `release`, `unpin`, `codex-flag` and
+review agent's pane (where `MAGNUM_REPORT_DIR` or `MAGNUM_PR_URL` is set) and in the staging resolver's (where
+`MAGNUM_STAGING_RESOLVE` is set), so a steered agent cannot act for the operator. The other commands have no such guard (`resume`, `snooze`, `star`, `release`, `unpin`, `codex-flag` and
 `retro` among them). An approval prompt that stops an agent
 during a review (Claude Code asks before some commands even with `--dangerously-skip-permissions`) is
 answered No, never Yes, at most 10 times per run and recorded as an `agent.prompt_denied` event, and an

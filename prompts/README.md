@@ -528,9 +528,11 @@ output), then is kept as invalid.
 
 The one prompt of the staging resolver's agent: a staging deploy's merge of a PR's head into a staging branch
 conflicts, and the agent resolves the conflicts in a review slot of the repository, detached at the branch's tip
-with `git merge --no-commit --no-ff <head>` in progress. It edits only the conflicted paths, runs their specs
-through the db-lock line, never stages, commits, pushes or runs `gh` (its pane has no GitHub credentials), and
-writes the result file; magnum makes the merge commit as the bot and checks it. No PR text is a variable.
+with `git merge --no-commit --no-ff <head>` in progress. It edits only the conflicted paths (a change one side
+made to a file the other renamed goes to the new path, as in the fix skill), adds no file, runs their specs
+through the db-lock line, never stages, commits, pushes or runs `gh` (its pane's env has no GitHub token and
+leaves git no way to push), and writes the result file; magnum makes the merge commit as the bot and checks it,
+and refuses a binary or a rename/rename conflict itself before the agent starts. No PR text is a variable.
 
 | Variable | Meaning |
 |---|---|
