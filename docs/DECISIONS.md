@@ -21046,13 +21046,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
     Without a copy on disk, with git failing in every copy, with the diffs past their minute, or with a round whose
     result counts P0 to P2 findings and whose rows magnum has none of (a result without provenance, or a read between
     the verdict and the record), the check stores nothing and is tried again after 5 minutes, its cause logged once.
-    The try once magnum's round is 25 minutes old stores it, with the files of its escapes compared at the same head
-    only (`same_head_only`) and the findings unrecorded (`unrecorded`) counted on the row, which the event (with this
-    daemon's tries) and the stats say. The last try goes by the round's age, which a restart keeps, not by a count in
-    memory, so restarts closer together than the bound cannot keep a check from storing. A passing failure so never
-    stores a wrong count for good, and one that persists (a head no copy has, a copies volume that stays unplugged) is
-    stored flagged rather than never. A round already older than the bound at its first try (the daemon was down, or
-    the PR was published before this change) gets that one try.
+    The try 25 minutes after magnum posted the round stores it, with the files of its escapes compared at the same
+    head only (`same_head_only`) and the findings unrecorded (`unrecorded`) counted on the row, which the event (with
+    this daemon's tries) and the stats say. The last try goes by the time magnum recorded the post (the posting run's
+    verification, else its end; the round's start when the run recorded neither), which a restart keeps, not by a
+    count in memory, so restarts closer together than the bound cannot keep a check from storing; and not by the
+    round's start, as most rounds run 25 minutes or more before they post. A passing failure so never stores a wrong
+    count for good, and one that persists (a head no copy has, a copies volume that stays unplugged) is stored flagged
+    rather than never. A post already older than the bound at the first try (the daemon was down, or the PR was
+    published before this change) gets that one try. A failed diff the result does not depend on still leaves the
+    comparable count a lower bound (the local finding counts as not comparable), which the event says (`at least`).
   - Off the loop. The tick's PR follow starts a task's check once magnum posted a review of the PR
     (`PRState.Review`) while the task has no stored check; the check (the read of magnum's round, one query with its
     findings, `store.FirstPostedReview`; the registry's reads; the diffs) runs in the background within 2 minutes, at
@@ -21087,28 +21090,30 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the git calls on the loop; storing an incomplete check at once (a slow or briefly failing git would count escapes
   that are none, for good); retrying an incomplete check forever (a persistent cause would leave it unchecked); checks
   of ended tasks in this change (`not checked` says so); the last try by a count of tries in memory (a daemon
-  restarted more often than the bound never stores); a unique index on `checks` for the CI rows (the existing record of causes writes several
-  GitHub CI rows of one head, and the only writer of these keeps them single in its transaction); reading the
-  posted round's findings one query per finding.
+  restarted more often than the bound never stores) or by the round's start (most rounds would get no retry); a
+  unique index on `checks` for the CI rows (the existing record of causes writes several GitHub CI rows of one head,
+  and the only writer of these keeps them single in its transaction); reading the posted round's findings one query
+  per finding.
   Tests: the registry's TestTheEscapesMigrationAppliesOnTheTemplateAndAVersion6File,
   TestAnEscapeCheckIsWrittenOnceWithItsEscapes and TestGitHubsCIIsRecordedOncePerHeadAndResult; the store's
   TestFirstPostedReviewIsTheFirstRoundThatBeganSinceAndPosted; the factory's
   TestFirstPostedRoundReadsMagnumsFirstPostedRoundSinceThePublish, TestAPostedP2NoLocalFindingIsNearIsAnEscape,
   TestALocalFindingThreeLinesAwayCatchesAndFourIsFar, TestDifferentHeadsCompareWhereTheFileDidNotChange,
   TestAnIncompleteCheckIsTriedAgainThenStoredWithItsSameHeadFiles,
-  TestADeadlineOfTheDiffsStoresNothingAndTheNextTryCompares, TestACopyWithoutGitIsSkippedAndAFailingCopyGivesWayToTheNext,
+  TestADeadlineOfTheDiffsStoresNothingAndTheNextTryCompares,
+  TestACopyWithoutGitIsSkippedAndAFailingCopyGivesWayToTheNext,
   TestTheFirstPostedRoundCountsFromThePublishsFirstBegin, TestAStopMidCheckWritesNothingAndTheNextDaemonChecksOnce,
   TestAFailedCheckWaitsItsRetryAndIsLoggedOnce, TestATaskHasOneCheckAtATime,
   TestARoundWhoseFindingsMagnumDidNotRecordIsStoredUnrecorded, TestRestartsDoNotKeepAnIncompleteCheckFromStoring,
-  TestAFailedDiffTheResultDoesNotDependOnNeitherDelaysNorFlagsTheCheck, TestNoEscapeCheckStartsWhileTheDaemonDrains,
-  TestTheEscapeCheckRunsOnce,
+  TestAFailedDiffTheResultDoesNotDependOnDelaysNorFlagsTheCheck, TestNoEscapeCheckStartsWhileTheDaemonDrains,
+  TestTheLastTryCountsFromThePostNotTheRoundsStart, TestTheEscapeCheckRunsOnce,
   TestNoEscapeCheckBeforeAPostedRoundAfterThePublish, TestAPostedTitleNeverReachesTheFactorysRegistry,
   TestThePRsCIAfterThePublishIsCopiedOncePerHeadAndResult and TestFixLoopsCountTheFixersPushesAndCommits; stats'
   TestStatsShowTheQualityOfThePublishedPRs; the CLI's TestFactoryStatsShowsTheQualityOfThePublishedPRs. The follow's
   call, the P0 to P2 filter, the head rule, the CI's stale guard and its once-per-head rule, the incomplete check's
   retry, the publish effect's cutoff, the `.git` rule, the next copy, the stop's guard, the one-check guard and the
-  retry's wait, the drain guard, the last try by the round's age and the rule of what the result depends on were each
-  taken out once, and a test failed.
+  retry's wait, the drain guard, the last try by the post's time, the rule of what the result depends on and the
+  event's `at least` were each taken out once, and a test failed.
 
 ## Learned rules
 

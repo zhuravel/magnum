@@ -14211,14 +14211,17 @@ type PostedRound struct {
 	Head     string
 	ReviewID int64
 	Start    time.Time
+	Posted   time.Time
 	Findings []PostedFinding
 	Counts   [4]int
 	Counted  bool
 }
     PostedRound is magnum's round on a PR that posted a review
     (Magnum.FirstPostedRound): the run of its judge that posted it (RunID,
-    magnum's runs.id), the round's number, the head it reviewed, the review's id
-    on GitHub, when the round began (its first run), and the findings it posted,
+    magnum's runs.id), the round's number, the head it reviewed,
+    the review's id on GitHub, when the round began (its first run),
+    when magnum recorded the post (Posted: the posting run's verification,
+    else its end; zero when the run has neither), and the findings it posted,
     in the judge's order. Counts are the new findings the round's result counts,
     P0 to P3 (store.ReviewSummary.Counts), when Counted: a result without
     provenance counts findings magnum recorded no row of.
@@ -28976,6 +28979,10 @@ type PostedReview struct {
 	CreatedAt   time.Time
 	RoundStart  time.Time
 	RoundTarget string
+	// PostedAt is when magnum recorded the post: the run's verification of
+	// the review, else its end; zero when the run has neither, and left
+	// zero by ReviewedPRs (FirstPostedReview reads it).
+	PostedAt time.Time
 	// Summary is what the judge's result says (ParseReviewResult); OK is
 	// false when the run stored no result that parses.
 	Summary ReviewSummary
@@ -29601,11 +29608,12 @@ func (s *Store) FirstPostedReview(ctx context.Context, prID int64, since time.Ti
     and began at or after since (its first run, a reviewer's before the judge's,
     created then; the rounds in the order they began), with the findings it
     posted, every priority, in the judge's order: the round as ReviewedPRs
-    reads a posted review (its run is the earliest of the round that carries the
-    review, Summary what that run's result says, OK false for none that parses),
-    its findings the posted rows of that round (findings.verdict posted).
-    A round that began before since does not count, however late it posted.
-    One query; false when no such round exists yet.
+    reads a posted review (its run is the earliest of the round that carries
+    the review, PostedAt when that run was verified, else when it ended,
+    Summary what its result says, OK false for none that parses), its findings
+    the posted rows of that round (findings.verdict posted). A round that began
+    before since does not count, however late it posted. One query; false when
+    no such round exists yet.
 
 func (s *Store) ForgetHerdrIDs(ctx context.Context) (int64, error)
     ForgetHerdrIDs clears the herdr workspace, tab and pane of every session
