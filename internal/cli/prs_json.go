@@ -143,6 +143,7 @@ type prsJSONStagingDeploy struct {
 	State       string    `json:"state"`
 	Why         string    `json:"why"`
 	Text        string    `json:"text"`
+	Resolver    string    `json:"resolver,omitempty"` // a live deploy's conflict: what the resolver's job does now
 	RunURL      string    `json:"run_url"`
 	At          time.Time `json:"at,omitzero"`
 	Live        bool      `json:"live"`
@@ -151,7 +152,7 @@ type prsJSONStagingDeploy struct {
 
 func prsJSONStagingDeployOf(d tui.StagingDeploy) prsJSONStagingDeploy {
 	return prsJSONStagingDeploy{Effect: d.Effect, Env: d.Env, Step: d.Step, Phase: d.Phase, State: d.State, Why: d.Why, Text: d.Text,
-		RunURL: d.RunURL, At: d.At, Live: d.Live, Unconfirmed: d.Unconfirmed}
+		Resolver: d.Resolver, RunURL: d.RunURL, At: d.At, Live: d.Live, Unconfirmed: d.Unconfirmed}
 }
 
 // prsJSONStaging is a PR's state on one staging env: latest (live),

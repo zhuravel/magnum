@@ -1085,13 +1085,17 @@ func StagingDeploySummary(d StagingDeploy, now time.Time) string {
 
 // StagingDeployWords are the lines under a deploy on the card and in
 // `magnum staging`: its last event's words, then why it ended, once when
-// they are the same (an end's event says its why).
+// they are the same (an end's event says its why), then what the resolver
+// does for its conflict ("resolver try 1: ...", naming the agent's pane).
 func StagingDeployWords(d StagingDeploy) []string {
 	var out []string
 	for _, w := range []string{d.Text, d.Why} {
 		if w != "" && !slices.Contains(out, w) {
 			out = append(out, w)
 		}
+	}
+	if d.Resolver != "" {
+		out = append(out, "resolver "+d.Resolver)
 	}
 	return out
 }

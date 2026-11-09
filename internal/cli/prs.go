@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -646,9 +647,11 @@ func boardStagings(ctx context.Context, st *store.Store, cfg *config.Config, r s
 	return out
 }
 
-// stagingDeployValues is every staging deploy's record (engine.KVStagingDeploys)
-// in one read; none without a repository with staging envs, or when the
-// registry cannot say.
+// stagingDeployValues is every staging deploy's record
+// (engine.KVStagingDeploys) and every resolver job's row
+// (engine.KVStagingResolves), whose keys differ, in two reads; none without
+// a repository with staging envs, or when the registry cannot say (a
+// failed read of the jobs leaves them out).
 func stagingDeployValues(ctx context.Context, st *store.Store, cfg *config.Config) map[string]string {
 	if len(engine.StagingRepos(cfg)) == 0 {
 		return nil
@@ -657,16 +660,24 @@ func stagingDeployValues(ctx context.Context, st *store.Store, cfg *config.Confi
 	if err != nil {
 		return nil
 	}
+	if jobs, err := st.KVValues(ctx, engine.KVStagingResolves); err == nil {
+		maps.Copy(values, jobs)
+	}
 	return values
 }
 
 // stagingDeploysOf is repo#number's staging deploys among values
-// (stagingDeployValues), the live ones first, as the screens show them.
+// (stagingDeployValues), the live ones first, as the screens show them,
+// each live one with what the resolver does for its conflict.
 func stagingDeploysOf(values map[string]string, repo string, number int) []tui.StagingDeploy {
 	var out []tui.StagingDeploy
 	for _, r := range engine.StagingDeploysOf(values, repo, number) {
-		out = append(out, tui.StagingDeploy{Effect: r.Effect, Env: r.Env, Step: r.Step, Phase: r.Phase, State: r.State, Why: r.Why,
-			Text: r.Text, RunURL: r.RunURL, At: r.At, Live: r.Live(), Unconfirmed: r.Unconfirmed()})
+		d := tui.StagingDeploy{Effect: r.Effect, Env: r.Env, Step: r.Step, Phase: r.Phase, State: r.State, Why: r.Why,
+			Text: r.Text, RunURL: r.RunURL, At: r.At, Live: r.Live(), Unconfirmed: r.Unconfirmed()}
+		if d.Live {
+			d.Resolver = engine.StagingResolverSays(values, r.Effect)
+		}
+		out = append(out, d)
 	}
 	return out
 }

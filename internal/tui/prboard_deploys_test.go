@@ -104,3 +104,22 @@ func TestAStagingDeploysWordsAreSaidOnce(t *testing.T) {
 		t.Errorf("words %q, want the event's and why", got)
 	}
 }
+
+// While the resolver merges a deploy's conflict, the card says under the
+// deploy what it does now, naming the agent's pane the operator can open;
+// its words reach the screen cleaned.
+func TestTheCardSaysWhatTheResolverDoesForAConflictedDeploy(t *testing.T) {
+	r := deployRow()
+	r.StagingDeploys[0].Step, r.StagingDeploys[0].Text = "merge", "conflict in 1 paths: the resolver works on it (try 1)"
+	r.StagingDeploys[0].Resolver = `try 1: the agent resolves 1 conflicted path in slot review1: pane w3:p1 of the herdr workspace "staging merge"`
+	m := iconBoard(t, IconsUnicode, 160, 90, r)
+	m, _ = send(t, m, keyMsg("enter"))
+	mustContain(t, viewOf(m), "resolver try 1: the agent resolves 1 conflicted path in slot review1: pane w3:p1")
+	if words := StagingDeployWords(r.StagingDeploys[0]); len(words) != 2 || !strings.HasPrefix(words[1], "resolver try 1: ") {
+		t.Errorf("the deploy's words %q", words)
+	}
+	r.StagingDeploys[0].Resolver = "try 1: pane \x1b[31mw3:p1"
+	if got := sanitizeRow(r).StagingDeploys[0].Resolver; got != "try 1: pane w3:p1" {
+		t.Errorf("sanitized resolver words %q", got)
+	}
+}

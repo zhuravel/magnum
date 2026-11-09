@@ -2,6 +2,8 @@ package cli
 
 import (
 	"encoding/json"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -136,5 +138,60 @@ func TestTheBoardReadsEachPRsStagingDeploysFromTheirRecords(t *testing.T) {
 	}
 	if js := prsJSONOf(by[6]); js.StagingDeploys == nil {
 		t.Fatal("tui --json prints null for no deploys, want []")
+	}
+}
+
+// setResolveRow stores a staging resolver job's row as the daemon writes
+// it (engine.KVStagingResolves).
+func (h *actHarness) setResolveRow(id, effect, state, why string, try int) {
+	h.t.Helper()
+	b, err := json.Marshal(map[string]any{"id": id, "effect": effect, "repo": "talkable/talkable", "state": state, "why": why, "try": try,
+		"started": time.Now().UTC()})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if err := h.st.SetKV(h.ctx, "staging.resolve."+id, string(b)); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// While the resolver merges a live deploy's conflict, the board's row,
+// `magnum staging <pr>` and their JSON carry what its job does now, which
+// names the agent's pane; an ended job, or a deploy that ended, carries
+// nothing.
+func TestTheBoardAndTheStagingCommandSayWhatTheResolverDoes(t *testing.T) {
+	h := newActHarness(t)
+	stagingConfig(h.d.Cfg)
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	at := time.Now().Add(-time.Minute).UTC().Truncate(time.Second)
+	h.setDeployRecord(engine.StagingDeployRecord{Effect: "bart-5-20261005t100000-abcd", Repo: "talkable/talkable", Number: 5, Head: pr.HeadSHA,
+		Env: "bart", Step: "merge", Phase: "begin", State: "running", Text: "conflict in 1 paths: the resolver works on it (try 1)", Seq: 4, At: at})
+	h.setDeployRecord(engine.StagingDeployRecord{Effect: "void-5-20261005t090000-abcd", Repo: "talkable/talkable", Number: 5, Head: pr.HeadSHA,
+		Env: "void", Step: "merge", Phase: "fail", State: "failed", Why: "conflict: the resolver failed: the agent gave up", Seq: 9, At: at})
+	works := `the agent resolves 1 conflicted path in slot review1: pane w3:p1 of the herdr workspace "staging merge"`
+	h.setResolveRow("bart-5-20261005t100000-abcd.r1.0a1b2c3d", "bart-5-20261005t100000-abcd", "running", works, 1)
+	h.setResolveRow("void-5-20261005t090000-abcd.r1.0b1b2c3d", "void-5-20261005t090000-abcd", "failed", "the agent gave up", 1)
+	out, err := prsSource(h.st, h.d.Cfg, store.BoardFilter{}, nil, h.d.Layout)(h.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(out, func(r tui.PRBoardRow) bool { return r.Number == 5 })
+	if i < 0 || len(out[i].StagingDeploys) != 2 {
+		t.Fatalf("rows %+v", out)
+	}
+	for _, d := range out[i].StagingDeploys {
+		want := ""
+		if d.Env == "bart" {
+			want = "try 1: " + works
+		}
+		if d.Resolver != want {
+			t.Errorf("%s's deploy says the resolver %q, want %q", d.Env, d.Resolver, want)
+		}
+	}
+	text, _ := h.stagingRun(0, "talkable#5")
+	actContains(t, text, "resolver try 1: "+works)
+	raw, _ := h.stagingRun(0, "talkable#5", "--json")
+	if !strings.Contains(raw, `"resolver": "try 1: the agent resolves 1 conflicted path`) {
+		t.Errorf("--json lacks the resolver's words:\n%s", raw)
 	}
 }

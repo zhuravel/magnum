@@ -950,3 +950,36 @@ func TestAStagingResolverJobFailsWhileItsAgentKindIsPaused(t *testing.T) {
 		t.Errorf("slot review1's HEAD is %s, want the PR's head back", got)
 	}
 }
+
+// StagingResolverSays is what the newest live job of an effect does now,
+// its try and its Why made safe for a terminal, for the card and `magnum
+// staging`; an ended job, a job of another effect and a row under another
+// key say nothing.
+func TestStagingResolverSaysWhatTheLiveJobOfAnEffectDoes(t *testing.T) {
+	row := func(j resolveJob) string {
+		b, err := json.Marshal(j)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	at := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	const effect = "bart-5-20261005t100000-abcd"
+	values := map[string]string{}
+	put := func(j resolveJob) { values[kvStagingResolve(j.ID)] = row(j) }
+	put(resolveJob{ID: effect + ".r1.00000001", Effect: effect, Try: 1, State: resolveFailed, Why: "the agent gave up", Started: at})
+	if got := StagingResolverSays(values, effect); got != "" {
+		t.Fatalf("an ended job says %q", got)
+	}
+	put(resolveJob{ID: effect + ".r2.00000002", Effect: effect, Try: 2, State: resolveRunning, Why: "the agent resolves \x1b[31m1 path", Started: at.Add(time.Minute)})
+	put(resolveJob{ID: "void-5-20261005t090000-abcd.r1.00000003", Effect: "void-5-20261005t090000-abcd", Try: 1, State: resolveQueued,
+		Why: "waits for its turn", Started: at})
+	values["staging.resolve.elsewhere"] = row(resolveJob{ID: effect + ".r1.00000004", Effect: effect, Try: 1, State: resolveQueued, Why: "a stray row",
+		Started: at.Add(time.Hour)})
+	if got := StagingResolverSays(values, effect); got != "try 2: the agent resolves  [31m1 path" {
+		t.Fatalf("the live job says %q", got)
+	}
+	if got := StagingResolverSays(values, "void-5-20261005t090000-abcd"); got != "try 1: waits for its turn" {
+		t.Fatalf("a queued job says %q", got)
+	}
+}

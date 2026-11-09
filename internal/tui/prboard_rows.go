@@ -357,8 +357,12 @@ type PRBoardRow struct {
 // confirmed: engine.StagingDeployRecord.Unconfirmed).
 type StagingDeploy struct {
 	Effect, Env, Step, Phase, State, Why, Text, RunURL string
-	At                                                 time.Time
-	Live, Unconfirmed                                  bool
+	// Resolver is what the resolver's job does for the live deploy's
+	// conflict ("try 1: the agent resolves ... pane w3:p1 ..."); "" when
+	// none works on it.
+	Resolver          string
+	At                time.Time
+	Live, Unconfirmed bool
 }
 
 // StagingInfo is where a PR stands on one staging env.
@@ -938,7 +942,7 @@ func cleanStagingDeploys(ds []StagingDeploy) []StagingDeploy {
 	out := make([]StagingDeploy, len(ds))
 	for i, d := range ds {
 		d.Effect, d.Env, d.Step, d.Phase, d.State = cleanText(d.Effect), cleanText(d.Env), cleanText(d.Step), cleanText(d.Phase), cleanText(d.State)
-		d.Why, d.Text, d.RunURL = cleanText(d.Why), cleanText(d.Text), ""
+		d.Why, d.Text, d.Resolver, d.RunURL = cleanText(d.Why), cleanText(d.Text), cleanText(d.Resolver), ""
 		if l := cleanLinks([]CheckLink{{URL: ds[i].RunURL}}); len(l) == 1 {
 			d.RunURL = l[0].URL
 		}

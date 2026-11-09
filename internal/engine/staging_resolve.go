@@ -59,9 +59,6 @@ import (
 )
 
 const (
-	// kvStagingResolves matches every staging resolver job's row
-	// (kvStagingResolve) in one KVValues read.
-	kvStagingResolves = "staging.resolve.*"
 	// resolveRunFor bounds a job from the moment it took its slot: its
 	// agent is stopped and the job fails past it.
 	resolveRunFor = 45 * time.Minute
@@ -97,6 +94,11 @@ const (
 	resolvePhaseAgent  = "agent"
 	resolvePhaseCommit = "commit"
 )
+
+// KVStagingResolves matches every staging resolver job's row
+// (kvStagingResolve) in one KVValues read: StagingResolverSays reads them
+// for the card and `magnum staging`.
+const KVStagingResolves = "staging.resolve.*"
 
 // whyUnknownJob is the Why of a job the journal does not hold.
 const whyUnknownJob = "unknown job"
@@ -440,7 +442,7 @@ func (e *Engine) resolveJob(ctx context.Context, id string) (resolveJob, bool, e
 // resolveJobs reads every job's row, the oldest Start first; a row that
 // does not parse is passed over.
 func (e *Engine) resolveJobs(ctx context.Context) ([]resolveJob, error) {
-	values, err := e.st.KVValues(ctx, kvStagingResolves)
+	values, err := e.st.KVValues(ctx, KVStagingResolves)
 	if err != nil {
 		return nil, err
 	}
@@ -452,6 +454,27 @@ func (e *Engine) resolveJobs(ctx context.Context) ([]resolveJob, error) {
 	}
 	slices.SortStableFunc(out, func(a, b resolveJob) int { return a.Started.Compare(b.Started) })
 	return out, nil
+}
+
+// StagingResolverSays is what the newest live resolver job of effect does
+// now, among values (a KVValues read of KVStagingResolves): "try N: " and
+// its Why made safe for a terminal, which names the agent's pane while the
+// agent works; "" when no job of effect is live.
+func StagingResolverSays(values map[string]string, effect string) string {
+	var newest *resolveJob
+	for k, v := range values {
+		j, ok := parseResolveJob(v)
+		if !ok || kvStagingResolve(j.ID) != k || j.Effect != effect || !j.live() {
+			continue
+		}
+		if newest == nil || j.Started.After(newest.Started) {
+			newest = &j
+		}
+	}
+	if newest == nil {
+		return ""
+	}
+	return "try " + strconv.Itoa(newest.Try) + ": " + stagingClean(newest.Why)
 }
 
 // parseResolveJob reads a row; false when it cannot be read or names no
