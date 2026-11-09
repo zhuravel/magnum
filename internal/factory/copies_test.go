@@ -62,6 +62,9 @@ type copiesRig struct {
 	mu        sync.Mutex
 	scripts   []miseCall     // every mise exec, in order
 	failSetup map[string]int // copy name -> setup failures left
+	// failScript fails a mise exec of "<script> <copy>" while its count
+	// lasts (another script than the setup: a post_checkout command).
+	failScript map[string]int
 	// setupStderr is what a failed setup writes to stderr ("setup failed"
 	// when it is empty), stderrFor what a copy's writes instead; in both
 	// {copy}, {dir} and {port} are the copy's name, path and PORT, and
@@ -192,7 +195,7 @@ func newCopiesRig(t *testing.T, maxCopies int) *copiesRig {
 		t.Fatal(err)
 	}
 	r := &copiesRig{t: t, ctx: t.Context(), root: root, clock: storetest.NewClock(t0), dbs: &copyDBs{version: map[string]string{}},
-		failSetup: map[string]int{}, stderrFor: map[string]string{}, blocks: map[string]chan struct{}{}, entered: make(chan string, 8), nextPID: 4242,
+		failSetup: map[string]int{}, failScript: map[string]int{}, stderrFor: map[string]string{}, blocks: map[string]chan struct{}{}, entered: make(chan string, 8), nextPID: 4242,
 		factoryHerdr: &fakeHerdrView{}, yourHerdr: &fakeHerdrView{},
 		devTools: "9333\n/devtools/browser/x\n", browserBins: map[string]bool{config.DefaultFactoryBrowsers[0]: true}}
 	r.real = &execx.Real{BaseEnv: []string{
@@ -479,9 +482,14 @@ func (r *copiesRig) mise(c execx.Cmd) (execx.Result, error) {
 	r.scripts = append(r.scripts, mc)
 	r.order = append(r.order, "mise "+mc.Script)
 	slot := mc.Env["WT_BRANCH"]
-	fail := mc.Script == "bin/worktree-setup" && r.failSetup[slot] > 0
-	if fail {
+	fail := true
+	switch key := mc.Script + " " + slot; {
+	case mc.Script == "bin/worktree-setup" && r.failSetup[slot] > 0:
 		r.failSetup[slot]--
+	case r.failScript[key] > 0:
+		r.failScript[key]--
+	default:
+		fail = false
 	}
 	block := r.blocks[mc.Script+" "+slot]
 	r.mu.Unlock()
@@ -668,6 +676,7 @@ func lstart(t time.Time) string { return t.Local().Format("Mon Jan _2 15:04:05 2
 type copyDBs struct {
 	mu      sync.Mutex
 	version map[string]string
+	down    bool // ListPrefixed fails as a MySQL that is down does
 }
 
 func (d *copyDBs) set(version string, names ...string) {
@@ -687,6 +696,9 @@ func (d *copyDBs) get(name string) string {
 func (d *copyDBs) ListPrefixed(_ context.Context, prefixes []string) ([]mysqlx.Database, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.down {
+		return nil, errors.New("mysql: connection refused")
+	}
 	var out []mysqlx.Database
 	for n := range d.version {
 		slug, ok := mysqlx.Slug(n)
@@ -1169,6 +1181,57 @@ func TestASetupFailureRunsOnceMoreThenMarksTheCopyBroken(t *testing.T) {
 	}
 	if c := r.claim(c3); c.Name != "factory1" {
 		t.Fatalf("claimed %s after the repair, want factory1", c.Name)
+	}
+}
+
+// A copy runs its post_checkout as the last step of its provisioning (after
+// the setup and its checks, slots.ProvisionPool). One that fails runs once
+// more, from post_checkout on, and a second failure marks the copy broken,
+// naming the command, and the task claims another, as a failed setup does:
+// such a failure is no claim's error, which would leave the copy
+// provisioning for every next claim to fail the same way.
+func TestAPostCheckoutFailureRunsOnceMoreThenMarksTheCopyBroken(t *testing.T) {
+	const install = "yarn install --frozen-lockfile"
+	once := newCopiesRig(t, 1)
+	once.cfg.Factory.Repos[0].PostCheckout = []string{install}
+	once.failScript[install+" factory1"] = 1
+	if c := once.claim(once.task("PR-1")); c.Name != "factory1" {
+		t.Fatalf("claimed %s after one failed post_checkout, want factory1 on its second run", c.Name)
+	}
+	if got := len(once.calls(install, "")); got != 2 {
+		t.Fatalf("post_checkout ran %d times, want 2", got)
+	}
+	if got := len(once.calls("bin/worktree-setup", "")); got != 1 {
+		t.Fatalf("the setup ran %d times, want once: the second run starts at post_checkout", got)
+	}
+
+	r := newCopiesRig(t, 2)
+	r.cfg.Factory.Repos[0].PostCheckout = []string{install}
+	r.failScript[install+" factory1"] = 2
+	if c := r.claim(r.task("PR-1")); c.Name != "factory2" {
+		t.Fatalf("claimed %s, want factory2 after factory1 broke", c.Name)
+	}
+	one := filepath.Join(r.root, "talkable.factory1")
+	if got := len(r.calls(install, one)); got != 2 {
+		t.Fatalf("factory1's post_checkout ran %d times, want 2", got)
+	}
+	if sl := r.slot("factory1"); sl.State != store.SlotBroken || !strings.Contains(store.Deref(sl.LastError), install) {
+		t.Fatalf("factory1 = %s (%s), want broken, naming %q", sl.State, store.Deref(sl.LastError), install)
+	}
+
+	// A check of the databases that cannot run (MySQL down) before
+	// post_checkout is the claim's error, and the copy stays provisioning.
+	down := newCopiesRig(t, 1)
+	down.cfg.Factory.Repos[0].PostCheckout = []string{install}
+	down.dbs.down = true
+	if _, err := down.c.Claim(down.ctx, down.task("PR-1")); err == nil || !strings.Contains(err.Error(), "connection refused") {
+		t.Fatalf("Claim with MySQL down = %v, want its error", err)
+	}
+	if sl := down.slot("factory1"); sl.State != store.SlotProvisioning {
+		t.Fatalf("factory1 = %s (%s), want provisioning: MySQL down breaks no copy", sl.State, store.Deref(sl.LastError))
+	}
+	if got := len(down.calls(install, "")); got != 0 {
+		t.Fatalf("post_checkout ran %d times before the databases were checked", got)
 	}
 }
 

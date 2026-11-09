@@ -4270,14 +4270,15 @@ stages = [
 - **Copies.** The copies are magnum's slots, kept in the factory's own store (`factory/agents.db`), so the
   review daemon never sees one and `magnum slots` does not list them; magnum's inventory and cleanup leave the
   databases of a `copy_name` alone. A claim takes the copy the task used last when it is free, else another
-  free one, else adds copy `{n}` (its worktree, `setup`, the checks of its slug marker and databases) up to
-  `max_copies`; with none left the task waits, `copy: all 3 busy`, at no cost. A setup that fails runs once
-  more; a second failure marks the copy broken (`factory.copy_broken` in its events, once per cause) and the
+  free one, else adds copy `{n}` (its worktree, `setup`, the checks of its slug marker and databases, then
+  `post_checkout`) up to `max_copies`; with none left the task waits, `copy: all 3 busy`, at no cost. A setup
+  (or the `post_checkout` after its checks) that fails runs once more, from where it failed; a second failure
+  marks the copy broken (`factory.copy_broken` in its events, once per cause) and the
   task takes another, and no claim takes a broken copy until it is repaired. Each start of the factory daemon
   (`magnum factory install`) repairs each broken copy once, when a claim finds no copy, and while the daemon
   runs it repairs a broken copy again on a backoff: 10 minutes after it broke (or its start's repair failed),
   30 minutes after that try failed, then every hour, so a cause that clears by itself (a PATH, a volume that
-  comes back) needs no restart. A repair runs the copy's setup and its checks again (`factory.copy_repair`,
+  comes back) needs no restart. A repair runs the copy's setup, its checks and `post_checkout` again (`factory.copy_repair`,
   begin and ok or fail) and puts the copy back in the pool when it works. The backoff's repairs run off the
   loop, one at a time, never while a claim or a task holds the copy, the daemon drains or a hold of the machine
   holds launches (the disk's among them); the daemon's stop cuts one and leaves the copy broken as it was, and

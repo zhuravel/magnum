@@ -336,11 +336,11 @@ func (c *copySet) nextCopy(ctx context.Context, repo config.FactoryRepo) (n int,
 }
 
 // provision adds copy n (slots.ProvisionPool with the copy's env). A failed
-// setup (the setup step or its verification: setupFailed) runs once more;
-// a second failure marks the copy broken (markBroken), and the claim goes on
-// to another copy. Too little disk is a wait; any other failure (a fetch
-// that cannot reach origin) is the claim's error, and the copy stays
-// provisioning for the next claim.
+// setup (the setup step, its verification or the post_checkout after them:
+// setupFailed) runs once more; a second failure marks the copy broken
+// (markBroken), and the claim goes on to another copy. Too little disk is a
+// wait; any other failure (a fetch that cannot reach origin) is the claim's
+// error, and the copy stays provisioning for the next claim.
 func (c *copySet) provision(ctx context.Context, repo config.FactoryRepo, n int) error {
 	pool := c.pool(repo, n)
 	name := pool.Slot(n)
@@ -361,8 +361,10 @@ func (c *copySet) provision(ctx context.Context, repo config.FactoryRepo, n int)
 }
 
 // setupFailed reports whether err, a failed provisioning of copy name, is
-// its setup's: the setup step failed after the worktree was added, or the
-// verification of what the setup makes (the slug marker, the databases).
+// its setup's: the setup step failed after the worktree was added, the
+// verification of what the setup makes (the slug marker, the databases)
+// failed, or the post_checkout step after that verification did. A check of
+// the databases that could not run (MySQL down: no ErrVerify) is not.
 func (c *copySet) setupFailed(ctx context.Context, name string, err error) bool {
 	if errors.Is(err, slots.ErrVerify) {
 		return true
@@ -373,7 +375,18 @@ func (c *copySet) setupFailed(ctx context.Context, name string, err error) bool 
 		return false
 	}
 	setup, derr := steps.Done(ctx, c.st, subject, "setup")
-	return derr == nil && !setup
+	switch {
+	case derr != nil:
+		return false
+	case !setup:
+		return true
+	}
+	verified, derr := steps.Done(ctx, c.st, subject, "verify_dbs")
+	if derr != nil || !verified {
+		return false
+	}
+	installed, derr := steps.Done(ctx, c.st, subject, "post_checkout")
+	return derr == nil && !installed
 }
 
 // The words a broken copy's reason starts with: what failed.
@@ -471,10 +484,10 @@ func (c *copySet) repairable(ctx context.Context, repo config.FactoryRepo) (stor
 }
 
 // repair runs broken copy sl's provisioning again (slots.Repair: render,
-// setup, verification), the start's (in a claim) or the backoff's, with a
-// factory.copy_repair begin and an ok or a fail event. It ends free, or
-// broken again when its setup fails (markBroken: a copyBroke, after which a
-// claim goes on). Any other failure of the start's repair (a fetch that
+// setup, verification, post_checkout), the start's (in a claim) or the
+// backoff's, with a factory.copy_repair begin and an ok or a fail event. It
+// ends free, or broken again when its setup fails (setupFailed; markBroken:
+// a copyBroke, after which a claim goes on). Any other failure of the start's repair (a fetch that
 // cannot reach origin) is the claim's error, and the copy stays
 // provisioning for the next claim; a backoff repair that could not run to
 // its end leaves the copy as it was (unrepaired). The caller marked it in

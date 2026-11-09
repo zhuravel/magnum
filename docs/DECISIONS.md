@@ -22253,6 +22253,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestStagingCommandFoldsAnEarlierFailedDeployOfTheSameEnvAndHead (the text folds, `--json` keeps all three records
   with their heads); staging's TestAConflictCountsItsPathsInTheSingularForOne. No golden changed: none held two deploys
   of one env and head. No new dependencies.
+- **A copy whose post_checkout fails in its provisioning runs it once more, then breaks** (2026-11-09). A copy
+  provisions through slots.ProvisionPool, which now runs the repository's `post_checkout` after the setup and its
+  checks ("A new pool slot runs post_checkout before it is free", under Checkouts and pools). Before, a copy, which
+  is never checked out, ran `post_checkout` first at its first release, and only when a lockfile had changed; the
+  `installs` covered the lockfiles they list at a claim, but a command such as a CSS build never ran in a new copy.
+  setupFailed knew only the setup and its verification, so a failing `post_checkout` would have been the claim's
+  error and left the copy provisioning, for every next claim to fail the same way. Now setupFailed also counts a
+  provisioning whose verify_dbs is done and whose post_checkout is not: the provision runs once more (from
+  post_checkout, not the setup), and a second failure marks the copy broken (`setup failed twice`, naming the
+  command, its first line of stderr and `provision-<copy>.log`) and the claim takes another; a repair that fails
+  there is `its repair failed`. It is keyed on verify_dbs being done, not on post_checkout not being done: a check
+  of the databases that could not run (MySQL down, no ErrVerify) still breaks no copy. A copy whose
+  `post_checkout` and `installs` run the same install runs it twice at its first claim; the second has nothing to
+  do. The install records of a copy a repair added again stay as they were, but its `post_checkout` now runs in the
+  repair. Test, failing first: TestAPostCheckoutFailureRunsOnceMoreThenMarksTheCopyBroken (one failure, two, and
+  MySQL down at the check: the claim's error, the copy provisioning, no post_checkout). A mutation that drops the
+  verify_dbs condition fails its MySQL case. No new dependencies.
 
 ## Learned rules
 
