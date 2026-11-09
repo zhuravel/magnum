@@ -12654,8 +12654,8 @@ const (
 	LocalTicketFile      = pipeline.TicketFile
 )
     LocalDescriptionFile and LocalTicketFile are the files a local round writes
-    in its scratch directory for the judge: the change's title and body,
-    and its ticket.
+    in its scratch directory for the judge: the change's title and body, and its
+    ticket with the operator's answers after it.
 
 const (
 	// OutcomeFlagged: the case is not replayed: an earlier replay of it or
@@ -12809,24 +12809,28 @@ type Deps struct {
     Deps is what a replay works with.
 
 type LocalCase struct {
-	Checkout, BaseSHA, HeadSHA, Branch, Title, Body, TicketMD string
-	Watch                                                     config.Watch
-	Roles                                                     []string
-	Round                                                     int
-	TaskID                                                    int64
-	Repo, Base                                                string
-	Env                                                       map[string]string
+	Checkout, BaseSHA, HeadSHA, Branch, Title, Body, TicketMD, AnswersMD string
+	Watch                                                                config.Watch
+	Roles                                                                []string
+	Round                                                                int
+	TaskID                                                               int64
+	Repo, Base                                                           string
+	Env                                                                  map[string]string
 }
-    LocalCase is one round of the factory's local review: magnum's full review
-    of a change in the task's copy, as a blind dry run, before any PR exists
-    (docs/superpowers/specs/2026-11-03-factory-design.md, section 6.5). Checkout
-    is the copy, BaseSHA and HeadSHA the change's ends, Branch its branch,
-    Title (with the Jira key), Body and TicketMD what the judge reads from files
-    instead of GitHub; Watch is the repository's [[watch]], whose review roles
-    round 1 runs, Roles the roles of this round and Round its number, from 1.
-    TaskID is the task whose change it is and Repo its repository (owner/name):
-    the round's synthetic PR number (LocalNumber) and its scratch directory
-    (LocalRoot) come from them. Base is the base branch ("" = master),
+    LocalCase is one round of the factory's local review: magnum's full
+    review of a change in the task's copy, as a blind dry run, before
+    any PR exists (docs/superpowers/specs/2026-11-03-factory-design.md,
+    section 6.5). Checkout is the copy, BaseSHA and HeadSHA the change's ends,
+    Branch its branch, Title (with the Jira key), Body and TicketMD what the
+    judge reads from files instead of GitHub; Body is the factory's own plan,
+    not a person's description, and AnswersMD the operator's answers to the
+    factory's questions (the task's answers.md, "" when it has none), the only
+    statement of intent a person made: they follow the ticket in the ticket file
+    under one fixed heading. Watch is the repository's [[watch]], whose review
+    roles round 1 runs, Roles the roles of this round and Round its number,
+    from 1. TaskID is the task whose change it is and Repo its repository
+    (owner/name): the round's synthetic PR number (LocalNumber) and its scratch
+    directory (LocalRoot) come from them. Base is the base branch ("" = master),
     Env the copy's environment, the one the factory's agents get in it
     (engine.LocalRound.Env). The factory's LocalReviewer takes it.
 
@@ -12885,17 +12889,17 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error)
     Each round is its own: a fresh scratch directory under the task's
     (LocalRoot/<round>-<tag>) with its registry, reports and a copy of the
     repository notes, a new agent tag, and the synthetic PR number LocalNumber,
-    so two rounds never share an agent, a herdr workspace label or an eval case
-    lock (it holds the case lock "local-<number>" for the round). It writes the
-    title and body (description.md) and the ticket (ticket.md, when c has one)
-    there, and runs engine.RunLocal in the task's copy at c.HeadSHA, always
-    with c.BaseSHA (post-review's --local-base), as a gh identity (the watch's,
-    else the first configured: an App's token would be minted from GitHub),
-    with the branch as the head ref and the title with the Jira key. The round's
-    config is d.Config (the factory's review candidate, config.WithCandidate).
-    A case it cannot run is an error and nothing starts; a round that ran is a
-    result, whatever its outcome, and only the end of ctx (a drain) is an error
-    after it started.
+    so two rounds never share an agent, a herdr workspace label or an eval
+    case lock (it holds the case lock "local-<number>" for the round).
+    It writes the title and body (description.md) and the ticket (ticket.md,
+    when c has a ticket or answers: localTicket) there, and runs engine.RunLocal
+    in the task's copy at c.HeadSHA, always with c.BaseSHA (post-review's
+    --local-base), as a gh identity (the watch's, else the first configured:
+    an App's token would be minted from GitHub), with the branch as the head
+    ref and the title with the Jira key. The round's config is d.Config (the
+    factory's review candidate, config.WithCandidate). A case it cannot run
+    is an error and nothing starts; a round that ran is a result, whatever its
+    outcome, and only the end of ctx (a drain) is an error after it started.
 
 type Options struct {
 	// Candidate replays a candidate directory's prompts and skill
