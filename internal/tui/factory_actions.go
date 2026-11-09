@@ -158,7 +158,7 @@ func (b *factoryBar) hold(q *factoryQuestion) {
 	if i := b.heldOf(q.plan); i >= 0 {
 		b.held = slices.Delete(b.held, i, i+1)
 	}
-	q.at = b.now()
+	q.at = b.now().Round(0) // the wall clock's: the monotonic one stops while the Mac sleeps
 	b.held = append(b.held, heldPlan{q: q})
 }
 
@@ -244,21 +244,33 @@ func (b *factoryBar) dropHeldNote(h heldPlan, why string) tea.Cmd {
 }
 
 // planTooOld reports whether q is a plan's question whose plan answered
-// heldPlanFor or longer before now: its y sends nothing.
+// heldPlanFor or longer before now, by the wall clock (a Mac's sleep
+// counts, which the monotonic reading leaves out): its y sends nothing.
 func planTooOld(q *factoryQuestion, now time.Time) bool {
-	return q != nil && q.plan != nil && !q.at.IsZero() && now.Sub(q.at) >= heldPlanFor
+	return q != nil && q.plan != nil && !q.at.IsZero() && now.Round(0).Sub(q.at.Round(0)) >= heldPlanFor
 }
 
 // takeDownOld takes down a plan's question that is up past heldPlanFor
-// since its plan answered, with its note (the footer it held is free).
+// since its plan answered (takeDown).
 func (b *factoryBar) takeDownOld() tea.Cmd {
 	q := b.asking
 	if !planTooOld(q, b.now()) {
 		return nil
 	}
 	b.asking = nil
+	return b.takeDown(q, false)
+}
+
+// takeDown is the note of plan question q taken down past its 10 minutes:
+// in the action log always, and in the footer on a key (keyed: the y that
+// came too late) or while no failure is kept there, which stays until a
+// key.
+func (b *factoryBar) takeDown(q *factoryQuestion, keyed bool) tea.Cmd {
 	text := planDropText(q, "taken down", heldAgeWords())
 	b.log.add(logEntry{at: b.now(), what: q.label, text: text})
+	if !keyed && b.flash != "" && b.flashKind == factoryFlashFailed {
+		return nil
+	}
 	return b.show(text, factoryFlashNote)
 }
 
@@ -305,7 +317,7 @@ func (b *factoryBar) key(msg tea.KeyPressMsg) (cmd tea.Cmd, taken bool) {
 	case !confirms(msg.String()):
 		return b.show(q.label+": cancelled, nothing was run", factoryFlashNote), true
 	case planTooOld(q, b.now()): // the 10 minutes run until y
-		return b.show(planDropText(q, "taken down", heldAgeWords()), factoryFlashNote), true
+		return b.takeDown(q, true), true
 	}
 	return b.run(q.label, q.run), true
 }

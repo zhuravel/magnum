@@ -21166,8 +21166,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
     hides none of them; a plan that answers away from its row leaves a failure kept in the footer (the pager's, the
     editor's) in place. The marker is in the frame's key. The 10 minutes after a plan answers (`heldPlanFor`, the
     engine's `StagingDeployWait`, which a test keeps equal: P's y binds nothing of its plan, so its plan must not
-    grow old) run until y: a held plan is dropped then, and a question still up is taken down (`takeDownOld`,
-    before each update, and the y itself checks it), so a y after them sends nothing. A held plan is dropped as well
+    grow old) run until y, on the wall clock (the plan's time is kept without Go's monotonic reading, which stops
+    while the Mac sleeps, as the engine's sleep checks do): a held plan is dropped then, and a question still up is
+    taken down (`takeDownOld`, before each update, and the y itself checks it; its note goes to the action log, and
+    to the footer unless a failure is kept there), so a y after them sends nothing. A held plan is dropped as well
     (`dropHeld`, before and after each update) once its row leaves home, or once its PR is no longer the row's
     open PR or magnum's registry says it is merged or closed; none of these while a refresh fails, whose rows are
     stale. The drop's note goes to the action log, and to the footer only while the footer says nothing else (a
@@ -21215,7 +21217,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAHeldPlanWaitsAsLongAsTheEnginesDeployWait, TestTheReadyCardFreesOnlyItsOwnPushsQuestion,
   TestAPlansQuestionGoesUpAtOnceOnlyOnTheViewWhereItsKeyWasPressed, TestARefreshFailureWinsOverTheHeldMarker,
   TestAHeldPlanKeepsAFailureInTheFooter, TestRaisingAHeldPlanRunsTheKeysRefusal,
-  TestAPlansQuestionIsTakenDownOnceItsPlanIsTenMinutesOld, TestPsQuestionShowsWholeOnHome and
+  TestAPlansQuestionIsTakenDownOnceItsPlanIsTenMinutesOld, TestAPlansAgeIsTheWallClocks,
+  TestATakenDownQuestionKeepsAFailureInTheFooter, TestPsQuestionShowsWholeOnHome and
   TestTheTaskCardSaysWhatTheResolverDoesForItsPRsDeploy (the board's E tests pass unchanged on the shared keys);
   the cli's TestTheFactoryScreensStagingDeployIsTheBoards, TestTheFactoryScreenReadsItsPRsStagingDeploys and
   TestTheFactoryScreenGivesItsPRsTheConfigsStagingEnvs; the factory's TestTheFactoryStagingClientCannotDeploy,

@@ -665,3 +665,48 @@ func TestPsQuestionShowsWholeOnHome(t *testing.T) {
 		t.Errorf("home asks\n%q\nwant\n%q\n%s", asked, want, v)
 	}
 }
+
+// The 10 minutes are the wall clock's: Go's monotonic reading stops while
+// the Mac sleeps, so a plan held, or a question up, over a closed lid
+// would outlive them. The time a plan answered is kept without one (as
+// the engine's sleep checks and the factory's heal strip it), and the age
+// is measured on the wall clock; a test cannot sleep the machine, so it
+// pins the stripping, on the real clock.
+func TestAPlansAgeIsTheWallClocks(t *testing.T) {
+	b := newFactoryBar(t.Context(), nil, time.Now, instantTick)
+	b.update(factoryDoneMsg{label: "Plan", next: &factoryQuestion{sentence: "Deploy?", label: "Deploy", plan: &planOf{row: 1, key: "E"}}})
+	if len(b.held) != 1 {
+		t.Fatalf("no plan held: %+v", b.held)
+	}
+	at := b.held[0].q.at
+	if !at.Equal(at.Round(0)) || strings.Contains(at.String(), "m=") {
+		t.Errorf("the plan's time %s keeps a monotonic reading", at)
+	}
+	q := &factoryQuestion{plan: &planOf{}, at: time.Now().Round(0).Add(-heldPlanFor)}
+	if !planTooOld(q, time.Now()) {
+		t.Error("a plan answered heldPlanFor ago by the wall clock is not too old")
+	}
+}
+
+// A question taken down after its 10 minutes leaves a failure kept in the
+// footer (the pager's) on screen; its note goes to the action log.
+func TestATakenDownQuestionKeepsAFailureInTheFooter(t *testing.T) {
+	h := testStaged(t, 160, 40)
+	h.open("PR-12320")
+	h.press("E", "1")
+	next, plan := h.m.Update(keyMsg("enter"))
+	h.m = next.(factoryModel)
+	h.feed(factoryPagerMsg{err: errors.New("less: not found")})
+	h.run(plan)
+	mustContain(t, h.view(), "less: not found", stagingAsk("example/talkable#4530", []string{"void"})+" y/N")
+	h.clock.at = h.clock.at.Add(heldPlanFor)
+	h.feed(factoryTickMsg{})
+	if q := h.m.bar.question(); q != "" {
+		t.Fatalf("the question is still up: %q", q)
+	}
+	mustContain(t, h.view(), "less: not found")
+	entries, _ := h.m.bar.log.snapshot()
+	if !slices.ContainsFunc(entries, func(e logEntry) bool { return strings.Contains(e.text, "taken down, the plan waited 10 min") }) {
+		t.Errorf("the action log lacks the take-down: %+v", entries)
+	}
+}
