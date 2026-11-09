@@ -4,7 +4,11 @@
 -- path, within 3 lines, at a head whose file reads the same). One escape_checks row per task, written once with its
 -- escapes in one transaction and never again: magnum's run that posted the review (runs.id) and its round, the head it
 -- reviewed, how many P0 to P2 findings it posted, how many of the task's local findings were placed at a head
--- comparable with it, and when the check ran. One escapes row per posted finding no local finding caught: magnum's
+-- comparable with it, how many files of its posted findings it compared at the same head only (git could not compare
+-- them in a copy: none on disk, git failed, or its bound ran out, on the last of a check's tries), how many P0 to P2
+-- findings the round's result counts that magnum's registry recorded no row of (a result without provenance: the
+-- escapes are then unknown, not none), and when the check ran. One escapes row per posted finding no local finding
+-- caught: magnum's
 -- finding (findings.id), its path and lines, its priority, the hash of its title (the factory's own, as
 -- review_findings keeps it), why (no_local, far or unplaced) and, for far only, the nearest local finding and how many
 -- lines lie between them. Neither table holds a title, a body or any other text of magnum's registry or the PR.
@@ -18,6 +22,8 @@ CREATE TABLE escape_checks (
   head_sha   TEXT NOT NULL CHECK (head_sha != ''),
   posted     INTEGER NOT NULL DEFAULT 0 CHECK (posted >= 0),
   comparable INTEGER NOT NULL DEFAULT 0 CHECK (comparable >= 0),
+  same_head_only INTEGER NOT NULL DEFAULT 0 CHECK (same_head_only >= 0),
+  unrecorded INTEGER NOT NULL DEFAULT 0 CHECK (unrecorded >= 0),
   checked_at TEXT NOT NULL
 );
 

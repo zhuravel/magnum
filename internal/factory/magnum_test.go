@@ -951,7 +951,7 @@ func roundRun(t *testing.T, st *store.Store, pr store.PR, round int, role, head 
 // FirstPostedRound reads magnum's first round on a PR that posted a review
 // and began at or after a time (the publish), with the findings it posted
 // (magnum's id of each, its path, its line as the start and the end, its
-// priority and its title), and writes nothing: a round that began before
+// priority and its title) and its result's counts, and writes nothing: a round that began before
 // the time counts not, and a PR, a repository or a registry magnum does not
 // have has no round, and nothing is created.
 func TestFirstPostedRoundReadsMagnumsFirstPostedRoundSinceThePublish(t *testing.T) {
@@ -966,6 +966,9 @@ func TestFirstPostedRoundReadsMagnumsFirstPostedRoundSinceThePublish(t *testing.
 	}
 	roundRun(t, st, pr, 2, "claude-review", "bbb222", 0, published.Add(time.Hour))
 	judge := roundRun(t, st, pr, 2, store.RoleJudge, "bbb222", 501, published.Add(time.Hour+5*time.Minute))
+	if err := st.UpdateRun(ctx, judge.ID, func(u *store.RunUpdate) { u.Set("result_json", `{"findings":{"P0":0,"P1":0,"P2":1,"P3":1}}`) }); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.RecordFindings(ctx, judge.ID, pr.ID, 2, []store.Finding{
 		{FindingID: "F1", Title: "The refund misses the cap", Severity: "P2", Path: "app/models/credit.rb", Line: 42, Verdict: store.FindingPosted},
 		{FindingID: "F2", Title: "A body note", Severity: "P3", Verdict: store.FindingPosted},
@@ -982,8 +985,9 @@ func TestFirstPostedRoundReadsMagnumsFirstPostedRoundSinceThePublish(t *testing.
 	if !bytes.Equal(was, registryBytes(t, l)) {
 		t.Error("FirstPostedRound changed magnum's registry")
 	}
-	if got.RunID != judge.ID || got.Round != 2 || got.Head != "bbb222" || got.ReviewID != 501 || !got.Start.Equal(published.Add(time.Hour)) {
-		t.Errorf("the round %+v, want the judge's run of round 2", got)
+	if got.RunID != judge.ID || got.Round != 2 || got.Head != "bbb222" || got.ReviewID != 501 || !got.Start.Equal(published.Add(time.Hour)) ||
+		!got.Counted || got.Counts != [4]int{0, 0, 1, 1} {
+		t.Errorf("the round %+v, want the judge's run of round 2 with its result's counts", got)
 	}
 	if len(got.Findings) != 2 {
 		t.Fatalf("its findings %+v, want 2", got.Findings)

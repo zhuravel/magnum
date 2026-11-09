@@ -126,6 +126,20 @@ func (f *fakeMagnum) post(ref PRRef, r PostedRound) {
 	f.posted[ref] = append(f.posted[ref], r)
 }
 
+// setPostedErr makes FirstPostedRound fail with err (nil: it reads).
+func (f *fakeMagnum) setPostedErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.postedErr = err
+}
+
+// setPostedGate holds FirstPostedRound until gate closes (nil: no hold).
+func (f *fakeMagnum) setPostedGate(gate chan struct{}) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.postedGate = gate
+}
+
 // postedCalls is how many times FirstPostedRound was asked.
 func (f *fakeMagnum) postedCalls() int {
 	f.mu.Lock()

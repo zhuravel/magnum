@@ -124,11 +124,12 @@ func (e *Engine) followPR(ctx context.Context, t registry.Task, ref PRRef, st PR
 }
 
 // copyCI writes the CI of published task t's PR, as magnum's registry last
-// read it (st.CI at st.Head: tui.CIInfo, by the repository's required
-// checks), to the task's checks once per head and result (kind ci, source
-// github, RecordGitHubCI): a passed or a failed head's, never a pending,
-// skipped or absent one's, nor CI that describes an older commit than the
-// head (Stale). A head that failed and then passed after a rerun writes
+// read it (st.CI at st.Head: tui.CIInfo's State, over every check of the
+// head the repository's ignore_checks leaves in, required or not: one
+// failed optional check makes it failed), to the task's checks once per
+// head and result (kind ci, source github, RecordGitHubCI): a passed or a
+// failed head's, never a pending, skipped or absent one's, nor CI that
+// describes an older commit than the head (Stale). A head that failed and then passed after a rerun writes
 // both. The cause stays "": nothing magnum reads of a PR's CI says a
 // failure is not the PR's own (the staging status's not ours is of the
 // staging branch's ci.yml run, not of the PR's checks). The last head and

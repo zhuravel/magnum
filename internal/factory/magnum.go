@@ -810,7 +810,9 @@ func (m *magnumRegistry) FixRecords(ctx context.Context, refs []PRRef) (map[PRRe
 // (Magnum.FirstPostedRound): the run of its judge that posted it (RunID,
 // magnum's runs.id), the round's number, the head it reviewed, the review's
 // id on GitHub, when the round began (its first run), and the findings it
-// posted, in the judge's order.
+// posted, in the judge's order. Counts are the new findings the round's
+// result counts, P0 to P3 (store.ReviewSummary.Counts), when Counted: a
+// result without provenance counts findings magnum recorded no row of.
 type PostedRound struct {
 	RunID    string
 	Round    int
@@ -818,6 +820,8 @@ type PostedRound struct {
 	ReviewID int64
 	Start    time.Time
 	Findings []PostedFinding
+	Counts   [4]int
+	Counted  bool
 }
 
 // PostedFinding is one finding a posted round posted: magnum's id of it
@@ -836,11 +840,11 @@ type PostedFinding struct {
 
 // FirstPostedRound reads, in one opening of magnum's registry, its first
 // round on PR ref that posted a review and began at or after since (the
-// task's publish), with the findings it posted, every priority
-// (store.FirstPostedReview: one query): false while there is none, and for
-// a repository, a PR or a registry magnum does not have (nothing is
-// created). It reads and never writes or migrates the registry, as
-// PRStates; a read that fails is an error.
+// task's publish), with the findings it posted, every priority, and its
+// result's counts (store.FirstPostedReview: one query): false while there
+// is none, and for a repository, a PR or a registry magnum does not have
+// (nothing is created). It reads and never writes or migrates the
+// registry, as PRStates; a read that fails is an error.
 func (m *magnumRegistry) FirstPostedRound(ctx context.Context, ref PRRef, since time.Time) (PostedRound, bool, error) {
 	st, err := m.open()
 	if st == nil || err != nil {
@@ -866,7 +870,10 @@ func (m *magnumRegistry) FirstPostedRound(ctx context.Context, ref PRRef, since 
 		}
 		return PostedRound{}, false, err
 	}
-	out := PostedRound{RunID: rv.RunID, Round: rv.Round, Head: rv.SHA, ReviewID: rv.ReviewID, Start: rv.RoundStart}
+	out := PostedRound{RunID: rv.RunID, Round: rv.Round, Head: rv.SHA, ReviewID: rv.ReviewID, Start: rv.RoundStart, Counted: rv.OK}
+	if rv.OK {
+		out.Counts = rv.Summary.Counts
+	}
 	for _, f := range fs {
 		out.Findings = append(out.Findings, PostedFinding{ID: f.ID, Path: f.Path, StartLine: f.Line, EndLine: f.Line, Priority: f.Severity,
 			Title: f.Title})

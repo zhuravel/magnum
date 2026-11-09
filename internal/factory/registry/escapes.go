@@ -16,14 +16,19 @@ import (
 // the review (RunID, runs.id) and its Round, the head that round reviewed,
 // how many P0 to P2 findings it posted, how many of the task's local
 // findings were placed at a head comparable with it, and when the check
-// ran.
+// ran. SameHeadOnly counts the files of the posted findings the check
+// compared at the same head only, as git could not compare them at two
+// heads (none means every comparison ran); Unrecorded the P0 to P2
+// findings the round's result counts that magnum recorded no row of (above
+// zero, the escapes are unknown, not none).
 type EscapeCheck struct {
-	TaskID             int64
-	RunID              string
-	Round              int
-	HeadSHA            string
-	Posted, Comparable int
-	At                 time.Time
+	TaskID                   int64
+	RunID                    string
+	Round                    int
+	HeadSHA                  string
+	Posted, Comparable       int
+	SameHeadOnly, Unrecorded int
+	At                       time.Time
 }
 
 // Why no local finding caught a posted one (Escape.Reason): none on its
@@ -75,11 +80,11 @@ func (e Escape) check() error {
 	return nil
 }
 
-const escapeCheckColumns = "task_id, run_id, round, head_sha, posted, comparable, checked_at"
+const escapeCheckColumns = "task_id, run_id, round, head_sha, posted, comparable, same_head_only, unrecorded, checked_at"
 
 func scanEscapeCheck(sc scanner) (EscapeCheck, error) {
 	var c EscapeCheck
-	err := sc.Scan(&c.TaskID, &c.RunID, &c.Round, &c.HeadSHA, &c.Posted, &c.Comparable, timeCol{&c.At})
+	err := sc.Scan(&c.TaskID, &c.RunID, &c.Round, &c.HeadSHA, &c.Posted, &c.Comparable, &c.SameHeadOnly, &c.Unrecorded, timeCol{&c.At})
 	return c, err
 }
 
@@ -126,8 +131,8 @@ func (r *Registry) RecordEscapeCheck(ctx context.Context, c EscapeCheck, es []Es
 		if err := taskExists(ctx, tx, c.TaskID); err != nil {
 			return err
 		}
-		res, err := tx.ExecContext(ctx, "INSERT INTO escape_checks ("+escapeCheckColumns+") VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (task_id) DO NOTHING",
-			c.TaskID, c.RunID, c.Round, c.HeadSHA, c.Posted, c.Comparable, at)
+		res, err := tx.ExecContext(ctx, "INSERT INTO escape_checks ("+escapeCheckColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (task_id) DO NOTHING",
+			c.TaskID, c.RunID, c.Round, c.HeadSHA, c.Posted, c.Comparable, c.SameHeadOnly, c.Unrecorded, at)
 		if err != nil {
 			return mapErr(err)
 		}

@@ -106,7 +106,9 @@ func localFinding(t *testing.T, r *registry.Registry, task registry.Task, path s
 
 // A task's escape check is written once, with its escapes, in one
 // transaction: a second write of the same task writes nothing and says so,
-// whatever it holds. Each escape keeps magnum's finding, its place, its
+// whatever it holds. The check keeps how many files it compared at the same
+// head only and how many P0 to P2 findings magnum's round posted that its
+// registry did not record. Each escape keeps magnum's finding, its place, its
 // priority, its title's hash and why, and the nearest local finding and
 // its distance for far only; a row that breaks those rules is refused and
 // leaves nothing behind.
@@ -117,7 +119,8 @@ func TestAnEscapeCheckIsWrittenOnceWithItsEscapes(t *testing.T) {
 	task := createTask(t, r, "PR-12391")
 	near := localFinding(t, r, task, "app/models/credit.rb", 40)
 
-	check := registry.EscapeCheck{TaskID: task.ID, RunID: "r-20261103T120000-7", Round: 2, HeadSHA: "def456", Posted: 3, Comparable: 1}
+	check := registry.EscapeCheck{TaskID: task.ID, RunID: "r-20261103T120000-7", Round: 2, HeadSHA: "def456", Posted: 3, Comparable: 1,
+		SameHeadOnly: 2, Unrecorded: 1}
 	escapes := []registry.Escape{
 		{FindingID: 71, Path: "app/models/credit.rb", StartLine: 12, EndLine: 12, Priority: "P2", TitleHash: "aaaaaaaaaaaa", Reason: registry.EscapeNoLocal},
 		{FindingID: 72, Path: "app/models/credit.rb", StartLine: 44, EndLine: 44, Priority: "P1", TitleHash: "bbbbbbbbbbbb", Reason: registry.EscapeFar,
@@ -130,6 +133,7 @@ func TestAnEscapeCheckIsWrittenOnceWithItsEscapes(t *testing.T) {
 	}{
 		"no run":              {registry.EscapeCheck{TaskID: task.ID, HeadSHA: "def456"}, nil},
 		"no head":             {registry.EscapeCheck{TaskID: task.ID, RunID: "r-1"}, nil},
+		"a negative count":    {registry.EscapeCheck{TaskID: task.ID, RunID: "r-1", HeadSHA: "def456", SameHeadOnly: -1}, nil},
 		"a P3":                {check, []registry.Escape{{FindingID: 74, Priority: "P3", Reason: registry.EscapeNoLocal}}},
 		"far without nearest": {check, []registry.Escape{{FindingID: 74, Priority: "P2", Reason: registry.EscapeFar}}},
 		"nearest not far":     {check, []registry.Escape{{FindingID: 74, Priority: "P2", Reason: registry.EscapeNoLocal, NearestID: near.ID, Distance: 5}}},

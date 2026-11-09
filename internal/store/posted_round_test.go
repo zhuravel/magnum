@@ -25,7 +25,7 @@ func roundRun(t *testing.T, st *Store, prID int64, round int, role, head string,
 
 // The first round of a PR that posted a review and began at or after a
 // time is read in one query with the findings it posted, every priority,
-// oldest first: a round that began before the time counts not, though it
+// oldest first, and the counts of its result when it has one: a round that began before the time counts not, though it
 // posted after it, and neither does a later round, a rejected finding, a
 // run that posted nothing, another PR's round or a round of no review.
 func TestFirstPostedReviewIsTheFirstRoundThatBeganSinceAndPosted(t *testing.T) {
@@ -62,7 +62,7 @@ func TestFirstPostedReviewIsTheFirstRoundThatBeganSinceAndPosted(t *testing.T) {
 		t.Fatalf("FirstPostedReview = %v, %v", ok, err)
 	}
 	want := PostedReview{RunID: judge.ID, Round: 2, SHA: "h2", ReviewID: 101, CreatedAt: t0.Add(time.Hour + 10*time.Minute),
-		RoundStart: t0.Add(time.Hour), RoundTarget: start.TargetSHA}
+		RoundStart: t0.Add(time.Hour), RoundTarget: start.TargetSHA, Summary: ReviewSummary{RunID: judge.ID, ReviewID: 101, SHA: "h2"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the round\n got %+v\nwant %+v", got, want)
 	}
@@ -84,8 +84,22 @@ func TestFirstPostedReviewIsTheFirstRoundThatBeganSinceAndPosted(t *testing.T) {
 		t.Errorf("since before round 1: round %d with %d findings, %v, %v; want round 1", got.Round, len(fs), ok, err)
 	}
 	roundRun(t, st, pr.ID, 4, RoleJudge, "h4", 103, 150*time.Minute) // a review with no finding
-	if got, fs, ok, err := st.FirstPostedReview(ctx, pr.ID, t0.Add(140*time.Minute)); err != nil || !ok || got.Round != 4 || got.ReviewID != 103 || len(fs) != 0 {
-		t.Errorf("a round that posted no finding: round %d review %d with %d findings, %v, %v; want round 4 with none", got.Round, got.ReviewID, len(fs), ok, err)
+	if got, fs, ok, err := st.FirstPostedReview(ctx, pr.ID, t0.Add(140*time.Minute)); err != nil || !ok || got.Round != 4 || got.ReviewID != 103 ||
+		len(fs) != 0 || got.OK {
+		t.Errorf("a round that posted no finding: round %d review %d with %d findings, result read %v, %v, %v; want round 4 with none and no result",
+			got.Round, got.ReviewID, len(fs), got.OK, ok, err)
+	}
+	// A round whose result counts its findings, none of which magnum recorded
+	// (a result without provenance): the counts come with the round.
+	counted := roundRun(t, st, pr.ID, 5, RoleJudge, "h5", 104, 170*time.Minute)
+	if err := st.UpdateRun(ctx, counted.ID, func(u *RunUpdate) {
+		u.Set("result_json", `{"event":"COMMENT","findings":{"P0":0,"P1":1,"P2":2,"P3":4}}`)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, fs, ok, err := st.FirstPostedReview(ctx, pr.ID, t0.Add(160*time.Minute)); err != nil || !ok || got.Round != 5 || len(fs) != 0 ||
+		!got.OK || got.Summary.Counts != [4]int{0, 1, 2, 4} {
+		t.Errorf("a round with counts and no rows: round %d, %d findings, result %v %+v, %v, %v", got.Round, len(fs), got.OK, got.Summary, ok, err)
 	}
 	if got, _, ok, err := st.FirstPostedReview(ctx, pr.ID, t0.Add(3*time.Hour)); err != nil || ok {
 		t.Errorf("since after every round: %+v, %v, %v; want none", got, ok, err)
