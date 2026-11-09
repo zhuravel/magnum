@@ -1,8 +1,10 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/staging"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -27,10 +29,59 @@ func TestStagingFirstIsTheMigrationOfTheHeadsFilesThatNoStagingHolds(t *testing.
 		"live on one":     {files, true, fixHead, []StagingEnv{{Env: "void", State: "latest"}, {Env: "bart", State: "none"}}},
 		"pushed to one":   {files, true, fixHead, []StagingEnv{{Env: "void", State: "pushed"}, {Env: "bart", State: "none"}}},
 		"unknown on one":  {files, true, fixHead, []StagingEnv{{Env: "void", State: "unknown"}, {Env: "bart", State: "none"}}},
+		"a word unknown":  {files, true, fixHead, []StagingEnv{{Env: "void", State: "deploying"}, {Env: "bart", State: "none"}}},
 		"no migration":    {store.PRFiles{HeadSHA: fixHead, Paths: []string{"app/a.rb", "db/schema.rb", "db/shard_1_schema.rb"}}, true, fixHead, none},
 	} {
 		if got := StagingFirst(c.files, c.listed, c.head, c.shown); got != "" {
 			t.Errorf("%s: StagingFirst = %q, want none", name, got)
 		}
+	}
+}
+
+// The look leaves a migration's staging deploy to the screens: your own
+// approved PR with nothing open stays idle in the merge's words, with no
+// need, while its head changes a migration that no staging holds. The
+// factory screen (factory.deployFirst) and the board
+// (tui.PRBoardRow.DeployNeedsYou) put the deploy first on that wait on
+// your merge from the registry rows the tick wrote, which say it
+// (StagingFirst over pr_files and the staging record); a needs_you here
+// would take the factory's E-first move away.
+func TestTheLookLeavesAMigrationsStagingDeployToTheScreens(t *testing.T) {
+	const m = "db/sharded_migrate/20261105011921_add_metric_indexes.rb"
+	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"), withStagings(&fakeStaging{}), func(h *harness) {
+		h.gh.defaultFiles = []string{"app/models/metric.rb", m, "db/shard_1_schema.rb"}
+	})
+	h.openOwn(prSpec{head: fixHead, gate: &github.ReviewGate{Decision: "APPROVED"}})
+	h.tick() // reviewed clean
+	h.pastSettle()
+	h.stagingTick()
+	h.stagingTick()
+	v := h.wantOpen(OpenIdle, "nothing open at a1a1a1a · approved, merge is yours")
+	if len(v.Needs) != 0 || strings.Contains(v.Why, "staging") {
+		t.Errorf("verdict %q needs %+v, want the merge's words and no need", v.Why, v.Needs)
+	}
+	pr := h.pr(2)
+	files, listed, err := h.st.PRFilesOf(h.ctx, pr.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, ok := h.stagingRecord(2)
+	now := h.clock.Now()
+	if got := StagingFirst(files, listed, pr.HeadSHA, StagingShown(rec, ok, StagingEnvs(h.cfg, "talkable/talkable"), pr.HeadSHA, now, now)); got != m {
+		t.Errorf("the registry's rows say the deploy first for %q, want %q", got, m)
+	}
+}
+
+// A PR whose head lives in a fork, or whose head branch is master, main or
+// a staging branch, never deploys to a staging, as the deploy's refusal
+// says; any other branch of the repository may.
+func TestStagingNeverDeploysAForkOrAProtectedBranch(t *testing.T) {
+	for ref, want := range map[string]bool{"feature/index": false, "master": true, "main": true, "staging-void": true, "stagingish": false} {
+		if got := StagingNeverDeploys(store.PR{HeadRef: new(ref)}); got != want {
+			t.Errorf("head branch %q: never deploys %v, want %v", ref, got, want)
+		}
+	}
+	if !StagingNeverDeploys(store.PR{HeadRef: new("feature/index"), IsCrossRepo: true}) {
+		t.Error("a fork's PR may deploy to a staging")
 	}
 }

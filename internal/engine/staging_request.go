@@ -279,7 +279,7 @@ func (e *Engine) stagingDeployRefusal(pr store.PR, label string, p StagingDeploy
 		return label + " is not yours: magnum deploys only your own PRs to staging for now"
 	case pr.IsCrossRepo:
 		return label + " comes from a fork: a fork's PR never deploys to staging"
-	case ref == "master" || ref == "main" || strings.HasPrefix(ref, "staging-"):
+	case stagingNeverMerged(ref):
 		return label + "'s head branch is " + ref + ": master, main and the staging branches are never merged into a staging"
 	case p.DryRun:
 	case p.Head == "":
@@ -288,6 +288,21 @@ func (e *Engine) stagingDeployRefusal(pr store.PR, label string, p StagingDeploy
 		return label + ": the head moved since you were asked: " + textx.ShortSHA(p.Head) + " is now " + textx.ShortSHA(pr.HeadSHA) + ": ask again"
 	}
 	return ""
+}
+
+// StagingNeverDeploys reports whether pr can never deploy to a staging,
+// whoever asks and whenever (stagingDeployRefusal): its head lives in a
+// fork, or its head branch is master, main or a staging branch. The board
+// says no staging deploy before such a PR's merge, since E would be
+// refused.
+func StagingNeverDeploys(pr store.PR) bool {
+	return pr.IsCrossRepo || stagingNeverMerged(deref(pr.HeadRef))
+}
+
+// stagingNeverMerged reports whether head branch ref is one that is never
+// merged into a staging: master, main or a staging branch.
+func stagingNeverMerged(ref string) bool {
+	return ref == "master" || ref == "main" || strings.HasPrefix(ref, "staging-")
 }
 
 // stagingAskedTooLongAgo refuses a deploy (never a dry run) asked at

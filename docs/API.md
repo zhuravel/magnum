@@ -9468,6 +9468,14 @@ func OpenHolds(ctx context.Context, st *store.Store) (map[int64]OpenHold, error)
     cannot read is left out. A record of a PR no longer pinned holds nothing
     (the next tick drops it): callers read it beside the PR's pin.
 
+func OpenMergeIsYours(g *store.ReviewGate) bool
+    OpenMergeIsYours reports whether GitHub's review gate g leaves the merge of
+    an own PR with nothing open to the operator (rule 12's "merge is yours"):
+    approved, or read with no decision (a base that requires no review); not
+    before magnum read it (nil), nor while it still wants a review or changes.
+    The board reads it with the look's idle verdict, as the factory screen's
+    wait on your merge does.
+
 func OpenRestorable(cfg *config.Config, full string) func(string) bool
     OpenRestorable reports whether a parked session of a role may stand in for
     the judge's in `magnum open` of a PR of repository full (OpenRestoreRole):
@@ -9629,10 +9637,18 @@ func StagingFirst(files store.PRFiles, listed bool, head string, shown []Staging
     StagingFirst is the migration a PR at head must take to a staging before
     its merge: staging.DeployBeforeMerge over files, the head's file list
     (store.PRFilesOf, which the poll writes from GitHub's Details), and shown,
-    the envs as StagingShown shows them (unknown holds nothing back), its
-    control characters spaces; "" when it need not, or files is another head's
-    or not listed (listed false). The look's verdict and the board share it,
-    and say it in staging.DeployBeforeMergeWords.
+    the envs as StagingShown shows them (unknown, and a state word this build
+    does not know, hold nothing back), its control characters spaces; "" when it
+    need not, or files is another head's or not listed (listed false). The board
+    says it in staging.DeployBeforeMergeWords on the wait on your merge the
+    look's idle verdict leaves (OpenMergeIsYours), as the factory screen does
+    from the same rows.
+
+func StagingNeverDeploys(pr store.PR) bool
+    StagingNeverDeploys reports whether pr can never deploy to a staging,
+    whoever asks and whenever (stagingDeployRefusal): its head lives in a fork,
+    or its head branch is master, main or a staging branch. The board says no
+    staging deploy before such a PR's merge, since E would be refused.
 
 func StagingPlanSays(ep StagingPlanEnv) string
     StagingPlanSays is what one env's plan says in words: why it takes no merge,

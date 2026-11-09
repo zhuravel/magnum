@@ -48,9 +48,13 @@ package engine
 //     settle_max after the push, and then needs you (it did not run: a
 //     workflow that runs only when the PR opens), never green; a merge
 //     with the base the look could not check is unknown;
-//  12. otherwise the PR is idle: nothing open at its head. It names the
-//     operator's optional calls still open (P3 author's calls a fixer left
-//     them, fix_optional.go), which are never work and hold nothing.
+//  12. otherwise the PR is idle: nothing open at its head. It says whether
+//     the merge is the operator's (OpenMergeIsYours: approved, or a base
+//     that requires no review) and names the operator's optional calls
+//     still open (P3 author's calls a fixer left them, fix_optional.go),
+//     which are never work and hold nothing. A migration that must go to a
+//     staging before the merge keeps it idle: the screens put that deploy
+//     first on their wait on the merge (StagingFirst), from the registry.
 //
 // Unknown is never idle.
 
@@ -591,12 +595,12 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 	}
 	why := "nothing open at " + short
 	switch g := f.pr.ReviewGate; {
-	case g != nil && g.Decision == "APPROVED":
-		why += " · approved, merge is yours"
-	case g != nil && g.Decision == "": // the base requires no review
-		why += " · no review required, merge is yours"
-	default:
+	case !OpenMergeIsYours(g):
 		why += " · no approval yet"
+	case g.Decision == "APPROVED":
+		why += " · approved, merge is yours"
+	default: // the base requires no review
+		why += " · no review required, merge is yours"
 	}
 	if f.approved != "" && f.afterCount > 0 {
 		why += " · " + textx.Count(f.afterCount, "commit", "commits") + " after the approval"
@@ -606,6 +610,16 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 		why += " · " + OptionalCallsWords(v.Optional)
 	}
 	return say(OpenIdle, why), nil, nil
+}
+
+// OpenMergeIsYours reports whether GitHub's review gate g leaves the
+// merge of an own PR with nothing open to the operator (rule 12's "merge
+// is yours"): approved, or read with no decision (a base that requires no
+// review); not before magnum read it (nil), nor while it still wants a
+// review or changes. The board reads it with the look's idle verdict, as
+// the factory screen's wait on your merge does.
+func OpenMergeIsYours(g *store.ReviewGate) bool {
+	return g != nil && (g.Decision == "APPROVED" || g.Decision == "")
 }
 
 // heldRestart is a drain's held fix as openFacts.held carries it (its
