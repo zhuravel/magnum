@@ -37,7 +37,7 @@ import (
 )
 
 const (
-	evalUsage    = "run|score|list|show|baseline|guards"
+	evalUsage    = "run|add|score|list|show|baseline|guards"
 	evalRunUsage = "[--corpus FILE] [--case NAME]... [--label TEXT] [--candidate DIR] [--judge-only] [--no-notes] [--keep] [--force]"
 	// evalCorpusFile is the default corpus, in the user config's directory
 	// (~/.config/magnum); evalLegacyCorpusFile its old place in a checkout.
@@ -84,7 +84,9 @@ func newEvalCmd(c *Context) *cobra.Command {
 			"The corpus is ~/.config/magnum/"+evalCorpusFile+" (a checkout's eval.local.toml still works; see eval.toml.example), "+
 			"then the learned corpus the daemon writes after each retro (learn/corpus.toml in the data directory: a case per general "+
 			"miss and per finding an author declined as wrong or ranked too high; a case name in both is an error); --corpus FILE "+
-			"reads that file alone. `run` says how many of its cases are learned ones. Each case runs "+
+			"reads that file alone. `run` says how many of its cases are learned ones. A local case (kind = \"local\") is a "+
+			"round of the factory's local review instead of a PR's: `magnum eval add --local-task ID --round N` freezes what the "+
+			"round read and prints its [[case]], and `run` replays it from those inputs, scored as a posted case. Each case runs "+
 			"in a scratch registry and report tree under state/eval/<run>/ and a detached worktree of the repository's "+
 			"clone, with agents named apart from the PR's own and from every other run's, in a herdr workspace "+
 			"\"eval <repo>#<N>\" that is closed when the case ends (a judge still at work is interrupted first) and "+
@@ -101,7 +103,7 @@ func newEvalCmd(c *Context) *cobra.Command {
 			fmt.Fprintf(c.Stdout, "usage: magnum eval %s\n", evalUsage)
 			return 0
 		})
-	cmd.AddCommand(newEvalRunCmd(c), newEvalScoreCmd(c), newEvalListCmd(c), newEvalShowCmd(c), newEvalBaselineCmd(c), newEvalGuardsCmd(c))
+	cmd.AddCommand(newEvalRunCmd(c), newEvalAddCmd(c), newEvalScoreCmd(c), newEvalListCmd(c), newEvalShowCmd(c), newEvalBaselineCmd(c), newEvalGuardsCmd(c))
 	return cmd
 }
 
@@ -185,11 +187,7 @@ func evalCorpusPath(c *Context, flag string) (user, learned string) {
 		return flag, ""
 	}
 	learned = c.Layout.LearnCorpus()
-	dir := c.Layout.ConfigDir()
-	if dir == "" {
-		dir = filepath.Join(paths.Expand("~"), ".config", "magnum")
-	}
-	user = filepath.Join(dir, evalCorpusFile)
+	user = evalDefaultCorpus(c)
 	if legacy := filepath.Join(c.Layout.Home, evalLegacyCorpusFile); c.Layout.Home != "" && !fsx.Exists(user) && fsx.Exists(legacy) {
 		return legacy, learned
 	}
@@ -295,7 +293,7 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 	}
 	stopped := ""
 	for i, ec := range cases {
-		cr := eval.CaseRun{Case: ec.Name, PR: ec.PR, Head: ec.Head, Started: now()}
+		cr := eval.CaseRun{Case: ec.Name, Kind: ec.Kind, PR: ec.PR, Head: ec.Head, Started: now()}
 		refused := ""
 		if stopped == "" && ctx.Err() == nil {
 			refused = evalrun.Refused(ctx, deps, ec)
@@ -307,9 +305,9 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 			cr.Outcome, cr.Error = eval.OutcomeSkipped, "interrupted"
 		case refused != "":
 			cr.Outcome, cr.Error = evalFlagged, refused
-			fmt.Fprintf(c.Stdout, "[%d/%d] %s %s refused: %s\n", i+1, len(cases), ec.Name, ec.PR, cr.Error)
+			fmt.Fprintf(c.Stdout, "[%d/%d] %s %s refused: %s\n", i+1, len(cases), ec.Name, evalCaseWhat(ec), cr.Error)
 		default:
-			fmt.Fprintf(c.Stdout, "[%d/%d] %s %s at %s\n", i+1, len(cases), ec.Name, ec.PR, textx.ShortSHA(ec.Head))
+			fmt.Fprintf(c.Stdout, "[%d/%d] %s %s at %s\n", i+1, len(cases), ec.Name, evalCaseWhat(ec), textx.ShortSHA(ec.Head))
 			cr = evalrun.RunCase(ctx, deps, ec, opts) // it flags a refused replay itself
 			if cr.Outcome == pipeline.OutcomeUsageLimit || cr.Outcome == pipeline.OutcomeLoginRequired {
 				stopped = "an earlier case hit " + cr.Outcome

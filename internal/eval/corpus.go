@@ -85,6 +85,9 @@ const LocalNumberBase = 900000
 // Local reports whether cs is a round of the factory's local review (KindLocal).
 func (cs Case) Local() bool { return cs.Kind == KindLocal }
 
+// ValidName reports whether name may name a case (and a defect): [a-z0-9][a-z0-9-]{0,47}.
+func ValidName(name string) bool { return idPattern.MatchString(name) }
+
 // What a review is expected to do with a defect (Defect.Expect): report it, the default, or not
 // report it, a finding an author declined as wrong (a match is a false positive, Score.AbsentHits).
 const (
