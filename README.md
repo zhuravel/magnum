@@ -5051,17 +5051,24 @@ recorded step and checks it again first: a push whose answer was lost is never p
 holds the merge). A cancel stops a deploy at once and nothing is pushed after it. A cancel during watch or confirm
 stops only the watching: **a deploy never reverts a push**, and neither does a failed CI or a missing deployment
 (revert by hand if you must). Every deploy records who asked (`cli`, `liaison` or `factory`) and each step's
-events, at least once (an event a crash cut is recorded when the deploy resumes).
+events, at least once (an event a crash cut is recorded when the deploy resumes; a repeat carries the same effect,
+journal write, step and phase, which the registry dedupes on).
 
 No deploy holds its env for ever. A passing failure at a step (a fetch, a git command, a read of GitHub or of the
 resolver, a push) tries again after 30 seconds, then 1, 2, 4 and 8 minutes, and the deploy's why names the next
 try's time; a step still failing 15 minutes after its first failure ends the deploy, failed before the push,
 `pushed, not confirmed` after it (so a short GitHub or network outage costs no redeploy). A definite failure ends it
-at once: a merge the mirror lacks or that verify refuses, the allowlist, the commit identity, the push's refusal.
-A resolver that works over 2 hours fails it. Either daemon resumes a deploy the other started, from the journals
-under `mirror_dir`, at its next tick. Keep `mirror_dir` out of every directory an
-agent can write (the review slots, the factory's copies): the push checks the merge again from git, but the journals
-and the mirror are what a deploy works from.
+at once: a merge the mirror lacks, that is no sha or that verify refuses, the allowlist, the commit identity, the
+push's refusal. A wait for the mirror's lock (a Refresh's fetch, a clone) is no failure: the step tries again 30
+seconds later. A resolver that works over 2 hours fails it. Either daemon resumes a deploy the other started, from
+the journals under `mirror_dir`, at its next tick; a journal whose env name is no slug is passed over (logged once;
+cancel it by its id).
+
+The deploys dir (`<mirror_dir>/<owner>/<repo>.deploys`) is operator-level state, like the registry and
+`~/.config/magnum`: magnum alone writes it, never a hand and never an agent's pane. A journal written there is a
+deploy: the daemon runs it without asking, its migrations included. The push checks the merge again from git (what
+is pushed), but only the directory guards who gave the word, so keep `mirror_dir` out of every directory an agent
+can write (the review slots, the factory's copies).
 
 ## Daily use
 

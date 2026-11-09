@@ -120,7 +120,7 @@ func (j *journal) live() bool { return j.State == EffectQueued || j.State == Eff
 // effect is the journal as the screens see it.
 func (j *journal) effect() Effect {
 	return Effect{ID: j.ID, Repo: j.Repo, Env: j.Env, PR: j.PR, By: j.By, Step: j.Step, State: j.State, Why: j.Why,
-		Merge: j.Merge, RunURL: j.RunURL, Try: 1 + j.Remerges, Started: j.Started, Updated: j.Updated}
+		Merge: j.Merge, RunURL: j.RunURL, Try: 1 + j.Remerges, Started: j.Started, Updated: j.Updated, Seq: j.Seq}
 }
 
 // deploysDir is the journal directory beside the mirror at dir

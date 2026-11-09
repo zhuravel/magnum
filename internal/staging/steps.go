@@ -25,6 +25,16 @@ type stepRun struct {
 	root *os.Root
 	g    deployGit
 	j    *journal
+	// out are the events of the run's writes, delivered by flush once the
+	// caller let the dir's and the effect's flocks go.
+	out []delivery
+}
+
+// delivery is an event with the effect as the write that recorded it left
+// it.
+type delivery struct {
+	e  Effect
+	ev pendingEvent
 }
 
 // run runs the effect's step.
@@ -48,7 +58,7 @@ func (r *stepRun) run(ctx context.Context) error {
 
 // git runs fn, the step's git, under the mirror's flock.
 func (r *stepRun) git(ctx context.Context, fn func() error) error {
-	return underMirror(ctx, r.dir, fn)
+	return r.c.underMirror(ctx, r.dir, fn)
 }
 
 // at runs the test's hook at a point of step.
@@ -65,7 +75,7 @@ func (r *stepRun) event(step, phase, text string) {
 	r.j.Pending = append(r.j.Pending, pendingEvent{Step: step, Phase: phase, Text: text})
 }
 
-// save writes the journal, then delivers its pending events.
+// save writes the journal, then takes its pending events for flush.
 func (r *stepRun) save() error {
 	r.j.Updated = r.c.d.Now()
 	r.j.Seq++
@@ -77,30 +87,42 @@ func (r *stepRun) save() error {
 			return err
 		}
 	}
-	r.deliver()
+	r.take()
 	return nil
 }
 
-// deliver hands the pending events to Deps.Event and forgets them (the
-// next write drops them from the journal); this client remembers the write
-// it delivered.
-func (r *stepRun) deliver() {
-	r.c.delivered(r.j.ID, r.j.Seq)
+// take moves the journal's pending events to the run's out, with the
+// effect as this write left it (the next write drops them from the
+// journal).
+func (r *stepRun) take() {
+	e := r.j.effect()
 	for _, ev := range r.j.Pending {
-		r.c.d.Log.Debug("staging: deploy", "repo", r.repo, "effect", r.j.ID, "by", r.j.By, "step", ev.Step, "phase", ev.Phase, "text", ev.Text)
-		if r.c.d.Event != nil {
-			r.c.d.Event(r.j.effect(), ev.Step, ev.Phase, ev.Text)
-		}
+		r.out = append(r.out, delivery{e: e, ev: ev})
 	}
 	r.j.Pending = nil
 }
 
-// redeliver delivers the pending events of a journal just loaded, unless
-// this client delivered that write already: a process that stopped between
-// a write and its delivery left them (at least once).
+// flush hands the run's events to Deps.Event, the caller holding neither
+// the deploys dir's flock nor the effect's, and remembers each write it
+// delivered.
+func (r *stepRun) flush() {
+	for _, d := range r.out {
+		r.c.d.Log.Debug("staging: deploy", "repo", r.repo, "effect", d.e.ID, "seq", d.e.Seq, "by", d.e.By, "step", d.ev.Step, "phase", d.ev.Phase, "text", d.ev.Text)
+		if r.c.d.Event != nil {
+			r.c.d.Event(d.e, d.ev.Step, d.ev.Phase, d.ev.Text)
+		}
+		r.c.delivered(d.e.ID, d.e.Seq)
+	}
+	r.out = nil
+}
+
+// redeliver takes for flush the pending events of a journal just loaded,
+// unless this client delivered that write already: a process that stopped
+// between a write and its delivery left them (at least once; another
+// client that delivered them makes this a repeat, with the same key).
 func (r *stepRun) redeliver() {
 	if len(r.j.Pending) > 0 && !r.c.wasDelivered(r.j.ID, r.j.Seq) {
-		r.deliver()
+		r.take()
 	}
 	r.j.Pending = nil
 }
@@ -147,6 +169,12 @@ var retryWaits = []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute,
 // stands).
 func (r *stepRun) retry(ctx context.Context, step, why string) error {
 	now := r.c.d.Now()
+	if r.j.FailingSince.After(now) {
+		// An edit, or a clock stepped back: the budget counts from now.
+		r.c.noteOnce("future "+string(r.j.ID), "staging: a deploy's first failure lies in the future; taken as now",
+			"effect", r.j.ID, "failing_since", r.j.FailingSince)
+		r.j.FailingSince = now
+	}
 	if r.j.Fails == 0 || r.j.FailingSince.IsZero() {
 		r.j.FailingSince = now
 	}
@@ -262,12 +290,29 @@ func (r *stepRun) tips(ctx context.Context, head bool) (string, string, error) {
 }
 
 // failed is a step's answer to err: a branch the remote lacks fails the
-// effect, anything else is one failure of step.
+// effect, a busy mirror is a wait (busy), anything else is one failure of
+// step.
 func (r *stepRun) failed(ctx context.Context, step, what string, err error) error {
-	if errors.Is(err, errNoBranch) {
+	switch {
+	case errors.Is(err, errNoBranch):
 		return r.end(ctx, EffectFailed, "the remote has no branch "+r.branch()+"; nothing was pushed")
+	case errors.Is(err, errMirrorBusy):
+		return r.busy()
 	}
 	return r.retry(ctx, step, what+": "+gitReason(err))
+}
+
+// busyRetry is how long a step waits to try again after the mirror's flock
+// stayed busy.
+const busyRetry = 30 * time.Second
+
+// busy is a step that waited for the mirror's flock in vain: no failure
+// (the budget neither counts it nor starts again), the step runs again
+// after busyRetry, Why says so.
+func (r *stepRun) busy() error {
+	r.j.RetryAt = r.c.d.Now().Add(busyRetry)
+	r.j.Phase, r.j.Why = PhaseFail, "waiting for the mirror's lock (a Refresh's fetch or a clone holds it); next try at "+r.j.RetryAt.Format("15:04:05")
+	return r.save()
 }
 
 // headMoved is the Why of a PR whose head is no longer the plan's.
@@ -349,7 +394,7 @@ func (r *stepRun) merge(ctx context.Context) error {
 	})
 	switch {
 	case err != nil:
-		return r.retry(ctx, StepMerge, "the merge could not be made: "+err.Error())
+		return r.failed(ctx, StepMerge, "the merge could not be made", err)
 	case there:
 		return r.end(ctx, EffectDone, alreadyThere(r.j.PR.Number, r.branch())+"; nothing was pushed")
 	}
@@ -382,7 +427,7 @@ func (r *stepRun) merge(ctx context.Context) error {
 		return r.g.keepMerge(ctx, r.dir, mergeRef(r.j.ID), sha)
 	})
 	if err != nil {
-		return r.retry(ctx, StepMerge, "the merge commit could not be made: "+gitReason(err))
+		return r.failed(ctx, StepMerge, "the merge commit could not be made", err)
 	}
 	r.j.Merge = sha
 	return r.ok(StepVerify, "merge "+short(sha)+" on "+short(r.j.Tip))
@@ -469,12 +514,16 @@ func (r *stepRun) resolution(ctx context.Context) error {
 			}
 		case typ != "commit":
 			refused = "the resolver's merge " + short(res.MergeSHA) + " is not a commit (a " + typ + ")"
+		default:
+			// Held at its ref whatever the fetch did: one that failed while
+			// an earlier try's left the merge in the mirror left no ref.
+			return r.g.keepMerge(ctx, r.dir, ref, res.MergeSHA)
 		}
 		return nil
 	})
 	switch {
 	case err != nil:
-		return r.retry(ctx, StepMerge, "the resolver's merge could not be read: "+gitReason(err))
+		return r.failed(ctx, StepMerge, "the resolver's merge could not be read", err)
 	case refused != "":
 		return r.end(ctx, EffectFailed, refused+"; nothing was pushed")
 	}
@@ -498,6 +547,9 @@ type checked struct {
 // on a tip other than the plan's it adds nothing the plan did not show. The
 // caller holds the mirror's flock.
 func (r *stepRun) checkMerge(ctx context.Context, tip string) (checked, error) {
+	if !isOID(r.j.Merge) {
+		return checked{fail: "the journal's merge " + strconv.Quote(oneLine(r.j.Merge)) + " is no sha"}, nil
+	}
 	if tip != r.j.Tip {
 		on, err := r.g.isAncestor(ctx, r.dir, r.j.Tip, tip)
 		switch {
@@ -628,6 +680,10 @@ func (r *stepRun) push(ctx context.Context) error {
 	var landed bool
 	var ch checked
 	err := r.git(ctx, func() error {
+		if !isOID(r.j.Merge) {
+			ch.fail = "the journal's merge " + strconv.Quote(oneLine(r.j.Merge)) + " is no sha"
+			return nil
+		}
 		if typ, err := r.g.objectType(ctx, r.dir, r.j.Merge); err != nil || typ != "commit" {
 			if err == nil {
 				ch.fail = "the merge " + short(r.j.Merge) + " is not in the mirror, or not a commit"
@@ -716,7 +772,7 @@ func (r *stepRun) push(ctx context.Context) error {
 	case refused != "":
 		return r.end(ctx, EffectFailed, refused+": nothing was pushed")
 	case landed:
-		return r.pushed("pushed " + short(r.j.Merge) + " to " + r.branch())
+		return r.pushed(r.branch() + " holds " + short(r.j.Merge) + " already")
 	case perr == nil:
 		if done, err := r.apply(ctx, ch, "the tip moved before the push"); done {
 			return err
@@ -816,7 +872,7 @@ func (r *stepRun) confirm(ctx context.Context) error {
 			return err
 		})
 		if err != nil {
-			return r.retry(ctx, StepConfirm, "the deployment's history could not be read: "+gitReason(err))
+			return r.failed(ctx, StepConfirm, "the deployment's history could not be read", err)
 		}
 		if in {
 			return r.end(ctx, EffectDone, "live: the deployment of "+short(dep)+" holds the merge"+note)

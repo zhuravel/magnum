@@ -317,9 +317,13 @@ type Deps struct {
 	// whom it was asked (Effect.By); text holds shas, counts, the effect's
 	// own words and paths made safe, never PR text. Nil = not recorded. An
 	// event is written in the journal with the state it records and handed
-	// to Event after that write, so a crash between the two hands it on when
-	// the effect next loads: at least once, a repeat possible. A failure the
-	// step tries again records none; the end it leads to records one.
+	// to Event after that write, and after the deploys dir's and the
+	// effect's flocks are let go (the env's, held for the effect's life and
+	// only ever tried, may be held), so a crash between the two hands it on
+	// when the effect next loads: at least once. A repeat (a crash, or another
+	// client loading the same write) has the same key, (e.ID, e.Seq, step,
+	// phase), which the registry dedupes on. A failure the step tries again
+	// records none; the end it leads to records one.
 	Event func(e Effect, step, phase, text string)
 }
 
@@ -344,6 +348,9 @@ type Client struct {
 	// stepping keeps Steps one at a time.
 	envLocks map[string]*envLock
 	sent     map[EffectID]int
+	// lockWait, when set, is how long a step waits for the mirror's flock
+	// (lockWait's default; tests shorten it).
+	lockWait time.Duration
 	stepping sync.Mutex
 	// hook, in tests, runs at the named points of a step; an error it
 	// returns ends the Step there, as a killed process would.

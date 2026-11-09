@@ -23,8 +23,10 @@ type countingRunner struct {
 	pushes, commits int
 	beforePush      func()
 	// fail, when set, fails each command whose git subcommand (the first
-	// argument after the mirror's options) it names, as git exiting 128.
-	fail map[string]bool
+	// argument after the mirror's options) it names, as git exiting 128;
+	// failWith fails each command with an argument that holds it.
+	fail     map[string]bool
+	failWith string
 }
 
 // subcommand is a mirror command's git subcommand: the first argument past
@@ -53,7 +55,7 @@ func (r *countingRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, er
 	case sub == "commit-tree":
 		r.commits++
 	}
-	failed := r.fail[sub]
+	failed := r.fail[sub] || r.failWith != "" && slices.ContainsFunc(c.Args, func(a string) bool { return strings.Contains(a, r.failWith) })
 	r.mu.Unlock()
 	if failed {
 		return execx.Result{Code: 128}, &execx.ExitError{Cmd: c, Code: 128, Stderr: "fatal: injected " + sub + " failure\n"}

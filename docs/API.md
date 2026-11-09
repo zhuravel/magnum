@@ -26069,9 +26069,13 @@ type Deps struct {
 	// whom it was asked (Effect.By); text holds shas, counts, the effect's
 	// own words and paths made safe, never PR text. Nil = not recorded. An
 	// event is written in the journal with the state it records and handed
-	// to Event after that write, so a crash between the two hands it on when
-	// the effect next loads: at least once, a repeat possible. A failure the
-	// step tries again records none; the end it leads to records one.
+	// to Event after that write, and after the deploys dir's and the
+	// effect's flocks are let go (the env's, held for the effect's life and
+	// only ever tried, may be held), so a crash between the two hands it on
+	// when the effect next loads: at least once. A repeat (a crash, or another
+	// client loading the same write) has the same key, (e.ID, e.Seq, step,
+	// phase), which the registry dedupes on. A failure the step tries again
+	// records none; the end it leads to records one.
 	Event func(e Effect, step, phase, text string)
 }
     Deps is what a Client runs on.
@@ -26111,10 +26115,14 @@ type Effect struct {
 	Merge, RunURL    string
 	Try              int
 	Started, Updated time.Time
+	Seq              int
 }
     Effect is a deploy effect as the screens see it: its step and state, why,
-    the merge's sha once made, ci.yml's run, and Try, the merge's try (1,
-    and one more after each move of the tip).
+    the merge's sha once made, ci.yml's run, and Try, the merge's try (1, and
+    one more after each move of the tip). Seq is the journal write it was read
+    at: each write counts one more. With an Event it is the write that recorded
+    the event, so (ID, Seq, step, phase) keys a delivery: Deps.Event is at least
+    once, and a repeat carries the same key.
 
 type EffectID string
     EffectID names a deploy effect: <env>-<pr>-<time>-<random>, lower-case

@@ -1,6 +1,7 @@
 package staging
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -196,7 +197,10 @@ type EnvPlan struct {
 
 // Effect is a deploy effect as the screens see it: its step and state, why,
 // the merge's sha once made, ci.yml's run, and Try, the merge's try (1, and
-// one more after each move of the tip).
+// one more after each move of the tip). Seq is the journal write it was
+// read at: each write counts one more. With an Event it is the write that
+// recorded the event, so (ID, Seq, step, phase) keys a delivery: Deps.Event
+// is at least once, and a repeat carries the same key.
 type Effect struct {
 	ID               EffectID
 	Repo             string
@@ -207,6 +211,7 @@ type Effect struct {
 	Merge, RunURL    string
 	Try              int
 	Started, Updated time.Time
+	Seq              int
 }
 
 // Resolver resolves a deploy's merge conflict in a repository of its own.
@@ -297,17 +302,25 @@ func (c *Client) gitEnv(repo string) (map[string]string, error) {
 	return env, nil
 }
 
-// underMirror runs fn under the mirror's flock, waiting for it at most
-// lockWait. Only git runs under it: never a call to GitHub, the resolver,
-// PushEnv or CommitIdentity, which would hold up every Refresh.
-func underMirror(ctx context.Context, dir string, fn func() error) error {
-	lctx, cancel := context.WithTimeout(ctx, lockWait)
+// errMirrorBusy is underMirror's error when the mirror's flock stayed
+// taken (a Refresh's fetch, a clone) for the whole wait: no failure of the
+// step, which waits for it.
+var errMirrorBusy = errors.New("the mirror's lock is busy (a Refresh's fetch or a clone holds it)")
+
+// underMirror runs fn under the mirror's flock, waiting for it at most the
+// client's lock wait (lockWait). Only git runs under it: never a call to
+// GitHub, the resolver, PushEnv or CommitIdentity, which would hold up
+// every Refresh.
+func (c *Client) underMirror(ctx context.Context, dir string, fn func() error) error {
+	lctx, cancel := context.WithTimeout(ctx, cmp.Or(c.lockWait, lockWait))
 	unlock, err := lockMirror(lctx, dir, nil)
 	cancel()
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return ctx.Err()
+	case errors.Is(err, context.DeadlineExceeded):
+		return errMirrorBusy
+	case err != nil:
 		return fmt.Errorf("the mirror's lock: %w", err)
 	}
 	defer unlock()
@@ -464,7 +477,7 @@ func (c *Client) Plan(ctx context.Context, pr PR, envs []Env) (DeployPlan, error
 		return DeployPlan{}, fmt.Errorf("staging %s: %w", pr.Repo, err)
 	}
 	plan := DeployPlan{PR: deployPR(pr), At: c.d.Now()}
-	err = underMirror(ctx, dir, func() error {
+	err = c.underMirror(ctx, dir, func() error {
 		base, err := c.d.Git.Base(ctx, dir, pr.Repo)
 		if err != nil {
 			return fmt.Errorf("the mirror: %w", err)
@@ -544,7 +557,7 @@ func (c *Client) Deploy(ctx context.Context, plan DeployPlan, by string) ([]Effe
 		return nil, err
 	}
 	var base string
-	if err := underMirror(ctx, dir, func() error {
+	if err := c.underMirror(ctx, dir, func() error {
 		base, err = c.d.Git.Base(ctx, dir, pr.Repo)
 		return err
 	}); err != nil {
@@ -671,15 +684,42 @@ func (c *Client) writeLocked(ctx context.Context, root *os.Root, j *journal) err
 // flock. It reports the effect it holds the env for. A flock this client
 // holds for an effect no longer running goes first.
 func (c *Client) claim(ctx context.Context, repo, dir string, root *os.Root, env string) (EffectID, bool, error) {
+	id, held, next, err := c.pick(ctx, repo, dir, root, env)
+	if err != nil || held || next == "" {
+		return id, held, err
+	}
+	f, ok, err := flockIn(ctx, root, envLockName(env), false)
+	if err != nil || !ok {
+		return "", false, err
+	}
+	r, err := c.claimed(ctx, repo, dir, root, env, next)
+	if r == nil || err != nil {
+		unflock(f)
+		if r != nil && !errors.Is(err, errHook) {
+			r.flush()
+		}
+		return "", false, err
+	}
+	c.mu.Lock()
+	c.envLocks[envKey(dir, env)] = &envLock{f: f, id: next}
+	c.mu.Unlock()
+	r.flush()
+	return next, true, nil
+}
+
+// pick reads the journals under the deploys dir's flock: the effect this
+// client holds env for (held), or the next one to claim, if any. A flock
+// this client holds for an effect no longer running goes.
+func (c *Client) pick(ctx context.Context, repo, dir string, root *os.Root, env string) (EffectID, bool, EffectID, error) {
 	df, _, err := flockIn(ctx, root, dirLockName, true)
 	if err != nil {
-		return "", false, err
+		return "", false, "", err
 	}
 	defer unflock(df)
 	all := readJournals(root)
 	if id, held := c.heldFor(dir, env); held {
 		if slices.ContainsFunc(all, func(j *journal) bool { return j.ID == id && j.State == EffectRunning }) {
-			return id, true, nil
+			return id, true, "", nil
 		}
 		c.release(dir, env)
 	}
@@ -693,45 +733,39 @@ func (c *Client) claim(ctx context.Context, repo, dir string, root *os.Root, env
 		}
 	}
 	if next == nil {
-		return "", false, nil
+		return "", false, "", nil
 	}
-	f, ok, err := flockIn(ctx, root, envLockName(env), false)
-	if err != nil || !ok {
-		return "", false, err
-	}
-	held := false
-	defer func() {
-		if !held {
-			unflock(f)
-		}
-	}()
-	ef, _, err := flockIn(ctx, root, effectLockName(next.ID), true)
+	return "", false, next.ID, nil
+}
+
+// claimed claims effect id under its flock, the env's held: a queued one
+// starts running, a running one (its runner stopped) resumes. It returns
+// the run, whose events the caller delivers after the unlock; nil when the
+// effect is no longer live.
+func (c *Client) claimed(ctx context.Context, repo, dir string, root *os.Root, env string, id EffectID) (*stepRun, error) {
+	ef, _, err := flockIn(ctx, root, effectLockName(id), true)
 	if err != nil {
-		return "", false, err
+		return nil, err
 	}
 	defer unflock(ef)
-	j, err := readJournal(root, next.ID)
+	j, err := readJournal(root, id)
 	if err != nil || !j.live() {
-		return "", false, err
+		return nil, err
 	}
 	r := &stepRun{c: c, repo: repo, dir: dir, root: root, j: j}
 	r.redeliver() // a crash may have cut them
 	if j.State == EffectQueued {
 		if err := r.begin(StepClaim, false, "claiming "+env); err != nil {
-			return "", false, err
+			return r, err
 		}
 		j.State = EffectRunning
 		if err := r.ok(StepPlan, "claimed "+env); err != nil {
-			return "", false, err
+			return r, err
 		}
 	} else {
 		c.d.Log.Info("staging: resuming a deploy whose runner stopped", "repo", repo, "effect", j.ID, "step", j.Step)
 	}
-	c.mu.Lock()
-	c.envLocks[envKey(dir, env)] = &envLock{f: f, id: j.ID}
-	c.mu.Unlock()
-	held = true
-	return j.ID, true, nil
+	return r, nil
 }
 
 // root is mirror_dir, Deps.MirrorRoot's; "" when there is none or its
@@ -813,6 +847,10 @@ func (c *Client) stepRepo(ctx context.Context, repo string) error {
 	for _, j := range readJournals(root) {
 		switch {
 		case !strings.EqualFold(j.Repo, repo):
+		case j.live() && !envNameRe.MatchString(j.Env.Name):
+			// Never a lock named after it: Cancel still ends it by id.
+			c.noteOnce(deploysDir(dir)+"/"+journalName(j.ID), "staging: a live deploy journal passed over: its env's name fails the id rule",
+				"repo", repo, "file", journalName(j.ID))
 		case j.live():
 			envs[j.Env.Name] = true
 		case now.Sub(j.Updated) > keepEnded:
@@ -854,21 +892,31 @@ func (c *Client) stepEnv(ctx context.Context, repo, dir string, root *os.Root, e
 // mirror's around its git alone); it reports whether the effect is still
 // live. An effect whose env or PR is not its id's fails at once.
 func (c *Client) advance(ctx context.Context, repo, dir string, root *os.Root, id EffectID) (bool, error) {
+	r, live, err := c.advanceLocked(ctx, repo, dir, root, id)
+	if r != nil && !errors.Is(err, errHook) {
+		r.flush()
+	}
+	return live, err
+}
+
+// advanceLocked is advance under the effect's flock; it returns the run,
+// whose events the caller delivers after the unlock.
+func (c *Client) advanceLocked(ctx context.Context, repo, dir string, root *os.Root, id EffectID) (*stepRun, bool, error) {
 	f, _, err := flockIn(ctx, root, effectLockName(id), true)
 	if err != nil {
-		return true, err
+		return nil, true, err
 	}
 	defer unflock(f)
 	j, err := readJournal(root, id)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	if j.State != EffectRunning || j.RetryAt.After(c.d.Now()) {
-		return j.live(), nil // queued, or waiting for its next try
+		return nil, j.live(), nil // queued, or waiting for its next try
 	}
 	_, g, err := c.deployDeps(repo)
 	if err != nil {
-		return true, err
+		return nil, true, err
 	}
 	r := &stepRun{c: c, repo: repo, dir: dir, root: root, g: g, j: j}
 	r.redeliver()
@@ -879,12 +927,12 @@ func (c *Client) advance(ctx context.Context, repo, dir string, root *os.Root, i
 	}
 	if err != nil && j.live() && !errors.Is(err, errHook) && ctx.Err() == nil {
 		// The mirror's lock, or a write: the step fails this time.
-		err = errors.Join(err, r.retry(ctx, j.Step, "the step could not run: "+errLine(err)))
+		err = errors.Join(err, r.failed(ctx, j.Step, "the step could not run", err))
 	}
 	if !j.live() && j.Held && !errors.Is(err, errHook) {
 		r.dropRefs(ctx)
 	}
-	return j.live(), err
+	return r, j.live(), err
 }
 
 // Effects lists repo's effects, the newest first, from their journals:
@@ -938,20 +986,33 @@ func (c *Client) Cancel(ctx context.Context, id EffectID) error {
 
 // cancelIn cancels id when its journal is in root.
 func (c *Client) cancelIn(ctx context.Context, repo, dir string, root *os.Root, id EffectID) (bool, error) {
-	if _, err := root.Lstat(journalName(id)); err != nil {
+	switch _, err := root.Lstat(journalName(id)); {
+	case errors.Is(err, fs.ErrNotExist):
 		return false, nil
+	case err != nil:
+		return true, err
 	}
+	r, env, err := c.cancelLocked(ctx, repo, dir, root, id)
+	if r != nil {
+		r.flush()
+	}
+	if held, ok := c.heldFor(dir, env); env != "" && ok && held == id {
+		c.release(dir, env)
+	}
+	return true, err
+}
+
+// cancelLocked is cancelIn under the effect's flock; it returns the run,
+// whose events the caller delivers after the unlock, and the effect's env.
+func (c *Client) cancelLocked(ctx context.Context, repo, dir string, root *os.Root, id EffectID) (*stepRun, string, error) {
 	f, _, err := flockIn(ctx, root, effectLockName(id), true)
 	if err != nil {
-		return true, err
+		return nil, "", err
 	}
 	defer unflock(f)
 	j, err := readJournal(root, id)
-	if err != nil {
-		return true, err
-	}
-	if !j.live() {
-		return true, nil
+	if err != nil || !j.live() {
+		return nil, "", err
 	}
 	why := "cancelled: nothing was pushed"
 	if !j.PushedAt.IsZero() {
@@ -964,10 +1025,7 @@ func (c *Client) cancelIn(ctx context.Context, repo, dir string, root *os.Root, 
 	if err == nil && j.Held {
 		r.dropRefs(ctx) // when the mirror's lock is busy, the refs wait for the next end of a step
 	}
-	if held, ok := c.heldFor(dir, j.Env.Name); ok && held == id {
-		c.release(dir, j.Env.Name)
-	}
-	return true, err
+	return r, j.Env.Name, err
 }
 
 // without is the paths of a that b lacks.

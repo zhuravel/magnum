@@ -20364,6 +20364,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
     TestAShortOutageIsRiddenOut (four failures over 3 minutes, then done), TestTheScanUsesTheMirrorRootAlone, and
     MirrorRoot's rows in TestAnAbsentVolumeGivesUnknownAndCreatesNothing and TestMirrorDirIsOwnerRepoUnderTheRoot;
     each failed before its change.
+- **A deploy's events carry the journal write they record, and none is delivered under the dir's or an effect's
+  flock** (2026-11-09, R46 follow-up, the re-review's Minors). `Effect.Seq` counts the journal's writes; each
+  `Deps.Event` gets the effect as the write that recorded the event left it, so the registry dedupes a repeat by
+  (effect id, Seq, step, phase): delivery stays at least once, and a second client that loads the same write (a
+  Cancel or a claim by the other daemon) repeats its key. Events are collected (`stepRun.out`) and delivered once the
+  deploys dir's and the effect's flocks are let go; `claim` picks the next effect under the dir's flock, lets it go,
+  then takes the env's and the effect's. The env's flock stays held while events go out: it is held for the effect's
+  life and only ever tried, so no one waits on it (delivering only at the end was the other choice, and loses every
+  step's record). A journal merge that is no sha fails at verify and at push at once. A `FailingSince` in the future
+  (an edit, a clock stepped back) is taken as now, logged once per effect. A live journal whose env name fails the
+  id rule is passed over by the scan, logged once per file, with no lock named after it; Cancel still ends it by
+  id. A resolver's merge accepted after a fetch that failed (an earlier try's left it in the mirror) is pointed at
+  by `refs/magnum/resolved/<id>` again. A lock wait that runs out (`errMirrorBusy`) is no failure: the step tries
+  again 30 s later and the 15-minute budget neither counts it nor starts again (a separate, longer budget was the
+  other choice; a mirror busy for good is a stuck process, which the operator sees in Why). The README names the
+  deploys dir operator-level state: a journal there is a deploy, so no hand or agent pane writes it. Tests (each
+  failed first): TestEveryEventCarriesItsJournalWritesSeq, TestAMergeThatIsNoShaFailsAtOnce,
+  TestAFailingSinceInTheFutureIsTakenAsNow, TestAJournalWithAHostileEnvNameIsPassedOver (`../../evil`, a NUL,
+  `.deploys`), TestNoEventIsDeliveredUnderTheDirOrEffectFlock, TestAResolvedMergeAcceptedAfterAFailedFetchIsHeldByItsRef
+  and TestAWaitForTheMirrorsLockIsNoFailure.
 
 ## Learned rules
 
