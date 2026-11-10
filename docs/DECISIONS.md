@@ -4381,6 +4381,28 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `token_permissions`, mints nothing in TestTheReRunGoesAsCIDispatchAsWithoutCIDispatch and
   TestTheLookStartsTheCIWorkflowAsCIDispatchAs.
 
+- **An App's own REST calls through gh read a gh config dir of each call's own** (2026-11-10, after review).
+  With `[github] transport = "gh"`, the default, `identity.GhTransport` ran `gh api` with the daemon's
+  environment, so gh read the operator's `~/.config/gh`. An App's pane runs as the same user and can write it
+  (and the App's own ConfigDir, which its env names): `gh config set http_unix_socket <its socket>` there sends
+  the pane the JWT of the next mint (the hourly refresh's, DaemonPushEnv's, ActionsEnv's) and the token of
+  each revoke, an Actions token's too, and lets it answer them (a forged 204 for the revoke). Each call now
+  makes a gh config dir in the gh root (`freshConfigDir`, which `batchConfigDir` shares: 0700, a fresh name
+  `.call-<identity>-<n>`, magnum's config.yml alone, no token), names it as `GH_CONFIG_DIR` with `GH_HOST`
+  pinned and `GITHUB_TOKEN` blanked, over the transport's Env, and removes it when the call ends. That dir has
+  no login and gh refuses to start without one, so a JWT call's `GH_TOKEN` is a placeholder
+  (`noLoginToken`): an explicit `-H Authorization` wins over `GH_TOKEN` (docs/spikes.md, 2026-11-10), so the
+  placeholder never reaches GitHub, and the operator's gh login is no longer needed nor read. A transport
+  without a gh root runs no gh. The client is built per App (`githubHTTPClient` in app.go, for New and
+  NewIdentity alike), so the dirs carry its name; `transport = "direct"` (net/http) is unchanged. Rejected:
+  the App's ConfigDir (the pane writes it), and a dir made once at the start (a pane could plant its
+  config.yml between calls). A same-user agent that races a call could still write the fresh dir, as for a
+  batch's. Tests, failing first by assertion with the fields in place:
+  TestGhTransportRunsEachCallOverAGhConfigDirOfItsOwn, TestGhTransportWithoutAConfigRootRunsNoGh,
+  TestGhTransportJWTCallStartsWithoutAnyLogin (in place of TestGhTransportJWTStaysInArgvNotEnv),
+  TestTheAppsRESTCallsRunOverAGhConfigDirOfEachCallsOwn, TestAppIdentityMintsThroughGhByDefault and
+  TestGitHubHTTPClient.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

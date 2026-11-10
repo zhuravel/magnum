@@ -366,7 +366,11 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"total_count": len(repos), "repositories": list})
 	case r.Method == http.MethodDelete && r.URL.Path == "/installation/token":
-		tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		auth := r.Header.Get("Authorization")
+		tok, ok := strings.CutPrefix(auth, "Bearer ")
+		if !ok {
+			tok, ok = strings.CutPrefix(auth, "token ") // as gh sends GH_TOKEN
+		}
 		if !ok || !strings.HasPrefix(tok, "ghs_test") {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "Bad credentials"})
 			return

@@ -183,10 +183,11 @@ func TestAnActionsTokenIsRevokedThoughTheBatchsContextEnded(t *testing.T) {
 	wantGone(t, env["GH_CONFIG_DIR"])
 }
 
-// wantGone fails unless dir is set and no longer exists.
+// wantGone fails unless the gh config dir dir is set and no longer
+// exists.
 func wantGone(t *testing.T, dir string) {
 	t.Helper()
 	if _, err := os.Stat(dir); dir == "" || !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("the batch's gh config dir %q is still there (%v)", dir, err)
+		t.Errorf("the gh config dir %q is still there (%v)", dir, err)
 	}
 }

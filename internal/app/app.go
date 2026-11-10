@@ -241,9 +241,8 @@ func New(cfg *config.Config, layout paths.Layout, opts Options) (*App, error) {
 
 	// Identities and their gh clients.
 	a.Identities = map[string]identity.Source{}
-	httpClient := githubHTTPClient(cfg.GitHub.Transport, a.Runner, opts.HTTPClient)
 	for _, id := range cfg.Identities {
-		a.Identities[id.Name], a.gh[id.Name] = newIdentity(cfg, layout, a.Runner, httpClient, opts.Getenv, id)
+		a.Identities[id.Name], a.gh[id.Name] = newIdentity(cfg, layout, a.Runner, opts.HTTPClient, opts.Getenv, id)
 	}
 	a.GitHub = a.githubFor
 
@@ -264,16 +263,18 @@ func New(cfg *config.Config, layout paths.Layout, opts Options) (*App, error) {
 // REST calls go as [github] transport says, and its private key is read
 // from the process's environment when private_key_env names it.
 func NewIdentity(cfg *config.Config, layout paths.Layout, run execx.Runner, id config.Identity) (identity.Source, *github.Client) {
-	return newIdentity(cfg, layout, run, githubHTTPClient(cfg.GitHub.Transport, run, nil), nil, id)
+	return newIdentity(cfg, layout, run, nil, nil, id)
 }
 
-// newIdentity is NewIdentity with the App's REST client (httpClient) and
-// the read of its key (getenv; nil: os.Getenv) given.
+// newIdentity is NewIdentity with the App's REST client (httpClient; nil:
+// githubHTTPClient's) and the read of its key (getenv; nil: os.Getenv)
+// given.
 func newIdentity(cfg *config.Config, layout paths.Layout, run execx.Runner, httpClient *http.Client, getenv func(string) string,
 	id config.Identity) (identity.Source, *github.Client) {
 	if id.Kind != "app" {
 		return identity.NewGH(id, run), &github.Client{Run: run, Env: map[string]string{}}
 	}
+	httpClient = githubHTTPClient(cfg.GitHub.Transport, run, httpClient, layout, id.Name)
 	app := identity.NewApp(id, layout, httpClient, getenv, nil, identity.WithRunner(run),
 		identity.WithRepos(identity.WatchedRepos(cfg, id.Name)...), identity.WithFixer(identity.FixRepos(cfg, id.Name)...))
 	// A 401 means the installation token was revoked: mint a new one and
@@ -282,20 +283,22 @@ func newIdentity(cfg *config.Config, layout paths.Layout, run execx.Runner, http
 		"GH_CONFIG_DIR": app.ConfigDir(), "GH_TOKEN": "", "GITHUB_TOKEN": ""}}
 }
 
-// githubHTTPClient is the client App identities use for their own REST calls
-// (JWT, installation token, installation checks). By default those calls run
-// as `gh api` through run, so they get the same redacted exec log lines as
-// every other gh call and pass outbound firewalls that only allow gh; with
-// [github] transport = "direct" (nil here) identity.NewApp falls back to its
-// 30 s net/http client. override (tests) wins.
-func githubHTTPClient(transport string, run execx.Runner, override *http.Client) *http.Client {
+// githubHTTPClient is the client App identity name uses for its own REST
+// calls (JWT, installation token, installation checks). By default those
+// calls run as `gh api` through run, so they get the same redacted exec log
+// lines as every other gh call and pass outbound firewalls that only allow
+// gh, each over a gh config dir of its own in layout's gh root (never the
+// operator's ~/.config/gh, nor the App's, which its panes can write); with
+// [github] transport = "direct" (nil here) identity.NewApp falls back to
+// its 30 s net/http client. override (tests) wins.
+func githubHTTPClient(transport string, run execx.Runner, override *http.Client, layout paths.Layout, name string) *http.Client {
 	if override != nil {
 		return override
 	}
 	if transport == "direct" {
 		return nil
 	}
-	return identity.NewGhClient(run, nil)
+	return identity.NewGhClient(run, layout.GhRoot(), name)
 }
 
 func (a *App) initLogger(opts Options) error {

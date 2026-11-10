@@ -43,6 +43,29 @@ func (a *App) syncConfigDir() error {
 	return nil
 }
 
+// callDirPrefix is the name prefix of the gh config dir of one REST call of
+// App name's own through gh (GhTransport), in the gh root.
+func callDirPrefix(name string) string { return ".call-" + name + "-" }
+
+// freshConfigDir makes a gh config dir in root, named prefix and a random
+// number: fresh (0700, a name no pane's env holds, so nothing a pane wrote
+// is in it), with magnum's config.yml for identity name alone and no
+// token (the caller's GH_TOKEN carries it).
+func freshConfigDir(root, prefix, name string) (string, error) {
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", fmt.Errorf("gh config dir: %w", err)
+	}
+	dir, err := os.MkdirTemp(root, prefix)
+	if err != nil {
+		return "", fmt.Errorf("gh config dir: %w", err)
+	}
+	if err := fsx.WriteFileAtomic(filepath.Join(dir, "config.yml"), renderConfigYML(name), 0o600); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", fmt.Errorf("gh config dir: %w", err)
+	}
+	return dir, nil
+}
+
 // renderHostsYML is gh's hosts.yml with a plain oauth_token (gh 2.102 reads it
 // without migrating it to the keyring; docs/spikes.md probe 7).
 func renderHostsYML(name, token, login string) []byte {

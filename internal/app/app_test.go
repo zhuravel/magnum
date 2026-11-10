@@ -665,18 +665,23 @@ func itoa(n int) string {
 	return string(b)
 }
 
+// An App's own REST calls go through gh, each over a gh config dir of its
+// own in the layout's gh root, made for the App (identity.GhTransport);
+// transport = "direct" keeps identity.NewApp's net/http client, and
+// Options.HTTPClient wins.
 func TestGitHubHTTPClient(t *testing.T) {
 	run := &execx.Fake{}
-	c := githubHTTPClient("gh", run, nil)
+	layout := paths.Layout{Home: t.TempDir()}
+	c := githubHTTPClient("gh", run, nil, layout, "talkable-app")
 	tr, ok := c.Transport.(*identity.GhTransport)
-	if !ok || tr.Run != run || c.Timeout <= 0 {
+	if !ok || tr.Run != run || c.Timeout <= 0 || tr.ConfigRoot != layout.GhRoot() || tr.Identity != "talkable-app" {
 		t.Fatalf("gh transport client = %+v", c)
 	}
-	if c := githubHTTPClient("direct", run, nil); c != nil {
+	if c := githubHTTPClient("direct", run, nil, layout, "talkable-app"); c != nil {
 		t.Fatalf("direct must leave identity.NewApp's net/http client, got %+v", c)
 	}
 	override := &http.Client{}
-	if c := githubHTTPClient("gh", run, override); c != override {
+	if c := githubHTTPClient("gh", run, override, layout, "talkable-app"); c != override {
 		t.Fatal("Options.HTTPClient must win")
 	}
 }
@@ -693,7 +698,7 @@ func TestAppIdentityMintsThroughGhByDefault(t *testing.T) {
 		Result: execx.Result{Stdout: []byte("HTTP/2.0 201 Created\nContent-Type: application/json\r\n\r\n" +
 			`{"token":"ghs_fromgh","expires_at":"` + expires + `"}`)},
 	}}}
-	a, _ := testApp(t, Options{Runner: run, Getenv: func(k string) string {
+	a, layout := testApp(t, Options{Runner: run, Getenv: func(k string) string {
 		if k == "MAGNUM_TEST_KEY" {
 			return keyPEM
 		}
@@ -713,6 +718,13 @@ func TestAppIdentityMintsThroughGhByDefault(t *testing.T) {
 	calls := run.CallsWithPrefix("gh", "api", "--method", "POST")
 	if len(calls) != 1 || !slices.Contains(calls[0].Args, "--include") {
 		t.Fatalf("mint calls %v", run.Calls)
+	}
+	// Over a gh config dir of the call's own, never the operator's
+	// ~/.config/gh (an unset GH_CONFIG_DIR) nor the App's, which its panes
+	// can write.
+	dir := calls[0].Env["GH_CONFIG_DIR"]
+	if filepath.Dir(dir) != layout.GhRoot() || !strings.HasPrefix(filepath.Base(dir), ".call-talkable-app-") || dir == src.ConfigDir() {
+		t.Errorf("the mint's GH_CONFIG_DIR = %q, want a dir of the call's own in %s", dir, layout.GhRoot())
 	}
 }
 

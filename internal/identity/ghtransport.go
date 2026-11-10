@@ -3,6 +3,7 @@ package identity
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"maps"
 	"net/http"
 	"net/textproto"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,10 +32,19 @@ import (
 // when the request has no Authorization header, so an App JWT passed that way
 // wins. An installation token (ghs_...) never touches argv: it travels in the
 // GH_TOKEN variable of that one gh process, which gh sends as the
-// Authorization header and other local users cannot read. gh still refuses to
-// start without some login of its own (`gh auth login` or GH_TOKEN), so for
-// JWT calls the user's normal gh auth must stay available; Env must not blank
-// it.
+// Authorization header and other local users cannot read.
+//
+// Each call's gh reads a gh config dir of its own, never the operator's
+// ~/.config/gh nor the App's ConfigDir: the App's panes run as the same user
+// and can write both, and an http_unix_socket set there would send the pane
+// the JWT of a mint and the token of a revoke, and let it answer them. The
+// dir is made fresh in ConfigRoot for the call (freshConfigDir: 0700,
+// magnum's config.yml alone, no token) and removed when it ends; GH_HOST is
+// pinned and GITHUB_TOKEN blanked, over Env. gh refuses to start without a
+// login of its own, which that dir has none of, so a JWT call's GH_TOKEN is
+// a placeholder (noLoginToken): gh sends the explicit Authorization header,
+// the JWT, in its place (checked with gh 2.103.3), so the placeholder never
+// reaches GitHub, and the operator's gh login is never read.
 //
 // Non-2xx answers become ordinary responses: gh exits 1 on an HTTP error but
 // still prints the status line, headers and body, so stdout is parsed whatever
@@ -49,6 +60,9 @@ type GhTransport struct {
 	// Env overlays the gh environment (after the transport's own NO_COLOR,
 	// CLICOLOR_FORCE and GH_FORCE_TTY, which keep the output parseable).
 	Env map[string]string
+	// ConfigRoot is where each call makes its gh config dir (the gh root
+	// of the layout); Identity names the App the calls are made for.
+	ConfigRoot, Identity string
 }
 
 var _ http.RoundTripper = (*GhTransport)(nil)
@@ -56,11 +70,17 @@ var _ http.RoundTripper = (*GhTransport)(nil)
 const ghAPIHost = "api.github.com"
 
 // NewGhClient returns an http.Client whose requests run through gh (see
-// GhTransport), with the same 30 s timeout the direct client uses. A request
+// GhTransport) for App identity, each over a gh config dir of its own in
+// root, with the same 30 s timeout the direct client uses. A request
 // without a deadline of its own gets the same 30 s as the gh call's bound.
-func NewGhClient(run execx.Runner, env map[string]string) *http.Client {
-	return &http.Client{Transport: &GhTransport{Run: run, Env: env}, Timeout: callTimeout}
+func NewGhClient(run execx.Runner, root, identity string) *http.Client {
+	return &http.Client{Transport: &GhTransport{Run: run, ConfigRoot: root, Identity: identity}, Timeout: callTimeout}
 }
+
+// noLoginToken is the GH_TOKEN of a gh call authenticated with an App JWT
+// (-H Authorization), so gh starts without any login of its own; gh sends
+// a request's explicit Authorization header in its place.
+const noLoginToken = "magnum-no-login"
 
 // skipHeaders are request headers gh must set itself (or that would make it
 // print a body it cannot decode).
@@ -77,6 +97,9 @@ func (t *GhTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	what := "gh api " + req.Method + " " + req.URL.Path
 	if t.Run == nil {
 		return nil, fmt.Errorf("%s: no command runner configured", what)
+	}
+	if t.ConfigRoot == "" {
+		return nil, fmt.Errorf("%s: no gh config root configured", what)
 	}
 	if req.URL.Host != ghAPIHost {
 		return nil, fmt.Errorf("%s: the gh transport only reaches %s, not %s (set [github] transport = \"direct\")", what, ghAPIHost, req.URL.Host)
@@ -104,11 +127,15 @@ func (t *GhTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		args = append(args, "--input", "-")
 	}
+	dir, err := freshConfigDir(t.ConfigRoot, callDirPrefix(t.Identity), t.Identity)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
 	env := map[string]string{"NO_COLOR": "1", "CLICOLOR_FORCE": "", "GH_FORCE_TTY": ""}
 	maps.Copy(env, t.Env)
-	if installToken != "" {
-		env["GH_TOKEN"] = installToken
-	}
+	maps.Copy(env, appEnv(dir))
+	env["GH_TOKEN"] = cmp.Or(installToken, noLoginToken)
 	cmd := execx.Cmd{
 		Name:    "gh",
 		Args:    args,

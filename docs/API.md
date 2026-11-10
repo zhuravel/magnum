@@ -20891,10 +20891,11 @@ func FixerGitEnv(id config.Identity) map[string]string
     env, as `git -c` ranks it, so no checkout's git config is written: the
     copies share one clone's config. It carries no secret.
 
-func NewGhClient(run execx.Runner, env map[string]string) *http.Client
+func NewGhClient(run execx.Runner, root, identity string) *http.Client
     NewGhClient returns an http.Client whose requests run through gh (see
-    GhTransport), with the same 30 s timeout the direct client uses. A request
-    without a deadline of its own gets the same 30 s as the gh call's bound.
+    GhTransport) for App identity, each over a gh config dir of its own in root,
+    with the same 30 s timeout the direct client uses. A request without a
+    deadline of its own gets the same 30 s as the gh call's bound.
 
 func WatchedRepos(c *config.Config, name string) []string
     WatchedRepos returns the literal "owner/name" repositories that watches
@@ -21058,6 +21059,9 @@ type GhTransport struct {
 	// Env overlays the gh environment (after the transport's own NO_COLOR,
 	// CLICOLOR_FORCE and GH_FORCE_TTY, which keep the output parseable).
 	Env map[string]string
+	// ConfigRoot is where each call makes its gh config dir (the gh root
+	// of the layout); Identity names the App the calls are made for.
+	ConfigRoot, Identity string
 }
     GhTransport is an http.RoundTripper that sends each request through `gh api
     --include` instead of opening a TLS connection itself.
@@ -21071,10 +21075,19 @@ type GhTransport struct {
     when the request has no Authorization header, so an App JWT passed that
     way wins. An installation token (ghs_...) never touches argv: it travels
     in the GH_TOKEN variable of that one gh process, which gh sends as the
-    Authorization header and other local users cannot read. gh still refuses
-    to start without some login of its own (`gh auth login` or GH_TOKEN),
-    so for JWT calls the user's normal gh auth must stay available; Env must not
-    blank it.
+    Authorization header and other local users cannot read.
+
+    Each call's gh reads a gh config dir of its own, never the operator's
+    ~/.config/gh nor the App's ConfigDir: the App's panes run as the same
+    user and can write both, and an http_unix_socket set there would send the
+    pane the JWT of a mint and the token of a revoke, and let it answer them.
+    The dir is made fresh in ConfigRoot for the call (freshConfigDir: 0700,
+    magnum's config.yml alone, no token) and removed when it ends; GH_HOST is
+    pinned and GITHUB_TOKEN blanked, over Env. gh refuses to start without a
+    login of its own, which that dir has none of, so a JWT call's GH_TOKEN is
+    a placeholder (noLoginToken): gh sends the explicit Authorization header,
+    the JWT, in its place (checked with gh 2.103.3), so the placeholder never
+    reaches GitHub, and the operator's gh login is never read.
 
     Non-2xx answers become ordinary responses: gh exits 1 on an HTTP error but
     still prints the status line, headers and body, so stdout is parsed whatever

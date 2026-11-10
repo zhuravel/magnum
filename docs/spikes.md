@@ -146,3 +146,19 @@ Open for the live run: whether the unmodified judge ends `blocked` or `error` on
 diff anyway; whether `claude-review-local.md`, without the code-review skill, finds what `/code-review` finds
 (or whether `/code-review <effort>` with a local target reviews the branch's diff); whether claude-simplify's
 URL leads it to a `gh` call; and a round's minutes and tokens.
+
+## 2026-11-10 — the gh transport over a gh config dir of each call's own (gh 2.103.3, a local socket only)
+
+A scratch `GH_CONFIG_DIR` held one config.yml with `http_unix_socket: <a local socket>`, which a Python server
+answered with 200; `GH_TOKEN=magnum-no-login`, every other `GH_*` and `GITHUB_*` unset, and `HTTPS_PROXY` at a
+closed local port, so nothing could reach GitHub. `gh api --method GET --include --hostname github.com app -H
+"Authorization: Bearer fake.jwt.value"` exited 0, and the server saw `Host: api.github.com` and
+`Authorization: Bearer fake.jwt.value`, not the placeholder.
+
+1. **An http_unix_socket in the config dir gh reads takes every call.** A pane that writes it into a dir the
+   daemon's gh reads (the operator's `~/.config/gh`, or the App's own) receives the request, its Authorization
+   header too, and answers it as GitHub. So the App's own REST calls (`identity.GhTransport`) read a gh config
+   dir made fresh for each call, and removed after it.
+2. **A placeholder GH_TOKEN starts gh, and the explicit header wins over it.** That dir has no login, and gh
+   refuses to start without one (probe 15), so a JWT call's `GH_TOKEN` is a placeholder, never sent: probe 15's
+   reliance on the user's gh login is gone.

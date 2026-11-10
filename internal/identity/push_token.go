@@ -23,12 +23,9 @@ import (
 	"maps"
 	"net/http"
 	"os"
-	"path/filepath"
 	"slices"
 	"sync"
 	"time"
-
-	"github.com/zhuravel/magnum/internal/fsx"
 )
 
 // ErrWorkflowsNotGranted is DaemonPushEnv's error when GitHub will not
@@ -145,24 +142,14 @@ func (a *App) daemonEnv(ctx context.Context, what string, perms map[string]strin
 }
 
 // batchConfigDir makes a gh config dir for one batch of Actions calls in
-// GhRoot: fresh (0700, a name no pane's env holds, so nothing a pane wrote
-// is in it), with magnum's config.yml alone and no token (GH_TOKEN carries
-// it).
+// GhRoot (freshConfigDir: magnum's config.yml alone, no token).
 func (a *App) batchConfigDir() (string, error) {
-	root := a.layout.GhRoot()
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		return "", fmt.Errorf("gh config dir: %w", err)
-	}
-	dir, err := os.MkdirTemp(root, ".actions-"+a.cfg.Name+"-")
-	if err != nil {
-		return "", fmt.Errorf("gh config dir: %w", err)
-	}
-	if err := fsx.WriteFileAtomic(filepath.Join(dir, "config.yml"), renderConfigYML(a.cfg.Name), 0o600); err != nil {
-		_ = os.RemoveAll(dir)
-		return "", fmt.Errorf("gh config dir: %w", err)
-	}
-	return dir, nil
+	return freshConfigDir(a.layout.GhRoot(), actionsDirPrefix(a.cfg.Name), a.cfg.Name)
 }
+
+// actionsDirPrefix is the name prefix of App name's batch gh config dirs
+// (batchConfigDir) in the gh root.
+func actionsDirPrefix(name string) string { return ".actions-" + name + "-" }
 
 // dropPush forgets p, revokes its token (best effort: a token GitHub does
 // not revoke expires within the hour) and removes its gh config dir.

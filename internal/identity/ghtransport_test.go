@@ -9,9 +9,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -67,7 +70,7 @@ func TestGhTransportArgvHeadersAndStdin(t *testing.T) {
 	req.Header.Add("X-Multi", "one")
 	req.Header.Add("X-Multi", "two")
 
-	resp, err := (&GhTransport{Run: run, Env: map[string]string{"GH_HOST": "github.com"}}).RoundTrip(req)
+	resp, err := (&GhTransport{Run: run, ConfigRoot: t.TempDir(), Identity: "talkable-app"}).RoundTrip(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,10 +103,78 @@ func TestGhTransportArgvHeadersAndStdin(t *testing.T) {
 			t.Errorf("env %s = %q (%v), want %q", k, have, ok, v)
 		}
 	}
-	for _, k := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_CONFIG_DIR"} {
-		if _, ok := got.Env[k]; ok {
-			t.Errorf("env must keep the user's gh auth, but sets %s", k)
+}
+
+// An App's panes run as the same user and can write both the operator's
+// gh config dir (~/.config/gh, which a gh without GH_CONFIG_DIR reads) and
+// the App's own: `gh config set http_unix_socket <its socket>` there would
+// send the pane the JWT of the next mint and the token of each revoke, and
+// let it answer them. So each call's gh reads a gh config dir made fresh
+// for it in ConfigRoot (0700, magnum's config.yml alone, no token), named
+// for the App, and removed when the call ends, a call GitHub refused too;
+// the transport's Env cannot name another, nor another host (GH_HOST is
+// pinned), nor a GITHUB_TOKEN.
+func TestGhTransportRunsEachCallOverAGhConfigDirOfItsOwn(t *testing.T) {
+	root := t.TempDir()
+	var calls []execx.Cmd
+	run := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api"}, Fn: func(c execx.Cmd) (execx.Result, error) {
+		calls = append(calls, c)
+		dir := c.Env["GH_CONFIG_DIR"]
+		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() || fi.Mode().Perm() != 0o700 {
+			t.Errorf("the call's gh config dir %q: %v, %v; want a 0700 dir", dir, fi, err)
 		}
+		if entries, err := os.ReadDir(dir); err != nil || len(entries) != 1 || entries[0].Name() != "config.yml" {
+			t.Errorf("the call's gh config dir holds %v, %v; want config.yml alone", entries, err)
+		}
+		if cfg, err := os.ReadFile(filepath.Join(dir, "config.yml")); err != nil || string(cfg) != string(renderConfigYML("talkable-app")) {
+			t.Errorf("its config.yml = %q, %v; want magnum's", cfg, err)
+		}
+		if len(calls) == 2 {
+			return execx.Result{Stdout: []byte(probe401), Code: 1}, &execx.ExitError{Cmd: c, Code: 1}
+		}
+		return execx.Result{Stdout: []byte("HTTP/2.0 200 OK\n\r\n{}")}, nil
+	}}}}
+	tr := &GhTransport{Run: run, ConfigRoot: root, Identity: "talkable-app",
+		Env: map[string]string{"GH_CONFIG_DIR": "/elsewhere", "GH_HOST": "ghe.example.com", "GITHUB_TOKEN": "ghp_user"}}
+	for _, auth := range []string{"Bearer eyJhbGciOiJSUzI1NiJ9.e30.sig", "token ghs_installationTokenSecret123"} {
+		req := newAPIRequest(t, context.Background(), http.MethodGet, "/app", nil)
+		req.Header.Set("Authorization", auth)
+		if _, err := tr.RoundTrip(req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(calls) != 2 {
+		t.Fatalf("gh ran %d times, want 2", len(calls))
+	}
+	home, _ := os.UserHomeDir()
+	for _, c := range calls {
+		dir := c.Env["GH_CONFIG_DIR"]
+		if filepath.Dir(dir) != root || !strings.HasPrefix(filepath.Base(dir), callDirPrefix("talkable-app")) || dir == filepath.Join(home, ".config", "gh") {
+			t.Errorf("GH_CONFIG_DIR = %q, want a dir of the call's own in %s", dir, root)
+		}
+		if c.Env["GH_HOST"] != "github.com" || c.Env["GITHUB_TOKEN"] != "" {
+			t.Errorf("GH_HOST = %q, GITHUB_TOKEN set: %v; want github.com and none", c.Env["GH_HOST"], c.Env["GITHUB_TOKEN"] != "")
+		}
+		wantGone(t, dir)
+	}
+	if calls[0].Env["GH_CONFIG_DIR"] == calls[1].Env["GH_CONFIG_DIR"] {
+		t.Error("two calls shared a gh config dir")
+	}
+	if entries, _ := os.ReadDir(root); len(entries) != 0 {
+		t.Errorf("left in the gh root: %v", entries)
+	}
+}
+
+// A transport that names no gh root runs no gh: it would read the
+// operator's ~/.config/gh.
+func TestGhTransportWithoutAConfigRootRunsNoGh(t *testing.T) {
+	run := &execx.Fake{}
+	req := newAPIRequest(t, context.Background(), http.MethodGet, "/app", nil)
+	if _, err := (&GhTransport{Run: run}).RoundTrip(req); err == nil || !strings.Contains(err.Error(), "no gh config root") {
+		t.Fatalf("err %v, want no gh config root", err)
+	}
+	if len(run.Calls) != 0 {
+		t.Fatalf("gh ran: %v", run.Calls)
 	}
 }
 
@@ -113,7 +184,7 @@ func TestGhTransportGetWithQueryHasNoInput(t *testing.T) {
 		Result: execx.Result{Stdout: []byte("HTTP/2.0 200 OK\n\r\n{}")},
 	}}}
 	req := newAPIRequest(t, context.Background(), http.MethodGet, "/installation/repositories?per_page=100&page=2", nil)
-	resp, err := (&GhTransport{Run: run}).RoundTrip(req)
+	resp, err := (&GhTransport{Run: run, ConfigRoot: t.TempDir()}).RoundTrip(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +263,7 @@ func TestGhTransportExitOneStillReturnsResponse(t *testing.T) {
 		Prefix: []string{"gh", "api"},
 		Result: execx.Result{Stdout: []byte(probe401), Stderr: []byte("gh: Bad credentials (HTTP 401)\n"), Code: 1},
 	}}}
-	client := NewGhClient(run, nil)
+	client := NewGhClient(run, t.TempDir(), "talkable-app")
 	req := newAPIRequest(t, context.Background(), http.MethodGet, "/app", nil)
 	req.Header.Set("Authorization", "Bearer invalid")
 	resp, err := client.Do(req)
@@ -279,7 +350,7 @@ func TestGhTransportErrorsHideSecrets(t *testing.T) {
 			defer cancel()
 			req := newAPIRequest(t, ctx, http.MethodGet, "/installation/repositories", nil)
 			req.Header.Set("Authorization", "Bearer "+tok)
-			_, err := (&GhTransport{Run: &execx.Fake{Rules: []execx.Rule{tc.rule}}}).RoundTrip(req)
+			_, err := (&GhTransport{Run: &execx.Fake{Rules: []execx.Rule{tc.rule}}, ConfigRoot: t.TempDir()}).RoundTrip(req)
 			if err == nil {
 				t.Fatal("want error")
 			}
@@ -299,7 +370,7 @@ func TestGhTransportErrorsHideSecrets(t *testing.T) {
 func TestGhTransportRejectsOtherHosts(t *testing.T) {
 	run := &execx.Fake{}
 	req, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:1234/app", nil)
-	_, err := (&GhTransport{Run: run}).RoundTrip(req)
+	_, err := (&GhTransport{Run: run, ConfigRoot: t.TempDir()}).RoundTrip(req)
 	if err == nil || !strings.Contains(err.Error(), `transport = "direct"`) {
 		t.Fatalf("err %v", err)
 	}
@@ -322,9 +393,6 @@ func ghBridge(t *testing.T, f *fakeGitHub) execx.Rule {
 				return execx.Result{Code: 2}, nil
 			}
 			req := httptest.NewRequest(a[2], DefaultBaseURL+"/"+a[6], bytes.NewReader(c.Stdin))
-			if tok := c.Env["GH_TOKEN"]; tok != "" {
-				req.Header.Set("Authorization", "token "+tok) // what gh sends for GH_TOKEN
-			}
 			for i := 7; i < len(a); i++ {
 				switch a[i] {
 				case "-H":
@@ -334,6 +402,9 @@ func ghBridge(t *testing.T, f *fakeGitHub) execx.Rule {
 				case "--input":
 					i++
 				}
+			}
+			if tok := c.Env["GH_TOKEN"]; tok != "" && req.Header.Get("Authorization") == "" {
+				req.Header.Set("Authorization", "token "+tok) // what gh sends for GH_TOKEN, unless -H names one
 			}
 			rec := httptest.NewRecorder()
 			f.serve(rec, req)
@@ -378,7 +449,8 @@ func newGhTransportApp(t *testing.T, f *fakeGitHub, clock *fakeClock, key string
 		return ""
 	}
 	opts = append([]AppOption{WithRunner(run)}, opts...)
-	return NewApp(f.id, newLayout(t), NewGhClient(run, nil), getenv, clock.Now, opts...), run
+	layout := newLayout(t)
+	return NewApp(f.id, layout, NewGhClient(run, layout.GhRoot(), f.id.Name), getenv, clock.Now, opts...), run
 }
 
 func TestAppMintsThroughGhTransport(t *testing.T) {
@@ -399,6 +471,99 @@ func TestAppMintsThroughGhTransport(t *testing.T) {
 	}
 	if line := execx.Redact(calls[0].String()); strings.Contains(line, "eyJ") || !strings.Contains(line, "Authorization: <redacted>") {
 		t.Fatalf("exec log line leaks the JWT: %s", line)
+	}
+}
+
+// Through gh, every REST call of the App's own runs over a gh config dir
+// of that call's own: the refresh's mint (the JWT as -H Authorization over
+// the placeholder GH_TOKEN), DaemonPushEnv's mint and revoke, ActionsEnv's
+// mint and revoke (the token as GH_TOKEN). None reads the operator's
+// ~/.config/gh nor the App's ConfigDir, which its panes can write (here
+// with an http_unix_socket of a pane's), and each dir is gone once its call
+// ends.
+func TestTheAppsRESTCallsRunOverAGhConfigDirOfEachCallsOwn(t *testing.T) {
+	clock := newClock()
+	f := newFakeGitHub(t, clock)
+	f.id.TokenRepositories = []string{"talkable"}
+	f.id.TokenPermissions = map[string]string{"contents": "write", "pull_requests": "write"}
+	app, run := newGhTransportApp(t, f, clock, pkcs1PEM(testKey(t)))
+	bridge := run.Rules[0]
+	type seen struct {
+		call    string
+		dir     string
+		token   string
+		jwtArg  bool
+		entries []string
+	}
+	var mu sync.Mutex
+	var calls []seen
+	run.Rules = []execx.Rule{{Prefix: bridge.Prefix, Fn: func(c execx.Cmd) (execx.Result, error) {
+		s := seen{call: c.Args[2] + " " + c.Args[6], dir: c.Env["GH_CONFIG_DIR"], token: c.Env["GH_TOKEN"],
+			jwtArg: strings.Contains(strings.Join(c.Args, "\n"), "Authorization: Bearer eyJ")}
+		if entries, err := os.ReadDir(s.dir); err == nil {
+			for _, e := range entries {
+				s.entries = append(s.entries, e.Name())
+			}
+		}
+		mu.Lock()
+		calls = append(calls, s)
+		mu.Unlock()
+		return bridge.Fn(c)
+	}}}
+	ctx := context.Background()
+	if _, err := app.EnsureConfigDir(ctx); err != nil { // the refresh's mint: ghs_test1, the pane's
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(app.ConfigDir(), "config.yml"), []byte("http_unix_socket: /tmp/pane.sock\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, release, err := app.DaemonPushEnv(ctx, true) // ghs_test2
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	_, release, err = app.ActionsEnv(ctx) // ghs_test3
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+
+	mint := "POST app/installations/105365229/access_tokens"
+	want := []string{mint, mint, "DELETE installation/token", mint, "DELETE installation/token"}
+	mu.Lock()
+	defer mu.Unlock()
+	var got []string
+	for _, c := range calls {
+		got = append(got, c.call)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("REST calls\n got %q\nwant %q", got, want)
+	}
+	home, _ := os.UserHomeDir()
+	revoked := []string{"ghs_test2", "ghs_test3"}
+	for i, c := range calls {
+		if c.dir == "" || c.dir == filepath.Join(home, ".config", "gh") || c.dir == app.ConfigDir() ||
+			filepath.Dir(c.dir) != app.layout.GhRoot() || !strings.HasPrefix(filepath.Base(c.dir), callDirPrefix(app.cfg.Name)) {
+			t.Errorf("%s ran with GH_CONFIG_DIR %q, want a dir of the call's own in %s", c.call, c.dir, app.layout.GhRoot())
+		}
+		if !slices.Equal(c.entries, []string{"config.yml"}) {
+			t.Errorf("%s: its gh config dir held %v during the call, want config.yml alone", c.call, c.entries)
+		}
+		wantGone(t, c.dir)
+		switch c.call {
+		case mint:
+			if !c.jwtArg || c.token != noLoginToken {
+				t.Errorf("mint %d: the JWT as -H %v, GH_TOKEN the placeholder %v", i, c.jwtArg, c.token == noLoginToken)
+			}
+		default:
+			if c.jwtArg || c.token != revoked[0] {
+				t.Errorf("revoke %d: GH_TOKEN is not %s", i, revoked[0])
+			}
+			revoked = revoked[1:]
+		}
+	}
+	if got := f.revokedTokens(); !slices.Equal(got, []string{"ghs_test2", "ghs_test3"}) {
+		t.Errorf("revoked = %v, want the push's and the batch's tokens", got)
 	}
 }
 
@@ -476,7 +641,7 @@ func TestGhTransportInstallationTokenTravelsInEnvNotArgv(t *testing.T) {
 			req := newAPIRequest(t, context.Background(), http.MethodGet, "/installation/repositories", nil)
 			req.Header.Set("Authorization", scheme+tok)
 			req.Header.Set("Accept", "application/vnd.github+json")
-			if _, err := (&GhTransport{Run: run, Env: map[string]string{"GH_TOKEN": "user-level"}}).RoundTrip(req); err != nil {
+			if _, err := (&GhTransport{Run: run, ConfigRoot: t.TempDir(), Env: map[string]string{"GH_TOKEN": "user-level"}}).RoundTrip(req); err != nil {
 				t.Fatal(err)
 			}
 			if line := got.String(); strings.Contains(line, tok) || strings.Contains(line, "Authorization") {
@@ -492,7 +657,13 @@ func TestGhTransportInstallationTokenTravelsInEnvNotArgv(t *testing.T) {
 	}
 }
 
-func TestGhTransportJWTStaysInArgvNotEnv(t *testing.T) {
+// A JWT call's gh has no login in its gh config dir of its own, and must
+// not borrow the operator's: its GH_TOKEN is a placeholder, so gh starts,
+// and what gh sends is the request's explicit Authorization header, the
+// JWT (an explicit -H Authorization wins over GH_TOKEN; checked with gh
+// 2.103.3), so the placeholder never reaches GitHub. The JWT stays out of
+// the env, and the placeholder out of argv.
+func TestGhTransportJWTCallStartsWithoutAnyLogin(t *testing.T) {
 	var got execx.Cmd
 	run := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api"}, Fn: func(c execx.Cmd) (execx.Result, error) {
 		got = c
@@ -500,13 +671,16 @@ func TestGhTransportJWTStaysInArgvNotEnv(t *testing.T) {
 	}}}}
 	req := newAPIRequest(t, context.Background(), http.MethodGet, "/app", nil)
 	req.Header.Set("Authorization", "Bearer eyJhbGciOiJSUzI1NiJ9.e30.sig")
-	if _, err := (&GhTransport{Run: run}).RoundTrip(req); err != nil {
+	if _, err := (&GhTransport{Run: run, ConfigRoot: t.TempDir(), Env: map[string]string{"GH_TOKEN": "gho_user"}}).RoundTrip(req); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := got.Env["GH_TOKEN"]; ok {
-		t.Error("a JWT must not replace gh's own login through GH_TOKEN")
+	if got.Env["GH_TOKEN"] != noLoginToken {
+		t.Errorf("GH_TOKEN = %q, want the placeholder %q (no login of the operator's, not the JWT)", got.Env["GH_TOKEN"], noLoginToken)
 	}
 	if !slices.Contains(got.Args, "Authorization: Bearer eyJhbGciOiJSUzI1NiJ9.e30.sig") {
 		t.Errorf("the JWT must travel as -H: %q", got.Args)
+	}
+	if strings.Contains(strings.Join(got.Args, " "), noLoginToken) {
+		t.Errorf("the placeholder is in argv: %q", got.Args)
 	}
 }
