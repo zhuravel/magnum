@@ -1,11 +1,11 @@
 package runtime
 
 // The watchdog and the recoveries (spec section 10.1). A turn past its
-// role's timeout whose transcript did not grow and whose screen did not
-// change for NoProgressAfter climbs three steps, each NoProgressAfter of
-// stillness after the last: the shell stopped and a nudge, the session quit
-// hard and resumed, a fresh session from the attempt's first prompt; then
-// EventStuck with the pane's last line. A lost pane is resumed from its
+// role's timeout whose transcript did not grow, whose screen did not change
+// and whose teammates' transcripts did not grow for NoProgressAfter climbs
+// three steps, each NoProgressAfter of stillness after the last: the shell
+// stopped and a nudge, the session quit hard and resumed, a fresh session
+// from the attempt's first prompt; then EventStuck with the pane's last line. A lost pane is resumed from its
 // conversation, at most MaxResumes times an attempt, then starts fresh from
 // the files; a role whose pane is lost before its first prompt (its CLI
 // exited at its start) is relaunched once, its stage sending that prompt
@@ -43,14 +43,16 @@ const (
 	// work holds open (backgroundNudge), where nudgeText says the turn seems
 	// stuck: the agent ended its turn and sits idle at its prompt, and the
 	// agents manager counts work it started in the background as running.
+	// Telling the agent lets that work go (agents.Manager.Tell), so the
+	// text says that ending the turn ends magnum's wait for it.
 	backgroundNudgeLead = "Your turn is past its time and nothing on your screen or in your transcript changed for 10 minutes, " +
 		"but magnum still counts "
-	backgroundNudgeOne = "1 background task you started (a command, an agent, a teammate or a monitor) as running, " +
-		"so it has kept your turn open for it. If you still need it, make sure that it makes progress; " +
-		"if you do not, stop it with TaskStop. "
-	backgroundNudgeMany = "%d background tasks you started (commands, agents, teammates or monitors) as running, " +
-		"so it has kept your turn open for them. If you still need one, make sure that it makes progress. " +
-		"Stop the ones you do not need with TaskStop. "
+	backgroundNudgeOne = "1 background task you started (a command, an agent, a teammate or a monitor) as running. " +
+		"If you still need it, wait for it and make sure that it makes progress before you end this turn: " +
+		"once you end it, magnum no longer waits for that work. If you do not need it, stop it with TaskStop. "
+	backgroundNudgeMany = "%d background tasks you started (commands, agents, teammates or monitors) as running. " +
+		"If you still need one, wait for it and make sure that it makes progress before you end this turn: " +
+		"once you end it, magnum no longer waits for that work. Stop the ones you do not need with TaskStop. "
 	backgroundNudgeEnd = "If you are done, write your output files and end your turn."
 )
 
@@ -188,7 +190,9 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 }
 
 // signature is what tells the watchdog the role moved: its transcript's
-// size and its screen.
+// size, its screen and the progress of the teammates it waits on (their
+// transcripts' sizes, agents.Manager.BackgroundProgress: a lead idle on
+// teammates that work is not stuck).
 func (r *Runtime) signature(ctx context.Context, st *roleState, run store.Run) string {
 	s, ok := r.liveSession(ctx, st)
 	if !ok && run.SessionID != nil {
@@ -206,7 +210,7 @@ func (r *Runtime) signature(ctx context.Context, st *roleState, run store.Run) s
 		}
 	}
 	screen, _ := r.mgr.ReadRecent(ctx, s, agents.HealthLines)
-	return strconv.FormatInt(size, 10) + "\x00" + shortHash(stillScreen(screen))
+	return strconv.FormatInt(size, 10) + "\x00" + shortHash(stillScreen(screen)) + "\x00" + r.mgr.BackgroundProgress(ctx, run)
 }
 
 // statusLine is a line a CLI redraws while its turn runs, a timer in it:

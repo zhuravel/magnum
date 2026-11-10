@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,15 +58,24 @@ func (g *rig) startTurn(first string, lines func(sent time.Time) []transcriptLin
 	g.h.screen(g.agent("fx-repro"), "Bash(bin/rspec)\nrunning rspec\n")
 }
 
-// appendTranscript adds lines to the Claude transcript of conversation sid,
-// which Claude Code only ever appends to.
-func (g *rig) appendTranscript(sid string, lines ...transcriptLine) {
+// transcriptFile is the path of the Claude transcript of conversation sid.
+func (g *rig) transcriptFile(sid string) string {
 	g.t.Helper()
 	path, err := filepath.Glob(filepath.Join(g.claudeDir, "projects", "*", sid+".jsonl"))
 	if err != nil || len(path) != 1 {
 		g.t.Fatalf("the transcript of %s: %v, %v", sid, path, err)
 	}
-	f, err := os.OpenFile(path[0], os.O_APPEND|os.O_WRONLY, 0)
+	return path[0]
+}
+
+// appendJSONL adds lines to the transcript at path (its directory made),
+// which Claude Code only ever appends to.
+func (g *rig) appendJSONL(path string, lines ...any) {
+	g.t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		g.t.Fatal(err)
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		g.t.Fatal(err)
 	}
@@ -81,16 +91,30 @@ func (g *rig) appendTranscript(sid string, lines ...transcriptLine) {
 	}
 }
 
-// idleTurn is startTurn for an agent that ended its turn and sits idle at its
-// prompt. It returns the events of the passes that show it so: with
-// background work in lines the manager holds the run open, so none of them
-// ends it.
-func (g *rig) idleTurn(first string, lines func(sent time.Time) []transcriptLine) []Event {
+// appendTranscript adds lines to the Claude transcript of conversation sid.
+func (g *rig) appendTranscript(sid string, lines ...transcriptLine) {
 	g.t.Helper()
-	g.startTurn(first, lines)
+	for _, l := range lines {
+		g.appendJSONL(g.transcriptFile(sid), l)
+	}
+}
+
+// goIdle ends the agent's turn: it sits idle at its prompt. It returns the
+// events of the passes that show it so: with background work in its
+// transcript the manager holds the run open, so none of them ends it.
+func (g *rig) goIdle() []Event {
+	g.t.Helper()
 	g.h.screen(g.agent("fx-repro"), "Reproducing.\n\n❯ \n")
 	g.h.setStatus(g.agent("fx-repro"), herdr.StatusIdle)
 	return g.observeN(4)
+}
+
+// idleTurn is startTurn for an agent that ended its turn and sits idle at its
+// prompt (goIdle).
+func (g *rig) idleTurn(first string, lines func(sent time.Time) []transcriptLine) []Event {
+	g.t.Helper()
+	g.startTurn(first, lines)
+	return g.goIdle()
 }
 
 // stuckTurn lets the idle agent's turn pass its role's timeout and stay still
@@ -133,6 +157,15 @@ func TestAnIdleAgentHeldByBackgroundWorkIsToldWhatHoldsItNotThatItSeemsStuck(t *
 	if nudge == nudgeText {
 		t.Fatal("the agent got the nudge of a hung command")
 	}
+	// Tell lets the agent's background work go, so ending its turn ends magnum's wait: the text says it.
+	for _, want := range []string{"wait for it", "before you end this turn", "no longer waits for that work", "end your turn"} {
+		if !strings.Contains(nudge, want) {
+			t.Fatalf("the nudge %q lacks %q: it must tell the agent that once it ends its turn magnum no longer waits for its work", nudge, want)
+		}
+	}
+	if strings.Contains(nudge, "kept your turn open") || strings.Contains(nudge, "waits for them") {
+		t.Fatalf("the nudge %q promises a wait that ending the turn does not keep", nudge)
+	}
 }
 
 func TestOneBackgroundTaskIsNamedInTheSingular(t *testing.T) {
@@ -142,8 +175,9 @@ func TestOneBackgroundTaskIsNamedInTheSingular(t *testing.T) {
 	g.stuckTurn()
 
 	nudge := g.h.promptTexts()[1]
-	if !strings.Contains(nudge, "1 background task ") || strings.Contains(nudge, "1 background tasks") {
-		t.Fatalf("the nudge %q, want 1 background task", nudge)
+	if !strings.Contains(nudge, "1 background task ") || strings.Contains(nudge, "1 background tasks") || strings.Contains(nudge, "wait for one") ||
+		!strings.Contains(nudge, "no longer waits for that work") {
+		t.Fatalf("the nudge %q, want 1 background task, in the singular throughout, and the end of magnum's wait", nudge)
 	}
 }
 
@@ -212,4 +246,73 @@ func TestWithoutBackgroundWorkTheNudgeIsTheHungCommandsOne(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A lead whose own screen and transcript are still, past its role's timeout,
+// is not stuck while a teammate it spawned works: the teammate's transcript
+// grows. BackgroundProgress, a text of each teammate's transcript size, is part
+// of what the watchdog reads, so the lead is not nudged on a teammate's
+// progress, and is nudged (with the teammate counted) once that stops too.
+func TestALeadIsNotNudgedWhileATeammatesTranscriptGrows(t *testing.T) {
+	g := newRig(t)
+	const mate = "adrafts-0123456789abcdef"
+	g.startTurn("build it", func(time.Time) []transcriptLine { return nil })
+	lead := g.transcriptFile("sid-1")
+	mateFile := filepath.Join(filepath.Dir(lead), "sid-1", "subagents", "agent-"+mate+".jsonl")
+	at := g.clock.Now()
+	g.appendJSONL(lead,
+		rawEntry(at, "assistant", false, "", []map[string]any{{"type": "tool_use", "id": "toolu_mate1", "name": "Agent",
+			"input": map[string]any{"description": "Draft", "name": "drafts", "prompt": "Build the drafts", "run_in_background": true}}}, nil),
+		rawEntry(at.Add(time.Second), "user", false, "", []map[string]any{{"type": "tool_result", "tool_use_id": "toolu_mate1", "content": "Spawned."}},
+			map[string]any{"status": "teammate_spawned", "agentId": mate, "agent_id": mate, "name": "drafts"}),
+	)
+	g.appendJSONL(mateFile, rawEntry(at.Add(2*time.Second), "user", true, mate, `<teammate-message teammate_id="team-lead">Build it.</teammate-message>`, nil))
+	if ended := only(g.goIdle(), EventEnded); len(ended) != 0 {
+		t.Fatalf("the lead's run ended with its teammate at work: %+v", ended)
+	}
+	step := func(i int) {
+		now, id := g.clock.Now(), fmt.Sprintf("toolu_m%d", i)
+		g.appendJSONL(mateFile,
+			rawEntry(now, "assistant", true, mate, []map[string]any{{"type": "tool_use", "id": id, "name": "Bash", "input": map[string]any{"command": "bin/rspec"}}}, nil),
+			rawEntry(now.Add(time.Second), "user", true, mate, []map[string]any{{"type": "tool_result", "tool_use_id": id, "content": "12 examples, 0 failures"}}, nil))
+	}
+
+	g.clock.Add(g.role("fx-repro").Timeout.Duration - NoProgressAfter)
+	g.watchdog()
+	for i := range 4 { // 2 x NoProgressAfter, the teammate going on
+		g.clock.Add(NoProgressAfter / 2)
+		step(i)
+		if evs := g.watchdog(); len(evs) != 0 {
+			t.Fatalf("watchdog events %+v while the teammate worked", evs)
+		}
+	}
+	if prompts := g.h.promptTexts(); len(prompts) != 1 {
+		t.Fatalf("prompts %q: the lead was nudged while its teammate's transcript grew", prompts)
+	}
+
+	g.clock.Add(NoProgressAfter / 2) // the teammate wrote nothing more
+	g.watchdog()
+	if prompts := g.h.promptTexts(); len(prompts) != 1 {
+		t.Fatalf("prompts %q: the lead was nudged before NoProgressAfter passed since its teammate's last progress", prompts)
+	}
+	g.clock.Add(NoProgressAfter / 2)
+	g.watchdog()
+	prompts := g.h.promptTexts()
+	if len(prompts) != 2 || !strings.Contains(prompts[1], "1 background task ") {
+		t.Fatalf("prompts %q, want the nudge naming the teammate once it stopped writing for NoProgressAfter", prompts)
+	}
+}
+
+// rawEntry is a transcript entry as Claude Code writes it, for what
+// transcriptLine has no field for: a teammate's (sidechain, agent id) and a
+// tool use's result.
+func rawEntry(at time.Time, typ string, sidechain bool, agent string, content any, result map[string]any) map[string]any {
+	l := map[string]any{"type": typ, "timestamp": at, "isSidechain": sidechain, "message": map[string]any{"role": typ, "content": content}}
+	if agent != "" {
+		l["agentId"] = agent
+	}
+	if result != nil {
+		l["toolUseResult"] = result
+	}
+	return l
 }
