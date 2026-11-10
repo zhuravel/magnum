@@ -24814,7 +24814,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     commands, each bounded alone, so README's "each command bounded by `cap`" holds.
   - A command that fails stops that database's run of the migration; its other databases still run.
     `precheck.md` says `<path> on <database>: passed` per run, names the database in a failure's line and its
-    Why, and after a failed command says the database may be left part-way migrated: nothing puts back what the
+    Why, and after a failed command (one that exited non-zero, or that its own bound stopped) says the database
+    may be left part-way migrated: nothing puts back what the
     command did (MySQL's DDL is no transaction), so the migration's next run starts from there, and, for a
     folder other than `db/migrate`, the copy's next claim looks only at `db/migrate`'s database when it decides
     whether to reset the databases (`foreignSchema`). The check records name the database through their command.
@@ -24836,8 +24837,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   counts any file, and the configuration, whose Validate checks the key's folders by the same rule, would
   depend on the staging reader); running every folder's migrations with the plain commands without the key
   (Rails refuses the plain task in a multi-database application, so the precheck would fail on every such
-  task); a deadline for the whole step scaled by its runs (`cap` × runs: a command that hangs early would hold
-  the step that long, and the bound of one command is what the README promises); only the files directly in a
+  task); a second deadline for the whole step, scaled by its runs (`cap` × runs): it adds nothing, since each
+  command's own bound already limits the step (a command that hangs ends it at that bound); only the files directly in a
   folder (a nested migration, which Rails runs and master ran under `db/migrate/`, would then be neither run
   nor flagged).
   Known gaps: the claim's `foreignSchema` reads only
@@ -24847,6 +24848,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   missing from it is never flagged, and a primary table of a shard table's name can flag it falsely.
   Tests (failing first): `TestAShardMigrationRunsUpDownAndUpOnEachShard` (a failed down on one shard: the Why,
   the failure's line with the database, the part-way note and the claim's gap),
+  `TestAMigrationCommandPastItsBoundSaysItsDatabaseMayBePartWay` (a denied command says nothing of it),
   `TestAReportingMigrationRunsOnReportingOnly` (a nested one too), `TestAMigrationOfAFolderWithNoDatabasesIsNotRunAndNamed`
   (precheck.md, the skipped check, FLAGS and the PR body, another head's record naming nothing; with a gh-ost
   migration of that folder, a pin: skipped as gh-ost, never named for lack of databases),

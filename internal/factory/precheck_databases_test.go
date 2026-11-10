@@ -429,3 +429,38 @@ func TestThePromptsSayWhichMigrationsThePrecheckRuns(t *testing.T) {
 		}
 	}
 }
+
+// A migration command its own bound stopped can leave its database part-way
+// migrated too, as one that exited non-zero can: precheck.md says so, naming
+// the database and the gap of the copy's next claim, beside the hang that
+// needs you; a run that never started says nothing of the kind.
+func TestAMigrationCommandPastItsBoundSaysItsDatabaseMayBePartWay(t *testing.T) {
+	r := newCodingRig(t)
+	r.multiDatabase()
+	task := r.codingTask("PR-12486", "feature")
+	r.commit("PR-12486 an index on the shards", map[string]string{
+		"db/sharded_migrate/20261111090000_add_x_to_events.rb": migrationText("AddXToEvents", "events"),
+	})
+	r.smallCaps()
+	r.setHang(func(run scriptRun) bool { return strings.HasPrefix(run.Script, "bin/rails db:migrate:down:shard_1 ") })
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil || res.Passed || !res.ForYou || !strings.Contains(res.Why, "it hangs") {
+		t.Fatalf("precheck %+v, %v; want a failure for you: the down on shard_1 hangs", res, err)
+	}
+	report := r.readTask(task.ID, precheckFile)
+	for _, words := range []string{"shard_1 may be left part-way migrated", "the copy's next claim looks only at db/migrate's database"} {
+		if !strings.Contains(report, words) {
+			t.Errorf("%s lacks %q after the down its bound stopped:\n%s", precheckFile, words, report)
+		}
+	}
+
+	// A command the deny list refuses never ran: nothing is part-way.
+	r.setHang(nil)
+	r.cfg.Factory.Repos[0].Precheck.Migrations = []string{"kubectl exec web-1 -- bin/rails db:migrate:up:{database} VERSION={version}"}
+	if res, err := r.e.precheck(r.ctx, task, r.cp); err != nil || res.Passed || !res.ForYou {
+		t.Fatalf("precheck %+v, %v; want a failure for you: the command is denied", res, err)
+	}
+	if report := r.readTask(task.ID, precheckFile); strings.Contains(report, "part-way") {
+		t.Fatalf("%s says a database may be part-way after a command that never ran:\n%s", precheckFile, report)
+	}
+}

@@ -1148,6 +1148,9 @@ func (p *precheckRun) migrate(path, version, db string, cmds []string) {
 			Replace(renderCommand(cmd, []string{path}, p.base))
 		run, ok := p.run("precheck.migrations", "migration "+filepath.Base(path)+on, script)
 		if !ok {
+			if p.overCap && p.parent.Err() == nil { // its own bound stopped it mid-run (capStopped)
+				p.say("\n%s\n", partWay(path, db))
+			}
 			if !p.stopped() {
 				p.record(registry.Check{Kind: registry.CheckMigration, Result: registry.CheckFail, Cause: "code", Command: script})
 			}
@@ -1167,8 +1170,9 @@ func (p *precheckRun) migrate(path, version, db string, cmds []string) {
 	p.say("\n%s%s: passed\n", path, on)
 }
 
-// partWay says that a failed command of migration path can leave database
-// db ("" for the copy's one database) part-way migrated: nothing puts back
+// partWay says that a failed command of migration path (one that exited
+// non-zero, or that its own bound stopped) can leave database db ("" for the
+// copy's one database) part-way migrated: nothing puts back
 // what it did (MySQL's DDL is no transaction), so the next run of the
 // migration starts from there. A migration outside db/migrate adds the gap
 // of the copy's next claim, which looks only at db/migrate's database

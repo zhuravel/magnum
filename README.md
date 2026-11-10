@@ -4589,8 +4589,9 @@ stages = [
   (the step as a whole has no deadline, so a migration on many shards is never cut late), and every command must
   hold `{database}`, the database's name (`bin/rails db:migrate:up:{database} VERSION={version}`); `precheck.md`
   and the check records name the database of each run. A failed command stops that database's run (the others
-  still run), and `precheck.md` says the database may be left part-way migrated: nothing puts back what the
-  command did, and the copy's next claim looks only at `db/migrate`'s database when it decides on a reset.
+  still run), and `precheck.md` says the database may be left part-way migrated (after a command that exited
+  non-zero or that its bound stopped): nothing puts back what the command did, and the copy's next claim looks
+  only at `db/migrate`'s database when it decides on a reset.
   Without the key only `db/migrate`'s migrations run, and no command may hold `{database}`. A migration of a
   folder with no databases (one the key leaves out, or, without it, any folder but `db/migrate`) is not run and
   fails nothing, never in silence: `precheck.md` says `not run: no databases are set for <folder>`, the ready
