@@ -13590,16 +13590,6 @@ func Redact(s string) string
     Redact masks GitHub tokens, JWTs, Authorization header values and PEM
     private keys in free text. An Authorization header keeps its name.
 
-func Scrub(s string) string
-    Scrub cleans output of code magnum does not trust before a file an agent
-    reads keeps it (the CI reader's ci-failures.json, of a PR's own CI):
-    Redact (GitHub tokens, JWTs, Authorization values, private keys), then the
-    token shapes and secret pairs the factory's scrub masks (the values of
-    password=, token: and the like, the key kept) and emails. Host names stay:
-    an infrastructure failure names its host, and the file stays the fixer's.
-    Redact's private-key rule spans lines, so Scrub runs on a whole text,
-    never line by line.
-
 func ShellQuote(s string) string
     ShellQuote single-quotes s unless it consists only of characters a POSIX
     shell never interprets; the empty string becomes two single quotes. Newlines
