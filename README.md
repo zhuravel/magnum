@@ -1763,18 +1763,24 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   `manual_repos` repository's, a bot's, one with a `skip_labels` label, one whose files all match
   `skip_paths`, ...) is not approved, however clean, nor is a PR Codex flagged;
 - it changes none of the review agents' instructions or hooks: no `AGENTS.md`, `AGENTS.override.md`,
-  `CLAUDE.md` or `CLAUDE.local.md` at any depth and in any case, nothing under `.claude/` or `.codex/`
-  and no `.mcp.json` (the head's file list, as the poller read it: GitHub's list of what the PR's
-  commits change, with the path each rename leaves, which the poller reads from GitHub's REST list for a
-  head whose list has a rename, so a PR that moves `.claude/hooks/x.rb` elsewhere changes `.claude/`), and
-  nothing a link of those paths leads to (`CLAUDE.md` -> `docs/guide.md`, or a link under `.claude/` or
-  `.codex/`: `.claude/skills` -> `.agents/skills`; in any case, as a session of the head read the links
-  from the slot's disk); they steer the review agents, and their hooks run on every teammate's machine
-  once merged. That a session of the head left the config out does not count by itself: git compared the
-  slot's files with a merge base, so an ignored `__pycache__/*.pyc` an earlier PR's round left there, an
-  uncommitted edit, a stacked PR's base branch, or a compare git could not make would hold the PR back for
-  something its commits do not change, and each pass decides again. A PR of more files than GitHub lists
-  (100) is not approved either;
+  `CLAUDE.md` or `CLAUDE.local.md` at any depth and in any case, nothing under a `.claude/` in any
+  directory (Claude Code loads the skills of a `packages/web/.claude/skills/` once it reads a file there,
+  and a skill can declare hooks) or under the root's `.codex/`, and no root `.mcp.json` (the head's file
+  list, as the poller read it: GitHub's list of what the PR's commits change, with the path each rename
+  leaves, which the poller reads from GitHub's REST list for a head whose list has a rename, so a PR that
+  moves `.claude/hooks/x.rb` elsewhere changes `.claude/`; while that list cannot be read, a list kept for
+  the same head is dropped and the PR waits without a class), and nothing a link of those paths leads to
+  (`CLAUDE.md` -> `docs/guide.md`, `app/CLAUDE.md` -> `../docs/app.md`, `.claude/skills` ->
+  `../.agents/skills` and a link under the directory it leads to; in any case). Magnum reads the links from
+  the head's own tree in the PR's clone, whatever head its sessions launched on, and a head whose links it
+  cannot read waits without a class. They steer the review agents, and their hooks run on every
+  teammate's machine once merged. That a session of the head left the config out does not count by itself:
+  git compared the slot's files with a merge base, so an ignored `__pycache__/*.pyc` an earlier PR's round
+  left there, an uncommitted edit, a stacked PR's base branch, or a compare git could not make would hold
+  the PR back for something its commits do not change, and each pass decides again. A PR of more files than
+  GitHub lists (100) is not approved either, even when the REST list read for its renames names them all. A
+  standing approval is held to this gate again when the PR is retargeted to another base branch, and
+  withdrawn when it refuses;
 - it changes none of its own workflows or actions: nothing under `.github/workflows/` or `.github/actions/`
   (in any case; the same file list). A workflow the PR adds may declare the CI workflow's name, and one
   that edits the CI workflow or an action it runs controls what the checks below say, so such a PR waits
@@ -2630,18 +2636,22 @@ starts without Magnum's flags.
 Claude Code does the same with the checkout's `.claude/` and `.mcp.json`, which a PR controls too: the
 project settings (hooks, which run outside any sandbox, `env`, plugins, permissions), `settings.local.json`,
 the MCP servers of `.mcp.json`, skills, commands, agents (Magnum trusts its checkouts and skips Claude's
-permission prompts), and the instruction files: the `CLAUDE.md` and `CLAUDE.local.md` of the root and of
-each directory Claude reads files in, and where the project has no `CLAUDE.md` its `AGENTS.md` files
-instead (Claude Code 2.1.292). When the files under `.claude/`, `.mcp.json` or a `CLAUDE.md`,
-`CLAUDE.local.md` or `AGENTS.md` in any directory differ from the PR's merge base (or git cannot tell), every
+permission prompts), the skills of a `.claude/skills/` below the root, which load the first time Claude
+reads a file in that directory (a skill can declare hooks), and the instruction files: the `CLAUDE.md` and
+`CLAUDE.local.md` of the root and of each directory Claude reads files in, and where the project has no
+`CLAUDE.md` its `AGENTS.md` files instead (Claude Code 2.1.292). Codex reads `.codex/` only from its start
+directory up, and Claude `.mcp.json` only at the root, so those two are the root's. When the files under a
+`.claude/` in any directory, `.mcp.json` or a `CLAUDE.md`, `CLAUDE.local.md` or `AGENTS.md` in any directory
+differ from the PR's merge base (or git cannot tell), every
 launch and resume of a claude role (claude-review, claude-simplify) passes `--setting-sources user`
 (`[kinds.claude] project_untrust`): the session loads your user settings, skills, agents and `CLAUDE.md`
 and nothing of the checkout's. A `CLAUDE.md` that links to `AGENTS.md` (or an `AGENTS.md` that links to
 `CLAUDE.md`, for Codex) loads the PR's file through the link: Magnum compares what an instruction file at
-the root links to as well, and what a link under `.claude/` or `.codex/` leads to in the checkout
-(`.claude/skills` -> `../.agents/skills`), and a link under a directory such a link leads to, matching git's
-paths in any case (a nested checkout, Claude Code's `.claude/worktrees/<name>`, is not looked into; past
-10,000 entries the session leaves the config out). A PR based on another branch than the repository's
+the root links to as well, what a link under `.claude/` or `.codex/` leads to in the checkout
+(`.claude/skills` -> `../.agents/skills`), what a tracked instruction file or `.claude/` link below the root
+leads to (`app/CLAUDE.md` -> `../docs/app.md`, read from the checkout's index), and a link under a directory
+such a link leads to, matching git's paths in any case (a nested checkout, Claude Code's
+`.claude/worktrees/<name>`, is not looked into; past 10,000 entries the session leaves the config out). A PR based on another branch than the repository's
 default (a stacked PR) is compared with `origin/<default branch>`: its base branch is another PR's, whose
 changes there nobody reviewed, so they count as its own and stay out. An ignored instruction file below the root (a package's `AGENTS.md` in
 `node_modules/`) is no change. An `agents.claude_project_declined` event records it, the board's card says
@@ -2654,7 +2664,7 @@ declines every later session in that slot: when none of the files that differ is
 (an untracked or ignored file, an uncommitted edit), for either CLI, the session declines all the same, but the
 card and the Checks say "Claude ran without the checkout's .claude/ files, which the PR's commits do not
 change". Auto-approval holds no PR for a session's decline by itself, residue or not: it asks the PR's
-file list (and the targets of the links a session of the head read). A PR that leaves both alone keeps the team's project config. Claude Code reloads
+file list (and the targets of the links of the head's tree). A PR that leaves both alone keeps the team's project config. Claude Code reloads
 its settings and skills while it runs, and loads a `.claude/settings.json` a later commit adds, so a
 Claude session that started with the project config loaded is quit (its conversation parked) before
 Magnum moves the checkout to a new head that changes it, at a round's start and at a restart after a push,
@@ -2663,11 +2673,11 @@ works as the early park's does. It sends one ctrl+c and a second later the kind'
 `/exit`), each after the same look at a bare prompt. Claude ignores two ctrl+c at its idle prompt. The
 checkout's fetch runs first, and the head it fetched decides: by the PR's file list when the list is
 complete and of that head, else (a PR of more files than the list holds) by git, the files that head
-changes there since its merge base with the base branch; a git that cannot tell quits the session. Not
-covered: a nested `<dir>/.claude/skills/` or `.claude/rules/` (Claude loads them once it works on files
-there), a team `CLAUDE.md` that imports (`@path`) another file the PR changes, an instruction file below
-the root that links to one, a team hook that runs a script outside `.claude/` the PR changes, and an agent
-that checks another commit out in the checkout.
+changes there since its merge base with the base branch; a file a link of the config leads to counts (the
+links on the slot's disk and in the fetched head's tree), and a git or links that cannot tell quit the
+session. Not covered: a team `CLAUDE.md` that imports (`@path`) another file the PR changes, a team hook
+that runs a script outside `.claude/` the PR changes, and an agent that checks another commit out in the
+checkout.
 
 Magnum's Claude sessions (claude-review, claude-simplify, and the retro's classifier and the notes curator
 when they run Claude) run on your own Claude Code setup too: its login, your user settings (hooks, plugins,

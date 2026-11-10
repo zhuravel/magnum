@@ -17710,10 +17710,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   CI, with no `mise.local.toml` anywhere, skips as before. The improvement loop's landing already ran the check as
   `mise -C <checkout> exec` (above); this covers every other gate in a worktree.
 
-- **Auto-approval's agent-config gate asks only the PR's file list, renames' previous paths included, and a
-  session's record only for its links' targets** (2026-11-10, amends "A project config declined only for files
-  a round left in the slot does not hold auto-approval", 2026-11-09, and "Auto-approval never approves a change
-  to the review agents' instructions or hooks", 2026-10-07). A talkable PR whose 14 files include no agent
+- **Auto-approval's agent-config gate asks only the PR's file list, renames' previous paths included, and the
+  links of the head's own tree** (2026-11-10, amends "A project config declined only for files a round left in
+  the slot does not hold auto-approval", 2026-11-09, and "Auto-approval never approves a change to the review
+  agents' instructions or hooks", 2026-10-07). A talkable PR whose 14 files include no agent
   config was refused at every pass, "it changes the review agents' instructions or hooks (.claude/)", and the
   automatic approval of its earlier head was withdrawn. Its record was the leftover `.pyc` of the 2026-11-09
   entry, written on Nov 4 by a daemon started before that build, so it had no `residue` field, and that entry
@@ -17724,42 +17724,74 @@ skill versions); people add theirs to the sections before it, at the end of the 
   days old, and that branch's own commits counted as the PR's, in the work tree's compare and in
   `committedChanges` alike: no residue, refused.
   - The gate: `agentConfigRefusal` takes what the PR changes only from the head's file list (`pr_files`,
-    GitHub's list of what the PR's commits change), and from a session's record of the head only its new
-    `Links`, the targets of the checkout's links (below), with their paths' labels. The list names a change
-    there by the target alone; the gate refuses when the list changes a target or a file under one
-    (`ProjectNote.ChangedLinks`, in any case), naming the link's label. Leftovers, a stale merge base, a compare
-    git could not make and a record an older build wrote no longer refuse. Since nothing keeps the decision,
-    the first pass after the daemon restarts on this build decides the PRs such records held back again (and
-    approves them as the operator when the other gates pass). The 2026-11-09 entry's "a record git could not
-    compare, one whose commits' diff failed, one written before the field … still refuse" is reversed: only
-    GitHub's list is a trustworthy account of a PR's commits, and the slot's compare is not.
+    GitHub's list of what the PR's commits change), and the links of the head's tree (below); a session's
+    record no longer counts. Leftovers, a stale merge base, a compare git could not make and a record an
+    older build wrote no longer refuse. Since nothing keeps the decision, the first pass after the daemon
+    restarts on this build decides the PRs such records held back again (and approves them as the operator
+    when the other gates pass). The 2026-11-09 entry's "a record git could not compare, one whose commits'
+    diff failed, one written before the field … still refuse" is reversed: only GitHub's list is a
+    trustworthy account of a PR's commits, and the slot's compare is not.
+  - The links of the head: the list names a change through a link (`CLAUDE.md -> docs/guide.md`,
+    `app/CLAUDE.md -> ../docs/app.md`, `.claude/skills -> ../.agents/skills`) by the target alone. The gate
+    reads the links of the head's tree from the PR's clone, into which a round's checkout fetches the head
+    (`gitx.Symlinks`: one `ls-tree -r` and one `cat-file --batch` of the links' blobs, kept by head since a
+    commit's tree never changes), follows each one that steers the review agents (an instruction file at any
+    depth, a path under a project directory) as macOS's filesystem would (`resolveConfigLinks`: each link
+    passed through, where it ends and the links under a directory there, in any case), and refuses a list
+    that changes one of those paths, by the link's label (`changedLinks`). Links that cannot be read (no
+    clone with the head, a tree listing past `execx.MaxOutput`, links too many to follow) refuse without a
+    class. The first build of this entry read the targets from a session's record of the head, written
+    only when a launch left the config out: a push starts nothing for a live session, so with
+    `CLAUDE.md -> docs/guide.md` in the base a head that edited the guide was refused and the next one,
+    pushed while the sessions stayed live, approved (the security review's P1). Recording every launch's
+    links instead would still miss a head no launch saw, a kind magnum does not run and a link the base
+    added after the last launch; the head's tree is exact and costs two local git commands per head.
+    `ProjectNote.Links` and `ChangedLinks` are gone.
   - Renames: Details' GraphQL list names a rename by its new path only, so a PR that moves the team's hook out
     of `.claude/` (`git mv .claude/hooks/x.rb scripts/`) listed `scripts/` alone, where the record of the
     head used to refuse it. Details now read each file's `changeType` (a field of a node read already, which
     GitHub does not price), and for a head whose list has a `RENAMED` entry the poller reads GitHub's REST
     list (`ListFiles`, which names both paths, within the poll's 20 file lists per repository) and keeps the
-    paths the renames leave in `pr_files` (`kvPRRenamedFiles` keeps what it read for the head and the Details'
-    list, so a refresh of the same list costs no call). While the REST list cannot be read, the head has no
-    list (the gates refuse without a class) and the next poll reads the Details again. `detailsEpoch` "2"
-    rereads the Details of the PRs reviewed at their head once, so the lists an earlier build kept get the
-    paths too.
+    paths the renames leave in `pr_files`. `kvPRRenamedFiles` keeps what it read for the head, the base
+    branch and its tip, and the Details' list, so a refresh of the same list costs no call, and a retarget
+    reads the paths the renames leave against the new base. The list stays cut where the Details cut it at
+    100 files, whatever the REST list (read at another moment) says. While the REST list cannot be read,
+    the head has no list: the upsert drops a list the registry kept for the same head
+    (`GitHubPR.FilesUnlisted`: an earlier build's, without the renames' paths, or one from before a
+    retarget), the gates refuse without a class, the poll's other REST reads wait, and the next poll reads
+    the Details again. `detailsEpoch` "2" rereads the Details of the PRs reviewed at their head once, so the
+    lists an earlier build kept get the paths too.
   - The list follows GitHub: `pr_files` is written again when GitHub lists other files for the same head (a
-    PR retargeted to another base), not only when the head moves; the same list writes nothing.
-  - Links: a session now follows the links under `.claude/` and `.codex/` too (`.claude/skills ->
+    PR retargeted to another base), not only when the head moves; the same list writes nothing. A standing
+    approval is held to the files gate again once the PR names another base branch than the one it was made
+    on (`kvAutoApprovalBase`), and withdrawn through the usual path when the gate refuses: a retarget starts
+    no round.
+  - A `.claude/` in any directory: Claude Code loads the skills of a `.claude/skills/` below its start
+    directory the first time it reads a file there, and a skill's frontmatter can declare hooks, so
+    `packages/web/.claude/skills/review/SKILL.md` is Claude's config, for the session's compare (the globs
+    `**/.claude` and `**/.claude/**`), `ProjectTouched`, the reload check and the gate. `.codex/` and
+    `.mcp.json` stay the root's: Codex reads `.codex/` from its start directory up to the project root, and
+    Claude reads the project's `.mcp.json` at the root.
+  - Links in a session: a session follows the links under `.claude/` and `.codex/` too (`.claude/skills ->
     ../.agents/skills` loads the skills there while git compares the link alone; seen on a watched
-    repository), and the links under a directory such a link leads to (a nested checkout,
-    `.claude/worktrees/<name>`, is not entered; past 10,000 entries the session declines), compares their
-    targets in the checkout, and records them with the directory's label. A link's target matches git's
-    path in any case (`underTarget`): git names a tracked file in its own case, the link's text keeps its
-    own, and the case-sensitive match let a session load a changed `docs/guide.md` through `CLAUDE.md ->
-    Docs/Guide.md` on macOS.
+    repository), the links of the kind's paths below the root that the checkout's index tracks
+    (`gitx.TrackedSymlinks`: `app/CLAUDE.md`, `packages/web/.claude/skills`), and the links under a
+    directory such a link leads to (a nested checkout, `.claude/worktrees/<name>`, is not entered; past
+    10,000 entries the session declines), and compares their targets in the checkout. A link's target
+    matches git's path in any case (`UnderTarget`): git names a tracked file in its own case, the link's
+    text keeps its own, and the case-sensitive match let a session load a changed `docs/guide.md` through
+    `CLAUDE.md -> Docs/Guide.md` on macOS. The reload check counts a file under a link's target too, with
+    the links of the slot's disk and of the fetched head's tree, so a Claude session that loaded the config
+    is parked before a head that edits `.agents/skills/x/SKILL.md`.
   - Stacked PRs: a session of a PR based on another branch than the repository's default compares the
     project config with `origin/<default branch>` (`projectBase`, for an agent's launch and a shell role's
     line alike), which a pool slot keeps fresh. Compared with `origin/<base_ref>` once that ref was fresh (the
     operator's fetch, a fix's), the base branch's own `.claude/` and `.codex/` changes, another PR's that
     nobody reviewed, loaded as the team's, hooks outside the sandbox included; now they count as the PR's and
     stay out. The card and the Checks of such a PR say "the PR's … changes" for them; the gate is not misled,
-    since it reads only the file list.
+    since it reads only the file list. A repository in the per-PR checkout mode now keeps GitHub's default
+    branch: it kept "master", so every PR of a main repository counted as stacked and left the team's config
+    out.
   - The needs-you words: a clean review the dispatch gates turned into a comment keeps their words for the
     needs-you list (`no_approval_review`), so the PRs above kept "approve by hand: the PR changes the review
     agents' instructions or hooks" while another gate held their approval as the operator back.
@@ -17767,21 +17799,28 @@ skill versions); people add theirs to the sections before it, at the end of the 
     list it cannot read) to what that gate says of the head every tick; words it no longer gives become "the
     gate that held magnum's approval back no longer holds it", which keeps the PR in the list (its review is
     still a comment).
-  What stays: the session's side otherwise (it still declines on leftovers, and the card's words for them);
-  records of older heads are ignored; a link's target counts only when a session of the head recorded it, so a
-  head no Claude or Codex launch saw is decided by its file list alone (records of older heads were never read).
-  Not covered: an instruction file below the root that links elsewhere (`app/CLAUDE.md -> ../docs/app.md`),
-  which needs a walk of the whole checkout, and the slot hygiene the 2026-11-09 entry left undone. Tests,
+  What stays: the session's side otherwise (it still declines on leftovers, and the card's words for them).
+  Not covered: a team `CLAUDE.md` that imports (`@path`) another file the PR changes, a tree whose listing
+  passes 8 MiB (its PRs wait for the operator), and the slot hygiene the 2026-11-09 entry left undone. Tests,
   failing first: TestAutoApprovalIgnoresAgentConfigTheFileListDoesNotChange (replaces
   TestAutoApprovalIgnoresAgentConfigLeftInTheSlot), TestARecordTheFileListDoesNotBackLeavesAMissedReviewerToItsCompletion,
   TestAutoApprovalRefusesAPRThatMovesAgentConfigElsewhere, TestANeedsYouReasonTheFilesGateNoLongerGivesGoes,
-  TestAClaudeDeclineRecordsTheCheckoutsRootLinkTargets, TestChangedLinksNamesTheLinksWhoseTargetsTheFilesChange,
   TestALinkInsideTheClaudeDirectoryIsComparedAsItsTarget, TestALinksTargetMatchesAChangedFileInAnyCase,
   TestAStackedPRsSessionsCompareTheProjectConfigWithTheDefaultBranch,
   TestUpsertStoresTheFileListWhenTheHeadOrTheListMoves (was TestUpsertStoresTheFileListOnlyWhenTheHeadMoves) and
-  TestDetailsReadsChangedFilePaths' renamed list; TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions
-  refuses on a root link's target and on a file under a linked directory instead of on a bare record, and
-  TestAnUnchangedClassEditsNothing changes its reason by a second link.
+  TestDetailsReadsChangedFilePaths' renamed list; from the security review:
+  TestAutoApprovalRefusesAChangeToALinksTargetAtTheHeadWhateverHeadItsSessionsSaw,
+  TestAutoApprovalRefusesAHeadWhoseLinksItCannotRead, TestResolveConfigLinksFollowsLinksAsTheFilesystemDoes,
+  TestSymlinksReadsEveryLinkOfACommitsTree, TestARESTFailureLeavesASameHeadListAnOlderBuildKeptUnread,
+  TestUpsertDropsTheListOfAHeadThePollerCannotList, TestARetargetReadsTheRenamesAgainstTheNewBase,
+  TestTheRESTListKeepsTheDetailsCutOfTheFileList, TestARESTFailureEndsThePollsReadsOfTheRenamesPaths,
+  TestAClaudeDirectoryBelowTheRootIsClaudesProjectConfig, TestAPathspecNamesADirectoryInAnyDirectory,
+  TestALinkOfTheAgentsConfigBelowTheRootIsComparedAsItsTarget, TestTrackedSymlinksListsTheIndexsLinksThePathsName,
+  TestALiveClaudeSessionIsParkedWhenTheNewHeadChangesALinksTarget, TestARetargetHoldsAStandingApprovalToTheFilesGateAgain,
+  TestAPerPRRepoKeepsGitHubsDefaultBranch and TestAWalkPastTheLinkBudgetLeavesTheConfigOut.
+  TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions refuses on the links of the head's tree (a root
+  link, a link under a linked directory, an instruction file below the root, a skill below the root) instead
+  of on a bare record, and TestAnUnchangedClassEditsNothing changes its reason by a second file of the list.
 
 ## The factory (2026-11-03)
 

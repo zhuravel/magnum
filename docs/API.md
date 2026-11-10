@@ -1078,12 +1078,21 @@ func PostReviewLine(d JudgeData) string
     --local-base (the base the blind replay's diff starts at) in a blind one,
     so the tool reads nothing from GitHub.
 
+func ProjectLinks(kind, dir string) (targets []string, partial bool)
+    ProjectLinks are the targets, relative to the checkout dir's root, of the
+    links among kind's paths at its root and under its project directories,
+    and under a directory such a link leads to, as the disk has them (onDisk:
+    what a session in dir loaded through them), sorted; partial reports that the
+    walk stopped at maxLinkWalk entries, so one may be missing. None for a kind
+    magnum does not compare.
+
 func ProjectPaths(kind string) []string
     ProjectPaths are the paths, relative to the checkout's root, that kind
     loads its project config from (claude: .claude, .mcp.json and CLAUDE.md,
-    CLAUDE.local.md and AGENTS.md at the root and, as gitx.AnyDir globs, in any
-    directory), for a comparison limited to them (gitx.Client.ChangedUnder,
-    whose answer ProjectTouched reads); nil for a kind magnum does not compare.
+    CLAUDE.local.md and AGENTS.md at the root and, as gitx.AnyDir globs,
+    in any directory, .claude/ and what lies under it too: anyDirSpecs),
+    for a comparison limited to them (gitx.Client.ChangedUnder, whose answer
+    ProjectTouched reads); nil for a kind magnum does not compare.
 
 func ProjectRule(kind string) (paths, effect, docs, docsEffect string, servers bool)
     ProjectRule describes for `magnum roles --kinds` the project config of
@@ -1109,7 +1118,8 @@ func ProjectTouched(kind string, paths []string) bool
     ProjectTouched reports whether paths (a PR's changed files, relative to
     the repository root) name the project config kind loads from the checkout:
     a file at or under one of its paths, or of the name of a path in any
-    directory, in any case (pathOf: macOS opens .Claude/settings.json for
+    directory, or under a directory of such a name (a .claude/ below the
+    root), in any case (pathOf: macOS opens .Claude/settings.json for
     .claude/settings.json). A kind magnum does not compare touches nothing.
 
 func PushLine(magnum, checkout, base string) string
@@ -1303,6 +1313,13 @@ func Title(repo string, number int, role Role) string
     (codex /rename, see nameAgent), and a shell role from the OSC 0 prefix of
     its command line (ShellData.Title). A Manager's agents take agentTitle,
     with Deps.Tag and Deps.OwnerName's owner in place of "PR #<N>".
+
+func UnderTarget(f, t string) bool
+    UnderTarget reports whether f, a path relative to the checkout's root,
+    is the link target t or lies under it, element by element in any case and
+    under Unicode folding (strings.EqualFold), as a case-insensitive filesystem
+    (macOS's) opens it: git names a tracked file in its own case, while a link's
+    text, which its target keeps (linkTarget), may spell it in another.
 
 
 TYPES
@@ -3041,21 +3058,9 @@ type ProjectNote struct {
 	// round left in the slot, or uncommitted edits, so they say nothing of
 	// the PR (the card and the review's Checks say so). False when git
 	// could not tell, and in a record written before it was kept. The
-	// auto-approval's gate reads none of the compare, residue or not: the
-	// PR's file list decides there, with Links.
+	// auto-approval's gate reads no record: the PR's file list decides
+	// there, with the links of the head's tree.
 	Residue bool `json:"residue,omitempty"`
-	// Links map the target of each symbolic link into the checkout that a
-	// root entry among the kind's paths is, or that lies under one of its
-	// directories or a directory such a link leads to (relative to the
-	// root: CLAUDE.md -> docs/guide.md, .claude/skills -> .agents/skills),
-	// to the label of that path (CLAUDE.md, .claude/), as the launch read
-	// them from the disk, not from git, so also when git could not compare.
-	// A PR that changes such a target changes what the CLI loads through
-	// the link, and its file list names the target alone: the
-	// auto-approval's gate asks ChangedLinks with that list. Kept out of the
-	// event (a link the PR added names a path it chose); none in a record
-	// written before they were kept.
-	Links map[string]string `json:"links,omitempty"`
 }
     ProjectNote is the PR's record of a session of one kind launched without the
     checkout's project configuration (store.KVPRProject).
@@ -3064,13 +3069,6 @@ func ProjectDeclined(ctx context.Context, st *store.Store, prID int64, kind stri
     ProjectDeclined reads the PR's record of a session of kind launched without
     the checkout's project configuration; false when there is none (or it cannot
     be read).
-
-func (n ProjectNote) ChangedLinks(paths []string) []string
-    ChangedLinks names the links of the record (Links, by their paths' labels,
-    each once, in the order of their targets) whose target paths, the files
-    a PR's commits change (its file list, relative to the repository's root),
-    change: the target itself, or a file under a target that is a directory,
-    in any case (underTarget). None for a record without links.
 
 type Readiness struct {
 	Checks []ReadinessCheck
@@ -11087,6 +11085,9 @@ type Git interface {
 	// pushed descends from the PR row's head, a push the poller saw during
 	// the run (the base merge `magnum fix-sync` replayed onto: recordFixPush).
 	IsAncestor(ctx context.Context, dir, ancestor, rev string) (bool, error)
+	// Symlinks are the links of a head's tree, which the files gate and
+	// the reload check follow to what they lead to (config_links.go).
+	Symlinks(ctx context.Context, dir, rev string) (map[string]string, error)
 }
     Git is the part of *gitx.Client the engine reads (round context, clone
     discovery for repos.clone_path).
@@ -19518,8 +19519,14 @@ const (
     staging merge's resolver refuses to resolve: git's stable names for them.
 
 const AnyDir = "**/"
-    AnyDir is the prefix of a path that names a file in any directory of the
-    repository, its top included ("**/CLAUDE.md"; pathspecs).
+    AnyDir is the prefix of a path that names a file in any directory of
+    the repository, its top included ("**/CLAUDE.md"; pathspecs), or, with
+    AnyDirTree after the name, every file under a directory of that name in any
+    directory ("**/.claude/**").
+
+const AnyDirTree = "/**"
+    AnyDirTree follows a name after AnyDir for the files under a directory of
+    that name in any directory (pathspecs).
 
 const EvalRefPrefix = "refs/magnum/eval/"
     EvalRefPrefix holds the refs magnum eval fetches pinned commits into,
@@ -19567,6 +19574,10 @@ var ErrNoClone = errors.New("gitx: no clone of the repository")
 var ErrNotDescendant = errors.New("gitx: the commit does not descend from the remote head")
     ErrNotDescendant is PushLease's refusal of a commit that does not descend
     from the remote head it expects: the push would rewrite history.
+
+var ErrTreeTooLarge = errors.New("gitx: tree too large to list")
+    ErrTreeTooLarge is Symlinks' error for a tree whose listing passes
+    execx.MaxOutput: a link it would leave out may be one that matters.
 
 
 FUNCTIONS
@@ -20148,6 +20159,23 @@ func (c *Client) SwitchDetachKeepUntracked(ctx context.Context, dir, ref string)
     refuse an ignored one too (git's default, which SwitchDetach keeps for the
     slots, writes over it). Nothing moves then. The factory's base runs detach a
     copy, whose files are yours, with it.
+
+func (c *Client) Symlinks(ctx context.Context, dir, rev string) (map[string]string, error)
+    Symlinks are the symbolic links of rev's tree, from the object store (never
+    the work tree): each link's path from the top, with its text, the path it
+    names as git stores it (relative to the link's directory, or absolute).
+    One `git ls-tree -r` of the whole tree and, when it has links, one `git
+    cat-file --batch` of their blobs; an empty map when it has none. A listing
+    past execx.MaxOutput is ErrTreeTooLarge, and a commit the clone lacks fails.
+    rev must name a commit.
+
+func (c *Client) TrackedSymlinks(ctx context.Context, dir string, paths ...string) ([]string, error)
+    TrackedSymlinks are the symbolic links of dir's index that paths name
+    (pathspecs: from the top, in any case, a path taken literally or one of
+    AnyDir), as the checkout has them tracked: `git ls-files -s` of those paths,
+    each link's path from the top, in git's order; nil when there are none.
+    A session's checkout compares what such a link leads to, which may lie
+    anywhere in it (app/CLAUDE.md -> ../docs/app.md).
 
 func (c *Client) TreeFiles(ctx context.Context, dir, rev string, pathspecs ...string) ([]string, error)
     TreeFiles lists the files of rev (a commit) that pathspecs match,
@@ -29979,6 +30007,13 @@ type GitHubPR struct {
 	// head (pr_files). Not Changed either: the list moves no eligibility
 	// (skip_paths reads its own).
 	Files *PRFiles
+	// FilesUnlisted is a head the Details named whose whole list the
+	// poller could not read (the paths its renames leave, from the REST
+	// list), with Files nil: a stored list of that head is dropped
+	// (dropPRFiles), so nothing reads an older list of the same head (an
+	// earlier build's, one GitHub gave before a retarget) as its whole one.
+	// "" keeps the stored list.
+	FilesUnlisted string
 	// ActivityAt is the Details' activity time (nil = keep the stored one).
 	// The stored prs.activity_at is the later of it and the PR's last head
 	// move the poller saw (head_changed_at, but not its insertion); a head
