@@ -308,7 +308,8 @@ databases = [
 #   cap_max = "30m"                        # 30m, or cap when longer; never below cap nor cap_per_file). A cap
 #                                          # that stops the specs or jest is a note: no fix turn, CI runs them;
 #                                          # one that stops the lint needs you (it hangs). The red specs' base
-#                                          # run and the migrations run whatever the cap, bounded by cap alone
+#                                          # run (its cap grown from the red files) and the migrations (bounded
+#                                          # by cap alone) run whatever the cap
 #   skip_specs_for_kinds = ["chore"]       # a gem upgrade runs no specs
 #
 #   [factory.repo.qa]                      # visual QA of the change's pages in the copy's own server, by a kind's qa

@@ -24279,19 +24279,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
     command the cap stopped ("did not finish") and the steps it kept from starting ("did not run"). With
     nothing else failed the precheck passes: the stage sends no fix turn, and the task goes on as after a pass
     (the check's ok event: `passed, but … (the precheck's cap): the task goes on as after a pass, and CI is
-    their only run`; inside the local review's loop or at the ready stage it goes on there). A failure before
+    their only run`; inside the local review's fix loop it goes on there). A failure before
     the cap stands and gets its fix turn, the note after it marked as nothing to fix. `precheck.json` records
     the note (`unfinished`); the ready card's FLAGS line says `precheck unfinished: …`; `appendKnown` adds one
     fixed sentence to the PR body after the Known list (`The factory's precheck stopped at its cap: …, so CI is
     their only run.`); and the PR body's turn gets `precheck.json` by its path (`.Precheck`), its prompt saying
     the precheck sentence never says a precheck passed that did not finish.
-  - The lint. A stop at the cap there is a failure for you, `precheck.lint `<command>` did not end within
-    <cap>: it hangs`: the lint is the first step, so it took the whole cap, which only a hang does (a spring
+  - The lint. A stop at the cap there is a failure for you, ``precheck.lint `<command>` did not end within
+    <cap>: it hangs``: the lint is the first step, so it took the whole cap, which only a hang does (a spring
     or bundler lock, a server it waits for), and a note there would pass a precheck that checked nothing.
   - The red examples. They are judged on the base whatever the cap: the lookup of their files on the base and
     the base run of only the red files run on the caller's context, which the cap never ends, the base run
-    bounded by `cap` (`capOf`). A base run that does not end within it hangs, a failure for you, and the head's
-    red run leaves its row (`unknown`) then too.
+    bounded by a cap grown from the red files as the precheck's is from the change's
+    (`precheckCap(repo, len(atBase))`: a change that breaks 40 spec files has a base run that is long, not
+    hung). A base run that does not end within it hangs, a failure for you that names `precheck.cap` and
+    `precheck.cap_max` for a run that is only long, and the head's red run leaves its row (`unknown`) then too.
   - The migrations. They run whatever the cap, after the steps, on a context of their own (`ownBound`: from the
     caller's, bounded by `cap`, each command too): CI never runs a new migration down and up, and a cap that
     cut one mid-run would leave the copy's database half migrated. One that does not end within `cap` hangs,
@@ -24300,8 +24302,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
     but a failure (the `checks` table's CHECK, `RecordCheck`), and an "over cap" cause would take a migration.
     `precheck.md` keeps the last 40 lines it printed on stdout, where it stopped, read from the last 64 KiB,
     without what a terminal acts on (`textx.StripTerminal`, first, so no escape splits a secret the scrub must
-    see), through `scrub.Text` (it is kept), in a fence one backtick longer than any run in it. execx returns
-    what a command wrote before its context or its bound stopped it; the precheck had dropped it.
+    see), through `scrub.Text` (it is kept), in a fence one backtick longer than any run in it. For a hang (the
+    lint, a migration, a base run) it keeps the last 20 lines of stderr too, the same way: tools say there what
+    they wait for (a bundler or spring lock, a prompt, a connection retry). execx returns what a command wrote
+    before its context or its bound stopped it; the precheck had dropped it.
   - The proof's spec runs keep `cap` alone (`capOf`).
   Rejected: a fix turn for a precheck over its cap (the writer cannot fix a time limit, and the live turn began
   timing the specs instead of writing code); a larger fixed cap (a small change would then wait as long as a
@@ -24312,14 +24316,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
   in seconds); deriving the migrations' context with `context.WithoutCancel` (a daemon's stop or a moved head
   would then wait up to `cap` for migrations whose result is thrown away: the caller's context is the one the
   cap does not end); a new registry cause (a migration for a word the event and `precheck.md` already carry).
+  Known gaps: the migrations' bound covers the whole step (every up, down and up, and every wait for the copy's
+  database lock), so with several migrations, or a reviewer holding that lock, the step's deadline can cut a
+  command that just started, and the line then names it as the one that hangs; and a lint the cap stops
+  between two of its commands, or before its run again after a heal, is not called a hang: that lint command
+  never runs, and the note names only the steps after it.
   Tests (failing first): `TestThePrecheckCapGrowsPerFileUpToCapMax` (with a deleted file),
   `TestAPrecheckCapNeverOverflows`, `TestAnOverCapPrecheckWithNoOtherFailureGoesOnToTheLocalReview` (with
   precheck.json and the proof's bounds), `TestAnOverCapPrecheckAfterALintFailureSendsTheLintFixTurn`,
   `TestPrecheckMdKeepsTheStoppedCommandsLast40LinesScrubbed` (stdout only, escapes, a fence in the output),
   `TestRedExamplesAreJudgedOnTheBaseWhateverTheCap` (the cap at the lookup and at the base run),
   `TestPrecheckStopsAtItsCap` (now: the lint hangs, for you), `TestTheMigrationsRunAfterTheCapStoppedTheSpecs`,
-  `TestTheCardAndThePRBodyNameAnUnfinishedPrecheck`, `TestThePRBodyPromptNamesThePrecheckRecord`
-  (internal/factory); `TestFactoryPrecheckCapGrowthTakesItsDefaults`, `TestFactoryPrecheckCapMaxBelowCapIsRefused`
+  `TestTheCardAndThePRBodyNameAnUnfinishedPrecheck`, `TestThePRBodyPromptNamesThePrecheckRecord`,
+  `TestABaseRunPastItsBoundHangsForYou`, `TestAMigrationPastItsOwnBoundHangsForYou` and
+  `TestTheCallersEndDuringTheMigrationsRecordsNoFailure` (a pin: green before, it holds the rejection of
+  `WithoutCancel`) (internal/factory); `TestFactoryPrecheckCapGrowthTakesItsDefaults`, `TestFactoryPrecheckCapMaxBelowCapIsRefused`
   (with a `cap_per_file` above `cap_max`) and the two keys in `TestEveryNegativeDurationIsRefused`
   (internal/config).
 

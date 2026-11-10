@@ -86,6 +86,10 @@ type ProofRun struct {
 	Tree    string        `json:"tree,omitempty"`
 	Took    time.Duration `json:"took,omitempty"`
 	Hung    bool          `json:"hung,omitempty"`
+	// out and errOut are the ends of what it printed on stdout and on
+	// stderr, raw (precheckTailWindow bytes each, never kept in a file as
+	// they are): a precheck's tails of a run its cap or bound stopped.
+	out, errOut []byte
 }
 
 // Holds reports whether p passed at head: another head voids it.
@@ -450,6 +454,7 @@ func (e *Engine) specRun(ctx context.Context, c Copy, cmd, rev string, timeout t
 	run.Took = time.Since(start).Round(time.Millisecond)
 	code, denied, err := ranTo(res, err)
 	run.Exit, run.Output = code, outputOf(res)
+	run.out, run.errOut = lastBytes(res.Stdout, precheckTailWindow), lastBytes(res.Stderr, precheckTailWindow)
 	switch {
 	case denied != "":
 		return run, "is denied: " + denied, nil

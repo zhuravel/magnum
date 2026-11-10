@@ -14,9 +14,10 @@ package factory
 // failure: the writer cannot fix a time limit, the task goes on, and CI runs
 // them. A lint the cap stops hangs, a failure for you. The red examples are
 // judged on the base, and the migrations run, whatever the cap: on the
-// caller's context, each command bounded by the repository's cap (capOf),
-// since CI never runs a migration down and up. Every command goes through
-// the deny list.
+// caller's context, the base run of the red files bounded by a cap grown
+// from them as the precheck's is, each migration command by the
+// repository's cap (capOf), since CI never runs a migration down and up.
+// Every command goes through the deny list.
 
 import (
 	"context"
@@ -81,12 +82,18 @@ type PrecheckResult struct {
 var errOverCap = errors.New("the precheck's cap")
 
 // precheckCapTail is how many lines of what a command printed on stdout
-// before the cap stopped it precheck.md keeps, read from its last
-// precheckTailWindow bytes.
+// before the cap or its bound stopped it precheck.md keeps, and
+// precheckErrTail how many of its stderr for a hang (where a tool says what
+// it waits for), each read from the stream's last precheckTailWindow bytes.
 const (
 	precheckCapTail    = 40
+	precheckErrTail    = 20
 	precheckTailWindow = 64 << 10
 )
+
+// hangFix is the fix of a command that hangs (a lint the cap stopped, a
+// migration or a base run past its bound).
+const hangFix = "fix: find what it waits for in the copy (a lock, a server, a prompt)"
 
 // precheckCap is the cap of a precheck of a change of n files: the
 // repository's cap (capOf), cap_per_file more for each file, cap_max at most
@@ -313,7 +320,7 @@ func unfinishedWords(cut string, notRun []string, limit string) string {
 	case cut != "":
 		return cut + " did not finish within " + limit
 	}
-	return andList(notRun) + " did not run: the cap of " + limit + " ran out before them"
+	return andList(notRun) + " did not run within the cap of " + limit
 }
 
 // precheckUnfinishedAt is what the last precheck in task directory dir did
@@ -540,12 +547,13 @@ func (p *precheckRun) run(key, what, cmd string) (ProofRun, bool) {
 	run.Took = time.Since(start).Round(time.Millisecond)
 	code, denied, err := ranTo(res, err)
 	run.Exit, run.Output = code, outputOf(res)
+	run.out, run.errOut = lastBytes(res.Stdout, precheckTailWindow), lastBytes(res.Stderr, precheckTailWindow)
 	p.stderr, p.exit = string(res.Stderr), code
 	switch {
 	case err != nil && p.parent.Err() != nil: // the caller's context: the daemon stops, or the head moved
 		return run, false
 	case err != nil && (p.ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded)): // the cap, or a bound
-		p.capStopped(key, what, cmd, run, res.Stdout) // it keeps what it printed before (execx)
+		p.capStopped(key, what, cmd, run) // it keeps what it printed before (execx)
 		return run, false
 	case denied != "":
 		p.say("\n- `%s`: denied: %s\n", cmd, denied)
@@ -576,46 +584,57 @@ var capKinds = map[string]string{"precheck.lint": registry.CheckLint, "precheck.
 // capStopped notes that the precheck's cap or a step's own bound (p.limit)
 // stopped run, the command what (cmd) of configuration key key: its check
 // is recorded as skipped (the registry keeps a cause for a failure only),
-// and precheck.md keeps the end of what it printed on stdout (stdoutTail).
-// A stop in the specs or jest is the precheck's note (cut): CI runs them. A
-// stop in the lint or the migrations hangs, a failure for you, never the
-// writer's: a lint that takes the whole cap, the first step, waits on
-// something (a lock, a server), and CI never runs a migration down and up.
-func (p *precheckRun) capStopped(key, what, cmd string, run ProofRun, stdout []byte) {
+// and precheck.md keeps the end of what it printed on stdout, where it
+// stopped (sayTail). A stop in the specs or jest is the precheck's note
+// (cut): CI runs them. A stop in the lint or the migrations hangs, a failure
+// for you, never the writer's (a lint that takes the whole cap, the first
+// step, waits on something: a lock, a server; CI never runs a migration
+// down and up), and precheck.md keeps the end of its stderr too, where a
+// tool says what it waits for.
+func (p *precheckRun) capStopped(key, what, cmd string, run ProofRun) {
 	p.overCap = true
 	p.record(registry.Check{Kind: capKinds[key], Result: registry.CheckSkipped, Command: run.Command, Exit: run.Exit, Took: run.Took})
-	if tail := stdoutTail(stdout); tail == "" {
-		p.say("\nIts run of %s did not end within %s, and the factory stopped it; it printed nothing on stdout.\n", what, capText(p.limit))
-	} else {
-		fence := fenceFor(tail)
-		p.say("\nIts run of %s did not end within %s, and the factory stopped it. The last lines it printed on stdout (at most %d):\n\n%s\n%s\n%s\n",
-			what, capText(p.limit), precheckCapTail, fence, tail, fence)
-	}
+	p.say("\nIts run of %s did not end within %s, and the factory stopped it.\n", what, capText(p.limit))
+	p.sayTail("stdout", run.out, precheckCapTail)
 	switch key {
 	case "precheck.specs", "precheck.jest":
 		if p.cut == "" {
 			p.cut = p.step
 		}
 	default:
-		p.failForYou(key + " `" + textx.Clip(cmd, 120) + "` did not end within " + capText(p.limit) + ": it hangs; " +
-			"fix: find what it waits for in the copy (a lock, a server, a prompt)")
+		p.sayTail("stderr", run.errOut, precheckErrTail)
+		p.failForYou(key + " `" + textx.Clip(cmd, 120) + "` did not end within " + capText(p.limit) + ": it hangs; " + hangFix)
 	}
 }
 
-// stdoutTail is the last precheckCapTail lines of stdout, where a stopped
-// command stopped, read from its last precheckTailWindow bytes, without
-// what a terminal acts on (StripTerminal, first, so no escape splits a
-// secret the scrub must see) and scrubbed (precheck.md is kept).
-func stdoutTail(stdout []byte) string {
-	s := string(stdout)
-	if len(s) > precheckTailWindow {
-		s = s[len(s)-precheckTailWindow:]
+// sayTail writes to precheck.md the last n lines of b, what a stopped
+// command printed on stream (streamTail), in a fence they cannot close.
+func (p *precheckRun) sayTail(stream string, b []byte, n int) {
+	tail := streamTail(b, n)
+	if tail == "" {
+		p.say("\nIt printed nothing on %s.\n", stream)
+		return
+	}
+	fence := fenceFor(tail)
+	p.say("\nThe last lines it printed on %s (at most %d):\n\n%s\n%s\n%s\n", stream, n, fence, tail, fence)
+}
+
+// streamTail is the last n lines of b, a stream of a stopped command, read
+// from its last precheckTailWindow bytes from a line's start, without what
+// a terminal acts on (StripTerminal, first, so no escape splits a secret the
+// scrub must see) and scrubbed (precheck.md is kept).
+func streamTail(b []byte, n int) string {
+	s := string(lastBytes(b, precheckTailWindow))
+	if len(b) > precheckTailWindow {
 		if i := strings.IndexByte(s, '\n'); i >= 0 {
 			s = s[i+1:]
 		}
 	}
-	return lastLines(scrub.Text(textx.StripTerminal(s)), precheckCapTail)
+	return lastLines(scrub.Text(textx.StripTerminal(s)), n)
 }
+
+// lastBytes is the end of b, n bytes at most.
+func lastBytes(b []byte, n int) []byte { return b[max(0, len(b)-n):] }
 
 // lastLines are the last n lines of s, without its trailing blank lines.
 func lastLines(s string, n int) string {
@@ -901,8 +920,9 @@ func failures(out string) []specFailure {
 // there, or of a spec file the base lacks, is the change's (code). They
 // are judged whatever the cap: the lookup of their files on the base and
 // the base run of only those files run on the caller's context, which the
-// cap never ends, the base run bounded by the repository's cap (capOf); one
-// that does not end within it hangs, a failure for you. A red run that
+// cap never ends, the base run bounded by a cap grown from the red files
+// (precheckCap); one that does not end within it hangs, a failure for you
+// that names the caps to raise when it only runs long. A red run that
 // names no failure it can be read by fails the precheck. Every red run at
 // the head leaves its row.
 func (p *precheckRun) specs(cmd string, files []string) {
@@ -954,7 +974,7 @@ func (p *precheckRun) specs(cmd string, files []string) {
 			return
 		}
 		baseScript := renderCommand(cmd, atBase, p.base)
-		bound := capOf(p.repo)
+		bound, _ := precheckCap(p.repo, len(atBase)) // as the precheck's grows from the change's files
 		p.e.noteCheck(p.t.ID, "precheck: specs on the base ("+plural(len(atBase), "spec file")+" red at the head)")
 		base, problem, err := p.e.baseRun(p.parent, p.t, p.c, p.started, p.base, p.head, nil, baseScript, bound)
 		if k, ok := errors.AsType[keptChanges](err); ok {
@@ -975,8 +995,10 @@ func (p *precheckRun) specs(cmd string, files []string) {
 		case base.Hung:
 			p.record(headRed)
 			p.say("\n`%s` did not end on the base within %s, and the factory stopped it.\n", baseScript, capText(bound))
+			p.sayTail("stdout", base.out, precheckCapTail)
+			p.sayTail("stderr", base.errOut, precheckErrTail)
 			p.failForYou("precheck.specs `" + textx.Clip(baseScript, 120) + "` did not end on the base within " + capText(bound) +
-				": it hangs; fix: find what it waits for in the copy (a lock, a server, a prompt)")
+				": it hangs; " + hangFix + ", or raise precheck.cap or precheck.cap_max when it only runs long")
 			return
 		}
 		for _, f := range failures(base.Output) {

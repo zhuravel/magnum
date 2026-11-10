@@ -3,6 +3,7 @@ package factory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -317,7 +318,9 @@ func TestPrecheckMdKeepsTheStoppedCommandsLast40LinesScrubbed(t *testing.T) {
 // The red examples of the change's spec run are judged on the base
 // whatever the cap: the lookup of their files on the base and the base run
 // of only those files run on a context the precheck's cap does not cut,
-// bounded by the repository's cap. A cap that fires in either never makes
+// bounded by a cap grown from the red files as the precheck's is from the
+// change's (cap, cap_per_file per red file, at most cap_max). A cap that
+// fires in either never makes
 // a red example the change's nor leaves it unjudged: one red on the base
 // too is not ours, one of a spec file the base lacks is the change's, and
 // each leaves its row. The steps the cap kept from starting did not run.
@@ -353,15 +356,15 @@ func TestRedExamplesAreJudgedOnTheBaseWhateverTheCap(t *testing.T) {
 			if err != nil || res.Passed || !strings.Contains(res.Why, "credit_extra_spec.rb") || strings.Contains(res.Why, "credit_spec.rb") {
 				t.Fatalf("precheck %+v, %v; want the new red spec to fail it and the one red on the base too not", res, err)
 			}
-			if res.Unfinished != "the jest tests did not run: the cap of 10m45s ran out before them" {
+			if res.Unfinished != "the jest tests did not run within the cap of 10m45s" {
 				t.Fatalf("unfinished %q, want only jest, which did not run", res.Unfinished)
 			}
 			if len(bounds()) == 0 {
 				t.Fatal("the cap never fired")
 			}
 			mu.Lock()
-			if !slices.Equal(baseBounds, []time.Duration{10 * time.Minute}) {
-				t.Errorf("the base run of the red files is bounded by %v, want one run of the repository's cap, 10m", baseBounds)
+			if !slices.Equal(baseBounds, []time.Duration{10*time.Minute + 15*time.Second}) {
+				t.Errorf("the base run of the red files is bounded by %v, want one run of the cap grown from its 1 red file, 10m15s", baseBounds)
 			}
 			mu.Unlock()
 			if got := r.checksOf(task.ID, "spec"); !slices.Equal(got, []string{"fail/not_ours", "fail/code"}) {
@@ -487,5 +490,122 @@ func TestThePRBodyPromptNamesThePrecheckRecord(t *testing.T) {
 	}
 	if d.Precheck == "" {
 		t.Fatal("the full prompt data has no precheck record")
+	}
+}
+
+// smallCaps gives the repository caps of milliseconds (cap 200ms, 400ms per
+// file, 5s at most) and the precheck a timer that never fires: only a
+// command's own bound stops it, in real time.
+func (r *codingRig) smallCaps() {
+	r.t.Helper()
+	pc := &r.cfg.Factory.Repos[0].Precheck
+	pc.Cap, pc.CapPerFile = config.Duration{Duration: 200 * time.Millisecond}, config.Duration{Duration: 400 * time.Millisecond}
+	pc.CapMax = config.Duration{Duration: 5 * time.Second}
+	r.e.after = func(time.Duration) <-chan time.Time { return nil }
+}
+
+// addMigration commits a migration that adds a column on the task's
+// branch.
+func (r *codingRig) addMigration(key string) {
+	r.t.Helper()
+	r.commit(key+" a column", map[string]string{"db/migrate/20261110090000_add_x_to_credits.rb": "class AddXToCredits < ActiveRecord::Migration[7.1]\n" +
+		"  def change\n    add_column :credits, :x, :integer\n  end\nend\n"})
+}
+
+// A base run of the red files that does not end within its bound (the cap
+// grown from the red files) hangs: a failure for you that names
+// precheck.cap and precheck.cap_max as the knobs of a run that is only
+// long, the head's red run leaves its row, precheck.md keeps the end of
+// what the base run printed on stdout and on stderr, and the copy is back
+// on its branch.
+func TestABaseRunPastItsBoundHangsForYou(t *testing.T) {
+	r := newCodingRig(t)
+	r.redOnMaster()
+	task := r.codingTask("PR-12478", "bug")
+	head := r.fix(task)
+	r.smallCaps()
+	r.mu.Lock()
+	r.printed["bin/specs"], r.printedErr["bin/specs"] = "1 example so far\n", "waiting for the \x1b[1mtest database\x1b[0m\n"
+	r.mu.Unlock()
+	r.setHang(func(run scriptRun) bool { return strings.HasPrefix(run.Script, "bin/specs ") && run.Branch == "" })
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	const why = "precheck: precheck.specs `bin/specs spec/models/credit_spec.rb` did not end on the base within 600ms: it hangs; " +
+		"fix: find what it waits for in the copy (a lock, a server, a prompt), or raise precheck.cap or precheck.cap_max when it only runs long"
+	if err != nil || res.Passed || !res.ForYou || res.Why != why {
+		t.Fatalf("precheck %+v, %v; want a failure for you: %s", res, err, why)
+	}
+	if got := r.checksOf(task.ID, "spec"); !slices.Equal(got, []string{"fail/unknown"}) {
+		t.Fatalf("spec checks %q, want the head's red run's row", got)
+	}
+	report := r.readTask(task.ID, precheckFile)
+	for _, want := range []string{"on stdout (at most 40):\n\n```\n1 example so far\n```", "on stderr (at most 20):\n\n```\nwaiting for the test database\n```"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("%s lacks %q:\n%s", precheckFile, want, report)
+		}
+	}
+	r.onBranch(task.Branch, head)
+}
+
+// A migration that does not end within its own bound (the repository's
+// cap) hangs: a failure for you, its check skipped, and precheck.md keeps
+// what it printed on stderr.
+func TestAMigrationPastItsOwnBoundHangsForYou(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12479", "feature")
+	r.fix(task)
+	r.addMigration("PR-12479")
+	r.smallCaps()
+	r.mu.Lock()
+	r.printedErr["bin/rails"] = "waiting for a metadata lock on credits\n"
+	r.mu.Unlock()
+	r.setHang(func(run scriptRun) bool { return strings.HasPrefix(run.Script, "bin/rails db:migrate:up") })
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	const why = "precheck: precheck.migrations `bin/rails db:migrate:up VERSION=20261110090000` did not end within 200ms: it hangs; " +
+		"fix: find what it waits for in the copy (a lock, a server, a prompt)"
+	if err != nil || res.Passed || !res.ForYou || res.Why != why || res.Unfinished != "" {
+		t.Fatalf("precheck %+v, %v; want a failure for you: %s", res, err, why)
+	}
+	if got := r.checksOf(task.ID, "migration"); !slices.Equal(got, []string{registry.CheckSkipped}) {
+		t.Fatalf("migration checks %q, want the stopped run skipped", got)
+	}
+	if report := r.readTask(task.ID, precheckFile); !strings.Contains(report, "on stderr (at most 20):\n\n```\nwaiting for a metadata lock on credits\n```") {
+		t.Fatalf("%s does not keep the hung migration's stderr:\n%s", precheckFile, report)
+	}
+}
+
+// The caller's context ending while the migrations run (the head moved, the
+// daemon stops) ends them with it: the precheck's error is the context's,
+// no migration is recorded as failed, and what they changed in tracked
+// files is put back.
+func TestTheCallersEndDuringTheMigrationsRecordsNoFailure(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12480", "feature")
+	r.fix(task)
+	r.addMigration("PR-12480")
+	r.blocks["bin/rails"] = make(chan struct{}) // until its context ends
+	r.setDuring(func(dir string, run scriptRun) {
+		if strings.HasPrefix(run.Script, "bin/rails ") {
+			r.write(dir, "README", "dumped by the migration\n")
+		}
+	})
+	ctx, cancel := context.WithCancel(r.ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.e.precheck(ctx, task, r.cp)
+		done <- err
+	}()
+	if w := <-r.entered; w != "bin/rails" {
+		t.Fatalf("%s waits, want the migration", w)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("precheck = %v, want the caller's context's end", err)
+	}
+	if got := r.checksOf(task.ID, "migration"); len(got) != 0 {
+		t.Fatalf("migration checks %q, want none recorded", got)
+	}
+	if got := r.read("README"); got != "shop\n" {
+		t.Fatalf("README is %q, want it put back as the branch has it", got)
 	}
 }

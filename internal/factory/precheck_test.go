@@ -191,6 +191,7 @@ func TestPrecheckStopsAtItsCap(t *testing.T) {
 		return fire
 	}
 	r.blocks["bin/lint"] = make(chan struct{}) // never ends on its own
+	r.printedErr["bin/lint"] = "rubocop: waiting for the \x1b[1mserver\x1b[0m lock\n"
 	done := make(chan PrecheckResult, 1)
 	go func() {
 		res, err := r.e.precheck(r.ctx, task, r.cp)
@@ -207,11 +208,14 @@ func TestPrecheckStopsAtItsCap(t *testing.T) {
 			"fix: find what it waits for in the copy (a lock, a server, a prompt)" {
 		t.Fatalf("precheck %+v; want a failure for you: the lint hangs", res)
 	}
-	if res.Unfinished != "the specs and the jest tests did not run: the cap of 10m30s ran out before them" {
+	if res.Unfinished != "the specs and the jest tests did not run within the cap of 10m30s" {
 		t.Fatalf("unfinished %q, want the specs and jest, which did not run", res.Unfinished)
 	}
 	if got := r.checksOf(task.ID, "lint"); !slices.Equal(got, []string{registry.CheckSkipped}) {
 		t.Fatalf("lint checks %q, want the stopped run skipped", got)
+	}
+	if report := r.readTask(task.ID, precheckFile); !strings.Contains(report, "on stderr (at most 20):\n\n```\nrubocop: waiting for the server lock\n```") {
+		t.Fatalf("%s does not keep the hung lint's stderr, stripped:\n%s", precheckFile, report)
 	}
 }
 

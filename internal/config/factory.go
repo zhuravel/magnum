@@ -372,8 +372,8 @@ type FactoryPrecheck struct {
 	// (default DefaultPrecheckCapMax, or Cap when that is longer; never
 	// below Cap). A precheck its cap stops in the specs or jest goes on with
 	// a note when nothing else failed; one it stops in the lint needs you.
-	// The proof's spec runs, the base run of the precheck's red specs and
-	// its migrations keep Cap alone.
+	// The proof's spec runs and the precheck's migrations keep Cap alone;
+	// the base run of its red specs grows from the red files the same way.
 	Cap        Duration `toml:"cap"`
 	CapPerFile Duration `toml:"cap_per_file"`
 	CapMax     Duration `toml:"cap_max"`

@@ -4276,8 +4276,8 @@ lint = ["bundle exec rubocop {files}"]
 specs = "bin/impact-specs {files}"
 cap = "10m"                          # a precheck's cap: 10m, then cap_per_file more per file of the change,
 cap_per_file = "15s"                 # at most cap_max (default 30m, or cap when longer; never below cap,
-cap_max = "30m"                      # never below cap_per_file). The proof, the red specs' base run and the
-                                     # migrations keep cap alone
+cap_max = "30m"                      # never below cap_per_file). The proof and the migrations keep cap alone;
+                                     # the red specs' base run grows from the red files the same way
 skip_specs_for_kinds = ["chore"]
 
 [[factory.repo.staging]]
@@ -4561,12 +4561,15 @@ stages = [
     cap: …, so CI is their only run.` (the PR body's own precheck sentence never says it passed). A failure
     before the cap (a lint offense, a red spec, a migration) still gets its fix turn, with the note.
   - **The lint.** It hangs (the lint is the first step, so it took the whole cap): the task needs you,
-    `precheck.lint `<command>` did not end within 10m30s: it hangs`, with no fix turn.
+    ``precheck.lint `<command>` did not end within 10m30s: it hangs``, with no fix turn.
   - **Never the red examples or the migrations.** A spec red at the head is judged on the base whatever the
-    cap: the lookup of its file there and the base run of only the red files are bounded by `cap` alone, and
-    a base run that does not end within it hangs (the task needs you). The branch's migrations run up and down
-    even after the cap, each command bounded by `cap` (CI never runs a migration down and up); one that does
-    not end within it hangs too.
+    cap: the lookup of its file there runs on the check's own context (quick git reads the cap does not cut),
+    and the base run of only the red files is bounded by a cap grown from them as the precheck's is (`cap`,
+    then `cap_per_file` per red file, at most `cap_max`). A base run that does not end within it hangs: the
+    task needs you, and the line names `precheck.cap` and `precheck.cap_max` for a run that is only long. The
+    branch's migrations run up and down even after the cap, each command bounded by `cap` (CI never runs a
+    migration down and up); one that does not end within it hangs too. For every hang, `precheck.md` keeps the
+    last 40 lines of its stdout and the last 20 of its stderr, where a tool says what it waits for.
   The proof's spec runs keep `cap` alone. `skip_specs_for_kinds` names the kinds of task that run no specs (a
   gem upgrade).
   `ghost_marker`, `table_stats` (a JSON object of table to rows, or to an object with `rows`) and
