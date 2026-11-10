@@ -23398,6 +23398,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
   herdr and checkouts). Revisit when an agent works on a repository the operator does not own, or a PR from outside
   the team reaches a pane.
 
+- **The local reviewer reports a user-visible choice that only the factory's description decides, at its real
+  priority, as a choice to ask about** (2026-11-10, R15c). R15b's judge rule keeps such a choice as a question
+  whenever a reviewer raises it, but with the local reviewer prompt (`claude-review-local.md`, which the replays use
+  since learn-gate-local) the reviewers raised talkable#12212's stored-category question at P2 in none of 3
+  replays: one called it a P3 "product choice", one saw nothing, and the third was found only because the judge's own
+  pass followed a residual-risk line. The local prompt now says the description is the factory's plan, not a
+  person's intent, never a reason to leave a finding out or lower it, and that a choice changing what a user sees
+  or gets, decided by the description alone, is a finding at the priority of what goes wrong (a wrong number a user
+  reads is P2), named as a choice to ask about for the judge to check against the ticket. Measured on the local case
+  `task-1-round-1`, 3 replays each, with `eval run --candidate`: 1 of 3 found before (20261110-063349, -070908,
+  -073756), 2 of 3 after (20261110-082151, -085959, -092853), noise 0 in all six; in run -085959 the reviewer itself
+  raised it at P2 as "a choice to ask about". The posted reviews' prompt (`claude-review.md`) is unchanged: a
+  person's description there is the author's intent. Codex's reviewer runs `codex-review.sh` and has no prompt to
+  change.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
