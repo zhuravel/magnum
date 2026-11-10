@@ -19,7 +19,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"unicode"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/store"
@@ -40,6 +39,14 @@ const maxHeadLinks = 256
 // errLinksTooMany is resolveConfigLinks' error for a tree whose links take
 // more than maxLinkSteps to follow.
 var errLinksTooMany = errors.New("the links take too many steps to follow")
+
+// errLinksFoldUnknown is resolveConfigLinks' error for a tree with links
+// that steer the review agents and a link whose path or text has a byte
+// outside ASCII: a case-insensitive filesystem folds such a name by rules
+// of its own (APFS opens .agents/ſkills for .agents/skills, ﬁrst.md for
+// first.md), which magnum does not model, so where the links lead cannot
+// be told.
+var errLinksFoldUnknown = errors.New("a link's path or text has a byte outside ASCII, which the filesystem folds by rules magnum does not model")
 
 // headLinks keeps, by head, configLinks' answer: a commit's tree never
 // changes, so neither does where its links lead. Its own mutex: a round's
@@ -112,26 +119,38 @@ func (e *Engine) headClone(ctx context.Context, pr store.PR) string {
 
 // changedLinks names, by their labels, each once, in the order of their
 // targets, the links of targets (configLinks) whose target paths, a PR's
-// changed files, change: the target itself, or a file under it, in any
-// case (agents.UnderTarget).
-func changedLinks(targets map[string]string, paths []string) []string {
-	var out []string
+// changed files, change: the target itself, or a file under it, in ASCII
+// case (agents.MatchTarget). maybe reports a path with a byte outside
+// ASCII that may name a target under the filesystem's own fold, which
+// magnum cannot tell.
+func changedLinks(targets map[string]string, paths []string) (names []string, maybe bool) {
 	for _, t := range slices.Sorted(maps.Keys(targets)) {
 		l := targets[t]
-		if !slices.Contains(out, l) && slices.ContainsFunc(paths, func(f string) bool { return agents.UnderTarget(f, t) }) {
-			out = append(out, l)
+		for _, f := range paths {
+			switch agents.MatchTarget(f, t) {
+			case agents.Under:
+				if !slices.Contains(names, l) {
+					names = append(names, l)
+				}
+			case agents.MaybeUnder:
+				maybe = true
+			}
 		}
 	}
-	return out
+	return names, maybe
 }
 
 // resolveConfigLinks follows the links of a commit's tree (links: each
 // link's path from the top, with its text) that steer the review agents
 // (isConfig: the link's path is one of their instruction files or lies in
-// a project config, and how a refusal names it) as the filesystem would,
-// on a case-insensitive one (macOS's): element by element, each element of
-// a link's text that is itself a link followed before a ".." after it,
-// names matched in any case. It returns each path the agents load through
+// a project config, and how a refusal names it) as a case-insensitive
+// filesystem would: element by element, each element of a link's text
+// that is itself a link followed before a ".." after it, names matched in
+// ASCII case, the fold every such filesystem agrees on. A name outside
+// ASCII folds by the filesystem's own rules (APFS: ſ is s, ß is ss, ﬁ is
+// fi, a decomposed name its composed spelling), which magnum does not
+// model: a tree with such a link, when any link steers the agents, fails
+// (errLinksFoldUnknown), so every target returned is ASCII. It returns each path the agents load through
 // such a link, with the link's label: the link itself, each link it passes
 // through on the way (re-pointing one changes what loads), where it ends
 // (a file, or a directory and what lies under it), and, for each link
@@ -143,12 +162,19 @@ func changedLinks(targets map[string]string, paths []string) []string {
 func resolveConfigLinks(links map[string]string, isConfig func(string) (string, bool)) (map[string]string, error) {
 	r := linkResolver{links: links, byFold: map[string][]string{}, out: map[string]string{}, walked: map[string]bool{}}
 	r.paths = slices.Sorted(maps.Keys(links))
+	steering := map[string]string{}
 	for _, l := range r.paths {
 		k := foldKey(l)
 		r.byFold[k] = append(r.byFold[k], l)
+		if label, ok := isConfig(l); ok {
+			steering[l] = label
+		}
+	}
+	if len(steering) > 0 && slices.ContainsFunc(r.paths, func(l string) bool { return !isASCII(l) || !isASCII(links[l]) }) {
+		return nil, errLinksFoldUnknown
 	}
 	for _, l := range r.paths {
-		if label, ok := isConfig(l); ok {
+		if label, ok := steering[l]; ok {
 			r.follow(l, label)
 		}
 	}
@@ -200,8 +226,8 @@ func (r *linkResolver) follow(l, label string) {
 }
 
 // realpath is where text, a link's text in the directory dir ("" for the
-// top), leads in the tree: the paths (one per way a case-folded name may
-// go, when the tree holds links whose paths differ in case only), none
+// top), leads in the tree: the paths (one per way a name folded in ASCII
+// case may go, when the tree holds links whose paths differ in case only), none
 // when it leaves the tree, loops or runs out of steps. Each link it passes
 // through is recorded with label.
 func (r *linkResolver) realpath(dir, text string, hops int, label string) []string {
@@ -253,16 +279,25 @@ func linkDir(p string) string {
 	return ""
 }
 
-// foldKey is s with each rune its smallest case variant (unicode.SimpleFold's
-// orbit), so two strings strings.EqualFold matches have the same key.
+// foldKey is s with its ASCII letters in lower case, every other byte as it
+// is: the key two paths a case-insensitive filesystem surely opens as one
+// share (resolveConfigLinks refuses a name outside ASCII).
 func foldKey(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		m := r
-		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
-			m = min(m, f)
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
 		}
-		b.WriteRune(m)
 	}
-	return b.String()
+	return string(b)
+}
+
+// isASCII reports whether s has no byte outside ASCII.
+func isASCII(s string) bool {
+	for i := range len(s) {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }

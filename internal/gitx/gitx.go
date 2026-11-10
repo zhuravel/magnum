@@ -598,7 +598,7 @@ func (c *Client) ModifiedPaths(ctx context.Context, dir, base, head string) ([]s
 }
 
 // ChangedUnder is ChangedPaths limited to the files paths name, each
-// relative to the repository's top in any case (pathspecs: a directory or
+// relative to the repository's top in any ASCII case (pathspecs: a directory or
 // a file taken literally, or "**/<name>" in any directory): what head
 // changes there since its merge base with base, whatever base did since.
 // One git diff; nil when head leaves them all alone.
@@ -626,6 +626,36 @@ func (c *Client) ChangedNames(ctx context.Context, dir, base, head string) ([]st
 	res, err := c.git(ctx, dir, call{label: label}, "diff", "--name-only", "-z", "--no-renames", base+"..."+head, "--")
 	if err != nil {
 		return nil, rangeErr(err, base, head)
+	}
+	if res.Truncated {
+		return nil, fmt.Errorf("gitx: %s: %w", label, ErrTreeTooLarge)
+	}
+	var paths []string
+	for p := range strings.SplitSeq(string(res.Stdout), "\x00") {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths, nil
+}
+
+// WorkTreeNames lists every tracked file whose state in dir's work tree
+// (or index) differs from base (git diff --name-only base, with no
+// pathspec), a rename as a deletion plus an addition, for a caller that
+// matches the paths itself (ChangedNames says why); untracked files are
+// not listed. A listing past execx.MaxOutput fails (ErrTreeTooLarge). nil
+// when they all match base.
+func (c *Client) WorkTreeNames(ctx context.Context, dir, base string) ([]string, error) {
+	if err := checkRev("revision", base); err != nil {
+		return nil, err
+	}
+	if strings.Contains(base, "..") {
+		return nil, fmt.Errorf("gitx: revision %q must not be a range", base)
+	}
+	label := "diff --name-only " + base
+	res, err := c.git(ctx, dir, call{label: label}, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", base, "--")
+	if err != nil {
+		return nil, err
 	}
 	if res.Truncated {
 		return nil, fmt.Errorf("gitx: %s: %w", label, ErrTreeTooLarge)
@@ -729,7 +759,7 @@ func pathspecs(paths []string) ([]string, error) {
 }
 
 // WorkTreeChanges lists the files paths name (each relative to the
-// repository's top in any case, pathspecs: a directory or a file taken
+// repository's top in any ASCII case, pathspecs: a directory or a file taken
 // literally, or "**/<name>" in any directory) whose state on disk differs
 // from base, as a tool reading them sees them: committed and uncommitted
 // changes and deletions (git diff base -- paths), and the untracked files

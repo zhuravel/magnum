@@ -424,6 +424,51 @@ func TestAutoApprovalRefusesAChangeToALinksTargetAtTheHeadWhateverHeadItsSession
 	h.wantRefused(2, "it changes the review agents' instructions or hooks (CLAUDE.md)")
 }
 
+// A case-insensitive filesystem folds a name outside ASCII by rules of its
+// own: APFS opens docs/claß.md for docs/class.md and docs/ﬁrst.md for
+// docs/first.md. The gate matches a listed path to a link's target in
+// ASCII case only, so a path with a byte outside ASCII where the target's
+// name differs, or a link whose path or text has one, is refused without a
+// class: magnum cannot tell what it changes. A path outside ASCII that no
+// link's target could name approves.
+func TestAutoApprovalCannotTellANameOutsideASCIIThroughALink(t *testing.T) {
+	const unknown = "Magnum cannot tell whether it changes the review agents' instructions or hooks"
+	for _, tc := range []struct {
+		name  string
+		links map[string]string
+		files []string
+		want  string
+	}{
+		{"a sharp s for ss", map[string]string{"CLAUDE.md": "docs/class.md"}, []string{"app/x.rb", "docs/claß.md"}, unknown},
+		{"a ligature for fi", map[string]string{"CLAUDE.md": "docs/first.md"}, []string{"docs/ﬁrst.md"}, unknown},
+		{"a decomposed name", map[string]string{"CLAUDE.md": "docs/caf\u00e9.md"}, []string{"docs/cafe\u0301.md"}, unknown},
+		{"a link outside ASCII", map[string]string{"CLAUDE.md": "docs/ﬁrst.md"}, []string{"docs/first.md"}, unknown},
+		{"a path no target could name", map[string]string{"CLAUDE.md": "docs/class.md"}, []string{"app/日本.rb"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newAutoHarness(t, func(h *harness) { h.d.Git = fakeGit{links: map[string]map[string]string{"b1": tc.links}} })
+			h.open(prSpec{n: 1, head: "base1"})
+			h.startup()
+			h.tick()
+			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: tc.files})
+			h.tick()
+			h.reviewTo(2, "b1")
+			h.flush()
+			if tc.want == "" {
+				if got := h.created(); len(got) != 1 || !strings.HasPrefix(got[0], "APPROVE@b1:") {
+					t.Fatalf("posted = %q (held back for %q), want the approval as the operator", got, h.autoRefused(2))
+				}
+				return
+			}
+			h.wantRefused(2, tc.want)
+			v, _ := h.e.getKV(h.ctx, KVPRAutoApproveRefused(h.pr(2).ID))
+			if r, _ := ParseAutoApproveRefused(v); r.Public != "" {
+				t.Fatalf("the refusal's class = %q: want none", r.Public)
+			}
+		})
+	}
+}
+
 // A head whose links magnum cannot read (no clone with it, a git that
 // fails) may change what a link of the agents' config leads to: its
 // approval waits, refused without a class, and the next pass reads them

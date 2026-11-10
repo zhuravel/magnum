@@ -8,8 +8,8 @@ import (
 )
 
 // resolveConfigLinks follows a tree's links that steer the review agents
-// as macOS's filesystem would: a link in a text's path before its "..",
-// names in any case, both ways where links differ in case only, the links
+// as a case-insensitive filesystem would: a link in a text's path before
+// its "..", names in ASCII case, both ways where links differ in case only, the links
 // under a directory one leads to; each link passed through is a target
 // too, a text that leaves the tree leads nowhere, a loop ends, and a link
 // that steers nothing is not followed. Too many steps fail rather than
@@ -45,6 +45,22 @@ func TestResolveConfigLinksFollowsLinksAsTheFilesystemDoes(t *testing.T) {
 				t.Fatalf("resolveConfigLinks = %q, %v\nwant %q", got, err, c.want)
 			}
 		})
+	}
+
+	// A name outside ASCII folds by the filesystem's own rules (APFS opens
+	// ſkills for skills, ﬁrst for first), which magnum does not model: a
+	// tree with such a link among links that steer the agents cannot be
+	// followed. One without any link that steers them has nothing to follow.
+	for _, odd := range []map[string]string{
+		{".claude/skills": "../.agents/skills", ".agents/ſkills": "../elsewhere"},
+		{"CLAUDE.md": "docs/ﬁrst.md"},
+	} {
+		if got, err := resolveConfigLinks(odd, isConfig); !errors.Is(err, errLinksFoldUnknown) {
+			t.Fatalf("resolveConfigLinks(%q) = %q, %v; want errLinksFoldUnknown", odd, got, err)
+		}
+	}
+	if got, err := resolveConfigLinks(map[string]string{"lib/ſ": "x"}, isConfig); err != nil || len(got) != 0 {
+		t.Fatalf("a tree whose links steer nothing: %q, %v", got, err)
 	}
 
 	many := map[string]string{}

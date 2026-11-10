@@ -402,7 +402,7 @@ func (e *Engine) changedFilesRefusal(ctx context.Context, pr store.PR) (r autoRe
 	if listed {
 		paths = f.Paths
 	}
-	why, linksUnknown := e.agentConfigRefusal(ctx, pr, paths)
+	why, unknownWhy := e.agentConfigRefusal(ctx, pr, paths)
 	if why != "" {
 		return autoRefusal{why: why, public: publicAgentConfig}, agentConfigShort
 	}
@@ -416,8 +416,8 @@ func (e *Engine) changedFilesRefusal(ctx context.Context, pr store.PR) (r autoRe
 	case f.Truncated:
 		why := fmt.Sprintf("Magnum cannot tell whether it changes %s: it changes more than the %d files GitHub listed", what, len(f.Paths))
 		return autoRefusal{why: why, public: publicTooManyFiles}, unknown
-	case linksUnknown:
-		return autoRefusal{why: "Magnum cannot tell whether it changes " + agentConfigWhat + ": it cannot read where the head's links lead"}, unknown
+	case unknownWhy != "":
+		return autoRefusal{why: "Magnum cannot tell whether it changes " + agentConfigWhat + ": " + unknownWhy}, unknown
 	}
 	return autoRefusal{}, ""
 }
@@ -433,32 +433,38 @@ func (e *Engine) changedFilesRefusal(ctx context.Context, pr store.PR) (r autoRe
 // -> ../docs/app.md, .claude/skills -> ../.agents/skills), and the list
 // names a change there by the target alone: the head's links, read from
 // its tree (configLinks), refuse a list that changes a target, by the
-// label of its link. unknown reports that they could not be read, for a
-// list with files in it: the caller refuses without a class, and the next
-// pass reads them again. What git found differing in a session's slot (its
+// label of its link, in ASCII case. unknown says why magnum cannot tell,
+// for a list with files in it: the links could not be read, or a listed
+// path with a byte outside ASCII may name a target under the
+// filesystem's own fold (agents.MaybeUnder); the caller refuses without a
+// class, and the next pass reads them again. What git found differing in a session's slot (its
 // record, agents.ProjectDeclined) is never the PR's change: files a round
 // left there, the base branch's commits behind a stale origin/<base>, a
 // compare git could not make, a record an older build wrote. Such files
 // steer the review agents, and their hooks run on every teammate's machine
 // once merged.
-func (e *Engine) agentConfigRefusal(ctx context.Context, pr store.PR, paths []string) (why string, unknown bool) {
+func (e *Engine) agentConfigRefusal(ctx context.Context, pr store.PR, paths []string) (why, unknown string) {
 	kinds := e.projectKinds()
 	for _, p := range paths {
 		if name, hit := agentConfigPath(kinds, p); hit {
-			return "it changes " + agentConfigWhat + " (" + name + ")", false
+			return "it changes " + agentConfigWhat + " (" + name + ")", ""
 		}
 	}
 	if len(paths) == 0 {
-		return "", false
+		return "", ""
 	}
 	targets, err := e.configLinks(ctx, pr)
 	if err != nil {
-		return "", true
+		return "", "it cannot read where the head's links lead"
 	}
-	if names := changedLinks(targets, paths); len(names) > 0 {
-		return "it changes " + agentConfigWhat + " (" + strings.Join(names, ", ") + ")", false
+	names, maybe := changedLinks(targets, paths)
+	switch {
+	case len(names) > 0:
+		return "it changes " + agentConfigWhat + " (" + strings.Join(names, ", ") + ")", ""
+	case maybe:
+		return "", "a path outside ASCII may name what a link of the head leads to"
 	}
-	return "", false
+	return "", ""
 }
 
 // agentConfigPath reports whether p, a path the PR changes, is one of the

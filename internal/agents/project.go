@@ -286,6 +286,14 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 		if err == nil {
 			files, mb, err = m.projectChanges(ctx, g, dir, base, pc.logFile, disk.git)
 		}
+		if err == nil && len(disk.links) > 0 {
+			var all []string
+			if all, err = g.WorkTreeNames(ctx, dir, mb); err == nil {
+				files = append(files, linkedChanges(all, disk.links)...)
+				slices.Sort(files)
+				files = slices.Compact(files)
+			}
+		}
 		changed := pc.changed(files, disk.links)
 		if disk.partial {
 			m.logAt(slog.LevelWarn, "agents: %s: more than %d entries to look through for links under %s, so the session leaves them out",
@@ -611,18 +619,19 @@ func globName(name string) string {
 }
 
 // changed are the project paths the files git listed fall in, one per file
-// (pathOf, or a link target of disk), leaving out what a glob matched
-// beyond its name.
+// (pathOf, or a link target of disk, UnderTarget: a name outside ASCII
+// that may be one counts), leaving out what a glob matched beyond its name.
 func (pc projectConfig) changed(files []string, links map[string]projectPath) []projectPath {
+	targets := slices.Sorted(maps.Keys(links))
 	var out []projectPath
 	for _, f := range files {
 		if p, _, ok := pc.pathOf(f); ok {
 			out = append(out, p)
 			continue
 		}
-		for t, p := range links {
+		for _, t := range targets {
 			if UnderTarget(f, t) {
-				out = append(out, p)
+				out = append(out, links[t])
 				break
 			}
 		}
@@ -630,15 +639,98 @@ func (pc projectConfig) changed(files []string, links map[string]projectPath) []
 	return out
 }
 
-// UnderTarget reports whether f, a path relative to the checkout's root,
-// is the link target t or lies under it, element by element in any case and
-// under Unicode folding (strings.EqualFold), as a case-insensitive
-// filesystem (macOS's) opens it: git names a tracked file in its own case,
-// while a link's text, which its target keeps (linkTarget), may spell it in
-// another.
-func UnderTarget(f, t string) bool {
+// linkedChanges are the files of all (every file git lists, with no
+// pathspec) at or under a link target of links (UnderTarget), which git's
+// pathspec may have left out: its icase folds ASCII only, so a literal
+// .agents/skills misses a tracked .agents/ſkills/x/SKILL.md that macOS
+// writes into .agents/skills/x/.
+func linkedChanges(all []string, links map[string]projectPath) []string {
+	return slices.DeleteFunc(slices.Clone(all), func(f string) bool {
+		for t := range links {
+			if UnderTarget(f, t) {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// TargetMatch says whether a path is a link's target or lies under it
+// (MatchTarget).
+type TargetMatch int
+
+const (
+	// NotUnder: the path is neither the target nor under it.
+	NotUnder TargetMatch = iota
+	// MaybeUnder: it may be, and magnum cannot tell: an element of the path
+	// and the target's that differ have a byte outside ASCII, which a
+	// case-insensitive filesystem folds by rules of its own (APFS opens
+	// claß.md for class.md, ﬁrst.md for first.md and a decomposed name for
+	// its composed spelling; HFS+ also ignores some code points).
+	MaybeUnder
+	// Under: the path is the target or lies under it.
+	Under
+)
+
+// MatchTarget says whether f, a path relative to the checkout's root, is
+// the link target t or lies under it, element by element, in ASCII case:
+// git names a tracked file in its own case, while a link's text, which its
+// target keeps (linkTarget), may spell it in another, and every
+// case-insensitive filesystem folds ASCII alike. An element with a byte
+// outside ASCII matches only one of the same bytes for sure; where it
+// differs, the answer is MaybeUnder.
+func MatchTarget(f, t string) TargetMatch {
 	fp, tp := strings.Split(f, "/"), strings.Split(t, "/")
-	return len(fp) >= len(tp) && slices.EqualFunc(fp[:len(tp)], tp, strings.EqualFold)
+	if len(fp) < len(tp) {
+		return NotUnder
+	}
+	m := Under
+	for i, e := range tp {
+		switch {
+		case asciiEqualFold(fp[i], e):
+		case !isASCII(fp[i]) || !isASCII(e):
+			m = MaybeUnder
+		default:
+			return NotUnder
+		}
+	}
+	return m
+}
+
+// UnderTarget reports whether f may be the link target t or lie under it
+// (MatchTarget: Under or MaybeUnder): a name magnum cannot fold counts, so
+// the session and the reload check err toward the config.
+func UnderTarget(f, t string) bool { return MatchTarget(f, t) != NotUnder }
+
+// asciiEqualFold reports whether a and b are equal with ASCII letters
+// folded, every other byte as it is.
+func asciiEqualFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range len(a) {
+		x, y := a[i], b[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
+}
+
+// isASCII reports whether s has no byte outside ASCII.
+func isASCII(s string) bool {
+	for i := range len(s) {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }
 
 // pathOf returns the project path f (relative to the checkout's root) is,
@@ -841,13 +933,20 @@ func (m *Manager) projectChanges(ctx context.Context, g *gitx.Client, dir, base 
 
 // committedChanges reports whether the commits from the merge base mb to
 // HEAD change the project config disk names (git diff mb...HEAD over the
-// same paths, a link's target mapped to the link as for the work
-// tree), which a PR's file list shows; false when only the work tree
+// same paths, and with links every file it lists, matched to their
+// targets: linkedChanges; a link's target mapped to the link as for the
+// work tree), which a PR's file list shows; false when only the work tree
 // differs (untracked or ignored files, uncommitted edits: what a round left
 // in the slot). A git that cannot tell counts as a change, so the record
 // keeps blaming the PR (it is only a warning).
 func (m *Manager) committedChanges(ctx context.Context, g *gitx.Client, role config.Role, dir, mb string, pc projectConfig, disk diskPaths) bool {
 	files, err := g.ChangedUnder(ctx, dir, mb, "HEAD", disk.git...)
+	if err == nil && len(disk.links) > 0 {
+		var all []string
+		if all, err = g.ChangedNames(ctx, dir, mb, "HEAD"); err == nil {
+			files = append(files, linkedChanges(all, disk.links)...)
+		}
+	}
 	if err != nil {
 		m.logErr(ctx, err, "agents: %s: cannot list the commits' changes of %s since the merge base, so they count as the PR's: %v", role.Name, pc.labels(nil), err)
 		return true

@@ -395,3 +395,32 @@ func TestChangedNamesListsWhatAPathspecWouldMiss(t *testing.T) {
 		t.Fatalf("ChangedNames = %q, %v; want %q", got, err, want)
 	}
 }
+
+// WorkTreeNames lists every tracked file whose state on disk differs from
+// a base, with no pathspec (committed, staged and unstaged changes alike,
+// a deletion too), for a caller that matches the paths itself; an
+// untracked file is not listed, and a listing cut at execx.MaxOutput fails.
+func TestWorkTreeNamesListsEveryTrackedChange(t *testing.T) {
+	ctx := context.Background()
+	c, f := newFake(execx.Rule{Prefix: []string{"git", "-C", slot, "diff"}, Result: execx.Result{Truncated: true, Stdout: []byte("a\x00")}})
+	if _, err := c.WorkTreeNames(ctx, slot, sha1); !errors.Is(err, ErrTreeTooLarge) {
+		t.Fatalf("a cut listing: %v, want ErrTreeTooLarge", err)
+	}
+	wantCall(t, f, 0, false, "git", "-C", slot, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", sha1, "--")
+	for _, bad := range []string{"", "-x", "a..b"} {
+		if _, err := c.WorkTreeNames(ctx, slot, bad); err == nil {
+			t.Errorf("WorkTreeNames(%q) must be refused", bad)
+		}
+	}
+
+	fx := newFixture(t)
+	dir := fx.origin
+	base := fx.commit(dir, "docs/guide.md", "the team's\n", "Add a guide")
+	fx.commit(dir, "app/x.rb", "x\n", "Change the app")
+	fx.write(dir, "docs/guide.md", "edited\n")
+	fx.write(dir, "untracked.md", "u\n")
+	got, err := fx.c.WorkTreeNames(ctx, dir, base)
+	if want := []string{"app/x.rb", "docs/guide.md"}; err != nil || !slices.Equal(got, want) {
+		t.Fatalf("WorkTreeNames = %q, %v; want %q", got, err, want)
+	}
+}

@@ -49,7 +49,7 @@ func TestALinkInsideTheClaudeDirectoryIsComparedAsItsTarget(t *testing.T) {
 	if raw, _, _ := e.st.GetKV(e.ctx, store.KVPRProject(e.pr.ID, KindClaude)); !ok || !slices.Equal(n.Paths, []string{".claude/"}) {
 		t.Fatalf("record %s: want a decline for .claude/", raw)
 	}
-	diffs := e.run.CallsWithPrefix("git", "-C", dir, "diff")
+	diffs := filteredDiffs(e, dir)
 	if len(diffs) == 0 {
 		t.Fatalf("no git diff: %v", e.run.Calls)
 	}
@@ -59,6 +59,13 @@ func TestALinkInsideTheClaudeDirectoryIsComparedAsItsTarget(t *testing.T) {
 			t.Fatalf("git %q: want the links' targets in the checkout compared, and no other", d.Args)
 		}
 	}
+}
+
+// filteredDiffs are the git diffs the session ran in dir with a pathspec:
+// with links it also lists every changed file (no pathspec, "--" last),
+// which it matches to the targets itself.
+func filteredDiffs(e *env, dir string) []execx.Cmd {
+	return slices.DeleteFunc(e.run.CallsWithPrefix("git", "-C", dir, "diff"), func(c execx.Cmd) bool { return c.Args[len(c.Args)-1] == "--" })
 }
 
 // git names a tracked file in its own case (docs/guide.md), while a link that
@@ -87,6 +94,64 @@ func TestALinksTargetMatchesAChangedFileInAnyCase(t *testing.T) {
 		if got := UnderTarget(c.f, c.t); got != c.want {
 			t.Errorf("UnderTarget(%q, %q) = %v, want %v", c.f, c.t, got, c.want)
 		}
+	}
+}
+
+// A case-insensitive filesystem folds a name outside ASCII by rules of its
+// own (APFS opens claß.md for class.md, ﬁrst.md for first.md, a decomposed
+// name for its composed spelling; HFS+ also ignores some code points),
+// which magnum does not model: where an element of the path or the target
+// has a byte outside ASCII and the two differ, whether the path is the
+// target or under it cannot be told (MaybeUnder), and UnderTarget, which
+// the session and the reload check ask, counts it. ASCII elements decide
+// in ASCII case, exactly, as every such filesystem agrees.
+func TestMatchTargetCannotTellANameOutsideASCII(t *testing.T) {
+	for _, c := range []struct {
+		f, t string
+		want TargetMatch
+	}{
+		{"docs/guide.md", "Docs/Guide.md", Under},
+		{"docs/claß.md", "docs/class.md", MaybeUnder},
+		{"docs/ﬁrst.md", "docs/first.md", MaybeUnder},
+		{"docs/cafe\u0301.md", "docs/caf\u00e9.md", MaybeUnder},
+		{".agents/ſkills/pwn/SKILL.md", ".agents/skills", MaybeUnder},
+		{"docs/日本.md", "docs/日本.md", Under},
+		{"app/日本.rb", ".agents/skills", NotUnder},
+		{"docs/guide.mdx", "docs/guide.md", NotUnder},
+	} {
+		if got := MatchTarget(c.f, c.t); got != c.want {
+			t.Errorf("MatchTarget(%q, %q) = %v, want %v", c.f, c.t, got, c.want)
+		}
+		if got, want := UnderTarget(c.f, c.t), c.want != NotUnder; got != want {
+			t.Errorf("UnderTarget(%q, %q) = %v, want %v", c.f, c.t, got, want)
+		}
+	}
+}
+
+// git's icase pathspec folds ASCII only, so the compare of a link's target
+// (.agents/skills, literally) leaves out a tracked .agents/ſkills/pwn/SKILL.md
+// the PR added, which macOS writes into .agents/skills/pwn/ where the
+// session loads it: when the checkout has links, the session reads every
+// file that differs from the merge base, unfiltered, and matches it to the
+// targets itself. It declines.
+func TestASessionComparesALinksTargetUnderAnotherSpelling(t *testing.T) {
+	e, dir, ws := projectEnv(t, map[string]string{".claude/settings.json": "{}", ".agents/skills/x/SKILL.md": "x\n"}, nil, nil)
+	if err := os.Symlink("../.agents/skills", filepath.Join(dir, ".claude", "skills")); err != nil {
+		t.Fatal(err)
+	}
+	const alias = ".agents/ſkills/pwn/SKILL.md"
+	e.run.Rules = append([]execx.Rule{{Prefix: []string{"git", "-C", dir, "diff"}, Fn: func(c execx.Cmd) (execx.Result, error) {
+		if c.Args[len(c.Args)-1] == "--" { // no pathspec
+			return execx.Result{Stdout: []byte(alias + "\x00")}, nil
+		}
+		return execx.Result{}, nil // git's literal icase pathspec: ASCII only
+	}}}, e.run.Rules...)
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], ""); err != nil {
+		t.Fatal(err)
+	}
+	n, ok := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindClaude)
+	if raw, _, _ := e.st.GetKV(e.ctx, store.KVPRProject(e.pr.ID, KindClaude)); !ok || !slices.Equal(n.Paths, []string{".claude/"}) || n.Residue {
+		t.Fatalf("record %s: want a decline for .claude/, the PR's", raw)
 	}
 }
 
@@ -222,7 +287,7 @@ func TestALinkOfTheAgentsConfigBelowTheRootIsComparedAsItsTarget(t *testing.T) {
 				raw, _, _ := e.st.GetKV(e.ctx, store.KVPRProject(e.pr.ID, KindClaude))
 				t.Fatalf("record %s: want a decline for %s", raw, c.label)
 			}
-			diffs := e.run.CallsWithPrefix("git", "-C", dir, "diff")
+			diffs := filteredDiffs(e, dir)
 			if len(diffs) == 0 {
 				t.Fatalf("no git diff: %v", e.run.Calls)
 			}
