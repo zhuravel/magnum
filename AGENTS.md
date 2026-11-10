@@ -150,6 +150,7 @@ curation, Run loop (`h.goRun`) or toasts outlive it. The tui tests build screens
 | `internal/staging` | which open PRs are live on a staging environment (latest, pushed, outdated, none, unknown), read only: a treeless bare mirror per repository under `[staging] mirror_dir`, GitHub's deployments and ci.yml's runs, at most once a minute across both daemons; never pushes |
 | `internal/launchd`, `reveal` | the LaunchAgent; bringing the herdr client to the front of the terminal |
 | `internal/paths`, `fsx`, `textx` | the on-disk layout; the shared file (atomic write) and text helpers, leaves on the stdlib |
+| `internal/scrub` | the secret scrub both daemons share, a leaf on `execx`: `Text` (secrets, emails, hosts) for what the factory keeps, `Secrets` (no email or host pass) for CI log tails; `scrub.py` in the improvement loop is held to it by a test |
 | `internal/relay`, `cmd/magnum-relay`, `deploy/relay` | the webhook relay, a separate internet-facing service (stdlib and SQLite only): signed receiver, journal, listing; its Dockerfile, compose file and deploy guide |
 | `docs/` | API doc (generated), decisions, probe notes (`spikes.md`), gh-dash keys |
 | `.claude/skills/magnum-improve` | the operator's improvement loop (`/magnum-improve` in Claude Code): evidence, analysts, specs, landing |

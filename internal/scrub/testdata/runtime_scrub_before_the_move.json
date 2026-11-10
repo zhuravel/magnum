@@ -1,0 +1,275 @@
+[
+  {
+    "seed": 0,
+    "in_sha256": "1a77baf9891163dd14aa97ac85ec9b16dc99fdb0bfa9b6e935f8300a63435ddc",
+    "out_sha256": "a68a6e0ea7874302e550ac5a133fcb8cb8b1f03c5298fcc68481bfcf9c823960",
+    "out": "password: <redacted>"
+  },
+  {
+    "seed": 1,
+    "in_sha256": "572eb09824630d9ae13882f677578358b4a70e118c5171abfa5bf14bc0aa3a0a",
+    "out_sha256": "c92bf168fc439b1ef9ebdf828e4cba0a58e04024c566665741d8d64f54cbaa0a"
+  },
+  {
+    "seed": 2,
+    "in_sha256": "8a089d7e831d902a08fd2b694d5d26f4898b9605ce8b8ad65537cad22391e2d9",
+    "out_sha256": "a729080de9177fac6c0e32c063d0587c24d500a2c34d0912e84adbef41e5850f"
+  },
+  {
+    "seed": 3,
+    "in_sha256": "fa586181aec304035870947746db96076b19492361d91a0fbce14d3aa6da9f5e",
+    "out_sha256": "3a2d1afa44d101200100d332f52384e523e7e881b7db0008da228cd94cebdfe1",
+    "out": "<redacted>"
+  },
+  {
+    "seed": 4,
+    "in_sha256": "0f8093ae234bd0f21621857e66a384c5b8aca48ccab273016920beae3126f767",
+    "out_sha256": "29f91c49b41bb3c02fd7dbdce1b9032cc12be2ae21b0db5f55b008bb885da662"
+  },
+  {
+    "seed": 5,
+    "in_sha256": "735b1dc4e1a8a573c96ca6849f3dc23457dd4fe4978cd0e7e758db30a2872c8d",
+    "out_sha256": "120c96e6d8b61efdaa6194d4b9e3f61ca02c962a336d76a6b8fc741f0c389340"
+  },
+  {
+    "seed": 6,
+    "in_sha256": "2a34127a345fd4c3c9dad0531a4ea9066faadb413590f21b6b617fc8b929862a",
+    "out_sha256": "057997d6bead9cdec0e90d7e31fab8f3c93d99b81209ce83951f868fda6330d0"
+  },
+  {
+    "seed": 7,
+    "in_sha256": "03534d2ec612a7592c614250a5f7c40362e72ca8fe0282a96824e5a4085b55f8",
+    "out_sha256": "057997d6bead9cdec0e90d7e31fab8f3c93d99b81209ce83951f868fda6330d0"
+  },
+  {
+    "seed": 8,
+    "in_sha256": "4bf95ba3902070b7536f1f46bcb642f9a09d651aa80f9d17b482e3e894791006",
+    "out_sha256": "8af58836cd6da65cec8d936fe9a9df38ab07a3f317f05a906e33cb8b31a7f721",
+    "out": "<redacted>: bearer password= <redacted>"
+  },
+  {
+    "seed": 9,
+    "in_sha256": "112a513ab8cbedb7a9e97ffb4c3c4f381241b933af8151007863bbb9b2551067",
+    "out_sha256": "d88922ac93332bf101d7a070063d1e8da142d905bbdd9bce6936dfaa36f85992",
+    "out": "password=<redacted>"
+  },
+  {
+    "seed": 10,
+    "in_sha256": "e84f72172ae3087bedae110e4b79fd79f392c20dd197737e1c4f23e492a2ab68",
+    "out_sha256": "6f624e49e2d64c46a5025e109f90c419583f43526115936dddf543a2c31ecf58",
+    "out": "Authorization: <redacted>"
+  },
+  {
+    "seed": 11,
+    "in_sha256": "ee1ef5f6905aa2dd5200e08d869a655f41ba6f21239014e55a63ced4967a80d7",
+    "out_sha256": "d2517ff58211f8a77eb61dbd6fa56bcf61c50da75491693fe5f605b674e0e0d2",
+    "out": "paſſword=<redacted>"
+  },
+  {
+    "seed": 12,
+    "in_sha256": "6601750488796165adc8c61d7ca0fa9d927f186a8ffc66897a48297b1f20f355",
+    "out_sha256": "d817d978cff6661a4fc3f7a4bf2f44716015e2271429fcbf647b758637e6cba4",
+    "out": "toKen: <redacted>"
+  },
+  {
+    "seed": 13,
+    "in_sha256": "d80a33082206387bc3b589de649cc30bc3967b9b5d5a22dd23ffe8a8ce4bf999",
+    "out_sha256": "8b3622be425afdccbec40fee317c2c79203221f4a594d9677c1553fade5c64e7",
+    "out": "mail <host> and db2.example.uK"
+  },
+  {
+    "seed": 14,
+    "in_sha256": "93c1cf120d7d27c21b8a987ff4d3bc9fc7777423d2fbbcb106971749799d4960",
+    "out_sha256": "e5f52204b31574fea57d08941acb84116ef70763454e8e59e6fa5fc057e4870a",
+    "out": "- token <redacted> here, and a JWT <redacted>\n- Authorization: <redacted> then Authorization: <redacted>\n"
+  },
+  {
+    "seed": 15,
+    "in_sha256": "ee828f7f9f307104b8858521148d51acff675c05974cecde4c7e2d2368775746",
+    "out_sha256": "7df575e1baab36b3c3b90e8667f7747d27e7acb6deb84839d8810cba3552a7f2",
+    "out": "- <redacted> and aws_secret_access_key=<redacted>\n- <redacted> <redacted> <redacted> <redacted> <redacted> <redacted>\n"
+  },
+  {
+    "seed": 16,
+    "in_sha256": "65f72a2e1ccd9beca5d49cb852f018fdc031d9316c64deb313a9f9085c31cd49",
+    "out_sha256": "836250deb31a449070ff2c3c44378061d3b11cea96b639769dc0f5b88d2ffc3a",
+    "out": "- password=<redacted> client_secret: <redacted> api_key:\n  <redacted>\n- mail <email> about <host> and <host>\n"
+  },
+  {
+    "seed": 17,
+    "in_sha256": "5f77e6030128c453bfeab7fbd3474474b94930b23c2c41a6d7a151b1102fbf8b",
+    "out_sha256": "50a24644d4377578d03dcc3bfbbb54133f56781bcf1faa97a5711b8e0b1d7368",
+    "out": "<redacted>\n- the cut key follows\n<redacted>"
+  },
+  {
+    "seed": 18,
+    "in_sha256": "a6db79e91f95e317e350f6d02ce957e9f715fdaf40ecb0b9d67abb4d6ef801a6",
+    "out_sha256": "9eb8af77dc15cbaea0c430628676d7ce9fc61393a88979803ecedb225acee16a",
+    "out": "{\"password\":<redacted>,\"user\":\"alice\"}, \"api_key\": <redacted>, 'secret': <redacted>, \"token\" = <redacted>,\"n\":1}"
+  },
+  {
+    "seed": 19,
+    "in_sha256": "982f67ff1b3104a468751e53f18f777b5b7f67fe8185e32281f1100467765c5b",
+    "out_sha256": "1ff45c69f5ee1bc9c4d6f00adc65bc72a1d83f7ab4cc1d008bb23678db62d794",
+    "out": "{\"X-Api-Key\":<redacted>,\"x_auth-token\": <redacted>, \"client_secret\":<redacted>]}[\"pwd\": <redacted>]"
+  },
+  {
+    "seed": 20,
+    "in_sha256": "141d17e09ea89956845bfba783178a445705a39c4d5ee4160ba71f13092f5e17",
+    "out_sha256": "b5c9be9d73c87f3b41431330550456acd90d76da9893fbfee424a586fe48fd86",
+    "out": "{\"password\": <redacted>, \"user\": \"alice\"}\n\"private_key\":\n<redacted>"
+  },
+  {
+    "seed": 21,
+    "in_sha256": "76a58b4c18d7597be963d3bcab91931c08f32d2f8a5b23da3037c3edff1e76f0",
+    "out_sha256": "b7cc377247c85dcdc40f2ddfc850d491ca7126bd4bb286a7a95aa3cbec62a698",
+    "out": "DB_PASSWORD=<redacted>\nGITHUB_TOKEN: <redacted>\nMY_APP.SECRET = <redacted>\nexport OPENAI_API_KEY=<redacted>\nDEPLOY_AWS_SECRET_ACCESS_KEY=<redacted>\nMAX_TOKENS=4096 TOKEN_LIMIT=5 mypassword=x 2password=y secretary: Jo\n__token: <redacted>"
+  },
+  {
+    "seed": 22,
+    "in_sha256": "b6a8ea55cc42897e5f871532b43e27e8d95690bf66778f3cb5ce9592e506f24e",
+    "out_sha256": "622a93a2831fcb7db1b64ab4998767ba052aa2152e40fa5050e49c26938bae4e",
+    "out": "{\"DB_PASSWORD\": <redacted>, 'stripe-api-key': <redacted>, \"__token\":<redacted>, \"db2_pwd\":<redacted>, \"2password\": \"x\", \"MAX_TOKENS\": 4096}{\"SLACK_BOT_TOKEN\":<redacted>,\"DB_HOST\":\"<host>\",\"DB_PASSWORD_HINT\":\"x\"}"
+  },
+  {
+    "seed": 23,
+    "in_sha256": "37f50b462c260d9353f72a26dc97701720562fc8d9b9d90d22f8d6b768a5b305",
+    "out_sha256": "f619324a1bc59f814afa0a1e2b37fcddbed403ee0a8c56b8d5ed9976559a8234",
+    "out": "dB_paſſword=<redacted>\nGITHUB_TOKEN: <redacted>\n\"xſ_token\": <redacted>, \"K_ſecret\": <redacted>"
+  },
+  {
+    "seed": 24,
+    "in_sha256": "c6c05235da24bf0ef1a9fc3857893e06cc8a19a15b5b019c7f4193b475a28293",
+    "out_sha256": "375bbbb035f173650272e6ed0c70e8062e35acf1bbd76ea06c766d963d6d96e5"
+  },
+  {
+    "seed": 25,
+    "in_sha256": "ac840b907ecee7afeadb1d8c1307945d1c334219834853526218ac37ad6c8c49",
+    "out_sha256": "a41a04a6a48e2d0cfff99030e8aec92c5592c36e61e5f0019224023f82704054"
+  },
+  {
+    "seed": 26,
+    "in_sha256": "f60a9147c3d89aa0605da21555dcedc4245f6e0b596a52e26ec6199370c58b81",
+    "out_sha256": "c54ae566498c99fdfecd97e0cbe5ed896535a2529e94283561163a421c0c6f29",
+    "out": "SECRET_KEY_BASE=<redacted>\nsecret_key_base: <redacted> \"secret_key_base\": <redacted> SECRET_KEY_BASE_DUMMY=1\n"
+  },
+  {
+    "seed": 27,
+    "in_sha256": "c013093a7936bd77d2700c6f41830a353c174ec6a9456f661047f5e5dfb73cf3",
+    "out_sha256": "5f0976ef3dc45a86fe808ca42f32afca045ba9ac1aacf9329bd0bdb77e9152ec",
+    "out": "RAILS_MASTER_KEY=<redacted>\nmaster-key: <redacted> {\"master_key\":<redacted>,\"master_keys\":\"x\"}\n"
+  },
+  {
+    "seed": 28,
+    "in_sha256": "abe499894b020c765320c45445a207c40b2c982a9943d9cf576887cdb6830536",
+    "out_sha256": "6166cbaec49062e4478fa9ae76f048cf38a66a5bc4330788388a58bdab332c09",
+    "out": "signing_key = <redacted>\n{\"signing_key\": <redacted>, 'Signing-Key': <redacted>} DB_PASSWORD_FILE=/run/secrets/db\n"
+  },
+  {
+    "seed": 29,
+    "in_sha256": "ae5d9ef2b11f99050b3d5df58341131024f9683df3eff8799bee0f20d29d7937",
+    "out_sha256": "0132cdea2572e892528695a9305811b80c5ac8d8752ae8de57a90cf379cdb157",
+    "out": "config.encryption_key: <redacted>\n{\"encryption_key\":<redacted>} API_KEY_ID=MADEUP-ID\n"
+  },
+  {
+    "seed": 30,
+    "in_sha256": "10f81573c77cfd1407a9c23d7f3c5897806c2be699f69a2a41535db9d365a7f4",
+    "out_sha256": "241faf5d88a8f528b3c80c34b21020d472997b07159ef3ea0aa8526be997d83e",
+    "out": "SESSION_SECRET:\n<redacted> <redacted>\nDB_PASSWORD=\n<redacted> <redacted>\nsigning_key:\n  <redacted> <redacted>\n\"DB_PASSWORD\":\n  <redacted> <redacted>\nGITHUB_TOKEN=<redacted> <redacted>\n\"secret\": <redacted> <redacted>"
+  },
+  {
+    "seed": 31,
+    "in_sha256": "adfbb59807065482c0c5da83b1895aebe64d6a0eb4b459d5a3124a65e3d58fed",
+    "out_sha256": "8593c15f5aac29968947dcae2c379d6c13abd99c9c22f3502f022215cd626404",
+    "out": "{\"password\":<redacted>}\n{\"password\":<redacted>,\"user\":\"alice\"} {'password': <redacted>} {\"password\":<redacted>,\"user\":\"alice\"}"
+  },
+  {
+    "seed": 32,
+    "in_sha256": "714fdef529776868bf0fa2be5478e09ef6da74269dcbd9d87c864ebf8c34c2a7",
+    "out_sha256": "5515a4714f3d73ede38f4359aef32a1ed41710c597f395671f62ce6399bf5e4d",
+    "out": "DB_PASSWORD=<redacted> next password=<redacted> c\" more {\"token\":<redacted>,\"user\":\"alice\"} {\"password\":<redacted>"
+  },
+  {
+    "seed": 33,
+    "in_sha256": "9f3106b43825214fc54a8b6f110435e1c92240b157b78bdb248e6db8c8f881ce",
+    "out_sha256": "ac8f0e1ee4f665d3fb3fc01d294890016b81ef7f323262b2eb48ec39cf164d25",
+    "out": "{\"password\":<redacted>, \"token\": <redacted>}"
+  },
+  {
+    "seed": 34,
+    "in_sha256": "4ccf94f5faed93ec5a705ac1f074172019675ba570ce2e52a1b492124fd1c5d5",
+    "out_sha256": "32f2730a2aca385c221680b4bdc6e9098ef1511df14bcb66bb6282e3c461c1a0",
+    "out": "{\"password\":<redacted>, \"token\": <redacted>} DB_PASSWORD=<redacted>"
+  },
+  {
+    "seed": 35,
+    "in_sha256": "6257d0d44d2e5a2848aac1a5548ead777d46ca304f2dfe3544b279c1e386dcbd",
+    "out_sha256": "570c59852df10e439210d005c1e58e8085c75809793d1ece7c5f6148b5ed9cf2",
+    "out": "{\"token\":<redacted>a token=<redacted> c\", \"pwd\" : <redacted>'s'}"
+  },
+  {
+    "seed": 36,
+    "in_sha256": "9e4d58999c2eb2176b9f5fdbfd92d7e1e759c2a0ea93531b6155a9c0585523e1",
+    "out_sha256": "8e3b66e63d2c8500e7bf6ff38ac7a49d0f02ec812574b83af170dd2e60b47bf4",
+    "out": "\"pwd: <redacted> and \"token: <redacted> {\"my password\": \"MADEUP-SPACE\", \"a'password\": <redacted>}"
+  },
+  {
+    "seed": 37,
+    "in_sha256": "c7d1dc6b02443ed7af835a86103569eafe9d8e30f9636224285a4b7606c65abe",
+    "out_sha256": "c7d1dc6b02443ed7af835a86103569eafe9d8e30f9636224285a4b7606c65abe",
+    "out": "{\"password_hint\":\"the dog\",\"tokens_used\":3,\"mypassword\":\"MADEUP\",\"user\":\"password\",\"note\":\"token\"}{\\\"password\\\":\\\"ESCAPED-JSON\\\"} \"password\" is a word, and so is 'token' too"
+  },
+  {
+    "seed": 38,
+    "in_sha256": "0747465ec0e9314c747bdd2ee0faab81c12d367891b987d0430df00b9e01245a",
+    "out_sha256": "b20f15dfaf8c4122714a3fcb9410924348c81fb9601938ed9379af462c0d227b",
+    "out": "{\"paſſword\":<redacted>,\"toKen\":<redacted>,\"aſ-api_Key\":<redacted>}\"aKpassword\": <redacted>, \"ſpwd\" = <redacted>"
+  },
+  {
+    "seed": 39,
+    "in_sha256": "245042fab0aa0d72fa724a6c561c1ea743dc999208c96fbcd312df73a520b63c",
+    "out_sha256": "b8821e48afcc5fc0d484efe08ba99c07d6b7634b2c3ba59630680f1306f1b3bd"
+  },
+  {
+    "seed": 40,
+    "in_sha256": "0bd6136ac9fbc81b37d4087c2210a393f841825d6822cb9d3abef6899e7fd783",
+    "out_sha256": "10c6b607a86c8ad891c9a31342992ab0f04629ad1802b5a24862c057e5144f35"
+  },
+  {
+    "seed": 41,
+    "in_sha256": "fc9aefb80b2d81b2abf294c4630593f743f67e5e8e074780803a79c850243906",
+    "out_sha256": "4637300bdfc92db39bdca43299ef7088b22fa211db26ef953ff2136466ea2eb2"
+  },
+  {
+    "seed": 42,
+    "in_sha256": "de86171cf6a9ccf713c7086c39458af5b95ec2c16e129d215bcd955a63dd0bf6",
+    "out_sha256": "de86171cf6a9ccf713c7086c39458af5b95ec2c16e129d215bcd955a63dd0bf6"
+  },
+  {
+    "seed": 43,
+    "in_sha256": "32687ddfe4d3a16b21ba8062a111af985dea89db5eeff1e82646239c11ba8cb8",
+    "out_sha256": "76e1ad9a20a3f78e001934ffda82135fbad0222797fb071b51f95b0e5fb06f9c",
+    "out": "- eyJshort.<redacted> and <email><email>"
+  },
+  {
+    "seed": 44,
+    "in_sha256": "895b5d895c4f32abb8e50c91ed829bb318f7bed6311e5077a182bf212e261b22",
+    "out_sha256": "3a2d1afa44d101200100d332f52384e523e7e881b7db0008da228cd94cebdfe1",
+    "out": "<redacted>"
+  },
+  {
+    "seed": 45,
+    "in_sha256": "2ae34f83fbb9533453a0b50926b95d87e7da93453ce5e681a3db68f8acbd26fa",
+    "out_sha256": "2ae34f83fbb9533453a0b50926b95d87e7da93453ce5e681a3db68f8acbd26fa"
+  },
+  {
+    "seed": 46,
+    "in_sha256": "ab5df406978ab228ad60a3e08b8321b7f9456d205368d075e41b52dc79d04760",
+    "out_sha256": "a80f70daca3ed8b97cee186af81869e9c1b38d9730f40c791195756d910f5c14"
+  },
+  {
+    "seed": 47,
+    "in_sha256": "f14762d2b21e0886963ff0fb8b4c87ab25b0b3e2c08a4303fb8b3289e562c8dd",
+    "out_sha256": "f14762d2b21e0886963ff0fb8b4c87ab25b0b3e2c08a4303fb8b3289e562c8dd"
+  }
+]

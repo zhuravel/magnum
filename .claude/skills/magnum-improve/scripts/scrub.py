@@ -1,14 +1,15 @@
 """The scrub the factory runs before it keeps text, for the improvement loop's evidence.sh.
 
-It is internal/factory/runtime/scrub.go after execx.Redact: GitHub tokens, JWTs, Authorization values and private keys;
-AWS, Slack, OpenAI, Anthropic, GitLab, Stripe and Google keys; the values of password=, token: and the like (the key
-stays), in three passes: the pairs as they were before R58, the pairs under a quoted key as JSON, YAML and TOML write
-one, "password": "x", and the pairs with an env-style name, DB_PASSWORD=x; emails; host names and IPv4 addresses. Each
-pattern is the Go one word for word, in the lists below, and go() compiles it with Go's meaning. It masks every byte
-the Go scrub masks; it masks more only where a run of host characters is longer than a host name may be, and where a
-run of non-space characters is still over 2,000 after the masks. In internal/factory/runtime, TestEvidenceScrubHoldsTheGoScrubsPatterns checks the lists against every pattern
-the Go source compiles, and Scrub's passes against its replay there; FuzzEvidenceScrubMasksEveryByteScrubMasks feeds
-both scrubs the same texts and wants this one's output to be the Go scrub's with these two extra masks.
+It is internal/scrub/scrub.go (Text, which the factory's runtime.Scrub calls) after execx.Redact: GitHub tokens, JWTs,
+Authorization values and private keys; AWS, Slack, OpenAI, Anthropic, GitLab, Stripe and Google keys; the values of
+password=, token: and the like (the key stays), in three passes: the pairs as they were before R58, the pairs under a
+quoted key as JSON, YAML and TOML write one, "password": "x", and the pairs with an env-style name, DB_PASSWORD=x;
+emails; host names and IPv4 addresses. Each pattern is the Go one word for word, in the lists below, and go() compiles
+it with Go's meaning. It masks every byte the Go scrub masks; it masks more only where a run of host characters is
+longer than a host name may be, and where a run of non-space characters is still over 2,000 after the masks. In
+internal/scrub, TestEvidenceScrubHoldsTheGoScrubsPatterns checks the lists against every pattern the Go source compiles
+(scrub.go and execx.go), and the passes of Text against its replay there; FuzzEvidenceScrubMasksEveryByteScrubMasks
+feeds both scrubs the same texts and wants this one's output to be the Go scrub's with these two extra masks.
 
 Python's engine, unlike Go's, backtracks: the JWT pattern on an eyJ repeated, the email pattern on a long run of the
 characters an address is made of and the host pattern on a dotted run take minutes on a long word. So the JWT and the
@@ -119,8 +120,8 @@ def go_class(cls, fold):
     return ("[^" if neg else "[") + extra + "".join(members) + "]"
 
 
-# The Go scrub's patterns word for word, in its order: execx.Redact's four, then runtime.Scrub's token shapes, key-value
-# pairs, emails and hosts. TestEvidenceScrubHoldsTheGoScrubsPatterns (internal/factory/runtime) checks these lists
+# The Go scrub's patterns word for word, in its order: execx.Redact's four, then internal/scrub's token shapes, key-value
+# pairs, emails and hosts. TestEvidenceScrubHoldsTheGoScrubsPatterns (internal/scrub) checks these lists
 # against the Go source.
 REDACT_GO = [
     r"(?:gho_|ghs_|ghp_|ghu_|ghr_|github_pat_)[A-Za-z0-9_]+",
@@ -139,10 +140,10 @@ TOKENS_GO = [
 # The key-value patterns, in the order scrub() runs them. PAIRS_GO is the pattern as it was before R58, word for word:
 # it runs first, on the text it saw then, so that no byte masked before is shown now (a newly covered key with no
 # value takes the name of the next key for its value, and the next value would show). QUOTED_GO, the pairs under a
-# quoted key (R58), and ENV_GO take the key names of KEYS_GO (runtime.scrubKeyWords). The key word ends the key, and
+# quoted key (R58), and ENV_GO take the key names of KEYS_GO (scrub.scrubKeyWords). The key word ends the key, and
 # it starts the key or follows a boundary or an underscore (DB_PASSWORD=, "x-api-key"). In QUOTED_GO the key word is
 # the only part under (?i:), so a prefix that ends in the long s or the Kelvin sign is one of non-word characters,
-# as \b counts it. A quoted value reads escapes (runtime.scrubQuotedValue), written unrolled so that the engine runs
+# as \b counts it. A quoted value reads escapes (scrub.scrubQuotedValue), written unrolled so that the engine runs
 # it in linear time on a string that never ends.
 KEYS_GO = r"(?:aws_)?(?:secret(?:_access)?_key(?:_base)?|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|master[_-]?key|signing[_-]?key|encryption[_-]?key|client[_-]?secret)"
 QUOTED_VALUE_GO = r"""("[^"\\]*(?:\\[\s\S][^"\\]*)*"|'[^'\\]*(?:\\[\s\S][^'\\]*)*'"""

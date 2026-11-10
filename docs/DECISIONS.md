@@ -23479,6 +23479,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   and the fuzz's seeds, which hold scrub.py to Scrub and Scrub to the oracle; selftest.sh's case 29 on task 22's
   notes. No new dependencies.
 
+- **The factory's scrub is a leaf package, `internal/scrub`, that both daemons import, with `Text` for what the
+  factory keeps and `Secrets` for CI log tails** (2026-11-10, R58 follow-up). The review daemon is about to put the
+  tails of failed CI job logs into the fixer's report folder, and those logs carry `DB_PASSWORD=x` and
+  `RAILS_MASTER_KEY=x`. The engine scrubbed with `execx.Redact`, which is weaker than `runtime.Scrub` since R58, and it
+  must not import `internal/factory/runtime`. So the masking moved, with no change of behaviour.
+  - `scrub.Text(text) string` is what `runtime.Scrub` masked: `execx.Redact`, the token shapes, `scrubPairs`,
+    `scrubQuotedPairs`, `scrubEnvPairs`, the emails, the host names, in that order. The patterns moved word for word
+    with their comments. `runtime.Scrub` keeps its signature and its long-block rule (`kept` is false for more than 40
+    lines or 4000 bytes) and calls `scrub.Text`.
+  - `scrub.Secrets(text) string` is `Text` without the email and host passes: `execx.Redact`, the tokens and the three
+    key-value passes, in that order. A host in a failing test's output is what the fixer needs, so the CI log tails
+    keep hosts and addresses and lose the secrets. `Text` is `Secrets` followed by the email and host passes.
+  - The evidence scrub's parity test (`TestEvidenceScrubHoldsTheGoScrubsPatterns` and the fuzz) moved with the
+    patterns, and reads `internal/scrub/scrub.go` and `execx.go`. It counts the passes of `Secrets`, then of `Text`
+    (which calls `Secrets`) against its replay, so a pattern or a pass added to scrub.go and not to scrub.py fails it
+    (the set, the list and both counts). scrub.py, evidence.sh, selftest.sh and landing.md name the new place. The
+    fuzz is run with `-fuzz FuzzEvidenceScrubMasksEveryByteScrubMasks ./internal/scrub`.
+  - Rejected: `Secrets` in the engine (a second list of patterns to keep equal); the engine importing
+    `internal/factory/runtime` (the review daemon would depend on the factory's runtime for a string function); a
+    `Scrub` with an option for the host pass (two behaviours behind one name, and the evidence port is held to one).
+  Tests: `TestTextMasksTheSeedsAsRuntimeScrubDidBeforeTheMove` (the outputs of `runtime.Scrub` on the fuzz's seeds,
+  recorded before the move in `internal/scrub/testdata`), `TestSecretsKeepsAHostAndAnEmailAndMasksTheSecrets` and
+  `TestSecretsMasksEveryByteTextMasksExceptEmailsAndHosts` (Secrets against the replay of its passes, against `Text`
+  and against the frozen pattern of before R58, on the seeds and a grammar), and the moved tests of the scrub, the
+  oracle and the pattern test, in `internal/scrub`; `TestScrubDropsTokensEmailsHostsAndLongPastes` and
+  `TestScrubKeepsAMessageOfExactlyTheLimitsAndDropsOneMore` in `internal/factory/runtime`. No new dependencies.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

@@ -71,6 +71,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [prview](#prview) | Package prview is a PR of magnum's registry as magnum's screens draw it: the head's CI (CI) and the findings of magnum's last posted review (Findings, Held), so the PR board's CI and FINDINGS columns and the factory screen's say the same of a PR. |
 | [relay](#relay) | Package relay is magnum-relay, the small service that receives a GitHub App's webhook deliveries and keeps them for magnum's daemon, which sleeps behind NAT and cannot receive them itself. |
 | [reveal](#reveal) | Package reveal brings the herdr client to the front of the user's terminal: focus the existing client when there is one, otherwise open a new tab or window running `herdr --session <name>`. |
+| [scrub](#scrub) | Package scrub masks the secrets, emails and host names in text before magnum keeps or shows it. |
 | [settings](#settings) | Package settings is the core of the settings screen (`magnum settings`): the typed allowlist of the settings it may change (Fields), what the user config says for each (Snapshot), the roles a draft resolves to after a restart (Preview), and the save: the draft becomes in-place edits of ~/.config/magnum/config.toml (internal/confedit), checked as `magnum config` checks a file, shown as a diff (Plan), then written atomically with the previous file kept in the config history (Commit), and the daemon asked to restart on it when idle (RequestRestart). |
 | [slots](#slots) | Package slots manages the checkouts magnum reviews in: the Talkable pool slots (~/Projects/talkable.reviewN, provisioned once with bin/worktree-setup and reused) and per-PR worktrees for small repositories, next to the repository's main clone whatever it is named (~/Projects/<owner>-<name>__worktrees/pr-N). |
 | [sqlitetest](#sqlitetest) | Package sqlitetest keeps a test's SQLite database in memory: a private database on one connection, loaded from the image of a database a test binary migrated once, so the test writes no database file. |
@@ -16862,13 +16863,14 @@ func PromptHash(text string) string
     it.
 
 func Scrub(text string) (clean string, kept bool)
-    Scrub cleans text before the factory keeps it: execx.Redact (GitHub tokens,
-    JWTs, Authorization values, private keys), then AWS keys and other token
-    shapes, the values of password=, token: and the like (the key stays),
-    emails and host names. clean is the scrubbed text; kept is false for a long
-    pasted block (more than 40 lines or 4000 bytes), which a capture of what the
-    operator typed drops (the ledger keeps the factory's own prompts, scrubbed,
-    whatever their length).
+    Scrub cleans text before the factory keeps it: scrub.Text (execx.Redact:
+    GitHub tokens, JWTs, Authorization values, private keys; then AWS keys and
+    other token shapes, the values of password=, token: and the like, also under
+    a quoted key ("password": "x") (the key stays), emails and host names).
+    clean is the scrubbed text; kept is false for a long pasted block (more
+    than 40 lines or 4000 bytes), which a capture of what the operator typed
+    drops (the ledger keeps the factory's own prompts, scrubbed, whatever their
+    length).
 
 func TaskSessions(ctx context.Context, st *store.Store, id int64) ([]store.Session, error)
     TaskSessions are the sessions of task id in the factory's agents store st,
@@ -26631,6 +26633,34 @@ func Reveal(ctx context.Context, run execx.Runner, cfg config.Terminal, herdrBin
 
 func (o Outcome) String() string
     String renders the outcome as one human-readable line.
+
+```
+
+## scrub
+
+```text
+package scrub // import "github.com/zhuravel/magnum/internal/scrub"
+
+Package scrub masks the secrets, emails and host names in text before magnum
+keeps or shows it. It is a leaf both daemons import: the factory's runtime.Scrub
+keeps what you typed and what it sent through Text (spec section 11.1),
+and the review daemon masks the tails of failed CI job logs with Secrets.
+The improvement loop's scrub.py (.claude/skills/magnum-improve/scripts) is held
+to the patterns below by a test and a fuzz in this package.
+
+FUNCTIONS
+
+func Secrets(text string) string
+    Secrets masks the secrets in text and leaves emails and host names:
+    execx.Redact (GitHub tokens, JWTs, Authorization values, private keys), then
+    AWS keys and other token shapes, then the values of password=, token: and
+    the like, also under a quoted key ("password": "x") and an env-style name
+    (DB_PASSWORD=x). The key stays. It is for text where a host or an address is
+    what the reader needs, such as a failing test's output in a CI log.
+
+func Text(text string) string
+    Text masks what Secrets masks, then emails and host names. It is what the
+    factory keeps of the words that pass through it (runtime.Scrub).
 
 ```
 

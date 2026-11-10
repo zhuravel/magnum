@@ -632,7 +632,7 @@ TZ=UTC touch -t 202610111000 "$round"
 } >"$ev/factory-tasks/7/notes.md"
 echo '- 2026-10-11 09:00 an older note' >"$ev/factory-tasks/8/notes.md"
 TZ=UTC touch -t 202610110900 "$ev/factory-tasks/8/notes.md"
-# Task 9's notes hold one sample of every pattern of the factory's scrub (execx.Redact and runtime.Scrub, most of them
+# Task 9's notes hold one sample of every pattern of the factory's scrub (execx.Redact and internal/scrub, most of them
 # from those files' Go tests; a key shape a scanner knows is built from two pieces), the values a key names across a
 # line break (on the next line, in quotes over two lines, after a key that ends a line of 2,500 characters, and on
 # the first line kept after the key's line was cut as the 81st from the end), and a dotted line of 20,000
@@ -848,7 +848,7 @@ ok "evidence.sh lists the report directories since its UTC since in any time zon
 
 # 18. The scrub of the notes is the factory's own: no sample of its patterns is left in evidence.md. That scrub.py's
 #     pattern lists are the Go scrub's word for word is a Go test (TestEvidenceScrubHoldsTheGoScrubsPatterns in
-#     internal/factory/runtime, which reads execx's from its source), and the Go fuzz
+#     internal/scrub, which reads execx's from its source), and the Go fuzz
 #     FuzzEvidenceScrubMasksEveryByteScrubMasks there checks what they mask; only the samples pin how evidence.sh
 #     applies them: on the whole text, so that a value on the next line is masked as the Go scrub masks it.
 for leak in "${leaks[@]}"; do

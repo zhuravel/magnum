@@ -797,9 +797,9 @@ def sql(q):
     return json.loads(res.stdout or "[]")
 
 
-# The scrub the factory runs before it keeps text (internal/factory/runtime/scrub.go, after execx.Redact), in scrub.py
+# The scrub the factory runs before it keeps text (internal/scrub/scrub.go, after execx.Redact), in scrub.py
 # beside this script: Go's patterns word for word, with Go's meaning, so that it masks every byte the Go scrub masks.
-# Its docstring says how it stays fast without dropping text first; the Go test and fuzz beside scrub.go hold it to
+# Its docstring says how it stays fast without dropping text first; the Go test and fuzz in internal/scrub hold it to
 # the Go scrub. It runs here on the factory's own words (holds, waits), and each note goes through
 # scrub.py --serve, the fuzz's own entry, in a process of its own with a time limit. Every text is scrubbed whole
 # before anything strips or cuts it.
