@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -218,6 +219,10 @@ type projectScope struct {
 	// the merge base change (committedChanges): they are untracked or
 	// ignored files a round left in the slot, or uncommitted edits.
 	residue bool
+	// links: declined, the targets of the checkout's root links into it,
+	// with their paths' labels (diskPaths.links), git or no git
+	// (ProjectNote.Links).
+	links   map[string]string
 	servers []config.ProjectServer // the MCP servers of the checkout's unchanged Codex config.toml (project_mcp "off")
 }
 
@@ -281,6 +286,12 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 				m.logErr(ctx, err, "agents: %s: cannot compare %s with the merge base, so the session leaves them out: %v", role.Name, pc.labels(nil), err)
 			}
 			s.declined, s.compared, s.files = true, err == nil, len(changed)
+			for t, p := range disk.links {
+				if s.links == nil {
+					s.links = map[string]string{}
+				}
+				s.links[t] = p.label()
+			}
 			if err == nil {
 				for _, p := range changed {
 					if l := p.label(); !slices.Contains(s.names, l) {
@@ -703,6 +714,32 @@ type ProjectNote struct {
 	// the PR (the auto-approval's gate reads its file list instead). False
 	// when git could not tell, and in a record written before it was kept.
 	Residue bool `json:"residue,omitempty"`
+	// Links map the target of each root entry among the kind's paths that
+	// is a symbolic link into the checkout (relative to its root: CLAUDE.md
+	// -> docs/guide.md) to the label of the link's path (CLAUDE.md), as the
+	// launch read them from the disk, not from git, so also when git could
+	// not compare. A PR that changes such a target changes what the CLI
+	// loads through the link, and its file list names the target alone:
+	// the auto-approval's gate asks ChangedLinks with that list. Kept out of
+	// the event (a link the PR added names a path it chose); none in a
+	// record written before they were kept.
+	Links map[string]string `json:"links,omitempty"`
+}
+
+// ChangedLinks names the links of the record (Links, by their paths'
+// labels, each once, in the order of their targets) whose target paths,
+// the files a PR's commits change (its file list, relative to the
+// repository's root), change: the target itself, or a file under a target
+// that is a directory. None for a record without links.
+func (n ProjectNote) ChangedLinks(paths []string) []string {
+	var out []string
+	for _, t := range slices.Sorted(maps.Keys(n.Links)) {
+		l := n.Links[t]
+		if !slices.Contains(out, l) && slices.ContainsFunc(paths, func(f string) bool { return f == t || strings.HasPrefix(f, t+"/") }) {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // ProjectDeclined reads the PR's record of a session of kind launched
@@ -790,7 +827,7 @@ func (m *Manager) recordProject(ctx context.Context, prID int64, role config.Rol
 		return
 	}
 	note, _ := json.Marshal(ProjectNote{Head: s.head, At: m.now().UTC(), Files: s.files, Compared: s.compared, Paths: s.names, DocsOnly: s.docsOff,
-		Residue: s.residue})
+		Residue: s.residue, Links: s.links})
 	if err := m.d.Store.SetKV(ctx, key, string(note)); err != nil {
 		m.logErr(ctx, err, "agents: %s: record %s: %v", role.Name, key, err)
 	}

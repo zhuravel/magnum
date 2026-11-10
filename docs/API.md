@@ -3041,6 +3041,16 @@ type ProjectNote struct {
 	// the PR (the auto-approval's gate reads its file list instead). False
 	// when git could not tell, and in a record written before it was kept.
 	Residue bool `json:"residue,omitempty"`
+	// Links map the target of each root entry among the kind's paths that
+	// is a symbolic link into the checkout (relative to its root: CLAUDE.md
+	// -> docs/guide.md) to the label of the link's path (CLAUDE.md), as the
+	// launch read them from the disk, not from git, so also when git could
+	// not compare. A PR that changes such a target changes what the CLI
+	// loads through the link, and its file list names the target alone:
+	// the auto-approval's gate asks ChangedLinks with that list. Kept out of
+	// the event (a link the PR added names a path it chose); none in a
+	// record written before they were kept.
+	Links map[string]string `json:"links,omitempty"`
 }
     ProjectNote is the PR's record of a session of one kind launched without the
     checkout's project configuration (store.KVPRProject).
@@ -3049,6 +3059,13 @@ func ProjectDeclined(ctx context.Context, st *store.Store, prID int64, kind stri
     ProjectDeclined reads the PR's record of a session of kind launched without
     the checkout's project configuration; false when there is none (or it cannot
     be read).
+
+func (n ProjectNote) ChangedLinks(paths []string) []string
+    ChangedLinks names the links of the record (Links, by their paths' labels,
+    each once, in the order of their targets) whose target paths, the files
+    a PR's commits change (its file list, relative to the repository's root),
+    change: the target itself, or a file under a target that is a directory.
+    None for a record without links.
 
 type Readiness struct {
 	Checks []ReadinessCheck
