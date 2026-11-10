@@ -5502,6 +5502,14 @@ func (c *Config) CIDispatchAs(fullName string) string
     "" when none does: the look does both as the watch's poll identity, else its
     identity.
 
+func (c *Config) CommentIdentity(fullName string) (*Watch, *Identity, error)
+    CommentIdentity is the watch that covers repository fullName
+    ("owner/name") and the identity `magnum comment` posts on its PRs as:
+    the watch's fix_identity, which must be a GitHub App of the fixer's own
+    (DedicatedFixApp) whose tokens reach the repository (token_repositories).
+    It never falls back to another identity (FixRoleFor's fix role or poll
+    identity, the operator's gh login): each refusal names the key to set.
+
 func (c *Config) CommentsWhenClean(repo, identity, author string) bool
     CommentsWhenClean reports whether the identity named identity posts
     a comment, not an approval, for a clean verdict on repository
@@ -5630,6 +5638,15 @@ func (c *Config) LearnRole() Role
     the [learn] kind in session mode with its model, effort, args, prompt,
     timeout and fallback models, writing retro.json, normalized like a
     configured role.
+
+func (c *Config) MagnumThreadLogins() []string
+    MagnumThreadLogins are the logins whose review threads magnum's review
+    started, in Account form, each once: every watch's posting identity
+    (the operator's gh login too, in a config that posts as it) and every
+    App identity, whatever it is for (a former reviewer's identity is a
+    declared one). A comment of magnum's own in such a thread answers nothing:
+    the daemon's poll, which reads no comment text, takes the fixer App's reply
+    there for the author's.
 
 func (c *Config) MaxSimplificationsFor(fullName string) int
     MaxSimplificationsFor is how many simplifications the judge posts
@@ -6514,6 +6531,10 @@ type Identity struct {
 	// unset): a fixer App's commits carry <user_id>+<login>@users.noreply.github.com.
 	UserID int64 `toml:"user_id"`
 }
+
+func (i Identity) Account() string
+    Account is the identity's login in Account form: an App's with its "[bot]"
+    (the config may leave it out), a gh identity's as it is.
 
 func (i Identity) DismissStale() bool
     DismissStale reports whether the identity dismisses its own stale
@@ -18479,6 +18500,10 @@ func (c *Client) ListFiles(ctx context.Context, owner, repo string, number int) 
     conclusions from the list (GitHub itself caps this endpoint at 3000 files).
     A missing repository or pull request is an error matching ErrNotFound.
 
+func (c *Client) Pull(ctx context.Context, owner, repo string, number int) (Pull, error)
+    Pull reads pull request number (GET /repos/{o}/{r}/pulls/{n}). A missing
+    repository or pull request is an error matching ErrNotFound.
+
 func (c *Client) PullFiles(ctx context.Context, owner, repo string, number int) (files []FileDelta, complete bool, err error)
     PullFiles reads the files a pull request changes with their patches as
     GitHub shows them in the PR's diff (GET /repos/{o}/{r}/pulls/{n}/files,
@@ -18520,6 +18545,15 @@ func (c *Client) ReplyToReviewComment(ctx context.Context, owner, repo string, n
     client's identity, the request {"body": …} sent as JSON on gh's stdin so no
     text reaches argv. GitHub refuses a reply to a reply, so commentID is the
     thread's first comment. It is marked Mutates, so execx.DryRun only plans it.
+
+func (c *Client) RequestReviewers(ctx context.Context, owner, repo string, number int, logins []string) error
+    RequestReviewers asks the users logins for a review of pull request
+    number (POST /repos/{o}/{r}/pulls/{n}/requested_reviewers) as the client's
+    identity, the request {"reviewers": […]} sent as JSON on gh's stdin.
+    Each login is a user's (ValidLogin: no App, no team, no "@"); GitHub
+    refuses the PR's author and anyone who is no collaborator with HTTP 422.
+    Asking someone who reviewed already asks again. It is marked Mutates,
+    so execx.DryRun only plans it.
 
 func (c *Client) RequiredChecks(ctx context.Context, owner, repo, branch string) (checks []string, known bool, err error)
     RequiredChecks reads the status checks a pull request into
@@ -18601,6 +18635,13 @@ func (c *Client) SubmitReview(ctx context.Context, owner, repo string, number in
     the request needs to be well formed (event, a full commit id); GitHub checks
     the rest. It is marked Mutates, so execx.DryRun only plans it.
 
+func (c *Client) UpdatePullTitle(ctx context.Context, owner, repo string, number int, title string) (Pull, error)
+    UpdatePullTitle sets the title of pull request number (PATCH
+    /repos/{o}/{r}/pulls/{n}) as the client's identity, the request {"title":
+    …} sent as JSON on gh's stdin so the text never reaches argv, and returns
+    the pull request as GitHub answered. A title that is blank or spans lines is
+    refused before gh runs. It is marked Mutates, so execx.DryRun only plans it.
+
 func (c *Client) UpdateReviewBody(ctx context.Context, owner, repo string, number int, reviewID int64, body string) error
     UpdateReviewBody replaces the summary body of a review (PUT
     /repos/{o}/{r}/pulls/{n}/reviews/{id}) as the client's identity; GitHub
@@ -18679,9 +18720,15 @@ func (g *GraphQLError) UnmarshalJSON(b []byte) error
 type IssueComment struct {
 	ID  int64  // REST comment id
 	URL string // html_url
+	// AuthorLogin and AuthorType are who GitHub shows wrote it (user.login,
+	// an App's with its "[bot]", and user.type); "" when it did not say.
+	AuthorLogin, AuthorType string
 }
     IssueComment is a comment on the conversation of an issue or a pull request,
     as GitHub answered its creation or edit.
+
+func (c IssueComment) Author() string
+    Author is the comment's author in Account form.
 
 type LatestReview struct {
 	State       string // APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | PENDING
@@ -18821,6 +18868,21 @@ type PRState struct {
 }
     PRState is the closed/merged confirmation of one pull request.
 
+type Pull struct {
+	Number int
+	Title  string
+	State  string // open | closed
+	URL    string // html_url
+	// Author is who opened it, in Account form (REST logins of Apps end
+	// in "[bot]"); "" for a deleted account.
+	Author string
+	// RequestedReviewers are the users asked for a review now (REST
+	// logins); GitHub drops a user from the list once they review.
+	RequestedReviewers []string
+}
+    Pull is a pull request as REST reports it (GET /repos/{o}/{r}/pulls/{n}):
+    what `magnum comment` checks before it writes.
+
 type PushComparison struct {
 	// Status is GitHub's: "ahead", "identical", "behind" or "diverged"
 	// (CompareFilesStatus).
@@ -18954,8 +19016,14 @@ type ReviewCommentReply struct {
 	ID        int64     // REST comment id
 	URL       string    // html_url
 	CreatedAt time.Time // created_at
+	// AuthorLogin and AuthorType are who GitHub shows wrote it (user.login,
+	// an App's with its "[bot]", and user.type); "" when it did not say.
+	AuthorLogin, AuthorType string
 }
     ReviewCommentReply is a reply posted to a review thread.
+
+func (r ReviewCommentReply) Author() string
+    Author is the reply's author in Account form.
 
 type ReviewDismissal struct {
 	ReviewID int64  // the dismissed review's REST id; 0 when the review is gone
@@ -25228,6 +25296,14 @@ and writes no file.
 CONSTANTS
 
 const (
+	PostConversation  = "conversation"   // a comment on the PR's conversation
+	PostReply         = "reply"          // a reply in a review thread
+	PostTitle         = "title"          // a new title
+	PostReviewRequest = "review_request" // a review request
+)
+    The kinds of post magnum comment makes (Posted.Kind, CommentPart.Kind).
+
+const (
 	ReplyAck      = "ack"      // a reason the judge accepts: one short acknowledgement
 	ReplyRebuttal = "rebuttal" // the judge keeps the finding: one sentence with evidence
 	ReplyAnswer   = "answer"   // an answer to a question
@@ -25259,6 +25335,14 @@ const (
 )
     Sides of an inline comment.
 
+const CommentMarker = "<!-- magnum:comment -->"
+    CommentMarker ends every comment `magnum comment` posts: a chat session's
+    comment, posted as the watch's fixer App. By it magnum tells these comments
+    from the author's replies and from the fixer's (FixReplyMarker): they are
+    magnum's own word, never the author's, and never a reply that starts a
+    review round or a fix loop. As with the fix marker, it means that only in a
+    comment of one of magnum's logins.
+
 const FixReplyMarker = "<!-- magnum:fix -->"
     FixReplyMarker ends every reply the fixer posts (skills/magnum-fix/SKILL.md,
     section 6). The fixer posts as the PR's author, the operator, whose login a
@@ -25279,8 +25363,17 @@ const StatusReplied = "replied"
 
 FUNCTIONS
 
+func IsComment(body string) bool
+    IsComment reports whether body carries CommentMarker.
+
 func IsFixReply(body string) bool
     IsFixReply reports whether body carries FixReplyMarker.
+
+func IsOwnAnswer(body string) bool
+    IsOwnAnswer reports whether body is an answer of magnum's side to someone
+    else's comment: a fixer's reply or a magnum comment. A reader asks it only
+    of a comment by one of magnum's logins (or, for a fix reply, the author's,
+    whom a gh fixer posts as).
 
 func ParseReplyMarker(body string) (runID, kind string, ok bool)
     ParseReplyMarker reads the reply marker in body: its run id and kind;
@@ -25311,6 +25404,104 @@ type BadAnchor struct {
 }
     BadAnchor is an inline comment GitHub would refuse: its line (or its
     start_line) is not a line of the pull request's diff on its side.
+
+type CommentGitHub interface {
+	FixReplyGitHub
+	Pull(ctx context.Context, owner, repo string, number int) (github.Pull, error)
+	RequestReviewers(ctx context.Context, owner, repo string, number int, logins []string) error
+	UpdatePullTitle(ctx context.Context, owner, repo string, number int, title string) (github.Pull, error)
+}
+    CommentGitHub is what RunComment reads and writes on GitHub (*github.Client,
+    as the watch's fixer App).
+
+type CommentOptions struct {
+	Owner, Repo    string
+	Number         int
+	ReplyTo        int64
+	RequestReviews []string
+	Title          *string
+	Login          string
+	Identity       string
+	MagnumLogins   []string
+	DryRun         bool
+}
+    CommentOptions name what `magnum comment` does on a pull request: a comment
+    on the conversation, or with ReplyTo a reply in the review thread of that
+    comment (any comment of it); a new Title; review requests of RequestReviews
+    (users' logins). Login is the App it posts as (Account form), the one
+    GitHub must show as the author, and Identity the name of its [[identity]];
+    MagnumLogins are the logins whose threads magnum's review started
+    (config.Config.MagnumThreadLogins and the PR's last reviewer), where it
+    refuses to reply. DryRun reads and checks everything and posts nothing.
+
+func (o CommentOptions) Check() (out CommentOutcome, ok bool)
+    Check is the outcome RunComment refuses o with (ok false) before it reads
+    anything: what the line got wrong (the pull request, the comment id,
+    the title, a login) is StatusInvalid, exit 2, the caller's to fix; no App
+    login is the caller's own error.
+
+func (o CommentOptions) CheckText(text []byte) (out CommentOutcome, ok bool)
+    CheckText is Check with text, the comment read from stdin, checked too:
+    one is needed for the conversation and for a reply, and it follows
+    fix-reply's rules (not empty, no magnum marker, no local path, not too long
+    once marked). The caller asks it before it mints a token.
+
+type CommentOutcome struct {
+	Status         string             `json:"status"`
+	Message        string             `json:"message,omitempty"`
+	Problems       []string           `json:"problems,omitempty"`
+	PR             string             `json:"pr"`
+	Identity       string             `json:"identity,omitempty"`
+	As             string             `json:"as,omitempty"`
+	Comment        *CommentPart       `json:"comment,omitempty"`
+	Title          *TitlePart         `json:"title,omitempty"`
+	ReviewRequests *ReviewRequestPart `json:"review_requests,omitempty"`
+	Event          string             `json:"event,omitempty"`
+}
+    CommentOutcome is what RunComment printed: a status (StatusPosted,
+    StatusAlreadyPosted, StatusDryRun, StatusInvalid or StatusError), the
+    pull request, the identity and the login it posts as, and each part done,
+    found done or planned. Event is the CLI's note of a registry record it could
+    not write.
+
+func RunComment(ctx context.Context, gh CommentGitHub, o CommentOptions, text []byte, onPosted func(Posted)) CommentOutcome
+    RunComment does what o names on its pull request as the App o.Login (gh
+    is its client): text, when it says something, signed with CommentMarker,
+    as a reply in the thread of o.ReplyTo (to its first comment) or on the
+    conversation; then the title; then the review requests. Everything is
+    checked before the first write: the line and text (fix-reply's rules: empty,
+    a magnum marker, a local path, too long), the pull request (its author is
+    never asked for a review), the comment id (one of this pull request's,
+    and in no thread magnum's review started: the daemon's poll reads no
+    comment text and would take the App's reply there for the author's).
+    A comment the same as one of the App's already there with nobody else's
+    after it (postedLast) is not posted again, a title already so is not sent,
+    and a login asked already is skipped, so after an unclear failure the same
+    line runs again safely. GitHub must show the App as each comment's author.
+    onPosted (nil: none) hears of each post, and of a comment found already
+    there.
+
+func (o CommentOutcome) ExitCode() int
+    ExitCode is 0 when everything is on GitHub (posted, already there) or a dry
+    run checked it, 2 when the comment or the line must change, and 1 otherwise:
+    something could not be confirmed, so run the same line with the same text
+    again.
+
+func (o CommentOutcome) Summary() string
+    Summary is the outcome in one line (ids and links, no comment or title
+    text).
+
+type CommentPart struct {
+	Kind    string `json:"kind"`
+	Thread  int64  `json:"thread,omitempty"`
+	ID      int64  `json:"id,omitempty"`
+	URL     string `json:"url,omitempty"`
+	Already bool   `json:"already"`
+	Planned bool   `json:"planned,omitempty"`
+}
+    CommentPart is the comment of an outcome: on the conversation or a reply
+    in the thread of Thread (its first comment), its id and link, posted,
+    found already there, or (dry run) planned.
 
 type Deps struct {
 	GitHub GitHub
@@ -25498,6 +25689,17 @@ func (o Outcome) ExitCode() int
 func (o Outcome) Summary() string
     Summary is the outcome in one human line (ids and counts, no PR text).
 
+type Posted struct {
+	Kind      string   // PostConversation, PostReply, PostTitle or PostReviewRequest
+	CommentID int64    // the comment's (PostConversation, PostReply)
+	Thread    int64    // the first comment of the reply's thread (PostReply)
+	URL       string   // the comment's link; the pull request's for a title or a review request
+	Reviewers []string // the logins asked (PostReviewRequest)
+	Already   bool     // the comment was there already: nothing posted now
+}
+    Posted is one post RunComment made, or (Already) a comment it found already
+    there from an earlier run: what the caller records.
+
 type PostedReply struct {
 	CommentID int64  `json:"comment_id"`
 	ID        int64  `json:"id,omitempty"`
@@ -25536,6 +25738,14 @@ func Parse(data []byte, o Options) (r Review, appended bool, problems []string)
     that), or the problems found, each naming its field. An APPROVE in a round
     whose no-findings event is COMMENT (Options.NoFindingsEvent) is one of them.
 
+type ReviewRequestPart struct {
+	Requested []string `json:"requested"`
+	Already   []string `json:"already"`
+	Planned   bool     `json:"planned,omitempty"`
+}
+    ReviewRequestPart is the review requests of an outcome: the logins asked
+    (or, planned, to ask) and the ones asked already, whom it skipped.
+
 type SkippedReply struct {
 	CommentID int64  `json:"comment_id"`
 	Kind      string `json:"kind"`
@@ -25545,6 +25755,13 @@ type SkippedReply struct {
     the reviewer's: another reviewer or the author started it, so it is theirs
     and never answered inline (DECISIONS "An author's own inline threads are not
     replies").
+
+type TitlePart struct {
+	Changed bool `json:"changed"`
+	Already bool `json:"already"`
+	Planned bool `json:"planned,omitempty"`
+}
+    TitlePart is the title of an outcome: changed, already so, or planned.
 
 ```
 

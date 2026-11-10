@@ -17184,6 +17184,92 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (residue approves; no residue, and a record without the field, refuse). TestADirectorysClaudeMDDeclinesClaudeOnly
   now counts the work tree's comparison alone.
 
+- **What a chat session writes on GitHub goes out as the watch's fixer App, through `magnum comment`, signed
+  with `<!-- magnum:comment -->`** (2026-11-10). A chat session posted a reply to a reviewer on talkable#12086
+  with plain `gh pr comment`, retitled the PR and asked for a review again, all as the operator's gh login, and
+  no magnum command could do it as the App: `magnum fix-reply` posts as the fixer pane's gh login, from the
+  pane's `MAGNUM_PR_URL` and `GH_CONFIG_DIR`, which a chat session does not have. The operator's decision:
+  comments that agents in chat sessions write on GitHub go out as the factory's GitHub App, never under the
+  operator's own login. `magnum comment <owner/repo#N|URL>` (internal/cli/comment.go) reads the comment on
+  stdin and posts it on the conversation, or with `--reply-to ID` in the thread of that review comment;
+  `--title` retitles the PR (PATCH pulls/N, the title on stdin, never in argv) and `--request-review LOGIN`
+  asks a person for a review (POST requested_reviewers). A comment is needed unless only `--title` or
+  `--request-review` is given. The order is the comment, then the title, then the requests, and every check
+  runs before the first write.
+  - Identity: `config.CommentIdentity` takes the watch of the repository and its `fix_identity` directly,
+    never `FixRoleFor`, which falls back to the role's or the poll identity: in the live config the poll
+    identity is the App magnum reviews as, whose comment would read as magnum's review. It refuses (exit 2,
+    nothing minted, gh never run) an unwatched repository, no or an undeclared `fix_identity`, one of kind
+    `gh` (the operator's login), one that is not `DedicatedFixApp` (Validate already refuses it; defence in
+    depth) and a repository outside its `token_repositories`, each naming the key to set. The token is
+    minted as `PrepareIdentity` does (`app.NewIdentity`, then `identity.App.Env`: narrowed to
+    `token_repositories` and `token_permissions`, written to the App's own gh config dir), every gh call
+    carries that env (`GH_CONFIG_DIR`, `GH_TOKEN` and `GITHUB_TOKEN` blanked, `GH_HOST` pinned), and the
+    client keeps `Reauth`. A failed mint is exit 1 with nothing posted; nothing falls back to the operator's
+    login or the keyring. The token never reaches argv, stdout, stderr, events or the registry. GitHub's
+    answer must show the App as each comment's author (`SameAccount`), else it is an error that says to
+    delete the comment. A short reference (`#N`, `repo#N`) and a review or factory agent's pane
+    (`agentPaneEnv` plus `MAGNUM_FACTORY_TASK`) are refused too: those agents read untrusted PR or ticket
+    text, and the fixer and the judge have their own tools. Contents and pull_requests write cover every call.
+  - Checks and retries come from fix-reply, shared rather than copied (`checkSigned`, `signedBody`,
+    `findSigned`, `postSigned`; fix-reply's words and behaviour are unchanged): an empty comment, any
+    `<!-- magnum:` marker, a local path and a comment too long once marked are refused; a comment id that is
+    not the PR's is refused; the same comment of the App already there with nobody else's after it
+    (`postedLast`, counting only the App's own comments as the same) posts nothing, a title already so sends
+    no PATCH and a login already requested no POST, so after an unclear failure the same line runs again
+    safely. A bad title (empty, more than one line, over 256 characters, a marker, a local path), a login that
+    fails `ValidLogin` (an App, a team, an `@`), the PR's author and a GitHub 422 on the title or the request
+    are invalid (exit 2: the line must change). Exit 1 lists the parts that went out. `--dry-run` mints, reads
+    and checks everything as the App, says what it would do and as whom, and posts nothing.
+  - The marker and its readers. `<!-- magnum:comment -->` means magnum's own word only in a comment of one of
+    magnum's logins (`fixLogins`, which holds the fixer App; the retro's own logins), as the fix marker does;
+    in anyone else's comment it means nothing. `postreview.IsOwnAnswer` (the fix marker or the comment
+    marker) is what the readers that ask "did magnum's side answer" use. In another reviewer's thread the
+    App's comment as the latest word answers it (`externalOf`, `resolvedByFixerOf`), and on the conversation a
+    comment of the App whose line under the quote is a remark's link answers that remark; a person's reply
+    after it opens the thread again with a new key. Before, the look's autofix = "open" read such a thread as
+    still unanswered and the fixer could answer that reviewer a second time. In magnum's own thread it is no
+    rebuttal (`magnumThreadsOf`: before, it read as magnum's rebuttal and opened an item a fix loop would
+    answer) and no answer to the finding. It is never the author's word (`ownWord` and `byAuthor` skip it, so
+    `since` does not move), never a remark of another reviewer's, never the author's decision on a fixer's
+    call and never closes the call (`decisionIn`, `callOpen` stay fix-only), never `fix.unmarked`. The fixer's
+    file marks such a comment with `comment`, and the fix skill's look again skips a thread whose latest
+    comment by `fixer_logins` carries either marker. The retro takes it as magnum's word (`OwnAuthor`), and
+    the factory's fix records ignore `comment.posted`. Pins hold the readers that needed no change.
+  - Magnum's own threads are refused (`--reply-to` into a thread whose first comment is by
+    `MagnumThreadLogins`: every watch's posting identity and every App, plus the PR's `last_review_login`).
+    The poll reads no comment text (`github.Remark` has no body), and the fixer App's reply in one of
+    magnum's threads counts as the author's reply (`repliesOf`, isFixer), so the App's chat comment there
+    would start a reply round whatever its marker. The refusal is the only guard: anything that posts as
+    the App another way gets past it.
+  - Each post is an event `comment.posted` of the PR (subject `pr:owner/name#N` in the registry's casing),
+    with the repository, number, identity, login, the kind of post (conversation, reply, title,
+    review_request), its link, the comment's id, the thread and the reviewers, never the comment's or the
+    title's text. A comment's event goes through `AppendEventOnce` keyed by its id, so a retry that finds
+    the comment records it if the first run lost the write. The registry opens before the mint (a refused
+    migration is exit 1); a write that fails after a post leaves the status posted and exit 0, with
+    `"event": "not recorded: …"` and the stderr line saying so: the readers go by the marker, not the event,
+    so a gap in the audit is better than a second post by a retry.
+  - Rejected: `FixRoleFor`'s fallback (the review App or the operator); posting as the operator's login at
+    all, even with a flag; minting a token of the review App; reading magnum's own threads with the fixer
+    logins instead of refusing them (the poll cannot read bodies, so it would still start a round); an
+    `--answers URL` flag for conversation answers (the link-under-the-quote convention the fixer already
+    follows is kept, and the help says it). Not done: the threads file and stalemate (`pipeline.ownThreads`,
+    `fix_calls.go`) do not tell a chat comment apart, which only a post past the refusal would reach.
+    Nothing technical makes a chat session use the command while it still has the operator's gh login: the
+    operator's rule in their own instructions is the enforcement, added after the daemon restart that loads
+    these readers and the skill. Tests, failing first: TestCommentEndsTheBodyWithTheCommentMarker,
+    TestCommentRefusesWhatFixReplyRefuses, TestCommentRefusesAReplyInMagnumsOwnThread,
+    TestCommentChangesTheTitleAndRequestsReviewsInOrder, TestCommentDryRunPostsNothingAndSaysAsWhom,
+    TestCommentReadsBackTheApp and the rest of postreview's; TestCommentIdentityRefusesWithTheKeyToSet;
+    TestCommentPostsAsTheWatchsFixerApp, TestCommentNeverFallsBackToYourLogin,
+    TestCommentRecordsEachPostInTheRegistry and the CLI's others;
+    TestAChatCommentOfTheAppAnswersAnotherReviewersThread, TestAChatCommentAnswersARemarkItLinks,
+    TestAChatCommentInMagnumsThreadIsNoRebuttal and TestAResolvedThreadTheAppAnsweredIsNoItem; pins
+    TestAChatCommentIsNoAuthorsWordAndNoRemark, TestAChatCommentIsNeverTheAuthorsDecision,
+    TestAChatCommentStartsNoReplyRound, TestTheRetroTakesTheAppsChatCommentAsMagnums and
+    TestFixRecordsIgnoreCommentPosted.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is
