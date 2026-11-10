@@ -190,13 +190,16 @@ func TestTheFixerSaidCannotNeedsYouAndStartsNothingAgainAtTheHead(t *testing.T) 
 }
 
 // The PR's own files decide before anything is read: one that changes its
-// CI config (a workflow, an action) gets no CI fix, nor one whose file
-// list GitHub cut short; one not listed at the head waits for the list.
+// CI config (a workflow, an action, a script of .github/bin, in any case:
+// the rule `magnum push --ci` holds the fixer to, CIConfigPath) gets no CI
+// fix, which could only answer config and spend one of 3, nor one whose
+// file list GitHub cut short; one not listed at the head waits for the list.
 func TestAPRThatChangesItsCIConfigGetsNoCIFix(t *testing.T) {
 	runs := ciFailedFacts().ci.failedRuns
-	for _, files := range [][]string{{".github/workflows/ci.yml"}, {".github/actions/setup/action.yml"}, {"tools/action.yaml"}} {
+	for _, files := range [][]string{{".github/workflows/ci.yml"}, {".github/actions/setup/action.yml"}, {"tools/action.yaml"},
+		{".github/bin/rspec-shard"}, {".GitHub/Bin/rspec-shard"}} {
 		refused, wait := ciFixRefusal(store.PRFiles{HeadSHA: fixHead, Paths: append([]string{"app/a.rb"}, files...)}, true, fixHead, runs)
-		if refused != "the PR changes its own workflows or actions, so its CI is yours" || wait {
+		if refused != "the PR changes its own CI config (a workflow, an action, a script of .github/bin), so its CI is yours" || wait {
 			t.Errorf("files %q: %q, wait %v", files, refused, wait)
 		}
 	}
@@ -210,9 +213,21 @@ func TestAPRThatChangesItsCIConfigGetsNoCIFix(t *testing.T) {
 		t.Errorf("the PR's own code: %q, wait %v", refused, wait)
 	}
 	f := ciFailedFacts()
-	f.ciFix.refused = "the PR changes its own workflows or actions, so its CI is yours"
+	f.ciFix.refused = "the PR changes its own CI config (a workflow, an action, a script of .github/bin), so its CI is yours"
 	v, work, _ := decideOpen(f)
-	wantNeedsCI(t, v, work, "required check Completion failed at a1a1a1a: the PR changes its own workflows or actions, so its CI is yours")
+	wantNeedsCI(t, v, work, "required check Completion failed at a1a1a1a: the PR changes its own CI config (a workflow, an action, a script of .github/bin), so its CI is yours")
+}
+
+// One rule names the CI config a CI fix never changes, for the look's
+// refusal and for `magnum push --ci`, in any case, at the checkout's root.
+func TestCIConfigPathIsTheLooksAndThePushsOneRule(t *testing.T) {
+	for p, want := range map[string]bool{".github/workflows/ci.yml": true, ".github/actions/setup/action.yml": true,
+		".github/bin/rspec-shard": true, ".GitHub/BIN/rspec-shard": true, "lib/action.yml": true, "app/models/offer.rb": false,
+		"docs/.github/bin/x": false, ".github/CODEOWNERS": false} {
+		if got := CIConfigPath(p); got != want {
+			t.Errorf("CIConfigPath(%q) = %v, want %v", p, got, want)
+		}
+	}
 }
 
 // A failed required check that is no GitHub Actions job (another app's

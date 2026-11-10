@@ -3891,7 +3891,8 @@ required run skipped beside a failed job of its workflow file (a `Completion` jo
 PR's rollup. A check that failed and passed on a re-run is no failure. Findings come first: while a thread,
 Magnum's review or anything else is open, the CI waits for the push that work brings. Then, once no
 required check still runs, the look checks that the PR's own files at the head are listed whole and change
-no CI config (`.github/workflows/`, `.github/actions/`, an `action.yml`), that every failed check is a
+no CI config (`.github/workflows/`, `.github/actions/`, `.github/bin/`, an `action.yml`, in any case: the
+rule `magnum push --ci` holds the fixer to), that every failed check is a
 GitHub Actions job, and reads the base's CI once per head, failed set and base tip (one GraphQL call as the
 poll identity: the base tip the look fetched and its four first parents): the newest of them that finished
 the failed job's check decides, past a tip where it still runs to an older one where it passed. Red there, or

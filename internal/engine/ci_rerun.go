@@ -270,6 +270,16 @@ func changesActions(p string) bool {
 	return changesWorkflow(p) || base == "action.yml" || base == "action.yaml"
 }
 
+// CIConfigPath reports whether p, a path a PR or a push changes, is CI
+// config a CI fix never changes, in any case: a file GitHub Actions runs as
+// the head has it (changesActions) or a script of .github/bin that a
+// workflow runs. The look gives no CI fix to a PR that changes one
+// (ciFixRefusal: its fixer could only answer config, and spend one of 3),
+// and `magnum push --ci` refuses a push that changes one from the base's.
+func CIConfigPath(p string) bool {
+	return changesActions(p) || strings.HasPrefix(strings.ToLower(p), ".github/bin/")
+}
+
 // openRerunCI re-runs r.Run, the run of pr's head that started no job (rule
 // 11 asked: v.rerun), as startCI's identity, once for the head: the record
 // is written before the call (kvPRCIRerun's At), and a head the record says

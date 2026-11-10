@@ -15,13 +15,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/gitx"
@@ -125,16 +125,6 @@ func newPushCmd(c *Context) *cobra.Command {
 	cmd.Flags().BoolVar(&ci, "ci", false, "a CI fix's push: refuse a change to CI config (.github/workflows, .github/actions, .github/bin, action.yml) "+
 		"that differs from the base's")
 	return cmd
-}
-
-// ciConfigPath reports whether p, a path a push changes, is CI config a CI
-// fix never changes (magnum push --ci): a workflow, a local action, an
-// action's metadata anywhere, or a script of .github/bin that a workflow
-// runs.
-func ciConfigPath(p string) bool {
-	base := strings.ToLower(path.Base(p))
-	return strings.HasPrefix(p, ".github/workflows/") || strings.HasPrefix(p, ".github/actions/") || strings.HasPrefix(p, ".github/bin/") ||
-		base == "action.yml" || base == "action.yaml"
 }
 
 // pushPrint prints out as JSON on stdout and one line on stderr, both
@@ -251,7 +241,7 @@ func pushRun(checkout, base string, ci bool, pos []string) (pushOutcome, int) {
 		if err != nil {
 			return failed("could not read the files the push changes: %v", err)
 		}
-		own, err := pushOwnWorkflows(ctx, g, dir, sha, base, slices.DeleteFunc(paths, func(p string) bool { return !ciConfigPath(p) }))
+		own, err := pushOwnWorkflows(ctx, g, dir, sha, base, slices.DeleteFunc(paths, func(p string) bool { return !engine.CIConfigPath(p) }))
 		switch {
 		case err != nil:
 			return failed("could not compare the CI files with %s's: %v", base, err)

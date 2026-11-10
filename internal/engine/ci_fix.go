@@ -16,7 +16,7 @@ package engine
 // (findings first: a findings push moves the head and runs CI again, and
 // the fixer does one job at a time), no required check still runs, the PR's
 // own files at the head are listed whole and change no CI config
-// (changesActions), each failed check is a GitHub Actions job, the base ran
+// (CIConfigPath), each failed check is a GitHub Actions job, the base ran
 // it green (readCIBase: the newest of the base tip's first parents that
 // finished the failed job's check decides, read once per head, failed set
 // and tip), the PR had fewer than ciFixMax CI fixes, and none ran at this
@@ -220,7 +220,8 @@ type ciFixFacts struct {
 // (listed: the poll listed them) get no CI fix ("" = none), and whether the
 // look waits for the head's list (wait): a check that is no GitHub Actions
 // job (no log to read), a list GitHub cut short, and a PR that changes its
-// own CI config (changesActions: a workflow, an action), whose CI is the
+// own CI config (CIConfigPath: a workflow, an action, a script of
+// .github/bin), whose CI is the
 // operator's.
 func ciFixRefusal(files store.PRFiles, listed bool, head string, runs []ciFailedCheck) (refused string, wait bool) {
 	if slices.ContainsFunc(runs, func(c ciFailedCheck) bool { return c.WorkflowFile == "" }) {
@@ -229,8 +230,8 @@ func ciFixRefusal(files store.PRFiles, listed bool, head string, runs []ciFailed
 	switch {
 	case !listed || files.HeadSHA != head:
 		return "", true
-	case slices.ContainsFunc(files.Paths, changesActions):
-		return "the PR changes its own workflows or actions, so its CI is yours", false
+	case slices.ContainsFunc(files.Paths, CIConfigPath):
+		return "the PR changes its own CI config (a workflow, an action, a script of .github/bin), so its CI is yours", false
 	case files.Truncated:
 		return "GitHub did not list every file of the PR, so magnum cannot tell whether it changes its CI", false
 	}
