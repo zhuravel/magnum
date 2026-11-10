@@ -143,6 +143,34 @@ func TestAnActionsTokenGoesOverAGhConfigDirOfTheBatchsOwn(t *testing.T) {
 	wantGone(t, dir)
 }
 
+// A batch whose gh config dir the gh root cannot take (a regular file in
+// its place here; a full disk, a dir it may not write) gets an error, and
+// the token minted for it is revoked at once: nobody holds it, so nothing
+// would release it, and the sweep does not know it.
+func TestAnActionsTokenIsRevokedWhenItsGhConfigDirCannotBeMade(t *testing.T) {
+	app, f, _ := pushApp(t)
+	root := app.layout.GhRoot()
+	if err := os.MkdirAll(filepath.Dir(root), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(root, []byte("not a dir\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env, release, err := app.ActionsEnv(context.Background())
+	if err == nil || env != nil || release != nil || !strings.Contains(err.Error(), "gh config dir") || !strings.Contains(err.Error(), "an Actions token") {
+		t.Fatalf("ActionsEnv = %v, %v; want the gh config dir's error", redactedEnv(env), err)
+	}
+	if got := f.revokedTokens(); !slices.Equal(got, []string{"ghs_test1"}) {
+		t.Errorf("revoked = %v, want the minted token", got)
+	}
+	app.pmu.Lock()
+	held := len(app.pushes)
+	app.pmu.Unlock()
+	if held != 0 {
+		t.Errorf("the App still holds %d tokens of its own", held)
+	}
+}
+
 // The App's refresh after an Actions token rewrites the pane's hosts.yml
 // with its own token, never the batch's: the panes never gain Actions.
 func TestThePanesHostsNeverGainAnActionsToken(t *testing.T) {
