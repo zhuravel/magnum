@@ -14,13 +14,27 @@ import (
 func kvPRRenamedFiles(id int64) string { return fmt.Sprintf("pr.%d.renamed_files", id) }
 
 // renamedFiles is a head's file list with the paths its renames leave
-// (withRenamedFrom): the Details' list it was read for, and the list the
-// registry keeps for it.
+// (withRenamedFrom): the head, the base branch and its tip, and the
+// Details' list it was read for, and the list the registry keeps for it.
 type renamedFiles struct {
-	Head   string   `json:"head"`
-	Listed []string `json:"listed"` // the Details' list (PRDetails.Files)
-	Paths  []string `json:"paths"`  // Listed and the previous paths of its renames
-	Cut    bool     `json:"cut"`    // the REST list was cut too (ListFiles' complete is false)
+	Head string `json:"head"`
+	// Base and BaseOid are the PR's base branch and its tip as the Details
+	// named them: what GitHub compared the head with, which decides the
+	// path a rename leaves (a retarget can change it while the head and
+	// the new paths stay). A record without them (an earlier build's)
+	// serves no list.
+	Base    string   `json:"base"`
+	BaseOid string   `json:"base_oid"`
+	Listed  []string `json:"listed"` // the Details' list (PRDetails.Files)
+	Paths   []string `json:"paths"`  // Listed and the previous paths of its renames
+	Cut     bool     `json:"cut"`    // the REST list was cut too (ListFiles' complete is false)
+}
+
+// serves reports whether r, a record read for an earlier poll, is the
+// list of in's head as the Details d name it: the same head, base branch,
+// base tip and Details' list.
+func (r renamedFiles) serves(d github.PRDetails, head string) bool {
+	return r.Head == head && r.Base != "" && r.Base == d.BaseRefName && r.BaseOid == d.BaseRefOid && slices.Equal(r.Listed, d.Files)
 }
 
 // withRenamedFrom adds to in's file list, which the Details d name a rename
@@ -29,8 +43,10 @@ type renamedFiles struct {
 // that moves .claude/hooks/x.rb to scripts/ changes .claude/ as much as one
 // that deletes it, and what reads pr_files must see it (the auto-approval's
 // gate, the judge's approval gates, the related PRs). The list it read for
-// the same head and the same Details' list (kvPRRenamedFiles of prID, 0
-// for a PR the registry does not know yet) serves again without a call.
+// the same head, base branch, base tip and Details' list (kvPRRenamedFiles
+// of prID, 0 for a PR the registry does not know yet; renamedFiles.serves)
+// serves again without a call: a PR retargeted to another base reads it
+// again, since the path a rename leaves is the new base's.
 // It returns the record to keep once the PR is upserted (nil: none new).
 // When the REST list cannot be read (no lister, an error, the poll's file
 // fetches spent), in keeps no file list and no updatedAt: the registry
@@ -43,8 +59,7 @@ func (e *Engine) withRenamedFrom(ctx context.Context, gh GitHub, repo store.Repo
 	}
 	if prID != 0 {
 		var r renamedFiles
-		if v, ok := e.getKV(ctx, kvPRRenamedFiles(prID)); ok && json.Unmarshal([]byte(v), &r) == nil &&
-			r.Head == in.Files.HeadSHA && slices.Equal(r.Listed, d.Files) {
+		if v, ok := e.getKV(ctx, kvPRRenamedFiles(prID)); ok && json.Unmarshal([]byte(v), &r) == nil && r.serves(d, in.Files.HeadSHA) {
 			in.Files.Paths, in.Files.Truncated = slices.Clone(r.Paths), in.Files.Truncated && r.Cut
 			return nil
 		}
@@ -80,7 +95,8 @@ func (e *Engine) withRenamedFrom(ctx context.Context, gh GitHub, repo store.Repo
 		}
 	}
 	in.Files.Paths, in.Files.Truncated = paths, in.Files.Truncated && !complete
-	return &renamedFiles{Head: in.Files.HeadSHA, Listed: slices.Clone(d.Files), Paths: slices.Clone(paths), Cut: !complete}
+	return &renamedFiles{Head: in.Files.HeadSHA, Base: d.BaseRefName, BaseOid: d.BaseRefOid, Listed: slices.Clone(d.Files),
+		Paths: slices.Clone(paths), Cut: !complete}
 }
 
 // keepRenamedFiles records r for PR prID (withRenamedFrom); nil keeps what
