@@ -46,8 +46,9 @@ func kvPRCIRerun(prID int64) string { return fmt.Sprintf("pr.%d.ci_rerun", prID)
 // ciRerun is what the look read of the runs at Head (at ReadAt) and did
 // about them: Run is the run that started no job (nil: none); Queued a run
 // of the head that had not ended at the read (its id, QueuedStatus its
-// status then), and Unread a read that failed, either of which the look
-// reads again settle_max after ReadAt; At when the look asked GitHub to
+// status then), and Unread a read that failed (UnreadWhy: GitHub would not
+// mint the token of the read, actionsNotGranted's words), either of which
+// the look reads again settle_max after ReadAt; At when the look asked GitHub to
 // re-run Run (written before the call, so a re-run whose answer was lost
 // still counts), Failed why GitHub refused (its status, never its message;
 // a 403 adds cannotStartWorkflows' words) and Refused why magnum did not
@@ -59,6 +60,7 @@ type ciRerun struct {
 	Queued       int64      `json:"queued,omitempty"`
 	QueuedStatus string     `json:"queued_status,omitempty"`
 	Unread       bool       `json:"unread,omitempty"`
+	UnreadWhy    string     `json:"unread_why,omitempty"`
 	Run          *ciNoJob   `json:"run,omitempty"`
 	At           time.Time  `json:"at,omitzero"`
 	Failed       string     `json:"failed,omitempty"`
@@ -241,6 +243,9 @@ func (e *Engine) openReadRuns(ctx context.Context, acts *ciActions, repo store.R
 	}
 	if err != nil {
 		r = ciRerun{Head: pr.HeadSHA, ReadAt: r.ReadAt, Unread: true}
+		if actionsRefused(err) { // ci_actions.go: the verdict says what to grant
+			r.UnreadWhy = actionsNotGranted(who)
+		}
 		if e.changed("open_ci_runs:"+full, err.Error()) {
 			e.event(ctx, "warn", prSubject(repo, pr.Number), "fix.open_ci_runs_error",
 				fmt.Sprintf("the runs at %s, read as %s: %v", textx.ShortSHA(pr.HeadSHA), who, err), map[string]any{"head": pr.HeadSHA, "identity": who})
@@ -436,15 +441,23 @@ func (e *Engine) seeRerun(ctx context.Context, acts *ciActions, owner, name stri
 // or a read that failed). Where the head's runs are due a read it asks for
 // it (v.readRuns) unless the GitHub budget is low, and waits for the budget
 // where nothing was read and no ci_dispatch would start the workflow
-// instead; it waits while a run of the head has not ended (queuedWhy), asks
+// instead; it needs you, with what to grant, while GitHub would not mint
+// the token that reads them (UnreadWhy; a start would fail on the same
+// mint); it waits while a run of the head has not ended (queuedWhy), asks
 // for the re-run (v.rerun) when nothing holds it (`magnum pause`, the
 // budget), waits for the re-run's attempt until settle_max after it, and
 // needs you when magnum or GitHub refused the re-run, when its attempt
 // started no job either, ended without the check, or never came.
 func openRerunVerdict(f openFacts, v *OpenVerdict, waits func(string, time.Time) OpenVerdict, needsYou func(string) OpenVerdict, what string) (OpenVerdict, bool) {
 	r, low := f.ciRerun, f.low || f.ciLow
-	if r.readDue(f.pr.HeadSHA, f.now, f.settle.max) {
+	due := r.readDue(f.pr.HeadSHA, f.now, f.settle.max)
+	if due {
 		v.readRuns = !low
+	}
+	if r.Head == f.pr.HeadSHA && r.Unread && r.UnreadWhy != "" { // ci_actions.go: GitHub will not mint the token that reads them
+		return needsYou(fmt.Sprintf("magnum cannot read the head's runs (%s); run its workflow on the PR's branch, or push", r.UnreadWhy)), true
+	}
+	if due {
 		if r.Head != f.pr.HeadSHA || r.Unread {
 			if low && f.ciWorkflow == "" {
 				return waits(what+" did not run; magnum reads the head's runs once the GitHub budget allows", time.Time{}), true

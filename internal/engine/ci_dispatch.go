@@ -154,6 +154,8 @@ func (e *Engine) ciAfterPush(ctx context.Context, id int64, now time.Time) {
 	case errors.Is(err, errNoGitHub):
 		done()
 		return
+	case actionsRefused(err):
+		err = nil // no read can come, and none is asked again each tick: startCI records why the start cannot either, once for the head
 	}
 	var runs []github.WorkflowRun
 	if err == nil && gh != nil {

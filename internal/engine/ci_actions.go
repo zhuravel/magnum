@@ -101,10 +101,14 @@ func (e *Engine) mintsActions(identity string) bool {
 
 // actionsFailed is how a start or a re-run as who that failed with err
 // says it in its record (ciStart.Failed, ciRerun.Failed), never in
-// GitHub's message: no client as such, else GitHub's status, a 403 with
-// cannotStartWorkflows' words.
+// GitHub's message: a token GitHub would not mint with Actions write in
+// actionsNotGranted's words, no client as such, else GitHub's status, a
+// 403 with cannotStartWorkflows' words.
 func (e *Engine) actionsFailed(who string, err error) string {
-	if errors.Is(err, errNoGitHub) {
+	switch {
+	case actionsRefused(err):
+		return actionsNotGranted(who)
+	case errors.Is(err, errNoGitHub):
 		return err.Error()
 	}
 	failed := "the call failed"
@@ -116,4 +120,14 @@ func (e *Engine) actionsFailed(who string, err error) string {
 		failed += ": " + e.cannotStartWorkflows(who)
 	}
 	return failed
+}
+
+// actionsRefused reports whether err is GitHub's refusal of a token with
+// Actions write (identity.ErrActionsNotGranted).
+func actionsRefused(err error) bool { return errors.Is(err, identity.ErrActionsNotGranted) }
+
+// actionsNotGranted says that GitHub would not mint App who a token with
+// Actions write, and what the operator does about it.
+func actionsNotGranted(who string) string {
+	return who + " may not use Actions: grant Actions: write on the App and accept it on the installation"
 }
