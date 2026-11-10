@@ -544,6 +544,11 @@ func TestAutoApprovalRefusesAChangeToAFileTheInstructionsImport(t *testing.T) {
 		// an @ right after the closing --- imports.
 		{name: "an import right after the frontmatter", files: map[string]string{".claude/rules/api.md": "---\npaths: src/**\n---@../../docs/evil.md\n"},
 			list: []string{"docs/evil.md"}, want: "(.claude/rules/api.md)"},
+		// Claude reads an HTML block that starts with a comment on its own,
+		// its comments taken out, though an earlier <!-- in a paragraph
+		// stays open.
+		{name: "an import a comment splits", files: map[string]string{"AGENTS.md": "Notes (<!--\n\n<!--a-->@docs/ev<!--b-->il.md\n"},
+			list: []string{"docs/evil.md"}, want: "(AGENTS.md)"},
 		// Claude ends a path at a #fragment.
 		{name: "an import with a fragment", files: map[string]string{"CLAUDE.md": "Setup: @docs/guide.md#setup\n"},
 			list: []string{"docs/guide.md"}, want: "(CLAUDE.md)"},

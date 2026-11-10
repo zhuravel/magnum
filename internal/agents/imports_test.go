@@ -284,6 +284,29 @@ func TestImportPathsReadsTheTextAfterAFrontmatterAsClaudeCodeDoes(t *testing.T) 
 	}
 }
 
+// Claude Code takes the comments out of each HTML block that starts with
+// one and reads the block on its own, so the text after its first comment
+// starts a path; an earlier <!-- it does not read as a comment (in a
+// paragraph, a heading or a frontmatter) leaves the block's comments as
+// they are. ImportPaths' read without comments pairs each <!-- with the
+// first --> after it across the whole text, so it starts a path wherever
+// a comment was cut.
+func TestImportPathsStartsAPathWhereACommentWasCut(t *testing.T) {
+	for _, c := range []struct {
+		text string
+		want string
+	}{
+		{"Notes (<!--\n\n<!--a-->@docs/ev<!--b-->il.md\n", "docs/evil.md"},
+		{"x<!--\n\n<!--a-->@docs/a.md\n", "docs/a.md"},
+		{"# é<!--\n\n<!--a-->@docs/b<!--b-->c.md\n", "docs/bc.md"},
+		{"---\ntitle: a<!--\n---\n<!--a-->@docs/ev<!--b-->il.md\n", "docs/evil.md"},
+	} {
+		if got, more := ImportPaths(c.text, 100); !slices.Contains(got, c.want) || more {
+			t.Errorf("ImportPaths(%q) = %q, %v; want %q among them", c.text, got, more, c.want)
+		}
+	}
+}
+
 // A session loads what a rules file imports right after its frontmatter:
 // the imported file is one of ProjectLinks' targets.
 func TestASessionReadsAnImportAfterAFrontmatter(t *testing.T) {

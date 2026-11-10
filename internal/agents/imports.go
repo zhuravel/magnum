@@ -59,10 +59,11 @@ const (
 // space at its end. It reads on after such a mark for a further @, reads
 // the text after a YAML frontmatter on its own (Claude strips one before
 // it lexes the rest, so an @ right after the closing --- imports), and
-// reads each again with its HTML comments taken out. A home (~) or an
-// absolute path is left out: no commit's tree holds it, and Claude loads a
-// file outside its working directory only once the user approves the
-// project's external imports, which magnum never does.
+// reads each again with its HTML comments taken out, where a cut starts a
+// path too (Claude reads a block that starts with a comment on its own).
+// A home (~) or an absolute path is left out: no commit's tree holds it,
+// and Claude loads a file outside its working directory only once the
+// user approves the project's external imports, which magnum never does.
 func ImportPaths(text string, limit int) (paths []string, more bool) {
 	texts := []string{text}
 	if body, ok := frontmatterBody(text); ok {
@@ -74,7 +75,7 @@ func ImportPaths(text string, limit int) (paths []string, more bool) {
 	}
 	r := importReader{seen: map[string]bool{}, limit: limit, work: work}
 	for _, t := range texts {
-		if r.read(t); r.more {
+		if r.read(t, nil); r.more {
 			break
 		}
 		if strings.Contains(t, "<!--") {
@@ -167,8 +168,9 @@ type importRun struct {
 	lone, hashes, cuts, pairs []int
 }
 
-// read gives the paths of t's imports.
-func (r *importReader) read(t string) {
+// read gives the paths of t's imports; an @ at one of joints (ascending
+// offsets where a comment was cut out of t) starts one too.
+func (r *importReader) read(t string, joints []int) {
 	var run importRun
 	for i := 0; i < len(t); {
 		k := strings.IndexByte(t[i:], '@')
@@ -177,7 +179,7 @@ func (r *importReader) read(t string) {
 		}
 		at := i + k
 		i = at + 1
-		if !importStarts(t, at) {
+		if _, joint := slices.BinarySearch(joints, at); !joint && !importStarts(t, at) {
 			continue
 		}
 		if at >= run.end {
@@ -327,9 +329,14 @@ func (r *importReader) paths1(t string, at int, run *importRun) bool {
 
 // withoutComments is t with its HTML comments (each <!-- to the first -->
 // after it) taken out, as Claude Code reads an HTML block that starts with
-// one.
-func withoutComments(t string) string {
+// one, and the offsets in it where one was cut (joints). Claude pairs them
+// within each such block, whose text after its first comment starts a
+// path; an earlier <!-- it does not read as a comment (in a paragraph, a
+// heading, a frontmatter) pairs here with that first comment's -->, which
+// glues the text before it to the block's, so the cut is a start.
+func withoutComments(t string) (string, []int) {
 	var b strings.Builder
+	var joints []int
 	for {
 		i := strings.Index(t, "<!--")
 		if i < 0 {
@@ -340,8 +347,11 @@ func withoutComments(t string) string {
 			break
 		}
 		b.WriteString(t[:i])
+		if n := b.Len(); len(joints) == 0 || joints[len(joints)-1] != n {
+			joints = append(joints, n)
+		}
 		t = t[i+4+j+3:]
 	}
 	b.WriteString(t)
-	return b.String()
+	return b.String(), joints
 }
