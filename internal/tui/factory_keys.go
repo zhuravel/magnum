@@ -53,6 +53,17 @@ var (
 	}
 )
 
+// RatingReasonKeys are the keys of the reasons the task card's + and −
+// offer, in the order of their digits: the keys the factory takes for a
+// rating (factory.RatingReasons), which a test in the cli pins them to.
+func RatingReasonKeys() []string {
+	out := make([]string, len(factoryRatingReasons))
+	for i, r := range factoryRatingReasons {
+		out[i] = r.key
+	}
+	return out
+}
+
 func reasonWords(rs []factoryReason) []string {
 	out := make([]string, len(rs))
 	for i, r := range rs {
@@ -1524,6 +1535,8 @@ func (m *factoryModel) taskCardKey(k string) (tea.Cmd, bool) {
 		case !c.Rate: // a task at work is not rated: nothing happens
 		case act == nil:
 			return m.note(noActions), true
+		case m.bar.busy != "": // refused at the key: the digit after it would find the bar busy and lose the rating
+			return m.bar.show("wait: "+m.bar.busy+" runs", factoryFlashWait), true
 		case k == "+":
 			m.rating = factoryRating{task: task, value: 1}
 		default:
@@ -1573,12 +1586,14 @@ func (m *factoryModel) rate(task int64, value int, reason string) tea.Cmd {
 		return m.note(noActions)
 	}
 	diff := m.diffs[task] == diffRead
-	sign := "+"
-	if value < 0 {
-		sign = "−"
-	}
+	sign := newCardPainter(m.viewWidth(), m.st, m.g, m.now()).ratingSign(value)
+	ascii := m.g.mode == IconsASCII
 	return m.bar.start("Rate "+m.taskKey(task)+" "+sign, func(ctx context.Context) (ActionResult, error) {
-		return act.Rate(ctx, task, value, reason, diff)
+		res, err := act.Rate(ctx, task, value, reason, diff)
+		if ascii { // the factory writes the minus sign; these glyphs draw a hyphen
+			res.Text = strings.ReplaceAll(res.Text, "−", "-")
+		}
+		return res, err
 	})
 }
 

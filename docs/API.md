@@ -14064,6 +14064,9 @@ func QuestionKey(text string) string
     marks, spaces and end punctuation), the rule by which answers.md keeps only
     the newest answer of a question asked again.
 
+func RatingReasons() []string
+    RatingReasons are the keys a rating takes for its reason, in order.
+
 func ReadDrain(l paths.Layout) (string, error)
     ReadDrain is the drain asked of the factory daemon of layout l ("" for
     none).
@@ -15096,11 +15099,11 @@ type RatePayload struct {
 	Surface    string
 }
     RatePayload is a ReqRate: task TaskID is rated Value, 1 for + and -1 for −,
-    with the key of a reason (a word: lowercase letters, digits, - and _;
-    "" for none). DiffOpened says the screen showed you the task's diff before
-    (the d key, or the ready card's diff in this run of the screen); the daemon
-    adds the diff your newest push on the task's ready card recorded as opened.
-    Surface is where you asked, for the record of your input.
+    with the key of a reason (one of RatingReasons; "" for none). DiffOpened
+    says the screen showed you the task's diff before (the d key, or the ready
+    card's diff in this run of the screen); the daemon adds the diff your newest
+    push on the task's ready card recorded as opened. Surface is where you
+    asked, for the record of your input.
 
 type ReadyCardFile struct {
 	Revision   int           `json:"revision"`
@@ -17604,16 +17607,19 @@ type QualityTotals struct {
 type RatingTotals struct {
 	Count    int            `json:"count"`
 	Tasks    int            `json:"tasks"`
+	Changed  int            `json:"changed"`
 	Plus     int            `json:"plus"`
 	Minus    int            `json:"minus"`
 	Reasons  map[string]int `json:"reasons"`
 	NoReason int            `json:"no_reason"`
 	Noise    int            `json:"noise"`
 }
-    RatingTotals are the ratings the operator gave with + and −: how many (every
-    rating is kept, so one task rated twice counts twice) on how many tasks, how
-    many of them + and −, by the key of the reason (NoReason: given with none),
-    and how many were given without the diff opened first, which is noise.
+    RatingTotals are the ratings the operator gave with + and −. Count is how
+    many were given (the registry keeps every one, so a task rated twice counts
+    twice) on Tasks tasks, and Changed the tasks whose newest rating has another
+    sign than an earlier one. The rest counts the newest rating of each task,
+    the operator's last word: Plus and Minus, the key of the reason (NoReason:
+    given with none), and Noise, those given without the diff opened first.
 
 type Report struct {
 	Since          time.Time
@@ -31897,6 +31903,11 @@ func OpenRestoreQuestion(ref string, hold time.Duration) string
     o, `magnum open` on a terminal): the role it opens has no live pane,
     so the daemon claims a slot, resumes the sessions and holds the PR for hold
     ([daemon] open_hold; 0 pins it until `magnum unpin`, OpenHoldPhrase).
+
+func RatingReasonKeys() []string
+    RatingReasonKeys are the keys of the reasons the task card's + and − offer,
+    in the order of their digits: the keys the factory takes for a rating
+    (factory.RatingReasons), which a test in the cli pins them to.
 
 func RenderPRBoard(rows []PRBoardRow, width int, opts PRBoardOptions) string
     RenderPRBoard renders the board once, for output that is not interactive and

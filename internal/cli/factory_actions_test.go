@@ -551,3 +551,60 @@ func TestOpenBrowserOpensThePageAsTheBoardDoes(t *testing.T) {
 		t.Errorf("OpenBrowser sent requests %+v and %d kicks", at.seen, at.kicks)
 	}
 }
+
+// A factory daemon of an older build answers a rating with "unknown request
+// kind": the screen says so in a sentence, with the command that starts the
+// daemon on this build, not the daemon's bare words.
+func TestARatingOnAnOlderFactoryDaemonSaysHowToStartTheNewOne(t *testing.T) {
+	storetest.Serial(t)
+	at := newScreenActionsTest(t, 250, func(registry.Request) (string, string) {
+		return registry.RequestFailed, `unknown request kind "rate"`
+	})
+
+	_, err := at.act.Rate(t.Context(), 7, 1, "tests", false)
+
+	if err == nil || !strings.Contains(err.Error(), "predates ratings") || !strings.Contains(err.Error(), "magnum factory install --drain") ||
+		strings.Contains(err.Error(), "unknown request kind") {
+		t.Fatalf("a rating on an older daemon: %v, want the sentence that names magnum factory install --drain", err)
+	}
+	// Another refusal is the daemon's own words.
+	at = newScreenActionsTest(t, 250, func(registry.Request) (string, string) {
+		return registry.RequestFailed, "PR-12330 is active: a task is rated once it is published or done"
+	})
+	if _, err := at.act.Rate(t.Context(), 7, 1, "", false); err == nil || err.Error() != "PR-12330 is active: a task is rated once it is published or done" {
+		t.Errorf("a refused rating: %v, want the daemon's words", err)
+	}
+}
+
+// A rating sent while no factory daemon runs is queued: the footer says so,
+// names the request and the command that loads the daemon.
+func TestARatingQueuedWithNoFactoryDaemonSaysSo(t *testing.T) {
+	storetest.Serial(t)
+	at := newScreenActionsTest(t, 0, nil)
+
+	res, err := at.act.Rate(t.Context(), 7, -1, "scope", true)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"queued as request 1", "no factory daemon runs", "`magnum factory install`", "within 30 minutes"} {
+		if !strings.Contains(res.Text, want) {
+			t.Errorf("the queued rating's text %q lacks %q", res.Text, want)
+		}
+	}
+	pending, err := at.registry(t).PendingRequests(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].Kind != factory.ReqRate || payloadOf[factory.RatePayload](t, pending[0]).Reason != "scope" {
+		t.Errorf("the pending requests %+v, want the rating", pending)
+	}
+}
+
+// The reasons the screen offers a rating are the keys the factory takes: the
+// screen's list and the factory's are one, in order.
+func TestTheScreensRatingReasonsAreTheKeysTheFactoryTakes(t *testing.T) {
+	if got, want := tui.RatingReasonKeys(), factory.RatingReasons(); !slices.Equal(got, want) {
+		t.Errorf("the screen offers %v, the factory takes %v", got, want)
+	}
+}

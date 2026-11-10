@@ -125,8 +125,8 @@ func TestARatingKnowsWhetherTheDiffWasOpenedFromTheScreenOrTheRegistry(t *testin
 	}
 }
 
-// Only a published or a done task is rated, only by + or −, and a reason is a
-// key (lowercase letters, digits, - and _); a refused rating stores nothing.
+// Only a published or a done task is rated, only by + or −, and a reason is
+// one of the rating's five keys (RatingReasons); a refused rating stores nothing.
 func TestARatingIsRefusedForATaskNotPublishedOrDoneAndForABadValueOrReason(t *testing.T) {
 	h := newHarness(t)
 	active := h.task("PR-12314", registry.TaskActive, "coding")
@@ -139,7 +139,8 @@ func TestARatingIsRefusedForATaskNotPublishedOrDoneAndForABadValueOrReason(t *te
 		{"an active task", RatePayload{TaskID: active.ID, Value: 1}, "PR-12314 is active: a task is rated once it is published or done"},
 		{"a value of 0", RatePayload{TaskID: published.ID, Value: 0}, "a rating is + (1) or − (-1), not 0"},
 		{"a value of 2", RatePayload{TaskID: published.ID, Value: 2}, "a rating is + (1) or − (-1), not 2"},
-		{"a reason with spaces", RatePayload{TaskID: published.ID, Value: 1, Reason: "too much"}, "a rating takes the key of its reason"},
+		{"a reason with spaces", RatePayload{TaskID: published.ID, Value: 1, Reason: "too much"}, "a rating takes one of the keys cause, scope, words, tests, time"},
+		{"a send back's key", RatePayload{TaskID: published.ID, Value: -1, Reason: "wrong-cause"}, "a rating takes one of the keys cause, scope, words, tests, time"},
 		{"an unknown task", RatePayload{TaskID: 9999, Value: 1}, "not found"},
 	} {
 		q := h.rate(tc.p)

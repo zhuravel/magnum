@@ -136,6 +136,7 @@ type fakeFactoryActions struct {
 	answerErr error
 	decideErr error
 	rateErr   error
+	rateText  string                  // Rate's answer; empty: a default one
 	started   func(text, kind string) // the source learns of the new task
 }
 

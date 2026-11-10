@@ -178,6 +178,9 @@ func (m factoryModel) menuItems() []menuItem {
 			{"step into its pane", "o", "o", acts}, {"back", "esc", "esc", true},
 		}
 	case fvTask:
+		if m.pendingRating() != 0 { // esc and "back" would store the rating with no reason: a click never does
+			return nil
+		}
 		c := m.taskCard()
 		r, _ := m.row(m.task)
 		pr, hasPR := FactoryPR{}, r.PR != nil
@@ -197,7 +200,7 @@ func (m factoryModel) menuItems() []menuItem {
 		}
 		return slices.Concat([]menuItem{
 			{"retry", "r", "r", acts && c.Retry}, {"accept for QA", acceptQAKey, acceptQAKey, acts && c.AcceptQA != ""},
-			{"diff", "d", "d", acts}, {"drop", "x", "x", acts},
+			{"diff", "d", "d", acts}, {"rate +", "+", "+", acts && c.Rate}, {"rate −", "−", "-", acts && c.Rate}, {"drop", "x", "x", acts},
 			{"step into its pane", "o", "o", acts}, {"open its PR", "b", "b", acts && c.PRURL != ""},
 			{"open its Jira issue", "t", "t", acts && c.IssueURL != ""}, m.reportItem(m.task)}, fixKeys,
 			[]menuItem{{"back", "esc", "esc", true}})

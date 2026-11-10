@@ -23206,14 +23206,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   which a `+` cannot give. The footer draws the question as the send back's reasons are drawn (`Why +?`, with `esc
   skips`), takes no other key meanwhile and asks no y/N, as spec 9.D says: a rating is undoable, and rating again
   stores a new row (every rating is kept). The hints offer `+ − rate` and the help lists the keys only where they
-  act; on a task at work the keys do nothing.
+  act; on a task at work the keys do nothing. While another action runs (the bar is busy) the key shows the wait
+  note and asks no reason, because a digit pressed after the prompt would find the bar busy and lose the rating. The
+  card's right-click menu lists `rate +` and `rate −` from the same keys, dimmed where the card offers none; while a
+  rating waits for its reason no menu opens, since the menu's "back" is `esc`, which stores the rating. In the ASCII
+  glyphs the screen writes the minus as a hyphen, in its question, its label and the daemon's answer.
   The screen sends the rating as the request `rate` (`RatePayload`: the task, the value, the reason's key, whether this
   run of the screen opened the task's diff, the surface) to the factory daemon, which records it and, as it does for an
   answer or a retry, your input (kind `rating`, text `+1: tests`, no class): the daemon refuses a task that is not
-  published or done, a value other than 1 and -1 and a reason that is no key, and answers what it stored (`PR-12330:
+  published or done, a value other than 1 and -1 and a reason that is none of the five keys (`factory.RatingReasons`,
+  which a test in the cli pins the screen's list to), and answers what it stored (`PR-12330:
   rated + (tests), the diff opened first`, or `..., the diff not opened first: noise`), which the footer shows. A
-  factory daemon of an older build answers `unknown request kind "rate"`: `magnum factory install --drain` starts it
-  on this build.
+  factory daemon of an older build answers `unknown request kind "rate"`: the screen's adapter turns it into "this
+  factory daemon predates ratings: `magnum factory install --drain` starts it on this build".
   `diff_opened_first` is true when the screen opened the diff (`d` on the task card or on the ready card, its pager
   ended without an error; a pager of a report does not count) or when the registry already records it: the task's
   newest push decision was taken with `diff_opened_at` set. The screen's reading is kept for the run of the screen
@@ -23227,8 +23232,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   recommendation (once per task by their text, with the current answer): in all, per source (the sources `Questions by
   source` counts a question under, several roles joined with `+`, not the raw `raised_by`, which names the judge for
   every question it relays) and per kind of task; and the decisions whose card carried a recommendation, by
-  `recommendation_followed`. The ratings count every row, the tasks rated, `+` and `−`, the reason keys with the
-  ratings given with none apart, and the ratings given without the diff opened first, which are noise (spec 11.2). No
+  `recommendation_followed`. The ratings count every row (`count`) on the tasks rated (`tasks`) and the tasks whose
+  newest rating has another sign than an earlier one (`changed`); `+` and `−`, the reason keys (those given with none
+  apart) and the ratings given without the diff opened first, which are noise (spec 11.2), count the newest rating
+  of each task, the operator's last word, so a mis-press that was rated again does not count as two votes. No
   migration: `ratings` and the two columns were in migration 0002.
   Known gap, not fixed here: `decide` records no `recommendation_shown` or `recommendation_followed` (nothing in the
   engine sets them), so the decisions line of the stats reads "No decision recorded a recommendation on its card"
@@ -23237,19 +23244,24 @@ skill versions); people add theirs to the sections before it, at the end of the 
   Rejected: reusing the send back's reason keys (faults only); a y/N before a rating (the spec says none, and it is
   undoable); writing the rating from the screen straight into the registry (every other input the screen gives is a
   request the daemon takes and records, and the screen opens the registry read only); counting a rating as noise
-  by the screen's own `d` alone (it would call nearly every rating of a published task noise); the stats reading
-  only the latest rating of a task (the registry keeps every one, and the first is the operator's first reaction);
+  by the screen's own `d` alone (it would call nearly every rating of a published task noise); counting every
+  row as a vote (a corrected mis-press made one + and one − for a task; the first review chose to count the newest);
   a rating line per task in the stats (the totals answer the F8 question: do the signals show a pattern); any decision of
   the task with the diff opened as the registry's source (a send back's diff is not the one pushed). Tests, each
   failing first: TestPlusThenADigitRatesAPublishedTaskWithItsReasonAndNoYN, TestMinusThenEscRatesWithoutAReason,
   TestARatingWaitsForADigitOfTheReasonsOrEsc, TestTheRatingSaysWhetherTheDiffWasOpenedFirst,
-  TestTheDiffReadOnTheReadyCardCountsForTheRatingAfterThePush, TestPlusDoesNothingOnATasksCardThatIsNotPublishedOrDone, TestARefusedRatingShowsTheDaemonsWords and
-  TestAPendingRatingEndsWithItsCard (`internal/tui`); TestARatingOfAPublishedTaskIsStoredWithItsReasonAndAnInput,
+  TestTheDiffReadOnTheReadyCardCountsForTheRatingAfterThePush, TestPlusDoesNothingOnATasksCardThatIsNotPublishedOrDone, TestARefusedRatingShowsTheDaemonsWords,
+  TestAPendingRatingEndsWithItsCard, TestPlusWhileAnotherActionRunsShowsTheWaitAtTheFirstKey,
+  TestTheTaskCardMenuRatesAndOpensNoMenuWhileARatingWaits and TestTheRatingsMinusIsAHyphenInTheASCIIGlyphs
+  (`internal/tui`); TestARatingOfAPublishedTaskIsStoredWithItsReasonAndAnInput,
   TestRatingAgainStoresANewRatingAndEveryOneIsKept, TestARatingKnowsWhetherTheDiffWasOpenedFromTheScreenOrTheRegistry,
-  TestARatingIsRefusedForATaskNotPublishedOrDoneAndForABadValueOrReason and
+  TestARatingIsRefusedForATaskNotPublishedOrDoneAndForABadValueOrReason (a send back's key among the refused) and
   TestTheTaskCardOffersRatingOnAPublishedOrDoneTaskOnly (`internal/factory`); the `rate` row of
-  TestTheFactoryScreensActionsAreFactoryRequests (`internal/cli`); TestStatsReadTheTakeRateOfTheRecommendations,
-  TestStatsCountTheRatingsAndTheNoiseAmongThem and TestStatsLeaveOutTheTakeRateAndTheRatingsWhenNothingIsRecorded
+  TestTheFactoryScreensActionsAreFactoryRequests, TestARatingOnAnOlderFactoryDaemonSaysHowToStartTheNewOne,
+  TestARatingQueuedWithNoFactoryDaemonSaysSo and TestTheScreensRatingReasonsAreTheKeysTheFactoryTakes
+  (`internal/cli`); TestStatsReadTheTakeRateOfTheRecommendations,
+  TestStatsCountTheRatingsAndTheNoiseAmongThem (a task rated twice, and the judge's relayed question counted for the
+  role whose findings it cites) and TestStatsLeaveOutTheTakeRateAndTheRatingsWhenNothingIsRecorded
   (`internal/factory/stats`). No new dependencies.
 
 ## Learned rules

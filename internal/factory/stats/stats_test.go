@@ -1146,12 +1146,13 @@ func TestStatsCountTheShadowWeeksJiraPlans(t *testing.T) {
 	}
 }
 
-// takeFixture seeds two tasks of two kinds with the records the take rate and
-// the ratings read: answered questions with a recommendation (taken or not,
-// from the raising role fx-points, from two roles together, and from the
-// critic), one without a recommendation and one never answered, two decisions
-// on a card that carried a recommendation (one followed) and one on a card
-// that did not, and three ratings.
+// takeFixture seeds three tasks of three kinds with the records the take rate
+// and the ratings read: answered questions with a recommendation (taken or
+// not, from the raising role fx-points, from two roles together, from the
+// critic, and the judge's, which relays fx-points' findings), one without a
+// recommendation and one never answered, two decisions on a card that
+// carried a recommendation (one followed) and one on a card that did not,
+// and four ratings of three tasks, one task rated twice.
 func takeFixture(t *testing.T) (*registry.Registry, registry.Task, registry.Task) {
 	t.Helper()
 	r, clk := openClocked(t)
@@ -1172,14 +1173,19 @@ func takeFixture(t *testing.T) (*registry.Registry, registry.Task, registry.Task
 		}
 	}
 	// The bug task: question 0 took the recommendation, 1 did not, 2 has none,
-	// 3 was never answered (a recommendation nobody took yet is no take).
+	// 3 was never answered (a recommendation nobody took yet is no take), and
+	// 4 is the judge's, which relays what fx-points' findings leave open and
+	// cites them: it counts for fx-points, which the judge only relays.
+	judgeRan(t, r, bug.ID, "fx-judge")
 	ask(bug.ID,
 		registry.Question{Text: "When does it go out?", Options: opts, Recommended: 0, RaisedBy: "fx-points"},
 		registry.Question{Text: "Who gets it?", Options: opts, Recommended: 1, RaisedBy: "fx-points"},
 		registry.Question{Text: "Which template?", Options: opts, Recommended: -1, RaisedBy: "fx-points"},
-		registry.Question{Text: "Is the migration online?", Options: opts, Recommended: 0, RaisedBy: "fx-critic"})
+		registry.Question{Text: "Is the migration online?", Options: opts, Recommended: 0, RaisedBy: "fx-critic"},
+		registry.Question{Text: "Does the refund path matter?", Options: opts, Recommended: 0, RaisedBy: "fx-judge",
+			Evidence: "findings-fx-points.md: Point 1"})
 	clk.Set(t0.Add(time.Hour))
-	if err := r.AnswerBatch(ctx, bug.ID, 1, map[int]string{0: "Seven days", 1: "Seven days", 2: "One day"}); err != nil {
+	if err := r.AnswerBatch(ctx, bug.ID, 1, map[int]string{0: "Seven days", 1: "Seven days", 2: "One day", 4: "Seven days"}); err != nil {
 		t.Fatal(err)
 	}
 	// The feature task: one question of fx-points took it, one of two roles
@@ -1199,10 +1205,18 @@ func takeFixture(t *testing.T) (*registry.Registry, registry.Task, registry.Task
 			t.Fatal(err)
 		}
 	}
+	chore, err := r.CreateTask(ctx, registry.Task{JiraKey: "PR-12504", Kind: "chore", Repo: "example/app", Title: "A chore"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The bug task was rated - without the diff, then + with it: its newest
+	// rating counts. The feature task was rated + with no reason and no diff,
+	// the chore - for words with the diff.
 	for _, rt := range []registry.Rating{
-		{TaskID: bug.ID, Value: 1, ReasonKey: "tests", DiffOpenedFirst: true},
 		{TaskID: bug.ID, Value: -1, ReasonKey: "scope"},
+		{TaskID: bug.ID, Value: 1, ReasonKey: "tests", DiffOpenedFirst: true},
 		{TaskID: feature.ID, Value: 1},
+		{TaskID: chore.ID, Value: -1, ReasonKey: "words", DiffOpenedFirst: true},
 	} {
 		if err := r.RecordRating(ctx, rt); err != nil {
 			t.Fatal(err)
@@ -1228,13 +1242,14 @@ func TestStatsReadTheTakeRateOfTheRecommendations(t *testing.T) {
 	if take == nil {
 		t.Fatal("the report has no take rate")
 	}
-	if want := (stats.Take{Of: 4, Took: 2}); take.Questions != want {
+	if want := (stats.Take{Of: 5, Took: 3}); take.Questions != want {
 		t.Errorf("questions %+v, want %+v", take.Questions, want)
 	}
-	if want := map[string]stats.Take{"fx-points": {Of: 3, Took: 2}, "fx-points+fx-points-codex": {Of: 1, Took: 0}}; !maps.Equal(take.ByRole, want) {
+	// The judge's question counts for fx-points, whose findings it cites.
+	if want := map[string]stats.Take{"fx-points": {Of: 4, Took: 3}, "fx-points+fx-points-codex": {Of: 1, Took: 0}}; !maps.Equal(take.ByRole, want) {
 		t.Errorf("by role %+v, want %+v", take.ByRole, want)
 	}
-	if want := map[string]stats.Take{"bug": {Of: 2, Took: 1}, "feature": {Of: 2, Took: 1}}; !maps.Equal(take.ByKind, want) {
+	if want := map[string]stats.Take{"bug": {Of: 3, Took: 2}, "feature": {Of: 2, Took: 1}}; !maps.Equal(take.ByKind, want) {
 		t.Errorf("by kind %+v, want %+v", take.ByKind, want)
 	}
 	if want := (stats.Take{Of: 2, Took: 1}); take.Decisions != want {
@@ -1243,12 +1258,12 @@ func TestStatsReadTheTakeRateOfTheRecommendations(t *testing.T) {
 	md := rep.Markdown()
 	for _, want := range []string{
 		"## Recommendations taken",
-		"Questions that carried a recommendation and were answered: 2 of 4 took it (50%).",
+		"Questions that carried a recommendation and were answered: 3 of 5 took it (60%).",
 		"| Raised by | Answered | Took it | Share |",
-		"| fx-points | 3 | 2 | 67% |",
+		"| fx-points | 4 | 3 | 75% |",
 		"| fx-points+fx-points-codex | 1 | 0 | 0% |",
 		"| Kind of task | Answered | Took it | Share |",
-		"| bug | 2 | 1 | 50% |",
+		"| bug | 3 | 2 | 67% |",
 		"| feature | 2 | 1 | 50% |",
 		"Decisions on a card that carried a recommendation: 1 of 2 followed it (50%).",
 	} {
@@ -1260,16 +1275,19 @@ func TestStatsReadTheTakeRateOfTheRecommendations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = `"take":{"questions":{"of":4,"took":2},"by_role":{"fx-points":{"of":3,"took":2},"fx-points+fx-points-codex":{"of":1,"took":0}},` +
-		`"by_kind":{"bug":{"of":2,"took":1},"feature":{"of":2,"took":1}},"decisions":{"of":2,"took":1}}`
+	const want = `"take":{"questions":{"of":5,"took":3},"by_role":{"fx-points":{"of":4,"took":3},"fx-points+fx-points-codex":{"of":1,"took":0}},` +
+		`"by_kind":{"bug":{"of":3,"took":2},"feature":{"of":2,"took":1}},"decisions":{"of":2,"took":1}}`
 	if !strings.Contains(string(js), want) {
 		t.Errorf("the JSON lacks %s:\n%s", want, js)
 	}
 }
 
-// The stats count the ratings: how many, how many are + and −, the reason
-// keys (a rating with none apart), on how many tasks, and how many were given
-// without the diff opened first, which the spec counts as noise.
+// The stats count the ratings: how many were given and on how many tasks,
+// how many tasks changed their sign, and from the newest rating of each task
+// how many are + and −, the reason keys (a rating with none apart) and how
+// many were given without the diff opened first, which the spec counts as
+// noise. A rating a task was given before its newest one is kept in the
+// registry and counts in neither.
 func TestStatsCountTheRatingsAndTheNoiseAmongThem(t *testing.T) {
 	t.Parallel()
 	r, _, _ := takeFixture(t)
@@ -1278,14 +1296,15 @@ func TestStatsCountTheRatingsAndTheNoiseAmongThem(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := rep.Ratings
-	want := &stats.RatingTotals{Count: 3, Tasks: 2, Plus: 2, Minus: 1, Reasons: map[string]int{"tests": 1, "scope": 1}, NoReason: 1, Noise: 2}
+	want := &stats.RatingTotals{Count: 4, Tasks: 3, Changed: 1, Plus: 2, Minus: 1, Reasons: map[string]int{"tests": 1, "words": 1}, NoReason: 1, Noise: 1}
 	if got == nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("ratings %+v, want %+v", got, want)
 	}
 	md := rep.Markdown()
 	for _, line := range []string{
 		"## Ratings",
-		"3 ratings on 2 tasks: 2 +, 1 −. Reasons: scope 1, tests 1, none given 1. 2 were given without the diff opened first (noise, not signal).",
+		"4 ratings on 3 tasks, 1 task changed its sign. The newest rating of each task counts: 2 +, 1 −. Reasons: tests 1, words 1, " +
+			"none given 1. 1 was given without the diff opened first (noise, not signal).",
 	} {
 		if !strings.Contains(md, line) {
 			t.Errorf("the markdown lacks %q:\n%s", line, md)
@@ -1295,7 +1314,7 @@ func TestStatsCountTheRatingsAndTheNoiseAmongThem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const wantJSON = `"ratings":{"count":3,"tasks":2,"plus":2,"minus":1,"reasons":{"scope":1,"tests":1},"no_reason":1,"noise":2}`
+	const wantJSON = `"ratings":{"count":4,"tasks":3,"changed":1,"plus":2,"minus":1,"reasons":{"tests":1,"words":1},"no_reason":1,"noise":1}`
 	if !strings.Contains(string(js), wantJSON) {
 		t.Errorf("the JSON lacks %s:\n%s", wantJSON, js)
 	}

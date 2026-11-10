@@ -10,13 +10,23 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/zhuravel/magnum/internal/factory/registry"
 )
 
+// ratingReasons are the keys of a rating's reason, in the order the task
+// card offers them by digit: the cause and the fix, how much it changed, how
+// it followed your words, the tests, the time it took you. One set serves +
+// and −: it names what the verdict is about. The screen's list is pinned to
+// this one by a test in the cli.
+var ratingReasons = []string{"cause", "scope", "words", "tests", "time"}
+
+// RatingReasons are the keys a rating takes for its reason, in order.
+func RatingReasons() []string { return slices.Clone(ratingReasons) }
+
 // RatePayload is a ReqRate: task TaskID is rated Value, 1 for + and -1 for −,
-// with the key of a reason (a word: lowercase letters, digits, - and _; ""
-// for none). DiffOpened says the screen showed you the task's diff before
+// with the key of a reason (one of RatingReasons; "" for none). DiffOpened says the screen showed you the task's diff before
 // (the d key, or the ready card's diff in this run of the screen); the
 // daemon adds the diff your newest push on the task's ready card recorded
 // as opened. Surface is where you asked, for the record of your input.
@@ -30,7 +40,7 @@ type RatePayload struct {
 
 // rateTask stores your rating p (ReqRate) and records it as your input. A
 // task is rated once it is published or done; the value is 1 or -1 and the
-// reason a key. The diff counts as opened first when the screen says so or
+// reason one of RatingReasons. The diff counts as opened first when the screen says so or
 // when the registry records that the diff of the task's newest push was
 // opened when you pushed (a card sent back and drawn again for a new head
 // is a diff not read yet): a rating given without it is noise (spec 11.2),
@@ -39,8 +49,8 @@ func (e *Engine) rateTask(ctx context.Context, p RatePayload) (string, error) {
 	if p.Value != 1 && p.Value != -1 {
 		return "", fmt.Errorf("a rating is + (1) or − (-1), not %d", p.Value)
 	}
-	if p.Reason != "" && !reasonKeyRe.MatchString(p.Reason) {
-		return "", fmt.Errorf("a rating takes the key of its reason (lowercase letters, digits, - and _), not %q", p.Reason)
+	if p.Reason != "" && !slices.Contains(ratingReasons, p.Reason) {
+		return "", fmt.Errorf("a rating takes one of the keys %s, not %q", strings.Join(ratingReasons, ", "), p.Reason)
 	}
 	t, err := e.reg.TaskByID(ctx, p.TaskID)
 	if err != nil {

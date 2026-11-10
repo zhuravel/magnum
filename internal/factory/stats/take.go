@@ -53,14 +53,16 @@ type TakeTotals struct {
 	Decisions Take            `json:"decisions"`
 }
 
-// RatingTotals are the ratings the operator gave with + and −: how many
-// (every rating is kept, so one task rated twice counts twice) on how many
-// tasks, how many of them + and −, by the key of the reason (NoReason: given
-// with none), and how many were given without the diff opened first, which is
-// noise.
+// RatingTotals are the ratings the operator gave with + and −. Count is how
+// many were given (the registry keeps every one, so a task rated twice counts
+// twice) on Tasks tasks, and Changed the tasks whose newest rating has another
+// sign than an earlier one. The rest counts the newest rating of each task,
+// the operator's last word: Plus and Minus, the key of the reason (NoReason:
+// given with none), and Noise, those given without the diff opened first.
 type RatingTotals struct {
 	Count    int            `json:"count"`
 	Tasks    int            `json:"tasks"`
+	Changed  int            `json:"changed"`
 	Plus     int            `json:"plus"`
 	Minus    int            `json:"minus"`
 	Reasons  map[string]int `json:"reasons"`
@@ -81,13 +83,11 @@ func newSignals() *signals {
 	}
 }
 
-// add reads task t's answered questions that carried a recommendation, its
-// decisions on a card that carried one and its ratings.
-func (s *signals) add(ctx context.Context, reg *registry.Registry, t registry.Task) error {
-	qs, err := reg.Questions(ctx, t.ID)
-	if err != nil {
-		return err
-	}
+// addTask counts task t: its answered questions that carried a recommendation
+// (qs are all its questions, relays the roles that ran its report stage), its
+// decisions ds on a card that carried one, and its ratings, which it reads.
+func (s *signals) addTask(ctx context.Context, reg *registry.Registry, t registry.Task, qs []registry.Question, relays map[string]bool,
+	ds []registry.Decision) error {
 	last := map[string]registry.Question{} // by text: the newest answered one that carried a recommendation
 	var order []string
 	for _, q := range qs {
@@ -99,53 +99,46 @@ func (s *signals) add(ctx context.Context, reg *registry.Registry, t registry.Ta
 		}
 		last[q.Text] = q
 	}
-	if len(order) > 0 {
-		relays, err := relayRoles(ctx, reg, t.ID)
-		if err != nil {
-			return err
-		}
-		kind := cmp.Or(t.Kind, "unknown")
-		for _, text := range order {
-			q := last[text]
-			role := cmp.Or(strings.Join(sourcesOf(q, relays), "+"), "unknown")
-			s.take.Questions.add(q.TookRecommendation)
-			byRole, byKind := s.take.ByRole[role], s.take.ByKind[kind]
-			byRole.add(q.TookRecommendation)
-			byKind.add(q.TookRecommendation)
-			s.take.ByRole[role], s.take.ByKind[kind] = byRole, byKind
-		}
-	}
-	ds, err := reg.Decisions(ctx, t.ID)
-	if err != nil {
-		return err
+	kind := cmp.Or(t.Kind, "unknown")
+	for _, text := range order {
+		q := last[text]
+		role := cmp.Or(strings.Join(sourcesOf(q, relays), "+"), "unknown")
+		s.take.Questions.add(q.TookRecommendation)
+		byRole, byKind := s.take.ByRole[role], s.take.ByKind[kind]
+		byRole.add(q.TookRecommendation)
+		byKind.add(q.TookRecommendation)
+		s.take.ByRole[role], s.take.ByKind[kind] = byRole, byKind
 	}
 	for _, d := range ds {
 		if d.RecommendationShown {
 			s.take.Decisions.add(d.RecommendationFollowed)
 		}
 	}
-	rs, err := reg.Ratings(ctx, t.ID)
+	rs, err := reg.Ratings(ctx, t.ID) // in the order they were given
 	if err != nil {
 		return err
 	}
-	if len(rs) > 0 {
-		s.ratings.Tasks++
+	if len(rs) == 0 {
+		return nil
 	}
-	for _, rt := range rs {
-		s.ratings.Count++
-		if rt.Value > 0 {
-			s.ratings.Plus++
-		} else {
-			s.ratings.Minus++
-		}
-		if rt.ReasonKey == "" {
-			s.ratings.NoReason++
-		} else {
-			s.ratings.Reasons[rt.ReasonKey]++
-		}
-		if !rt.DiffOpenedFirst {
-			s.ratings.Noise++
-		}
+	newest := rs[len(rs)-1]
+	s.ratings.Count += len(rs)
+	s.ratings.Tasks++
+	if slices.ContainsFunc(rs[:len(rs)-1], func(r registry.Rating) bool { return r.Value != newest.Value }) {
+		s.ratings.Changed++
+	}
+	if newest.Value > 0 {
+		s.ratings.Plus++
+	} else {
+		s.ratings.Minus++
+	}
+	if newest.ReasonKey == "" {
+		s.ratings.NoReason++
+	} else {
+		s.ratings.Reasons[newest.ReasonKey]++
+	}
+	if !newest.DiffOpenedFirst {
+		s.ratings.Noise++
 	}
 	return nil
 }
@@ -216,8 +209,14 @@ func (r Report) ratingsMarkdown(b *strings.Builder) {
 	if rt.Noise == 1 {
 		were = "was"
 	}
-	fmt.Fprintf(b, "\n## Ratings\n\n%s on %s: %d +, %d −. Reasons: %s. %d %s given without the diff opened first (noise, not signal).\n",
-		plural(rt.Count, "rating"), plural(rt.Tasks, "task"), rt.Plus, rt.Minus, strings.Join(reasons, ", "), rt.Noise, were)
-	b.WriteString("\nThe task card's + and − store a rating each; a task rated again keeps both. A rating given without the diff opened " +
-		"first, on the screen or as your newest push on the ready card recorded, counts as noise.\n")
+	changed := "changed their sign"
+	if rt.Changed == 1 {
+		changed = "changed its sign"
+	}
+	fmt.Fprintf(b, "\n## Ratings\n\n%s on %s, %s %s. The newest rating of each task counts: %d +, %d −. Reasons: %s. %d %s given without the diff opened "+
+		"first (noise, not signal).\n", plural(rt.Count, "rating"), plural(rt.Tasks, "task"), plural(rt.Changed, "task"), changed, rt.Plus, rt.Minus,
+		strings.Join(reasons, ", "), rt.Noise, were)
+	b.WriteString("\nThe task card's + and − store a rating each. A task rated again keeps every rating, and its newest counts here, in the " +
+		"reasons and in the noise. A rating given without the diff opened first, on the screen or as your newest push on the ready card " +
+		"recorded, counts as noise.\n")
 }

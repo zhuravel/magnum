@@ -201,8 +201,14 @@ func (a *factoryActions) AcceptQA(ctx context.Context, taskID int64) (tui.Action
 // a reason ("" for none), as the task card's + and − do; diffOpened is that
 // the screen showed you the task's diff first (RatePayload). The screen asks
 // no y/N for it: a rating is undoable, as rating again stores a new one.
+// A factory daemon of an older build refuses the request as unknown: that
+// becomes the sentence that says how to start the daemon on this build.
 func (a *factoryActions) Rate(ctx context.Context, taskID int64, value int, reason string, diffOpened bool) (tui.ActionResult, error) {
-	return a.send(ctx, factory.ReqRate, factory.RatePayload{TaskID: taskID, Value: value, Reason: reason, DiffOpened: diffOpened, Surface: screenSurface})
+	res, err := a.send(ctx, factory.ReqRate, factory.RatePayload{TaskID: taskID, Value: value, Reason: reason, DiffOpened: diffOpened, Surface: screenSurface})
+	if err != nil && strings.Contains(err.Error(), "unknown request kind") {
+		return res, errors.New("this factory daemon predates ratings: `magnum factory install --drain` starts it on this build")
+	}
+	return res, err
 }
 
 // Open steps into the task's pane: herdr focuses its agent on the

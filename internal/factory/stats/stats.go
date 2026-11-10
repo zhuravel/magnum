@@ -537,11 +537,8 @@ func ComputeAt(ctx context.Context, reg *registry.Registry, since, now time.Time
 		if !since.IsZero() && t.Created.Before(since) {
 			continue
 		}
-		ts, err := taskStats(ctx, reg, t, now)
+		ts, err := taskStats(ctx, reg, t, now, sig)
 		if err != nil {
-			return Report{}, fmt.Errorf("stats of task %d: %w", t.ID, err)
-		}
-		if err := sig.add(ctx, reg, t); err != nil {
 			return Report{}, fmt.Errorf("stats of task %d: %w", t.ID, err)
 		}
 		rep.Tasks = append(rep.Tasks, ts)
@@ -556,7 +553,7 @@ func ComputeAt(ctx context.Context, reg *registry.Registry, since, now time.Time
 	return rep, nil
 }
 
-func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now time.Time) (TaskStats, error) {
+func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now time.Time, sig *signals) (TaskStats, error) {
 	spans, err := reg.Spans(ctx, t.ID)
 	if err != nil {
 		return TaskStats{}, err
@@ -595,6 +592,9 @@ func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now
 	}
 	judges, second, err := roundJudges(ctx, reg, t.ID, cycles)
 	if err != nil {
+		return TaskStats{}, err
+	}
+	if err := sig.addTask(ctx, reg, t, questions, relays, decisions); err != nil {
 		return TaskStats{}, err
 	}
 	batches, onQuestions := answeredBatches(questions)
