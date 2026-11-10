@@ -5684,6 +5684,13 @@ func (c *Config) OwnPRsOnFactory() bool
     OwnPRsOnFactory reports whether your own open PRs are listed on the factory
     screen and not on the board ([board] own_prs = "factory").
 
+func (c *Config) PRThreadLogins(identity string, former []string) []string
+    PRThreadLogins is MagnumThreadLogins with one PR's own logins: the identity
+    it posts as (a pin of `magnum review --as`, or its watch's; one no longer
+    declared counts by its name) and its former identities still declared (the
+    engine's KVPRFormerIdentities), as the engine's ownLogins and the threads
+    file take them for magnum's on that PR.
+
 func (c *Config) PoolFor(fullName string) *Pool
     PoolFor returns the pool for owner/name, or nil (per-PR worktree repos).
 
@@ -9324,6 +9331,11 @@ func FixNeedsAsked(msg string, entries []string) []string
     A message that only counts them keeps all of entries when it counts them
     all and none otherwise, since it cannot say which went; one that asks for no
     call keeps none. The factory screen draws what it keeps.
+
+func FormerIdentities(v string) []string
+    FormerIdentities is the identity names v, a value of KVPRFormerIdentities,
+    holds (nil when v is empty or unreadable): the engine's and `magnum
+    comment`'s one reader of it.
 
 func GitHubOpWords(op string) string
     GitHubOpWords is op in the words `magnum status` shows: an engine label
@@ -25405,6 +25417,7 @@ type BadAnchor struct {
 
 type CommentGitHub interface {
 	FixReplyGitHub
+	AllReviews(ctx context.Context, owner, repo string, number int) ([]github.Review, bool, error)
 	Pull(ctx context.Context, owner, repo string, number int) (github.Pull, error)
 	RequestReviewers(ctx context.Context, owner, repo string, number int, logins []string) error
 	UpdatePullTitle(ctx context.Context, owner, repo string, number int, title string) (github.Pull, error)
@@ -25423,14 +25436,15 @@ type CommentOptions struct {
 	MagnumLogins   []string
 	DryRun         bool
 }
-    CommentOptions name what `magnum comment` does on a pull request: a comment
-    on the conversation, or with ReplyTo a reply in the review thread of that
-    comment (any comment of it); a new Title; review requests of RequestReviews
-    (users' logins). Login is the App it posts as (Account form), the one
-    GitHub must show as the author, and Identity the name of its [[identity]];
-    MagnumLogins are the logins whose threads magnum's review started
-    (config.Config.MagnumThreadLogins and the PR's last reviewer), where it
-    refuses to reply. DryRun reads and checks everything and posts nothing.
+    CommentOptions name what `magnum comment` does on a pull request:
+    a comment on the conversation, or with ReplyTo a reply in the review
+    thread of that comment (any comment of it); a new Title; review requests of
+    RequestReviews (users' logins). Login is the App it posts as (Account form),
+    the one GitHub must show as the author, and Identity the name of its
+    [[identity]]; MagnumLogins are the logins whose threads magnum's review
+    started (config.Config.MagnumThreadLogins, or for a PR in the registry
+    PRThreadLogins, and the PR's last reviewer), where it refuses to reply.
+    DryRun reads and checks everything and posts nothing.
 
 func (o CommentOptions) Check() (out CommentOutcome, ok bool)
     Check is the outcome RunComment refuses o with (ok false) before it reads
@@ -25473,11 +25487,13 @@ func RunComment(ctx context.Context, gh CommentGitHub, o CommentOptions, text []
     and in no thread magnum's review started: the daemon's poll reads no
     comment text and would take the App's reply there for the author's).
     A comment the same as one of the App's already there with nobody else's
-    after it (postedLast) is not posted again, a title already so is not sent,
+    after it (postedLast; on the conversation nobody else's review either,
+    reviewedSince) is not posted again, a title already so is not sent,
     and a login asked already is skipped, so after an unclear failure the same
-    line runs again safely. GitHub must show the App as each comment's author.
-    onPosted (nil: none) hears of each post, and of a comment found already
-    there.
+    line runs again safely. GitHub must show the App as each comment's author:
+    another account there is StatusInvalid (otherAuthor) and nothing more goes
+    out. onPosted (nil: none) hears of each post, with the author GitHub showed
+    when it is not the App, and of a comment found already there.
 
 func (o CommentOutcome) ExitCode() int
     ExitCode is 0 when everything is on GitHub (posted, already there) or a dry
@@ -25496,6 +25512,9 @@ type CommentPart struct {
 	URL     string `json:"url,omitempty"`
 	Already bool   `json:"already"`
 	Planned bool   `json:"planned,omitempty"`
+	// Author is who GitHub shows wrote the comment posted when that is not
+	// the App (Posted.Author); "" when it is.
+	Author string `json:"author,omitempty"`
 }
     CommentPart is the comment of an outcome: on the conversation or a reply
     in the thread of Thread (its first comment), its id and link, posted,
@@ -25694,6 +25713,11 @@ type Posted struct {
 	URL       string   // the comment's link; the pull request's for a title or a review request
 	Reviewers []string // the logins asked (PostReviewRequest)
 	Already   bool     // the comment was there already: nothing posted now
+	// Author is who GitHub shows wrote the comment when that is not the
+	// App (Account form; "an account it does not name" when it named
+	// none): a wrong login in the config, or a post under a person's
+	// login. "" when it is the App.
+	Author string
 }
     Posted is one post RunComment made, or (Already) a comment it found already
     there from an earlier run: what the caller records.
