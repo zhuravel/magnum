@@ -214,9 +214,10 @@ func TestASessionsImportsStayWithinTheWalksBudget(t *testing.T) {
 // Claude Code 2.1 lexes an instruction file with marked, without GFM, and
 // matches its import pattern only in the text tokens: a path ends where an
 // emphasis, a link's text, a code span, an image or inline HTML begins or
-// ends (**@docs/guide.md** loads docs/guide.md), a token after a code span
-// starts a path of its own, a zero-width no-break space ends one (JS's \s
-// holds it) while U+0085 does not, an escaped space at its end is trimmed,
+// ends (**@docs/guide.md** loads docs/guide.md), a token after a code span,
+// a link, an emphasis or an escape starts a path of its own, a zero-width
+// no-break space ends one and starts the next (JS's \s holds it) while
+// U+0085 does not, an escaped space at its end is trimmed,
 // and an HTML block that starts with a comment is read with its comments
 // taken out. ImportPaths gives each path Claude loads among its own;
 // an underscore inside a word is no emphasis, so @app_config gives no app.
@@ -240,6 +241,14 @@ func TestImportPathsGivesThePathClaudeCodesMarkdownEnds(t *testing.T) {
 		{"@docs/a\u0085b.md\n", []string{"docs/a\u0085b.md"}},
 		{"Load @docs/a.md\\ \n", []string{"docs/a.md"}},
 		{"<!-- c --> @docs/a<!-- x -->.md\n", []string{"docs/a.md"}},
+		// A text token starts after a zero-width no-break space, a link,
+		// a reference link, an emphasis and an escape, and ends at a link.
+		{"x\ufeff@docs/g.md\n", []string{"docs/g.md"}},
+		{"[x](y)@docs/i.md\n", []string{"docs/i.md"}},
+		{"[x]: /u\n\n[x]@docs/j.md\n", []string{"docs/j.md"}},
+		{"_x_@docs/k.md\n", []string{"docs/k.md"}},
+		{"\\.@docs/l.md\n", []string{"docs/l.md"}},
+		{"@docs/m.md[x](y)\n", []string{"docs/m.md"}},
 	} {
 		got, more := ImportPaths(c.text, 100)
 		for _, w := range c.want {
@@ -379,8 +388,9 @@ func TestASessionReadsAnImportInMarkdownsEmphasis(t *testing.T) {
 }
 
 // One file may be named many ways (here 300 links to it): the session reads
-// it once per walk, however many paths name it, so a large file there
-// costs one read and one scan at each Claude launch, not one per name.
+// it once per walk, however many paths name it (its device and inode), so
+// a large file there costs one read and one scan at each Claude launch, not
+// one per name, and the walk stays within its budget, whole.
 func TestASessionReadsAnImportedFileOncePerWalk(t *testing.T) {
 	dir := t.TempDir()
 	var b strings.Builder
@@ -393,16 +403,20 @@ func TestASessionReadsAnImportedFileOncePerWalk(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	done := make(chan []string, 1)
+	type walk struct {
+		targets []string
+		partial bool
+	}
+	done := make(chan walk, 1)
 	start := time.Now()
 	go func() {
-		targets, _ := ProjectLinks(t.Context(), KindClaude, dir)
-		done <- targets
+		targets, partial := ProjectLinks(t.Context(), KindClaude, dir)
+		done <- walk{targets, partial}
 	}()
 	select {
-	case targets := <-done:
-		if !slices.Contains(targets, ".docs/big.md") || !slices.Contains(targets, ".docs/x") {
-			t.Fatalf("ProjectLinks = %d targets, want .docs/big.md and what it imports", len(targets))
+	case w := <-done:
+		if !slices.Contains(w.targets, ".docs/big.md") || !slices.Contains(w.targets, ".docs/x") || w.partial {
+			t.Fatalf("ProjectLinks = %d targets, partial %v; want .docs/big.md and what it imports, whole", len(w.targets), w.partial)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatalf("ProjectLinks still runs after %s", time.Since(start))
