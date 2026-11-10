@@ -536,7 +536,7 @@ func (e *Engine) settleHead(ctx context.Context, job *roundJob, pr store.PR, tar
 	if pr.HeadSHA == target {
 		return s
 	}
-	dc := e.checkDelta(ctx, job.repo, job.watch, prBase(job.repo, pr), target, pr.HeadSHA)
+	dc := e.checkDelta(ctx, job.repo, job.watch, pr, target)
 	if dc.trivial {
 		s.reviewed, s.trivial, s.settled = pr.HeadSHA, dc.classes, dc
 		return s

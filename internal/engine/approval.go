@@ -273,7 +273,7 @@ func (e *Engine) keepForDeltaCheck(ctx context.Context, repo store.Repo, pr stor
 		}
 	} else if !pending {
 		return false, "" // an unmeasured delta: the approval goes, as before
-	} else if dc := e.checkDelta(ctx, repo, *w, prBase(repo, pr), reviewed, pr.HeadSHA); dc.measured {
+	} else if dc := e.checkDelta(ctx, repo, *w, pr, reviewed); dc.measured {
 		size = dc.size // a push while the check runs
 	} else {
 		return gone("the commits since it could not be measured; a re-review follows")

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"slices"
 	"strings"
@@ -165,6 +166,56 @@ func TestAPushOfTheAgentsInstructionsIsReReviewed(t *testing.T) {
 			}
 			if !said || !strings.Contains(logs.String(), "path="+tc.path) {
 				t.Fatalf("log does not say why (%q, %s):\n%s", why, tc.path, logs.String())
+			}
+		})
+	}
+}
+
+// A link of the reviewed commit's tree that steers the review agents leads
+// elsewhere (.claude/skills -> ../.agents/skills, CLAUDE.md ->
+// docs/guide.md): a docs push that edits a file there, or a file on the way
+// to one (a push can turn it into a link that leads anywhere), changes what
+// the agents load though it names nothing under .claude/. Settled as docs,
+// it would get no round, so no gate of a standing approval would see it: it
+// is re-reviewed, and so is a push whose reviewed commit's links magnum
+// cannot read. A docs page no link leads to still settles.
+func TestADocsPushThroughALinkOfTheAgentsConfigIsReReviewed(t *testing.T) {
+	skills := map[string]map[string]string{"b1": {".claude/skills": "../.agents/skills"}}
+	guide := map[string]map[string]string{"b1": {"CLAUDE.md": "notes.md/guide.md"}}
+	for _, tc := range []struct {
+		name     string
+		links    map[string]map[string]string
+		linksErr error
+		path     string
+		trivial  bool
+		log      string
+	}{
+		{name: "a skill a link leads to", links: skills, path: ".agents/skills/x/SKILL.md", log: "path=.claude/skills"},
+		{name: "in any case", links: skills, path: ".Agents/Skills/x/SKILL.md", log: "path=.claude/skills"},
+		{name: "a file on the way to a target", links: guide, path: "notes.md", log: "path=CLAUDE.md"},
+		{name: "links that cannot be read", linksErr: errors.New("git broke"), path: "docs/guide.md",
+			log: "cannot read where the links of the reviewed commit lead"},
+		{name: "a page no link leads to", links: skills, path: "docs/guide.md", trivial: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs syncBuffer
+			h := newHarness(t, func(h *harness) {
+				h.d.Logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+				h.d.Git = fakeGit{links: tc.links, linksErr: tc.linksErr}
+			})
+			files := []github.FileDelta{{Path: tc.path, Status: "modified", Patch: "@@ -1,2 +1,2 @@\n # Notes\n-Review the specs.\n+Run every hook."}}
+			pr := reviewedThenPushed(t, h, "", files)
+			if tc.trivial {
+				if pr.State != store.PRReviewed || deref(pr.ReviewedSHA) != "b2" || len(trivialEvents(t, h)) != 1 {
+					t.Fatalf("state %s reviewed_sha %q; want the docs push settled", pr.State, deref(pr.ReviewedSHA))
+				}
+				return
+			}
+			if pr.State != store.PRRereviewPending || deref(pr.ReviewedSHA) != "b1" || len(trivialEvents(t, h)) != 0 {
+				t.Fatalf("state %s reviewed_sha %q, want a re-review of b2", pr.State, deref(pr.ReviewedSHA))
+			}
+			if !strings.Contains(logs.String(), tc.log) {
+				t.Fatalf("log does not say %q:\n%s", tc.log, logs.String())
 			}
 		})
 	}

@@ -12,9 +12,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/eligibility"
 	"github.com/zhuravel/magnum/internal/github"
@@ -119,16 +121,19 @@ func (dc deltaCheck) change() string {
 	return fmt.Sprintf("changes %s (%d %s)", DeltaLabel(dc.classes), dc.files, textx.Plural(dc.files, "file", "files"))
 }
 
-// checkDelta measures from...to as the watch's poll identity, when the
-// watch skips trivial deltas or has a re-review threshold, with the measure
-// triage and the rerun share (measureRange): one GitHub call, and when the
-// push has a merge commit or diverged from the reviewed commit (a rebase, a
-// force push) two more that compare the PR's own diff against base before
-// and after it. A file that steers the review agents (agentConfigPath: an
-// AGENTS.md or CLAUDE.md at any depth, .claude/, .codex/, .mcp.json) is
-// never trivial, though it is Markdown: settled as reviewed the push would
-// get no round, and the gates of a standing approval run only on a head
-// magnum reviews (standingGateRefusal); the log says so. A push trivial by
+// checkDelta measures from...pr's head as the watch's poll identity, when
+// the watch skips trivial deltas or has a re-review threshold, with the
+// measure triage and the rerun share (measureRange): one GitHub call, and
+// when the push has a merge commit or diverged from the reviewed commit (a
+// rebase, a force push) two more that compare the PR's own diff against
+// pr's base before and after it. A file that steers the review agents
+// (agentConfigPath: an AGENTS.md or CLAUDE.md at any depth, .claude/,
+// .codex/, .mcp.json) is never trivial, though it is Markdown: settled as
+// reviewed the push would get no round, and the gates of a standing
+// approval run only on a head magnum reviews (standingGateRefusal); the log
+// says so. Nor is a file a link of the reviewed commit's tree that steers
+// them leads to, or one on the way there (linkedSteering), and a push whose
+// reviewed commit's links magnum cannot read is not trivial either. A push trivial by
 // its own files stands as it is; otherwise an unchanged own diff is the
 // class DeltaBase, a changed one gives the size of that change, and an
 // incomplete comparison keeps the size of from...to.
@@ -138,8 +143,9 @@ func (dc deltaCheck) change() string {
 // finds behind the reviewed commit (a force push back to an ancestor: no
 // commit and no file to measure, while the review discusses code the push
 // dropped): the PR gets its re-review.
-func (e *Engine) checkDelta(ctx context.Context, repo store.Repo, w config.Watch, base, from, to string) deltaCheck {
+func (e *Engine) checkDelta(ctx context.Context, repo store.Repo, w config.Watch, pr store.PR, from string) deltaCheck {
 	ctx = github.WithOp(ctx, opPushDelta) // github_cost.go
+	base, to := prBase(repo, pr), pr.HeadSHA
 	allowed := e.cfg.TrivialDeltas(&w)
 	if len(allowed) == 0 && e.cfg.ThrottleFor(&w).RereviewMinLines <= 0 {
 		return deltaCheck{}
@@ -173,6 +179,16 @@ func (e *Engine) checkDelta(ctx context.Context, repo store.Repo, w config.Watch
 	}
 	dc := deltaCheck{measured: true, files: len(pc.Files), commits: pc.Commits}
 	dc.size, dc.classes, dc.trivial = assessDelta(pc.Files, allowed, steers)
+	if dc.trivial {
+		switch label, err := e.linkedSteering(ctx, pr, from, pc.Files); {
+		case err != nil:
+			dc.trivial, dc.classes = false, nil
+			e.log.Info("delta: cannot read where the links of the reviewed commit lead; the push is re-reviewed", "repo", repo.FullName(),
+				"from", textx.ShortSHA(from), "to", textx.ShortSHA(to))
+		case label != "":
+			dc.trivial, dc.classes, steering = false, nil, label
+		}
+	}
 	if emptyPush(pc) && slices.Contains(allowed, DeltaEmpty) {
 		// No file listed, so none that steers the agents either.
 		dc.trivial, dc.classes = true, []string{DeltaEmpty}
@@ -189,6 +205,33 @@ func (e *Engine) checkDelta(ctx context.Context, repo store.Repo, w config.Watch
 			"from", textx.ShortSHA(from), "to", textx.ShortSHA(to), "path", steering)
 	}
 	return dc
+}
+
+// linkedSteering names, by its link's label, a file of the push (files: a
+// path, or the path a rename left) that a link of from's tree that steers
+// the review agents leads to or through (configLinks of the reviewed
+// commit: .claude/skills -> ../.agents/skills makes
+// .agents/skills/x/SKILL.md one), or that lies on the way to such a target
+// (a push can turn notes.md of CLAUDE.md -> notes.md/guide.md into a link
+// that leads anywhere); "" for none, and an error when the links cannot be
+// read. pr names the PR and its clone.
+func (e *Engine) linkedSteering(ctx context.Context, pr store.PR, from string, files []github.FileDelta) (string, error) {
+	at := pr
+	at.HeadSHA = from
+	targets, err := e.configLinks(ctx, at)
+	if err != nil {
+		return "", err
+	}
+	for _, t := range slices.Sorted(maps.Keys(targets)) {
+		for _, f := range files {
+			for _, p := range []string{f.Path, f.PreviousPath} {
+				if p != "" && (agents.UnderTarget(p, t) || agents.UnderTarget(t, p)) {
+					return targets[t], nil
+				}
+			}
+		}
+	}
+	return "", nil
 }
 
 // emptyPush reports whether GitHub's comparison of the reviewed commit with
@@ -255,7 +298,7 @@ func (e *Engine) settlePush(ctx context.Context, repo store.Repo, w config.Watch
 	if from == "" || from == pr.HeadSHA {
 		return false, nil
 	}
-	dc := e.checkDelta(ctx, repo, w, prBase(repo, pr), from, pr.HeadSHA)
+	dc := e.checkDelta(ctx, repo, w, pr, from)
 	if !dc.trivial {
 		e.recordDelta(ctx, pr.ID, from, pr.HeadSHA, dc, e.now())
 		return false, nil
@@ -313,7 +356,7 @@ func (e *Engine) settleSmallDelta(ctx context.Context, job *roundJob) bool {
 	}
 	e.deltaLooked[pr.ID] = pr.HeadSHA
 	from := deref(pr.ReviewedSHA)
-	dc := e.checkDelta(ctx, job.repo, job.watch, prBase(job.repo, pr), from, pr.HeadSHA)
+	dc := e.checkDelta(ctx, job.repo, job.watch, pr, from)
 	if !dc.trivial {
 		return false
 	}
