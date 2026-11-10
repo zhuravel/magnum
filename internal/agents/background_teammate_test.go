@@ -897,28 +897,47 @@ func TestAnotherSessionsMessageIsNoPromptTypedIntoThePane(t *testing.T) {
 // A prompt the operator types stays a human's when it quotes another
 // session's message: Claude Code's origin for it (human) decides, and with
 // no origin (an older Claude Code) the text is such a message only when it
-// starts with one. The review daemon's human activity (ObsHumanActive) and
-// ClaudeUserTurns read it as the operator's.
+// starts with one, never when it quotes the tag or the line before it
+// further on. humanTurn (the review daemon's ObsHumanActive), TypedDuringRun
+// and ClaudeUserTurns read it as the operator's.
 func TestAPromptTheOperatorTypesThatQuotesAnotherSessionsMessageIsHuman(t *testing.T) {
+	const (
+		tagMidText  = "see this: <teammate-message teammate_id=\"drafts\" summary=\"Drafts done\">The drafts part is done.</teammate-message>"
+		lineMidText = "what does Another Claude session sent a message: mean"
+	)
 	quoted := "Why did the drafts teammate say this?\n" + teammateMessageText
-	for _, tc := range []struct {
+	var cases []struct {
 		name   string
 		prompt func(at time.Time) tline
 		text   string
-	}{
-		{"with its origin, quoting a teammate's message", func(at time.Time) tline { return humanPrompt(at, quoted) }, quoted},
-		{"with its origin, starting with a teammate's message", func(at time.Time) tline {
-			return humanPrompt(at, teammateMessageText+"\nIs this right?")
-		}, teammateMessageText + "\nIs this right?"},
-		{"with its origin, starting with a cross-session message", func(at time.Time) tline {
-			return humanPrompt(at, crossSessionMessageText+"\nAnswer it.")
-		}, crossSessionMessageText + "\nAnswer it."},
-		{"with no origin, quoting a teammate's message", func(at time.Time) tline { return userPrompt(at, quoted) }, quoted},
-		{"with no origin, quoting a cross-session message", func(at time.Time) tline {
-			return userPrompt(at, "See below.\n"+crossSessionMessageText)
-		}, "See below.\n" + crossSessionMessageText},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+	}
+	add := func(name, text string, origin bool) {
+		prompt := func(at time.Time) tline { return userPrompt(at, text) }
+		if origin {
+			prompt = func(at time.Time) tline { return humanPrompt(at, text) }
+		}
+		cases = append(cases, struct {
+			name   string
+			prompt func(at time.Time) tline
+			text   string
+		}{name, prompt, text})
+	}
+	for _, origin := range []bool{true, false} {
+		with := "with no origin"
+		if origin {
+			with = "with its origin"
+		}
+		add(with+", a teammate's tag mid-text", tagMidText, origin)
+		add(with+", the relay line mid-text", lineMidText, origin)
+		add(with+", a teammate's message after a line", quoted, origin)
+		add(with+", a cross-session message after a line", "See below.\n"+crossSessionMessageText, origin)
+	}
+	// Claude Code's human origin decides even for a prompt that starts with one.
+	add("with its origin, starting with a teammate's message", teammateMessageText+"\nIs this right?", true)
+	add("with its origin, starting with a cross-session message", crossSessionMessageText+"\nAnswer it.", true)
+
+	for _, tc := range cases {
+		t.Run("humanTurn: "+tc.name, func(t *testing.T) {
 			e := newEnv(t)
 			tr := e.claudeTranscript()
 			id := e.promptClaude()
@@ -936,12 +955,32 @@ func TestAPromptTheOperatorTypesThatQuotesAnotherSessionsMessageIsHuman(t *testi
 			if o, pr := e.observe()[RoleClaude], e.reloadPR(); o.Kind != ObsHumanActive || pr.HumanActiveAt == nil {
 				t.Fatalf("observation %q, human_active_at %v; want human activity", o.Kind, pr.HumanActiveAt)
 			}
-			turns, err := ClaudeUserTurns(tr.path, at)
+		})
+		t.Run("TypedDuringRun: "+tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			tr := e.claudeTranscript()
+			id := e.promptClaude()
+			at := e.clock.Now()
+			tr.add(humanPrompt(at, reviewPrompt), assistantSays(at.Add(time.Minute), "Pushed."), turnEnded(at.Add(time.Minute)),
+				tc.prompt(at.Add(2*time.Minute)), assistantSays(at.Add(3*time.Minute), "It is a teammate's message."), turnEnded(at.Add(3*time.Minute)))
+			e.clock.Add(4 * time.Minute)
+			if o := e.idleTicks(2); o.Kind != ObsCompleted || o.Run == nil || o.Run.ID != id {
+				t.Fatalf("the run's end = %+v, want completed", o)
+			}
+			if !e.m.TypedDuringRun(e.ctx, e.run1(id)) {
+				t.Error("TypedDuringRun = false, want true")
+			}
+		})
+		t.Run("ClaudeUserTurns: "+tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			tr := e.claudeTranscript()
+			tr.add(humanPrompt(t0, "first prompt"), assistantSays(t0.Add(time.Second), "working"), tc.prompt(t0.Add(time.Minute)))
+			turns, err := ClaudeUserTurns(tr.path, time.Time{})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(turns) != 1 || turns[0].Text != tc.text {
-				t.Fatalf("ClaudeUserTurns = %+v, want the operator's prompt", turns)
+			if len(turns) != 2 || turns[1].Text != tc.text {
+				t.Fatalf("ClaudeUserTurns = %+v, want the first prompt and the operator's", turns)
 			}
 		})
 	}

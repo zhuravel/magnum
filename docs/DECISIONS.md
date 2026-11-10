@@ -4770,10 +4770,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestObserveHoldsTheRunWhileATeammateWaitsOnItsOwnBackgroundWork (the review's probe),
   TestObserveHoldsTheRunWhileAMonitorItStartedWatches (all but its persistent case),
   TestAnotherSessionsMessageIsNoPromptTypedIntoThePane,
-  TestAPromptTheOperatorTypesThatQuotesAnotherSessionsMessageIsHuman (its cases that start with a quoted
-  message; those that quote one further on guard the anchor),
-  TestAMonitorHoldsTheRunNoLongerThanItsTimeoutAndAGrace, TestObserveWatchesAtMostSixteenTeammatesPerRun and
-  TestATeammatesOwnTeammatesAreNotWatched; TestObserveHoldsTheRunWhileATeammateRunsAForegroundCommand and
+  TestAPromptTheOperatorTypesThatQuotesAnotherSessionsMessageIsHuman (for humanTurn, TypedDuringRun and
+  ClaudeUserTurns: its cases with an origin that start with a quoted message; those that quote the tag or the
+  line before it further on guard the anchor), TestAMonitorHoldsTheRunNoLongerThanItsTimeoutAndAGrace,
+  TestObserveWatchesAtMostSixteenTeammatesPerRun and TestATeammatesOwnTeammatesAreNotWatched;
+  TestObserveHoldsTheRunWhileATeammateRunsAForegroundCommand and
   TestATeammatesTurnEndsOnlyWhereClaudeCodeWaitsForItsNextPrompt pin the ends of a turn (an assistant entry that
   means idle, or a null stop_reason that does, fails them),
   TestATeammateWatchReadsABoundedPartOfItsTranscriptPerReading the bounded incremental read (a whole read fails
