@@ -551,3 +551,40 @@ func TestTheWalkReadsTheTreesFilesAsClaudeDoes(t *testing.T) {
 		}
 	})
 }
+
+// A link outside ASCII matters to the agents only where a case-insensitive
+// filesystem may check it out in place of a path they load: at, on the
+// way to or under a target, or a file whose imports the walk reads (docſ
+// for docs/guide.md, pKg with the Kelvin sign for pkg/CLAUDE.md,
+// docs/guıde.md for the guide).
+// One elsewhere in a tree whose
+// instructions import (a test fixture café.txt -> data.txt) changes
+// nothing they load, so the tree's targets are told.
+func TestALinkOutsideASCIIAwayFromWhatTheAgentsLoadIsFollowed(t *testing.T) {
+	kinds := defaultKinds()
+	isConfig := func(p string) (string, bool) { return agentConfigPath(kinds, p) }
+	files := map[string]string{"AGENTS.md": "Read @docs/guide.md first.\n", "docs/guide.md": "x\n", "pkg/CLAUDE.md": "No imports.\n"}
+	for _, c := range []struct {
+		name  string
+		links map[string]string
+		fails bool
+	}{
+		{"a fixture", map[string]string{"spec/fixtures/café.txt": "data.txt"}, false},
+		{"a fixture's text", map[string]string{"spec/fixtures/data.txt": "café.txt"}, false},
+		{"on the way to an import", map[string]string{"docſ": "evil"}, true},
+		{"on the way to an instruction file", map[string]string{"p\u212ag": "evil"}, true}, // the Kelvin sign: pKg is pkg
+		{"in place of an imported file", map[string]string{"docs/guıde.md": "../evil.md"}, true},
+		{"beside an imported file", map[string]string{"docs/ſub": "../evil"}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tree, read := treeOf(files, c.links)
+			got, err := resolveConfigTargets(context.Background(), tree, isConfig, read)
+			switch {
+			case c.fails && !errors.Is(err, errLinksFoldUnknown):
+				t.Fatalf("resolveConfigTargets = %q, %v; want errLinksFoldUnknown", got, err)
+			case !c.fails && (err != nil || got["docs/guide.md"] != "AGENTS.md"):
+				t.Fatalf("resolveConfigTargets = %q, %v; want docs/guide.md of AGENTS.md", got, err)
+			}
+		})
+	}
+}

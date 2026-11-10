@@ -46,13 +46,14 @@ const maxHeadLinks = 256
 var errLinksTooMany = errors.New("the links take too many steps to follow")
 
 // errLinksFoldUnknown is resolveConfigTargets' error for a tree with a
-// link whose path or text has a byte outside ASCII and anything the agents
-// load through links or imports (a link that steers them, an import): a
-// case-insensitive filesystem folds such a name by rules of its own (APFS
-// opens .agents/ſkills for .agents/skills, ﬁrst.md for first.md, and
-// checks docſ -> evil out in place of docs/, which @docs/guide.md then
-// reads), which magnum does not model, so where the links lead cannot be
-// told.
+// link whose path or text has a byte outside ASCII and a link that steers
+// the agents, or with such a link where they load through imports (at, on
+// the way to or under a target or a file whose imports are read:
+// foldsOnto): a case-insensitive filesystem folds such a name by rules of
+// its own (APFS opens .agents/ſkills for .agents/skills, ﬁrst.md for
+// first.md, and checks docſ -> evil out in place of docs/, which
+// @docs/guide.md then reads), which magnum does not model, so where the
+// links lead cannot be told.
 var errLinksFoldUnknown = errors.New("a link's path or text has a byte outside ASCII, which the filesystem folds by rules magnum does not model")
 
 // linkRetryAfter is how long configLinks keeps a head's failure that a
@@ -222,8 +223,8 @@ func changedLinks(targets map[string]string, paths []string) (names []string, ma
 // ASCII folds by the filesystem's own rules (APFS: ſ is s, ß is ss, ﬁ is
 // fi, a decomposed name its composed spelling), which magnum does not
 // model: a tree with such a link, when any link steers the agents (or,
-// in resolveConfigTargets, the instructions import anything), fails
-// (errLinksFoldUnknown). It returns each path the agents load through
+// in resolveConfigTargets, where it may stand for a path the agents load
+// through imports: foldsOnto), fails (errLinksFoldUnknown). It returns each path the agents load through
 // such a link, with the link's label: the link itself, each link it passes
 // through on the way (re-pointing one changes what loads), where it ends
 // (a file, or a directory and what lies under it; "" for the tree's root,
@@ -246,19 +247,21 @@ func resolveConfigTargets(ctx context.Context, tree gitx.Tree, isConfig func(str
 	read func(paths []string) (map[string]string, error)) (map[string]string, error) {
 	links := tree.Links
 	r := linkResolver{ctx: ctx, links: links, byFold: map[string][]string{}, out: map[string]string{}, walked: map[string]bool{},
-		via: map[string][]string{}}
+		via: map[string][]string{}, sources: map[string]bool{}}
 	paths := slices.Sorted(maps.Keys(links))
 	steering := map[string]string{}
-	odd := false // a link's path or text has a byte outside ASCII
+	var odd []string // the links whose path or text has a byte outside ASCII
 	for _, l := range paths {
 		k := foldKey(l)
 		r.byFold[k] = append(r.byFold[k], l)
 		if label, ok := isConfig(l); ok {
 			steering[l] = label
 		}
-		odd = odd || !isASCII(l) || !isASCII(links[l])
+		if !isASCII(l) || !isASCII(links[l]) {
+			odd = append(odd, l)
+		}
 	}
-	if len(steering) > 0 && odd {
+	if len(steering) > 0 && len(odd) > 0 {
 		return nil, errLinksFoldUnknown
 	}
 	r.keys = slices.Sorted(maps.Keys(r.byFold))
@@ -270,16 +273,44 @@ func resolveConfigTargets(ctx context.Context, tree gitx.Tree, isConfig func(str
 	if read != nil && r.err == nil {
 		r.imports(tree.Files, isConfig, read)
 	}
-	switch {
-	case r.err != nil:
-		return nil, r.err
-	case odd && len(r.out) > 0:
+	if len(odd) > 0 && len(r.out) > 0 && r.err == nil && r.foldsOnto(odd) {
 		// No link steers the agents, but the instructions import: APFS
 		// checks docſ -> evil out in place of docs/, and @docs/guide.md
 		// then loads evil/guide.md.
 		return nil, errLinksFoldUnknown
 	}
+	if r.err != nil {
+		return nil, r.err
+	}
 	return r.out, nil
+}
+
+// foldsOnto reports whether a link of odd (one whose path or text has a
+// byte outside ASCII) may be at, on the way to or under a path the agents
+// load through the walk, a target or a file whose imports it read, or such
+// a path under it (agents.MatchTarget, either way): a case-insensitive
+// filesystem may check such a link out in place of one of those (APFS:
+// docſ -> evil for docs/, which @docs/guide.md then reads) by rules magnum
+// does not model. A link elsewhere (a test fixture café.txt) changes
+// nothing they load. Each comparison is a step of the walk.
+func (r *linkResolver) foldsOnto(odd []string) bool {
+	loaded := slices.Sorted(maps.Keys(r.out))
+	for _, f := range slices.Sorted(maps.Keys(r.sources)) {
+		if _, ok := r.out[f]; !ok {
+			loaded = append(loaded, f)
+		}
+	}
+	for _, l := range odd {
+		for _, p := range loaded {
+			if !r.step() {
+				return false
+			}
+			if agents.MatchTarget(p, l) != agents.NotUnder || agents.MatchTarget(l, p) != agents.NotUnder {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // importSource is a file of the tree whose @path imports load: its path,
@@ -445,6 +476,7 @@ func (r *linkResolver) addSource(list *[]importSource, at map[string]int, f, lab
 	if !r.step() {
 		return false
 	}
+	r.sources[f] = true
 	i, ok := at[f]
 	if !ok {
 		i = len(*list)
@@ -565,15 +597,16 @@ func (r *linkResolver) expand(t, label string) {
 // ways (links whose paths differ in case only) stops the walk as soon as
 // it passes the budget, and the context is asked every linkCtxEvery steps.
 type linkResolver struct {
-	ctx    context.Context
-	links  map[string]string
-	byFold map[string][]string // foldKey of a path -> the links' paths that fold to it
-	keys   []string            // byFold's keys, sorted: the links under a path are a run of them (under)
-	out    map[string]string   // target -> label
-	walked map[string]bool     // the targets whose links below were followed
-	via    map[string][]string // agents.LooseFold of a target -> the links that lead to it (dirsOf)
-	steps  int
-	err    error // errLinksTooMany, or the context's: the walk stopped
+	ctx     context.Context
+	links   map[string]string
+	byFold  map[string][]string // foldKey of a path -> the links' paths that fold to it
+	keys    []string            // byFold's keys, sorted: the links under a path are a run of them (under)
+	out     map[string]string   // target -> label
+	walked  map[string]bool     // the targets whose links below were followed
+	via     map[string][]string // agents.LooseFold of a target -> the links that lead to it (dirsOf)
+	sources map[string]bool     // the files whose imports the walk read (foldsOnto)
+	steps   int
+	err     error // errLinksTooMany, or the context's: the walk stopped
 }
 
 // linkCtxEvery is how many steps the walk takes between two looks at its
