@@ -73,7 +73,8 @@ func (r *replies) turn() []string {
 // the user entries that start a turn (a string, or the first text block, is
 // the Text; a tool result and the line esc writes are no turns), not the
 // entries of a subagent's own thread, not text Claude Code adds itself
-// (isMeta), not task notifications, and not what Claude Code writes as a
+// (isMeta), not task notifications or messages another Claude session sent
+// (notTyped), and not what Claude Code writes as a
 // command's output (a slash or bash-mode command's stdout and stderr, the
 // caveat before them: cliOutputTags) or a compaction's summary
 // (isCompactSummary); the command record a slash command leaves stays (see
@@ -109,7 +110,7 @@ func ClaudeUserTurns(path string, since time.Time) ([]UserTurn, error) {
 			return true // no prompt, or one Claude Code wrote itself: no turn of anybody's
 		}
 		before := said.turn()
-		if !e.byNotification(text) && !e.Timestamp.Before(since) {
+		if !e.notTyped(text) && !e.Timestamp.Before(since) {
 			out = append(out, UserTurn{At: e.Timestamp, Text: text, Origin: e.originName(), Before: before})
 		}
 		return true
@@ -218,7 +219,7 @@ func ClaudeQueuedTurns(path string, since time.Time) ([]UserTurn, error) {
 		switch {
 		case e.Type == "queue-operation" && e.Operation == "enqueue":
 			text, _ = e.Content.(string)
-			if fromNotification("", nil, "", text) {
+			if notTyped("", nil, "", text) {
 				text = ""
 			}
 		case e.Type == "attachment":

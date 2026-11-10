@@ -177,7 +177,8 @@ type Agents interface {
 	// message to stop its background work, at the end of a round or before
 	// a push restarts it (round.stopBackground); BackgroundTasks counts the
 	// work a claude agent started in the background during a run and left
-	// running (ok false: unknown).
+	// running, with the teammates it spawned during the run that are at
+	// work (ok false: unknown).
 	Tell(ctx context.Context, run store.Run, text string) error
 	BackgroundTasks(ctx context.Context, run store.Run) (int, bool)
 	// TurnError is the error a Codex turn ended with, from its session's

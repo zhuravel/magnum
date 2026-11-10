@@ -2124,6 +2124,15 @@ func (m *Manager) AnswerTrustDialog(ctx context.Context, s store.Session) (bool,
     or screen, a shell role and any kind other than codex and claude (whose
     trust handling is unknown) are left untouched (false, nil).
 
+func (m *Manager) BackgroundProgress(ctx context.Context, run store.Run) string
+    BackgroundProgress is a short text that changes whenever the transcript of
+    a teammate the claude agent of run's session spawned during run, and still
+    tracks, grows: each teammate's agent id and its transcript's size (0 while
+    there is none), in the order of the ids. It is "" with no teammate tracked,
+    for another kind and when the transcript cannot be read. A watchdog that
+    sees no progress of the agent itself reads it to tell a lead waiting on its
+    teammates from a stuck one.
+
 func (m *Manager) BackgroundTasks(ctx context.Context, run store.Run) (int, bool)
     BackgroundTasks counts the background work the claude agent of run's session
     started during run and left running, and the teammates it spawned during
@@ -3646,16 +3655,17 @@ func ClaudeUserTurns(path string, since time.Time) ([]UserTurn, error)
     the user entries that start a turn (a string, or the first text block,
     is the Text; a tool result and the line esc writes are no turns),
     not the entries of a subagent's own thread, not text Claude Code adds
-    itself (isMeta), not task notifications, and not what Claude Code writes
-    as a command's output (a slash or bash-mode command's stdout and stderr,
-    the caveat before them: cliOutputTags) or a compaction's summary
-    (isCompactSummary); the command record a slash command leaves stays (see
-    SlashCommand). Each carries the text of the assistant's messages in the
-    agent's two turns before it (Before; a turn a task notification began is
-    one of the agent's turns too). The whole file is read, a line at a time;
-    a line that is no JSON, such as the half-written last one, is skipped.
-    A prompt typed while the agent worked and taken into the turn it was in is
-    an attachment entry, not a user entry, and is not returned.
+    itself (isMeta), not task notifications or messages another Claude session
+    sent (notTyped), and not what Claude Code writes as a command's output (a
+    slash or bash-mode command's stdout and stderr, the caveat before them:
+    cliOutputTags) or a compaction's summary (isCompactSummary); the command
+    record a slash command leaves stays (see SlashCommand). Each carries the
+    text of the assistant's messages in the agent's two turns before it (Before;
+    a turn a task notification began is one of the agent's turns too).
+    The whole file is read, a line at a time; a line that is no JSON, such as
+    the half-written last one, is skipped. A prompt typed while the agent worked
+    and taken into the turn it was in is an attachment entry, not a user entry,
+    and is not returned.
 
 func CodexUserTurns(path string, since time.Time) ([]UserTurn, error)
     CodexUserTurns reads the user turns of the Codex rollout at path that
@@ -25001,7 +25011,8 @@ type Agents interface {
 	// message to stop its background work, at the end of a round or before
 	// a push restarts it (round.stopBackground); BackgroundTasks counts the
 	// work a claude agent started in the background during a run and left
-	// running (ok false: unknown).
+	// running, with the teammates it spawned during the run that are at
+	// work (ok false: unknown).
 	Tell(ctx context.Context, run store.Run, text string) error
 	BackgroundTasks(ctx context.Context, run store.Run) (int, bool)
 	// TurnError is the error a Codex turn ended with, from its session's

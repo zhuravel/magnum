@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -33,15 +35,20 @@ import (
 // the session's transcript, the JSONL file Claude Code appends every entry
 // to, and holds the run open while background work started during the run
 // has neither notified nor been stopped (TaskStop), or while the agent has
-// not answered a notification yet. A teammate (an Agent tool use with a
-// name, which never notifies and idles until a message wakes it) holds the
-// run only while its own transcript shows a turn in progress
-// (teammateAtWork). With no run in flight the agent still
-// works on its own: on background work an earlier run left running (the
-// subagents of a turn the restart's esc cut short) or on the turn a task
-// notification began. The observer takes it for a human's only when the
-// transcript shows a prompt typed into the pane after magnum's last prompt
-// to the session (humanTurn).
+// not answered a notification yet. A Monitor is such work until its stream
+// ends (each event notifies the agent without ending it; a persistent one,
+// which watches for the whole session, is none). A teammate (an Agent tool
+// use with a name), which never notifies the agent and idles until a
+// message wakes it, holds the run while its own transcript, read on the
+// same way, shows a turn in progress, background work of its own or a
+// notification it has not answered (matesAtWork). With no run in flight
+// the agent still works on its own: on background work an earlier run left
+// running (the subagents of a turn the restart's esc cut short) or on the
+// turn a task notification began. The observer takes it for a human's only
+// when the transcript shows a prompt typed into the pane after magnum's
+// last prompt to the session (humanTurn): a task notification and a message
+// another Claude session sent (a teammate's, a cross-session one) are
+// nobody's typing (notTyped).
 
 // EventBackgroundWait is recorded once per run when background work holds
 // an idle claude agent's run open (data: role, run, tasks).
@@ -53,9 +60,11 @@ const (
 	transcriptSkew = 2 * time.Second
 	// transcriptChunk is how much transcriptStart reads at a time.
 	transcriptChunk = 64 << 10
-	// teammateTail is how much of a teammate's transcript each reading
-	// reads, from its end (teammateAtWork).
-	teammateTail = 256 << 10
+	// mateRead is about how much of a teammate's transcript one reading
+	// reads past where the last one stopped (a line longer than that is
+	// read whole): a teammate further behind counts as at work until the
+	// readings catch up (readSide).
+	mateRead = 1 << 20
 	// teammateGrace is how long after its spawn a teammate whose transcript
 	// is not there yet holds the run.
 	teammateGrace = 2 * time.Minute
@@ -81,8 +90,17 @@ type bgWatch struct {
 	reply time.Time         // the newest assistant entry
 	// mates are the teammates spawned during the run: the spawn's tool_use
 	// id -> the teammate. Unlike tasks they never finish by themselves: each
-	// reading looks at their own transcripts (matesAtWork).
-	mates map[string]teammate
+	// reading reads on in their own transcripts (matesAtWork).
+	mates map[string]*teammate
+	// side marks the watch of a teammate's own transcript (teammate.w): apply
+	// takes its entries, sidechain ones, and readSide reads it.
+	side bool
+	// inTurn: the last user or assistant entry read leaves a turn in
+	// progress (endsTurn; what a teammate's watch reads).
+	inTurn bool
+	// behind: a teammate's watch stopped its last reading at mateRead,
+	// before its transcript's end.
+	behind bool
 	// cut is the newest line Claude Code wrote when its turn was cut short
 	// (esc, or a tool use it asked about and was refused): the turn ended
 	// there, whatever herdr shows while background work runs on.
@@ -105,16 +123,26 @@ type bgWatch struct {
 }
 
 // teammate is an in-process teammate the agent spawned: its agent id, which
-// names its transcript, and when the spawn's result was written.
+// names its transcript, when the spawn's result was written, and the watch
+// of its own transcript (side; the lead's watch's mu guards it).
 type teammate struct {
 	agent   string
 	spawned time.Time
+	w       *bgWatch
+}
+
+// newMateWatch is the watch of a teammate's own transcript, which it reads
+// from its start (the transcript begins at the spawn).
+func newMateWatch() *bgWatch {
+	w := &bgWatch{side: true}
+	w.reset()
+	return w
 }
 
 // reset forgets what was read (a new session id, a transcript that shrank).
 func (w *bgWatch) reset() {
 	w.offset, w.tasks, w.stops, w.note, w.reply = -1, map[string]string{}, map[string]string{}, time.Time{}, time.Time{}
-	w.mates = map[string]teammate{}
+	w.mates, w.inTurn, w.behind = map[string]*teammate{}, false, false
 	w.cut, w.typed, w.queued = time.Time{}, time.Time{}, map[string][]time.Time{}
 }
 
@@ -186,27 +214,61 @@ func (m *Manager) backgroundWait(ctx context.Context, s store.Session, sid strin
 // spawned during run that are at work, as the transcripts show now (ok
 // false: not a claude session, or no transcript to read).
 func (m *Manager) BackgroundTasks(ctx context.Context, run store.Run) (int, bool) {
+	n := 0
+	ok := m.readRun(ctx, run, func(w *bgWatch) { n = len(w.tasks) + w.matesAtWork(m.now()) })
+	return n, ok
+}
+
+// BackgroundProgress is a short text that changes whenever the transcript
+// of a teammate the claude agent of run's session spawned during run, and
+// still tracks, grows: each teammate's agent id and its transcript's size
+// (0 while there is none), in the order of the ids. It is "" with no
+// teammate tracked, for another kind and when the transcript cannot be
+// read. A watchdog that sees no progress of the agent itself reads it to
+// tell a lead waiting on its teammates from a stuck one.
+func (m *Manager) BackgroundProgress(ctx context.Context, run store.Run) string {
+	var parts []string
+	m.readRun(ctx, run, func(w *bgWatch) {
+		for _, mt := range w.mates {
+			size := int64(0)
+			if st, err := os.Stat(w.matePath(mt.agent)); err == nil {
+				size = st.Size()
+			}
+			parts = append(parts, fmt.Sprintf("%s:%d", mt.agent, size))
+		}
+	})
+	slices.Sort(parts)
+	return strings.Join(parts, " ")
+}
+
+// readRun brings the watch of run's session up to date with its transcript
+// and calls f with it, under its mu. It reports false, without calling f,
+// for a run without a claude session that has a Claude session id, and
+// when the transcript cannot be read.
+func (m *Manager) readRun(ctx context.Context, run store.Run, f func(w *bgWatch)) bool {
 	if run.SessionID == nil {
-		return 0, false
+		return false
 	}
 	s, err := m.d.Store.SessionByID(ctx, *run.SessionID)
 	if err != nil || m.sessionKind(s) != KindClaude || store.Deref(s.SessionID) == "" {
-		return 0, false
+		return false
 	}
 	w := m.watch(s.ID, run)
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if !m.readTranscript(s, store.Deref(s.SessionID), w) {
-		return 0, false
+		return false
 	}
-	return len(w.tasks) + w.matesAtWork(m.now()), true
+	f(w)
+	return true
 }
 
-// matesAtWork counts the teammates w recorded that are at work at now: those
-// whose transcript (see matePath) shows a turn in progress
-// (teammateAtWork), and those whose transcript is not there yet within
-// teammateGrace of their spawn (Claude Code may create it late). A
-// transcript that cannot be read holds nothing.
+// matesAtWork counts the teammates w recorded that are at work at now. Each
+// call reads on in every teammate's transcript (matePath, readSide: about
+// mateRead bytes at most past the last call) and counts the teammate while
+// its watch shows it at work (atWork). A transcript not there yet counts
+// within teammateGrace of the spawn (Claude Code may create it late); one
+// that cannot be read counts nothing.
 func (w *bgWatch) matesAtWork(now time.Time) int {
 	n := 0
 	for _, mt := range w.mates {
@@ -217,7 +279,7 @@ func (w *bgWatch) matesAtWork(now time.Time) int {
 	return n
 }
 
-func (w *bgWatch) mateAtWork(mt teammate, now time.Time) bool {
+func (w *bgWatch) mateAtWork(mt *teammate, now time.Time) bool {
 	f, err := os.Open(w.matePath(mt.agent))
 	if errors.Is(err, fs.ErrNotExist) {
 		return now.Before(mt.spawned.Add(teammateGrace))
@@ -230,7 +292,8 @@ func (w *bgWatch) mateAtWork(mt teammate, now time.Time) bool {
 	if err != nil || !st.Mode().IsRegular() {
 		return false
 	}
-	return teammateAtWork(f, st.Size())
+	mt.w.readSide(f, st.Size())
+	return mt.w.atWork()
 }
 
 // matePath is where Claude Code keeps the transcript of teammate agent of
@@ -240,74 +303,41 @@ func (w *bgWatch) matePath(agent string) string {
 	return filepath.Join(filepath.Dir(w.path), w.sid, "subagents", "agent-"+agent+".jsonl")
 }
 
-// teammateAtWork reports whether a teammate's transcript r (size bytes)
-// shows a turn in progress. Only its last teammateTail bytes are read (every
-// reading reads it): the last complete user or assistant entry there
-// decides, never the last line, since Claude Code appends system,
-// attachment, api-request and other entries after a turn's end. That entry
-// is the turn's end when it is an assistant entry with stop_reason
-// "end_turn"; a user entry (a tool result, a message that woke the
-// teammate) or an assistant entry with another stop_reason (tool_use, null,
-// none) is a turn in progress. A tail without such an entry, or one that
-// cannot be read, is none.
-func teammateAtWork(r io.ReaderAt, size int64) bool {
-	from := max(size-teammateTail, 0)
-	if from > 0 {
-		from-- // and the byte before: whether a line starts the tail
+// readSide reads on in a teammate's transcript r (size bytes) from where
+// its watch w stopped, a complete line at a time, as apply reads the lead's
+// (sidechain entries included), and stops once it read mateRead bytes (a
+// line longer than that is read whole, once): behind says it stopped
+// before the end. A transcript that shrank is read again from its start.
+func (w *bgWatch) readSide(r io.ReaderAt, size int64) {
+	if w.offset > size {
+		w.reset()
 	}
-	buf := make([]byte, size-from)
-	n, err := r.ReadAt(buf, from)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false
-	}
-	buf = buf[:n]
-	end := bytes.LastIndexByte(buf, '\n')
-	if end < 0 {
-		return false
-	}
-	buf = buf[:end] // not a line still being written
-	if from > 0 {
-		start := bytes.IndexByte(buf, '\n')
-		if start < 0 {
-			return false
-		}
-		buf = buf[start+1:] // not a line that began before the tail
-	}
+	w.offset = max(w.offset, 0)
+	br := bufio.NewReaderSize(io.NewSectionReader(r, w.offset, size-w.offset), transcriptChunk)
+	var n int64
+	w.behind = false
 	for {
-		i := bytes.LastIndexByte(buf, '\n')
-		if atWork, ok := mateTurn(buf[i+1:]); ok {
-			return atWork
+		if n >= mateRead {
+			w.behind = w.offset+n < size
+			break
 		}
-		if i < 0 {
-			return false
+		line, err := br.ReadBytes('\n')
+		if err != nil {
+			break // the end, or a line still being written
 		}
-		buf = buf[:i]
+		n += int64(len(line))
+		w.apply(line[:len(line)-1])
 	}
+	w.offset += n
 }
 
-// mateTurn reads one line of a teammate's transcript: ok when it is a user
-// or assistant entry, and then whether it leaves a turn in progress (see
-// teammateAtWork).
-func mateTurn(line []byte) (atWork, ok bool) {
-	if !bytes.Contains(line, []byte(`"user"`)) && !bytes.Contains(line, []byte(`"assistant"`)) {
-		return false, false // most lines after a turn's end: no JSON decoding
-	}
-	var e struct {
-		Type    string `json:"type"`
-		Message struct {
-			StopReason string `json:"stop_reason"`
-		} `json:"message"`
-	}
-	if json.Unmarshal(line, &e) != nil {
-		return false, false
-	}
-	switch e.Type {
-	case "user":
-		return true, true
-	case "assistant":
-		return e.Message.StopReason != "end_turn", true
-	}
-	return false, false
+// atWork reports whether a teammate's watch shows it at work: its last user
+// or assistant entry leaves a turn in progress (a user entry, or an
+// assistant entry that does not end the turn: endsTurn), background work it
+// started has not finished, a notification it got is not answered yet, or
+// the readings are behind its transcript.
+func (w *bgWatch) atWork() bool {
+	return w.inTurn || len(w.tasks) > 0 || w.note.After(w.reply) || w.behind
 }
 
 // humanTurn reports whether the agent of session s (Claude Code session
@@ -316,7 +346,8 @@ func mateTurn(line []byte) (atWork, ok bool) {
 // into its pane. A claude agent does only when its transcript shows a
 // prompt typed after magnum's last prompt to the session (last_prompt_at,
 // else started_at, plus transcriptSkew) in the turn it is in: the prompt
-// that began the turn, unless a task notification did (when it was typed
+// that began the turn, unless a task notification or another Claude
+// session's message did (notTyped; when it was typed
 // is the stamp of its enqueue when Claude Code queued it, else of its
 // entry), or one Claude Code took into the turn. Otherwise the work is
 // magnum's turn going on (cut short by esc, whose interrupt line begins no
@@ -720,6 +751,9 @@ type (
 		Content     any       `json:"content"`   // queue-operation: the queued text
 		Message     struct {
 			Content json.RawMessage `json:"content"` // a string, or content blocks
+			// StopReason is why the model stopped, on an assistant entry
+			// ("" for null or none): see endsTurn.
+			StopReason string `json:"stop_reason"`
 		} `json:"message"`
 		ToolUseResult any `json:"toolUseResult"` // an object, or a string for an error
 		// Attachment of an "attachment" entry: a queued prompt Claude Code
@@ -736,6 +770,9 @@ type (
 		// IsCompactSummary marks the user entry a compaction leaves (its
 		// summary of the conversation): ClaudeUserTurns returns no such turn.
 		IsCompactSummary bool `json:"isCompactSummary"`
+		// IsAPIErrorMessage marks the assistant entry Claude Code writes
+		// itself when it gives up on an API call: the turn ends there.
+		IsAPIErrorMessage bool `json:"isApiErrorMessage"`
 	}
 	tBlock struct {
 		Type      string         `json:"type"`
@@ -751,6 +788,17 @@ type (
 // stopTools name a task to stop in their input (Claude Code's TaskStop,
 // earlier KillShell and KillBash).
 var stopTools = map[string]bool{"TaskStop": true, "KillShell": true, "KillBash": true}
+
+// turnEnds are the stop reasons after which Claude Code waits for the next
+// prompt. After any other (tool_use, pause_turn, max_tokens, none) the turn
+// goes on, or may.
+var turnEnds = map[string]bool{"end_turn": true, "stop_sequence": true, "refusal": true}
+
+// endsTurn reports whether e, an assistant entry, ends its turn: a stop
+// reason in turnEnds, or an API error Claude Code wrote itself.
+func (e *tEntry) endsTurn() bool {
+	return e.IsAPIErrorMessage || turnEnds[e.Message.StopReason]
+}
 
 // prompt is the text of a user entry that starts a turn: a prompt typed
 // into the pane or a task notification, as a string or a first text block
@@ -772,52 +820,69 @@ func (e *tEntry) interruption(text string) bool {
 	return e.TurnOrigin == nil && e.Origin == nil && strings.HasPrefix(text, "[Request interrupted by user")
 }
 
-// byNotification reports whether the turn prompt e starts (text) began
-// with a task notification: as Claude Code records the turn's origin, else
-// (older versions) when the text is one.
-func (e *tEntry) byNotification(text string) bool {
-	return fromNotification(str(e.TurnOrigin), e.Origin, "", text)
+// notTyped reports whether the turn prompt e starts (text) is nobody's
+// typing into the pane (see notTyped).
+func (e *tEntry) notTyped(text string) bool {
+	return notTyped(str(e.TurnOrigin), e.Origin, "", text)
 }
 
-// fromNotification reports whether a prompt (text) came from a task
-// notification: by Claude Code's turnOrigin, origin.kind or, for a queued
-// command, commandMode, else by its text.
-func fromNotification(turnOrigin string, origin any, mode, text string) bool {
+// notTyped reports whether a prompt (text) is nobody's typing into the
+// pane: a message another Claude session sent (relayed), whatever origin
+// Claude Code records for it (a peer's, or none for a teammate's); else a
+// task notification or a peer's message as Claude Code records the
+// prompt's turnOrigin, origin.kind or, for a queued command, commandMode;
+// else (versions that record none) a text that is a task notification.
+func notTyped(turnOrigin string, origin any, mode, text string) bool {
+	if relayed(text) {
+		return true
+	}
 	o, _ := origin.(map[string]any)
 	switch kind := str(o["kind"]); {
 	case turnOrigin != "":
-		return turnOrigin == "task_notification"
+		return turnOrigin == "task_notification" || turnOrigin == "peer"
 	case kind != "":
-		return kind == "task-notification"
+		return kind == "task-notification" || kind == "peer"
 	case mode != "":
 		return mode == "task-notification"
 	}
 	return strings.HasPrefix(strings.TrimSpace(text), "<task-notification>")
 }
 
+// relayed reports whether text is a message another Claude session sent: a
+// teammate's (<teammate-message>), a cross-session one
+// (<cross-session-message>) or a named agent's (<agent-message>), as is or
+// after the line Claude Code puts before it ("Another Claude session sent a
+// message:").
+func relayed(text string) bool {
+	text = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text), "Another Claude session sent a message:"))
+	return strings.HasPrefix(text, "<teammate-message") || strings.HasPrefix(text, "<cross-session-message") ||
+		strings.HasPrefix(text, "<agent-message")
+}
+
 // takenIn is when a prompt typed into the pane that Claude Code took into
 // the turn it was in (an attachment entry holding a queued command that is
-// no task notification) was queued.
+// someone's typing: notTyped) was queued.
 func (e *tEntry) takenIn() (time.Time, bool) {
 	a, _ := e.Attachment.(map[string]any)
 	if e.Type != "attachment" || str(a["type"]) != "queued_command" ||
-		fromNotification("", a["origin"], str(a["commandMode"]), str(a["prompt"])) {
+		notTyped("", a["origin"], str(a["commandMode"]), str(a["prompt"])) {
 		return time.Time{}, false
 	}
 	return e.Timestamp, true
 }
 
 // apply reads one transcript line into w. Entries stamped before w.since,
-// entries of a subagent's own thread (isSidechain) and lines that are not
-// JSON are skipped.
+// entries of a subagent's own thread (isSidechain) unless w is a teammate's
+// (side), and lines that are not JSON are skipped.
 func (w *bgWatch) apply(line []byte) {
 	var e tEntry
-	if json.Unmarshal(line, &e) != nil || e.IsSidechain || e.Timestamp.Before(w.since) {
+	if json.Unmarshal(line, &e) != nil || (e.IsSidechain && !w.side) || e.Timestamp.Before(w.since) {
 		return
 	}
 	var blocks []tBlock
 	if e.Type == "assistant" || e.Type == "user" {
 		blocks = contentBlocks(e.Message.Content)
+		w.inTurn = e.Type == "user" || !e.endsTurn()
 	}
 	if text, ok := e.prompt(blocks); ok {
 		typed := e.Timestamp
@@ -826,7 +891,7 @@ func (w *bgWatch) apply(line []byte) {
 			w.unqueue(text)
 		}
 		w.typed = time.Time{}
-		if !e.byNotification(text) {
+		if !e.notTyped(text) {
 			w.typed = typed
 		}
 	}
@@ -892,7 +957,10 @@ func (w *bgWatch) unqueue(text string) {
 // toolUseResult, which belongs to its first block; at is the entry's
 // stamp): a teammate's spawn becomes a teammate and no task (the Agent tool
 // use's run_in_background made it one), a background launch becomes a task,
-// a failed launch is none, a TaskStop that worked ends its task.
+// and so does a Monitor (a result with taskId and timeoutMs) unless it is
+// persistent (it watches for the whole session, so it would hold the run
+// until Tell), a failed launch is none, a TaskStop that worked ends its
+// task.
 func (w *bgWatch) result(b tBlock, res map[string]any, first bool, at time.Time) {
 	id := b.ToolUseID
 	if id == "" {
@@ -914,12 +982,16 @@ func (w *bgWatch) result(b tBlock, res map[string]any, first bool, at time.Time)
 	case res["status"] == "teammate_spawned":
 		delete(w.tasks, id)
 		if agent := cmp.Or(str(res["agentId"]), str(res["agent_id"])); oneSegment(agent) {
-			w.mates[id] = teammate{agent: agent, spawned: at}
+			w.mates[id] = &teammate{agent: agent, spawned: at, w: newMateWatch()}
 		}
 	case str(res["backgroundTaskId"]) != "":
 		w.tasks[id] = str(res["backgroundTaskId"])
 	case res["background"] == true || res["status"] == "async_launched":
 		w.tasks[id] = cmp.Or(str(res["agentId"]), str(res["taskId"]), str(res["task_id"]), id)
+	case str(res["taskId"]) != "" && res["timeoutMs"] != nil: // a Monitor
+		if res["persistent"] != true {
+			w.tasks[id] = str(res["taskId"])
+		}
 	}
 }
 
@@ -935,15 +1007,24 @@ var (
 
 // notified reads the task notifications in text, a user message or a
 // queued one, stamped at: each ends the task it names (by tool use or task
-// id) unless its status says the task still runs, and the newest is what
-// the agent must answer.
+// id) unless its status says the task still runs or it is one event of a
+// Monitor that watches on (an <event> and no status), and the newest is
+// what the agent must answer.
 func (w *bgWatch) notified(text string, at time.Time) {
 	if !strings.Contains(text, "<task-notification>") {
 		return
 	}
 	for _, m := range notificationBlock.FindAllStringSubmatch(text, -1) {
-		block, _, _ := strings.Cut(m[1], "<result>") // the task's own output may quote anything
-		if st := notifiedStatus.FindStringSubmatch(block); st != nil && (st[1] == "running" || st[1] == "pending") {
+		block, _, _ := strings.Cut(m[1], "<result>")     // the task's own output may quote anything
+		block, _, event := strings.Cut(block, "<event>") // and so may a Monitor's event
+		st := notifiedStatus.FindStringSubmatch(block)
+		if st != nil && (st[1] == "running" || st[1] == "pending") {
+			continue
+		}
+		if at.After(w.note) {
+			w.note = at
+		}
+		if st == nil && event {
 			continue
 		}
 		toolUse, task := "", ""
@@ -954,9 +1035,6 @@ func (w *bgWatch) notified(text string, at time.Time) {
 			task = x[1]
 		}
 		w.finish(toolUse, task)
-		if at.After(w.note) {
-			w.note = at
-		}
 	}
 }
 

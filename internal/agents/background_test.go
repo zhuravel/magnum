@@ -78,7 +78,12 @@ func notificationText(toolUseID, taskID, status string) string {
 // notification is the queue entry and the user message Claude Code writes
 // when background work finishes while the agent is idle.
 func notification(at time.Time, toolUseID, taskID, status string) []tline {
-	text := notificationText(toolUseID, taskID, status)
+	return noticed(at, notificationText(toolUseID, taskID, status))
+}
+
+// noticed is the queue entry and the user message Claude Code writes when a
+// task notification (text) reaches the agent while it is idle.
+func noticed(at time.Time, text string) []tline {
 	return []tline{
 		{"type": "queue-operation", "operation": "enqueue", "timestamp": stamp(at), "sessionId": claudeSID, "content": text},
 		{"type": "queue-operation", "operation": "dequeue", "timestamp": stamp(at), "sessionId": claudeSID},
