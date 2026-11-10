@@ -2325,6 +2325,18 @@ type fakeIdentity struct {
 	pushErr   error
 	pushMints []bool
 	released  int
+	// actionsErr: an App's ActionsEnv fails with it; actionsMints and
+	// actionsReleased count its mints and releases.
+	actionsErr      error
+	actionsMints    int
+	actionsReleased int
+}
+
+// actionsTokens are the App's ActionsEnv mints and releases so far.
+func (f *fakeIdentity) actionsTokens() (mints, released int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.actionsMints, f.actionsReleased
 }
 
 // daemonPushes are an App's DaemonPushEnv calls (their workflows
@@ -2393,6 +2405,28 @@ func (f *fakeAppIdentity) DaemonPushEnv(_ context.Context, workflows bool) (map[
 		})
 	}
 	return map[string]string{"GH_CONFIG_DIR": "/state/gh/" + f.name, "GH_TOKEN": f.name + "-push-token", "GITHUB_TOKEN": "", "GH_HOST": "github.com"}, release, nil
+}
+
+// ActionsEnv is identity.App's: a token of the daemon's own with Actions
+// write as GH_TOKEN ("<name>-actions-token<n>") over /state/gh/<name>, or
+// actionsErr; actionsMints counts the mints, actionsReleased the releases.
+func (f *fakeAppIdentity) ActionsEnv(context.Context) (map[string]string, func(), error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.actionsMints++
+	if f.actionsErr != nil {
+		return nil, nil, f.actionsErr
+	}
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			f.mu.Lock()
+			f.actionsReleased++
+			f.mu.Unlock()
+		})
+	}
+	tok := fmt.Sprintf("%s-actions-token%d", f.name, f.actionsMints)
+	return map[string]string{"GH_CONFIG_DIR": "/state/gh/" + f.name, "GH_TOKEN": tok, "GITHUB_TOKEN": "", "GH_HOST": "github.com"}, release, nil
 }
 
 func (f *fakeAppIdentity) EnsureConfigDir(context.Context) (string, error) {

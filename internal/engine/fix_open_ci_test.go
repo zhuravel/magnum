@@ -681,6 +681,7 @@ func TestTheLookStartsTheCIWorkflowAsCIDispatchAs(t *testing.T) {
 			if data := h.dispatchData("fix.open_ci_dispatch"); data["identity"] != c.identity || !strings.HasSuffix(ev.Message, " as "+c.identity) {
 				t.Errorf("fix.open_ci_dispatch = %q, %v; want it to name %s", ev.Message, data, c.identity)
 			}
+			h.wantMintedNothing("talkable-app") // its tokens have the installation's whole access: a mint with Actions write would get 422
 		})
 	}
 }

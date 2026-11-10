@@ -17,7 +17,9 @@ package engine
 // short, an unknown branch), its record before the call (kvPRCIStart, so a
 // head is started at most once, a crash between the two included) and its
 // identity ([[repo]] ci_dispatch_as, else the watch's poll identity, the
-// daemon's own client, never the fixer's pane).
+// daemon's own client, never the fixer's pane; an App whose tokens leave
+// Actions out, such as a fixer App, over a token with Actions write minted
+// for the daemon alone: ci_actions.go).
 
 import (
 	"context"
@@ -195,18 +197,19 @@ func (e *Engine) ciAfterPush(ctx context.Context, id int64, now time.Time) {
 	}
 }
 
-// startCI starts workflow, [[repo]] ci_dispatch, on the branch of pr, a
-// PR of repo under w, and returns the start; ok is false when it did
-// nothing and its caller asks again (the head's file list is not read yet,
-// or the record could not be written). It refuses, once per head, a PR
-// that changes its own workflows or actions or whose files GitHub did not
-// list whole, and one whose branch it does not know. Else it records the
-// start (kvPRCIStart) before it asks GitHub as [[repo]] ci_dispatch_as,
-// else the watch's poll identity, else its identity, and records how it
-// ended, with an event of words naming that identity: words.kind, its
-// _failed (the status only: the message of GitHub's refusal can name the
-// branch, the PR's text; a 403 says that the identity cannot start
-// workflows, cannotStartWorkflows) or its _refused.
+// startCI starts workflow, [[repo]] ci_dispatch, on the branch of pr, a PR
+// of repo, in the batch acts (ci_actions.go), and returns the start; ok is
+// false when it did nothing and its caller asks again (the head's file list
+// is not read yet, or the record could not be written). It refuses, once
+// per head, a PR that changes its own workflows or actions or whose files
+// GitHub did not list whole, and one whose branch it does not know. Else it
+// records the start (kvPRCIStart) before it asks GitHub (or mints the
+// batch's token) as the batch's identity ([[repo]] ci_dispatch_as, else the
+// watch's poll identity, else its identity: ciDispatchIdentity), and
+// records how it ended, with an event of words naming that identity:
+// words.kind, its _failed (the status only: the message of GitHub's refusal
+// can name the branch, the PR's text; a 403 says that the identity cannot
+// start workflows, cannotStartWorkflows) or its _refused.
 func (e *Engine) startCI(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR, workflow string, words ciWords) (ciStart, bool) {
 	s := ciStart{Head: pr.HeadSHA, Workflow: workflow}
 	files, listed, err := e.st.PRFilesOf(ctx, pr.ID)

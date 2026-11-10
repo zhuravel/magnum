@@ -768,4 +768,5 @@ func TestTheReRunGoesAsCIDispatchAsWithoutCIDispatch(t *testing.T) {
 	if ev, _ := h.fixEvent("fix.open_ci_rerun"); data["identity"] != "talkable-app" || !strings.HasSuffix(ev.Message, " as talkable-app") {
 		t.Errorf("fix.open_ci_rerun = %q, %v; want it to name talkable-app", ev.Message, data)
 	}
+	h.wantMintedNothing("talkable-app") // its tokens have the installation's whole access: a mint with Actions write would get 422
 }

@@ -926,6 +926,12 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 		}
 		return nil
 	}
+	d.GitHubEnv = func(id string, env map[string]string) GitHub {
+		if c := a.GitHub(id); c != nil {
+			return c.WithEnv(env)
+		}
+		return nil
+	}
 	d.Rounds = func(id string) Rounds {
 		if r := a.Pipeline[id]; r != nil {
 			return r

@@ -12,16 +12,18 @@ package engine
 // produces its required checks, starts that workflow on the PR's branch
 // once for the head (openStartCI) as [[repo]] ci_dispatch_as, else the
 // watch's poll identity, the daemon's own client of that identity (never
-// the fixer's pane), and waits for its run while the head's checks run,
-// while the run is queued or runs (the poll reads it, awaitCIRuns: GitHub's
-// rollup of the head leaves it out) and settle_max after the start. GitHub
-// runs the workflow as the branch has it and refuses one without a
-// workflow_dispatch trigger there; a PR that changes its own workflows or
-// actions is never started (its CI would run its own code with the
-// repository's secrets). The start is recorded before the call
-// (kvPRCIStart), so a head is started at most once, a crash between the two
-// included. Before it needs you or starts the workflow, rule 11 reads the
-// head's runs once and re-runs a run that started no job (ci_rerun.go).
+// the fixer's pane; a fixer App's over a token with Actions write minted
+// for the daemon alone, ci_actions.go), and waits for its run while the
+// head's checks run, while the run is queued or runs (the poll reads it,
+// awaitCIRuns: GitHub's rollup of the head leaves it out) and settle_max
+// after the start. GitHub runs the workflow as the branch has it and
+// refuses one without a workflow_dispatch trigger there; a PR that changes
+// its own workflows or actions is never started (its CI would run its own
+// code with the repository's secrets). The start is recorded before the
+// call (kvPRCIStart), so a head is started at most once, a crash between
+// the two included. Before it needs you or starts the workflow, rule 11
+// reads the head's runs once and re-runs a run that started no job
+// (ci_rerun.go).
 
 import (
 	"cmp"

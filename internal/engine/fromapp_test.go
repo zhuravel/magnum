@@ -16,6 +16,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // TestFromAppDryRunOnce wires the real components (hermetically: scripted
@@ -165,5 +166,66 @@ func TestFromAppMetersEveryIdentitysGitHubClient(t *testing.T) {
 	e.ghMeter.mu.Unlock()
 	if got != (GitHubOpCost{Points: 3, Calls: 1}) || other {
 		t.Fatalf("the meter after one call of zhuravel's client: %+v (talkable-app counted: %v)", got, other)
+	}
+}
+
+// FromApp gives a batch of Actions calls (ci_actions.go) the identity's
+// client over the batch's token: GH_TOKEN over the App's GH_CONFIG_DIR,
+// no Reauth (a 401 of that token is no reason to refresh the App's own),
+// and its calls counted as the identity's; the App's own client is not
+// changed.
+func TestFromAppGivesABatchTheIdentitysClientOverItsToken(t *testing.T) {
+	home := t.TempDir()
+	cfgText := strings.ReplaceAll(testConfigTOML, "HOME", home)
+	cfgText = strings.Replace(cfgText, "[herdr]\n", "[herdr]\nsocket = \""+filepath.Join(home, "no.sock")+"\"\n", 1)
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(cfgText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	layout := paths.Layout{Home: home}
+	cfg, err := config.Load(layout, filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := layout.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	storetest.OpenFile(t, layout.DB()).Close()
+	fake := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api"}, Result: execx.Result{Stdout: []byte(`{"workflow_runs":[]}`)}}}}
+	a, err := app.New(cfg, layout, app.Options{DryRun: true, Runner: fake, Stderr: &bytes.Buffer{},
+		MySQLDSN: "root:@tcp(127.0.0.1:1)/?timeout=1s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	e := FromApp(a)
+	if e.d.GitHubEnv == nil {
+		t.Fatal("FromApp gives no client over a batch's token")
+	}
+	c, ok := e.d.GitHubEnv("talkable-app", map[string]string{"GH_TOKEN": "ghs_batch"}).(*github.Client)
+	own := a.GitHub("talkable-app")
+	if !ok || c == own || c.Env["GH_TOKEN"] != "ghs_batch" || c.Env["GH_CONFIG_DIR"] == "" || c.Env["GH_CONFIG_DIR"] != own.Env["GH_CONFIG_DIR"] || c.Reauth != nil {
+		t.Fatalf("the batch's client = %+v, want talkable-app's over the batch's token without Reauth", c)
+	}
+	if own.Env["GH_TOKEN"] != "" || own.Reauth == nil {
+		t.Errorf("the App's own client changed: %+v", own)
+	}
+	if _, err := c.HeadRuns(context.Background(), "talkable", "talkable", strings.Repeat("a1", 20)); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(fake.Calls); n != 1 || fake.Calls[0].Env["GH_TOKEN"] != "ghs_batch" {
+		t.Fatalf("calls = %d, want one with the batch's token", n)
+	}
+	e.ghMeter.mu.Lock()
+	calls := 0
+	if m := e.ghMeter.ids["talkable-app"]; m != nil {
+		for _, hour := range m.Hours {
+			for _, op := range hour.Ops {
+				calls += op.Calls
+			}
+		}
+	}
+	e.ghMeter.mu.Unlock()
+	if calls != 1 {
+		t.Errorf("talkable-app's meter counted %d calls, want the batch's one", calls)
 	}
 }
