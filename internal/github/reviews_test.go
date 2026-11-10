@@ -409,3 +409,70 @@ func TestReviewsEmptyAndErrors(t *testing.T) {
 		}
 	}
 }
+
+// RecentReviews reads a PR's reviews over GraphQL from the newest back, a
+// page of 100 at a time, until a page holds a review the caller's stop
+// accepts (the first one submitted before a time), and returns them oldest
+// first: however many reviews the PR has, a reader of what came after a
+// time reads only back to it. Without a stop it reads to the first review,
+// and at the page limit it says the list is not complete.
+func TestRecentReviewsReadBackToTheCallersStop(t *testing.T) {
+	node := func(id int, at string) string {
+		return fmt.Sprintf(`{"databaseId":%d,"state":"COMMENTED","body":"","url":"u%d","submittedAt":%q,"commit":null,"author":{"login":"rev-ann","__typename":"User"}}`, id, id, at)
+	}
+	newest := `{"data":{"repository":{"pullRequest":{"reviews":{"pageInfo":{"hasPreviousPage":true,"startCursor":"c1"},"nodes":[` +
+		node(902, "2026-10-20T13:00:00Z") + `,` + node(903, "2026-10-20T14:00:00Z") + `]}}}}}`
+	older := `{"data":{"repository":{"pullRequest":{"reviews":{"pageInfo":{"hasPreviousPage":true,"startCursor":"c2"},"nodes":[` +
+		node(900, "2026-10-20T11:00:00Z") + `,` + node(901, "2026-10-20T12:30:00Z") + `]}}}}}`
+	var cursors []any
+	f := &execx.Fake{Rules: []execx.Rule{gqlRule(t, func(_ execx.Cmd, req gqlReq) (execx.Result, error) {
+		cursors = append(cursors, req.Variables["cursor"])
+		if req.Variables["cursor"] == nil {
+			return okResult(compact(t, newest))
+		}
+		return okResult(compact(t, older))
+	})}}
+	noon := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	got, complete, err := (&Client{Run: f}).RecentReviews(context.Background(), "talkable", "talkable", 5, func(r Review) bool { return r.SubmittedAt.Before(noon) })
+	if err != nil || !complete {
+		t.Fatal(complete, err)
+	}
+	if !reflect.DeepEqual(cursors, []any{nil, "c1"}) {
+		t.Fatalf("cursors = %v, want the newest page and the one before it", cursors)
+	}
+	var ids []int64
+	for _, r := range got {
+		ids = append(ids, r.DatabaseID)
+	}
+	if !reflect.DeepEqual(ids, []int64{900, 901, 902, 903}) || got[0].AuthorLogin != "rev-ann" || !got[3].SubmittedAt.Equal(noon.Add(2*time.Hour)) {
+		t.Fatalf("reviews = %+v, want 900 to 903 oldest first", got)
+	}
+	if call := f.Calls[0]; call.Mutates {
+		t.Errorf("call = %+v", call)
+	}
+	if q := oneLine(decodeReq(t, f.Calls[0]).Query); !strings.Contains(q, "reviews(last: 100, before: $cursor) { pageInfo { hasPreviousPage startCursor } "+
+		"nodes { "+reviewNodeFields+" } }") {
+		t.Errorf("query = %s", q)
+	}
+
+	endless := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Result: execx.Result{Stdout: compact(t, older)}}}}
+	got, complete, err = (&Client{Run: endless}).RecentReviews(context.Background(), "talkable", "talkable", 5, nil)
+	if err != nil || complete || len(got) != 2*reviewsMaxPages || len(endless.Calls) != reviewsMaxPages {
+		t.Errorf("at the page limit: %d reviews in %d calls, complete %v, %v", len(got), len(endless.Calls), complete, err)
+	}
+	empty := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Result: execx.Result{Stdout: compact(t,
+		`{"data":{"repository":{"pullRequest":{"reviews":{"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[]}}}}}`)}}}}
+	if got, complete, err := (&Client{Run: empty}).RecentReviews(context.Background(), "talkable", "talkable", 5, nil); err != nil || !complete || got == nil || len(got) != 0 {
+		t.Fatalf("no reviews = %v, %v, %v (want an empty, non-nil, complete list)", got, complete, err)
+	}
+	missing := &execx.Fake{Rules: []execx.Rule{{
+		Prefix: []string{"gh", "api", "graphql"},
+		Result: execx.Result{Stdout: fixture(t, "reviews_notfound.json"), Stderr: fixture(t, "reviews_notfound.stderr"), Code: 1},
+	}}}
+	if _, _, err := (&Client{Run: missing}).RecentReviews(context.Background(), "talkable", "talkable", 99999999, nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing PR = %v, want ErrNotFound", err)
+	}
+	if _, _, err := (&Client{Run: empty}).RecentReviews(context.Background(), "talkable", "talkable", 0, nil); err == nil {
+		t.Fatal("PR 0: want an error")
+	}
+}

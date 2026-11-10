@@ -82,6 +82,7 @@ var callKinds = func() [][2]string {
 		{"review threads", "review threads"},
 		{"reviews", "reviews"},
 		{"all reviews", "all reviews"},
+		{"recent reviews", "recent reviews"},
 		{"review", "review"},
 		{"dismiss review", "dismiss review"},
 		{"update review", "update review"},

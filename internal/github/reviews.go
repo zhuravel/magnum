@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -66,6 +67,18 @@ var reviewsPagedQuery = fmt.Sprintf(`query($owner: String!, $name: String!, $num
     pullRequest(number: $number) {
       reviews(first: %d, after: $cursor) {
         pageInfo { hasNextPage endCursor }
+        nodes { `+reviewNodeFields+` }
+      }
+    }
+  }
+}`, reviewsPageSize)
+
+var recentReviewsQuery = fmt.Sprintf(`query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  `+rateLimitFields+`
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviews(last: %d, before: $cursor) {
+        pageInfo { hasPreviousPage startCursor }
         nodes { `+reviewNodeFields+` }
       }
     }
@@ -363,4 +376,70 @@ func (c *Client) UpdateReviewBody(ctx context.Context, owner, repo string, numbe
 	path := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews/%d", owner, repo, number, reviewID)
 	op := fmt.Sprintf("update review %s/%s#%d/%d", owner, repo, number, reviewID)
 	return c.restInput(ctx, op, "PUT", path, map[string]string{"body": body}, true, nil)
+}
+
+// RecentReviews lists the reviews of a pull request, oldest first, the way
+// IssueComments lists the conversation: reviewsPageSize (100) at a time
+// from the newest back, until a page holds a review that stop (nil: none)
+// reports true for, or it reached the first review, and then it returns
+// every review it read. A reader of what came after a time stops at the
+// first review submitted before it, so how many reviews the pull request
+// has does not matter. complete is false when it stopped at reviewsMaxPages
+// pages with older reviews, none of which stop was asked about, left
+// unread. A missing repository or pull request is an error matching
+// ErrNotFound.
+func (c *Client) RecentReviews(ctx context.Context, owner, repo string, number int, stop func(Review) bool) (reviews []Review, complete bool, err error) {
+	if err := checkRepo(owner, repo); err != nil {
+		return nil, false, err
+	}
+	if number <= 0 {
+		return nil, false, fmt.Errorf("github: invalid pull request number %d", number)
+	}
+	op := fmt.Sprintf("recent reviews %s/%s#%d", owner, repo, number)
+	var pages [][]Review // newest page first
+	var cursor any       // nil: the newest page
+	join := func() []Review {
+		out := []Review{}
+		for _, p := range slices.Backward(pages) {
+			out = append(out, p...)
+		}
+		return out
+	}
+	for range reviewsMaxPages {
+		var data struct {
+			Repository *struct {
+				PullRequest *struct {
+					Reviews struct {
+						PageInfo struct {
+							HasPreviousPage bool   `json:"hasPreviousPage"`
+							StartCursor     string `json:"startCursor"`
+						} `json:"pageInfo"`
+						Nodes []reviewNodeJSON `json:"nodes"`
+					} `json:"reviews"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		}
+		vars := map[string]any{"owner": owner, "name": repo, "number": number, "cursor": cursor}
+		_, notFound, err := c.graphql(ctx, op, recentReviewsQuery, vars, &data)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(notFound) > 0 || data.Repository == nil || data.Repository.PullRequest == nil {
+			return nil, false, &APIError{Op: op, Errors: notFoundOr(notFound, op)}
+		}
+		rv := data.Repository.PullRequest.Reviews
+		page := make([]Review, 0, len(rv.Nodes))
+		found := false
+		for _, n := range rv.Nodes {
+			r := n.review()
+			found = found || (stop != nil && stop(r))
+			page = append(page, r)
+		}
+		pages = append(pages, page)
+		if found || !rv.PageInfo.HasPreviousPage || rv.PageInfo.StartCursor == "" {
+			return join(), true, nil
+		}
+		cursor = rv.PageInfo.StartCursor
+	}
+	return join(), false, nil
 }
