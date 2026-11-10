@@ -192,6 +192,11 @@ func TestTheCIFixRecordIsWrittenBeforeTheStart(t *testing.T) {
 	if len(h.fixRuns(pr.ID)) != 0 {
 		t.Fatal("a fixer ran")
 	}
+	h.advance(6 * time.Minute) // the look asks again, still refused
+	h.tick()
+	if rec := h.ciRecordOf(); len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeUnstarted || !rec.Starts[0].At.After(typed) {
+		t.Fatalf("record = %+v, want the one unstarted start: a refused start takes its place", rec.Starts)
+	}
 	lost := ciFixRecord{Read: rec.Read, Base: rec.Base}
 	for _, head := range []string{"1111111111111111111111111111111111111111", "2222222222222222222222222222222222222222", "3333333333333333333333333333333333333333"} {
 		lost.Starts = append(lost.Starts, ciFixStart{Head: head, Entries: []string{"Completion"}, At: typed})

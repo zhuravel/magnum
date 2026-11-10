@@ -663,10 +663,17 @@ func (e *Engine) ensureCIRead(ctx context.Context, acts *ciActions, repo store.R
 
 // noteCIFixStart records a CI fix of entries at pr's head by by before its
 // start (kvPRCIFix's Starts), and reports whether it did: a start whose
-// record could not be written does not start.
+// record could not be written does not start. It takes the place of an
+// unstarted one at the head (a look that waits for a free slot tries every
+// tick), so the record keeps one of them per head at most.
 func (e *Engine) noteCIFixStart(ctx context.Context, pr store.PR, entries []string, by string) bool {
 	err := e.updateCIFix(ctx, pr.ID, func(r *ciFixRecord) bool {
-		r.Starts = append(r.Starts, ciFixStart{Head: pr.HeadSHA, Entries: entries, At: e.now().UTC(), By: by})
+		s := ciFixStart{Head: pr.HeadSHA, Entries: entries, At: e.now().UTC(), By: by}
+		if n := len(r.Starts); n > 0 && r.Starts[n-1].Head == pr.HeadSHA && r.Starts[n-1].Outcome == ciOutcomeUnstarted {
+			r.Starts[n-1] = s
+			return true
+		}
+		r.Starts = append(r.Starts, s)
 		return true
 	})
 	if err != nil {
