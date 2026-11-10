@@ -47,7 +47,10 @@ func (r renamedFiles) serves(d github.PRDetails, head string) bool {
 // of prID, 0 for a PR the registry does not know yet; renamedFiles.serves)
 // serves again without a call: a PR retargeted to another base reads it
 // again, since the path a rename leaves is the new base's.
-// It returns the record to keep once the PR is upserted (nil: none new).
+// The list stays cut where the Details cut it (at 100 files), whatever the
+// REST list says (it was read at another moment), and is cut where the
+// REST list is. It returns the record to keep once the PR is upserted
+// (nil: none new).
 // When the REST list cannot be read (no lister, an error, the poll's file
 // fetches spent), in keeps no file list and no updatedAt, and names the
 // head unlisted (store.GitHubPR.FilesUnlisted): the registry drops a list
@@ -63,7 +66,7 @@ func (e *Engine) withRenamedFrom(ctx context.Context, gh GitHub, repo store.Repo
 	if prID != 0 {
 		var r renamedFiles
 		if v, ok := e.getKV(ctx, kvPRRenamedFiles(prID)); ok && json.Unmarshal([]byte(v), &r) == nil && r.serves(d, in.Files.HeadSHA) {
-			in.Files.Paths, in.Files.Truncated = slices.Clone(r.Paths), in.Files.Truncated && r.Cut
+			in.Files.Paths, in.Files.Truncated = slices.Clone(r.Paths), in.Files.Truncated || r.Cut
 			return nil
 		}
 	}
@@ -98,7 +101,7 @@ func (e *Engine) withRenamedFrom(ctx context.Context, gh GitHub, repo store.Repo
 			paths = append(paths, f)
 		}
 	}
-	in.Files.Paths, in.Files.Truncated = paths, in.Files.Truncated && !complete
+	in.Files.Paths, in.Files.Truncated = paths, in.Files.Truncated || !complete
 	return &renamedFiles{Head: in.Files.HeadSHA, Base: d.BaseRefName, BaseOid: d.BaseRefOid, Listed: slices.Clone(d.Files),
 		Paths: slices.Clone(paths), Cut: !complete}
 }

@@ -103,3 +103,31 @@ func TestARESTFailureEndsThePollsReadsOfTheRenamesPaths(t *testing.T) {
 		t.Fatalf("ListFiles asked %d times in the poll, want 1: a failure ends the poll's reads", n)
 	}
 }
+
+// A list GitHub's Details cut at 100 files stays cut once the REST list
+// adds the paths renames leave, whatever the REST list says: it was read
+// at another moment, and the first page of the Details is no whole list.
+// The list served again for the same head stays cut too, and the gate
+// refuses the head as one of more files than GitHub lists.
+func TestTheRESTListKeepsTheDetailsCutOfTheFileList(t *testing.T) {
+	h, fg := renamesHarness(t)
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	fg.set(2, "scripts/x.rb", "lib/x.rb", "app/y.rb")
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: []string{"scripts/x.rb"}, renamed: true, filesTruncated: true})
+	h.tick()
+	if f, ok, err := h.st.PRFilesOf(h.ctx, h.pr(2).ID); err != nil || !ok || !f.Truncated {
+		t.Fatalf("the head's list = %+v, %v (%v): want it cut, as the Details said", f, ok, err)
+	}
+	h.advance(time.Minute)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: []string{"scripts/x.rb"}, renamed: true, filesTruncated: true,
+		labels: []string{"ready"}})
+	h.tick()
+	if f, ok, err := h.st.PRFilesOf(h.ctx, h.pr(2).ID); err != nil || !ok || !f.Truncated || fg.fetches(2) != 1 {
+		t.Fatalf("the head's list served again = %+v, %v (%v) after %d REST reads: want it cut, from the one read", f, ok, err, fg.fetches(2))
+	}
+	h.reviewTo(2, "b1")
+	h.flush()
+	h.wantRefused(2, "it changes more than the 3 files GitHub listed")
+}
