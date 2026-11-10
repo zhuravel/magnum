@@ -105,6 +105,28 @@ func (o CommentOptions) Check() (out CommentOutcome, ok bool) {
 	return out, true
 }
 
+// CheckText is Check with text, the comment read from stdin, checked
+// too: one is needed for the conversation and for a reply, and it follows
+// fix-reply's rules (not empty, no magnum marker, no local path, not too
+// long once marked). The caller asks it before it mints a token.
+func (o CommentOptions) CheckText(text []byte) (out CommentOutcome, ok bool) {
+	if out, ok = o.Check(); !ok {
+		return out, false
+	}
+	var problems []string
+	switch hasText := strings.TrimSpace(string(text)) != ""; {
+	case o.needsBody() && !hasText:
+		problems = []string{"the comment is empty: pass it on standard input (a pipe or a heredoc)"}
+	case hasText:
+		problems = checkSigned(string(text), CommentMarker, "magnum comment", "the comment", "the comment marker")
+	}
+	if len(problems) > 0 {
+		out.Status, out.Problems = StatusInvalid, problems
+		return out, false
+	}
+	return out, true
+}
+
 // titleProblems is what is wrong with title, trimmed, as a pull request's
 // new title (nil: none).
 func titleProblems(title string) []string {
@@ -288,7 +310,7 @@ func (o CommentOutcome) Summary() string {
 // safely. GitHub must show the App as each comment's author. onPosted (nil:
 // none) hears of each post, and of a comment found already there.
 func RunComment(ctx context.Context, gh CommentGitHub, o CommentOptions, text []byte, onPosted func(Posted)) CommentOutcome {
-	out, ok := o.Check()
+	out, ok := o.CheckText(text)
 	if !ok {
 		return out
 	}
@@ -297,16 +319,6 @@ func RunComment(ctx context.Context, gh CommentGitHub, o CommentOptions, text []
 	}
 	hasText := strings.TrimSpace(string(text)) != ""
 	var problems []string
-	switch {
-	case o.needsBody() && !hasText:
-		problems = append(problems, "the comment is empty: pass it on standard input (a pipe or a heredoc)")
-	case hasText:
-		problems = append(problems, checkSigned(string(text), CommentMarker, "magnum comment", "the comment", "the comment marker")...)
-	}
-	if len(problems) > 0 {
-		out.Status, out.Problems = StatusInvalid, problems
-		return out
-	}
 	var title string
 	if o.Title != nil {
 		title = strings.TrimSpace(*o.Title)
