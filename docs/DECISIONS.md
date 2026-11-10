@@ -24616,6 +24616,31 @@ skill versions); people add theirs to the sections before it, at the end of the 
   once herdr lists its agent (a liaison still starting is named as a pane, and held by the same 30 minutes); a parked
   role whose resumed start fails before any session row exists is charged nothing, so a lasting start error repeats
   as the stage's failure on each prompt and never escalates to EventLost.
+- **The watchdog's nudge names the background work that holds a turn, not "you seem stuck"** (2026-11-10, found
+  live). A writer ended its turn and sat idle at its prompt; the agents manager still held its run open, because it
+  counted 2 background tasks the agent had started as running (`agent.background_wait`, "fx-writer: waiting for 2
+  background tasks"). The run stayed past its role's timeout with a still screen and transcript, and the watchdog's
+  first step told the finished agent "You seem stuck: ... if you are done, write your output files and stop". The
+  agent spent a turn answering that it was done and nothing hung. The step now asks
+  `agents.Manager.BackgroundTasks` (the count the observer holds the run for, read from the Claude transcript)
+  before it sends: for n > 0 the text is `backgroundNudge(n)`, which says the turn is past its time and unchanged for
+  10 minutes but magnum counts n background tasks (commands, agents, teammates or monitors) as running, and has kept
+  the turn open for them; it asks the agent to make progress on the ones it still needs, to stop the others with
+  `TaskStop`, and to write its output files and end its turn if it is done. For one task the text says "1 background
+  task" and its pronouns agree. For n = 0, for a session that is not Claude's and for a transcript that cannot be
+  read, the text stays `nudgeText`, the nudge of a hung command. The ledger entry keeps the text that was sent and
+  its `PromptHash`, so everything that reads the ledger for the factory's own prompts (the typed-turn filter, the
+  unknown-delivery ladder) finds both texts; nothing compares against the nudge's words, so no shared lead was
+  needed. The later steps (the resume, the fresh start, `EventStuck`) are unchanged. The nudge still goes through
+  `Manager.Tell`, which as before lets the agent's background work go (it no longer holds the run), so the turn ends
+  once the agent is idle again: the text says the work "has kept" the turn open and promises no further wait.
+  Rejected: the watchdog ends the run of an idle agent that only background work holds, with no nudge. That is wrong
+  for a real long background run, a spec run the agent waits on, say: the turn would end while the work still
+  runs. A nudge that names the work leaves the call to the agent, which knows whether it still needs it. Tests (failing first):
+  `TestAnIdleAgentHeldByBackgroundWorkIsToldWhatHoldsItNotThatItSeemsStuck`, `TestOneBackgroundTaskIsNamedInTheSingular`,
+  `TestTheLedgerKeepsTheBackgroundNudgeAsItWasSentWithItsHash`, `TestTheBackgroundNudgeIsNoTypedTurn`, and
+  `TestWithoutBackgroundWorkTheNudgeIsTheHungCommandsOne` (which pins the old text for a transcript with no tool use,
+  a foreground tool, work that finished and no transcript) in internal/factory/runtime.
 
 - **A precheck's cap grows with the change, and a precheck its cap stops in the specs or jest goes on with a
   note** (2026-11-10). On a change of 129 files the precheck's specs did not finish within its fixed `cap` of

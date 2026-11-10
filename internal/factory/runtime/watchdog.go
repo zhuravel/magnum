@@ -38,7 +38,31 @@ const (
 		"its time. If a command hangs, stop it and go on another way; if you are done, write your output files and stop."
 	resumeText = "magnum restarted this session (its pane was lost or its turn hung). Continue the task where you stopped; " +
 		"its inputs are the task's files."
+
+	// backgroundNudgeLead opens the nudge of a turn that only background
+	// work holds open (backgroundNudge), where nudgeText says the turn seems
+	// stuck: the agent ended its turn and sits idle at its prompt, and the
+	// agents manager counts work it started in the background as running.
+	backgroundNudgeLead = "Your turn is past its time and nothing on your screen or in your transcript changed for 10 minutes, " +
+		"but magnum still counts "
+	backgroundNudgeOne = "1 background task you started (a command, an agent, a teammate or a monitor) as running, " +
+		"so it has kept your turn open for it. If you still need it, make sure that it makes progress; " +
+		"if you do not, stop it with TaskStop. "
+	backgroundNudgeMany = "%d background tasks you started (commands, agents, teammates or monitors) as running, " +
+		"so it has kept your turn open for them. If you still need one, make sure that it makes progress. " +
+		"Stop the ones you do not need with TaskStop. "
+	backgroundNudgeEnd = "If you are done, write your output files and end your turn."
 )
+
+// backgroundNudge is the nudge of an idle agent whose turn n background
+// tasks (n > 0) hold open: it names them, where nudgeText would tell an agent
+// that is done that it seems stuck.
+func backgroundNudge(n int) string {
+	if n == 1 {
+		return backgroundNudgeLead + backgroundNudgeOne + backgroundNudgeEnd
+	}
+	return backgroundNudgeLead + fmt.Sprintf(backgroundNudgeMany, n) + backgroundNudgeEnd
+}
 
 // errRecoveriesSpent is a recovery asked for once the recoveries of a
 // role's attempt ran out.
@@ -254,16 +278,22 @@ func (r *Runtime) climb(ctx context.Context, t registry.Task, a registry.Attempt
 	return Event{}, false
 }
 
-// nudge tells a hung run's agent, within the run, that it seems stuck: a
-// ledger entry, then agents.Manager.Tell.
+// nudge tells a hung run's agent, within the run, that it seems stuck, or,
+// when the agents manager counts background work of the agent as running
+// (it ended its turn and the work holds the run open), what holds its turn:
+// a ledger entry of the text, then agents.Manager.Tell.
 func (r *Runtime) nudge(ctx context.Context, t registry.Task, a registry.Attempt, st *roleState, run store.Run) {
+	text := nudgeText
+	if n, ok := r.mgr.BackgroundTasks(ctx, run); ok && n > 0 {
+		text = backgroundNudge(n)
+	}
 	e, err := r.reg.AppendLedger(ctx, registry.LedgerEntry{TaskID: t.ID, AttemptID: a.ID, Role: st.role.Name, RunID: run.ID,
-		Hash: PromptHash(nudgeText), Text: nudgeText})
+		Hash: PromptHash(text), Text: text})
 	if err != nil {
 		r.log.Warn("the ledger did not take a nudge", "role", st.role.Name, "err", err)
 		return
 	}
-	err = r.mgr.Tell(ctx, run, nudgeText)
+	err = r.mgr.Tell(ctx, run, text)
 	verdict := registry.DeliveredYes
 	if err != nil {
 		r.log.Warn("nudge a hung turn", "role", st.role.Name, "err", err)
