@@ -2,25 +2,31 @@
 
 It is internal/factory/runtime/scrub.go after execx.Redact: GitHub tokens, JWTs, Authorization values and private keys;
 AWS, Slack, OpenAI, Anthropic, GitLab, Stripe and Google keys; the values of password=, token: and the like (the key
-stays); emails; host names and IPv4 addresses. Each pattern is the Go one word for word, which selftest.sh checks, and
-go() compiles it with Go's meaning. It masks every byte the Go scrub masks, and more only where a run of host
-characters is longer than a host name may be; FuzzEvidenceScrubMasksEveryByteScrubMasks (internal/factory/runtime)
-feeds both the same texts and fails on a byte it shows that the Go scrub masked.
+stays); emails; host names and IPv4 addresses. Each pattern is the Go one word for word, in the lists below, and go()
+compiles it with Go's meaning. It masks every byte the Go scrub masks; it masks more only where a run of host
+characters is longer than a host name may be, and where a run of non-space characters is still over 2,000 after the
+masks. In internal/factory/runtime, TestEvidenceScrubHoldsTheGoScrubsPatterns checks the lists against the Go source,
+and FuzzEvidenceScrubMasksEveryByteScrubMasks feeds both scrubs the same texts: it fails on a byte this one shows that
+the Go scrub masked, and on any other output than the Go scrub's where no such long run is.
 
 Python's engine, unlike Go's, backtracks: the JWT pattern on an eyJ repeated, the email pattern on a long run of the
 characters an address is made of and the host pattern on a dotted run take minutes on a long word. So the JWT and the
 email patterns skip the starts that must fail as an earlier one in the same run failed, which is no change to what
 they match, and the host pattern runs on each run of host characters, a run longer than a host name (253 characters)
-masked whole. No text is dropped or cut before the masks run: a word dropped for speed took with it a quote, a key, a
------BEGIN or an Authorization: that opens a secret going on past the word, and the rest of that secret showed.
+masked whole. Redact's patterns run as merged searches that reuse what they found, so that no text is searched again
+to its end (redact). No text is dropped or cut before the masks run: a word dropped for speed took with it a quote, a
+key, a -----BEGIN or an Authorization: that opens a secret going on past the word, and the rest of that secret
+showed.
 
 The secret, token and key-value patterns run on the whole text, in the Go scrub's order, since a private key, an
 Authorization value and a key's value (on the next line, or quoted over lines) cross a line break; emails and hosts,
-which cannot, run on each line kept.
+which cannot, run on each line.
 
-python3 scrub.py --serve is the fuzz's side: records of a 4-byte big-endian length and a text's UTF-8 bytes in, the
-same for the scrubbed text out, until its input ends.
+python3 scrub.py --serve is the entry of the fuzz and of evidence.sh's notes: records of a 4-byte big-endian length
+and a text's UTF-8 bytes in, the same for the scrubbed text out, until its input ends. python3 scrub.py --patterns
+prints the pattern lists as JSON.
 """
+import json
 import re
 import sys
 
@@ -107,78 +113,111 @@ def go_class(cls, fold):
     return ("[^" if neg else "[") + extra + "".join(members) + "]"
 
 
-# execx.Redact's four patterns, in its order. The JWT one runs apart (jwt_from), so that it skips the starts that fail;
-# the other three run as one pattern, each in a group of its own, so that a tie goes to the first in Go's order.
+# The Go scrub's patterns word for word, in its order: execx.Redact's four, then runtime.Scrub's token shapes, key-value
+# pairs, emails and hosts. TestEvidenceScrubHoldsTheGoScrubsPatterns (internal/factory/runtime) checks these lists
+# against the Go source.
 REDACT_GO = [
     r"(?:gho_|ghs_|ghp_|ghu_|ghr_|github_pat_)[A-Za-z0-9_]+",
     r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
     r"(?i:authorization:\s*(?:bearer|token|basic)\s+)\S+",
     r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)",
 ]
-REDACT = go("|".join("(%s)" % p for p in REDACT_GO[:1] + REDACT_GO[2:]))
-JWT = go(REDACT_GO[1])
-JWT_RUN = re.compile(r"[A-Za-z0-9_-]*", re.ASCII)
-TOKENS = go("|".join([
+TOKENS_GO = [
     r"\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[0-9A-Z]{16}\b",
     r"\bxox[abposr]-[A-Za-z0-9-]{10,}",
     r"\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}",
     r"\bglpat-[A-Za-z0-9_-]{16,}",
     r"\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}",
     r"\bAIza[0-9A-Za-z_-]{35}\b",
-]))
-PAIRS = go(r'''(?i)\b((?:aws_)?(?:secret(?:_access)?_key|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret))(\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)''')
-EMAIL = go(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+]
+PAIRS_GO = r'''(?i)\b((?:aws_)?(?:secret(?:_access)?_key|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret))(\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)'''
+EMAIL_GO = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+HOST_GO = r"(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|dev|app|ai|cloud|internal|local|lan|corp|intra|info|biz|tech|xyz|site|us|uk|de|ua|eu|me|cc|tv|gg)\b|\b(?:\d{1,3}\.){3}\d{1,3}\b"
+
+# Redact runs as three searches, merged: the JWT one apart (jwt_from), so that it skips the starts that fail; the
+# private key's header, whose body (body_end) is searched only for a header that wins; and the GitHub token, the
+# Authorization value and that header as one pattern, each in a group of its own for Go's order. A search whose
+# match another one's took in is searched again from that match's end, and a JWT or a body found before is reused,
+# so that no part of the text is searched again to its end.
+BEGIN_HEAD, BEGIN_BODY, BEGIN_TAIL = REDACT_GO[3].partition(r"[\s\S]*?(?:")
+if not (BEGIN_BODY and BEGIN_TAIL.endswith("|$)")):
+    raise ValueError("scrub: execx's private key pattern is no longer a header, a lazy body and an END or $")
+REDACT = go("|".join("(%s)" % p for p in (REDACT_GO[0], REDACT_GO[2], BEGIN_HEAD)))
+REDACT_ORDER = {1: 0, 2: 2, 3: 3}  # REDACT's group: its pattern's place in Go's order (the JWT one is 1)
+BEGIN_END = go(BEGIN_TAIL[: -len("|$)")])
+JWT = go(REDACT_GO[1])
+JWT_RUN = re.compile(r"[A-Za-z0-9_-]*", re.ASCII)
+TOKENS = go("|".join(TOKENS_GO))
+PAIRS = go(PAIRS_GO)
+EMAIL = go(EMAIL_GO)
 # an email that starts a run of the characters of its first part, after the place the search starts
 EMAIL_RUN = re.compile(r"(?<![A-Za-z0-9._%+-])" + EMAIL.pattern, re.ASCII)
-HOST = go(r"(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|dev|app|ai|cloud|internal|local|lan|corp|intra|info|biz|tech|xyz|site|us|uk|de|ua|eu|me|cc|tv|gg)\b|\b(?:\d{1,3}\.){3}\d{1,3}\b")
+HOST = go(HOST_GO)
 # The characters of a host name, the word characters and the long s and the Kelvin sign Go's (?i) folds to: a host
 # never leaves such a run, and the characters around a run are no word characters, so the hosts of a run are the
 # same as on the whole line.
 HOST_RUN = re.compile("[A-Za-z0-9_.\u017f\u212a-]+", re.ASCII)
 HOST_MAX = 253
+# After every mask, a run of non-space characters still over WORD_MAX shows as [...]: it masks only more, and a long
+# minified JSON shows no quoted secret the Go scrub's key-value pattern does not see.
+WORD = re.compile("[^" + GO_SPACE + "]+")
+WORD_MAX = 2000
 
 
-def redacted(m):
-    s = m.group(0)
-    i = s.find(":")
-    return s[: i + 1] + " <redacted>" if i >= 0 and s.lower().startswith("authorization") else "<redacted>"
-
-
-def jwt_from(text, pos):
-    """The JWT pattern's first match at pos or after, as Go finds it. When it fails at an eyJ, it fails at every later
-    eyJ of the same run of token characters: the first part runs to the end of that run from any of them, and is
-    only shorter. So the search goes on from the run's end, and a run of eyJ costs its length, not its square."""
+def jwt_from(text, pos, last):
+    """The JWT pattern's first match at pos or after, as Go finds it, as (start, end). From any eyJ of a run of token
+    characters the first part runs to the run's end, where a dot must follow: a later eyJ of the run fails as an
+    earlier one did, and matches with the earlier one's end when its first part still has 10 characters. last keeps
+    the runs of the last eyJ tried (start, first part's end, end or None), so that no run is read twice."""
     while True:
         at = text.find("eyJ", pos)
         if at < 0:
             return None
-        m = JWT.match(text, at)
-        if m:
-            return m
-        pos = JWT_RUN.match(text, at).end()
+        if not last[0] <= at < last[1]:
+            m = JWT.match(text, at)
+            last[:] = at, JWT_RUN.match(text, at).end(), m.end() if m else None
+        first_end, end = last[1], last[2]
+        if end is not None and first_end - (at + 3) >= 10:
+            return at, end
+        pos = first_end
 
 
-def redact_order(m):
-    """Where a match of Redact's patterns stands: its start, then its pattern's place in Go's order."""
-    return m.start(), 1 if m.re is JWT else 0 if m.lastindex == 1 else 2
+def body_end(text, at, last):
+    """Where a private key's body that starts at at ends: after the first END line at at or after, else at the text's
+    end. last keeps the last search (from, match or None): one that found none from before at finds none from at,
+    and one that found an END at or after at finds that one."""
+    frm, m = last
+    if frm is None or frm > at or m is not None and m.start() < at:
+        m = BEGIN_END.search(text, at)
+        last[:] = at, m
+    return m.end() if m else len(text)
 
 
 def redact(text):
     """execx.Redact: the leftmost match of its four patterns, the first of them in Go's order where two start at one
-    place, and on from its end."""
-    out, pos, other, jwt = [], 0, None, None
+    place, and on from its end. An Authorization value keeps its name."""
+    out, pos, other, jwt, jwt_runs, ends = [], 0, None, None, [0, 0, None], [None, None]
     while True:
+        # each search's next match at pos or after: None to search, False when there is none
         if other is not False and (other is None or other.start() < pos):
             other = REDACT.search(text, pos) or False
-        if jwt is not False and (jwt is None or jwt.start() < pos):
-            jwt = jwt_from(text, pos) or False
-        m = min((x for x in (other, jwt) if x), key=redact_order, default=None)
-        if m is None:
+        if jwt is not False and (jwt is None or jwt[0] < pos):
+            jwt = jwt_from(text, pos, jwt_runs) or False
+        if not other and not jwt:
             out.append(text[pos:])
             return "".join(out)
-        out.append(text[pos : m.start()])
-        out.append(redacted(m))
-        pos = m.end()
+        if jwt and (not other or (jwt[0], 1) < (other.start(), REDACT_ORDER[other.lastindex])):
+            start, end = jwt
+        else:
+            start = other.start()
+            end = body_end(text, other.end(), ends) if other.lastindex == 3 else other.end()
+        out.append(text[pos:start])
+        colon = text.find(":", start, end)
+        if colon >= 0 and text[start : start + 13].lower() == "authorization":
+            out.append(text[start : colon + 1] + " <redacted>")
+        else:
+            out.append("<redacted>")
+        pos = end
 
 
 def emails(line):
@@ -203,30 +242,17 @@ def host(m):
     return "<host>" if len(run) > HOST_MAX else HOST.sub("<host>", run)
 
 
-def masked(text):
-    """The text with the secret, token and key-value patterns masked, in the Go scrub's order."""
-    return PAIRS.sub(r"\1\2<redacted>", TOKENS.sub("<redacted>", redact(text)))
+def capped(m):
+    return "[...]" if len(m.group(0)) > WORD_MAX else m.group(0)
 
 
-def line_masked(line):
-    """A line of masked text with its emails and hosts masked too."""
-    return HOST_RUN.sub(host, emails(line))
-
-
-def scrub_lines(text, keep=0):
-    """The lines of text scrubbed, the last keep of them (0: all), and how many it left out."""
-    lines = masked(text or "").splitlines()
-    left = max(0, len(lines) - keep) if keep else 0
-    return [line_masked(line) for line in lines[left:]], left
-
-
-def scrub(s):
-    return "\n".join(scrub_lines(s)[0])
-
-
-def scrub_text(text):
-    """The whole text scrubbed, every line and line break kept: what the fuzz compares with the Go scrub."""
-    return "".join(line_masked(line) for line in masked(text).splitlines(keepends=True))
+def scrub(text):
+    """The text scrubbed, every line and line break kept: the secret, token and key-value patterns on the whole text,
+    in the Go scrub's order, then the emails and hosts of each line, then each run of non-space characters still
+    over WORD_MAX as [...]."""
+    text = PAIRS.sub(r"\1\2<redacted>", TOKENS.sub("<redacted>", redact(text or "")))
+    text = "".join(HOST_RUN.sub(host, emails(line)) for line in text.splitlines(keepends=True))
+    return WORD.sub(capped, text)
 
 
 def serve(stdin, stdout):
@@ -235,12 +261,16 @@ def serve(stdin, stdout):
         if len(head) < 4:
             return
         text = stdin.read(int.from_bytes(head, "big")).decode("utf-8", "surrogateescape")
-        out = scrub_text(text).encode("utf-8", "surrogateescape")
+        out = scrub(text).encode("utf-8", "surrogateescape")
         stdout.write(len(out).to_bytes(4, "big") + out)
         stdout.flush()
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] != ["--serve"]:
-        sys.exit("usage: scrub.py --serve")
-    serve(sys.stdin.buffer, sys.stdout.buffer)
+    if sys.argv[1:] == ["--serve"]:
+        serve(sys.stdin.buffer, sys.stdout.buffer)
+    elif sys.argv[1:] == ["--patterns"]:
+        json.dump({"redact": REDACT_GO, "tokens": TOKENS_GO, "pairs": [PAIRS_GO], "email": [EMAIL_GO], "host": [HOST_GO]},
+                  sys.stdout)
+    else:
+        sys.exit("usage: scrub.py --serve | --patterns")

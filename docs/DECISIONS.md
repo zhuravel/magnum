@@ -23004,43 +23004,60 @@ skill versions); people add theirs to the sections before it, at the end of the 
   and no second opinion before the change). No new dependencies.
 
 - **The improvement loop's evidence scrub masks every byte the factory's Go scrub masks: it drops no word before its
-  masks, and a Go fuzz holds it to the Go scrub** (2026-11-10, R54). evidence.sh's Python copy of `runtime.Scrub`
-  after `execx.Redact` turned a word over 2,000 characters into `[...]` before its masks, for speed, keeping only a
-  key the word ended with. A secret that starts in such a word or right after it and goes on past it then showed where
-  the Go scrub masks it: the rest of a quoted value whose quote was in the word, a private key whose `-----BEGIN`
-  ended the word or whose header was glued to a long body, the value of a key that ended the word before ` :` or
-  ` =`, and the token after a glued `authorization:Bearer` or after `Authorization:` with a word character before it
-  (Go's pattern needs no word boundary there). Python's engine also parted from Go's on any text: its `\s` takes the
-  vertical tab, which Go's `\S` takes, and its ASCII `(?i)` folds neither `s` to the long s nor `k` to the Kelvin
-  sign, as Go's does.
-  - The scrub moves to `scripts/scrub.py`, which evidence.sh loads. Each pattern is still the Go one word for word
-    (the selftest checks it, now with no `$`-to-`\Z` mapping), and its `go()` compiles a pattern with Go's meaning:
-    Go's `\s` and `\S`, `$` as the end of the text, and the two folds of `(?i)`.
+  masks, and a Go test and fuzz hold it to the Go scrub** (2026-11-10, R54). evidence.sh's Python copy of
+  `runtime.Scrub` after `execx.Redact` turned a word over 2,000 characters into `[...]` before its masks, for speed,
+  keeping only a key the word ended with. A secret that starts in such a word or right after it and goes on past it
+  then showed where the Go scrub masks it: the rest of a quoted value whose quote was in the word, a private key
+  whose `-----BEGIN` ended the word or whose header was glued to a long body, the value of a key that ended the word
+  before ` :` or ` =`, and the token after a glued `authorization:Bearer` or after `Authorization:` with a word
+  character before it (Go's pattern needs no word boundary there). Python's engine also parted from Go's on any text:
+  its `\s` takes the vertical tab, which Go's `\S` takes, and its ASCII `(?i)` folds neither `s` to the long s nor `k`
+  to the Kelvin sign, as Go's does. And evidence.sh stripped a note's end and cut a wait's words at their first `(`
+  or `:` before the scrub, which can part a value from its key.
+  - The scrub moves to `scripts/scrub.py`. Its pattern lists are the Go ones word for word, and its `go()` compiles a
+    pattern with Go's meaning: Go's `\s` and `\S`, `$` as the end of the text, and the two folds of `(?i)`.
   - Nothing is dropped or cut before the masks. Python backtracks where RE2 does not in three patterns, and each keeps
     its matches: the JWT search goes on from the end of a run of token characters when it fails at an `eyJ` (every
     later `eyJ` of the run fails as it did), the email search tries only a run's start after the place it starts,
-    and the host pattern runs on each run of host characters, a run over 253 masked whole: the one place the port
-    masks more than Go, in the last pass, so no pass after it loses a match. The slowest text at the 1 MiB cap is
-    still one line of 253-character dotted words, 5 s; 1 MiB of `eyJ` takes 0.05 s. A line is cut to 400
-    characters only when shown, after its masks.
-  - `FuzzEvidenceScrubMasksEveryByteScrubMasks` (`internal/factory/runtime`, beside the scrub it holds the port to:
-    Go builds no package under `.claude`) feeds a text to `Scrub` and to `scrub.py --serve`. A replay of Scrub's
-    passes, checked equal to Scrub's output, says which bytes of the text Scrub kept, and the fuzz fails when a piece
-    of the port's output between its masks stands on no kept byte. Its 23 seeds (R54's shapes, the engine's
-    differences, a sample of each pattern, the texts Python backtracks on) run in `make test` in under a second; it
-    skips without python3, and landing.md says to fuzz it for a few minutes after a change to either scrub.
+    and the host pattern runs on each run of host characters, a run over 253 masked whole, in the last pass. Redact's
+    four patterns run as merged searches: the JWT one apart, and the private key's header apart from its body, which
+    is searched only for a header that wins. A JWT or a body found before is reused, so that no text is searched
+    again to its end when another search's match takes in what one found (a GitHub token around each `eyJ` of a
+    megabyte of them took 48 s, a JWT that takes in each `-----BEGIN` of keys with no END 74 s; now 0.11 s and
+    0.06 s). After every mask, a run of non-space characters still over 2,000 shows as `[...]`, so a long minified
+    JSON shows no quoted secret (the Go key-value pattern misses JSON-quoted keys). The slowest text measured at the
+    1 MiB cap is one line of 253-character dotted words, 4.8 s; 1 MiB of `eyJ` takes 0.04 s.
+  - evidence.sh scrubs each note through `scrub.py --serve` in a process of its own, with a time limit
+    (`MAGNUM_SCRUB_TIMEOUT`, 30 s): a note past it is left out, "(notes.md took too long to scrub: left out)", and a
+    slow path nobody found yet costs one note at most. It scrubs before it strips a note or cuts a wait's words, and
+    then cuts the note to its last 80 lines and each line to 400 characters. The factory's own words (holds, waits)
+    are scrubbed in its process.
+  - `TestEvidenceScrubHoldsTheGoScrubsPatterns` (`internal/factory/runtime`, beside the scrub it holds the port to:
+    Go builds no package under `.claude`) checks scrub.py's lists (`scrub.py --patterns`) against execx's
+    `secretPattern`, read from its source, and the Go scrub's own patterns.
+    `FuzzEvidenceScrubMasksEveryByteScrubMasks` feeds a text to `Scrub` and to `scrub.py --serve`. A replay of Scrub's passes, its Redact pattern compiled from
+    execx's source and its output checked equal to Scrub's, says which bytes Scrub kept. On a text with no long run
+    the fuzz wants the port's output to be Scrub's; on the others it fails when a piece of the port's output between
+    its masks stands on no kept byte. Its 23 seeds (R54's shapes, the engine's differences, a sample of each pattern,
+    the texts Python backtracks on) run in `make test` in under a second; both skip without python3, and landing.md
+    says to fuzz it for a few minutes after a change to either scrub.
   Rejected: keeping the quote and `-----BEGIN` characters of a dropped word and a wider kept key (the fix R54
   suggested). A dropped word changes what every pass after it sees, kept parts or not: kept at the end of a long
   `ghp_` word, `authorization:` masks the next word as its token, where Go's Redact takes `authorization` into the
-  GitHub token and its key-value pass then masks the value after `password=`, which the port would show. Tests, each failing
-  first on the old scrub: 13 of the fuzz's seeds (the R54 shapes, the vertical tab, the long s and the Kelvin sign);
-  selftest.sh's three R54 checks on task 19's notes, each marker on the line after its long word so that the
-  400-character cut cannot hide it, and its pattern check against scrub.py; its dotted-line check now expects the
-  line masked as a host. Seven mutations of scrub.py (the JWT search on from the word's end, the email search
-  without its first try, host runs without the folded runes, Python's `$`, Python's `\s`, no folds, a word dropped)
-  each fail a seed. The fuzz ran 446,870 texts and a grammar of keys, separators, quotes, markers and long words
-  138,000 more: none showed a byte Scrub masked, and the port's output equaled Scrub's wherever no host run was
-  over 253 characters. No new dependencies.
+  GitHub token and its key-value pass then masks the value after `password=`, which the port would show. Also
+  rejected: a copy of execx's pattern in the test (a new pattern there left the seeds green), a check that each Go
+  pattern stands somewhere in scrub.py (a comment passed it), and a time limit inside the scrub's process (a long
+  match runs in the regex engine's C code). Tests, each failing first on the old scrub: 13 of the fuzz's seeds (the
+  R54 shapes, the vertical tab, the long s and the Kelvin sign); selftest.sh's three R54 checks on task 19's notes,
+  each marker on the line after its long word so that the 400-character cut cannot hide it, with task 19's masked
+  first line and no fallback line; the speed case with both megabyte notes (118 s before, 1 s after), task 13's eyJ
+  and task 20's tokens as `[...]`; a note's trailing vertical tab after `Authorization: Bearer` and a wait's quoted
+  value cut at its `(` masked; a note left out past the time limit. A made-up `npm_` pattern added to execx's
+  `secretPattern` fails `make test` in the pattern test. Seven mutations of scrub.py (the JWT search on from the
+  word's end, the email search without its first try, host runs without the folded runes, Python's `$`, Python's
+  `\s`, no folds, a word dropped) each fail a seed. The fuzz ran 446,870 texts and a grammar of keys, separators,
+  quotes, markers and long words 138,000 more: none showed a byte Scrub masked, and the port's output equaled Scrub's
+  wherever no host run was over 253 characters. No new dependencies.
 
 ## Learned rules
 

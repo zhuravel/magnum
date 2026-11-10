@@ -16,7 +16,8 @@
 # With a factory registry, evidence.md ends with the factory's tasks, the PRs they published, their local reviews,
 # their waits and failures, its holds and alerts, the time per stage, the waits on you by cause, the take rate of the
 # recommended answers by role, what they asked of the operator, and the liaison's notes (each task folder's notes.md,
-# scrubbed).
+# scrubbed by scrub.py in a process of its own, a note whose scrub takes over MAGNUM_SCRUB_TIMEOUT seconds, default
+# 30, left out).
 # It reads the registries with sqlite3 -readonly and never writes to them.
 set -euo pipefail
 
@@ -798,10 +799,12 @@ def sql(q):
 
 # The scrub the factory runs before it keeps text (internal/factory/runtime/scrub.go, after execx.Redact), in scrub.py
 # beside this script: Go's patterns word for word, with Go's meaning, so that it masks every byte the Go scrub masks.
-# Its docstring says how it stays fast without dropping text first; selftest.sh and the Go fuzz
-# FuzzEvidenceScrubMasksEveryByteScrubMasks hold it to the Go scrub.
-SCRUB = runpy.run_path(scrub_py, run_name="scrub")
-scrub, scrub_lines = SCRUB["scrub"], SCRUB["scrub_lines"]
+# Its docstring says how it stays fast without dropping text first; the Go test and fuzz beside scrub.go hold it to
+# the Go scrub. It runs here on the factory's own words (holds, waits), and each note goes through
+# scrub.py --serve, the fuzz's own entry, in a process of its own with a time limit. Every text is scrubbed whole
+# before anything strips or cuts it.
+scrub = runpy.run_path(scrub_py, run_name="scrub")["scrub"]
+SCRUB_TIMEOUT = float(os.environ.get("MAGNUM_SCRUB_TIMEOUT") or 30)
 
 
 def clip(s, n):
@@ -875,9 +878,10 @@ def cause(what):
         return "questions"
     if what.startswith("ready to push"):
         return "ready to push"
+    what = scrub(what)
     cut = [i for i in (what.find("("), what.find(":")) if i > 0]
     head = what[: min(cut)].rstrip() if cut else what
-    return clip(re.sub(r"\d+", "N", scrub(head)), 80) or "-"
+    return clip(re.sub(r"\d+", "N", head), 80) or "-"
 
 
 print("\n## Factory waits on you by cause\n")
@@ -967,6 +971,22 @@ cut = datetime.strptime(fsince, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.ut
 
 NOT_PLAIN, UNREADABLE, OVER = ("(notes.md is not a plain file: left out)", "(notes.md cannot be read: left out)",
                                "(notes.md is over 1 MiB: left out)")
+SLOW, UNSCRUBBED = "(notes.md took too long to scrub: left out)", "(notes.md could not be scrubbed: left out)"
+
+
+def scrubbed(text):
+    """(text, note) of a note through scrub.py --serve, in a process of its own: the text scrubbed, or why it is left
+    out, when the scrub takes over SCRUB_TIMEOUT seconds or fails."""
+    data = text.encode("utf-8", "surrogateescape")
+    try:
+        res = subprocess.run([sys.executable, "-I", scrub_py, "--serve"], input=len(data).to_bytes(4, "big") + data,
+                             capture_output=True, timeout=SCRUB_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return None, SLOW
+    out = res.stdout
+    if res.returncode or len(out) < 4 or int.from_bytes(out[:4], "big") != len(out) - 4:
+        return None, UNSCRUBBED
+    return out[4:].decode("utf-8", "replace"), None
 
 
 def notes(folder):
@@ -1016,13 +1036,16 @@ for name in names:
     task = tasks.get(int(name), {})
     print("\n### Task %s (%s, %s)\n" % (name, task.get("jira_key") or "task " + name, task.get("repo") or "-"))
     shown += 1
+    if not note:
+        text, note = scrubbed(text)
     if note:
         print(note)
         continue
-    lines, left = scrub_lines(text.rstrip(), NOTES_LINES)
+    lines = text.rstrip().splitlines()
+    left = max(0, len(lines) - NOTES_LINES)
     if left:
         print("(%d earlier lines left out)\n" % left)
-    for line in lines:
+    for line in lines[left:]:
         line = line.rstrip()[:400]
         print("> " + line if line else ">")
 if not shown:

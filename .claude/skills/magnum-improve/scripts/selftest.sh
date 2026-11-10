@@ -607,7 +607,8 @@ insert into task_spans (task_id, to_state, stage, waits_who, waits_what, on_you,
   (8, 'needs_you', 'judge', 'you', '3 questions before judge goes on', 1, '2026-10-11T09:20:00Z'),
   (8, 'active', 'local_review', '', '', 0, '2026-10-11T09:35:00Z'),
   (8, 'needs_you', 'local_review', 'you', 'round 1 of the local review left 1 tracked change in the copy (Gemfile.lock)', 1,
-   '2026-10-11T09:45:00Z');
+   '2026-10-11T09:45:00Z'),
+  (18, 'needs_you', 'probe', 'you', 'stuck on password="a b(c d"', 1, '2026-10-11T10:40:00Z');
 insert into questions (task_id, raised_by, state, recommended, took_recommendation, flag, asked_at, answered_at) values
   (7, 'fx-judge', 'answered', 0, 1, '', '2026-10-11T09:20:00Z', '2026-10-11T09:25:00Z'),
   (7, 'fx-judge', 'answered', 1, 1, '', '2026-10-11T09:20:00Z', '2026-10-11T09:25:00Z'),
@@ -710,7 +711,13 @@ print(X + ".password :\nR54-SPACED-COLON")
 print(X + ".token =\nR54-SPACED-EQUALS")
 print(X + "authorization:Bearer\nR54-GLUED-BEARER")
 print(X + "authorization: Bearer\nR54-NO-BOUNDARY")
+print("- Authorization: Bearer \v")
 PYX
+# Tasks 20 and 21's notes are a megabyte each of what made the first exact scrub search again to the text's end: a
+# GitHub token around each eyJ, and a JWT that takes in each -----BEGIN of keys with no END.
+mkdir -p "$ev/factory-tasks/20" "$ev/factory-tasks/21"
+python3 -c 'print("- " + "ghp_aeyJ-" * 116000 + ".aaaaaaaaaaaa.aaaaaaaaaaaa")' >"$ev/factory-tasks/20/notes.md"
+python3 -c 'print("- " + "eyJaaaaaaaaaaa.aaaaaaaaaaa.aaaaaaaaaaa-----BEGIN PRIVATE KEY----- " * 15800)' >"$ev/factory-tasks/21/notes.md"
 started=$SECONDS
 MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$fdb MAGNUM_FACTORY_TASKS=$ev/factory-tasks \
     run "$scripts/evidence.sh" 2026-10-01T00:00:00Z "$ev/fout"
@@ -821,36 +828,11 @@ TZ=Asia/Tokyo MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_
     fail "the report directories since a UTC since, in Asia/Tokyo: $(tr '\n' ';' <"$ev/f6out/reports.txt") / $(tr '\n' ';' <"$ev/f6out/factory-reports.txt")"
 ok "evidence.sh lists the report directories since its UTC since in any time zone"
 
-# 18. The scrub of the notes is the factory's own: every pattern of execx.Redact and runtime.Scrub stands in
-#     scrub.py, which evidence.sh loads, word for word (its go() compiles them with Go's meaning), and no sample of
-#     them is left in evidence.md. The first half reads only the backtick literals inside regexp.MustCompile( calls
-#     of the two Go files, so a pattern written another way escapes it, and a pattern that stands only in a comment of
-#     scrub.py passes it; the Go fuzz FuzzEvidenceScrubMasksEveryByteScrubMasks (internal/factory/runtime) checks
-#     what the patterns mask.
-#     Only the samples pin how the patterns are applied: their order, their replacements and on what text (the whole
-#     text, so that a value on the next line is masked as the Go scrub masks it).
-repo_root=$(cd "$here/../../../.." && pwd)
-run python3 - "$repo_root/internal/execx/execx.go" "$repo_root/internal/factory/runtime/scrub.go" "$scripts/scrub.py" <<'PY'
-import re, sys
-
-*gos, port = sys.argv[1:]
-text = open(port).read()
-pats = []
-for g in gos:
-    src = open(g).read()
-    for m in re.finditer(r"regexp\.MustCompile\(", src):
-        i, depth, raw = m.end(), 1, False
-        while depth:
-            c = src[i]
-            raw = not raw if c == "`" else raw
-            depth += 0 if raw else (c == "(") - (c == ")")
-            i += 1
-        pats += re.findall(r"`([^`]*)`", src[m.end():i])
-missing = [p for p in pats if p not in text]
-print("%d patterns of the Go scrub, missing from scrub.py: %s" % (len(pats), missing))
-sys.exit(1 if len(pats) < 13 or missing else 0)
-PY
-[[ $rc == 0 ]] || fail "scrub.py holds every pattern of the factory's scrub"
+# 18. The scrub of the notes is the factory's own: no sample of its patterns is left in evidence.md. That scrub.py's
+#     pattern lists are the Go scrub's word for word is a Go test (TestEvidenceScrubHoldsTheGoScrubsPatterns in
+#     internal/factory/runtime, which reads execx's from its source), and the Go fuzz
+#     FuzzEvidenceScrubMasksEveryByteScrubMasks there checks what they mask; only the samples pin how evidence.sh
+#     applies them: on the whole text, so that a value on the next line is masked as the Go scrub masks it.
 for leak in "${leaks[@]}"; do
     ! grep -Fq -- "$leak" "$ev/fout/evidence.md" || fail "the notes' sample $leak is scrubbed: $(grep -F -- "$leak" "$ev/fout/evidence.md" | cut -c1-200)"
 done
@@ -859,14 +841,20 @@ grep -A2 -Fx '### Task 9 (task 9, -)' "$ev/fout/evidence.md" | grep -Fxq '(1 ear
     fail "task 9's notes are listed from the value of the key cut away: $(grep -A6 -Fx '### Task 9 (task 9, -)' "$ev/fout/evidence.md" | cut -c1-120 | tr '\n' ';')"
 ok "evidence.sh scrubs the notes with every pattern of the factory's scrub, and no sample of them is left"
 
-# 19. A long dotted line and a long run of eyJ, which Python's regex engine (unlike Go's) backtracks on for minutes,
-#     are scrubbed in seconds with no word dropped first: the dotted word that fills the line is a run of host
-#     characters longer than a host name, masked whole, and the eyJ, no secret, shows cut to 400 characters.
-[[ $run1_secs -lt 20 ]] || fail "evidence.sh with a 20,000-character dotted line and 600 KB of eyJ in the notes took ${run1_secs}s"
+# 19. Long texts that Python's regex engine (unlike Go's) backtracks on for minutes, or that made the first exact
+#     scrub search again to the text's end, are scrubbed in seconds with no word dropped first: a dotted line of
+#     20,000 characters (a run of host characters longer than a host name, masked whole), 600 KB of eyJ, a megabyte
+#     of GitHub tokens around eyJ and one of JWTs that take in a -----BEGIN each. A run of non-space characters still
+#     over 2,000 after the masks shows as [...].
+tsect() { sed -n "/^### Task $1 /,/^### /p" "$ev/fout/evidence.md"; }
+[[ $run1_secs -lt 20 ]] ||
+    fail "evidence.sh with a 20,000-character dotted line, 600 KB of eyJ and two crafted 1 MB notes took ${run1_secs}s"
 grep -Fxq '> - <host>' "$ev/fout/evidence.md" && ! grep -q '^> - a\.a\.' "$ev/fout/evidence.md" &&
-    grep -A2 -Fx '### Task 13 (task 13, -)' "$ev/fout/evidence.md" | grep -Fxq "> - $(printf 'eyJ%.0s' $(seq 1 132))ey" ||
-    fail "the long dotted line is masked as a host, the eyJ cut to 400 characters: $(grep -c '^> - a\.a\.' "$ev/fout/evidence.md") $(grep -A2 -Fx '### Task 13 (task 13, -)' "$ev/fout/evidence.md" | cut -c1-80 | tr '\n' ';')"
-ok "evidence.sh scrubs a 20,000-character dotted line and 600 KB of eyJ in the notes in ${run1_secs}s"
+    tsect 13 | grep -Fxq '> - [...]' && tsect 20 | grep -Fxq '> - [...]' &&
+    tsect 21 | grep -q '^> - <redacted> PRIVATE KEY----- <redacted> PRIVATE KEY----- ' &&
+    ! grep -Fq 'took too long to scrub' "$ev/fout/evidence.md" ||
+    fail "the long texts are scrubbed: $(grep -c '^> - a\.a\.' "$ev/fout/evidence.md") $(tsect 13 | cut -c1-80 | tr '\n' ';') $(tsect 20 | cut -c1-80 | tr '\n' ';') $(tsect 21 | cut -c1-80 | tr '\n' ';')"
+ok "evidence.sh scrubs a 20,000-character dotted line, 600 KB of eyJ and two crafted 1 MB notes in ${run1_secs}s"
 
 # 20. The notes are read only from a plain notes.md of 1 MiB at most, in a task folder that is no link and is named
 #     with ASCII digits.
@@ -944,6 +932,28 @@ ok "evidence.sh masks the value of a key that ends a word over 2,000 characters,
 ! grep -Eq 'R54-GLUED-BEARER|R54-NO-BOUNDARY' "$f_md" ||
     fail "the token of an authorization: that ends a long word is masked: $(r54 'R54-GLUED-BEARER|R54-NO-BOUNDARY')"
 ok "evidence.sh masks the token of authorization:Bearer glued at the end of a word over 2,000 characters"
+tsect 19 | grep -Fxq '> - password: <redacted>' && ! grep -Fq "(the factory's stage times" "$f_md" ||
+    fail "task 19's notes are scrubbed, not left to evidence.sh's fallback line: $(tsect 19 | cut -c1-120 | tr '\n' ';')"
+ok "evidence.sh scrubs task 19's notes whole, with no fallback line"
+
+# 26. The scrub runs before anything cuts the text: a note's trailing characters that Go's \S takes (a vertical tab
+#     after "Authorization: Bearer ") stay for the masks, and a wait's cause is cut at its first ( or : only after its
+#     quoted value is masked.
+tsect 19 | grep -Fxq '> - Authorization: <redacted>' ||
+    fail "a note is scrubbed before its trailing characters are stripped: $(tsect 19 | tail -3 | tr '\n' ';')"
+grep -q '^| stuck on password=<redacted> | probe | 1 | 1 | ' <<<"$frows" && ! grep -Fq 'password=<redacted> b' "$f_md" ||
+    fail "a wait's cause is scrubbed before it is cut: $(fsect 'Factory waits on you' "$f_md")"
+ok "evidence.sh scrubs a note before it strips it, and a wait's words before it cuts them"
+
+# 27. Each note is scrubbed in a process of its own with a time limit (MAGNUM_SCRUB_TIMEOUT, seconds): past it, the
+#     note is left out with a line that says so, and none of its text shows.
+MAGNUM_SCRUB_TIMEOUT=0.001 MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$fdb \
+    MAGNUM_FACTORY_TASKS=$ev/factory-tasks run "$scripts/evidence.sh" 2026-10-01T00:00:00Z "$ev/tout"
+t_md=$ev/tout/evidence.md
+[[ $rc == 0 ]] && grep -A2 -Fx '### Task 7 (PR-12345, example/app)' "$t_md" | grep -Fxq '(notes.md took too long to scrub: left out)' &&
+    ! grep -Eq 'filler note|R54-|^> ' "$t_md" ||
+    fail "a note past the time limit is left out (rc $rc): $(fsect 'Factory liaison notes' "$t_md" | cut -c1-300)"
+ok "evidence.sh leaves out a note whose scrub takes too long, and says so"
 
 
 echo "selftest: $checks checks passed"
