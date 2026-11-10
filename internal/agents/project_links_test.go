@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -171,5 +172,66 @@ func TestAClaudeDirectoryBelowTheRootIsClaudesProjectConfig(t *testing.T) {
 		if !slices.Contains(d.Args, ":(top,icase,glob)**/.claude/**") {
 			t.Fatalf("git %q: want every .claude/ compared", d.Args)
 		}
+	}
+}
+
+// A link of the agents' config below the root leads anywhere in the
+// checkout too: an instruction file that links elsewhere
+// (app/CLAUDE.md -> ../docs/app.md, which Claude loads once it reads a file
+// in app/), a link under a .claude/ below the root
+// (packages/web/.claude/skills -> ../../../shared/skills), and a link under
+// the directory such a link leads to. The session finds them in the
+// checkout's index (git ls-files of the kind's paths in any directory, one
+// call), compares their targets as their labels, and declines when the PR
+// changes one.
+func TestALinkOfTheAgentsConfigBelowTheRootIsComparedAsItsTarget(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		links   map[string]string
+		changed string
+		label   string
+		specs   []string
+	}{
+		{"an instruction file", map[string]string{"app/CLAUDE.md": "../docs/app.md"}, "docs/app.md", "CLAUDE.md",
+			[]string{":(top,literal,icase)docs/app.md"}},
+		{"a skill directory", map[string]string{"packages/web/.claude/skills": "../../../shared/skills", "shared/skills/lint": "../../tools/lint"},
+			"tools/lint/SKILL.md", ".claude/", []string{":(top,literal,icase)shared/skills", ":(top,literal,icase)tools/lint"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e, dir, ws := projectEnv(t, map[string]string{"docs/app.md": "x\n", "shared/skills/x/SKILL.md": "x\n", "tools/lint/SKILL.md": "y\n",
+				"app/x.rb": "x\n", "packages/web/x.ts": "x\n"}, []string{c.changed}, nil)
+			var index []string
+			for name, target := range c.links {
+				if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
+					t.Fatal(err)
+				}
+				if strings.HasPrefix(name, "app/") || strings.HasPrefix(name, "packages/") {
+					index = append(index, "120000 1111111111111111111111111111111111111111 0\t"+name+"\x00")
+				}
+			}
+			e.run.Rules = slices.Insert(e.run.Rules, 0, execx.Rule{Prefix: []string{"git", "-C", dir, "ls-files", "-s"},
+				Result: execx.Result{Stdout: []byte(strings.Join(index, ""))}})
+			if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], ""); err != nil {
+				t.Fatal(err)
+			}
+			if n, ok := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindClaude); !ok || !slices.Equal(n.Paths, []string{c.label}) {
+				raw, _, _ := e.st.GetKV(e.ctx, store.KVPRProject(e.pr.ID, KindClaude))
+				t.Fatalf("record %s: want a decline for %s", raw, c.label)
+			}
+			diffs := e.run.CallsWithPrefix("git", "-C", dir, "diff")
+			if len(diffs) == 0 {
+				t.Fatalf("no git diff: %v", e.run.Calls)
+			}
+			for _, d := range diffs {
+				for _, spec := range c.specs {
+					if !slices.Contains(d.Args, spec) {
+						t.Fatalf("git %q: want %s, a link's target, compared", d.Args, spec)
+					}
+				}
+			}
+		})
 	}
 }

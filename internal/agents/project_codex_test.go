@@ -71,6 +71,7 @@ func projectEnvIn(t *testing.T, files map[string]string, changed, untracked []st
 	e.run.Rules = append(e.run.Rules,
 		execx.Rule{Prefix: git("merge-base"), Result: execx.Result{Stdout: []byte(projectMergeBase + "\n")}},
 		execx.Rule{Prefix: git("diff"), Result: execx.Result{Stdout: nul(changed)}},
+		execx.Rule{Prefix: git("ls-files", "-s"), Result: execx.Result{}}, // no tracked links below the root
 		execx.Rule{Prefix: git("ls-files"), Result: execx.Result{Stdout: nul(untracked)}},
 		execx.Rule{Prefix: git("rev-parse", "--verify", "--quiet", "HEAD^{commit}"), Result: execx.Result{Stdout: []byte(projectHead + "\n")}},
 	)

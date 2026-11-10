@@ -241,9 +241,10 @@ type projectScope struct {
 // directory). A PR controls them, so when the files on disk there differ
 // from the merge base of HEAD and base (gitx.WorkTreeChanges: the PR's
 // commits, and files a round left there, untracked logs aside: logFile;
-// the paths in any case, onDisk, and what a link at the root or under a
-// project directory leads to; base is the default branch's for a stacked
-// PR, projectBase), or git cannot tell (a git that fails is a warning; a launch
+// the paths in any case, onDisk, and what a link at the root, under a
+// project directory or of the kind's paths below the root leads to,
+// trackedLinks; base is the default branch's for a stacked PR,
+// projectBase), or git cannot tell (a git that fails is a warning; a launch
 // without a base and a dir that is no git checkout, as the retro's and the
 // curation's are, never reach git and log at debug: errNoBase,
 // errNoCheckout), the session gets the kind's
@@ -278,7 +279,12 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 		ctx, cancel := context.WithTimeout(ctx, projectTimeout)
 		defer cancel()
 		g := gitx.New(m.d.Runner)
-		files, mb, err := m.projectChanges(ctx, g, dir, base, pc.logFile, disk.git)
+		var files []string
+		var mb string
+		err := m.trackedLinks(ctx, g, dir, base, pc, &disk)
+		if err == nil {
+			files, mb, err = m.projectChanges(ctx, g, dir, base, pc.logFile, disk.git)
+		}
 		changed := pc.changed(files, disk.links)
 		if disk.partial {
 			m.logAt(slog.LevelWarn, "agents: %s: more than %d entries to look through for links under %s, so the session leaves them out",
@@ -429,6 +435,63 @@ func (pc projectConfig) onDisk(dir string) (d diskPaths, present bool) {
 		d.git = append(append(d.git, found...), targets...)
 	}
 	return d, present
+}
+
+// trackedLinks adds to disk the links of pc's paths in any directory that
+// the checkout's index tracks (gitx.TrackedSymlinks, one git ls-files of
+// the kind's paths in any directory: an app/CLAUDE.md -> ../docs/app.md,
+// a packages/web/.claude/skills -> ../../../shared/skills), as onDisk adds
+// the root's (addLinks): Claude loads a CLAUDE.md or a .claude/skills/
+// below the root once it reads a file there, through the link. Nothing for
+// a kind without such paths, and no git where projectChanges asks none (no
+// runner, no base, no checkout: it answers for the launch). An untracked
+// link there is an untracked file the compare counts anyway.
+func (m *Manager) trackedLinks(ctx context.Context, g *gitx.Client, dir, base string, pc projectConfig, disk *diskPaths) error {
+	var specs []string
+	for _, p := range pc.paths {
+		specs = append(specs, p.anyDirSpecs()...)
+	}
+	if len(specs) == 0 || m.d.Runner == nil || base == "" || !inGitCheckout(dir) {
+		return nil
+	}
+	links, err := g.TrackedSymlinks(ctx, dir, specs...)
+	if err != nil {
+		return err
+	}
+	pc.addLinks(dir, disk, links)
+	return nil
+}
+
+// addLinks adds to d the target of each of links (paths relative to the
+// checkout dir's root) that is one of pc's paths and a symbolic link into
+// the checkout, labelled by that path, and the links under the directory
+// it leads to (linkWalk), as onDisk does for the root's entries.
+func (pc projectConfig) addLinks(dir string, d *diskPaths, links []string) {
+	if len(links) == 0 {
+		return
+	}
+	root, _ := filepath.EvalSymlinks(dir)
+	if root == "" {
+		root = dir
+	}
+	w := linkWalk{pc: pc, d: d, root: root, seen: map[string]bool{}, budget: maxLinkWalk}
+	for _, l := range links {
+		p, _, ok := pc.pathOf(l)
+		if !ok {
+			continue
+		}
+		full := filepath.Join(root, filepath.FromSlash(l))
+		t, ok := linkTarget(root, full)
+		if !ok {
+			continue
+		}
+		if w.add(t, p) {
+			d.git = append(d.git, t)
+		}
+		if fi, err := os.Stat(full); err == nil && fi.IsDir() {
+			d.git = append(d.git, w.walk([]string{t}, p)...)
+		}
+	}
 }
 
 // linkWalk finds the symbolic links under a checkout's project directories

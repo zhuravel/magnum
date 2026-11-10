@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -77,6 +78,39 @@ func (c *Client) Symlinks(ctx context.Context, dir, rev string) (map[string]stri
 			return nil, fmt.Errorf("gitx: %s: unexpected size of %s", k.label, oid)
 		}
 		out[paths[i]], data = string(rest[:size]), rest[size+1:]
+	}
+	return out, nil
+}
+
+// TrackedSymlinks are the symbolic links of dir's index that paths name
+// (pathspecs: from the top, in any case, a path taken literally or one of
+// AnyDir), as the checkout has them tracked: `git ls-files -s` of those
+// paths, each link's path from the top, in git's order; nil when there
+// are none. A session's checkout compares what such a link leads to, which
+// may lie anywhere in it (app/CLAUDE.md -> ../docs/app.md).
+func (c *Client) TrackedSymlinks(ctx context.Context, dir string, paths ...string) ([]string, error) {
+	specs, err := pathspecs(paths)
+	if err != nil {
+		return nil, err
+	}
+	res, err := c.git(ctx, dir, call{label: "ls-files -s"}, append([]string{"ls-files", "-s", "-z", "--"}, specs...)...)
+	if err != nil {
+		return nil, err
+	}
+	// Each entry is "<mode> SP <oid> SP <stage> TAB <path>" NUL.
+	var out []string
+	for rec := range strings.SplitSeq(string(res.Stdout), "\x00") {
+		if rec == "" {
+			continue
+		}
+		meta, file, ok := strings.Cut(rec, "\t")
+		f := strings.Fields(meta)
+		if !ok || len(f) != 3 || file == "" {
+			return nil, errors.New("gitx: ls-files -s: unexpected entry")
+		}
+		if f[0] == symlinkMode && !slices.Contains(out, file) {
+			out = append(out, file)
+		}
 	}
 	return out, nil
 }
