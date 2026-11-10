@@ -909,6 +909,13 @@ func DoneMarker(runID string) string
     DoneMarker is the line a shell role's line prints when its command finished,
     followed by the command's exit status ("<marker> 0").
 
+func ExactTarget(p string) string
+    ExactTarget is the target an import of the directory p gives: p alone,
+    with a slash at its end (MatchTarget). Claude Code loads no directory an
+    import names, nor anything under it, so a change there is none; a commit
+    that makes p a file or a link, or a path on the way to it a link, is,
+    which a match of the path against the target the other way round finds.
+
 func FixReplyLine(magnum string) string
     FixReplyLine is the line the fixer posts each of its replies through
     (RoleData.FixReplyCommand): `magnum fix-reply` of the daemon's binary
@@ -954,22 +961,25 @@ func ImportPaths(text string, limit int) (paths []string, more bool)
     `(?:^|\s)@((?:[^\s\\]|\\ )+)` in each text token marked (without GFM) gives,
     but in code spans and fenced blocks, and in an HTML block that starts with
     a comment, with its comments taken out; it cuts the path at its first #,
-    makes "\ " a space and trims it. ImportPaths reads an @ where a text token
-    may start or after a blank (the text's start, a blank, or a mark an inline
-    token starts or ends with: > ) ] [ * _ ` or an escaped one; not ( " or a
-    letter), in code too, up to the first blank a backslash does not escape
-    (JS's \s: U+FEFF is one, U+0085 is not). It gives that token as it is and
-    as Claude's pattern ends it (at a backslash no space follows), each without
-    its #fragment too, and, since a text token ends where another begins,
-    the path up to each mark that may begin or end an emphasis, a code span,
-    a link's text, an image or inline HTML (* _ ` < [ ] and ![; an underscore
-    inside a word is none, so @app_config gives no app), each with and without
-    the punctuation that may end a sentence after it and an escaped space at its
-    end. It reads on after such a mark for a further @, and reads the text again
-    with its HTML comments taken out. A home (~) or an absolute path is left
-    out: no commit's tree holds it, and Claude loads a file outside its working
-    directory only once the user approves the project's external imports,
-    which magnum never does.
+    makes "\ " a space and trims it. ImportPaths reads an @ where a text
+    token may start or after a blank (the text's start, a blank, or a mark
+    an inline token starts or ends with: > ) ] [ * _ ` or an escaped one;
+    not ( " or a letter), in code too, up to the first blank a backslash does
+    not escape (JS's \s: U+FEFF is one, U+0085 is not). It gives that token as
+    it is and as Claude's pattern ends it (at a backslash no space follows),
+    each without its #fragment too, and, since a text token ends where another
+    begins, the path up to each mark that may begin or end an emphasis,
+    a code span, a link's text, an image or inline HTML (* _ ` < [ ] and ![;
+    an underscore inside a word is none, so @app_config gives no app),
+    each with and without the punctuation that may end a sentence after it and
+    an escaped space at its end. It reads on after such a mark for a further @,
+    reads the text after a YAML frontmatter on its own (Claude strips one
+    before it lexes the rest, so an @ right after the closing --- imports),
+    and reads each again with its HTML comments taken out, where a cut starts
+    a path too (Claude reads a block that starts with a comment on its own).
+    A home (~) or an absolute path is left out: no commit's tree holds it,
+    and Claude loads a file outside its working directory only once the user
+    approves the project's external imports, which magnum never does.
 
 func JoinCodexHookProblems(problems []CodexHookProblem) string
     JoinCodexHookProblems says problems in one sentence without its final
@@ -1150,10 +1160,11 @@ func ProjectLinks(ctx context.Context, kind, dir string) (targets []string, part
     ProjectLinks are the targets, relative to the checkout dir's root, of the
     links among kind's paths at its root and under its project directories,
     and under a directory such a link leads to, and the files the instruction
-    files there import (addImports), as the disk has them (onDisk: what a
-    session in dir loaded through them), sorted; partial reports that the walk
-    stopped at maxLinkWalk steps, or as ctx ended, so one may be missing.
-    None for a kind magnum does not compare.
+    files there import (addImports; a directory one names as ExactTarget,
+    that path alone), as the disk has them (onDisk: what a session in dir loaded
+    through them), sorted; partial reports that the walk stopped at maxLinkWalk
+    steps, or as ctx ended, so one may be missing. None for a kind magnum does
+    not compare.
 
 func ProjectPaths(kind string) []string
     ProjectPaths are the paths, relative to the checkout's root, that kind
@@ -3591,7 +3602,9 @@ func MatchTarget(f, t string) TargetMatch
     folds ASCII alike. An element with a byte outside ASCII matches only one
     of the same bytes for sure; where it differs, the answer is MaybeUnder.
     The target "" (a link to the checkout's root, .claude/skills -> ..) covers
-    every path.
+    every path. An exact target (ExactTarget: a slash at its end) has no path
+    under it, its last element empty as no path's is; its path, and each on the
+    way to it, lies under it the other way round (MatchTarget(t, f)).
 
 type ThreadReply struct {
 	ID     int64  `json:"id"` // REST comment id

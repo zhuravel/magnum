@@ -18178,6 +18178,49 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAReloadCheckDoesNotDecideOnAFileListOfAnotherBase, TestTheLinksAnImportMayFoldToCountAgainstTheBudget,
   TestTheWalkReadsTheTreesFilesAsClaudeDoes and TestTheDispatchGatesReadTheHeadAgainOnceTheCheckoutBringsIt.
 
+- **The agents' config gate reads past a frontmatter, takes an import of a directory as that path alone, and
+  ends its link loops** (2026-11-11, after two reviews of the fourth round's fixes; supersedes in parts "The
+  agents' config gate reads imports as Claude's Markdown lexer ends them, ...", the day before: its rule
+  that a directory an import names loads what lies under it). Each finding was checked against the code
+  and Claude Code 2.1.322's own JS, and fixed test first.
+  - A frontmatter (P2). Claude strips a file's YAML frontmatter (`/^---\s*\n([\s\S]*?)---\s*\n?/`, after a
+    BOM; the closing `---` need not end its line) and lexes the rest, so `---@docs/evil.md` right after it
+    imports; `ImportPaths` saw a `-` before the `@`. It now also reads the text after a frontmatter on its
+    own.
+  - A comment that splits an import (P3). Claude takes the comments out of each HTML block that starts with
+    one, on its own; `ImportPaths` paired `<!--` with `-->` across the file, so an earlier `<!--` Claude
+    does not read as a comment (`Notes (<!--`) glued a character to the `@`. A cut now starts a path.
+  - A directory an import names (P2). Since the fourth round `ImportPaths` cuts paths in code too, so
+    `` `^.*@.*$` `` gave the root and a fenced `@config[:x]` gave `config/`: every PR, or every PR that
+    touched `config/`, would have waited for the operator, and the session left the config out at every
+    launch. Claude loads no directory an import names (its reader skips a target that is no file), so
+    such a target is now `agents.ExactTarget`: the path with a slash at its end, which nothing lies under
+    and which the path itself and each on the way to it match the other way round; the root is never one.
+    The engine no longer follows the links under it, and the session neither compares nor walks it.
+  - Loops and long paths (P2, P3). The engine's `dirsOf` built ever longer paths through a link back up
+    (`.claude/rules/back -> ..`), to the root, or two links into each other, and asked its context every
+    1024 paths (3m18s past a 60 s deadline): it now builds no path with a link at or under where it leads
+    or with a link the path was already built with (Claude's rules walk enters each directory once), none
+    longer than 4096 bytes, and counts a step per directory it looks up. The session's walk copied the
+    path Claude reads a directory by at each level of a chain of directory links (4,000 levels: 1.9 GB):
+    it enters no directory by a path longer than 4096 bytes, and keeps the way up as a chain. A link at a
+    path longer than 4096 bytes, which git checks out nowhere, no longer counts as a link outside ASCII
+    (a 4 MiB name beside 3,000 imports took 34 s per head).
+  - Memory (P2). `ImportPaths` copied a run with escaped spaces once per `@` in it, each copy kept by its
+    paths (31 `@` in 4 MiB kept 124 MiB): a run is now copied once.
+  - Tests the review's mutations survived (P3): the starts after a zero-width no-break space, a link, a
+    reference link, an emphasis's `_` and an escape, the cut at `[`, and the session's single read of a
+    file named many ways (now asserted whole). Its U+0085 mutation changed code no input reached (U+0085
+    is a cut first); a run that ends there fails the existing case.
+  Tests, failing first: TestImportPathsReadsTheTextAfterAFrontmatterAsClaudeCodeDoes,
+  TestASessionReadsAnImportAfterAFrontmatter, TestImportPathsStartsAPathWhereACommentWasCut,
+  TestImportPathsKeepsOneCopyOfARunWithEscapedSpaces, TestALinkLoopUnderTheClaudeDirectoryEndsTheEnginesWalk,
+  TestEachDirectoryTheWalkLooksUpIsAStep, TestAChainOfDirectoryLinksKeepsTheWalksMemorySmall,
+  TestAnImportOfADirectoryIsThatPathAlone, TestASessionTakesAnImportOfADirectoryAsThatPathAlone,
+  TestALinkLongerThanPathMaxStandsForNothing, and cases of
+  TestAutoApprovalRefusesAChangeToAFileTheInstructionsImport and
+  TestImportPathsGivesThePathClaudeCodesMarkdownEnds.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is
