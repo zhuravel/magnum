@@ -99,3 +99,24 @@ func TestMagnumThreadLoginsHasEveryPostingAndAppLogin(t *testing.T) {
 		t.Errorf("MagnumThreadLogins = %q, want the gh identity a watch posts as", got)
 	}
 }
+
+// A PR's own logins join magnum's: the identity it posts as (a gh pin of
+// `magnum review --as`, or one no longer declared, by its name) and its
+// former identities still declared, each once; a former identity no
+// longer declared stays out, as the engine leaves it out.
+func TestPRThreadLoginsAddThePRsOwnAndFormerIdentities(t *testing.T) {
+	cfg := commentConfig()
+	cfg.Identities = append(cfg.Identities, Identity{Name: "old-gh", Kind: "gh", Login: "zhuravel"})
+	all := cfg.MagnumThreadLogins()
+	got := cfg.PRThreadLogins("z", []string{"old-gh", "gone", "review-app"})
+	want := append(slices.Clone(all), "z", "zhuravel")
+	if !slices.Equal(got, want) {
+		t.Errorf("PRThreadLogins = %q, want %q", got, want)
+	}
+	if got := cfg.PRThreadLogins("undeclared", nil); !slices.Equal(got, append(slices.Clone(all), "undeclared")) {
+		t.Errorf("an undeclared identity: PRThreadLogins = %q", got)
+	}
+	if got := cfg.PRThreadLogins("review-app", nil); !slices.Equal(got, all) {
+		t.Errorf("the watch's identity: PRThreadLogins = %q, want %q", got, all)
+	}
+}

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/postreview"
@@ -41,8 +42,9 @@ var commentMint = []string{"gh", "api", "--method", "POST", "--include", "--host
 
 // commentHarness runs `magnum comment` against a fake GitHub: pull request
 // talkable/talkable#5 by alice, with rev-ann's thread (comments 11 and
-// 12), a thread magnum's review App started (31) and one a former
-// reviewer's App started (41); the conversation and the review requests
+// 12), a thread magnum's review App started (31), one a former
+// reviewer's App started (41) and one you started as zhuravel (51), and
+// no reviews; the conversation and the review requests
 // keep what the command writes, as GitHub would. The config has your gh
 // identity zhuravel, the App magnum reviews as and the watch's fixer App
 // (fix_identity fixer-app, login fixer-app[bot]); the registry is a file.
@@ -168,9 +170,14 @@ func (h *commentHarness) graphql(c execx.Cmd) (execx.Result, error) {
 			threadNode("PRRT_1", [3]string{"11", "rev-ann", "User"}, [3]string{"12", "alice", "User"}),
 			threadNode("PRRT_3", [3]string{"31", "review-app", "Bot"}),
 			threadNode("PRRT_4", [3]string{"41", "old-app", "Bot"}),
+			threadNode("PRRT_5", [3]string{"51", "zhuravel", "User"}),
 		}
 		return jsonResult(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
 			"reviewThreads": map[string]any{"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""}, "nodes": threads}}}}})
+	}
+	if strings.Contains(string(c.Stdin), "reviews(first:") {
+		return jsonResult(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+			"reviews": map[string]any{"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""}, "nodes": []any{}}}}}})
 	}
 	return jsonResult(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
 		"comments": map[string]any{"pageInfo": map[string]any{"hasPreviousPage": false, "startCursor": ""}, "nodes": append([]map[string]any{}, h.comments...)}}}}})
@@ -436,6 +443,95 @@ func TestCommentRefusesAThreadOfThePRsLastReviewer(t *testing.T) {
 	}
 }
 
+// A reply in a thread the PR's own identity or one of its former ones
+// started is refused, since the poll and the threads file take those
+// threads for magnum's: a PR pinned to your gh identity (magnum review
+// --as), or one whose watch moved from your gh identity to an App
+// (pr.N.former_identities). With neither, a thread you started by hand is
+// one the App may answer.
+func TestCommentRefusesAThreadOfThePRsOwnOrFormerIdentity(t *testing.T) {
+	for name, tc := range map[string]struct {
+		identity, former string
+		refused          bool
+	}{
+		"pinned to your gh identity": {identity: "zhuravel", refused: true},
+		"a former gh identity":       {identity: "review-app", former: `["zhuravel"]`, refused: true},
+		"neither":                    {identity: "review-app"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newCommentHarness(t, nil)
+			repo, err := h.st.UpsertRepo(t.Context(), store.Repo{NodeID: "R_tt", Owner: "talkable", Name: "talkable", Mode: store.RepoModePerPR})
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := h.st.UpsertPRFromGitHub(t.Context(), store.GitHubPR{RepoID: repo.ID, NodeID: "PR_5", Number: 5, URL: "https://github.com/talkable/talkable/pull/5",
+				HeadSHA: "abc1234def5678", AuthorLogin: new("alice"), GHState: store.GHOpen, InitialState: store.PRReviewed, Identity: tc.identity})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.former != "" {
+				if err := h.st.SetKV(t.Context(), engine.KVPRFormerIdentities(res.PR.ID), tc.former); err != nil {
+					t.Fatal(err)
+				}
+			}
+			code, got := h.exec("It is right.", "talkable/talkable#5", "--reply-to", "51", "--dry-run")
+			switch {
+			case tc.refused && (code != 2 || got["status"] != "invalid" || !strings.Contains(h.out.String(), "a thread magnum's review started (zhuravel)")):
+				t.Errorf("exit %d, stdout %s: want it refused", code, h.out)
+			case !tc.refused && (code != 0 || got["status"] != "dry_run"):
+				t.Errorf("exit %d, stdout %s: want it planned", code, h.out)
+			}
+		})
+	}
+}
+
+// GitHub showing the comment by another App than the identity's login (a
+// wrong login in the config) is exit 2, never 1, which would post it again,
+// and nothing more goes out. The post is still recorded, as a warning that
+// names the author GitHub showed; once the login names that App, the same
+// line finds the comment, goes on with the title and records the comment
+// once.
+func TestCommentRecordsAPostGitHubShowsByAnotherApp(t *testing.T) {
+	h := newCommentHarness(t, func(c *config.Config) { c.Identities[2].Login = "fixer-bot[bot]" })
+	if _, err := h.st.UpsertRepo(t.Context(), store.Repo{NodeID: "R_tt", Owner: "talkable", Name: "talkable", Mode: store.RepoModePerPR}); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"talkable/talkable#5", "--title", "Fix the order total"}
+	code, got := h.exec("Renamed.", args...)
+	if code != 2 || got["status"] != "invalid" || !strings.Contains(h.out.String(), "login of [[identity]] fixer-app is wrong; set it to fixer-app[bot]") ||
+		len(h.comments) != 1 || h.titleSends != 0 {
+		t.Fatalf("exit %d, stdout %s, %d comments, %d titles", code, h.out, len(h.comments), h.titleSends)
+	}
+	events := func() []store.Event {
+		evs, err := h.st.EventsBySubject(t.Context(), "pr:talkable/talkable#5", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.DeleteFunc(evs, func(e store.Event) bool { return e.Kind != "comment.posted" })
+	}
+	evs := events()
+	if len(evs) != 1 {
+		t.Fatalf("events = %+v, want the comment's", evs)
+	}
+	var d map[string]any
+	if err := json.Unmarshal(evs[0].Data, &d); err != nil {
+		t.Fatal(err)
+	}
+	if evs[0].Level != "warn" || d["author"] != "fixer-app[bot]" || d["login"] != "fixer-bot[bot]" || d["comment_id"] != float64(7001) ||
+		!strings.Contains(evs[0].Message, "GitHub shows it by fixer-app[bot]") {
+		t.Errorf("event %s %q, data %v", evs[0].Level, evs[0].Message, d)
+	}
+
+	h.c.Config.Identities[2].Login = "fixer-app[bot]"
+	code, got = h.exec("Renamed.", args...)
+	if c, _ := got["comment"].(map[string]any); code != 0 || got["status"] != "posted" || c["already"] != true || len(h.comments) != 1 || h.titleSends != 1 {
+		t.Fatalf("with the login set: exit %d, stdout %v, %d comments, %d titles", code, got, len(h.comments), h.titleSends)
+	}
+	if n := len(events()); n != 2 {
+		t.Errorf("%d events, want the comment's and the title's", n)
+	}
+}
+
 // A line the caller got wrong exits 2 with the JSON's problems: a flag it
 // does not have, a comment id that is no number, no argument or two, and
 // no comment on stdin where one is needed.
@@ -483,9 +579,16 @@ func TestCommentHelpSaysWhatAsWhomAndWhatItRefuses(t *testing.T) {
 	}
 	help := strings.Join(strings.Fields(out.String()), " ")
 	for _, want := range []string{"fix_identity", "never as your own login", "<!-- magnum:comment -->", "--dry-run", "token_repositories",
-		"--reply-to", "--request-review", "--title", "standard input", "a review agent's pane", "comment.posted"} {
+		"--reply-to", "--request-review", "--title", "standard input", "a review agent's pane", "comment.posted",
+		// Where the token goes: the App's own gh config, on a dry run too.
+		"writes it only to the App's own gh config", "even on --dry-run",
+		// The exact form that answers a review body or a comment.
+		"the remark's own link alone on the next line", "#pullrequestreview-N", "#issuecomment-N"} {
 		if !strings.Contains(help, want) {
 			t.Errorf("help lacks %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(help, "never prints, logs or stores") {
+		t.Errorf("help says the token is never stored:\n%s", out)
 	}
 }

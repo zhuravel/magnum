@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zhuravel/magnum/internal/app"
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/github"
@@ -66,7 +67,9 @@ const commentLong = "Post on a pull request of a watched repository as the watch
 	"reviewed already. With only --title or --request-review the comment may be left out. The pull request is " +
 	"owner/repo#N or its URL.\n\n" +
 	"magnum mints the App's installation token as it does for the fixer's panes, narrowed to the identity's " +
-	"token_repositories, and never prints, logs or stores it. It refuses a repository magnum does not watch, a " +
+	"token_repositories, and writes it only to the App's own gh config (hosts.yml in gh/<identity> under magnum's " +
+	"state dir, mode 0600, the one the fixer's panes read), even on --dry-run: it never reaches the command line, " +
+	"stdout, stderr, the events or the registry. It refuses a repository magnum does not watch, a " +
 	"watch without fix_identity, a fix_identity that is your gh identity or the App magnum reviews as, and a " +
 	"repository outside the App's token_repositories, each naming the key to set; a comment that is empty, carries " +
 	"a <!-- magnum: marker, names a local path or is longer than GitHub takes; a reply to a comment that is not this " +
@@ -75,16 +78,19 @@ const commentLong = "Post on a pull request of a watched repository as the watch
 	"or the pull request's author; and a review agent's pane or a factory agent's.\n\n" +
 	"It appends a blank line and <!-- magnum:comment -->, by which magnum knows the comment as its own: never your " +
 	"word, never a reply that starts a review round or a fix loop; a reviewer's answer after it counts as usual. To " +
-	"answer a review body or a comment on the conversation, put its link on the first line under a quote of it: " +
-	"magnum then counts it answered. The same comment already there with the marker and nobody else's comment " +
-	"after it gets nothing more, a title already so is not sent again and a login already asked is skipped, so after " +
+	"answer a review body or a comment on the conversation, start with a quote of its first line (\"> …\"), put the " +
+	"remark's own link alone on the next line (its URL, ending in #pullrequestreview-N or #issuecomment-N, and " +
+	"nothing else on that line), then a blank line and the answer: magnum then counts it answered. The same comment " +
+	"already there with the marker and nobody else's comment after it (on the conversation, nobody else's review " +
+	"either) gets nothing more, a title already so is not sent again and a login already asked is skipped, so after " +
 	"an unclear failure run the same line with the same text again. Each post is recorded in magnum's registry " +
 	"(comment.posted: the pull request, the App, the kind of post and its link, never the text). --dry-run checks " +
 	"everything as the App, prints what it would post and as whom, and posts nothing.\n\n" +
 	"It prints one JSON object on stdout (status: posted, already_posted, dry_run, invalid or error, with each part " +
-	"and the problems) and one line on stderr. Exit 0: done (or, dry run, checked); 2: fix the comment or the line " +
-	"and run it again; 1: anything else, it could not confirm everything went out: run the same line with the same " +
-	"text again."
+	"and the problems) and one line on stderr. Exit 0: done (or, dry run, checked); 2: fix what the problems name " +
+	"(the comment, the line or the config) and run it again, and when GitHub shows the comment by another account " +
+	"than the App, do what the problem says; 1: anything else, it could not confirm everything went out: run the " +
+	"same line with the same text again."
 
 func newCommentCmd(c *Context) *cobra.Command {
 	var replyTo int64
@@ -209,8 +215,18 @@ func runComment(c *Context, f commentFlags, pos []string) int {
 			case errors.Is(err, store.ErrNotFound):
 			case err != nil:
 				return fail("read magnum's registry: %v", err)
-			case p.LastReviewLogin != nil && *p.LastReviewLogin != "":
-				o.MagnumLogins = append(o.MagnumLogins, *p.LastReviewLogin)
+			default:
+				// The PR's own logins, as the poll and the threads file
+				// take them for magnum's: its identity, its former ones,
+				// its last reviewer.
+				former, _, err := st.GetKV(ctx, engine.KVPRFormerIdentities(p.ID))
+				if err != nil {
+					return fail("read magnum's registry: %v", err)
+				}
+				o.MagnumLogins = c.Config.PRThreadLogins(p.Identity, engine.FormerIdentities(former))
+				if p.LastReviewLogin != nil && *p.LastReviewLogin != "" {
+					o.MagnumLogins = append(o.MagnumLogins, *p.LastReviewLogin)
+				}
 			}
 		}
 	}
@@ -257,6 +273,12 @@ func (r *commentRecorder) record(ctx context.Context, p postreview.Posted) {
 	if len(p.Reviewers) > 0 {
 		data["reviewers"] = p.Reviewers
 	}
+	level, as := "info", "as "+r.login
+	if p.Author != "" {
+		// GitHub shows the comment by someone else: the warning names whom.
+		data["author"] = p.Author
+		level, as = "warn", fmt.Sprintf("as %s, but GitHub shows it by %s", r.login, p.Author)
+	}
 	b, err := json.Marshal(data)
 	if err != nil {
 		r.err = cmp.Or(r.err, err)
@@ -264,7 +286,7 @@ func (r *commentRecorder) record(ctx context.Context, p postreview.Posted) {
 	}
 	what := map[string]string{postreview.PostConversation: "a comment on the conversation", postreview.PostReply: "a reply in a review thread",
 		postreview.PostTitle: "a new title", postreview.PostReviewRequest: "a review request of " + strings.Join(p.Reviewers, ", ")}[p.Kind]
-	ev := store.Event{Level: "info", Subject: &r.subject, Kind: commentPostedKind, Message: fmt.Sprintf("magnum comment posted %s as %s: %s", what, r.login, p.URL), Data: b}
+	ev := store.Event{Level: level, Subject: &r.subject, Kind: commentPostedKind, Message: fmt.Sprintf("magnum comment posted %s %s: %s", what, as, p.URL), Data: b}
 	if p.CommentID != 0 {
 		_, err = r.st.AppendEventOnce(ctx, ev, fmt.Sprintf("comment:%d", p.CommentID))
 	} else {

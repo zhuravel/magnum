@@ -75,6 +75,31 @@ func (c *Config) MagnumThreadLogins() []string {
 	return out
 }
 
+// PRThreadLogins is MagnumThreadLogins with one PR's own logins: the
+// identity it posts as (a pin of `magnum review --as`, or its watch's; one
+// no longer declared counts by its name) and its former identities still
+// declared (the engine's KVPRFormerIdentities), as the engine's ownLogins
+// and the threads file take them for magnum's on that PR.
+func (c *Config) PRThreadLogins(identity string, former []string) []string {
+	out := c.MagnumThreadLogins()
+	add := func(l string) {
+		if l != "" && !slices.ContainsFunc(out, func(o string) bool { return github.SameAccount(o, l) }) {
+			out = append(out, l)
+		}
+	}
+	if id := c.IdentityByName(identity); id != nil {
+		add(accountOf(*id))
+	} else {
+		add(strings.TrimSpace(identity))
+	}
+	for _, name := range former {
+		if id := c.IdentityByName(name); id != nil {
+			add(accountOf(*id))
+		}
+	}
+	return out
+}
+
 // accountOf is id's login in Account form: an App's with its "[bot]" (the
 // config may leave it out), a gh identity's as it is.
 func accountOf(id Identity) string {

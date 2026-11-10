@@ -43,7 +43,17 @@ const FormerDismissMessage = "magnum: superseded by the review of %s posted as %
 // unreadable).
 func (e *Engine) formerIdentities(ctx context.Context, prID int64) []string {
 	v, ok := e.getKV(ctx, KVPRFormerIdentities(prID))
-	if !ok || v == "" {
+	if !ok {
+		return nil
+	}
+	return FormerIdentities(v)
+}
+
+// FormerIdentities is the identity names v, a value of
+// KVPRFormerIdentities, holds (nil when v is empty or unreadable): the
+// engine's and `magnum comment`'s one reader of it.
+func FormerIdentities(v string) []string {
+	if v == "" {
 		return nil
 	}
 	var out []string
