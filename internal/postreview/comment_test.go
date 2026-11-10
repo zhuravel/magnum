@@ -416,8 +416,9 @@ func TestCommentPostsTheSameAgainAfterSomeoneElsesComment(t *testing.T) {
 // (GitHub makes each review comment part of a review), writes nothing on
 // the conversation, and "please take another look" is said again in the
 // next round. The App's own reviews after it, a review before it and a
-// review not submitted yet keep it a retry; a list of reviews cut short
-// may hide one, so it goes out.
+// review not submitted yet keep it a retry, past 500 reviews too: the
+// reviews are read from the newest back to the first one before it. A
+// list cut short before reaching one may hide a review, so it goes out.
 func TestCommentPostsTheSameAgainAfterSomeoneElsesReview(t *testing.T) {
 	text := "Addressed the review, please take another look."
 	signed := text + "\n\n" + CommentMarker
@@ -431,7 +432,9 @@ func TestCommentPostsTheSameAgainAfterSomeoneElsesReview(t *testing.T) {
 		"magnum's review after it":      {nodes: []node{{ID: 902, Author: "talkable", Bot: true, At: "2026-10-06T13:00:00Z"}}, post: true},
 		"the App's own after it":        {nodes: []node{{ID: 903, Author: "fixer-app", Bot: true, At: "2026-10-06T13:00:00Z"}}},
 		"a colleague's before it":       {nodes: []node{{ID: 904, Author: "rev-ann", At: "2026-10-06T11:00:00Z"}}},
-		"a list cut short":              {cut: true, post: true},
+		"past 500 reviews, a colleague's before it and the App's own after it": {nodes: []node{{ID: 905, Author: "rev-ann", At: "2026-10-06T11:00:00Z"},
+			{ID: 906, Author: "fixer-app", Bot: true, At: "2026-10-06T13:00:00Z"}}, cut: true},
+		"a list cut short": {cut: true, post: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w, _ := commentWorld(t)

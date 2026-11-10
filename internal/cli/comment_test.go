@@ -197,9 +197,9 @@ func (h *commentHarness) graphql(c execx.Cmd) (execx.Result, error) {
 		return jsonResult(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
 			"reviewThreads": map[string]any{"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""}, "nodes": threads}}}}})
 	}
-	if strings.Contains(string(c.Stdin), "reviews(first:") {
+	if strings.Contains(string(c.Stdin), "reviews(last:") {
 		return jsonResult(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
-			"reviews": map[string]any{"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""}, "nodes": []any{}}}}}})
+			"reviews": map[string]any{"pageInfo": map[string]any{"hasPreviousPage": false, "startCursor": ""}, "nodes": []any{}}}}}})
 	}
 	return jsonResult(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
 		"comments": map[string]any{"pageInfo": map[string]any{"hasPreviousPage": false, "startCursor": ""}, "nodes": append([]map[string]any{}, h.comments...)}}}}})

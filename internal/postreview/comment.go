@@ -156,7 +156,7 @@ func (o CommentOptions) outcome() CommentOutcome {
 // (*github.Client, as the watch's fixer App).
 type CommentGitHub interface {
 	FixReplyGitHub
-	AllReviews(ctx context.Context, owner, repo string, number int) ([]github.Review, bool, error)
+	RecentReviews(ctx context.Context, owner, repo string, number int, stop func(github.Review) bool) ([]github.Review, bool, error)
 	Pull(ctx context.Context, owner, repo string, number int) (github.Pull, error)
 	RequestReviewers(ctx context.Context, owner, repo string, number int, logins []string) error
 	UpdatePullTitle(ctx context.Context, owner, repo string, number int, title string) (github.Pull, error)
@@ -501,19 +501,22 @@ func (o CommentOptions) alreadyByOther(found signedFound) string {
 // review comment, a reply in a thread too, part of a review, and none of
 // them is a comment on the conversation, so without this a colleague's
 // review between two rounds would leave the App's same words of the next
-// round taken for a retry's. A list cut short may hide one: true. A review
-// not submitted yet has no time and counts for nothing.
+// round taken for a retry's. It reads the reviews from the newest back to
+// the first one submitted before at, so a pull request's many reviews never
+// hide one; a list cut short before it reached one may: true. A review not
+// submitted yet has no time and counts for nothing.
 func (o CommentOptions) reviewedSince(ctx context.Context, gh CommentGitHub, at time.Time) (bool, error) {
-	reviews, complete, err := gh.AllReviews(ctx, o.Owner, o.Repo, o.Number)
+	before := func(r github.Review) bool { return !r.SubmittedAt.IsZero() && r.SubmittedAt.Before(at) }
+	reviews, complete, err := gh.RecentReviews(ctx, o.Owner, o.Repo, o.Number, before)
 	if err != nil {
 		return false, fmt.Errorf("read the pull request's reviews: %w", err)
 	}
-	if !complete {
+	if slices.ContainsFunc(reviews, func(r github.Review) bool {
+		return r.SubmittedAt.After(at) && !github.SameAccount(github.Account(r.AuthorLogin, r.AuthorType), o.Login)
+	}) {
 		return true, nil
 	}
-	return slices.ContainsFunc(reviews, func(r github.Review) bool {
-		return r.SubmittedAt.After(at) && !github.SameAccount(github.Account(r.AuthorLogin, r.AuthorType), o.Login)
-	}), nil
+	return !complete, nil
 }
 
 // magnumThread refuses a thread magnum's review started (its first
