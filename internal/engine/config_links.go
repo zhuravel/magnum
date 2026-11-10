@@ -19,8 +19,10 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -48,29 +50,60 @@ var errLinksTooMany = errors.New("the links take too many steps to follow")
 // be told.
 var errLinksFoldUnknown = errors.New("a link's path or text has a byte outside ASCII, which the filesystem folds by rules magnum does not model")
 
+// linkRetryAfter is how long configLinks keeps a head's failure that a
+// fetch or a git that works again may heal (a commit the clone lacks yet,
+// a git that failed) before it reads the head again.
+const linkRetryAfter = 2 * time.Minute
+
 // headLinks keeps, by head, configLinks' answer: a commit's tree never
-// changes, so neither does where its links lead. Its own mutex: a round's
-// dispatch gates, auto-approval and the needs-you words read it on their
-// goroutines.
+// changes, so neither does where its links lead, nor a failure the tree
+// itself gives (too large to list, links too many to follow or outside
+// ASCII: lastingLinkFailure); any other failure is kept for
+// linkRetryAfter. The dispatch gates, the needs-you words (every tick),
+// auto-approval, the trivial-delta check and the reload check all ask it,
+// so a head that cannot be read costs at most one read per head and
+// linkRetryAfter (the reload check still quits a session that reloads the
+// config on each such head: no proof). Its own mutex: they read it on
+// their goroutines.
 type headLinks struct {
 	mu      sync.Mutex
 	targets map[string]map[string]string // head -> target -> label
+	failed  map[string]linkFailure       // head -> why its links cannot be read
 	warned  map[int64]string             // pr -> the last read error logged
+}
+
+// linkFailure is a head's failure configLinks keeps: until the zero time,
+// for good.
+type linkFailure struct {
+	err   error
+	until time.Time
+}
+
+// lastingLinkFailure reports whether err is one a commit's tree always
+// gives: a listing past execx.MaxOutput, links too many to follow, a link
+// outside ASCII.
+func lastingLinkFailure(err error) bool {
+	return errors.Is(err, gitx.ErrTreeTooLarge) || errors.Is(err, errLinksTooMany) || errors.Is(err, errLinksFoldUnknown)
 }
 
 // configLinks are where the links of pr's head lead that steer the review
 // agents (resolveConfigLinks over the head's tree, read in the PR's clone:
 // headClone), each target with the label of the link it is reached from;
 // an error when they cannot be read (no git, no clone, a clone without the
-// head, a tree too large to list, links too many to follow), logged once
-// per PR and error.
+// head, a tree too large to list, links too many to follow or outside
+// ASCII, a context that ended), logged once per PR and error. Answers and
+// failures are kept by head (headLinks), but for a context that ended.
 func (e *Engine) configLinks(ctx context.Context, pr store.PR) (map[string]string, error) {
 	head := pr.HeadSHA
 	e.links.mu.Lock()
 	t, ok := e.links.targets[head]
+	f, failed := e.links.failed[head]
 	e.links.mu.Unlock()
-	if ok {
+	switch {
+	case ok:
 		return t, nil
+	case failed && (f.until.IsZero() || e.now().Before(f.until)):
+		return nil, f.err
 	}
 	var err error
 	if e.d.Git == nil {
@@ -79,22 +112,34 @@ func (e *Engine) configLinks(ctx context.Context, pr store.PR) (map[string]strin
 		var links map[string]string
 		if links, err = e.d.Git.Symlinks(ctx, e.headClone(ctx, pr), head); err == nil {
 			kinds := e.projectKinds()
-			t, err = resolveConfigLinks(links, func(p string) (string, bool) { return agentConfigPath(kinds, p) })
+			t, err = resolveConfigLinks(ctx, links, func(p string) (string, bool) { return agentConfigPath(kinds, p) })
 		}
 	}
 	e.links.mu.Lock()
 	defer e.links.mu.Unlock()
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, err // the daemon stops or the caller gave up: nothing is known of the head
+		}
+		if e.links.failed == nil || len(e.links.failed) >= maxHeadLinks {
+			e.links.failed = map[string]linkFailure{}
+		}
+		f := linkFailure{err: err}
+		if !lastingLinkFailure(err) {
+			f.until = e.now().Add(linkRetryAfter)
+		}
+		e.links.failed[head] = f
 		if e.links.warned == nil {
 			e.links.warned = map[int64]string{}
 		}
-		if e.links.warned[pr.ID] != err.Error() && ctx.Err() == nil {
+		if e.links.warned[pr.ID] != err.Error() {
 			e.links.warned[pr.ID] = err.Error()
 			e.log.Warn("project config: cannot read where the links of the head's tree lead, so the gates cannot tell what it changes",
 				"pr", pr.ID, "head", head, "err", err)
 		}
 		return nil, err
 	}
+	delete(e.links.failed, head)
 	delete(e.links.warned, pr.ID)
 	if e.links.targets == nil || len(e.links.targets) >= maxHeadLinks {
 		e.links.targets = map[string]map[string]string{}
@@ -158,40 +203,83 @@ func changedLinks(targets map[string]string, paths []string) (names []string, ma
 // same again. A text that leaves the tree (absolute, or past its top)
 // leads nowhere a commit reaches; a path that is no link in the tree is
 // taken as it is, there or not (a stale target only adds refusals). A loop
-// ends after maxLinkHops; past maxLinkSteps it fails (errLinksTooMany).
-func resolveConfigLinks(links map[string]string, isConfig func(string) (string, bool)) (map[string]string, error) {
-	r := linkResolver{links: links, byFold: map[string][]string{}, out: map[string]string{}, walked: map[string]bool{}}
-	r.paths = slices.Sorted(maps.Keys(links))
+// ends after maxLinkHops; past maxLinkSteps it fails (errLinksTooMany),
+// and it stops with ctx's error when ctx ends.
+func resolveConfigLinks(ctx context.Context, links map[string]string, isConfig func(string) (string, bool)) (map[string]string, error) {
+	r := linkResolver{ctx: ctx, links: links, byFold: map[string][]string{}, out: map[string]string{}, walked: map[string]bool{}}
+	paths := slices.Sorted(maps.Keys(links))
 	steering := map[string]string{}
-	for _, l := range r.paths {
+	for _, l := range paths {
 		k := foldKey(l)
 		r.byFold[k] = append(r.byFold[k], l)
 		if label, ok := isConfig(l); ok {
 			steering[l] = label
 		}
 	}
-	if len(steering) > 0 && slices.ContainsFunc(r.paths, func(l string) bool { return !isASCII(l) || !isASCII(links[l]) }) {
+	if len(steering) > 0 && slices.ContainsFunc(paths, func(l string) bool { return !isASCII(l) || !isASCII(links[l]) }) {
 		return nil, errLinksFoldUnknown
 	}
-	for _, l := range r.paths {
-		if label, ok := steering[l]; ok {
+	r.keys = slices.Sorted(maps.Keys(r.byFold))
+	for _, l := range paths {
+		if label, ok := steering[l]; ok && r.err == nil {
 			r.follow(l, label)
 		}
 	}
-	if r.steps > maxLinkSteps {
-		return nil, fmt.Errorf("%w (more than %d)", errLinksTooMany, maxLinkSteps)
+	if r.err != nil {
+		return nil, r.err
 	}
 	return r.out, nil
 }
 
-// linkResolver is resolveConfigLinks' walk of one tree.
+// linkResolver is resolveConfigLinks' walk of one tree. Every step of its
+// loops counts against maxLinkSteps (step), so one link that leads many
+// ways (links whose paths differ in case only) stops the walk as soon as
+// it passes the budget, and the context is asked every linkCtxEvery steps.
 type linkResolver struct {
+	ctx    context.Context
 	links  map[string]string
-	paths  []string            // links' paths, sorted
 	byFold map[string][]string // foldKey of a path -> the links' paths that fold to it
+	keys   []string            // byFold's keys, sorted: the links under a path are a run of them (under)
 	out    map[string]string   // target -> label
 	walked map[string]bool     // the targets whose links below were followed
 	steps  int
+	err    error // errLinksTooMany, or the context's: the walk stopped
+}
+
+// linkCtxEvery is how many steps the walk takes between two looks at its
+// context.
+const linkCtxEvery = 1024
+
+// step counts one step of the walk; false once the walk must stop (r.err):
+// past maxLinkSteps, or its context ended.
+func (r *linkResolver) step() bool {
+	if r.err != nil {
+		return false
+	}
+	r.steps++
+	switch {
+	case r.steps > maxLinkSteps:
+		r.err = fmt.Errorf("%w (more than %d)", errLinksTooMany, maxLinkSteps)
+	case r.steps%linkCtxEvery == 0 && r.ctx.Err() != nil:
+		r.err = r.ctx.Err()
+	}
+	return r.err == nil
+}
+
+// under calls fn with each link's path that lies under t (not t itself),
+// in ASCII case: the run of the sorted folded keys that start with t's
+// and a "/", found by a binary search rather than a scan of every link.
+// It stops when fn or the walk's budget says so.
+func (r *linkResolver) under(t string, fn func(l string) bool) {
+	prefix := foldKey(t) + "/"
+	i, _ := slices.BinarySearch(r.keys, prefix)
+	for ; i < len(r.keys) && strings.HasPrefix(r.keys[i], prefix); i++ {
+		for _, l := range r.byFold[r.keys[i]] {
+			if !r.step() || !fn(l) {
+				return
+			}
+		}
+	}
 }
 
 // add records p for label, unless a label is recorded for it already.
@@ -205,22 +293,23 @@ func (r *linkResolver) add(p, label string) {
 // and the links under a directory there, with label.
 func (r *linkResolver) follow(l, label string) {
 	queue := []string{l}
-	for len(queue) > 0 && r.steps <= maxLinkSteps {
+	for len(queue) > 0 && r.step() {
 		l := queue[0]
 		queue = queue[1:]
 		r.add(l, label)
 		for _, t := range r.realpath(linkDir(l), r.links[l], 0, label) {
+			if !r.step() {
+				return
+			}
 			r.add(t, label)
 			if r.walked[t] {
 				continue
 			}
 			r.walked[t] = true
-			for _, m := range r.paths {
-				r.steps++
-				if m != t && agents.UnderTarget(m, t) {
-					queue = append(queue, m)
-				}
-			}
+			r.under(t, func(m string) bool {
+				queue = append(queue, m)
+				return true
+			})
 		}
 	}
 }
@@ -238,7 +327,7 @@ func (r *linkResolver) realpath(dir, text string, hops int, label string) []stri
 	for elem := range strings.SplitSeq(text, "/") {
 		var next []string
 		for _, c := range cur {
-			if r.steps++; r.steps > maxLinkSteps {
+			if !r.step() {
 				return nil
 			}
 			switch elem {
@@ -258,6 +347,9 @@ func (r *linkResolver) realpath(dir, text string, hops int, label string) []stri
 					next = append(next, p)
 				}
 				for _, l := range via {
+					if !r.step() {
+						return nil
+					}
 					r.add(l, label)
 					next = append(next, r.realpath(linkDir(l), r.links[l], hops+1, label)...)
 				}

@@ -1,10 +1,16 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 // resolveConfigLinks follows a tree's links that steer the review agents
@@ -40,7 +46,7 @@ func TestResolveConfigLinksFollowsLinksAsTheFilesystemDoes(t *testing.T) {
 			map[string]string{"apps/web/.claude/skills": "apps/web/.claude/skills", "shared/skills": "apps/web/.claude/skills"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := resolveConfigLinks(c.links, isConfig)
+			got, err := resolveConfigLinks(context.Background(), c.links, isConfig)
 			if err != nil || !maps.Equal(got, c.want) {
 				t.Fatalf("resolveConfigLinks = %q, %v\nwant %q", got, err, c.want)
 			}
@@ -55,20 +61,125 @@ func TestResolveConfigLinksFollowsLinksAsTheFilesystemDoes(t *testing.T) {
 		{".claude/skills": "../.agents/skills", ".agents/ſkills": "../elsewhere"},
 		{"CLAUDE.md": "docs/ﬁrst.md"},
 	} {
-		if got, err := resolveConfigLinks(odd, isConfig); !errors.Is(err, errLinksFoldUnknown) {
+		if got, err := resolveConfigLinks(context.Background(), odd, isConfig); !errors.Is(err, errLinksFoldUnknown) {
 			t.Fatalf("resolveConfigLinks(%q) = %q, %v; want errLinksFoldUnknown", odd, got, err)
 		}
 	}
-	if got, err := resolveConfigLinks(map[string]string{"lib/ſ": "x"}, isConfig); err != nil || len(got) != 0 {
+	if got, err := resolveConfigLinks(context.Background(), map[string]string{"lib/ſ": "x"}, isConfig); err != nil || len(got) != 0 {
 		t.Fatalf("a tree whose links steer nothing: %q, %v", got, err)
 	}
 
-	many := map[string]string{}
-	for i := range 400 {
-		many[fmt.Sprintf(".claude/l%d", i)] = fmt.Sprintf("../d%d", i)
-		many[fmt.Sprintf("x%d", i)] = "y"
+	many := map[string]string{".claude/skills": "../s"}
+	for i := range 60_000 {
+		many[fmt.Sprintf("s/l%d", i)] = fmt.Sprintf("../t%d", i)
 	}
-	if _, err := resolveConfigLinks(many, isConfig); !errors.Is(err, errLinksTooMany) {
+	if _, err := resolveConfigLinks(context.Background(), many, isConfig); !errors.Is(err, errLinksTooMany) {
 		t.Fatalf("a tree whose links take more than %d steps: %v, want errLinksTooMany", maxLinkSteps, err)
+	}
+}
+
+// One link's text can lead to thousands of targets at once: a tree with
+// every case variant of a 14-letter name as a link (16,384 of them) gives
+// CLAUDE.md -> abcdefghijklmn/x.md 16,384 ways to go, and a walk that
+// scanned every link for each target, checking its budget only between
+// links, took minutes. The walk finds the links under a target through an
+// index, counts every step it takes inside its loops, and gives up past
+// the budget at once; it also stops when its context ends.
+func TestResolveConfigLinksStaysWithinItsBudget(t *testing.T) {
+	kinds := defaultKinds()
+	isConfig := func(p string) (string, bool) { return agentConfigPath(kinds, p) }
+	const name = "abcdefghijklmn"
+	links := map[string]string{"CLAUDE.md": name + "/x.md"}
+	for i := range 1 << len(name) {
+		b := []byte(name)
+		for j := range b {
+			if i&(1<<j) != 0 {
+				b[j] -= 'a' - 'A'
+			}
+		}
+		links[string(b)] = fmt.Sprintf("t%d", i)
+	}
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		got, err := resolveConfigLinks(context.Background(), links, isConfig)
+		if err == nil && len(got) != 2*len(links)-1 {
+			err = fmt.Errorf("%d targets, want %d", len(got), 2*len(links)-1)
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil && !errors.Is(err, errLinksTooMany) {
+			t.Fatal(err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatalf("resolveConfigLinks of %d case variants still runs after %s", len(links), time.Since(start))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := resolveConfigLinks(ctx, links, isConfig); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a walk whose context ended: %v, want context.Canceled", err)
+	}
+}
+
+// symlinksGit counts the reads of a head's links (Symlinks), failing them
+// with err.
+type symlinksGit struct {
+	fakeGit
+	mu    sync.Mutex
+	err   error
+	reads int
+}
+
+func (g *symlinksGit) Symlinks(_ context.Context, _, rev string) (map[string]string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.reads++
+	return nil, g.err
+}
+
+func (g *symlinksGit) count() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.reads
+}
+
+// The dispatch gates, the needs-you words (every tick), auto-approval and
+// the reload check all ask a head's links: a head whose links cannot be
+// read is not read again on every call. A failure that a commit always
+// gives (a tree past the listing's cap) is kept as long as an answer; any
+// other (a commit the clone lacks yet, a git that failed) for
+// linkRetryAfter, then read again.
+func TestConfigLinksKeepsAHeadsFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		retake bool
+	}{
+		{"a tree too large", fmt.Errorf("gitx: ls-tree -r b1: %w", gitx.ErrTreeTooLarge), false},
+		{"a commit the clone lacks", errors.New("gitx: ls-tree -r b1: exit status 128"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &symlinksGit{err: tc.err}
+			h := newHarness(t, func(h *harness) { h.d.Git = g })
+			pr := store.PR{ID: 7, HeadSHA: "b1"}
+			for range 3 {
+				if _, err := h.e.configLinks(h.ctx, pr); err == nil {
+					t.Fatal("configLinks of a head that cannot be read: no error")
+				}
+			}
+			if n := g.count(); n != 1 {
+				t.Fatalf("reads = %d, want 1 for three asks", n)
+			}
+			h.advance(linkRetryAfter + time.Second)
+			if _, err := h.e.configLinks(h.ctx, pr); err == nil {
+				t.Fatal("configLinks after the wait: no error")
+			}
+			if want := 1 + btoi(tc.retake); g.count() != want {
+				t.Fatalf("reads after %s = %d, want %d", linkRetryAfter, g.count(), want)
+			}
+		})
 	}
 }
