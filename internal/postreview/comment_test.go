@@ -419,6 +419,8 @@ func TestCommentPostsTheSameAgainAfterSomeoneElsesComment(t *testing.T) {
 // review not submitted yet keep it a retry, past 500 reviews too: the
 // reviews are read from the newest back to the first one before it. A
 // list cut short before reaching one may hide a review, so it goes out.
+// A reply in a review thread goes by the thread alone, and reviews that
+// cannot be read are exit 1 with nothing posted.
 func TestCommentPostsTheSameAgainAfterSomeoneElsesReview(t *testing.T) {
 	text := "Addressed the review, please take another look."
 	signed := text + "\n\n" + CommentMarker
@@ -448,6 +450,26 @@ func TestCommentPostsTheSameAgainAfterSomeoneElsesReview(t *testing.T) {
 				t.Errorf("outcome = %+v (comment %+v), posts %q: want 77 found", out, out.Comment, w.issuePosts)
 			}
 		})
+	}
+
+	// In a review thread a colleague's review after the App's reply keeps
+	// it a retry: only a comment in the thread after it makes the same
+	// words new there.
+	w, _ := commentWorld(t)
+	w.threads = []fakeThread{thread(rev(11, "Rename this?"), fakeComment{ID: 12, Author: "fixer-app", Bot: true, Body: signed, At: "2026-10-06T12:00:00Z"})}
+	w.nodes = []node{{ID: 901, State: "CHANGES_REQUESTED", Author: "rev-ann", At: "2026-10-06T13:00:00Z"}}
+	if out, _ := w.runComment(copts(11), text); out.Status != StatusAlreadyPosted || out.Comment == nil || out.Comment.ID != 12 || w.writes() != 0 {
+		t.Errorf("a reply before a colleague's review: outcome = %+v (comment %+v), %d writes: want 12 found", out, out.Comment, w.writes())
+	}
+
+	// Reviews that cannot be read leave it unknown whether the comment is a
+	// retry's: exit 1, run it again, and nothing posted.
+	w, _ = commentWorld(t)
+	w.issueComments = []fakeComment{found}
+	w.listErr = errors.New("connection reset")
+	if out, posted := w.runComment(copts(0), text); out.Status != StatusError || out.ExitCode() != 1 ||
+		!strings.Contains(out.Message, "read the pull request's reviews") || w.writes() != 0 || len(posted) != 0 {
+		t.Errorf("the reviews unread: outcome = %+v, %d writes, posted %+v", out, w.writes(), posted)
 	}
 }
 
