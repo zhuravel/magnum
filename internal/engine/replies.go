@@ -105,7 +105,12 @@ func (e *Engine) ownLogins(ctx context.Context, w config.Watch, pr store.PR) []s
 // A reply in one of own's threads by one of fixers (the watch's fixer
 // App, config.Config.FixerLogins) counts as the author's would: it answers
 // magnum for the author, though GitHub gives an App no association with
-// the repository; its remark anywhere else counts for nothing.
+// the repository; its remark anywhere else counts for nothing. A Remark
+// carries no comment text, so the App's chat comment (`magnum comment`,
+// postreview.CommentMarker) cannot be told from its fix reply here: in
+// another reviewer's thread or on the conversation it counts for nothing,
+// and in one of own's threads it would start a reply round, which is why
+// magnum comment refuses to post in a thread magnum's review started.
 // Nil when the Details carry no timeline.
 func repliesOf(d github.PRDetails, own, fixers []string) []store.Reply {
 	if d.Remarks == nil {

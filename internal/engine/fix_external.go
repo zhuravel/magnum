@@ -128,6 +128,10 @@ type externalComment struct {
 	Truncated bool   `json:"truncated,omitempty"`
 	CreatedAt string `json:"created_at,omitempty"`
 	Fix       bool   `json:"fix,omitempty"`
+	// Comment says it carries the comment marker (postreview.IsComment):
+	// a comment `magnum comment` posted for a chat session as the fixer's
+	// App, magnum's own word.
+	Comment bool `json:"comment,omitempty"`
 }
 
 // externalRemark is a review body (Kind "review", with its State) or a
@@ -267,7 +271,9 @@ type externalInput struct {
 
 // ownWord reports whether a review body or comment by the author is the
 // author's own word: no magnum marker in it (the fixer's replies, a status
-// comment or a review posted as the author's own login are magnum's).
+// comment or a review posted as the author's own login are magnum's). A
+// magnum comment (postreview.CommentMarker) is the fixer App's, never the
+// author's login, so it never is.
 func ownWord(body string) bool { return !strings.Contains(body, magnumMarker) }
 
 // externalOf makes the file's content from in, and counts the items it
@@ -278,9 +284,10 @@ func ownWord(body string) bool { return !strings.Contains(body, magnumMarker) }
 // author and magnum's logins started it; its comments are the reviewers'
 // among all GitHub listed (its first and its newest:
 // github.Thread.AllComments), and it is answered when the latest of them is
-// the author's, the fixer's included, or carries the fixer's marker
-// (postreview.IsFixReply) and comes from one of magnum's logins (the marker
-// in anyone else's comment answers nothing), unless it holds the author's
+// the author's, the fixer's included, or carries the fixer's marker or the
+// comment marker of a chat session's `magnum comment` (postreview.IsOwnAnswer)
+// and comes from one of magnum's logins (the marker in anyone else's
+// comment answers nothing), unless it holds the author's
 // decision (decisionIn): their own word after the fixer's call there
 // (in.Calls) while that call is open, which no word the fixer may have
 // written since hides (in.Busy, under a gh fixer). One of magnum's own
@@ -293,8 +300,10 @@ func ownWord(body string) bool { return !strings.Contains(body, magnumMarker) }
 // word (ownWord) among the reviews and the comments, or, when the comments
 // stop short of that word (CommentsComplete false), after the oldest comment
 // GitHub listed; it is answered when a later comment of the author or of
-// magnum's logins carrying the fixer's marker names it as its target
-// (replyTarget). A remark edited in place counts from its last edit, for
+// magnum's logins carrying the fixer's marker, or of magnum's logins
+// carrying the comment marker, names it as its target (replyTarget). A
+// magnum comment is never a remark (magnum's logins write none) and never
+// the author's word. A remark edited in place counts from its last edit, for
 // both (its text is new: an answer to the old text answers nothing), and
 // the file gives that time (edited_at). The conversation is oldest first.
 func externalOf(in externalInput) (externalItems, int) {
@@ -344,7 +353,7 @@ func externalOf(in externalInput) (externalItems, int) {
 		}
 		last := cs[len(cs)-1]
 		et := threadOf(t, all, cs, name)
-		et.Answered = byAuthor(last.AuthorLogin, last.AuthorType) || (postreview.IsFixReply(last.Body) && isOwn(last.AuthorLogin, last.AuthorType))
+		et.Answered = byAuthor(last.AuthorLogin, last.AuthorType) || (postreview.IsOwnAnswer(last.Body) && isOwn(last.AuthorLogin, last.AuthorType))
 		if at, ok := in.Calls[et.CommentID]; ok {
 			var d *github.ThreadComment
 			if et.called, d = decisionIn(cs, at, byAuthor, isOwn, busy); d != nil {
@@ -409,7 +418,8 @@ func externalOf(in externalInput) (externalItems, int) {
 	slices.SortStableFunc(items, func(a, b dated) int { return a.at.Compare(b.at) })
 	for _, it := range items {
 		it.r.Answered = it.r.URL != "" && slices.ContainsFunc(in.Comments, func(c github.PRComment) bool {
-			return c.CreatedAt.After(it.text) && postreview.IsFixReply(c.Body) && (byAuthor(c.AuthorLogin, c.AuthorType) || isOwn(c.AuthorLogin, c.AuthorType)) &&
+			own := isOwn(c.AuthorLogin, c.AuthorType)
+			return c.CreatedAt.After(it.text) && ((postreview.IsFixReply(c.Body) && (byAuthor(c.AuthorLogin, c.AuthorType) || own)) || (postreview.IsComment(c.Body) && own)) &&
 				replyTarget(c.Body) == it.r.URL
 		})
 		x.Conversation = append(x.Conversation, it.r)
@@ -425,7 +435,8 @@ func threadOf(t github.Thread, all, cs []github.ThreadComment, name func(login, 
 	et := externalThread{CommentID: root.ID, URL: root.URL, Path: t.Path, Line: cmp.Or(t.Line, t.OriginalLine), Outdated: t.Outdated,
 		Comments: []externalComment{}, Omitted: max(t.CommentCount-len(all), 0)}
 	for _, c := range cs {
-		ec := externalComment{ID: c.ID, URL: c.URL, Author: name(c.AuthorLogin, c.AuthorType), CreatedAt: rfc3339(c.CreatedAt), Fix: postreview.IsFixReply(c.Body)}
+		ec := externalComment{ID: c.ID, URL: c.URL, Author: name(c.AuthorLogin, c.AuthorType), CreatedAt: rfc3339(c.CreatedAt), Fix: postreview.IsFixReply(c.Body),
+			Comment: postreview.IsComment(c.Body)}
 		ec.Body, ec.Truncated = excerptOf(c.Body)
 		et.Comments = append(et.Comments, ec)
 	}

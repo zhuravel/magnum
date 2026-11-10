@@ -106,9 +106,10 @@ func quietMarked(markers []string, body string) bool {
 // started: its first comment's id and link, the review it belongs to, its
 // latest comment's id and time, whether that latest comment is magnum's
 // rebuttal (a reply of magnum's whose marker says rebuttal or that has
-// none), and whether it was answered: a reply by the PR author, or a
-// fix-marked reply by one of magnum's logins, the latest of them made at
-// AnsweredAt.
+// none; a fixer's reply or a chat session's magnum comment is none), and
+// whether it was answered: a reply by the PR author, or a fix-marked reply
+// by one of magnum's logins, the latest of them made at AnsweredAt (a
+// magnum comment answers none of magnum's own findings).
 type magnumThread struct {
 	RootID     int64     `json:"root_id"`
 	URL        string    `json:"url,omitempty"`
@@ -152,7 +153,7 @@ func magnumThreadsOf(threads []github.Thread, own []string, author string) []mag
 		}
 		root, latest := all[0], all[len(all)-1]
 		mt := magnumThread{RootID: root.ID, URL: root.URL, ReviewID: root.ReviewID, LatestID: latest.ID, LatestAt: latest.CreatedAt}
-		if len(all) > 1 && isOwn(latest.AuthorLogin, latest.AuthorType) && !postreview.IsFixReply(latest.Body) {
+		if len(all) > 1 && isOwn(latest.AuthorLogin, latest.AuthorType) && !postreview.IsOwnAnswer(latest.Body) {
 			_, kind, marked := postreview.ParseReplyMarker(latest.Body)
 			mt.Rebuttal = !marked || kind == postreview.ReplyRebuttal
 		}
@@ -175,9 +176,9 @@ func magnumThreadsOf(threads []github.Thread, own []string, author string) []mag
 // review thread's resolvedBy is a User, so an App's resolution reads
 // null); a bot's is the bot's own, which resolves its threads once the
 // code changed. The answer is externalOf's: the latest of the reviewers'
-// comments is the author's, or a fix-marked reply of one of magnum's
-// logins; the key's latest comment is that one too, so a thread that is
-// resolved and unresolved again keeps its key.
+// comments is the author's, or a fix-marked reply or a magnum comment of
+// one of magnum's logins; the key's latest comment is that one too, so a
+// thread that is resolved and unresolved again keeps its key.
 func resolvedByFixerOf(in externalInput) []resolvedThread {
 	inList := func(list []string, login, typ string) bool {
 		a := github.Account(login, typ)
@@ -207,7 +208,7 @@ func resolvedByFixerOf(in externalInput) []resolvedThread {
 		cs := slices.DeleteFunc(slices.Clone(all), func(c github.ThreadComment) bool { return !reviewer(c) })
 		latest := cs[len(cs)-1]
 		if len(cs) > 1 && (byAuthor(latest.AuthorLogin, latest.AuthorType) ||
-			postreview.IsFixReply(latest.Body) && inList(in.Own, latest.AuthorLogin, latest.AuthorType)) {
+			postreview.IsOwnAnswer(latest.Body) && inList(in.Own, latest.AuthorLogin, latest.AuthorType)) {
 			continue // answered, as externalOf answers an unresolved one
 		}
 		rt := resolvedThread{RootID: root.ID, LatestID: latest.ID, URL: root.URL, Bot: bot}
