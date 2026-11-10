@@ -857,7 +857,8 @@ it. The poll reads a head's checks again when its CI rollup's state changes, and
 failed, pending or passed checks do (a rollup stays FAILURE while an earlier failure is red, and a check
 created passed, such as a run's report through the Checks API, moves only the passed count); the counts
 come in the same rollup request, with more fields. It also reads them on every poll while Magnum's start
-of a `ci_dispatch` workflow waits for its run.
+of a `ci_dispatch` workflow waits for its run, and while its re-run of a run that started no job waits for
+the new attempt (in any repository; it then also reads the head's runs, one REST call).
 
 The rest of the re-review sees a base merge the same way: triage reads the PR's own diff of the files whose
 own change differs, the simplify reviewer's rerun measures that change, and the reviewers' and the judge's
@@ -3797,13 +3798,15 @@ the PR changes no workflow. Such a run leaves nothing in the PR's check rollup (
 run), so its required check did not run. When rule 11 reaches "did not run" at an own PR's head, Magnum reads
 the head's runs once (one REST call, `actions/runs?head_sha=`, as the identity that starts `ci_dispatch`'s
 workflow: `ci_dispatch_as`, else the poll identity), and records what it read per head (`pr.<id>.ci_rerun`),
-so no look reads them again; a read that found a run still queued, or one that failed
+so no look reads them again; a read that found a run that had not ended, or one that failed
 (`fix.open_ci_runs_error`, said once), is read again `settle_max` later. Of the newest run of each
 `.github/workflows` file for a `pull_request` and for a `push`, one that ended `startup_failure`, or `failure`
 or `cancelled` with no job in its latest attempt (one more call reads its jobs), started no job. A run that
-waits or runs started none yet: while any run of the head has not ended, Magnum re-runs nothing ("CI at
-a1b2c3d: run 42673098082 has started no job yet"). When the PR changes no workflow or action file
-(`.github/workflows/`, `.github/actions/`, any `action.yml` or `action.yaml`) and GitHub listed all its files,
+has not ended is no start that failed: while any run of the head has not ended, Magnum re-runs nothing ("CI
+at a1b2c3d: run 42673098082 has started no job yet" while it is requested, queued or pending, "CI at a1b2c3d:
+run 42673098082 has not ended" while it is in progress or waits for an environment). When the PR changes no
+workflow or action file (`.github/workflows/`, `.github/actions/`, any `action.yml` or `action.yaml`) and
+GitHub listed all its files,
 Magnum re-runs that run once for the head (`POST actions/runs/{id}/rerun`: the same run id with a new
 `run_attempt`, of the run's own event and commit), recorded before the call so that a restart or a second look
 never re-runs it twice (`fix.open_ci_rerun`), and waits for the new attempt as for a started run ("CI at
@@ -3839,7 +3842,8 @@ start: `ci_dispatch_as` names one with or without `ci_dispatch`. A new head star
   (`magnum fix --decide`), `fix.decisions`, `fix.decisions_built` and `fix.optional_lifted` (Your decisions),
   `fix.optional` (the optional calls), and under `autofix = "open"`
   `autofix.open`, `fix.open_needs_you`, `fix.open_answered`, `fix.open_magnum_late`, `fix.open_ci_dispatch`,
-  `fix.open_ci_dispatch_failed` and `fix.open_ci_dispatch_refused`; the parent's merge adds `fix.parent_merged`,
+  `fix.open_ci_dispatch_failed`, `fix.open_ci_dispatch_refused`, `fix.open_ci_rerun`, `fix.open_ci_rerun_failed`,
+  `fix.open_ci_rerun_refused`, `fix.open_ci_rerun_twice` and `fix.open_ci_runs_error`; the parent's merge adds `fix.parent_merged`,
   `fix.parent_skipped` (the fix role is no fixer App), `fix.parent_refused` (why the daemon pushed nothing) and
   `fix.parent_pushed` (the fixer's handed merge), and the CI after magnum's own pushes `fix.push_ci_dispatch`,
   `fix.push_ci_dispatch_failed`, `fix.push_ci_dispatch_refused` and `fix.push_ci_ran` (the workflow ran at the

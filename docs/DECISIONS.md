@@ -4234,13 +4234,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   start or refusal stands at the head, the look reads the head's runs once (`github.HeadRuns`, GET
   actions/runs?head_sha=, every workflow and event, one page of 20) as startCI's identity (`ci_dispatch_as`,
   else the poll identity, else the identity) and records the read per head (`pr.<id>.ci_rerun`, the last
-  head's), so no look reads again; a read that found a run of the head still queued, or one that failed
+  head's), so no look reads again; a read that found a run of the head that had not ended, or one that failed
   (`fix.open_ci_runs_error`, said once per distinct error), is read again settle_max after it, and in that
   window the old words stand. A run started no job when its status is completed and its conclusion is
   startup_failure (no jobs read), or failure or cancelled with no job in its latest attempt (`RunJobs`,
-  filter=latest); queued, waiting, pending or in-progress runs started none yet and are no failure, and any
-  such run of a .github/workflows file at the head blocks the re-run (the workflow's concurrency group, its
-  workflow and ref, would cancel one of the two), the look waiting with "run N has started no job yet".
+  filter=latest); a run that has not ended (requested, queued, pending, waiting or in progress) is no failure,
+  and any such run of a .github/workflows file at the head blocks the re-run (the workflow's concurrency group,
+  its workflow and ref, would cancel one of the two), the look waiting with "run N has started no job yet"
+  while GitHub has given it no runner (requested, queued, pending) and "run N has not ended" once it runs or
+  waits for an environment (in progress, waiting): a run in progress started its jobs, such as one of the
+  workflow that the operator started by hand on the PR's branch, so the first words would be false of it.
   Action_required, skipped and other conclusions never count. Only each .github/workflows file's newest run
   for a pull_request and for a push is a candidate (an older run that a newer one of the same workflow and
   event followed is no longer the head's, and its jobs are not read), and of those the newest that started no
@@ -4267,8 +4270,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   read yet, below the floor, no ci_dispatch). Each needs-you keeps the need {kind ci, the PR's URL}; the run
   id is GitHub's number and W passes ValidWorkflowFile, so the words hold no PR text. Events
   `fix.open_ci_rerun`, `fix.open_ci_rerun_failed` (GitHub's status, never its message),
-  `fix.open_ci_rerun_refused`, `fix.open_ci_rerun_twice` and `fix.open_ci_runs_error`, whose data name the
-  head, the run, its workflow, attempt and conclusion and the identity. Validation no longer refuses
+  `fix.open_ci_rerun_refused` and `fix.open_ci_rerun_twice`, whose data name the head, the run, its workflow,
+  attempt and conclusion and the identity, and `fix.open_ci_runs_error`, whose data name the head and the
+  identity (no run is known when the read fails). Validation no longer refuses
   `ci_dispatch_as` without `ci_dispatch`: alone it names who reads and re-runs, which the live repository
   needs (its poll identity, an App with Actions: read only, gets HTTP 403 on the re-run until `ci_dispatch_as`
   names one that can). Rejected: a read of the head's runs per poll or per look for every own PR (budget spent
@@ -4286,11 +4290,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAFailedReadOfTheHeadsRunsIsSaidOnceAndReadAgainAfterSettleMax, TestANewHeadIsReRunAfresh,
   TestCIDispatchReRunsARunThatStartedNoJobAndDispatchesAHeadWithNone,
   TestTheReRunWaitsForThePauseAndTheBudget, TestTheLookReRunsOnceThePauseAndTheBudgetAllow,
-  TestAReRunStillQueuedPastSettleMaxKeepsTheLookWaiting,
+  TestAReRunStillQueuedPastSettleMaxKeepsTheLookWaitingUntilItEnds,
   TestAReRunWhoseAttemptNeverCameOrEndedWithoutTheCheckNeedsYou,
-  TestTheReRunGoesAsCIDispatchAsWithoutCIDispatch,
+  TestTheReRunGoesAsCIDispatchAsWithoutCIDispatch, TestTheReRunIsRecordedBeforeItsCall,
+  TestARecordedReRunIsNotRedoneByALookThatCouldNotReadTheRecord,
+  TestTheWaitBesideARunOfTheHeadThatHasNotEndedSaysWhetherItStarted,
   TestHeadRunsListsEveryWorkflowsRunsAtACommitWithTheirAttempt, TestRerunRunPostsTheRerun and
-  TestABadCIDispatchAsFailsValidation.
+  TestABadCIDispatchAsFailsValidation. The guards that keep a head from a second re-run each have a test that
+  fails without them: the record written before the call (the fake's re-run reads it at the call), the stored
+  record read again before the read and before the call (the look's read of the record lost), and the poll's
+  read of an attempt still queued or running past settle_max (else its second startup failure is never seen
+  and the look waits for good).
 
 ## Screens and commands
 
