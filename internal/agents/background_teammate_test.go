@@ -1218,3 +1218,148 @@ func TestATeammatesOwnTeammatesAreNotWatched(t *testing.T) {
 	leadIdle(tr, now.Add(6*time.Second))
 	e.ends(id, "with only a teammate's own teammate at work")
 }
+
+// enqueuedOnly is a notification that only reached the lead's queue: the
+// enqueue in the lead's transcript, nothing else (a teammate's, as Claude
+// Code writes it for an idle teammate).
+func enqueuedOnly(tr *transcript, at time.Time, text string) {
+	tr.add(tline{"type": "queue-operation", "operation": "enqueue", "timestamp": stamp(at), "sessionId": claudeSID, "content": text})
+}
+
+// A notification that only reached the lead's queue, of work no watched
+// teammate launched (an earlier run's teammate's, the 17th teammate's),
+// holds the lead's run for queueGrace from its enqueue, then nothing:
+// neither the lead nor the idle teammate is woken by it (the re-review's
+// probes, which held the run until Tell).
+func TestObserveHoldsTheRunAtMostAGraceForANotificationOnlyQueued(t *testing.T) {
+	t.Run("an earlier run's teammate's", func(t *testing.T) {
+		e := newEnv(t)
+		tr := e.claudeTranscript()
+		id1 := e.promptClaude()
+		now := e.clock.Now()
+		tr.add(userPrompt(now, "build it"))
+		tr.addAll(teammateSpawned(now.Add(time.Second), "toolu_mate1", mateA))
+		mt := tr.teammate(mateA)
+		mt.add(mateMail(now.Add(2*time.Second), mateA))
+		mt.addAll(mateDone(now.Add(3*time.Second), mateA))
+		leadIdle(tr, now.Add(4*time.Second))
+		e.ends(id1, "run 1")
+
+		e.clock.Add(time.Minute)
+		id2, err := e.m.Prompt(e.ctx, e.pr, RoleClaude, store.RunInitial, "fix the findings")
+		if err != nil {
+			t.Fatal(err)
+		}
+		at := e.clock.Now()
+		tr.add(userPrompt(at, "fix the findings"),
+			toolUse(at.Add(time.Second), "toolu_send1", "SendMessage", map[string]any{"to": "drafts", "message": "fix the drafts finding"}),
+			toolResult(at.Add(2*time.Second), "toolu_send1", "sent", map[string]any{"success": true}, false))
+		mt.add(mateMail(at.Add(3*time.Second), mateA))
+		mt.addAll(mates(mateA, bashInBackground(at.Add(4*time.Second), "toolu_m1", "bgm1")))
+		mt.add(mate(mateA, stopped(assistantSays(at.Add(6*time.Second), "Waiting for the specs."), "end_turn")))
+		tr.add(userPrompt(at.Add(7*time.Second), "Another Claude session sent a message:\n<teammate-message teammate_id=\"drafts\" color=\"blue\">\n{\"type\":\"idle_notification\",\"from\":\"drafts\"}\n</teammate-message>"),
+			stopped(assistantSays(at.Add(8*time.Second), "The drafts teammate is idle; done."), "end_turn"), turnEnded(at.Add(8*time.Second)))
+		queued := at.Add(20 * time.Second)
+		enqueuedOnly(tr, queued, notificationText("toolu_m1", "bgm1", "completed"))
+		e.clock.Add(queued.Add(queueGrace).Sub(e.clock.Now()) - 40*time.Second)
+		e.heldFor(1, 0, "within the grace of a notification only queued")
+		e.ends(id2, "past the grace of an earlier run's teammate's notification")
+	})
+	t.Run("the 17th teammate's", func(t *testing.T) {
+		e := newEnv(t)
+		tr := e.claudeTranscript()
+		id := e.promptClaude()
+		now := e.clock.Now()
+		tr.add(userPrompt(now, "build it"))
+		var last *transcript
+		var agent string
+		for i := range 17 {
+			agent = fmt.Sprintf("amate%02d-0123456789abcdef", i)
+			tr.addAll(teammateSpawned(now.Add(time.Duration(i)*time.Second), fmt.Sprintf("toolu_mate%02d", i), agent))
+			last = tr.teammate(agent)
+			last.add(mateMail(now.Add(20*time.Second), agent))
+			last.addAll(mateDone(now.Add(21*time.Second), agent))
+		}
+		last.addAll(mates(agent, bashInBackground(now.Add(20*time.Second), "toolu_m17", "bgm17")))
+		leadIdle(tr, now.Add(22*time.Second))
+		queued := now.Add(40 * time.Second)
+		enqueuedOnly(tr, queued, notificationText("toolu_m17", "bgm17", "completed"))
+		e.clock.Add(queued.Add(queueGrace).Sub(e.clock.Now()) - 40*time.Second)
+		e.heldFor(1, 0, "within the grace of a notification only queued")
+		e.ends(id, "past the grace of the 17th teammate's notification")
+	})
+}
+
+// A notification the lead took into a turn (its user entry, or the queued
+// command of one taken into the turn it was in) holds the run until the
+// lead answers it, past queueGrace: an idle lead takes its own in at once.
+func TestALeadsOwnNotificationItTookInHoldsUntilItAnswers(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		taken func(tr *transcript, at time.Time)
+	}{
+		{"its user entry", func(tr *transcript, at time.Time) {
+			tr.addAll(notification(at, "toolu_bash1", "bg1", "completed"))
+		}},
+		{"its queued command", func(tr *transcript, at time.Time) {
+			text := notificationText("toolu_bash1", "bg1", "completed")
+			tr.add(enqueued(at, text),
+				tline{"type": "queue-operation", "operation": "remove", "timestamp": stamp(at.Add(time.Second)), "sessionId": claudeSID, "content": text},
+				tline{"type": "attachment", "isSidechain": false, "timestamp": stamp(at), "sessionId": claudeSID, "attachment": map[string]any{
+					"type": "queued_command", "prompt": text, "commandMode": "task-notification",
+					"origin": map[string]any{"kind": "task-notification", "producer": "session-task"}, "timestamp": stamp(at)}})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			tr := e.claudeTranscript()
+			id := e.promptClaude()
+			now := e.clock.Now()
+			tr.add(userPrompt(now, "review"))
+			tr.addAll(bashInBackground(now.Add(time.Second), "toolu_bash1", "bg1"))
+			tr.add(assistantSays(now.Add(2*time.Second), "Waiting for the spec run."), turnEnded(now.Add(2*time.Second)))
+			e.heldFor(1, 1, "while the spec run runs")
+			tc.taken(tr, e.clock.Now())
+			e.heldFor(6, 0, "with the notification taken in and not answered")
+			tr.add(assistantSays(e.clock.Now(), "Specs pass."), turnEnded(e.clock.Now()))
+			e.ends(id, "after the lead answered")
+		})
+	}
+}
+
+// The events of a teammate's persistent Monitor reach the lead's
+// transcript; they are the teammate's work, not the lead's to answer (the
+// re-review's probe, which held the run with every event).
+func TestObserveIsNotHeldByEventsOfATeammatesPersistentMonitor(t *testing.T) {
+	e := newEnv(t)
+	tr := e.claudeTranscript()
+	id := e.promptClaude()
+	now := e.clock.Now()
+	tr.add(userPrompt(now, "build it"))
+	tr.addAll(teammateSpawned(now.Add(time.Second), "toolu_mate1", mateA))
+	mt := tr.teammate(mateA)
+	mt.add(mateMail(now.Add(2*time.Second), mateA))
+	mt.addAll(mates(mateA, monitorStarted(now.Add(3*time.Second), "toolu_mon1", "bmon1", true)), mateDone(now.Add(5*time.Second), mateA))
+	leadIdle(tr, now.Add(6*time.Second))
+	enqueuedOnly(tr, now.Add(20*time.Second), monitorEventText("bmon1"))
+	e.clock.Add(time.Minute)
+	e.ends(id, "after an event of the teammate's persistent Monitor")
+}
+
+// esc in a teammate's tool use (the re-review's probe): the line esc writes
+// ends its turn.
+func TestObserveIsNotHeldByATeammateWhoseTurnEscCut(t *testing.T) {
+	e := newEnv(t)
+	tr := e.claudeTranscript()
+	id := e.promptClaude()
+	now := e.clock.Now()
+	tr.add(userPrompt(now, "build it"))
+	tr.addAll(teammateSpawned(now.Add(time.Second), "toolu_mate1", mateA))
+	mt := tr.teammate(mateA)
+	mt.add(mateMail(now.Add(2*time.Second), mateA),
+		mate(mateA, stopped(toolUse(now.Add(3*time.Second), "toolu_m1", "Bash", map[string]any{"command": "bin/rspec"}), "tool_use")),
+		mate(mateA, toolResult(now.Add(4*time.Second), "toolu_m1", "Interrupted", map[string]any{"interrupted": true}, true)),
+		mate(mateA, userPrompt(now.Add(4*time.Second), "[Request interrupted by user]")))
+	leadIdle(tr, now.Add(5*time.Second))
+	e.ends(id, "after esc ended the teammate's turn")
+}

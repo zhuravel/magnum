@@ -46,7 +46,9 @@ import (
 // teammate's own. Claude Code queues the notification of a teammate's work
 // in the lead's transcript and wakes neither the lead nor an idle teammate
 // with it: it ends the teammate's work there (ended), and it is not the
-// lead's to answer. With no run in flight
+// lead's to answer. A notification the agent took into a turn holds the run
+// until it answers; one that only reached its queue holds it for queueGrace
+// at most (unanswered). With no run in flight
 // the agent still works on its own: on background work an earlier run left
 // running (the subagents of a turn the restart's esc cut short) or on the
 // turn a task notification began. The observer takes it for a human's only
@@ -79,6 +81,9 @@ const (
 	// maxMates is how many teammates a run's watch watches at most: a
 	// further spawn holds nothing.
 	maxMates = 16
+	// queueGrace is how long a task notification that only reached the
+	// agent's queue (not taken into a turn) holds the run, from its enqueue.
+	queueGrace = 2 * time.Minute
 )
 
 // bgWatch is what the transcript of one claude session says about the run
@@ -146,11 +151,13 @@ type bgWatch struct {
 	failed   string // the last read error logged ("" = none)
 }
 
-// notice is one task notification read: when, and the tool use and task it
-// names.
+// notice is one task notification read: when, the tool use and task it
+// names, and whether the agent took it into a turn (its user entry or its
+// queued command) or it only reached the agent's queue (an enqueue).
 type notice struct {
 	at            time.Time
 	toolUse, task string
+	taken         bool
 }
 
 // teammate is an in-process teammate the agent spawned: its agent id, which
@@ -228,7 +235,7 @@ func (m *Manager) backgroundWait(ctx context.Context, s store.Session, sid strin
 	}
 	now := m.now()
 	tasks = w.pending(now) + w.matesAtWork(now)
-	hold = (tasks > 0 && !w.released) || w.unanswered()
+	hold = (tasks > 0 && !w.released) || w.unanswered(now)
 	if tasks > 0 && !w.released && !w.told {
 		w.told = true
 		noun := "tasks"
@@ -344,12 +351,14 @@ func (w *bgWatch) endAll(ended map[string]bool) {
 }
 
 // unanswered reports whether a task notification w read is not answered
-// yet, leaving out the notifications of its teammates' work (no teammate of
-// w's launched what they name): Claude Code queues those in the lead's
-// transcript but does not wake the lead with them.
-func (w *bgWatch) unanswered() bool {
+// yet at now and holds the run: one the agent took into a turn until it
+// answers, one that only reached its queue for queueGrace from its enqueue
+// (an idle agent takes its own in at once; Claude Code wakes no one with a
+// teammate's), and none of the work of a teammate w watches (what it names
+// is in a teammate's launched).
+func (w *bgWatch) unanswered(now time.Time) bool {
 	return slices.ContainsFunc(w.notes, func(n notice) bool {
-		return n.at.After(w.reply) && !w.matesWork(n)
+		return n.at.After(w.reply) && (n.taken || now.Before(n.at.Add(queueGrace))) && !w.matesWork(n)
 	})
 }
 
@@ -423,7 +432,7 @@ func (w *bgWatch) readSide(r io.ReaderAt, size int64) {
 // not its to answer: an idle teammate is not woken by it), or the readings
 // are behind its transcript.
 func (w *bgWatch) atWork(now time.Time) bool {
-	return w.inTurn || w.pending(now) > 0 || w.unanswered() || w.behind
+	return w.inTurn || w.pending(now) > 0 || w.unanswered(now) || w.behind
 }
 
 // humanTurn reports whether the agent of session s (Claude Code session
@@ -1006,7 +1015,7 @@ func (w *bgWatch) apply(line []byte) {
 		for i, b := range blocks {
 			switch b.Type {
 			case "text":
-				w.notified(b.Text, e.Timestamp)
+				w.notified(b.Text, e.Timestamp, true)
 				if e.interruption(b.Text) {
 					w.inTurn = false // the turn ended there
 					if e.Timestamp.After(w.cut) {
@@ -1024,16 +1033,17 @@ func (w *bgWatch) apply(line []byte) {
 			clear(w.queued)
 		case !ok:
 		case e.Operation == "enqueue":
-			w.notified(text, e.Timestamp)
+			w.notified(text, e.Timestamp, false)
 			w.queued[text] = append(w.queued[text], e.Timestamp)
 		case e.Operation == "remove": // taken into the turn (its attachment says when it was queued), or dropped
 			w.unqueue(text)
 		}
 	case "attachment":
-		// A teammate's transcript gets no enqueue (its lead's does): only the
-		// queued command of a notification it took into a turn.
-		if a, _ := e.Attachment.(map[string]any); w.side && str(a["type"]) == "queued_command" && str(a["commandMode"]) == "task-notification" {
-			w.notified(str(a["prompt"]), e.Timestamp)
+		// The queued command of a notification the agent took into the turn
+		// it was in. A teammate's transcript gets no enqueue (its lead's
+		// does): this is all it gets.
+		if a, _ := e.Attachment.(map[string]any); str(a["type"]) == "queued_command" && str(a["commandMode"]) == "task-notification" {
+			w.notified(str(a["prompt"]), e.Timestamp, true)
 		}
 	}
 }
@@ -1095,7 +1105,11 @@ func (w *bgWatch) result(b tBlock, res map[string]any, first bool, at time.Time)
 	case res["background"] == true || res["status"] == "async_launched":
 		w.launch(id, cmp.Or(str(res["agentId"]), str(res["taskId"]), str(res["task_id"]), id))
 	case str(res["taskId"]) != "" && res["timeoutMs"] != nil: // a Monitor
-		if ms, _ := res["timeoutMs"].(float64); res["persistent"] != true && ms > 0 {
+		ms, _ := res["timeoutMs"].(float64)
+		switch {
+		case res["persistent"] == true: // no task, but its events are of w's work
+			w.launched[id], w.launched[str(res["taskId"])] = true, true
+		case ms > 0:
 			w.launch(id, str(res["taskId"]))
 			w.until[id] = at.Add(time.Duration(ms)*time.Millisecond + monitorGrace)
 		}
@@ -1113,12 +1127,12 @@ var (
 )
 
 // notified reads the task notifications in text, a user message or a
-// queued one, stamped at: each ends the task it names (by tool use or task
-// id, kept in ended) unless its status says the task still runs or it is
-// one event of a Monitor that watches on (an <event> and no status), and
-// each but those of a running task is one for the agent to answer (notes;
-// see unanswered).
-func (w *bgWatch) notified(text string, at time.Time) {
+// queued one (taken: into a turn, not only into the queue), stamped at:
+// each ends the task it names (by tool use or task id, kept in ended)
+// unless its status says the task still runs or it is one event of a
+// Monitor that watches on (an <event> and no status), and each but those of
+// a running task is one for the agent to answer (notes; see unanswered).
+func (w *bgWatch) notified(text string, at time.Time, taken bool) {
 	if !strings.Contains(text, "<task-notification>") {
 		return
 	}
@@ -1129,7 +1143,7 @@ func (w *bgWatch) notified(text string, at time.Time) {
 		if st != nil && (st[1] == "running" || st[1] == "pending") {
 			continue
 		}
-		var n notice
+		n := notice{taken: taken}
 		if x := notifiedToolUse.FindStringSubmatch(block); x != nil {
 			n.toolUse = x[1]
 		}
