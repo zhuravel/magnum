@@ -4675,6 +4675,34 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the keys and the words alone; TestAnApprovalAcceptsTheReviewersEarlierItemsOnly also holds that the reviewer's
   reply in their thread and a body edited after the approval stay open (comparing the thread's root, or the
   remark's creation, fails it); TestALoopsNeedsYouWithAReplyKeepsItsRules pins the loop's rules.
+- **Team hooks and a PR's mise file stay as they are** (2026-11-10, the operator's decision after a read-only
+  audit). When a PR leaves the project configuration alone, a Claude session loads the team's
+  `.claude/settings.json`. A team's PostToolUse hook can then run linters (rubocop, eslint, haml-lint,
+  markdownlint, stylelint) after every Write or Edit inside the checkout. Those linters load the PR's
+  Gemfile, binstubs and lint configuration, so PR code runs outside any sandbox. The audit found that review
+  roles never write inside a checkout. About 12,000 writes of the review, simplify, judge and whiteboard
+  roles all went to the reviews directory or the session's scratchpad. Three kinds of session write inside.
+  The fixer writes only on the operator's own PRs, because the fix loop refuses others. The factory writes
+  in task copies of the default branch. The staging resolver writes in a staging tree, and then runs the
+  specs of the same tree, as its prompt requires. magnum also runs a PR's code itself. When a lockfile
+  changes, the pool's post_checkout installs gems and packages. A repository's prepare and ready steps run
+  every round. So the hook gives a coworker's PR nothing that it does not already have.
+  A PR that changes a mise file (`mise.toml`, `.mise.toml`, `.tool-versions`, `.mise/`) is the wider path.
+  The operator's mise configuration trusts the directories of the checkouts. So an `[env] _.source` script
+  or a RUBYOPT or NODE_OPTIONS value runs in every pane shell of the slot, for every role, with no agent
+  action. The operator accepts both paths as one insider risk. PR authors are members of the organization
+  or allowed bot authors (`skip_cross_repository`). Also, 38 of 46 reviews of coworkers' PRs ran the PR's
+  specs anyway.
+  Rejected: `disableAllHooks` on coworkers' PRs. It also turns off magnum's own agent hooks, so turn ends
+  fall back to polling, and it gains nothing while review roles never write inside.
+  Rejected: `--setting-sources user` on coworkers' PRs. The reviewer loses the team's instructions and
+  skills.
+  Rejected: a guard that ignores a changed mise file in the slot. magnum then reviews a PR that bumps a
+  toolchain on the base's toolchain, and its specs can fail for that reason alone.
+  Rejected: sandboxed review sessions (see "Plain codex and claude binaries run without approval prompts by
+  default").
+  If magnum stops running PR code on purpose, the team hooks and the mise file are the first paths to close.
+  Sandboxed review sessions are one example of that change.
 
 ## Screens and commands
 
