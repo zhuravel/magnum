@@ -701,7 +701,7 @@ func TestACleanTenthRoundGetsItsSecondOpinionAsRoundEleven(t *testing.T) {
 		f.Title, f.Line = fmt.Sprintf("%s (round %d)", unitFinding.Title, i+1), 14+i
 		answers = append(answers, result(f))
 	}
-	answers = append(answers, result(), result())
+	answers = append(answers, rounds(2, result())...)
 	r := newReviewRig(t, answers...)
 	r.cfg.Factory.LocalReview.Cycles = 10
 	task, _ := r.wideReviewTask("PR-12395")
