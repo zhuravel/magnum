@@ -607,10 +607,13 @@ func (e *Engine) readCIBase(ctx context.Context, repo store.Repo, w config.Watch
 // whose check runs of that name (any workflow: a reusable workflow on the
 // base names its jobs as the PR's) finished it decides: passed, or failed
 // (a run skipped beside a failed job of its workflow file counts as
-// failed). A commit where it has not ended is passed over (a busy base's
-// tip runs it while its parent finished it), and it is running when no
-// commit read finished it but one runs it; a skip with no failure beside it
-// (a path filter) is no run. No commit that ran it is never. The worst of
+// failed). A commit where it has not ended is passed over for an older one
+// that passed it (a busy base's tip runs it while its parent finished it),
+// and it is running when no commit read finished it but one runs it, or
+// one runs it above a commit that failed it (the newer run may pass, and a
+// running word is read again settle_max later, where a failed one stands
+// until the tip moves); a skip with no failure beside it (a path filter) is
+// no run. No commit that ran it is never. The worst of
 // its names is c's word (failed, running, never, passed), each name's word
 // in Each when it compared more than one.
 func ciBaseOf(commits []github.CommitWithChecks, c ciFailedCheck) ciBaseCheck {
@@ -628,13 +631,15 @@ func ciBaseOf(commits []github.CommitWithChecks, c ciFailedCheck) ciBaseCheck {
 			switch {
 			case !ok:
 				continue
-			case state == ciBaseRunning: // an older commit that finished it decides; running when none did
+			case state == ciBaseRunning: // an older commit that passed it decides; running when none finished it
 				if got.State == ciBaseNever {
 					got = ciBaseCheck{Name: name, SHA: cm.SHA, State: state}
 				}
 				continue
 			}
-			got = ciBaseCheck{Name: name, SHA: cm.SHA, State: state}
+			if state == ciBasePassed || got.State != ciBaseRunning { // a failure under a newer run that may pass: running
+				got = ciBaseCheck{Name: name, SHA: cm.SHA, State: state}
+			}
 			break
 		}
 		each = append(each, got)

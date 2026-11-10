@@ -3894,10 +3894,11 @@ required check still runs, the look checks that the PR's own files at the head a
 no CI config (`.github/workflows/`, `.github/actions/`, an `action.yml`), that every failed check is a
 GitHub Actions job, and reads the base's CI once per head, failed set and base tip (one GraphQL call as the
 poll identity: the base tip the look fetched and its four first parents): the newest of them that finished
-the failed job's check decides, past a tip where it still runs. Red there, or never run in those five, needs
-you ("required check Completion failed at a1b2c3d, and on master at c0c0c0c too: magnum fixes only a check
-that passes on the base"; "…; master's last 5 commits never ran it: …"); running with none of the five
-finished waits. Green there, rule 9's
+the failed job's check decides, past a tip where it still runs to an older one where it passed. Red there, or
+never run in those five, needs you ("required check Completion failed at a1b2c3d, and on master at c0c0c0c
+too: magnum fixes only a check that passes on the base"; "…; master's last 5 commits never ran it: …");
+running with none of the five finished, or above one where it failed (the tip may pass), waits and is read
+again `settle_max` later. Green there, rule 9's
 terms hold the start as any (the settle, the hands off after your push, `magnum pause`, quiet hours, the
 daily cap of loops, whose words read "3 loops today: f starts another, c a CI fix"), and the verdict says
 "starts a CI fix of required check Completion at a1b2c3d (CI fix 1 of 3)". Right before the start Magnum
