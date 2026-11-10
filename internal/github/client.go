@@ -78,6 +78,21 @@ type Client struct {
 	repoPage, prPage int
 }
 
+// WithEnv is a client that runs gh as c does with env laid over c's Env:
+// the daemon's client of one batch of Actions calls over a token minted
+// for it (GH_TOKEN, which gh answers with before GH_CONFIG_DIR's
+// hosts.yml). It keeps c's Run, Dir and Meter (the calls count against the
+// identity's budget) and has no Reauth: a 401 of that token is no reason to
+// refresh the identity's own. c is not changed.
+func (c *Client) WithEnv(env map[string]string) *Client {
+	out := &Client{Run: c.Run, Env: maps.Clone(c.Env), Dir: c.Dir, Meter: c.Meter, now: c.now, repoPage: c.repoPage, prPage: c.prPage}
+	if out.Env == nil {
+		out.Env = map[string]string{}
+	}
+	maps.Copy(out.Env, env)
+	return out
+}
+
 // RateLimit is GitHub's GraphQL rateLimit{} block.
 type RateLimit struct {
 	Limit     int
