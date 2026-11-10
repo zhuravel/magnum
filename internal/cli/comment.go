@@ -157,7 +157,7 @@ func runComment(c *Context, f commentFlags, pos []string) int {
 	if err != nil {
 		return commentInvalid(c, named, err.Error())
 	}
-	login := id.Account()
+	login := id.Login
 	o := postreview.CommentOptions{Owner: owner, Repo: repo, Number: number, ReplyTo: f.replyTo, RequestReviews: f.reviewers, Title: f.title,
 		Login: login, Identity: id.Name, MagnumLogins: c.Config.MagnumThreadLogins(), DryRun: f.dryRun}
 	base, ok := o.Check()

@@ -24,16 +24,17 @@ func commentConfig() *Config {
 
 // magnum comment posts as the fixer App of the watch that covers the
 // repository, in any case: with two watches of one owner, each repository
-// gets its own watch's App.
+// gets its own watch's App, its login in Account form.
 func TestCommentIdentityIsTheWatchsFixerApp(t *testing.T) {
 	cfg := commentConfig()
 	cfg.Normalize()
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate = %v", err)
 	}
+	cfg.Identities[len(cfg.Identities)-1].Login = "fixer-two" // the config may leave an App's "[bot]" out
 	for full, want := range map[string]string{"talkable/talkable": "fixer-app", "Talkable/Example-Repo": "fixer-two"} {
 		w, id, err := cfg.CommentIdentity(full)
-		if err != nil || id == nil || id.Name != want || w == nil || w.FixIdentity != want {
+		if err != nil || id == nil || id.Name != want || id.Login != want+"[bot]" || w == nil || w.FixIdentity != want {
 			t.Errorf("CommentIdentity(%s) = %v, %+v, %v; want %s", full, w, id, err, want)
 		}
 	}

@@ -34,6 +34,7 @@ type commentPull struct {
 // commentWorld is a world whose posts go out as the fixer App, with pull
 // request 5's title and review requests read and written through p.
 func commentWorld(t *testing.T) (*world, *commentPull) {
+	t.Helper()
 	w := newWorld(t)
 	w.postAs = "fixer-app"
 	p := &commentPull{title: "Fix the total"}

@@ -5507,8 +5507,10 @@ func (c *Config) CommentIdentity(fullName string) (*Watch, *Identity, error)
     ("owner/name") and the identity `magnum comment` posts on its PRs as:
     the watch's fix_identity, which must be a GitHub App of the fixer's own
     (DedicatedFixApp) whose tokens reach the repository (token_repositories).
-    It never falls back to another identity (FixRoleFor's fix role or poll
-    identity, the operator's gh login): each refusal names the key to set.
+    The identity is a copy whose Login is in Account form (with its "[bot]",
+    which the config may leave out): the author GitHub must show. It never
+    falls back to another identity (FixRoleFor's fix role or poll identity,
+    the operator's gh login): each refusal names the key to set.
 
 func (c *Config) CommentsWhenClean(repo, identity, author string) bool
     CommentsWhenClean reports whether the identity named identity posts
@@ -6531,10 +6533,6 @@ type Identity struct {
 	// unset): a fixer App's commits carry <user_id>+<login>@users.noreply.github.com.
 	UserID int64 `toml:"user_id"`
 }
-
-func (i Identity) Account() string
-    Account is the identity's login in Account form: an App's with its "[bot]"
-    (the config may leave it out), a gh identity's as it is.
 
 func (i Identity) DismissStale() bool
     DismissStale reports whether the identity dismisses its own stale

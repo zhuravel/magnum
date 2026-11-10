@@ -12,6 +12,8 @@ import (
 // ("owner/name") and the identity `magnum comment` posts on its PRs as:
 // the watch's fix_identity, which must be a GitHub App of the fixer's own
 // (DedicatedFixApp) whose tokens reach the repository (token_repositories).
+// The identity is a copy whose Login is in Account form (with its "[bot]",
+// which the config may leave out): the author GitHub must show.
 // It never falls back to another identity (FixRoleFor's fix role or poll
 // identity, the operator's gh login): each refusal names the key to set.
 func (c *Config) CommentIdentity(fullName string) (*Watch, *Identity, error) {
@@ -41,7 +43,9 @@ func (c *Config) CommentIdentity(fullName string) (*Watch, *Identity, error) {
 	if !slices.ContainsFunc(id.TokenRepositories, func(r string) bool { return strings.EqualFold(r, name) }) {
 		return nil, nil, fmt.Errorf("the App %s's tokens do not reach %s: add %q to token_repositories of [[identity]] %s", id.Name, fullName, name, id.Name)
 	}
-	return w, id, nil
+	out := *id
+	out.Login = accountOf(out)
+	return w, &out, nil
 }
 
 // MagnumThreadLogins are the logins whose review threads magnum's review
@@ -60,22 +64,22 @@ func (c *Config) MagnumThreadLogins() []string {
 	}
 	for _, w := range c.Watches {
 		if id := c.IdentityByName(w.Identity); id != nil {
-			add(id.Account())
+			add(accountOf(*id))
 		}
 	}
 	for _, id := range c.Identities {
 		if id.Kind == "app" {
-			add(id.Account())
+			add(accountOf(id))
 		}
 	}
 	return out
 }
 
-// Account is the identity's login in Account form: an App's with its
-// "[bot]" (the config may leave it out), a gh identity's as it is.
-func (i Identity) Account() string {
-	l := strings.TrimSpace(i.Login)
-	if i.Kind == "app" {
+// accountOf is id's login in Account form: an App's with its "[bot]" (the
+// config may leave it out), a gh identity's as it is.
+func accountOf(id Identity) string {
+	l := strings.TrimSpace(id.Login)
+	if id.Kind == "app" {
 		return github.Account(l, "Bot")
 	}
 	return l
