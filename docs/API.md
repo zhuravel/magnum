@@ -699,6 +699,11 @@ const LostGrace = 15 * time.Second
     failed on a judge marked lost in the second it started: the tick's snapshot
     was taken before StartAgent made the session live.
 
+const MaxImportHops = 5
+    MaxImportHops is how many hops of imports magnum follows from an instruction
+    file: Claude Code's four, and one more, so an off-by-one in either reading
+    errs toward a target.
+
 const MaxPromptDenies = 10
     MaxPromptDenies caps the permission prompts magnum denies, plus the
     after-deny continuations it sends, per run: an agent that keeps asking is
@@ -941,6 +946,18 @@ func HooksReviewShown(text string) bool
     shows Codex's startup hooks review live at its bottom (detectHooksDialog):
     a session that shows it eats its next prompt until someone answers it.
 
+func ImportPaths(text string) []string
+    ImportPaths are the paths text imports (@path), each once, in order,
+    read wider than Claude Code reads them so that magnum errs toward a target:
+    an @ at the start of the text or after any character but a letter or a digit
+    (an e-mail address imports nothing), up to the first blank a backslash
+    does not escape ("\ " is a space of the path), given with and without the
+    punctuation that may end a sentence after it, in a code span or a fenced
+    block too, which Claude skips. A home (~) or an absolute path is left out:
+    no commit's tree holds it, and Claude loads a file outside its working
+    directory only once the user approves the project's external imports,
+    which magnum never does.
+
 func JoinCodexHookProblems(problems []CodexHookProblem) string
     JoinCodexHookProblems says problems in one sentence without its final
     period: the first in full, each other after "; it" ("herdr's Codex session
@@ -1004,6 +1021,16 @@ func MagnumCommands(cfg *config.Config) map[string]bool
     read: what the factory records of its panes, and the baseline of what the
     operator typed before it, drop their records (MagnumCommand), so a person's
     command of one of these names is dropped on both sides alike.
+
+func MayFold(a, b string) bool
+    MayFold reports whether a case-insensitive filesystem may open a for b, two
+    names of one path element of which at least one has a byte outside ASCII:
+    magnum does not model the filesystem's fold of such a name (APFS folds ß to
+    ss and ﬁ to fi and decomposes é, HFS+ ignores some code points), but every
+    rune outside ASCII folds to zero or more runes and an ASCII one to its lower
+    case, so the ASCII letters of one name, in order, are always among those of
+    the other's fold. False for two ASCII names (asciiEqualFold decides those),
+    and for two names a fold cannot match: José is never app.
 
 func NewRunID(now time.Time) string
     NewRunID is a run id: "r-<UTC yyyymmddThhmmss>-<6 random hex digits>",
@@ -1080,11 +1107,12 @@ func PostReviewLine(d JudgeData) string
 
 func ProjectLinks(kind, dir string) (targets []string, partial bool)
     ProjectLinks are the targets, relative to the checkout dir's root, of the
-    links among kind's paths at its root and under its project directories,
-    and under a directory such a link leads to, as the disk has them (onDisk:
-    what a session in dir loaded through them), sorted; partial reports that the
-    walk stopped at maxLinkWalk entries, so one may be missing. None for a kind
-    magnum does not compare.
+    links among kind's paths at its root and under its project directories, and
+    under a directory such a link leads to, and the files the instruction files
+    there import (addImports), as the disk has them (onDisk: what a session in
+    dir loaded through them), sorted; partial reports that the walk stopped at
+    maxLinkWalk entries, so one may be missing. None for a kind magnum does not
+    compare.
 
 func ProjectPaths(kind string) []string
     ProjectPaths are the paths, relative to the checkout's root, that kind
@@ -1315,11 +1343,9 @@ func Title(repo string, number int, role Role) string
     with Deps.Tag and Deps.OwnerName's owner in place of "PR #<N>".
 
 func UnderTarget(f, t string) bool
-    UnderTarget reports whether f, a path relative to the checkout's root,
-    is the link target t or lies under it, element by element in any case and
-    under Unicode folding (strings.EqualFold), as a case-insensitive filesystem
-    (macOS's) opens it: git names a tracked file in its own case, while a link's
-    text, which its target keeps (linkTarget), may spell it in another.
+    UnderTarget reports whether f may be the link target t or lie under it
+    (MatchTarget: Under or MaybeUnder): a name magnum cannot fold counts,
+    so the session and the reload check err toward the config.
 
 
 TYPES
@@ -3488,6 +3514,33 @@ const (
     The classes of StopFailure: Claude Code's error names, and StopFailureOther
     for any other (invalid_request, server_error, max_output_tokens, unknown,
     anything an agent made up).
+
+type TargetMatch int
+    TargetMatch says whether a path is a link's target or lies under it
+    (MatchTarget).
+
+const (
+	// NotUnder: the path is neither the target nor under it.
+	NotUnder TargetMatch = iota
+	// MaybeUnder: it may be, and magnum cannot tell: an element of the path
+	// and the target's that differ have a byte outside ASCII, which a
+	// case-insensitive filesystem folds by rules of its own (APFS opens
+	// claß.md for class.md, ﬁrst.md for first.md and a decomposed name for
+	// its composed spelling; HFS+ also ignores some code points), and the
+	// ASCII letters of the one are among the other's (MayFold).
+	MaybeUnder
+	// Under: the path is the target or lies under it.
+	Under
+)
+func MatchTarget(f, t string) TargetMatch
+    MatchTarget says whether f, a path relative to the checkout's root, is the
+    link target t or lies under it, element by element, in ASCII case: git names
+    a tracked file in its own case, while a link's text, which its target keeps
+    (linkTarget), may spell it in another, and every case-insensitive filesystem
+    folds ASCII alike. An element with a byte outside ASCII matches only one
+    of the same bytes for sure; where it differs, the answer is MaybeUnder.
+    The target "" (a link to the checkout's root, .claude/skills -> ..) covers
+    every path.
 
 type ThreadReply struct {
 	ID     int64  `json:"id"` // REST comment id
@@ -11079,9 +11132,10 @@ type Git interface {
 	// commit, the base a post-merge round reviews from (postMergeBase).
 	RevParse(ctx context.Context, dir, ref string) (string, error)
 	FetchCommit(ctx context.Context, mainClone, sha string, number int) error
-	// ChangedUnder tells whether a head changes the project config a
-	// running agent reloads (parkReloading).
-	ChangedUnder(ctx context.Context, dir, base, head string, paths ...string) ([]string, error)
+	// ChangedNames tells whether a head changes the project config a
+	// running agent reloads (parkReloading): every file it changes, which
+	// the engine matches itself (git's pathspec folds ASCII case only).
+	ChangedNames(ctx context.Context, dir, base, head string) ([]string, error)
 	// DiffStat measures the PR's size at a full pass's baseline, in the
 	// round's checkout (prSize, fullpass.go).
 	DiffStat(ctx context.Context, dir, base, head string) ([]gitx.FileStat, error)
@@ -11098,9 +11152,12 @@ type Git interface {
 	// pushed descends from the PR row's head, a push the poller saw during
 	// the run (the base merge `magnum fix-sync` replayed onto: recordFixPush).
 	IsAncestor(ctx context.Context, dir, ancestor, rev string) (bool, error)
-	// Symlinks are the links of a head's tree, which the files gate and
-	// the reload check follow to what they lead to (config_links.go).
-	Symlinks(ctx context.Context, dir, rev string) (map[string]string, error)
+	// Tree and Blobs read a head's tree: its links, which the files gate,
+	// the reload check and the trivial-delta check follow to what they lead
+	// to, and the instruction files whose @path imports they follow too
+	// (config_links.go).
+	Tree(ctx context.Context, dir, rev string, keep func(path string) bool) (gitx.Tree, error)
+	Blobs(ctx context.Context, dir, rev string, paths []string) (map[string]string, error)
 }
     Git is the part of *gitx.Client the engine reads (round context, clone
     discovery for repos.clone_path).
@@ -19647,8 +19704,9 @@ var ErrNotDescendant = errors.New("gitx: the commit does not descend from the re
     from the remote head it expects: the push would rewrite history.
 
 var ErrTreeTooLarge = errors.New("gitx: tree too large to list")
-    ErrTreeTooLarge is Symlinks' error for a tree whose listing passes
-    execx.MaxOutput: a link it would leave out may be one that matters.
+    ErrTreeTooLarge is Symlinks' error for a tree, and ChangedNames' for a list
+    of names, whose listing passes execx.MaxOutput: a link or a path it would
+    leave out may be one that matters.
 
 
 FUNCTIONS
@@ -19751,6 +19809,14 @@ func (c *Client) BlameLine(ctx context.Context, dir, rev, path string, line int)
     path is relative to dir, the top of a work tree: blame takes no pathspec
     magic). A line the file does not have at rev is an error.
 
+func (c *Client) Blobs(ctx context.Context, dir, rev string, paths []string) (map[string]string, error)
+    Blobs reads the files paths name in rev's tree (each from the top,
+    as git stores it) from the object store, in one `git cat-file --batch`
+    of "<rev>:<path>": each regular file or link found with its content (a
+    link's is its text); a path rev lacks, or names a directory, is left out.
+    A path with a line feed cannot be asked and fails, and so does an output
+    past execx.MaxOutput (ErrTreeTooLarge). rev must name a commit.
+
 func (c *Client) BranchDelete(ctx context.Context, mainClone, branch string, force bool) error
     BranchDelete deletes a local branch (force = -D, otherwise -d). A branch
     that does not exist counts as deleted; git's refusal to delete an existing
@@ -19779,6 +19845,16 @@ func (c *Client) ChangedFiles(ctx context.Context, dir, base, head string) ([]Fi
     a deletion plus an addition), in git's order; nil when head changes nothing.
     Unlike DiffLines it reads no patch, so a change of any size fits.
 
+func (c *Client) ChangedNames(ctx context.Context, dir, base, head string) ([]string, error)
+    ChangedNames lists every file head changes since its merge base with
+    base (git diff --name-only base...head, with no pathspec), a rename as a
+    deletion plus an addition, for a caller that matches the paths itself:
+    git's icase pathspec folds ASCII only, so a literal .agents/skills misses
+    a commit's .agents/ſkills/x/SKILL.md, which a case-insensitive filesystem
+    (macOS's) writes into .agents/skills/x/. A listing past execx.MaxOutput
+    fails (ErrTreeTooLarge): a path it would leave out may be one that matters.
+    nil when nothing changed.
+
 func (c *Client) ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error)
     ChangedPaths lists the files head changed relative to its merge base with
     base (git diff base...head), optionally limited to pathspecs such as "db/".
@@ -19787,10 +19863,10 @@ func (c *Client) ChangedPaths(ctx context.Context, dir, base, head string, paths
 
 func (c *Client) ChangedUnder(ctx context.Context, dir, base, head string, paths ...string) ([]string, error)
     ChangedUnder is ChangedPaths limited to the files paths name, each relative
-    to the repository's top in any case (pathspecs: a directory or a file taken
-    literally, or "**/<name>" in any directory): what head changes there since
-    its merge base with base, whatever base did since. One git diff; nil when
-    head leaves them all alone.
+    to the repository's top in any ASCII case (pathspecs: a directory or a file
+    taken literally, or "**/<name>" in any directory): what head changes there
+    since its merge base with base, whatever base did since. One git diff;
+    nil when head leaves them all alone.
 
 func (c *Client) Clone(ctx context.Context, repoURL, dest string) error
     Clone clones url into the absolute path dest (parents are created). URLs
@@ -20232,13 +20308,14 @@ func (c *Client) SwitchDetachKeepUntracked(ctx context.Context, dir, ref string)
     copy, whose files are yours, with it.
 
 func (c *Client) Symlinks(ctx context.Context, dir, rev string) (map[string]string, error)
-    Symlinks are the symbolic links of rev's tree, from the object store (never
-    the work tree): each link's path from the top, with its text, the path it
-    names as git stores it (relative to the link's directory, or absolute).
-    One `git ls-tree -r` of the whole tree and, when it has links, one `git
-    cat-file --batch` of their blobs; an empty map when it has none. A listing
-    past execx.MaxOutput is ErrTreeTooLarge, and a commit the clone lacks fails.
-    rev must name a commit.
+    Symlinks are the symbolic links of rev's tree (Tree's Links), from the
+    object store (never the work tree): an empty map when it has none.
+
+func (c *Client) TrackedFiles(ctx context.Context, dir string, paths ...string) (links, files []string, err error)
+    TrackedFiles is TrackedSymlinks that also gives the regular files of dir's
+    index that paths name (a blob of mode 100644 or 100755), each once, in git's
+    order: the instruction files and project files a session reads for the files
+    they import.
 
 func (c *Client) TrackedSymlinks(ctx context.Context, dir string, paths ...string) ([]string, error)
     TrackedSymlinks are the symbolic links of dir's index that paths name
@@ -20247,6 +20324,14 @@ func (c *Client) TrackedSymlinks(ctx context.Context, dir string, paths ...strin
     each link's path from the top, in git's order; nil when there are none.
     A session's checkout compares what such a link leads to, which may lie
     anywhere in it (app/CLAUDE.md -> ../docs/app.md).
+
+func (c *Client) Tree(ctx context.Context, dir, rev string, keep func(path string) bool) (Tree, error)
+    Tree reads rev's tree from the object store (never the work tree):
+    its symbolic links with their texts, and the paths of its regular files
+    keep accepts (nil keeps none). One `git ls-tree -r` of the whole tree and,
+    when it has links, one `git cat-file --batch` of their blobs. A listing past
+    execx.MaxOutput is ErrTreeTooLarge, and a commit the clone lacks fails.
+    rev must name a commit.
 
 func (c *Client) TreeFiles(ctx context.Context, dir, rev string, pathspecs ...string) ([]string, error)
     TreeFiles lists the files of rev (a commit) that pathspecs match,
@@ -20299,7 +20384,7 @@ func (c *Client) WordUses(ctx context.Context, dir, rev, word string) ([]Use, er
 
 func (c *Client) WorkTreeChanges(ctx context.Context, dir, base string, skip func(untracked string) bool, paths ...string) ([]string, error)
     WorkTreeChanges lists the files paths name (each relative to the
-    repository's top in any case, pathspecs: a directory or a file taken
+    repository's top in any ASCII case, pathspecs: a directory or a file taken
     literally, or "**/<name>" in any directory) whose state on disk differs
     from base, as a tool reading them sees them: committed and uncommitted
     changes and deletions (git diff base -- paths), and the untracked files
@@ -20315,6 +20400,13 @@ func (c *Client) WorkTreeDiff(ctx context.Context, dir, rev string) ([]string, e
     WorkTreeDiff lists the tracked paths whose content in the work tree at
     dir is not rev's (a commit or a tree), sorted: `git diff --name-only rev`,
     without rename detection. Untracked files are not listed.
+
+func (c *Client) WorkTreeNames(ctx context.Context, dir, base string) ([]string, error)
+    WorkTreeNames lists every tracked file whose state in dir's work tree (or
+    index) differs from base (git diff --name-only base, with no pathspec),
+    a rename as a deletion plus an addition, for a caller that matches the paths
+    itself (ChangedNames says why); untracked files are not listed. A listing
+    past execx.MaxOutput fails (ErrTreeTooLarge). nil when they all match base.
 
 func (c *Client) WorktreeAdd(ctx context.Context, mainClone, path, ref string, detach bool, branch string) error
     WorktreeAdd creates a worktree at the absolute path, checking out ref.
@@ -20493,6 +20585,17 @@ func (e StatusEntry) Ignored() bool
 
 func (e StatusEntry) Untracked() bool
     Untracked reports whether the entry is an untracked file or directory.
+
+type Tree struct {
+	// Links are its symbolic links: each link's path from the top, with
+	// its text (the path it names as git stores it: relative to the link's
+	// directory, or absolute).
+	Links map[string]string
+	// Files are the paths of its regular files (a blob of mode 100644 or
+	// 100755) that the caller's keep accepted, in git's order.
+	Files []string
+}
+    Tree is what Tree reads of a commit's tree.
 
 type Use struct {
 	Path string
@@ -30703,7 +30806,11 @@ type PRAgentTime struct {
     PRAgentTime is what one PR's runs cost over a window (AgentTimeSince).
 
 type PRFiles struct {
-	HeadSHA   string    // the head the paths belong to
+	HeadSHA string // the head the paths belong to
+	// BaseRef is the base branch GitHub compared the head with when it
+	// listed them (the Details' baseRefName); "" when unknown (a list
+	// stored before migration 0032).
+	BaseRef   string
 	Paths     []string  // never nil once stored
 	Truncated bool      // the PR changes more files than Paths lists
 	FetchedAt time.Time // when the list was written (set by the store)

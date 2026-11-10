@@ -649,7 +649,11 @@ needed" instead. `[daemon] skip_trivial_deltas` (default
 `["comments", "whitespace", "docs", "base", "empty"]`, `[]` = re-review every push) picks the kinds, a
 `[[watch]]` can override it, and `magnum review` always runs. A list you wrote before `empty` existed
 replaces the default and so keeps it off. A file that steers the review agents (an `AGENTS.md`, `CLAUDE.md` or `CLAUDE.local.md` in any
-directory, anything under `.claude/` or `.codex/`, `.mcp.json`) never counts as documentation for this. A
+directory, anything under `.claude/` or `.codex/`, `.mcp.json`) never counts as documentation for this, nor
+does a file a link of those paths in the reviewed commit's tree leads to (`.claude/skills` ->
+`../.agents/skills` makes `.agents/skills/x/SKILL.md` one), a file on the way to such a target (a push may
+turn it into a link), or a file the instruction files import (`@path`); a reviewed commit whose links
+Magnum cannot read makes the push non-trivial. A
 comment line that holds its language's interpolation counts as code, because in a heredoc, a template or a
 `run:` block it runs: `#{` in Ruby and ERB, `{` in Python, `${` in JavaScript, TypeScript, Kotlin, shell and
 Terraform, `{{` in YAML.
@@ -1769,18 +1773,29 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   list, as the poller read it: GitHub's list of what the PR's commits change, with the path each rename
   leaves, which the poller reads from GitHub's REST list for a head whose list has a rename, so a PR that
   moves `.claude/hooks/x.rb` elsewhere changes `.claude/`; while that list cannot be read, a list kept for
-  the same head is dropped and the PR waits without a class), and nothing a link of those paths leads to
+  the same head is dropped and the PR waits without a class), nothing a link of those paths leads to
   (`CLAUDE.md` -> `docs/guide.md`, `app/CLAUDE.md` -> `../docs/app.md`, `.claude/skills` ->
-  `../.agents/skills` and a link under the directory it leads to; in any case). Magnum reads the links from
-  the head's own tree in the PR's clone, whatever head its sessions launched on, and a head whose links it
-  cannot read waits without a class. They steer the review agents, and their hooks run on every
+  `../.agents/skills` and a link under the directory it leads to; a link to the root, `.claude/skills` ->
+  `..`, makes every file one), and nothing those files import (`@path`, Claude Code's imports: a team
+  `AGENTS.md` that imports `@.docs/guide.md` loads the PR's guide; from the importing file's directory,
+  and from the link's for a file reached through one, through the tree's links, five hops deep, one more
+  than Claude's four; a home or an absolute import is never the tree's). Paths match in ASCII case, which
+  every case-insensitive filesystem folds alike; a listed path whose name outside ASCII may fold to a
+  target's (APFS opens `claß.md` for `class.md`, `ﬁrst.md` for `first.md`), and a tree with a link whose
+  path or text is outside ASCII, wait without a class: Magnum does not model a filesystem's fold of such a
+  name. Magnum reads the links and the imports from the head's own tree in the PR's clone, whatever head
+  its sessions launched on, and a head whose links it cannot read waits without a class (a failure the
+  tree always gives is kept for that head, any other for 2 minutes). They steer the review agents, and their hooks run on every
   teammate's machine once merged. That a session of the head left the config out does not count by itself:
   git compared the slot's files with a merge base, so an ignored `__pycache__/*.pyc` an earlier PR's round
   left there, an uncommitted edit, a stacked PR's base branch, or a compare git could not make would hold
   the PR back for something its commits do not change, and each pass decides again. A PR of more files than
   GitHub lists (100) is not approved either, even when the REST list read for its renames names them all. A
   standing approval is held to this gate again when the PR is retargeted to another base branch, and
-  withdrawn when it refuses;
+  withdrawn when it refuses (until the head's file list was read against the base branch the PR now names,
+  the gate refuses too); a push whose file list this gate refuses for good (the agents' config, its own
+  workflows or actions, more files than GitHub lists) withdraws a standing approval at once, before the
+  new head's round, naming the head;
 - it changes none of its own workflows or actions: nothing under `.github/workflows/` or `.github/actions/`
   (in any case; the same file list). A workflow the PR adds may declare the CI workflow's name, and one
   that edits the CI workflow or an action it runs controls what the checks below say, so such a PR waits
@@ -2649,9 +2664,13 @@ and nothing of the checkout's. A `CLAUDE.md` that links to `AGENTS.md` (or an `A
 `CLAUDE.md`, for Codex) loads the PR's file through the link: Magnum compares what an instruction file at
 the root links to as well, what a link under `.claude/` or `.codex/` leads to in the checkout
 (`.claude/skills` -> `../.agents/skills`), what a tracked instruction file or `.claude/` link below the root
-leads to (`app/CLAUDE.md` -> `../docs/app.md`, read from the checkout's index), and a link under a directory
-such a link leads to, matching git's paths in any case (a nested checkout, Claude Code's
-`.claude/worktrees/<name>`, is not looked into; past 10,000 entries the session leaves the config out). A PR based on another branch than the repository's
+leads to (`app/CLAUDE.md` -> `../docs/app.md`, read from the checkout's index), a link under a directory
+such a link leads to, and, for Claude, the files the instruction files and the pages under `.claude/`
+import (`@path`, five hops deep, from the importing file's directory as its path reads it and as the disk
+has it), matching git's paths in ASCII case; a name outside ASCII that may fold to a target's counts, and
+with links the session reads every changed file itself, since git's case-insensitive pathspec folds ASCII
+only (a nested checkout, Claude Code's `.claude/worktrees/<name>`, is not looked into; past 10,000 entries
+the session leaves the config out, and so does a link to the checkout's root). A PR based on another branch than the repository's
 default (a stacked PR) is compared with `origin/<default branch>`: its base branch is another PR's, whose
 changes there nobody reviewed, so they count as its own and stay out. An ignored instruction file below the root (a package's `AGENTS.md` in
 `node_modules/`) is no change. An `agents.claude_project_declined` event records it, the board's card says
@@ -2672,12 +2691,12 @@ and resumed once the new head is checked out; one that works or is blocked holds
 works as the early park's does. It sends one ctrl+c and a second later the kind's `exit_keys` (Claude:
 `/exit`), each after the same look at a bare prompt. Claude ignores two ctrl+c at its idle prompt. The
 checkout's fetch runs first, and the head it fetched decides: by the PR's file list when the list is
-complete and of that head, else (a PR of more files than the list holds) by git, the files that head
-changes there since its merge base with the base branch; a file a link of the config leads to counts (the
-links on the slot's disk and in the fetched head's tree), and a git or links that cannot tell quit the
-session. Not covered: a team `CLAUDE.md` that imports (`@path`) another file the PR changes, a team hook
-that runs a script outside `.claude/` the PR changes, and an agent that checks another commit out in the
-checkout.
+complete and of that head, else (a PR of more files than the list holds) by git, every file that head
+changes since its merge base with the base branch, matched by Magnum rather than by git's pathspec; a file
+a link of the config leads to, or the instruction files import, counts (the links and imports on the slot's
+disk and in the fetched head's tree), and a fetch that fails, a git or links that cannot tell quit the
+session. Not covered: a team hook that runs a script outside `.claude/` the PR changes, an import by an
+absolute path into the checkout, and an agent that checks another commit out in the checkout.
 
 Magnum's Claude sessions (claude-review, claude-simplify, and the retro's classifier and the notes curator
 when they run Claude) run on your own Claude Code setup too: its login, your user settings (hooks, plugins,

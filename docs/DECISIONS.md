@@ -17822,6 +17822,98 @@ skill versions); people add theirs to the sections before it, at the end of the 
   link, a link under a linked directory, an instruction file below the root, a skill below the root) instead
   of on a bare record, and TestAnUnchangedClassEditsNothing changes its reason by a second file of the list.
 
+- **The agents' config gate follows imports and the reviewed head's links, cannot tell a name outside ASCII,
+  and holds a standing approval to the list of the head and base it stands on** (2026-11-10, supersedes in
+  parts "Auto-approval's agent-config gate asks only the PR's file list, renames' previous paths included,
+  and the links of the head's own tree", the same day: its "as macOS's filesystem would" and "in any case",
+  its "Not covered" import, and its rule that a head magnum has not reviewed changes nothing). A security
+  review of that entry's build found ten gaps; each is closed here, test first.
+  - Trivial pushes (P1). `checkDelta` asked `agentConfigPath` only: with `.claude/skills ->
+    ../.agents/skills` (or `CLAUDE.md -> docs/guide.md`) in the base, a push that added `hooks:` to
+    `.agents/skills/x/SKILL.md` settled as docs, no round started, no gate saw it, and a repository without
+    stale-approval dismissal merged it under the operator's approval. It now reads the reviewed commit's
+    targets (`configLinks` of `from`, `linkedSteering`): a file at or under one, or on the way to one (a push
+    can turn `notes.md` of `CLAUDE.md -> notes.md/guide.md` into a link), steers; links it cannot read make
+    the push non-trivial. A push still cannot be told to turn a file into a link from GitHub's comparison
+    alone (it has no modes, and the clone lacks the new head at the poll); a link that matters lies at, under
+    or above a target of the reviewed commit, which this covers, or is a path of the agents' config.
+  - Git's pathspec (P1). The reload check sent the targets to git as literal icase pathspecs, whose fold is
+    ASCII only, so `.agents/ſkills/pwn/SKILL.md`, which APFS writes into `.agents/skills/pwn/`, was never
+    listed (verified on this Mac). `gitx.ChangedNames` (and `WorkTreeNames` for a session's work tree) lists
+    every changed file with no pathspec, failing past `execx.MaxOutput` rather than leave one out, and magnum
+    matches in Go; a session with links does the same beside its pathspec compare.
+  - Names outside ASCII (P2). `strings.EqualFold` folds less than APFS (`claß.md` is `class.md`, `ﬁrst.md`
+    is `first.md`, a decomposed name its composed spelling). Chosen: refuse as cannot-tell, not model the
+    fold. NFD plus full case folding (`golang.org/x/text`) would model APFS alone, at the library's Unicode
+    version, still miss HFS+'s ignored code points and exFAT's upcase table, and add a dependency; ASCII
+    folding is exact on every case-insensitive filesystem. `agents.MatchTarget` compares element by element
+    in ASCII case and says `MaybeUnder` where an element with a byte outside ASCII differs and a fold could
+    still match (`MayFold`: the ASCII letters of one name are, in order, among the other's, so José is never
+    app); the session, the reload check and the trivial-delta check count it, the gate refuses it without a
+    class ("a path outside ASCII may name what a link of the head leads to"). The tree's walk folds ASCII
+    only and fails (`errLinksFoldUnknown`) for a tree with links that steer the agents and a link outside
+    ASCII. The cost: such a PR waits for the operator.
+  - The base of a list (P2). The radar names the base on every poll; the list is the Details'. When the
+    Details of a retargeted PR failed, `baseGateRefusal` gated the old base's clean list and recorded the new
+    base, so the next real list was never gated. Migration 0032 adds `pr_files.base_ref`
+    (`store.PRFiles.BaseRef`), the same files against another base are written again, `baseGateRefusal`
+    refuses without recording until the head's list was read against the base the PR names (the approval is
+    withdrawn without a class), and `changedFilesRefusal` takes a list of another base for none; a list from
+    before the migration still counts there. `detailsEpoch` "3" reads the Details of the PRs reviewed at
+    their head once.
+  - A push under a standing approval (P2). The approval of the operator's stood on a new head until that
+    head's round ended. Now the files gate asks the poll's list of the new head with the approved head's links
+    (`movedHeadRefusal`; the clone lacks the new head at the poll, and a link the push adds is a config path
+    of its list) and a refusal for good (agents' config, own workflows, more files than GitHub lists)
+    withdraws the approval at once through the usual path, saying the head ("found nothing to fix, but on
+    602da9d the PR changes ..."); anything else is still the round's to decide.
+  - The walk's cost (P2). The step cap was checked only between queue items while one link could give
+    thousands of targets, each scanning every link (16,000 case-variant links took 36 s, under the 8 MiB cap),
+    with no context and no cache of the error. Every loop step now counts, the links under a target are a run
+    of sorted folded keys found by binary search (16,384 variants resolve in 20 ms), the context is asked
+    every 1,024 steps, and `configLinks` keeps a head's failure: one the tree always gives (too large, too many
+    steps, outside ASCII) for good, any other (a commit the clone lacks yet) for `linkRetryAfter`, 2
+    minutes. A head that fails still quits a reloading session, which is no proof, without a git read each
+    time.
+  - A link to the root (P3). `.claude/skills -> ..` loads `<root>/*/SKILL.md`; it covered nothing. The target
+    `""` covers every path, the tree's walk follows every link under it, and a session with such a link
+    leaves the config out without walking the checkout.
+  - A probe that fetched nothing (P3). The reload check decided on the radar head's list when its fetch
+    failed, and the checkout's own fetch could then bring a newer head: no head fetched is no proof now.
+  - Tests that cut the REST list (P3): `withRenamedFrom`'s two clauses that keep a cut list cut had survived
+    mutation.
+  - Imports. Claude Code expands `@path` in a `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, a rules file and
+    what they import (its memory docs): relative to the importing file, a home or absolute path as it is
+    (outside the working directory only after the user approves external imports), at most four hops, not in
+    code spans or fenced blocks, a backslash keeping a space. Implemented wider so magnum errs toward a
+    target (`agents.ImportPaths`): an @ after anything but a letter or a digit, with and without trailing
+    punctuation, in code too, five hops (`MaxImportHops`), home and absolute paths left out. The tree's
+    sources are its Markdown files that steer the agents themselves and those at or under a link's target;
+    an import resolves from the source's directory and, through a link, from the link's (the path Claude
+    reads it by), following the tree's links, and an import outside ASCII also through a link a filesystem
+    may open for it. `gitx.Client.Tree` gives the links and the files from one ls-tree, `Blobs` reads one
+    cat-file batch per hop; each target carries the importing file's label. The session (Claude only)
+    reads the imports from disk, of the root's instruction files, the index's below it
+    (`gitx.TrackedFiles`) and the pages under `.claude/` and its links' targets.
+  Not covered: a team hook that runs a script outside `.claude/`, an import by an absolute path into the
+  checkout, a source past the 8 MiB batch output (its head waits as one whose links cannot be read), and an
+  untracked file a round left under a directory whose name only an outside-ASCII fold aliases. Tests,
+  failing first: TestADocsPushThroughALinkOfTheAgentsConfigIsReReviewed,
+  TestALiveClaudeSessionIsParkedWhenTheNewHeadChangesALinksTarget (another spelling, an import),
+  TestChangedNamesListsWhatAPathspecWouldMiss, TestWorkTreeNamesListsEveryTrackedChange,
+  TestAutoApprovalCannotTellANameOutsideASCIIThroughALink, TestMatchTargetCannotTellANameOutsideASCII,
+  TestASessionComparesALinksTargetUnderAnotherSpelling, TestARetargetWhoseFileListIsOfTheOldBaseIsNotGatedOnIt,
+  TestAFileListKeepsTheBaseItWasReadAgainst, TestMigrationV31ToV32KeepsTheFileListsWithoutABase,
+  TestAPushTheFilesGateRefusesWithdrawsAStandingApprovalAtOnce, TestResolveConfigLinksStaysWithinItsBudget,
+  TestConfigLinksKeepsAHeadsFailure, TestALinkToTheCheckoutsRootLeavesTheConfigOut,
+  TestAutoApprovalRefusesAnyFileUnderALinkToTheRoot, TestALiveClaudeSessionStaysWhenTheNewHeadLeavesItsConfigAlone
+  ("the fetch fails" now quits), TestARESTListCutShortCutsTheFileList, TestImportPathsReadsClaudeCodesImports,
+  TestASessionComparesWhatTheInstructionsImport, TestAutoApprovalRefusesAChangeToAFileTheInstructionsImport,
+  TestResolveConfigTargetsFollowsTheInstructionsImports, TestTreeAndBlobsReadACommitsFiles and
+  TestTrackedFilesListsTheIndexsFilesAndLinks. The tests that pinned a round's withdrawal for an
+  `AGENTS.md` push now use a change only the new head's own links refuse, and
+  TestAStandingApprovalStandsUntilMagnumReviewsTheNewHead pins the old rule for failing checks only.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is
