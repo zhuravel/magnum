@@ -267,3 +267,21 @@ func TestALinearAnswerNeedsNoAmend(t *testing.T) {
 		})
 	}
 }
+
+// A title that starts with a longer key the task's key is a prefix of
+// (ABC-12 for the key ABC-1) does not hold the task's key: the key goes in
+// front, in either case and either format.
+func TestATitleStartingWithALongerKeyStillGetsTheTasksKey(t *testing.T) {
+	for _, tc := range []struct{ title, format, want string }{
+		{"ABC-12 Title", "", "ABC-1 ABC-12 Title"},
+		{"abc-12 Title", "", "ABC-1 abc-12 Title"},
+		{"[ABC-12] Title", "[{key}] {title}", "[ABC-1] [ABC-12] Title"},
+		{"ABC-1 Title", "", "ABC-1 Title"},
+		{"[abc-1] Title", "[{key}] {title}", "[ABC-1] Title"},
+	} {
+		got := prTitle(registry.Task{Title: tc.title, JiraKey: "ABC-1"}, tc.format)
+		if got != tc.want {
+			t.Errorf("prTitle(%q, %q) = %q, want %q", tc.title, tc.format, got, tc.want)
+		}
+	}
+}

@@ -1026,7 +1026,7 @@ func TestThePRTitleFollowsTheReposTitleFormat(t *testing.T) {
 		"en dash and space":     {registry.Task{JiraKey: "ABC-12", Title: "ABC-12 \u2013 Title"}, brackets, "[ABC-12] Title"},
 		"comma":                 {registry.Task{JiraKey: "ABC-12", Title: "ABC-12, Title"}, brackets, "[ABC-12] Title"},
 		"default, hyphen joins": {registry.Task{JiraKey: "ABC-12", Title: "ABC-12-beta fix"}, "", "ABC-12-beta fix"},
-		"default, a longer key": {registry.Task{JiraKey: "ABC-1", Title: "ABC-12 Title"}, "", "ABC-12 Title"},
+		"default, a longer key": {registry.Task{JiraKey: "ABC-1", Title: "ABC-12 Title"}, "", "ABC-1 ABC-12 Title"},
 		"default, key alone":    {registry.Task{JiraKey: "ABC-12"}, "", "ABC-12"},
 		// A key written in another form is the same key: it is kept once, in the format's form.
 		"parenthesised key":      {registry.Task{JiraKey: "ABC-12", Title: "(ABC-12) Title"}, brackets, "[ABC-12] Title"},

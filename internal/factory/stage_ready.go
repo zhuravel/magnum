@@ -380,13 +380,33 @@ func prTitle(t registry.Task, format string) string {
 	format = cmp.Or(format, config.DefaultFactoryTitleFormat)
 	pre, post, _ := strings.Cut(format, config.TitleTitle)
 	pre, post = strings.TrimSpace(strings.ReplaceAll(pre, config.TitleKey, key)), strings.TrimSpace(strings.ReplaceAll(post, config.TitleKey, key))
-	if (pre != "" || post != "") && hasPrefixFold(title, pre) && hasSuffixFold(title, post) && len(title) >= len(pre)+len(post) {
+	if (pre != "" || post != "") && hasPrefixFold(title, pre) && hasSuffixFold(title, post) && len(title) >= len(pre)+len(post) &&
+		keyEnds(title, pre, post, key) {
 		return pre + title[len(pre):len(title)-len(post)] + post
 	}
 	if strings.Contains(format, config.TitleKey) {
 		title = withoutLeadingKey(title, key)
 	}
 	return strings.TrimSpace(strings.NewReplacer(config.TitleKey, key, config.TitleTitle, title).Replace(format))
+}
+
+// keyEnds reports whether the formatted key that title starts with (pre) or
+// ends with (post) is the whole key: a pre that ends with key is not
+// followed by a letter or a digit, and a post that starts with key is not
+// preceded by one. Else the title names a longer key (ABC-12 for the key
+// ABC-1) and does not hold the task's. A hyphen or a dot after the key
+// ("ABC-12-beta") keeps it, as before.
+func keyEnds(title, pre, post, key string) bool {
+	joins := func(c byte) bool {
+		return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+	}
+	if hasSuffixFold(pre, key) && len(title) > len(pre) && joins(title[len(pre)]) {
+		return false
+	}
+	if hasPrefixFold(post, key) && len(title) > len(post) && joins(title[len(title)-len(post)-1]) {
+		return false
+	}
+	return true
 }
 
 // hasPrefixFold and hasSuffixFold are strings.HasPrefix and HasSuffix with
