@@ -342,8 +342,11 @@ const linkBytesPerStep = 4096
 // own, a link's that leads to it or to a directory above it, the one an
 // import named it from), as the filesystem resolves that path (realpath,
 // through the tree's links) and as it is with its ".." taken first
-// (path.resolve's); the links under a directory it names are followed too.
-// A file the filesystem may open for it (agents.LooseFold: Docs/Guide.md,
+// (path.resolve's). A directory of the tree it names (and no file) is
+// that path alone (agents.ExactTarget), the root none: Claude Code loads
+// no directory an import names, nor anything under it, and code an
+// instruction file quotes (`^.*@.*$` gives the root) would make every
+// change one. A file the filesystem may open for it (agents.LooseFold: Docs/Guide.md,
 // docſ/guide.md for docs/guide.md) becomes a source of the next hop. Every
 // source, every import and every linkBytesPerStep bytes scanned count
 // against the walk's steps (a tree of more files than maxLinkSteps is no
@@ -358,6 +361,22 @@ func (r *linkResolver) imports(files []string, isConfig func(string) (string, bo
 	covers := map[string]string{} // agents.LooseFold of a target -> its label
 	for t, label := range r.out {
 		covers[agents.LooseFold(t)] = label
+	}
+	var dirs map[string]bool // agents.LooseFold of each directory of the tree, read once an import needs it
+	isDir := func(t string) bool {
+		if t == "" {
+			return true
+		}
+		if dirs == nil {
+			dirs = map[string]bool{}
+			for _, f := range append(slices.Collect(maps.Keys(byName)), slices.Collect(maps.Keys(r.links))...) {
+				k := agents.LooseFold(f)
+				for i := strings.LastIndexByte(k, '/'); i > 0 && !dirs[k[:i]]; i = strings.LastIndexByte(k[:i], '/') {
+					dirs[k[:i]] = true
+				}
+			}
+		}
+		return dirs[agents.LooseFold(t)]
 	}
 	steers := func(f string) (string, bool) { // a Markdown file that steers the agents, by its own path
 		if !strings.EqualFold(path.Ext(f), ".md") {
@@ -449,8 +468,13 @@ func (r *linkResolver) imports(files []string, isConfig func(string) (string, bo
 							if !r.step() {
 								return
 							}
+							if len(byName[agents.LooseFold(t)]) == 0 && isDir(t) {
+								if t != "" { // Claude loads no directory an import names: the path alone
+									r.add(agents.ExactTarget(t), src.label)
+								}
+								continue
+							}
 							r.add(t, src.label)
-							r.expand(t, src.label)
 							for _, f := range byName[agents.LooseFold(t)] {
 								var from []string
 								if named != "" {
@@ -610,23 +634,6 @@ func (r *linkResolver) dirsOf(f string) []string {
 	return out
 }
 
-// expand follows, with label, the links under t once: a directory an
-// import names loads what lies under it.
-func (r *linkResolver) expand(t, label string) {
-	if r.walked[t] {
-		return
-	}
-	r.walked[t] = true
-	var found []string
-	r.under(t, func(m string) bool {
-		found = append(found, m)
-		return true
-	})
-	for _, m := range found {
-		r.follow(m, label)
-	}
-}
-
 // linkResolver is resolveConfigLinks' walk of one tree. Every step of its
 // loops counts against maxLinkSteps (step), so one link that leads many
 // ways (links whose paths differ in case only) stops the walk as soon as
@@ -637,7 +644,7 @@ type linkResolver struct {
 	byFold  map[string][]string // foldKey of a path -> the links' paths that fold to it
 	keys    []string            // byFold's keys, sorted: the links under a path are a run of them (under)
 	out     map[string]string   // target -> label
-	walked  map[string]bool     // the targets whose links below were followed
+	walked  map[string]bool     // the targets whose links below were followed (follow)
 	via     map[string][]string // agents.LooseFold of a target -> the links that lead to it (dirsOf)
 	sources map[string]bool     // the files whose imports the walk read (foldsOnto)
 	steps   int

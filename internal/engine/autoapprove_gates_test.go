@@ -556,6 +556,10 @@ func TestAutoApprovalRefusesAChangeToAFileTheInstructionsImport(t *testing.T) {
 			list: []string{"x.md", "etc/x.md"}},
 		{name: "a page nothing imports", files: map[string]string{"AGENTS.md": "Read @.docs/datagrid-guide.md first.\n"},
 			list: []string{".docs/other.md"}},
+		// Claude loads no directory an import names: a regex in a code span
+		// gives the root, a fenced block's @config[:x] a directory.
+		{name: "code that names a directory", files: map[string]string{"AGENTS.md": "Validate with `^.*@.*$`.\n\n```\n@config[:x]\n```\n",
+			"config/database.yml": "x"}, list: []string{"app/models/user.rb", "config/database.yml"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, _ := newAutoHarness(t, func(h *harness) {

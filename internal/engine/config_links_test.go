@@ -642,3 +642,36 @@ func TestEachDirectoryTheWalkLooksUpIsAStep(t *testing.T) {
 		t.Fatalf("dirsOf = %q after %d steps; want a/b/c, after a step for each of its 5 lookups", dirs, r.steps)
 	}
 }
+
+// Claude Code loads no directory an import names, and nothing under it,
+// while ImportPaths reads code and prose wide: a regex in a code span
+// (`^.*@.*$`) gives the root, @config[:x] in a fenced block or "see @docs"
+// a directory of the tree. Such a target is that path alone: a change
+// under it is none, while one that makes it a file or a link, or a path on
+// the way to it a link, is; the root is never one.
+func TestAnImportOfADirectoryIsThatPathAlone(t *testing.T) {
+	kinds := defaultKinds()
+	isConfig := func(p string) (string, bool) { return agentConfigPath(kinds, p) }
+	tree, read := treeOf(map[string]string{
+		"AGENTS.md":           "Validate e-mail with `^.*@.*$` first.\n\n```ruby\n@config[:x]\n```\n\nSee @docs and @lib/tasks for more.\n",
+		"config/database.yml": "x\n", "docs/guide.md": "y\n", "app/models/user.rb": "z\n", "lib/tasks/a.rake": "w\n",
+	}, nil)
+	got, err := resolveConfigTargets(context.Background(), tree, isConfig, read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got[""]; ok {
+		t.Fatalf("targets %q: the root is one", got)
+	}
+	for _, c := range []struct {
+		path string
+		want bool
+	}{
+		{"app/models/user.rb", false}, {"config/database.yml", false}, {"docs/guide.md", false}, {"lib/tasks/a.rake", false},
+		{"config", true}, {"docs", true}, {"lib", true}, {"lib/tasks", true},
+	} {
+		if names, maybe := changedLinks(got, []string{c.path}); (len(names) > 0) != c.want || maybe {
+			t.Errorf("changedLinks(%q) = %q, %v; want a change %v (targets %q)", c.path, names, maybe, c.want, got)
+		}
+	}
+}

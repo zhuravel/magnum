@@ -468,3 +468,34 @@ func TestASessionsImportsOfManyFilesStayWithinTheWalksBudget(t *testing.T) {
 		t.Errorf("ProjectLinks = %q, %v; want a.md", targets, partial)
 	}
 }
+
+// Claude Code loads no directory an import names (a stat that is no file
+// is skipped), and ImportPaths reads code and prose wide: a regex in a
+// code span (`^.*@.*$`) gives the root, @config[:x] in a fenced block or
+// "see @docs" the directory. The session takes such an import as that
+// path alone (ExactTarget): a change under it is none to what Claude
+// loads, and only a commit that makes the path a file or a link, or a path
+// on the way to it a link, changes it (the reload check matches both ways).
+func TestASessionTakesAnImportOfADirectoryAsThatPathAlone(t *testing.T) {
+	files := map[string]string{"CLAUDE.md": "Validate e-mail with `^.*@.*$` first.\n\n```ruby\n@config[:x]\n```\n\nSee @docs for more.\n",
+		"config/database.yml": "x\n", "docs/guide.md": "y\n"}
+	e, dir, ws := projectEnv(t, files, []string{"config/database.yml", "docs/guide.md"}, nil)
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], ""); err != nil {
+		t.Fatal(err)
+	}
+	if n, ok := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindClaude); ok {
+		t.Fatalf("declined for %q: a change under a directory an import names", n.Paths)
+	}
+	targets, partial := ProjectLinks(t.Context(), KindClaude, dir)
+	if slices.Contains(targets, "") || slices.Contains(targets, "config") || !slices.Contains(targets, ExactTarget("config")) || partial {
+		t.Fatalf("ProjectLinks = %q, %v; want config alone, and not the root", targets, partial)
+	}
+	for _, c := range []struct {
+		f    string
+		want bool
+	}{{"config", true}, {"Config", true}, {"config/database.yml", false}, {"conf", false}} {
+		if got := UnderTarget(c.f, ExactTarget("config")) || UnderTarget(ExactTarget("config"), c.f); got != c.want {
+			t.Errorf("%q matches %q: %v, want %v", c.f, ExactTarget("config"), got, c.want)
+		}
+	}
+}

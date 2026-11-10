@@ -605,6 +605,25 @@ func (w *linkWalk) add(t string, p projectPath) bool {
 	return true
 }
 
+// addExact records ExactTarget(t), the directory t an import of path p
+// names, unless t is the root or one of pc's paths (compared as itself),
+// or it is recorded already: nothing for git to compare, and nothing to
+// walk, since Claude loads no directory an import names.
+func (w *linkWalk) addExact(t string, p projectPath) {
+	if t == "" {
+		return
+	}
+	if _, _, own := w.pc.pathOf(t); own {
+		return
+	}
+	if w.d.links == nil {
+		w.d.links = map[string]projectPath{}
+	}
+	if _, dup := w.d.links[ExactTarget(t)]; !dup {
+		w.d.links[ExactTarget(t)] = p
+	}
+}
+
 // walkDir is a directory linkWalk reads: its path from the root as the
 // disk has it (real) and as Claude reads it (asRead, through the links the
 // walk followed to it: .claude/rules for docs/ai/rules), and the directory
@@ -716,7 +735,9 @@ const importBytesPerStep = 4096
 // (a CLAUDE.md -> docs/guide.md imports from the root and from docs/),
 // into the checkout, as linkTarget finds it (a file that is not there
 // loads nothing; one of pc's own paths is compared as itself, its imports
-// followed all the same); a directory it names is walked for links (walk).
+// followed all the same); a directory it names is that path alone
+// (addExact: Claude Code loads no directory an import names, so nothing
+// under it is compared or walked, and the root is none).
 // A file it names is read by the path the import names (CLAUDE.md's
 // @lib/guide.md, through lib -> a/b/shared, imports @../x.md from lib/ as
 // Claude resolves it, and from a/b/shared/ as the disk has it). A file is
@@ -793,12 +814,15 @@ func (pc projectConfig) addImports(ctx context.Context, dir string, d *diskPaths
 					if !ok {
 						continue
 					}
+					fi, err := os.Stat(target)
+					if err == nil && fi.IsDir() { // Claude loads none: the path alone (ExactTarget), and never the root
+						w.addExact(t, src.p)
+						continue
+					}
 					if w.add(t, src.p) {
 						d.git = append(d.git, t)
 					}
-					if fi, err := os.Stat(target); err == nil && fi.IsDir() {
-						d.git = append(d.git, w.walk([]walkDir{{real: t, asRead: namedPath(root, target, t)}}, src.p)...)
-					} else if err == nil && t != "" {
+					if err == nil && t != "" {
 						next = append(next, importFile{namedPath(root, target, t), src.p})
 					}
 				}
@@ -946,7 +970,10 @@ const (
 // case-insensitive filesystem folds ASCII alike. An element with a byte
 // outside ASCII matches only one of the same bytes for sure; where it
 // differs, the answer is MaybeUnder. The target "" (a link to the
-// checkout's root, .claude/skills -> ..) covers every path.
+// checkout's root, .claude/skills -> ..) covers every path. An exact
+// target (ExactTarget: a slash at its end) has no path under it, its last
+// element empty as no path's is; its path, and each on the way to it, lies
+// under it the other way round (MatchTarget(t, f)).
 func MatchTarget(f, t string) TargetMatch {
 	if t == "" {
 		return Under
@@ -1055,6 +1082,13 @@ func foldRune(r rune) rune {
 	}
 	return m
 }
+
+// ExactTarget is the target an import of the directory p gives: p alone,
+// with a slash at its end (MatchTarget). Claude Code loads no directory an
+// import names, nor anything under it, so a change there is none; a commit
+// that makes p a file or a link, or a path on the way to it a link, is,
+// which a match of the path against the target the other way round finds.
+func ExactTarget(p string) string { return p + "/" }
 
 // UnderTarget reports whether f may be the link target t or lie under it
 // (MatchTarget: Under or MaybeUnder): a name magnum cannot fold counts, so
@@ -1203,7 +1237,8 @@ func ProjectTouched(kind string, paths []string) bool {
 // ProjectLinks are the targets, relative to the checkout dir's root, of
 // the links among kind's paths at its root and under its project
 // directories, and under a directory such a link leads to, and the files
-// the instruction files there import (addImports), as the disk has them
+// the instruction files there import (addImports; a directory one names as
+// ExactTarget, that path alone), as the disk has them
 // (onDisk: what a session in dir loaded through them), sorted; partial
 // reports that the walk stopped at maxLinkWalk steps, or as ctx ended, so
 // one may be missing. None for a kind magnum does not compare.
