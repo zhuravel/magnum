@@ -291,21 +291,28 @@ func TestTheDenialIsReadOnItsStableWords(t *testing.T) {
 }
 
 // The line names the setting as macOS shows it: Removable Volumes under
-// Files and Folders for a copy on a mounted volume (Full Disk Access where
+// Files & Folders for a copy on a mounted volume (Full Disk Access where
 // that toggle is absent), and the terminal app the reveal starts the
-// server from, when it is one; for a copy elsewhere, Files and Folders.
+// server from, when it is one; for a copy elsewhere, Files & Folders.
 func TestTheDenialNamesTheSettingAsMacOSShowsIt(t *testing.T) {
 	for _, c := range []struct{ volume, app, want string }{
 		{"/Volumes/Work", "iTerm2", "macOS blocks the factory's herdr server from reading /Volumes/Work: allow herdr and magnum (and " +
-			"iTerm2, which starts the server) in System Settings > Privacy & Security > Files and Folders > Removable Volumes " +
+			"iTerm2, which starts the server) in System Settings > Privacy & Security > Files & Folders > Removable Volumes " +
 			"(or Full Disk Access, if that toggle is absent), then retry"},
 		{"/Users/zhuravel/Projects/talkable.factory2", "custom", "macOS blocks the factory's herdr server from reading " +
-			"/Users/zhuravel/Projects/talkable.factory2: allow herdr and magnum in System Settings > Privacy & Security > Files and " +
+			"/Users/zhuravel/Projects/talkable.factory2: allow herdr and magnum in System Settings > Privacy & Security > Files & " +
 			"Folders (or Full Disk Access, if that toggle is absent), then retry"},
 	} {
 		if got := DeniedLine(c.volume, c.app); got != c.want {
 			t.Errorf("DeniedLine(%q, %q) =\n%s\nwant\n%s", c.volume, c.app, got, c.want)
 		}
+	}
+	held := &DeniedError{Volume: "/Volumes/Work", App: "iTerm2", Held: "a pane of yours, w3:p2, runs ruby bin/rails c"}
+	want := "macOS blocks the factory's herdr server from reading /Volumes/Work (System Settings > Privacy & Security > Files & " +
+		"Folders > Removable Volumes), and its restart waited 30 minutes for a pane of yours, w3:p2, runs ruby bin/rails c: " +
+		"close or end it, then retry, and the factory restarts the server"
+	if got := held.Error(); got != want {
+		t.Errorf("the line after a hold =\n%s\nwant\n%s", got, want)
 	}
 }
 
@@ -624,8 +631,8 @@ func TestAServerRestartedMeanwhileIsNotStoppedAgain(t *testing.T) {
 }
 
 // This task's own liaison holds the stop with words of its own (you are
-// talking with it), and never for good: after liaisonHold the line goes
-// to you.
+// talking with it), and never for good: after holdLimit the task goes to
+// you with a line that names it, not the privacy setting alone.
 func TestThisTasksOwnLiaisonHoldsTheStopThenGoesToYou(t *testing.T) {
 	g := newRig(t)
 	if _, err := g.r.Talk(g.ctx, g.task, talkPrompt); err != nil {
@@ -638,9 +645,11 @@ func TestThisTasksOwnLiaisonHoldsTheStopThenGoesToYou(t *testing.T) {
 	if w, ok := errors.AsType[*WaitError](err); !ok || !strings.Contains(w.What, "this task's liaison") || strings.Contains(w.What, "another task") {
 		t.Fatalf("Send = %v, want a wait on this task's liaison in its own words", err)
 	}
-	g.clock.Add(liaisonHold + time.Minute)
-	if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug"); !errors.As(err, new(*DeniedError)) {
-		t.Fatalf("Send after %v = %v, want the line for you", liaisonHold, err)
+	g.clock.Add(holdLimit + time.Minute)
+	_, err = g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug")
+	if d, ok := errors.AsType[*DeniedError](err); !ok || !strings.Contains(d.Error(), "waited 30 minutes for this task's liaison: "+
+		"exit the liaison, then retry") || strings.Contains(d.Error(), "allow herdr") {
+		t.Fatalf("Send after %v = %v, want the line that names the liaison", holdLimit, err)
 	}
 	if n := g.h.stopCount(); n != 0 {
 		t.Fatalf("%d stops under your talk", n)
@@ -744,6 +753,10 @@ func TestSinceLaunchCutsWhatThePaneShowedBefore(t *testing.T) {
 		{"the same lines again", deniedScreen, deniedScreen + deniedScreen,
 			"zhuravel@mac talkable.factory2 % " + deniedScreen},
 		{"scrolled off", before, "Can't read the current directory (EPERM).\n$ ", "Can't read the current directory (EPERM).\n$ "},
+		{"a read that ends with a newline", before + "\n", before + "codex --search\nerror: bad flag\n",
+			"zhuravel@mac talkable.factory2 % codex --search\nerror: bad flag\n"},
+		{"a read padded with blank rows", before + "\n\n\n", before + "codex --search\nerror: bad flag\n\n\n",
+			"zhuravel@mac talkable.factory2 % codex --search\nerror: bad flag\n\n\n"},
 	} {
 		if got := sinceLaunch(c.screen, paneMark(c.before)); got != c.want {
 			t.Errorf("%s: sinceLaunch = %q, want %q", c.name, got, c.want)
@@ -751,5 +764,108 @@ func TestSinceLaunchCutsWhatThePaneShowedBefore(t *testing.T) {
 	}
 	if deniedLine(sinceLaunch(deniedScreen+deniedScreen, paneMark(deniedScreen))) == "" {
 		t.Error("a launch that printed the refusal again is no denial")
+	}
+	for _, pad := range []string{"\n", "\n\n\n"} {
+		if got := paneMark(before + pad); got != "Error: Operation not permitted (os error 1)" {
+			t.Errorf("paneMark of a read padded with %q = %q, want the old line alone", pad, got)
+		}
+	}
+}
+
+// A pre-read of the pane that fails leaves no mark: that launch says
+// nothing of a refusal (the recoveries take it), never the whole
+// scrollback, old lines included.
+func TestAFailedPreReadOfThePaneSaysNothingOfThatLaunch(t *testing.T) {
+	g := newRig(t)
+	g.h.paneScreen = "Error: Operation not permitted (os error 1)\nzhuravel@mac talkable.factory2 % "
+	g.h.exitAtStart = "codex --search\nerror: the argument '--search' cannot be used multiple times\n"
+	g.h.failReads(errors.New("herdr pane.read: timeout"))
+	g.launch("fx-repro")
+	g.h.failReads(nil)
+
+	if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug"); err == nil {
+		t.Fatal("Send went through to an agent that exited")
+	}
+	g.observeN(3)
+	if n := g.h.stopCount(); n != 0 {
+		t.Fatalf("%d stops for a launch whose pane was not read before it", n)
+	}
+}
+
+// While the stop waits on something else in the session, no prompt's try
+// runs the CLI's login check or reads the budget: those come once nothing
+// holds the stop, right before it.
+func TestAWaitingStopRunsNoLoginCheck(t *testing.T) {
+	g := newRig(t)
+	other := g.newTask("PR-12346")
+	oa := g.begin(other, "investigate")
+	if err := g.r.Launch(g.ctx, other, oa, Copy{Name: "factory2", Path: t.TempDir(), Number: 2}, g.roles("fx-repro")); err != nil {
+		t.Fatal(err)
+	}
+	g.h.exitAtStart = deniedScreen
+	g.launch("fx-repro")
+	checks := len(g.run.CallsWithPrefix("claude", "auth", "status"))
+	for range 3 {
+		if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug"); !errors.As(err, new(*WaitError)) {
+			t.Fatalf("Send = %v, want the wait on the other task's agent", err)
+		}
+	}
+	if n := len(g.run.CallsWithPrefix("claude", "auth", "status")) - checks; n != 0 {
+		t.Fatalf("%d login checks while the stop waited, want none", n)
+	}
+	if err := g.r.QuitRole(g.ctx, other, "fx-repro", "its stage ended"); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug")
+	if n := len(g.run.CallsWithPrefix("claude", "auth", "status")) - checks; n != 1 || g.h.stopCount() != 1 {
+		t.Fatalf("%d login checks and %d stops once nothing held it, want one of each", n, g.h.stopCount())
+	}
+}
+
+// Whatever else holds the stop (a pane of yours that runs something,
+// another task's agent) holds it for holdLimit at most, as the liaison
+// does: then the task goes to you with a line that names what held it,
+// not the privacy setting alone.
+func TestWhatHoldsTheStopHoldsItHalfAnHourThenGoesToYou(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		setup func(g *rig) string
+	}{
+		{"a pane of yours", func(g *rig) string {
+			return "a pane of yours, " + g.h.yourPane("ruby bin/rails c") + ", runs ruby bin/rails c"
+		}},
+		{"another task's agent", func(g *rig) string {
+			other := g.newTask("PR-12346")
+			oa := g.begin(other, "investigate")
+			if err := g.r.Launch(g.ctx, other, oa, Copy{Name: "factory2", Path: g.t.TempDir(), Number: 2}, g.roles("fx-repro")); err != nil {
+				g.t.Fatal(err)
+			}
+			return "PR-12346 fx-repro"
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g := newRig(t)
+			holder := c.setup(g)
+			g.h.exitAtStart = deniedScreen
+			g.launch("fx-repro")
+			if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug"); !errors.As(err, new(*WaitError)) {
+				t.Fatalf("Send = %v, want the wait", err)
+			}
+			g.clock.Add(holdLimit - time.Minute)
+			if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug"); !errors.As(err, new(*WaitError)) {
+				t.Fatalf("Send before %v = %v, want the wait still", holdLimit, err)
+			}
+			g.clock.Add(2 * time.Minute)
+			_, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug")
+			d, ok := errors.AsType[*DeniedError](err)
+			if !ok || !strings.Contains(d.Error(), "waited 30 minutes for "+holder+": close or end it, then retry") ||
+				!strings.Contains(d.Error(), "Files & Folders > Removable Volumes") && strings.HasPrefix(g.copy, "/Volumes/") ||
+				strings.Contains(d.Error(), "allow herdr") {
+				t.Fatalf("Send after %v = %v, want the line that names %s", holdLimit, err, holder)
+			}
+			if n := g.h.stopCount(); n != 0 {
+				t.Fatalf("%d stops while it was held", n)
+			}
+		})
 	}
 }

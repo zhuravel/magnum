@@ -46,13 +46,15 @@ import (
 
 // The heal's bounds: stopWindow is how long one stop of the factory's herdr
 // server serves every task (a fresh server denied too is yours, not
-// stopped again, unless you retried the task since); liaisonHold how long
-// this task's own liaison may hold the stop before the line goes to you;
+// stopped again, unless you retried the task since); holdLimit how long
+// anything else in the session (another task's agent, a pane of yours,
+// this task's own liaison) may hold the stop before the task goes to you,
+// with a line that names it;
 // readableWait how long the daemon's read of a copy may take (a read macOS
 // holds for a permission dialog counts as one that failed).
 const (
 	stopWindow   = time.Hour
-	liaisonHold  = 30 * time.Minute
+	holdLimit    = 30 * time.Minute
 	readableWait = 5 * time.Second
 )
 
@@ -77,15 +79,22 @@ func deniedLine(screen string) string {
 	return textx.Clip(execx.Redact(last), 200)
 }
 
-// paneMark is what a pane showed before a launch, its last line left out
-// (the shell's prompt, which the launch's command extends) and its blank
-// last lines too; "" for a pane that showed nothing.
+// paneMark is what a pane showed before a launch: its blank last lines
+// left out (a read that ends with a newline, or padded with blank rows),
+// then its last line (the shell's prompt, which the launch's command
+// extends); "" for a pane that showed nothing.
 func paneMark(text string) string {
 	lines := strings.Split(strings.ReplaceAll(text, "\r", ""), "\n")
-	lines = lines[:len(lines)-1]
-	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+	trim := func() {
+		for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+			lines = lines[:len(lines)-1]
+		}
+	}
+	trim()
+	if len(lines) > 0 {
 		lines = lines[:len(lines)-1]
 	}
+	trim()
 	return strings.Join(lines, "\n")
 }
 
@@ -110,18 +119,21 @@ func sinceLaunch(screen, mark string) string {
 
 // markPane notes what pane shows before an agent starts in it (paneMark),
 // so a refusal is read only in what the launch printed: never in a shell's
-// earlier output nor in the scrollback herdr restores.
+// earlier output nor in the scrollback herdr restores. A read that fails
+// leaves the pane with no mark: that launch says nothing of a refusal, and
+// the recoveries take it.
 func (r *Runtime) markPane(ctx context.Context, pane string) {
 	if pane == "" {
 		return
 	}
-	mark := ""
-	if res, err := r.d.Herdr.PaneRead(ctx, pane, herdr.ReadOptions{Source: herdr.SourceRecentUnwrapped, Lines: agents.HealthLines}); err == nil {
-		mark = paneMark(res.Text)
-	}
+	res, err := r.d.Herdr.PaneRead(ctx, pane, herdr.ReadOptions{Source: herdr.SourceRecentUnwrapped, Lines: agents.HealthLines})
 	r.mu.Lock()
-	r.marks[pane] = mark
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	if err != nil {
+		delete(r.marks, pane)
+		return
+	}
+	r.marks[pane] = paneMark(res.Text)
 }
 
 // launchMark is the mark of pane's last launch, and whether this runtime
@@ -137,7 +149,7 @@ func (r *Runtime) launchMark(pane string) (string, bool) {
 // factory's herdr server from reading volume after its one heal: whom to
 // allow (herdr, magnum and app, the [terminal] app the engine's reveal
 // starts the server from, when it is one) and where, as macOS names the
-// setting: Removable Volumes under Files and Folders for a mounted volume,
+// setting: Removable Volumes under Files & Folders for a mounted volume,
 // Full Disk Access where that toggle is absent; then your retry.
 func DeniedLine(volume, app string) string {
 	who := "herdr and magnum"
@@ -146,12 +158,35 @@ func DeniedLine(volume, app string) string {
 	default:
 		who += " (and " + app + ", which starts the server)"
 	}
-	where := "Files and Folders"
+	return "macOS blocks the factory's herdr server from reading " + volume + ": allow " + who + " in " + setting(volume) +
+		" (or Full Disk Access, if that toggle is absent), then retry"
+}
+
+// setting is the setting of macOS that allows reading volume, as macOS names
+// it: Removable Volumes under Files & Folders for a mounted volume.
+func setting(volume string) string {
+	where := "System Settings > Privacy & Security > Files & Folders"
 	if strings.HasPrefix(volume, "/Volumes/") {
 		where += " > Removable Volumes"
 	}
-	return "macOS blocks the factory's herdr server from reading " + volume + ": allow " + who + " in System Settings > Privacy & " +
-		"Security > " + where + " (or Full Disk Access, if that toggle is absent), then retry"
+	return where
+}
+
+// ownLiaison names task t's own liaison among what holds the stop.
+const ownLiaison = "this task's liaison"
+
+// heldLine is what a task waits on you for once held (what lives in the
+// factory's herdr session: another task's agent, a pane of yours, this
+// task's own liaison) kept the restart of the server that cannot read
+// volume waiting holdLimit: the setting at stake and what held it, which
+// you end before your retry.
+func heldLine(volume, held string) string {
+	end := "close or end it"
+	if held == ownLiaison {
+		end = "exit the liaison"
+	}
+	return fmt.Sprintf("macOS blocks the factory's herdr server from reading %s (%s), and its restart waited %d minutes for %s: "+
+		"%s, then retry, and the factory restarts the server", volume, setting(volume), int(holdLimit/time.Minute), held, end)
 }
 
 // volumeOf is the volume a copy's checkout dir is on, as DeniedLine names
@@ -167,13 +202,20 @@ func volumeOf(dir string) string {
 
 // DeniedError is Send's answer while macOS blocks the factory's herdr
 // server from reading Volume after the heal, or while the factory may not
-// heal it (its herdr session is yours, its herdr has no server.stop, this
-// task's liaison held the stop for liaisonHold): the task needs you, with
-// DeniedLine (App is the [terminal] app), until your retry.
-type DeniedError struct{ Volume, App string }
+// heal it (its herdr session is yours, its herdr has no server.stop), or
+// once Held (what lives in its session) held the stop for holdLimit: the
+// task needs you until your retry, with DeniedLine (App is the [terminal]
+// app), or with heldLine once something held it.
+type DeniedError struct{ Volume, App, Held string }
 
-// Error is DeniedLine of the volume and the app.
-func (e *DeniedError) Error() string { return DeniedLine(e.Volume, e.App) }
+// Error is the line the task waits on you for: heldLine when Held is set,
+// else DeniedLine.
+func (e *DeniedError) Error() string {
+	if e.Held != "" {
+		return heldLine(e.Volume, e.Held)
+	}
+	return DeniedLine(e.Volume, e.App)
+}
 
 // serverStopper stops the herdr session's server (herdr.Client.ServerStop).
 type serverStopper interface {
@@ -261,15 +303,8 @@ func openDir(dir string) error {
 // memory or Codex's budget (gate), nor with its CLI logged out (preflight).
 // stagger reports the memory at warn, when starts take turns Stagger apart.
 func (r *Runtime) mayStart(ctx context.Context, role config.Role) (stagger bool, err error) {
-	select {
-	case <-r.drained:
-		return false, ErrDraining
-	default:
-	}
-	if r.d.MayStart != nil {
-		if who, what, ok := r.d.MayStart(); !ok {
-			return false, &WaitError{Who: who, What: what}
-		}
+	if err := r.mayHold(); err != nil {
+		return false, err
 	}
 	level, err := r.gate(ctx, role)
 	if err != nil {
@@ -281,22 +316,39 @@ func (r *Runtime) mayStart(ctx context.Context, role config.Role) (stagger bool,
 	return level == engine.MemoryWarn, nil
 }
 
+// mayHold is mayStart's cheap part, which reads no CLI and no budget: the
+// daemon's drain (ErrDraining) and the engine's holds (Deps.MayStart).
+func (r *Runtime) mayHold() error {
+	select {
+	case <-r.drained:
+		return ErrDraining
+	default:
+	}
+	if r.d.MayStart != nil {
+		if who, what, ok := r.d.MayStart(); !ok {
+			return &WaitError{Who: who, What: what}
+		}
+	}
+	return nil
+}
+
 // heal is a task's heal of the factory's herdr server in one attempt: the
 // volume its server cannot read, the refusal's line, the role that showed
 // it first and its pane; when the server was stopped for it (by its own stop
 // or another task's within stopWindow; zero: not yet), the roles that took
 // no prompt yet and are due their relaunch on the fresh server, those it
 // relaunched, whether the task's rows were reconciled with that server
-// (agents.Manager.Recover), the wait it last recorded, since when this
-// task's liaison holds the stop, and when the line went to you (zero: not
-// yet).
+// (agents.Manager.Recover), the wait it last recorded, since when
+// something else in the session holds the stop and what held it once that
+// went to you, and when the line went to you (zero: not yet).
 type heal struct {
 	attempt, volume, line, role, pane string
 	stopped                           time.Time
 	relaunch, relaunched              map[string]bool
 	reconciled                        bool
 	waits                             string
-	liaison                           time.Time
+	heldSince                         time.Time
+	held                              string
 	told                              time.Time
 }
 
@@ -505,15 +557,16 @@ func (r *Runtime) restartWait(h *heal) *WaitError {
 func (r *Runtime) deniedErr(h *heal) *DeniedError {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return &DeniedError{Volume: h.volume, App: r.d.Config.Terminal.App}
+	return &DeniedError{Volume: h.volume, App: r.d.Config.Terminal.App, Held: h.held}
 }
 
-// tell sends heal h of task t (role st's refusal) to you now: the role
-// takes no recovery, and an event says why.
-func (r *Runtime) tell(ctx context.Context, t registry.Task, st *roleState, h *heal, why string) *DeniedError {
+// tell sends heal h of task t (role st's refusal) to you now, held being
+// what held its stop for holdLimit ("" for none): the role takes no
+// recovery, and an event says why.
+func (r *Runtime) tell(ctx context.Context, t registry.Task, st *roleState, h *heal, why, held string) *DeniedError {
 	now := r.now()
 	r.mu.Lock()
-	h.told = now
+	h.told, h.held = now, held
 	st.lost, st.ranOut, st.recovering, st.pending = true, now, false, false
 	r.mu.Unlock()
 	d := r.deniedErr(h)
@@ -526,8 +579,11 @@ func (r *Runtime) tell(ctx context.Context, t registry.Task, st *roleState, h *h
 //   - never a session that is yours or magnum's review panes' (ownSession),
 //     nor with a herdr that has no server.stop (before 0.9.5): the line goes
 //     to you;
-//   - not while you are in the role's pane, its kind pauses, or a hold
-//     stops a launch (mayRestart, mayStart): the relaunch would wait anyway;
+//   - not while you are in the role's pane, its kind pauses, the daemon
+//     drains or a hold of the engine's stops a launch (mayRestart,
+//     mayHold), nor, checked once nothing else holds it, right before the
+//     stop, under critical memory, Codex's budget or a logged-out CLI
+//     (mayStart): the relaunch would wait anyway;
 //   - not while a talk starts a liaison (talkMu), which would die unseen;
 //   - not when the refused pane is gone from the session: somebody
 //     restarted the server meanwhile, which is the fresh server the role is
@@ -535,8 +591,9 @@ func (r *Runtime) tell(ctx context.Context, t registry.Task, st *roleState, h *h
 //   - not while an agent of another task, a liaison of another task, or a
 //     pane of yours that runs something lives in the session (othersLive):
 //     the wait names them, and the next prompt tries again; this task's own
-//     liaison holds it with words of its own for liaisonHold at most, then
-//     the line goes to you.
+//     liaison holds it with words of its own. Whatever holds it does so for
+//     holdLimit at most: then the task goes to you with heldLine, which
+//     names it.
 //
 // The stop's begin, end or failure are events; once it went through,
 // every role of the attempt that took no prompt yet is due its relaunch,
@@ -549,12 +606,12 @@ func (r *Runtime) stopFor(ctx context.Context, t registry.Task, a registry.Attem
 	stopper, ok := r.d.Herdr.(serverStopper)
 	if !ok || !ownSession(r.d.Config) {
 		return r.tell(ctx, t, st, h, st.role.Name+"'s agent exited at its start ("+line+"); the factory's herdr session is not its own, "+
-			"so it never stops its server")
+			"so it never stops its server", "")
 	}
 	if err := r.mayRestart(ctx, t, st); err != nil {
 		return err
 	}
-	if _, err := r.mayStart(ctx, st.role); err != nil {
+	if err := r.mayHold(); err != nil {
 		return err
 	}
 	if !r.talkMu.TryLock() {
@@ -583,41 +640,44 @@ func (r *Runtime) stopFor(ctx context.Context, t registry.Task, a registry.Attem
 		return &WaitError{Who: pauseAgent, What: "the factory's herdr server cannot read " + volume + " (macOS blocks it), and the " +
 			"factory cannot tell what else lives in it: " + textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200)}
 	}
-	what := ""
-	switch {
-	case len(others) > 0:
-		what = "the factory's herdr server cannot read " + volume + " (macOS blocks it): the factory restarts it once nothing " +
+	if len(others) > 0 || liaison {
+		holders := others
+		what := "the factory's herdr server cannot read " + volume + " (macOS blocks it): the factory restarts it once nothing " +
 			"else lives in it (" + strings.Join(others, ", ") + ")"
-	case liaison:
-		r.mu.Lock()
-		if h.liaison.IsZero() {
-			h.liaison = r.now()
+		if len(others) == 0 {
+			holders = []string{ownLiaison}
+			what = "the factory's herdr server cannot read " + volume + " (macOS blocks it), and this task's liaison lives in its " +
+				"session: exit the liaison, and the factory restarts the server"
 		}
-		since := h.liaison
-		r.mu.Unlock()
-		if r.now().Sub(since) >= liaisonHold {
-			return r.tell(ctx, t, st, h, "this task's liaison held the restart of the factory's herdr server for "+
-				textx.DurationWords(liaisonHold))
-		}
-		what = "the factory's herdr server cannot read " + volume + " (macOS blocks it), and this task's liaison lives in its " +
-			"session: exit the liaison, and the factory restarts the server"
-	}
-	if what != "" {
+		now := r.now()
 		r.mu.Lock()
-		said := h.waits == what
+		if h.heldSince.IsZero() {
+			h.heldSince = now
+		}
+		since, said := h.heldSince, h.waits == what
 		h.waits = what
 		r.mu.Unlock()
+		if now.Sub(since) >= holdLimit {
+			held := strings.Join(holders, ", ")
+			return r.tell(ctx, t, st, h, held+" held the restart of the factory's herdr server for "+textx.DurationWords(holdLimit), held)
+		}
 		if !said {
 			r.event(ctx, t.ID, registry.PhaseInfo, what)
 		}
 		return &WaitError{Who: pauseAgent, What: what}
+	}
+	r.mu.Lock()
+	h.heldSince = time.Time{}
+	r.mu.Unlock()
+	if _, err := r.mayStart(ctx, st.role); err != nil { // the budget and the CLI's login, right before the stop
+		return err
 	}
 	r.event(ctx, t.ID, registry.PhaseBegin, "stops the factory's herdr server: macOS blocks it from reading "+volume+" ("+
 		role+"'s pane: "+line+"), which the factory reads")
 	if err := stopper.ServerStop(ctx); err != nil && !herdr.NoServer(err) {
 		if herdr.IsCode(err, herdr.CodeUnknownMethod) {
 			return r.tell(ctx, t, st, h, "the factory's herdr has no server.stop (herdr 0.9.5 and later have it), so the factory "+
-				"cannot restart its server")
+				"cannot restart its server", "")
 		}
 		why := textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200)
 		r.event(ctx, t.ID, registry.PhaseFail, "the stop of the factory's herdr server failed: "+why)

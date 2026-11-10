@@ -24176,7 +24176,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   and relaunches it (an event); the observe pass and the watchdog leave a due role to the heal. (4) The same refusal
   from a relaunched agent (or from a session started after the stop) goes to you: `macOS blocks the factory's herdr
   server from reading <volume>: allow herdr and magnum (and <terminal app>, which starts the server) in System Settings >
-  Privacy & Security > Files and Folders > Removable Volumes (or Full Disk Access, if that toggle is absent), then retry`
+  Privacy & Security > Files & Folders > Removable Volumes (or Full Disk Access, if that toggle is absent), then retry`
   (the brief's words, with the setting named as macOS shows it; `runtime.DeniedError` from Send, `EventVolumeDenied` from the observe pass, a
   needsYou either way); your retry relaunches the role and starts the heal over. A refusal the daemon shares is the
   copy's or its volume's: nothing is stopped, an event says so once, and the lost pane takes the steps of (1), then
@@ -24221,7 +24221,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   fresh server, and one launched after it and denied is told, unless you retried that task since. A refused pane gone
   from the session means somebody restarted the server: no stop, the relaunch goes on. `server.stop` is optional
   (`herdr.OptionalMethods`): doctor warns, naming 0.9.5, and a herdr that answers `unknown_method` sends the line at
-  once. The line names the setting as macOS shows it (`Files and Folders > Removable Volumes`, or `Full Disk Access`
+  once. The line names the setting as macOS shows it (`Files & Folders > Removable Volumes`, or `Full Disk Access`
   where that toggle is absent; Removable Volumes only for a /Volumes path) and the `[terminal] app` the reveal starts
   the server from (`DeniedLine(volume, app)`). The daemon's read of a copy keeps one read per directory in flight
   (`dirProber`): a read macOS holds is waited for once, and a check meanwhile answers no at once. A heal told to you
@@ -24242,6 +24242,24 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (internal/factory/runtime); `TestAPromptTheDrainHoldsCostsTheTaskNothing`, `TestMayLaunchSaysTheHoldThatStopsAStart`
   (internal/factory); the optional method in `TestRequiredMethodsCoverEveryCall` (internal/herdr) and doctor's warn in
   `TestDoctorHerdrMethodsAreTheOnesMagnumSends` (internal/cli).
+  After the second review (same change): a pane's mark leaves its blank last rows out before its prompt line, so a
+  read that ends with a newline or is padded still lines up; a pre-read that fails leaves no mark, so that launch says
+  nothing (the recoveries take it). The stop's wait reads no CLI and no budget: the drain and the engine's holds come
+  first (`mayHold`), the budget and the login only once nothing holds the stop, right before it. Whatever holds the
+  stop (another task's agent, a pane of yours, this task's liaison) holds it 30 minutes at most (`holdLimit`): then
+  the task needs you with the line that names it and the setting at stake (`heldLine`, `DeniedError.Held`: "… its
+  restart waited 30 minutes for a pane of yours, w3:p2, runs ruby bin/rails c: close or end it, then retry"), never
+  the privacy line alone. The setting is spelled `Files & Folders`. Tests (failing first):
+  `TestAFailedPreReadOfThePaneSaysNothingOfThatLaunch`, `TestAWaitingStopRunsNoLoginCheck`,
+  `TestWhatHoldsTheStopHoldsItHalfAnHourThenGoesToYou`, the padded reads in `TestSinceLaunchCutsWhatThePaneShowedBefore`,
+  the held line in `TestTheDenialNamesTheSettingAsMacOSShowsIt` and `TestThisTasksOwnLiaisonHoldsTheStopThenGoesToYou`,
+  and the install's drain in `TestAPromptTheDrainHoldsCostsTheTaskNothing`.
+  Known gaps too: pane ids restart with a fresh herdr server, so a fresh server can show a pane with the refused
+  pane's id (the stop then goes ahead on a healthy server), and a stale row's pane id of this task can match a pane
+  you opened since (it is skipped as the task's own and ends in the stop); this task's liaison counts as its own only
+  once herdr lists its agent (a liaison still starting is named as a pane, and held by the same 30 minutes); a parked
+  role whose resumed start fails before any session row exists is charged nothing, so a lasting start error repeats
+  as the stage's failure on each prompt and never escalates to EventLost.
 
 ## Learned rules
 

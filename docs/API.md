@@ -16980,7 +16980,7 @@ func DeniedLine(volume, app string) string
     factory's herdr server from reading volume after its one heal: whom to
     allow (herdr, magnum and app, the [terminal] app the engine's reveal starts
     the server from, when it is one) and where, as macOS names the setting:
-    Removable Volumes under Files and Folders for a mounted volume, Full Disk
+    Removable Volumes under Files & Folders for a mounted volume, Full Disk
     Access where that toggle is absent; then your retry.
 
 func IsUnknownReason(what string) bool
@@ -17044,15 +17044,17 @@ type Copy struct {
     and its environment, the repository's env rendered for the copy (its name,
     its number, its Redis offset). Its panes run in Path with Env.
 
-type DeniedError struct{ Volume, App string }
+type DeniedError struct{ Volume, App, Held string }
     DeniedError is Send's answer while macOS blocks the factory's herdr server
     from reading Volume after the heal, or while the factory may not heal it
-    (its herdr session is yours, its herdr has no server.stop, this task's
-    liaison held the stop for liaisonHold): the task needs you, with DeniedLine
-    (App is the [terminal] app), until your retry.
+    (its herdr session is yours, its herdr has no server.stop), or once Held
+    (what lives in its session) held the stop for holdLimit: the task needs
+    you until your retry, with DeniedLine (App is the [terminal] app), or with
+    heldLine once something held it.
 
 func (e *DeniedError) Error() string
-    Error is DeniedLine of the volume and the app.
+    Error is the line the task waits on you for: heldLine when Held is set,
+    else DeniedLine.
 
 type Deps struct {
 	Config   *config.Config

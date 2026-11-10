@@ -5425,11 +5425,13 @@ session's nor the review panes'), opens the session again at once, so a fresh se
 relaunches there the task's roles that took no prompt yet; each step is a `herdr` event of the task. One stop serves
 every task for an hour. The stop waits, and the task's wait says why, while anything else lives in that session (an
 agent of another task, a liaison, a pane of yours that runs something: `a pane of yours, w3:p2, runs ruby bin/rails
-c`), while a talk starts a liaison, and under the holds a launch waits for; this task's own liaison holds it for 30
-minutes at most (`exit the liaison, and the factory restarts the server`). A server somebody restarted meanwhile is
-not stopped again. If a relaunched agent exits the same way, or a herdr without `server.stop` cannot be restarted,
+c`), while a talk starts a liaison, and under the holds a launch waits for; this task's own liaison holds it in words of
+its own (`exit the liaison, and the factory restarts the server`). What lives in the session holds the stop for 30
+minutes at most: then the task needs you with a line that names it (`… its restart waited 30 minutes for a pane of
+yours, w3:p2, runs ruby bin/rails c: close or end it, then retry, and the factory restarts the server`). A server
+somebody restarted meanwhile is not stopped again. If a relaunched agent exits the same way, or a herdr without `server.stop` cannot be restarted,
 the task needs you: `macOS blocks the factory's herdr server from reading /Volumes/Work: allow herdr and magnum (and
-iTerm2, which starts the server) in System Settings > Privacy & Security > Files and Folders > Removable Volumes (or
+iTerm2, which starts the server) in System Settings > Privacy & Security > Files & Folders > Removable Volumes (or
 Full Disk Access, if that toggle is absent), then retry` (the app is your `[terminal] app`); your retry relaunches
 the role and starts the heal over. When the daemon cannot read the copy either, the copy or its volume is at fault,
 not herdr: nothing is stopped, the lost pane takes the steps above, and the copies' own handling applies (a copy

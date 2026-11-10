@@ -16,7 +16,7 @@ import (
 // deniedLine is the line a task waits on you for once macOS still blocks
 // the factory's herdr server from reading the copies' volume after its heal.
 const deniedLine = "macOS blocks the factory's herdr server from reading /Volumes/Work: allow herdr and magnum (and iTerm2, which " +
-	"starts the server) in System Settings > Privacy & Security > Files and Folders > Removable Volumes (or Full Disk Access, if " +
+	"starts the server) in System Settings > Privacy & Security > Files & Folders > Removable Volumes (or Full Disk Access, if " +
 	"that toggle is absent), then retry"
 
 // A prompt the runtime answers with the denial's line (the heal did not
@@ -131,19 +131,30 @@ func TestAHealsServerStopOpensTheSessionAtOnce(t *testing.T) {
 }
 
 // A prompt the daemon's drain held (the runtime would start a role again
-// first, and no launch starts while the daemon drains) costs the task
-// nothing: no failure, and no wait of the drain's on the task.
+// first, and no launch starts while the daemon drains, on SIGTERM or for an
+// install) costs the task nothing: no failure, and no wait of the drain's
+// on the task.
 func TestAPromptTheDrainHoldsCostsTheTaskNothing(t *testing.T) {
-	h := newHarness(t)
-	task := h.kindTask("PR-12534", "bug", "investigate")
-	h.rt.setSendErr(fmt.Errorf("send to fx-repro: %w", runtime.ErrDraining))
-	h.startStage(task)
-	h.tick()
-	if got := h.reload(task.ID); got.State != registry.TaskActive || got.WaitsWho == holdRestart {
-		t.Fatalf("task %s waits %q: %q, want active with no wait of the drain's", got.State, got.WaitsWho, got.WaitsWhat)
-	}
-	if evs := h.events(task.ID, "advance"); len(evs) != 0 {
-		t.Fatalf("advance failures %+v, want none", evs)
+	for _, c := range []struct {
+		name string
+		err  error
+	}{
+		{"SIGTERM", fmt.Errorf("send to fx-repro: %w", runtime.ErrDraining)},
+		{"an install's drain", fmt.Errorf("send to fx-repro: %w", &runtime.WaitError{Who: holdRestart, What: drainWhat})},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			task := h.kindTask("PR-12534", "bug", "investigate")
+			h.rt.setSendErr(c.err)
+			h.startStage(task)
+			h.tick()
+			if got := h.reload(task.ID); got.State != registry.TaskActive || got.WaitsWho == holdRestart {
+				t.Fatalf("task %s waits %q: %q, want active with no wait of the drain's", got.State, got.WaitsWho, got.WaitsWhat)
+			}
+			if evs := h.events(task.ID, "advance"); len(evs) != 0 {
+				t.Fatalf("advance failures %+v, want none", evs)
+			}
+		})
 	}
 }
 

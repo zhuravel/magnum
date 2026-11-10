@@ -80,6 +80,8 @@ type fakeHerdr struct {
 	// set for a pane, is its process info (an idle shell otherwise).
 	paneScreen string
 	procs      map[string]herdr.ProcessInfo
+	// readErr, when set, is what a read of a pane answers.
+	readErr error
 
 	creates []herdr.WorkspaceCreateOptions
 	splits  []herdr.SplitOptions
@@ -206,7 +208,20 @@ func (f *fakeHerdr) read(target string) string {
 }
 
 func (f *fakeHerdr) PaneRead(_ context.Context, paneID string, o herdr.ReadOptions) (herdr.ReadResult, error) {
+	f.mu.Lock()
+	err := f.readErr
+	f.mu.Unlock()
+	if err != nil {
+		return herdr.ReadResult{}, err
+	}
 	return herdr.ReadResult{PaneID: paneID, Source: o.Source, Text: f.read(paneID)}, nil
+}
+
+// failReads makes every read of a pane fail with err (nil: reads answer).
+func (f *fakeHerdr) failReads(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readErr = err
 }
 
 func (f *fakeHerdr) AgentRead(_ context.Context, target string, o herdr.ReadOptions) (herdr.ReadResult, error) {
