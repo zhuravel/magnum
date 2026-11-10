@@ -4576,11 +4576,12 @@ stages = [
   takes `{files}` (the changed files, shell-quoted) and `{base}`, and a `migrations` command also `{version}`
   (the digits a migration's file name starts with) and `{file}`: each runs once per migration the branch
   adds, in order (`bin/rails db:migrate:up VERSION={version}`, then `…:down…`, then `…:up…` again, so the copy's
-  database keeps the change). A migration is an added file directly in a migration folder whose name starts
-  with its version (`20261111090000_add_x.rb`); a migration folder is a `db` directory's child whose name holds
-  `migrate` (`db/migrate`, `db/reporting_migrate`, `db/sharded_migrate`, `engines/billing/db/migrate`), never
-  one under `spec/` or `test/` (`spec/db/reporting_migrate/backfill_x_spec.rb` is a spec, not a migration). A
-  helper or a nested file in a migration folder is none either. A multi-database application, which refuses a
+  database keeps the change). A migration is an added file in a migration folder, at any depth as Rails loads
+  them, whose name starts with its version (`20261111090000_add_x.rb`; `db/migrate/archive/<version>_x.rb` is
+  `db/migrate`'s); a migration folder is a `db` directory's child whose name holds `migrate` (`db/migrate`,
+  `db/reporting_migrate`, `db/sharded_migrate`, `engines/billing/db/migrate`), never one under `spec/` or `test/`
+  (`spec/db/reporting_migrate/backfill_x_spec.rb` is a spec, not a migration). A helper without a version in a
+  migration folder is none either. A multi-database application, which refuses a
   plain `db:migrate:up`, sets `migration_databases`, each folder's databases by the application's names:
   `migration_databases = { "db/migrate" = ["primary"], "db/reporting_migrate" = ["reporting"],
   "db/sharded_migrate" = ["shard_1", "shard_1001"] }`. Each migration's commands then run on each database of its

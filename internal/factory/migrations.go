@@ -87,9 +87,8 @@ func (f MigrationFlag) String() string {
 func notRunWords(folder string) string { return "not run: no databases are set for " + folder }
 
 // isMigration reports whether path, a file the change adds, is a
-// migration (config.MigrationFolder): a file directly in a migration folder
-// whose name starts with its version, never a spec, a helper or a nested
-// file.
+// migration (config.MigrationFolder): a file at any depth in a migration
+// folder whose name starts with its version, never a spec or a helper.
 func isMigration(path string) bool {
 	_, ok := config.MigrationFolder(path)
 	return ok

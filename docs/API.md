@@ -5405,15 +5405,17 @@ func MatchPath(glob, name string) bool
     see ValidatePathGlob.
 
 func MigrationFolder(path string) (folder string, ok bool)
-    MigrationFolder is the folder of path, a file relative to the checkout
-    as git names it, and whether path is a migration: a file directly in a
-    migration folder whose name is a version, "_", a name and .rb. A migration
-    folder is a db directory's child whose name holds "migrate", the root's or
-    an engine's (db/migrate, db/sharded_migrate, engines/billing/db/migrate),
-    but never one under a spec or test directory (spec/db/reporting_migrate
-    holds the specs of migrations). It narrows internal/staging's isMigration
-    (a staging deploy migrates every such folder) to the migrations themselves,
-    and names their folder.
+    MigrationFolder is the folder of path, a file relative to the checkout as
+    git names it, and whether path is a migration: a file at any depth in a
+    migration folder (as Rails' migrator loads a folder's migrations) whose
+    name is a version, "_", a name and .rb; its folder is the migration folder,
+    never a subfolder of it (db/migrate/archive/<version>_x.rb is db/migrate's).
+    A migration folder is a db directory's child whose name holds
+    "migrate", the root's or an engine's (db/migrate, db/sharded_migrate,
+    engines/billing/db/migrate), but never one under a spec or test directory
+    (spec/db/reporting_migrate holds the specs of migrations). It narrows
+    internal/staging's isMigration (a staging deploy migrates every such folder)
+    to the migrations themselves, and names their folder.
 
 func ParseDuration(s string) (time.Duration, error)
     ParseDuration is time.ParseDuration plus a leading whole-day count: "7d",

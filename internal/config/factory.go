@@ -1495,22 +1495,31 @@ const DatabasePlaceholder = "{database}"
 var migrationFileRe = regexp.MustCompile(`^[0-9]+_[^/]*\.rb$`)
 
 // MigrationFolder is the folder of path, a file relative to the checkout as
-// git names it, and whether path is a migration: a file directly in a
-// migration folder whose name is a version, "_", a name and .rb. A
-// migration folder is a db directory's child whose name holds "migrate",
-// the root's or an engine's (db/migrate, db/sharded_migrate,
-// engines/billing/db/migrate), but never one under a spec or test directory
-// (spec/db/reporting_migrate holds the specs of migrations). It narrows
-// internal/staging's isMigration (a staging deploy migrates every such
-// folder) to the migrations themselves, and names their folder.
+// git names it, and whether path is a migration: a file at any depth in a
+// migration folder (as Rails' migrator loads a folder's migrations) whose
+// name is a version, "_", a name and .rb; its folder is the migration
+// folder, never a subfolder of it (db/migrate/archive/<version>_x.rb is
+// db/migrate's). A migration folder is a db directory's child whose name
+// holds "migrate", the root's or an engine's (db/migrate,
+// db/sharded_migrate, engines/billing/db/migrate), but never one under a
+// spec or test directory (spec/db/reporting_migrate holds the specs of
+// migrations). It narrows internal/staging's isMigration (a staging deploy
+// migrates every such folder) to the migrations themselves, and names
+// their folder.
 func MigrationFolder(path string) (folder string, ok bool) {
 	parts := strings.Split(path, "/")
-	n := len(parts)
-	if n < 3 || parts[n-3] != "db" || !strings.Contains(parts[n-2], "migrate") || !migrationFileRe.MatchString(parts[n-1]) ||
-		slices.ContainsFunc(parts[:n-3], func(p string) bool { return p == "spec" || p == "test" }) {
+	if !migrationFileRe.MatchString(parts[len(parts)-1]) {
 		return "", false
 	}
-	return strings.Join(parts[:n-1], "/"), true
+	for i := 0; i+2 < len(parts); i++ {
+		switch {
+		case parts[i] == "spec" || parts[i] == "test":
+			return "", false
+		case parts[i] == "db" && strings.Contains(parts[i+1], "migrate"):
+			return strings.Join(parts[:i+2], "/"), true
+		}
+	}
+	return "", false
 }
 
 // databaseNameRe is a database's name in migration_databases: it goes into

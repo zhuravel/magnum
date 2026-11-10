@@ -138,14 +138,16 @@ func TestAShardMigrationRunsUpDownAndUpOnEachShard(t *testing.T) {
 }
 
 // A migration of the reporting folder runs on the reporting database only,
+// one nested below it too (Rails loads a folder's migrations at any depth),
 // and one of db/migrate on the primary only.
 func TestAReportingMigrationRunsOnReportingOnly(t *testing.T) {
 	r := newCodingRig(t)
 	r.multiDatabase()
 	task := r.codingTask("PR-12481", "feature")
 	r.commit("PR-12481 columns", map[string]string{
-		"db/migrate/20261111090000_add_x_to_credits.rb":           migrationText("AddXToCredits", "credits"),
-		"db/reporting_migrate/20261111090100_add_x_to_reports.rb": migrationText("AddXToReports", "reports"),
+		"db/migrate/20261111090000_add_x_to_credits.rb":                     migrationText("AddXToCredits", "credits"),
+		"db/reporting_migrate/20261111090100_add_x_to_reports.rb":           migrationText("AddXToReports", "reports"),
+		"db/reporting_migrate/backfills/20261111090200_backfill_reports.rb": migrationText("BackfillReports", "reports"),
 	})
 	res, err := r.e.precheck(r.ctx, task, r.cp)
 	if err != nil || !res.Passed {
@@ -156,13 +158,18 @@ func TestAReportingMigrationRunsOnReportingOnly(t *testing.T) {
 		"bin/rails db:migrate:up:primary VERSION=20261111090000",
 		"bin/rails db:migrate:up:reporting VERSION=20261111090100", "bin/rails db:migrate:down:reporting VERSION=20261111090100",
 		"bin/rails db:migrate:up:reporting VERSION=20261111090100",
+		"bin/rails db:migrate:up:reporting VERSION=20261111090200", "bin/rails db:migrate:down:reporting VERSION=20261111090200",
+		"bin/rails db:migrate:up:reporting VERSION=20261111090200",
 	}
 	if got := r.railsScripts(); !slices.Equal(got, want) {
 		t.Fatalf("migration scripts %q, want %q", got, want)
 	}
-	if len(res.Migrations) != 2 || res.Migrations[1].Path != "db/reporting_migrate/20261111090100_add_x_to_reports.rb" ||
-		!slices.Equal(res.Migrations[1].Tables, []string{"reports"}) {
-		t.Fatalf("migrations %+v, want both named with their flags", res.Migrations)
+	if len(res.Migrations) != 3 || res.Migrations[1].Path != "db/reporting_migrate/20261111090100_add_x_to_reports.rb" ||
+		!slices.Equal(res.Migrations[1].Tables, []string{"reports"}) || res.Migrations[2].Path != "db/reporting_migrate/backfills/20261111090200_backfill_reports.rb" {
+		t.Fatalf("migrations %+v, want the three named with their flags", res.Migrations)
+	}
+	if report := r.readTask(task.ID, precheckFile); !strings.Contains(report, "db/reporting_migrate/backfills/20261111090200_backfill_reports.rb on reporting: passed") {
+		t.Fatalf("%s does not name the nested migration's run on reporting:\n%s", precheckFile, report)
 	}
 }
 
@@ -245,26 +252,31 @@ func TestAMigrationOfAFolderWithNoDatabasesIsNotRunAndNamed(t *testing.T) {
 }
 
 // Without migration_databases only db/migrate's migrations run, with the
-// commands as they are (no database); a migration of another folder (a
-// shard's, an engine's) is listed and not run, naming its folder.
+// commands as they are (no database), one nested below it too, as on
+// master; a migration of another folder (a shard's, an engine's) is listed
+// and not run, naming its folder.
 func TestWithoutMigrationDatabasesOnlyDbMigrateRuns(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.codingTask("PR-12483", "feature")
 	r.commit("PR-12483 columns", map[string]string{
-		"db/migrate/20261111090000_add_x_to_credits.rb":        migrationText("AddXToCredits", "credits"),
-		"db/sharded_migrate/20261111090100_add_x_to_events.rb": migrationText("AddXToEvents", "events"),
-		"engines/billing/db/migrate/20261111090200_add_x.rb":   migrationText("AddX", "invoices"),
+		"db/migrate/20261111090000_add_x_to_credits.rb":         migrationText("AddXToCredits", "credits"),
+		"db/sharded_migrate/20261111090100_add_x_to_events.rb":  migrationText("AddXToEvents", "events"),
+		"engines/billing/db/migrate/20261111090200_add_x.rb":    migrationText("AddX", "invoices"),
+		"db/migrate/archive/20261111090300_add_y_to_credits.rb": migrationText("AddYToCredits", "credits"),
 	})
 	res, err := r.e.precheck(r.ctx, task, r.cp)
 	if err != nil || !res.Passed {
 		t.Fatalf("precheck %+v, %v; want passed", res, err)
 	}
-	want := []string{"bin/rails db:migrate:up VERSION=20261111090000", "bin/rails db:migrate:down VERSION=20261111090000"}
-	if got := r.railsScripts(); !slices.Equal(got, want) {
-		t.Fatalf("migration scripts %q, want db/migrate's only, as before: %q", got, want)
+	want := []string{
+		"bin/rails db:migrate:up VERSION=20261111090000", "bin/rails db:migrate:down VERSION=20261111090000",
+		"bin/rails db:migrate:up VERSION=20261111090300", "bin/rails db:migrate:down VERSION=20261111090300",
 	}
-	if len(res.Migrations) != 3 {
-		t.Fatalf("migrations %+v, want all three named", res.Migrations)
+	if got := r.railsScripts(); !slices.Equal(got, want) {
+		t.Fatalf("migration scripts %q, want db/migrate's only, the nested one too, as before: %q", got, want)
+	}
+	if len(res.Migrations) != 4 {
+		t.Fatalf("migrations %+v, want all four named", res.Migrations)
 	}
 	report := r.readTask(task.ID, precheckFile)
 	for _, words := range []string{"not run: no databases are set for db/sharded_migrate", "not run: no databases are set for engines/billing/db/migrate"} {
@@ -280,17 +292,18 @@ func TestWithoutMigrationDatabasesOnlyDbMigrateRuns(t *testing.T) {
 
 // The FLAGS line lists a migration the branch adds in every migration
 // folder (a db directory's child whose name holds "migrate", the root's or
-// an engine's, under no spec or test directory), a file directly in it
+// an engine's, under no spec or test directory), a file at any depth in it
 // whose name starts with its version, and no other file: not a migration's
-// spec beside it in spec/db/<folder> (as a multi-database application keeps
-// them), a helper or a nested file in a migration folder, a test's
-// fixture, or another file under db.
+// spec in spec/db/<folder> (as a multi-database application keeps them), a
+// helper in a migration folder, a test's fixture, or another file under
+// db.
 func TestFlagsListAMigrationOfEveryFolder(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.codingTask("PR-12484", "feature")
 	migrations := []string{
 		"db/data_migrate/20261111090000_backfill.rb",
 		"db/migrate/20261111090100_add_x_to_credits.rb",
+		"db/migrate/archive/20261111090500_add_y_to_credits.rb",
 		"db/reporting_migrate/20261111090200_add_x_to_reports.rb",
 		"db/sharded_migrate/20261111090300_add_x_to_events.rb",
 		"engines/billing/db/migrate/20261111090400_add_x_to_invoices.rb",
@@ -302,7 +315,6 @@ func TestFlagsListAMigrationOfEveryFolder(t *testing.T) {
 		"spec/db/reporting_migrate/backfill_points_spec.rb":       "RSpec.describe BackfillPoints do\nend\n",
 		"db/migrate/support/helper.rb":                            "module MigrationHelper\nend\n",
 		"db/sharded_migrate/helper.rb":                            "module ShardHelper\nend\n",
-		"db/migrate/archive/20261111090500_add_y_to_credits.rb":   migrationText("AddYToCredits", "credits"),
 		"test/db/migrate/20261111090600_add_z_to_credits.rb":      migrationText("AddZToCredits", "credits"),
 		"engines/billing/spec/db/migrate/20261111090700_add_z.rb": migrationText("AddZ", "invoices"),
 	}

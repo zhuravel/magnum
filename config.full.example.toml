@@ -303,9 +303,10 @@ databases = [
 #   migrations = ["bin/rails db:migrate:up VERSION={version}", "bin/rails db:migrate:down VERSION={version}",
 #                 "bin/rails db:migrate:up VERSION={version}"]   # each new migration, in order ({version}, {file}): up,
 #                                          # down and up again; a gh-ost one is not run; db/schema.rb is put back after.
-#                                          # A migration is a file directly in a db directory's child whose name
-#                                          # holds "migrate" (the root's or an engine's, none under spec/ or test/),
-#                                          # its name starting with its version. Without migration_databases only
+#                                          # A migration is a file at any depth in a db directory's child whose
+#                                          # name holds "migrate" (the root's or an engine's, none under spec/ or
+#                                          # test/), its name starting with its version; it is that top folder's.
+#                                          # Without migration_databases only
 #                                          # db/migrate's migrations run; one of another folder is listed and not run:
 #                                          # "no databases are set for" its folder
 #   # migration_databases = { "db/migrate" = ["primary"], "db/reporting_migrate" = ["reporting"],

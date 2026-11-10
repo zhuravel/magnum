@@ -24783,18 +24783,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `db/reporting_migrate` the reporting database, `db/sharded_migrate` every shard), so a new migration in
   another folder was never run and never flagged, and nothing said so. Such an application also refuses a
   plain `db:migrate:up`: it asks for one database's task (`db:migrate:up:primary`, `db:migrate:up:shard_1`).
-  - Detection. A migration is an added file directly in a migration folder whose name is a version, `_`, a name
-    and `.rb` (`config.MigrationFolder`). A migration folder is a `db` directory's child whose name holds
+  - Detection. A migration is an added file at any depth in a migration folder whose name is a version, `_`, a
+    name and `.rb` (`config.MigrationFolder`), as Rails' migrator loads a folder's paths recursively; its folder
+    is the top one (`db/migrate/archive/<version>_x.rb` is `db/migrate`'s, runs on its databases, and FLAGS and
+    `precheck.md` list it, as master ran it). A migration folder is a `db` directory's child whose name holds
     `migrate`, the root's or an engine's, never under a `spec` or `test` directory: `internal/staging`'s
     `isMigration` rule (copied, not imported), narrowed to the migrations themselves, with their folder named.
     The application keeps the specs of its reporting migrations in `spec/db/reporting_migrate/<name>_spec.rb`:
     the first version of this change counted such a spec as a migration of the folder
     `spec/db/reporting_migrate`, put it into the PR body as a migration the factory did not run, and let the
-    config name that folder, whose "migration" then ran with an empty `VERSION`. A helper or a nested file in a
-    migration folder (`db/migrate/support/helper.rb`, `db/migrate/archive/<version>_x.rb`) is no migration
-    either: master ran every `.rb` file under `db/migrate/`, a version-less one with an empty `VERSION`. The
-    precheck and FLAGS use the rule; the gh-ost rule stays (a gh-ost migration is not run, in any folder, and is
-    never one of those not run for lack of databases).
+    config name that folder, whose "migration" then ran with an empty `VERSION`. A helper without a version in a
+    migration folder (`db/migrate/support/helper.rb`) is no migration either: master ran every `.rb` file under
+    `db/migrate/`, a version-less one with an empty `VERSION`. The precheck and FLAGS use the rule; the gh-ost
+    rule stays (a gh-ost migration is not run, in any folder, and is never one of those not run for lack of
+    databases). A folder key of `migration_databases` is a top folder (a subfolder is refused).
   - `[factory.repo.precheck] migration_databases`, a table from a migration folder to its databases by the
     application's names, and `{database}` in the `migrations` commands. With the key, each migration's commands
     run on each database of its folder, in order (for each migration, for each database: up, down, up), with
@@ -24835,23 +24837,22 @@ skill versions); people add theirs to the sections before it, at the end of the 
   depend on the staging reader); running every folder's migrations with the plain commands without the key
   (Rails refuses the plain task in a multi-database application, so the precheck would fail on every such
   task); a deadline for the whole step scaled by its runs (`cap` × runs: a command that hangs early would hold
-  the step that long, and the bound of one command is what the README promises); Rails' own glob of a folder's
-  migrations at any depth (`**/[0-9]*_*.rb`): the review ruled files directly in their folder, one shape that
-  the config's folder keys share, and leaves the nested case as a known gap.
-  Known gaps: a migration nested below its folder (`db/migrate/archive/<version>_x.rb`), which Rails runs, is
-  neither run nor flagged, where master ran one under `db/migrate/`; the claim's `foreignSchema` reads only
+  the step that long, and the bound of one command is what the README promises); only the files directly in a
+  folder (a nested migration, which Rails runs and master ran under `db/migrate/`, would then be neither run
+  nor flagged).
+  Known gaps: the claim's `foreignSchema` reads only
   `db/migrate` and the development database, so a shard or reporting database another task migrated (or a
   failed command left part-way) is not reset; and, latent while no repository sets `table_stats`, the
   migration-safety lint reads every folder's tables against the one `table_stats` file, so a large shard table
   missing from it is never flagged, and a primary table of a shard table's name can flag it falsely.
   Tests (failing first): `TestAShardMigrationRunsUpDownAndUpOnEachShard` (a failed down on one shard: the Why,
   the failure's line with the database, the part-way note and the claim's gap),
-  `TestAReportingMigrationRunsOnReportingOnly`, `TestAMigrationOfAFolderWithNoDatabasesIsNotRunAndNamed`
+  `TestAReportingMigrationRunsOnReportingOnly` (a nested one too), `TestAMigrationOfAFolderWithNoDatabasesIsNotRunAndNamed`
   (precheck.md, the skipped check, FLAGS and the PR body, another head's record naming nothing; with a gh-ost
   migration of that folder, a pin: skipped as gh-ost, never named for lack of databases),
-  `TestWithoutMigrationDatabasesOnlyDbMigrateRuns` (an engine's and a shard's folder named),
-  `TestFlagsListAMigrationOfEveryFolder` (a migration's spec under `spec/db/reporting_migrate`, helpers, a nested
-  migration and a test's or an engine spec's `db` are none), `TestEachMigrationCommandHasItsOwnBound` (six
+  `TestWithoutMigrationDatabasesOnlyDbMigrateRuns` (an engine's and a shard's folder named, a nested one of
+  `db/migrate` run as on master), `TestFlagsListAMigrationOfEveryFolder` (a nested migration is one; a
+  migration's spec under `spec/db/reporting_migrate`, helpers and a test's or an engine spec's `db` are none), `TestEachMigrationCommandHasItsOwnBound` (six
   commands of 0.4 cap each on two shards pass), `TestThePromptsSayWhichMigrationsThePrecheckRuns` and
   `TestTheChecksPrintCountsMigrationDatabases` (internal/factory); `TestMigrationDatabasesRefuseCommandsWithoutDatabase`,
   `TestMigrationsCommandsWithDatabaseNeedMigrationDatabases`, `TestMigrationDatabasesRefuseAnEmptyListOfDatabases`
