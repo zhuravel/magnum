@@ -273,9 +273,11 @@ databases = [
 #                                          # one-word name; none: the factory's own outline. The table from the ticket's
 #                                          # points to their specs and the proof stay in it; the Known list is folded
 # title_format = "[{key}] {title}"         # the layout of a PR's title: {key} is the task's issue key (Jira's or Linear's),
-#                                          # {title} its title and is required, once. Default "{key} {title}". A task with
-#                                          # no key gets its title alone; a title that already starts with the key keeps it
-#                                          # once. Set it where the repository requires "[ABC-123] Title". On a Linear-
+#                                          # {title} its title and is required, once; any other {word} is refused. Default
+#                                          # "{key} {title}". A task with no key gets its title alone, whatever else the
+#                                          # format says ("feat: {title}" gives "Title" to a keyless task); a title that
+#                                          # already starts with the key keeps it once. Set it where the repository
+#                                          # requires "[ABC-123] Title". On a Linear-
 #                                          # tracked repository (a tracker link on linear.app, none on Jira) a prompt task
 #                                          # asks "Which Linear issue is this (ABC-…)?"; the answer's key goes in its
 #                                          # branch and, by this format, its PR's title

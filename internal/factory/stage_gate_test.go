@@ -1110,7 +1110,16 @@ func TestEachReproductionAnswerAtTheQuestionsGateIsActedOnOnce(t *testing.T) {
 // it is; its judge wrote the report.
 func linkRig(t *testing.T) (*intakeRig, registry.Task) {
 	t.Helper()
+	return linkRigOn(t, func(*intakeRig) {}, registry.Question{Text: whichIssue, RaisedBy: intakeRole, Recommended: 0, Options: []registry.Option{
+		{Label: "PR-12345 Credit expiry reminder email", Means: "the task follows PR-12345"}, {Label: noIssue, Means: "your words only"}}})
+}
+
+// linkRigOn is linkRig for the question q, after setup changed the rig's
+// config (a Linear-tracked repository's rig asks the Linear question).
+func linkRigOn(t *testing.T, setup func(r *intakeRig), q registry.Question) (*intakeRig, registry.Task) {
+	t.Helper()
 	r := newIntakeRig(t)
+	setup(r)
 	r.stage(config.FactoryStageAgents, r.e.runAgents) // the amend turn runs
 	r.stageCopy()
 	task, err := r.reg.CreateTask(r.ctx, registry.Task{Prompt: "remind advocates before their credit expires", Kind: "feature",
@@ -1119,8 +1128,6 @@ func linkRig(t *testing.T) (*intakeRig, registry.Task) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q := registry.Question{Text: whichIssue, RaisedBy: intakeRole, Recommended: 0, Options: []registry.Option{
-		{Label: "PR-12345 Credit expiry reminder email", Means: "the task follows PR-12345"}, {Label: noIssue, Means: "your words only"}}}
 	if err := r.reg.ReplaceQuestions(r.ctx, task.ID, 1, []registry.Question{q}); err != nil {
 		t.Fatal(err)
 	}

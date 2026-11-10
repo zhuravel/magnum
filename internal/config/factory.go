@@ -496,6 +496,11 @@ const (
 	TitleTitle = "{title}"
 )
 
+// titlePlaceholder is a braced word of a title_format: only TitleKey and
+// TitleTitle are placeholders, and any other would print its braces into
+// every PR's title.
+var titlePlaceholder = regexp.MustCompile(`\{[^{}]*\}`)
+
 // The defaults and the limits of a repository's [factory.repo.qa]
 // (FactoryQA).
 const (
@@ -1265,6 +1270,13 @@ func (c *Config) validateFactoryRepos() []error {
 				bad("title_format %q must contain %s once", f, TitleTitle)
 			case strings.ContainsFunc(f, unicode.IsControl):
 				bad("title_format %q must be one line", f)
+			default:
+				for _, ph := range titlePlaceholder.FindAllString(f, -1) {
+					if ph != TitleKey && ph != TitleTitle {
+						bad("title_format %q has the placeholder %s, which is neither %s nor %s", f, ph, TitleKey, TitleTitle)
+						break
+					}
+				}
 			}
 		}
 		if r.LargeTableRows < 0 {

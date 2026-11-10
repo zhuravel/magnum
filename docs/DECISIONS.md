@@ -23525,25 +23525,42 @@ skill versions); people add theirs to the sections before it, at the end of the 
     with a Jira tracker keeps the Jira question, one with neither Jira's nor Linear's trackers still asks nothing).
     Its prompt task asks, as revision 1, `Which Linear issue is this (ABC-…)?` with the first Linear tracker's key
     prefix, one option (`no issue`, recommended). It is stored at once, without Jira or a search (`askWhichLinear`),
-    and nothing asks it again. Answering types the key, with words after it or not, or the issue's link
-    (`namedIssue` reads it as a start does, `readStart`). `isWhichIssue` is the one test of "intake's question" for
+    and nothing asks it again. The one option is recommended as the Jira question recommends "no issue" when no title
+    matches, so the tracker does not change the default (a question with no recommendation was considered: the Jira
+    question always recommends, and two defaults for one question seemed worse). Answering types the key, with words
+    after it or not, or the issue's link, or pastes a branch name or a sentence: `namedIssue` takes the first key of the
+    repository's Linear trackers anywhere in the answer, in any case (`ex-12`, `alice/ex-12-export-fails`, `it is
+    EX-12`), written as the tracker's prefix writes it (`linearKeyIn`). Linear's "copy branch name" is lower case, and
+    a silent drop of a pasted branch name would send the PR out with no key. `isWhichIssue` is the one test of "intake's question" for
     both texts, where the code compared the Jira text (the link, the amend's exception, the wait's clock, the ask
     again).
   - **The stored key.** The answer's key goes where a Jira key is kept, `registry.Task.JiraKey` (the `jira_key`
     column), as a start of a key of another tracker already does (`startOther`). The name says Jira, but nothing
     reads it as Jira's: `linkedTicket`, the tracking read and the agents' prompts already ask `otherTracker` first, so
     a Linear key is never read from Jira. The branch already carries the key (`nameRemoteBranch` names the PR's
-    branch from it when it is linked after the local branch was made), so the branch rule is unchanged. A key-shaped
-    first word that no tracker of the repository owns (`EXP-12` for `EX-`) is refused with the prefix to type and the
-    question stays open: taken as words, it would send the PR out with no key, the fault this closes.
+    branch from it when it is linked after the local branch was made), so the branch rule is unchanged. An answer with no such key
+    whose first word is key-shaped, in any case (`EXP-12`, `exp-12` for `EX-`), is refused with the prefix to type and
+    the question stays open: taken as words, it would send the PR out with no key, the fault this closes. A key later
+    in the answer that no tracker owns is not refused (`handling of UTF-8`).
   - **`title_format`.** `[[factory.repo]] title_format` is a template with `{key}` and `{title}`, default
     `{key} {title}` (`config.DefaultFactoryTitleFormat`; the zero value stands for it). `prTitle(task, format)` lays
     the title out by it; with no key the title is the title alone (no empty brackets); a title that already starts
     with the formatted prefix (and ends with the formatted suffix, for `{title} ({key})`) keeps it once, and one that
-    starts with the bare key as a word is laid out from what follows it (`ABC-12: Title` gives `[ABC-12] Title`).
-    Under the default format that is the old rule, byte for byte (`HasPrefix(title, key)`, so a longer key's title
-    is kept as before). The config check refuses a format without `{title}`, with `{title}` more than once, or on
-    more than one line.
+    starts with the key bare or in brackets, in any case, where the key ends (a space, a colon, a comma, a dash and a
+    space, or the end) is laid out from what follows it (`ABC-12: Title` and `(ABC-12) Title` give `[ABC-12] Title`).
+    A hyphen, a dot or a letter after the key joins it to the next word, so `ABC-12-beta fix` and `ABC-1.5 notes` keep
+    their words. The formatted key is matched without case and written as the format writes it (`[abc-12] Title`
+    gives `[ABC-12] Title`). Under the default format a title that starts with the key's exact case is the old rule,
+    byte for byte (a longer key's title is kept as before); only the key in another case or in brackets, which the
+    old rule repeated (`ABC-12 abc-12 Title`), is now kept once. The config check refuses a format without `{title}`,
+    with `{title}` more than once, with any other braced word (`{KEY}`, `{ticket}`: their braces would print into
+    every title), or on more than one line. A format with words and no `{key}` (`feat: {title}`) gives a task with no
+    key its title alone, as the brief says; the config comment says so.
+  - **One title everywhere** (fix round 1). The local review's case (`localCase`) had its own copy of the old rule, so
+    the judge read `# EX-12 Title` where the PR reads `[EX-12] Title`: where a repository's own rules ask for
+    `[KEY] Title`, a round could raise a title finding the writer cannot fix, since the factory owns the title.
+    `localCase` now calls `prTitle` with the repository's format. The screen's ready card showed the task's title, not
+    the card's (the PR's): it shows the card's, and the task's for a card drawn before the file had a title.
   - Rejected: a Linear API or search (the factory reads no Linear: the question is plain, and a Linear read is a later
     item); a second column or a rename of `jira_key` (a migration and every reader for a name; the generic
     key is documented here and in `FactoryRepo.TitleFormat`); asking the Linear question where the repository mixes
@@ -23551,10 +23568,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
     keys found in the prompt's words (those are words in a Linear-tracked repository, as in `readStart`).
   Tests: `TestAPromptOfALinearTrackedRepositoryAsksWhichLinearIssueOnce`, `TestTheLinearQuestionNeedsNoJira`,
   `TestAJiraTrackedRepositoryKeepsTheJiraQuestion`, `TestAnAnswerNamingALinearKeyGivesItsPRTitleAndBranchTheKey`,
-  `TestNoIssueGivesALinearTrackedTasksPRTheTitleAlone` and `TestAWrongLinearKeyIsRefusedAndTheQuestionStaysOpen`
-  (`internal/factory`), `TestThePRTitleIsTheKeyAndTheTitle` (the old cases under both spellings of the default) and
-  `TestThePRTitleFollowsTheReposTitleFormat` (`internal/factory`), `TestFactoryRepoTitleFormat` and the title_format
-  cases of `TestFactoryChecksTheRepositoryBlock` (`internal/config`). No new dependencies.
+  `TestNoIssueGivesALinearTrackedTasksPRTheTitleAlone`, `TestAWrongLinearKeyIsRefusedAndTheQuestionStaysOpen`,
+  `TestATaskStartedWithALinearKeyGetsItsKeyOnceInThePRTitle`, `TestTheLinearQuestionRecommendsWhatTheJiraQuestionDoes`,
+  `TestALinearAnswerNeedsNoAmend`, `TestTheTitleFormatReachesTheReadyCardAndThePRThePushOpens`,
+  `TestTheDefaultTitleFormatKeepsTheCardsAndThePRsTitle`, `TestTheLocalRoundGetsTheTitleThePRWillHave` and
+  `TestTheReadyCardShowsThePRsTitle` (`internal/factory`), `TestThePRTitleIsTheKeyAndTheTitle` (the old cases under both
+  spellings of the default) and `TestThePRTitleFollowsTheReposTitleFormat` (`internal/factory`),
+  `TestFactoryRepoTitleFormat` and the title_format cases of `TestFactoryChecksTheRepositoryBlock` (`internal/config`).
+  No new dependencies.
 
 ## Learned rules
 

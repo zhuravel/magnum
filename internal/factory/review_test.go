@@ -645,6 +645,31 @@ func TestTheLocalRoundGetsTheOperatorsAnswersFromTheTasksAnswersFile(t *testing.
 	}
 }
 
+// The local review reads the title the PR will have: the task's title laid
+// out by the repository's title_format, as the ready card and the publish lay
+// it out. Where a repository requires "[KEY] Title", a description that read
+// "KEY Title" would have the judge raise a title finding the writer cannot fix.
+func TestTheLocalRoundGetsTheTitleThePRWillHave(t *testing.T) {
+	for name, tc := range map[string]struct{ format, want string }{
+		"default":  {"", "PR-12370 title"},
+		"brackets": {"[{key}] {title}", "[PR-12370] title"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newReviewRig(t, result())
+			r.cfg.Factory.Repos[0].TitleFormat = tc.format
+			task, _ := r.reviewTask("PR-12370")
+			r.run(4, func() bool { return len(r.rv.calls()) > 0 })
+			calls := r.rv.calls()
+			if len(calls) == 0 {
+				t.Fatal("no round ran")
+			}
+			if calls[0].Title != tc.want || calls[0].Title != prTitle(task, tc.format) {
+				t.Errorf("the round's title = %q, want %q (the PR's)", calls[0].Title, tc.want)
+			}
+		})
+	}
+}
+
 // End to end, from the task's folder to the judge's ticket file: the round
 // is handed the task's ticket.md and the answers.md the factory wrote
 // (answersMarkdown, here from two answered questions), and the file the

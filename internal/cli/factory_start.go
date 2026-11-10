@@ -36,7 +36,7 @@ func newFactoryStartCmd(c *Context) *cobra.Command {
 		"Hand the factory daemon a task. A Jira key (PR-12345) or a Jira link at the start makes a task of that "+
 			"ticket, which the daemon reads itself, and the words after it are your guidance for every agent: "+
 			"\"PR-12345 only the refund path\". Anything else is the task in your words; its first question asks "+
-			"which Jira issue it is. A key or a Jira link elsewhere in your words counts too when Jira knows the "+
+			"which Jira issue it is (which Linear issue, in a Linear-tracked repository). A key or a Jira link elsewhere in your words counts too when Jira knows the "+
 			"key (\"fix the expiry date in PR-12345, only the refund path\"): the task follows that ticket and the "+
 			"whole text is its guidance; a word such as UTF-8 stays a word (when the trackers name Jira projects, a "+
 			"bare key of another project is never read from Jira), and several known keys make the first question ask which of "+

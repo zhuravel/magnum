@@ -1,8 +1,10 @@
 package factory
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/factory/registry"
 )
@@ -112,10 +114,18 @@ func TestAJiraTrackedRepositoryKeepsTheJiraQuestion(t *testing.T) {
 // key is never read from Jira. A link of the tracker names its key too.
 func TestAnAnswerNamingALinearKeyGivesItsPRTitleAndBranchTheKey(t *testing.T) {
 	for name, answer := range map[string]string{
-		"key":            "EX-12",
-		"key and words":  "EX-12 Export fails on Safari",
-		"link":           "https://linear.app/example/issue/EX-12/export-fails-on-safari",
-		"key then colon": "EX-12: the export, I think",
+		"key":             "EX-12",
+		"key and words":   "EX-12 Export fails on Safari",
+		"link":            "https://linear.app/example/issue/EX-12/export-fails-on-safari",
+		"key then colon":  "EX-12: the export, I think",
+		"lower case":      "ex-12",
+		"mixed case":      "Ex-12 export fails",
+		"branch name":     "alice/ex-12-export-fails",
+		"key in words":    "it is EX-12",
+		"key in a line":   "The ticket is (EX-12), see the export",
+		"link in words":   "this one: https://linear.app/example/issue/EX-12/export-fails-on-safari",
+		"first key wins":  "EX-12 or EX-13, not sure",
+		"other key first": "EXP-9 is not it, EX-12 is",
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newIntakeRig(t)
@@ -140,7 +150,7 @@ func TestAnAnswerNamingALinearKeyGivesItsPRTitleAndBranchTheKey(t *testing.T) {
 			if again := r.reload(task.ID); again.JiraKey != "EX-12" || again.WaitsWho == "Jira" {
 				t.Errorf("after a tick the task is %+v, want EX-12 linked and no wait for Jira", again)
 			}
-			if answers := r.taskFile(task.ID, answersFile); !strings.Contains(answers, "EX-12") {
+			if answers := r.taskFile(task.ID, answersFile); !strings.Contains(answers, answer) {
 				t.Errorf("answers.md does not hold the answer:\n%s", answers)
 			}
 		})
@@ -164,16 +174,18 @@ func TestNoIssueGivesALinearTrackedTasksPRTheTitleAlone(t *testing.T) {
 }
 
 // A key of no tracker of the repository (a typo of the prefix) is no
-// silent miss: the answer is refused, naming the prefix to type, and the
-// question stays open. A key another task holds is refused as a Jira
-// key is.
+// silent miss, in any case: the answer is refused, naming the prefix to type,
+// and the question stays open. A key another task holds is refused as a Jira
+// key is. An answer with no key at all is words, and is taken.
 func TestAWrongLinearKeyIsRefusedAndTheQuestionStaysOpen(t *testing.T) {
 	r := newIntakeRig(t)
 	r.linearRepo()
 	task := r.mustStartIn("example/site", "Export fails on Safari")
-	q := r.sendAnswers(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: "EXP-12"}})
-	if q.State != registry.RequestFailed || !strings.Contains(q.Result, "EXP-12") || !strings.Contains(q.Result, "EX-") {
-		t.Fatalf("request %s: %q; want refused, naming EXP-12 and the prefix EX-", q.State, q.Result)
+	for _, wrong := range []string{"EXP-12", "exp-12", "Exp-12 the export", "EXP-12: export fails"} {
+		q := r.sendAnswers(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: wrong}})
+		if q.State != registry.RequestFailed || !strings.Contains(strings.ToUpper(q.Result), "EXP-12") || !strings.Contains(q.Result, "EX-") {
+			t.Fatalf("%q: request %s: %q; want refused, naming EXP-12 and the prefix EX-", wrong, q.State, q.Result)
+		}
 	}
 	if got := r.reload(task.ID); got.JiraKey != "" {
 		t.Fatalf("task with key %q, want none", got.JiraKey)
@@ -186,13 +198,72 @@ func TestAWrongLinearKeyIsRefusedAndTheQuestionStaysOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q = r.sendAnswers(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: "EX-12"}})
-	if q.State != registry.RequestFailed || !strings.Contains(q.Result, "EX-12") || !strings.Contains(q.Result, "task") {
-		t.Fatalf("request %s: %q; want refused, naming the task %d that holds EX-12", q.State, q.Result, other.ID)
+	for _, held := range []string{"EX-12", "ex-12", "branch alice/ex-12-export"} {
+		q := r.sendAnswers(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: held}})
+		if q.State != registry.RequestFailed || !strings.Contains(q.Result, "EX-12") || !strings.Contains(q.Result, fmt.Sprintf("task %d", other.ID)) {
+			t.Fatalf("%q: request %s: %q; want refused, naming the task %d that holds EX-12", held, q.State, q.Result, other.ID)
+		}
 	}
 	// Words that name no key are words: the answer is taken, the task links nothing.
 	r.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: "no ticket yet, it is a quick fix"}})
 	if got := r.reload(task.ID); got.JiraKey != "" {
 		t.Errorf("words linked the key %q", got.JiraKey)
+	}
+}
+
+// A task started with its Linear key (startOther) has a title that begins
+// with the bare key, "EX-12 Export fails": its PR's title under
+// "[{key}] {title}" holds the key once, "[EX-12] Export fails".
+func TestATaskStartedWithALinearKeyGetsItsKeyOnceInThePRTitle(t *testing.T) {
+	r := newIntakeRig(t)
+	r.linearRepo()
+	task := r.mustStart("EX-12 Export fails on Safari")
+	if task.JiraKey != "EX-12" || task.Title != "EX-12 Export fails on Safari" || task.Repo != "example/site" {
+		t.Fatalf("the task %+v, want EX-12 in example/site, its title beginning with the key", task)
+	}
+	if title := prTitle(task, r.e.titleFormat(task.Repo)); title != "[EX-12] Export fails on Safari" {
+		t.Errorf("the PR's title is %q, want [EX-12] Export fails on Safari", title)
+	}
+	if qs, _ := r.reg.Questions(r.ctx, task.ID); len(qs) != 0 {
+		t.Errorf("a task of a key asks %+v", qs)
+	}
+}
+
+// The Linear question recommends what the Jira question recommends when no
+// issue can be told: "no issue", the one option. It is the same default for
+// both trackers, so the tracker does not change how a task is asked.
+func TestTheLinearQuestionRecommendsWhatTheJiraQuestionDoes(t *testing.T) {
+	r := newIntakeRig(t)
+	r.linearRepo()
+	r.site.search = searchAnswer() // Jira knows no title that shares a word
+	jiraQ, _ := r.reg.Questions(r.ctx, r.mustStartIn("example/app", "The reminder email comes late").ID)
+	linearQ, _ := r.reg.Questions(r.ctx, r.mustStartIn("example/site", "The export fails on Safari").ID)
+	if len(jiraQ) != 1 || len(linearQ) != 1 {
+		t.Fatalf("questions %+v and %+v, want one each", jiraQ, linearQ)
+	}
+	label := func(q registry.Question) string { return q.Options[q.Recommended].Label }
+	if label(jiraQ[0]) != noIssue || label(linearQ[0]) != label(jiraQ[0]) {
+		t.Errorf("the Jira question recommends %q, the Linear one %q, want both %q", label(jiraQ[0]), label(linearQ[0]), noIssue)
+	}
+}
+
+// The gate amends the report for an answer that changes the plan, and for
+// no answer to intake's question: a Linear key you type costs no agent turn
+// (the factory reads no ticket of it), and neither does "no issue".
+func TestALinearAnswerNeedsNoAmend(t *testing.T) {
+	for name, answer := range map[string]string{"a key": "EX-12", "a lower-case branch name": "alice/ex-12-export-fails", "no issue": noIssue} {
+		t.Run(name, func(t *testing.T) {
+			r, task := linkRigOn(t, func(r *intakeRig) { r.cfg.Board.Trackers = []string{siteTracker} },
+				registry.Question{Text: whichLinear("EX-"), RaisedBy: intakeRole, Recommended: 0,
+					Options: []registry.Option{{Label: noIssue, Means: "the PR's title carries no issue key"}}})
+			r.clock.Add(time.Minute)
+			r.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: answer}})
+			got := r.reload(task.ID)
+			wantKey := map[bool]string{true: "EX-12"}[answer != noIssue]
+			if got.Stage != "coding" || got.JiraKey != wantKey || r.site.curlCalls() != 0 || len(r.rt.launchedRoles()) != 0 {
+				t.Fatalf("task %s at %s, key %q, %d Jira calls, launches %v; want coding, key %q, no Jira call and no amend", got.State, got.Stage,
+					got.JiraKey, r.site.curlCalls(), r.rt.launchedRoles(), wantKey)
+			}
+		})
 	}
 }

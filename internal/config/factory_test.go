@@ -1069,6 +1069,8 @@ func TestFactoryChecksTheRepositoryBlock(t *testing.T) {
 		"title format":     {func(r *FactoryRepo) { r.TitleFormat = "[{key}]" }, []string{"title_format", "{title}"}},
 		"title format x2":  {func(r *FactoryRepo) { r.TitleFormat = "{title} {title}" }, []string{"title_format", "{title}", "once"}},
 		"title format nl":  {func(r *FactoryRepo) { r.TitleFormat = "{key}\n{title}" }, []string{"title_format", "one line"}},
+		"title format KEY": {func(r *FactoryRepo) { r.TitleFormat = "[{KEY}] {title}" }, []string{"title_format", "{KEY}", "{key}"}},
+		"title format x":   {func(r *FactoryRepo) { r.TitleFormat = "{ticket}: {title}" }, []string{"title_format", "{ticket}"}},
 		"copy file escape": {func(r *FactoryRepo) { r.CopyFiles = []string{"../secret"} }, []string{"copy_files"}},
 	} {
 		t.Run(name, func(t *testing.T) {

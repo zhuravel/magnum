@@ -36,7 +36,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/config"
@@ -362,11 +361,16 @@ func prTemplate(copyPath string) string {
 // repository's title_format, "" = config.DefaultFactoryTitleFormat), {key}
 // the task's issue key (the Jira key, or a Linear one: Task.JiraKey holds
 // either) and {title} its title with the white space of its lines folded.
-// A task with no key gets its title alone, with no empty brackets. A title
-// that starts (or, for a format that ends with the key, ends) with the
-// formatted key keeps it once; one that starts with the bare key as a word
-// is laid out from what follows it ("ABC-12: Title" is "[ABC-12] Title" in
-// brackets).
+// A task with no key gets its title alone, with no empty brackets, whatever
+// the format's other words. The key is kept once, in the format's form:
+//   - a title that starts (or, for a format that ends with the key, ends)
+//     with the formatted key, in any case, keeps it, written as the format
+//     writes it ("[abc-12] Title" is "[ABC-12] Title" in brackets);
+//   - one that starts with the key bare or in brackets, in any case, where
+//     the key ends there ("ABC-12: Title", "ABC-12 - Title", "(ABC-12) Title"),
+//     is laid out from what follows it. A key that a hyphen, a dot or a
+//     letter joins to the next word is part of that word ("ABC-12-beta",
+//     "ABC-1.5", and ABC-12 for the key ABC-1).
 func prTitle(t registry.Task, format string) string {
 	title := strings.Join(strings.Fields(t.Title), " ")
 	key := t.JiraKey
@@ -375,21 +379,62 @@ func prTitle(t registry.Task, format string) string {
 	}
 	format = cmp.Or(format, config.DefaultFactoryTitleFormat)
 	pre, post, _ := strings.Cut(format, config.TitleTitle)
-	pre, post = strings.ReplaceAll(pre, config.TitleKey, key), strings.ReplaceAll(post, config.TitleKey, key)
-	if p, q := strings.TrimSpace(pre), strings.TrimSpace(post); (p != "" || q != "") && strings.HasPrefix(title, p) && strings.HasSuffix(title, q) {
-		return title
+	pre, post = strings.TrimSpace(strings.ReplaceAll(pre, config.TitleKey, key)), strings.TrimSpace(strings.ReplaceAll(post, config.TitleKey, key))
+	if (pre != "" || post != "") && hasPrefixFold(title, pre) && hasSuffixFold(title, post) && len(title) >= len(pre)+len(post) {
+		return pre + title[len(pre):len(title)-len(post)] + post
 	}
-	if rest, ok := strings.CutPrefix(title, key); ok && !startsWord(rest) && strings.Contains(format, config.TitleKey) {
-		title = strings.TrimLeft(rest, " :,;-\u2013\u2014")
+	if strings.Contains(format, config.TitleKey) {
+		title = withoutLeadingKey(title, key)
 	}
 	return strings.TrimSpace(strings.NewReplacer(config.TitleKey, key, config.TitleTitle, title).Replace(format))
 }
 
-// startsWord reports whether s starts with a letter, a digit or an
-// underscore: after a key, that makes it part of another key or word.
-func startsWord(s string) bool {
-	r, _ := utf8.DecodeRuneInString(s)
-	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)
+// hasPrefixFold and hasSuffixFold are strings.HasPrefix and HasSuffix with
+// letters of any case equal.
+func hasPrefixFold(s, prefix string) bool {
+	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
+}
+
+func hasSuffixFold(s, suffix string) bool {
+	return len(s) >= len(suffix) && strings.EqualFold(s[len(s)-len(suffix):], suffix)
+}
+
+// withoutLeadingKey is title without key at its start, when the key stands
+// there as a word of its own: bare or in one pair of brackets, in any case,
+// then the end of the title, or a space, a colon, a comma or a semicolon, or
+// a dash and a space. Any other title is returned as it is: a hyphen, a dot
+// or a letter after the key joins it to the next word.
+func withoutLeadingKey(title, key string) string {
+	rest, wrapped := title, false
+	if rest != "" && strings.ContainsRune("([{<", rune(rest[0])) {
+		rest, wrapped = rest[1:], true
+	}
+	if !hasPrefixFold(rest, key) {
+		return title
+	}
+	rest = rest[len(key):]
+	if wrapped {
+		if rest == "" || !strings.ContainsRune(")]}>", rune(rest[0])) {
+			return title
+		}
+		rest = rest[1:]
+	}
+	if rest != "" && !strings.ContainsRune(" :,;", rune(rest[0])) && !startsWithDash(rest) {
+		return title
+	}
+	rest = strings.TrimLeft(rest, " :,;")
+	if startsWithDash(rest) {
+		_, n := utf8.DecodeRuneInString(rest)
+		rest = strings.TrimLeft(rest[n:], " ")
+	}
+	return rest
+}
+
+// startsWithDash reports whether s starts with a hyphen or a dash that
+// stands alone: followed by a space, or by nothing.
+func startsWithDash(s string) bool {
+	r, n := utf8.DecodeRuneInString(s)
+	return strings.ContainsRune("-\u2013\u2014", r) && r != utf8.RuneError && (n == len(s) || s[n] == ' ')
 }
 
 // titleFormat is the title_format of the factory repository repo ("" = the

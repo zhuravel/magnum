@@ -4362,10 +4362,14 @@ stages = [
   the PR's description, one word; see the PR body below), `ghost_marker`, `table_stats` and
   `large_table_rows` (the gh-ost rule for migrations) and `consoles` (remote consoles that no factory command
   runs) have no default: they are yours. `title_format` is the layout of the PR's title, a template with `{key}`
-  (the task's issue key, Jira's or Linear's) and `{title}` (required, once); the default is `"{key} {title}"`, and
-  a repository whose PR titles must read `[ABC-123] Title` sets `title_format = "[{key}] {title}"`. A task with
-  no key gets its title alone, with no empty brackets, and a title that already starts with the formatted key
-  (or with the bare key) keeps it once.
+  (the task's issue key, Jira's or Linear's) and `{title}` (required, once; any other braced word is refused);
+  the default is `"{key} {title}"`, and a repository whose PR titles must read `[ABC-123] Title` sets
+  `title_format = "[{key}] {title}"`. A task with no key gets its title alone, with no empty brackets, even when
+  the format has other words (`"feat: {title}"` keeps `feat: ` for a task with a key only). A title that already
+  starts with the formatted key keeps it once, in the format's form; so does one that starts with the key bare
+  or in brackets, in any case, where the key ends (`abc-12: Title`, `(ABC-12) Title`), but not `ABC-12-beta` or
+  `ABC-1.5`, whose key a hyphen or a dot joins to a word. The ready card, the screen's ready card, the push's
+  y/N, the local review's description and the PR itself all carry this title.
 - **Copies.** The copies are magnum's slots, kept in the factory's own store (`factory/agents.db`), so the
   review daemon never sees one and `magnum slots` does not list them; magnum's inventory and cleanup leave the
   databases of a `copy_name` alone. A claim takes the copy the task used last when it is free, else another
@@ -4692,11 +4696,14 @@ its first question, which Jira issue it is: the 3 best title matches of a Jira s
 and "no issue"; the best match is recommended, and "no issue" when no title shares a word. In a Linear-tracked
 repository (its trackers hold a `linear.app` link and no Jira one) the first question is plain, with no search and
 no Jira: `Which Linear issue is this (ABC-…)?` with the tracker's key prefix, `no issue` its only option and
-recommended; you type the key (`ABC-12`, with words after it or not) or the issue's link. The key becomes the task's
+recommended; you type the key (`ABC-12`, with words after it or not) or the issue's link, or paste a branch name or
+a sentence: the first key of the repository's Linear tracker in your answer counts, in any case (`ex-12`,
+`alice/ex-12-export-fails`, `it is EX-12`) and is stored as the tracker spells it. The key becomes the task's
 key, where a Jira key is kept (the registry's `jira_key`; the factory reads nothing from Linear), so the branch
 and the PR's title carry it, `[ABC-12] Title` with `title_format = "[{key}] {title}"`, which Linear's GitHub
-integration reads to link the PR to the issue; `no issue` gives the title alone. A key-shaped first word that no
-tracker of the repository owns (a mistyped prefix) is refused, naming the prefix to type, and the question stays open. While Jira does
+integration reads to link the PR to the issue; `no issue` gives the title alone. An answer with no such key whose first word
+is shaped like one (`EXP-12`, `exp-12`: a mistyped prefix) is refused, naming the prefix to type, and the question
+stays open; an answer with no key at all is words and is taken. While Jira does
 not answer (curl's timeout or any other failure of curl to reach Jira, HTTP 5xx, a 429) the task waits, `Jira: start
 when Jira answers`, at no cost,
 tries again after 1, 2, 4, 8, 16 and then every 30 minutes, and needs you after 6 hours (a tick makes at most 3 such

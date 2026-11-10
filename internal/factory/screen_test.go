@@ -639,6 +639,27 @@ func TestScreenDataFillsTheFlagsAndTheLeftovers(t *testing.T) {
 
 // The ready card's reason to push names the local review's second opinion,
 // its round and its judge, when the loop ran one.
+// The ready card shows the title the PR will have, the one the card file
+// holds (the task's title laid out by the repository's title_format), not the
+// task's own: you push under "[EX-12] Count the archived activities", and the
+// card says so. A card with no title (one drawn before the file had one)
+// shows the task's.
+func TestTheReadyCardShowsThePRsTitle(t *testing.T) {
+	r := newScreenRig(t)
+	r.at(12 * time.Minute)
+	laid := r.task("EX-12", "bug", "Count the archived activities", registry.TaskNeedsYou, "ready", waitsYou, "ready to push (card 1)")
+	r.card(laid.ID, ReadyCardFile{Revision: 1, Head: "abc", Base: "def", Copy: "talkable.factory3", Title: "[EX-12] Count the archived activities"})
+	old := r.task("PR-12361", "bug", "Count the activities", registry.TaskNeedsYou, "ready", waitsYou, "ready to push (card 1)")
+	r.card(old.ID, ReadyCardFile{Revision: 1, Head: "abc", Base: "def", Copy: "talkable.factory2"})
+	cards := r.data(screenNow).Cards
+	if c := cards[laid.ID].Ready; c == nil || c.Title != "[EX-12] Count the archived activities" {
+		t.Errorf("the ready card shows %+v, want the PR's title", c)
+	}
+	if c := cards[old.ID].Ready; c == nil || c.Title != "Count the activities" {
+		t.Errorf("a card with no title shows %+v, want the task's title", c)
+	}
+}
+
 func TestTheReadyCardNamesTheSecondOpinion(t *testing.T) {
 	r := newScreenRig(t)
 	clean := r.task("PR-12402", "bug", "Points of refunds", registry.TaskNeedsYou, "ready", waitsYou, "ready to push (card 1): PR-12402")

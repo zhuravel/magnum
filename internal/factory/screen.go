@@ -1082,13 +1082,14 @@ func (s *screen) comment(t registry.Task, q registry.Question, a ask) string {
 	return strings.TrimRight(draftComment(t, q, a.Login), "\n")
 }
 
-// readyCard is the ready card of task v as the factory drew it: with the
+// readyCard is the ready card of task v as the factory drew it, titled as the
+// PR will be (the card's title: the task's laid out by title_format), with the
 // QA run that passed at its head, its QA line, the after side's shots and
 // the run's report (summary.md, which e opens) of a walk, and QA's notes
 // and what you accepted under KNOWN.
 func (s *screen) readyCard(v *taskView) *tui.ReadyCard {
 	t, card := v.t, v.card
-	c := &tui.ReadyCard{TaskKey: TaskKey(t), Title: t.Title, Kind: t.Kind, Branch: cmp.Or(card.Remote, card.Branch, t.Branch),
+	c := &tui.ReadyCard{TaskKey: TaskKey(t), Title: cmp.Or(card.Title, t.Title), Kind: t.Kind, Branch: cmp.Or(card.Remote, card.Branch, t.Branch),
 		Waited: max(s.now.Sub(v.since), 0), Flags: card.Flags, Leftovers: knownLines(card.Review, false), Copy: card.Copy}
 	for _, f := range card.Files {
 		c.Files = append(c.Files, tui.CardFile{Path: f.Path, Added: f.Added, Removed: f.Removed, InPlan: f.InPlan, Flagged: f.Flagged})

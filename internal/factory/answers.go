@@ -23,6 +23,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,6 +31,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/github"
@@ -284,14 +286,16 @@ func parseAsk(answer string) (login, comment string, ok bool) {
 }
 
 // namedIssue is the key answer names when it answers intake's question q,
-// which issue task t is: for the Jira question, a key or a Jira link at its
-// start (an option's label starts with its key), as a start reads one; for
-// the Linear one, a key of a tracker the factory does not read from Jira, or
-// that tracker's link, at its start (readStart; nothing is read from
-// Linear). "" for any other answer ("no issue", your own words) and any
-// other question. A key-shaped first word of an answer to the Linear
-// question that no tracker of the repository owns is an error: the prefix
-// is mistyped, and the PR would go out with no key.
+// which issue task t is. For the Jira question that is a key or a Jira link
+// at its start (an option's label starts with its key), as a start reads
+// one. For the Linear question it is the first key of the repository's
+// Linear trackers anywhere in the answer, in any case ("EX-12", "ex-12", a
+// pasted branch name "alice/ex-12-export-fails", "it is EX-12"), spelled as
+// the tracker's prefix spells it (linearKeyIn); nothing is read from Linear.
+// "" for any other answer ("no issue", your own words) and any other
+// question. For the Linear question, an answer with no such key whose first
+// word is shaped like a key (any case) is an error: the prefix is mistyped,
+// and the PR would go out with no key.
 func (e *Engine) namedIssue(t registry.Task, q registry.Question, answer string) (string, error) {
 	switch {
 	case !isWhichIssue(q):
@@ -299,20 +303,42 @@ func (e *Engine) namedIssue(t registry.Task, q registry.Question, answer string)
 	case q.Text == whichIssue:
 		return ParseStart(answer, e.trackers(t.Repo)).Key, nil
 	}
-	if in, _, other := e.readStart(answer, t.Repo); other {
-		return in.Key, nil
+	var linear []config.Tracker
+	for _, tr := range e.cfg.TrackersFor(t.Repo) {
+		if isLinear(tr) {
+			linear = append(linear, tr)
+		}
 	}
-	if word, _ := splitStart(strings.TrimSpace(answer)); startKey.MatchString(word) {
-		var prefixes []string
-		for _, tr := range e.cfg.TrackersFor(t.Repo) {
-			if isLinear(tr) {
-				prefixes = append(prefixes, tr.Prefix+"\u2026")
-			}
+	if key := linearKeyIn(answer, linear); key != "" {
+		return key, nil
+	}
+	if word, _ := splitStart(strings.TrimSpace(answer)); len(linear) > 0 && keyShape.MatchString(word) {
+		prefixes := make([]string, len(linear))
+		for i, tr := range linear {
+			prefixes[i] = tr.Prefix + "\u2026"
 		}
 		return "", fmt.Errorf("%s is not a key of this repository's Linear tracker (%s): type the key again or answer %s", word,
 			strings.Join(prefixes, ", "), noIssue)
 	}
 	return "", nil
+}
+
+// keyShape is the shape of an issue key in any case: "EXP-12", "exp-12".
+var keyShape = regexp.MustCompile(`(?i)^[a-z][a-z0-9_]*-[0-9]+$`)
+
+// linearKeyIn is the first key of one of trackers in text, in any case, as
+// the tracker spells it ("EX-12" for "ex-12" of the prefix "EX-"); "" when
+// the text holds none. A key counts when no letter, digit or underscore
+// touches it ("apex-12" and "EX-12a" hold none), as at a start.
+func linearKeyIn(text string, trackers []config.Tracker) string {
+	at, key := -1, ""
+	for _, tr := range trackers {
+		re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(tr.Prefix) + `([0-9]+)\b`)
+		if loc := re.FindStringSubmatchIndex(text); loc != nil && (at < 0 || loc[0] < at) {
+			at, key = loc[0], tr.Prefix+text[loc[2]:loc[3]]
+		}
+	}
+	return key
 }
 
 // mayLink checks that task t may take key, which your answer to question

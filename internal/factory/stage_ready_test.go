@@ -1019,12 +1019,84 @@ func TestThePRTitleFollowsTheReposTitleFormat(t *testing.T) {
 		"default, bare key":     {registry.Task{JiraKey: "ABC-12", Title: "ABC-12: Title"}, "", "ABC-12: Title"},
 		"default, other repos":  {registry.Task{JiraKey: "ABC-12", Title: "Title"}, config.DefaultFactoryTitleFormat, "ABC-12 Title"},
 		"brackets, unset title": {registry.Task{JiraKey: "ABC-12", Title: "ABC-12"}, brackets, "[ABC-12]"},
+		// The key is cut from the title only when it ends there: a hyphen or a dot after it joins it to a word.
+		"hyphen joins a word":   {registry.Task{JiraKey: "ABC-12", Title: "ABC-12-beta fix"}, brackets, "[ABC-12] ABC-12-beta fix"},
+		"dot joins a number":    {registry.Task{JiraKey: "ABC-1", Title: "ABC-1.5 release notes"}, brackets, "[ABC-1] ABC-1.5 release notes"},
+		"dash and space":        {registry.Task{JiraKey: "ABC-12", Title: "ABC-12 - Title"}, brackets, "[ABC-12] Title"},
+		"en dash and space":     {registry.Task{JiraKey: "ABC-12", Title: "ABC-12 \u2013 Title"}, brackets, "[ABC-12] Title"},
+		"comma":                 {registry.Task{JiraKey: "ABC-12", Title: "ABC-12, Title"}, brackets, "[ABC-12] Title"},
+		"default, hyphen joins": {registry.Task{JiraKey: "ABC-12", Title: "ABC-12-beta fix"}, "", "ABC-12-beta fix"},
+		"default, a longer key": {registry.Task{JiraKey: "ABC-1", Title: "ABC-12 Title"}, "", "ABC-12 Title"},
+		"default, key alone":    {registry.Task{JiraKey: "ABC-12"}, "", "ABC-12"},
+		// A key written in another form is the same key: it is kept once, in the format's form.
+		"parenthesised key":      {registry.Task{JiraKey: "ABC-12", Title: "(ABC-12) Title"}, brackets, "[ABC-12] Title"},
+		"lower-case bracketed":   {registry.Task{JiraKey: "ABC-12", Title: "[abc-12] Title"}, brackets, "[ABC-12] Title"},
+		"lower-case bare":        {registry.Task{JiraKey: "ABC-12", Title: "abc-12: Title"}, brackets, "[ABC-12] Title"},
+		"default, lower-case":    {registry.Task{JiraKey: "ABC-12", Title: "abc-12 Title"}, "", "ABC-12 Title"},
+		"default, parenthesised": {registry.Task{JiraKey: "ABC-12", Title: "(ABC-12) Title"}, "", "ABC-12 Title"},
+		"suffix in lower case":   {registry.Task{JiraKey: "ABC-12", Title: "Title (abc-12)"}, "{title} ({key})", "Title (ABC-12)"},
+		"another key stays":      {registry.Task{JiraKey: "ABC-12", Title: "[ABC-13] Title"}, brackets, "[ABC-12] [ABC-13] Title"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := prTitle(tc.task, tc.format); got != tc.want {
 				t.Errorf("prTitle(%+v, %q) = %q, want %q", tc.task, tc.format, got, tc.want)
 			}
 		})
+	}
+}
+
+// A repository's title_format reaches the PR through the ready card and the
+// publish, not only through prTitle: the card (and the screen and the y/N
+// before the push) show the PR's title, and the push opens the PR under that
+// title, "[EX-12] Count the archived activities", where the task's own title
+// is "Count the archived activities".
+func TestTheTitleFormatReachesTheReadyCardAndThePRThePushOpens(t *testing.T) {
+	r := newReadyRig(t)
+	r.cfg.Factory.Repos[0].TitleFormat = "[{key}] {title}"
+	task, err := r.reg.CreateTask(r.ctx, registry.Task{JiraKey: "EX-12", Kind: "bug", Repo: "example/shop",
+		Title: "Count the archived activities", State: registry.TaskActive, Stage: "coding", Branch: "zhuravel-EX-12-count-archived-activities"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.git(r.copyDir, "switch", "--quiet", "--no-track", "-c", task.Branch, "origin/master")
+	_, head := r.cardOf(task)
+	c := r.card(task.ID)
+	const want = "[EX-12] Count the archived activities"
+	if c.Title != want {
+		t.Fatalf("the card's title is %q, want %q", c.Title, want)
+	}
+	if q := r.decideOn(task.ID, c, ChoicePush, "", ""); q.State != registry.RequestDone {
+		t.Fatalf("push request %s: %q", q.State, q.Result)
+	}
+	if got := r.published(task.ID); got.State != registry.TaskPublished {
+		t.Fatalf("task %s waits %q", got.State, got.WaitsWhat)
+	}
+	if cs := r.gh.createCalls(); len(cs) != 1 || cs[0].title != want || r.remoteHead(c.Remote) != head {
+		t.Fatalf("CreatePR %+v; want one PR titled %q", cs, want)
+	}
+}
+
+// With the repository's default title_format the PR keeps the title it had
+// before the key existed: the key, a space and the title.
+func TestTheDefaultTitleFormatKeepsTheCardsAndThePRsTitle(t *testing.T) {
+	r := newReadyRig(t)
+	task, err := r.reg.CreateTask(r.ctx, registry.Task{JiraKey: "EX-12", Kind: "bug", Repo: "example/shop",
+		Title: "Count the archived activities", State: registry.TaskActive, Stage: "coding", Branch: "zhuravel-EX-12-count-archived-activities"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.git(r.copyDir, "switch", "--quiet", "--no-track", "-c", task.Branch, "origin/master")
+	r.cardOf(task)
+	c := r.card(task.ID)
+	if c.Title != "EX-12 Count the archived activities" {
+		t.Fatalf("the card's title is %q, want the key, a space and the title", c.Title)
+	}
+	if q := r.decideOn(task.ID, c, ChoicePush, "", ""); q.State != registry.RequestDone {
+		t.Fatalf("push request %s: %q", q.State, q.Result)
+	}
+	r.published(task.ID)
+	if cs := r.gh.createCalls(); len(cs) != 1 || cs[0].title != c.Title {
+		t.Fatalf("CreatePR %+v; want the card's title %q", cs, c.Title)
 	}
 }
 
