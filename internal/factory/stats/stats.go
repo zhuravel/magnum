@@ -247,6 +247,11 @@ type Report struct {
 	// JiraMoves are the factory's plans of its Jira moves over the tasks
 	// (nil when none has one): the shadow week's evidence.
 	JiraMoves *JiraMoves
+	// Take is whether your answers took the recommendations, and Ratings
+	// what you rated with + and −, over the tasks (nil when none is
+	// recorded): your explicit signals, from the registry's records.
+	Take    *TakeTotals
+	Ratings *RatingTotals
 }
 
 // JiraMoves count the factory's plans of the Jira moves of a report's
@@ -420,7 +425,9 @@ func (r Report) MarshalJSON() ([]byte, error) {
 		FixLoopsUnread string         `json:"fix_loops_unread,omitempty"`
 		Quality        *QualityTotals `json:"quality,omitempty"`
 		JiraMoves      *JiraMoves     `json:"jira_moves,omitempty"`
-	}{since, nonNilTasks(r.Tasks), r.Baseline, byHand, r.FixLoopsUnread, r.Quality(), r.JiraMoves})
+		Take           *TakeTotals    `json:"take,omitempty"`
+		Ratings        *RatingTotals  `json:"ratings,omitempty"`
+	}{since, nonNilTasks(r.Tasks), r.Baseline, byHand, r.FixLoopsUnread, r.Quality(), r.JiraMoves, r.Take, r.Ratings})
 }
 
 // QualityTotals are the quality numbers over a report's tasks with a PR:
@@ -525,6 +532,7 @@ func ComputeAt(ctx context.Context, reg *registry.Registry, since, now time.Time
 	}
 	rep := Report{Since: since, Tasks: []TaskStats{}}
 	ids := map[int64]bool{}
+	sig := newSignals()
 	for _, t := range tasks {
 		if !since.IsZero() && t.Created.Before(since) {
 			continue
@@ -533,9 +541,13 @@ func ComputeAt(ctx context.Context, reg *registry.Registry, since, now time.Time
 		if err != nil {
 			return Report{}, fmt.Errorf("stats of task %d: %w", t.ID, err)
 		}
+		if err := sig.add(ctx, reg, t); err != nil {
+			return Report{}, fmt.Errorf("stats of task %d: %w", t.ID, err)
+		}
 		rep.Tasks = append(rep.Tasks, ts)
 		ids[t.ID] = true
 	}
+	rep.Take, rep.Ratings = sig.totals()
 	plans, err := reg.JiraPlans(ctx)
 	if err != nil {
 		return Report{}, err
@@ -794,29 +806,7 @@ func questionSources(qs []registry.Question, relays map[string]bool) (asked int,
 		}
 		seen[q.Text] = true
 		asked++
-		var raisers []string
-		for r := range strings.SplitSeq(q.RaisedBy, ",") {
-			if r = strings.TrimSpace(r); r != "" {
-				raisers = append(raisers, r)
-			}
-		}
-		roles := map[string]bool{}
-		for _, r := range raisers {
-			if len(relays) > 0 && !relays[r] {
-				roles[r] = true
-			}
-		}
-		if len(roles) == 0 {
-			for _, m := range findingsRef.FindAllStringSubmatch(q.Evidence, -1) {
-				roles[m[1]] = true
-			}
-		}
-		if len(roles) == 0 {
-			for _, r := range raisers {
-				roles[r] = true
-			}
-		}
-		switch names := slices.Sorted(maps.Keys(roles)); len(names) {
+		switch names := sourcesOf(q, relays); len(names) {
 		case 0:
 		case 1:
 			count(&from, names[0])
@@ -825,6 +815,34 @@ func questionSources(qs []registry.Question, relays map[string]bool) (asked int,
 		}
 	}
 	return asked, from, shared
+}
+
+// sourcesOf is the sources of question q, sorted: see questionSources for how
+// the roles its raised_by names and the findings its evidence cites decide.
+func sourcesOf(q registry.Question, relays map[string]bool) []string {
+	var raisers []string
+	for r := range strings.SplitSeq(q.RaisedBy, ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			raisers = append(raisers, r)
+		}
+	}
+	roles := map[string]bool{}
+	for _, r := range raisers {
+		if len(relays) > 0 && !relays[r] {
+			roles[r] = true
+		}
+	}
+	if len(roles) == 0 {
+		for _, m := range findingsRef.FindAllStringSubmatch(q.Evidence, -1) {
+			roles[m[1]] = true
+		}
+	}
+	if len(roles) == 0 {
+		for _, r := range raisers {
+			roles[r] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(roles))
 }
 
 // answeredBatches counts the answered batches of questions: one for each
@@ -945,6 +963,8 @@ func (r Report) Markdown() string {
 	r.judgesMarkdown(&b)
 	r.fixLoopsMarkdown(&b)
 	r.qualityMarkdown(&b)
+	r.takeMarkdown(&b)
+	r.ratingsMarkdown(&b)
 	r.jiraMovesMarkdown(&b)
 	b.WriteString("\n## Against the baseline\n\n")
 	bl := r.Baseline

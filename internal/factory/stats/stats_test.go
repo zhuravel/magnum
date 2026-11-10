@@ -1145,3 +1145,182 @@ func TestStatsCountTheShadowWeeksJiraPlans(t *testing.T) {
 		t.Errorf("a report without a plan: %+v", rep.JiraMoves)
 	}
 }
+
+// takeFixture seeds two tasks of two kinds with the records the take rate and
+// the ratings read: answered questions with a recommendation (taken or not,
+// from the raising role fx-points, from two roles together, and from the
+// critic), one without a recommendation and one never answered, two decisions
+// on a card that carried a recommendation (one followed) and one on a card
+// that did not, and three ratings.
+func takeFixture(t *testing.T) (*registry.Registry, registry.Task, registry.Task) {
+	t.Helper()
+	r, clk := openClocked(t)
+	ctx := t.Context()
+	bug, err := r.CreateTask(ctx, registry.Task{JiraKey: "PR-12501", Kind: "bug", Repo: "example/app", Title: "A bug"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	feature, err := r.CreateTask(ctx, registry.Task{JiraKey: "PR-12502", Kind: "feature", Repo: "example/app", Title: "A feature"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := []registry.Option{{Label: "Seven days"}, {Label: "One day"}}
+	ask := func(id int64, qs ...registry.Question) {
+		t.Helper()
+		if err := r.ReplaceQuestions(ctx, id, 1, qs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The bug task: question 0 took the recommendation, 1 did not, 2 has none,
+	// 3 was never answered (a recommendation nobody took yet is no take).
+	ask(bug.ID,
+		registry.Question{Text: "When does it go out?", Options: opts, Recommended: 0, RaisedBy: "fx-points"},
+		registry.Question{Text: "Who gets it?", Options: opts, Recommended: 1, RaisedBy: "fx-points"},
+		registry.Question{Text: "Which template?", Options: opts, Recommended: -1, RaisedBy: "fx-points"},
+		registry.Question{Text: "Is the migration online?", Options: opts, Recommended: 0, RaisedBy: "fx-critic"})
+	clk.Set(t0.Add(time.Hour))
+	if err := r.AnswerBatch(ctx, bug.ID, 1, map[int]string{0: "Seven days", 1: "Seven days", 2: "One day"}); err != nil {
+		t.Fatal(err)
+	}
+	// The feature task: one question of fx-points took it, one of two roles
+	// together did not.
+	ask(feature.ID,
+		registry.Question{Text: "How long is the window?", Options: opts, Recommended: 0, RaisedBy: "fx-points"},
+		registry.Question{Text: "Which currency?", Options: opts, Recommended: 0, RaisedBy: "fx-points, fx-points-codex"})
+	if err := r.AnswerBatch(ctx, feature.ID, 1, map[int]string{0: "Seven days", 1: "One day"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []registry.Decision{
+		{TaskID: bug.ID, Kind: "ready_push", Choice: "send_back", Note: "scope", RecommendationShown: true, At: t0.Add(2 * time.Hour)},
+		{TaskID: bug.ID, Kind: "ready_push", Choice: "push", RecommendationShown: true, RecommendationFollowed: true, At: t0.Add(3 * time.Hour)},
+		{TaskID: feature.ID, Kind: "ready_push", Choice: "push", At: t0.Add(3 * time.Hour)},
+	} {
+		if err := r.RecordDecision(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, rt := range []registry.Rating{
+		{TaskID: bug.ID, Value: 1, ReasonKey: "tests", DiffOpenedFirst: true},
+		{TaskID: bug.ID, Value: -1, ReasonKey: "scope"},
+		{TaskID: feature.ID, Value: 1},
+	} {
+		if err := r.RecordRating(ctx, rt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return r, bug, feature
+}
+
+// The stats read the take rate from the registry's question and decision
+// records: of the answered questions that carried a recommendation, how many
+// took it, in all, per raising role (the sources the stats already count a
+// question under, several roles joined with +) and per kind of task, and of
+// the decisions on a card that carried a recommendation how many followed it.
+// A question without a recommendation or never answered is no part of it.
+func TestStatsReadTheTakeRateOfTheRecommendations(t *testing.T) {
+	t.Parallel()
+	r, _, _ := takeFixture(t)
+	rep, err := stats.ComputeAt(t.Context(), r, time.Time{}, t0.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	take := rep.Take
+	if take == nil {
+		t.Fatal("the report has no take rate")
+	}
+	if want := (stats.Take{Of: 4, Took: 2}); take.Questions != want {
+		t.Errorf("questions %+v, want %+v", take.Questions, want)
+	}
+	if want := map[string]stats.Take{"fx-points": {Of: 3, Took: 2}, "fx-points+fx-points-codex": {Of: 1, Took: 0}}; !maps.Equal(take.ByRole, want) {
+		t.Errorf("by role %+v, want %+v", take.ByRole, want)
+	}
+	if want := map[string]stats.Take{"bug": {Of: 2, Took: 1}, "feature": {Of: 2, Took: 1}}; !maps.Equal(take.ByKind, want) {
+		t.Errorf("by kind %+v, want %+v", take.ByKind, want)
+	}
+	if want := (stats.Take{Of: 2, Took: 1}); take.Decisions != want {
+		t.Errorf("decisions %+v, want %+v", take.Decisions, want)
+	}
+	md := rep.Markdown()
+	for _, want := range []string{
+		"## Recommendations taken",
+		"Questions that carried a recommendation and were answered: 2 of 4 took it (50%).",
+		"| Raised by | Answered | Took it | Share |",
+		"| fx-points | 3 | 2 | 67% |",
+		"| fx-points+fx-points-codex | 1 | 0 | 0% |",
+		"| Kind of task | Answered | Took it | Share |",
+		"| bug | 2 | 1 | 50% |",
+		"| feature | 2 | 1 | 50% |",
+		"Decisions on a card that carried a recommendation: 1 of 2 followed it (50%).",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("the markdown lacks %q:\n%s", want, md)
+		}
+	}
+	js, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `"take":{"questions":{"of":4,"took":2},"by_role":{"fx-points":{"of":3,"took":2},"fx-points+fx-points-codex":{"of":1,"took":0}},` +
+		`"by_kind":{"bug":{"of":2,"took":1},"feature":{"of":2,"took":1}},"decisions":{"of":2,"took":1}}`
+	if !strings.Contains(string(js), want) {
+		t.Errorf("the JSON lacks %s:\n%s", want, js)
+	}
+}
+
+// The stats count the ratings: how many, how many are + and −, the reason
+// keys (a rating with none apart), on how many tasks, and how many were given
+// without the diff opened first, which the spec counts as noise.
+func TestStatsCountTheRatingsAndTheNoiseAmongThem(t *testing.T) {
+	t.Parallel()
+	r, _, _ := takeFixture(t)
+	rep, err := stats.ComputeAt(t.Context(), r, time.Time{}, t0.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := rep.Ratings
+	want := &stats.RatingTotals{Count: 3, Tasks: 2, Plus: 2, Minus: 1, Reasons: map[string]int{"tests": 1, "scope": 1}, NoReason: 1, Noise: 2}
+	if got == nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("ratings %+v, want %+v", got, want)
+	}
+	md := rep.Markdown()
+	for _, line := range []string{
+		"## Ratings",
+		"3 ratings on 2 tasks: 2 +, 1 −. Reasons: scope 1, tests 1, none given 1. 2 were given without the diff opened first (noise, not signal).",
+	} {
+		if !strings.Contains(md, line) {
+			t.Errorf("the markdown lacks %q:\n%s", line, md)
+		}
+	}
+	js, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantJSON = `"ratings":{"count":3,"tasks":2,"plus":2,"minus":1,"reasons":{"scope":1,"tests":1},"no_reason":1,"noise":2}`
+	if !strings.Contains(string(js), wantJSON) {
+		t.Errorf("the JSON lacks %s:\n%s", wantJSON, js)
+	}
+}
+
+// A report with no recommendation answered, no decision on one and no rating
+// has neither section, and its JSON neither key: a registry from before the
+// factory recorded them reads as it did.
+func TestStatsLeaveOutTheTakeRateAndTheRatingsWhenNothingIsRecorded(t *testing.T) {
+	t.Parallel()
+	r, clk := openClocked(t)
+	a := createTask(t, r, "PR-12503")
+	askRevision(t, r, clk, a.ID, 1, 1, time.Hour, 0, 0) // an open question with no recommendation
+	rep, err := stats.ComputeAt(t.Context(), r, time.Time{}, t0.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Take != nil || rep.Ratings != nil {
+		t.Fatalf("take %+v, ratings %+v, want none", rep.Take, rep.Ratings)
+	}
+	md := rep.Markdown()
+	if strings.Contains(md, "## Recommendations taken") || strings.Contains(md, "## Ratings") {
+		t.Errorf("the markdown has a section for nothing:\n%s", md)
+	}
+	if js, _ := json.Marshal(rep); strings.Contains(string(js), `"take"`) || strings.Contains(string(js), `"ratings"`) {
+		t.Errorf("the JSON has a key for nothing:\n%s", js)
+	}
+}
