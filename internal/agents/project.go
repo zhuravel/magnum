@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -69,6 +71,10 @@ type projectConfig struct {
 	// reloads: the CLI reloads its project config from the checkout while
 	// it runs (ReloadsProject).
 	reloads bool
+	// imports: the CLI loads the files its instruction files import
+	// (@path, ImportPaths), which the session compares as a link's
+	// targets (addImports).
+	imports bool
 }
 
 // projectPath is one path a CLI loads project configuration from, relative
@@ -140,6 +146,7 @@ var projectConfigs = map[string]projectConfig{
 	KindClaude: {
 		cli:     "Claude",
 		reloads: true,
+		imports: true,
 		paths: []projectPath{{name: ".claude", dir: true, anyDir: true}, {name: ".mcp.json"},
 			{name: "CLAUDE.md", anyDir: true, docs: true}, {name: "CLAUDE.local.md", anyDir: true, docs: true},
 			{name: "AGENTS.md", anyDir: true, docs: true}},
@@ -284,6 +291,7 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 		var mb string
 		err := m.trackedLinks(ctx, g, dir, base, pc, &disk)
 		if err == nil {
+			pc.addImports(dir, &disk)
 			files, mb, err = m.projectChanges(ctx, g, dir, base, pc.logFile, disk.git)
 		}
 		if err == nil && len(disk.links) > 0 {
@@ -377,6 +385,18 @@ type diskPaths struct {
 	// session leaves the config out, and nothing walks the checkout for
 	// links.
 	root bool
+	// sources: the files whose imports the CLI loads (pc.imports): the
+	// instruction files at the root and the index's below it, the Markdown
+	// files under a project directory and where a link of one leads, each
+	// with its project path (addImports).
+	sources []importFile
+}
+
+// importFile is a file of a checkout whose @path imports a CLI loads: its
+// path relative to the root, and the project path it counts as.
+type importFile struct {
+	rel string
+	p   projectPath
 }
 
 // maxLinkWalk caps the entries onDisk reads under a checkout's project
@@ -399,7 +419,9 @@ const maxLinkWalk = 10000
 // linkWalk). present reports whether one of them is there as its path's
 // type (a directory for .claude) or cannot be told, and, for a path in any
 // directory, whether the root is there; a root that cannot be read adds no
-// entries.
+// entries. For a CLI that loads imports, the root's instruction files and
+// the Markdown files the walk passes are the sources of imports
+// (addImports).
 func (pc projectConfig) onDisk(dir string) (d diskPaths, present bool) {
 	entries, rerr := os.ReadDir(dir)
 	root := ""
@@ -449,6 +471,13 @@ func (pc projectConfig) onDisk(dir string) (d diskPaths, present bool) {
 			w.root = realRoot()
 			targets = append(targets, w.walk(walk, p)...)
 		}
+		if pc.imports && p.docs {
+			for _, n := range found {
+				if fi, err := os.Stat(filepath.Join(dir, n)); err == nil && fi.Mode().IsRegular() {
+					d.sources = append(d.sources, importFile{n, p})
+				}
+			}
+		}
 		if p.anyDir {
 			present = present || !errors.Is(rerr, fs.ErrNotExist)
 			found = append(found, p.anyDirSpecs()...)
@@ -459,11 +488,13 @@ func (pc projectConfig) onDisk(dir string) (d diskPaths, present bool) {
 }
 
 // trackedLinks adds to disk the links of pc's paths in any directory that
-// the checkout's index tracks (gitx.TrackedSymlinks, one git ls-files of
+// the checkout's index tracks (gitx.TrackedFiles, one git ls-files of
 // the kind's paths in any directory: an app/CLAUDE.md -> ../docs/app.md,
 // a packages/web/.claude/skills -> ../../../shared/skills), as onDisk adds
 // the root's (addLinks): Claude loads a CLAUDE.md or a .claude/skills/
-// below the root once it reads a file there, through the link. Nothing for
+// below the root once it reads a file there, through the link. The
+// instruction files and the Markdown files under a project directory it
+// tracks there are sources of imports (addImports). Nothing for
 // a kind without such paths, and no git where projectChanges asks none (no
 // runner, no base, no checkout: it answers for the launch). An untracked
 // link there is an untracked file the compare counts anyway.
@@ -475,11 +506,18 @@ func (m *Manager) trackedLinks(ctx context.Context, g *gitx.Client, dir, base st
 	if len(specs) == 0 || m.d.Runner == nil || base == "" || !inGitCheckout(dir) {
 		return nil
 	}
-	links, err := g.TrackedSymlinks(ctx, dir, specs...)
+	links, files, err := g.TrackedFiles(ctx, dir, specs...)
 	if err != nil {
 		return err
 	}
 	pc.addLinks(dir, disk, links)
+	if pc.imports {
+		for _, f := range files {
+			if p, rest, ok := pc.pathOf(f); ok && (p.docs || p.dir && rest != "" && strings.EqualFold(path.Ext(f), ".md")) {
+				disk.sources = append(disk.sources, importFile{f, p})
+			}
+		}
+	}
 	return nil
 }
 
@@ -596,13 +634,108 @@ func (w *linkWalk) walk(start []string, p projectPath) []string {
 				}
 				if fi, err := os.Stat(full); err == nil && fi.IsDir() {
 					queue = append(queue, t)
+				} else if err == nil {
+					w.source(child, p)
 				}
 			case e.IsDir():
 				queue = append(queue, child)
+			case e.Type().IsRegular():
+				w.source(child, p)
 			}
 		}
 	}
 	return targets
+}
+
+// source records rel, a file under a project directory or where a link of
+// one leads, as a file whose imports the CLI loads, when it loads imports
+// and rel is a Markdown file (a rules file, a CLAUDE.md under .claude/).
+func (w *linkWalk) source(rel string, p projectPath) {
+	if w.pc.imports && strings.EqualFold(path.Ext(rel), ".md") {
+		w.d.sources = append(w.d.sources, importFile{rel, p})
+	}
+}
+
+// maxImportBytes is the largest file whose imports addImports reads:
+// Claude Code skips an instruction file over 4 MiB.
+const maxImportBytes = 4 << 20
+
+// addImports adds to d, as link targets of the importing file's project
+// path, the files d.sources import (@path, ImportPaths), and what those
+// import, to MaxImportHops hops (pc.imports): an import relative to the
+// importing file's directory as its path reads it and as the disk has it
+// (a CLAUDE.md -> docs/guide.md imports from the root and from docs/),
+// into the checkout, as linkTarget finds it (a file that is not there
+// loads nothing; one of pc's own paths is compared as itself, its imports
+// followed all the same); a directory it names is walked for links (walk).
+// Each file read counts against maxLinkWalk; past it the walk is partial.
+// A file that cannot be read, or is over maxImportBytes, imports nothing.
+func (pc projectConfig) addImports(dir string, d *diskPaths) {
+	if !pc.imports || len(d.sources) == 0 {
+		return
+	}
+	root, _ := filepath.EvalSymlinks(dir)
+	if root == "" {
+		root = dir
+	}
+	w := linkWalk{pc: pc, d: d, root: root, seen: map[string]bool{}, budget: maxLinkWalk}
+	read := map[string]bool{}
+	srcs := slices.Clone(d.sources)
+	for hop := 1; hop <= MaxImportHops && len(srcs) > 0; hop++ {
+		var next []importFile
+		for _, src := range srcs {
+			if read[src.rel] {
+				continue
+			}
+			read[src.rel] = true
+			if w.budget--; w.budget < 0 {
+				d.partial = true
+				return
+			}
+			full := filepath.Join(root, filepath.FromSlash(src.rel))
+			text, ok := readImportFile(full)
+			if !ok {
+				continue
+			}
+			bases := []string{filepath.Dir(full)}
+			if real, err := filepath.EvalSymlinks(full); err == nil && filepath.Dir(real) != bases[0] {
+				bases = append(bases, filepath.Dir(real))
+			}
+			for _, imp := range ImportPaths(text) {
+				for _, base := range bases {
+					target := filepath.Join(base, filepath.FromSlash(imp))
+					t, ok := linkTarget(root, target)
+					if !ok {
+						continue
+					}
+					if w.add(t, src.p) {
+						d.git = append(d.git, t)
+					}
+					if fi, err := os.Stat(target); err == nil && fi.IsDir() {
+						d.git = append(d.git, w.walk([]string{t}, src.p)...)
+					} else if err == nil && t != "" {
+						next = append(next, importFile{t, src.p})
+					}
+				}
+			}
+		}
+		srcs = next
+	}
+}
+
+// readImportFile reads the file at full (through links), false when it
+// cannot or is over maxImportBytes.
+func readImportFile(full string) (string, bool) {
+	f, err := os.Open(full)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxImportBytes+1))
+	if err != nil || len(b) > maxImportBytes {
+		return "", false
+	}
+	return string(b), true
 }
 
 // linkTarget is where the symbolic link path leads, relative to root (the
@@ -693,7 +826,8 @@ const (
 	// and the target's that differ have a byte outside ASCII, which a
 	// case-insensitive filesystem folds by rules of its own (APFS opens
 	// claß.md for class.md, ﬁrst.md for first.md and a decomposed name for
-	// its composed spelling; HFS+ also ignores some code points).
+	// its composed spelling; HFS+ also ignores some code points), and the
+	// ASCII letters of the one are among the other's (MayFold).
 	MaybeUnder
 	// Under: the path is the target or lies under it.
 	Under
@@ -719,13 +853,62 @@ func MatchTarget(f, t string) TargetMatch {
 	for i, e := range tp {
 		switch {
 		case asciiEqualFold(fp[i], e):
-		case !isASCII(fp[i]) || !isASCII(e):
+		case MayFold(fp[i], e):
 			m = MaybeUnder
 		default:
 			return NotUnder
 		}
 	}
 	return m
+}
+
+// MayFold reports whether a case-insensitive filesystem may open a for b,
+// two names of one path element of which at least one has a byte outside
+// ASCII: magnum does not model the filesystem's fold of such a name (APFS
+// folds ß to ss and ﬁ to fi and decomposes é, HFS+ ignores some code
+// points), but every rune outside ASCII folds to zero or more runes and an
+// ASCII one to its lower case, so the ASCII letters of one name, in order,
+// are always among those of the other's fold. False for two ASCII names
+// (asciiEqualFold decides those), and for two names a fold cannot match:
+// José is never app.
+func MayFold(a, b string) bool {
+	switch {
+	case isASCII(a) && isASCII(b):
+		return false
+	case !isASCII(a) && !isASCII(b):
+		return true
+	case isASCII(a):
+		a, b = b, a
+	}
+	return asciiSubsequence(asciiLower(a), asciiLower(b))
+}
+
+// asciiLower is the ASCII bytes of s in lower case, every other byte left
+// out.
+func asciiLower(s string) string {
+	b := make([]byte, 0, len(s))
+	for i := range len(s) {
+		c := s[i]
+		switch {
+		case c >= 0x80:
+			continue
+		case 'A' <= c && c <= 'Z':
+			c += 'a' - 'A'
+		}
+		b = append(b, c)
+	}
+	return string(b)
+}
+
+// asciiSubsequence reports whether sub's bytes appear in s in order.
+func asciiSubsequence(sub, s string) bool {
+	i := 0
+	for j := 0; i < len(sub) && j < len(s); j++ {
+		if sub[i] == s[j] {
+			i++
+		}
+	}
+	return i == len(sub)
 }
 
 // UnderTarget reports whether f may be the link target t or lie under it
@@ -874,8 +1057,9 @@ func ProjectTouched(kind string, paths []string) bool {
 
 // ProjectLinks are the targets, relative to the checkout dir's root, of
 // the links among kind's paths at its root and under its project
-// directories, and under a directory such a link leads to, as the disk has
-// them (onDisk: what a session in dir loaded through them), sorted; partial
+// directories, and under a directory such a link leads to, and the files
+// the instruction files there import (addImports), as the disk has them
+// (onDisk: what a session in dir loaded through them), sorted; partial
 // reports that the walk stopped at maxLinkWalk entries, so one may be
 // missing. None for a kind magnum does not compare.
 func ProjectLinks(kind, dir string) (targets []string, partial bool) {
@@ -884,6 +1068,7 @@ func ProjectLinks(kind, dir string) (targets []string, partial bool) {
 		return nil, false
 	}
 	d, _ := pc.onDisk(dir)
+	pc.addImports(dir, &d)
 	return slices.Sorted(maps.Keys(d.links)), d.partial
 }
 

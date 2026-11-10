@@ -117,6 +117,9 @@ func TestMatchTargetCannotTellANameOutsideASCII(t *testing.T) {
 		{".agents/ſkills/pwn/SKILL.md", ".agents/skills", MaybeUnder},
 		{"docs/日本.md", "docs/日本.md", Under},
 		{"app/日本.rb", ".agents/skills", NotUnder},
+		{"docs/José.md", "docs/app.md", NotUnder}, // no fold makes José app
+		{"José/guide.md", "docs", NotUnder},
+		{"s\u200ckills/x", "skills", MaybeUnder}, // HFS+ ignores U+200C
 		{"docs/guide.mdx", "docs/guide.md", NotUnder},
 		{"docs/guide.md", "", Under}, // a link to the checkout's root
 	} {

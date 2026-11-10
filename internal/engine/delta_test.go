@@ -182,15 +182,18 @@ func TestAPushOfTheAgentsInstructionsIsReReviewed(t *testing.T) {
 func TestADocsPushThroughALinkOfTheAgentsConfigIsReReviewed(t *testing.T) {
 	skills := map[string]map[string]string{"b1": {".claude/skills": "../.agents/skills"}}
 	guide := map[string]map[string]string{"b1": {"CLAUDE.md": "notes.md/guide.md"}}
+	imports := map[string]map[string]string{"b1": {"AGENTS.md": "Read @.docs/guide.md first.\n"}}
 	for _, tc := range []struct {
 		name     string
 		links    map[string]map[string]string
+		files    map[string]map[string]string
 		linksErr error
 		path     string
 		trivial  bool
 		log      string
 	}{
 		{name: "a skill a link leads to", links: skills, path: ".agents/skills/x/SKILL.md", log: "path=.claude/skills"},
+		{name: "a page the instructions import", files: imports, path: ".docs/guide.md", log: "path=AGENTS.md"},
 		{name: "in any case", links: skills, path: ".Agents/Skills/x/SKILL.md", log: "path=.claude/skills"},
 		{name: "a file on the way to a target", links: guide, path: "notes.md", log: "path=CLAUDE.md"},
 		{name: "links that cannot be read", linksErr: errors.New("git broke"), path: "docs/guide.md",
@@ -201,7 +204,7 @@ func TestADocsPushThroughALinkOfTheAgentsConfigIsReReviewed(t *testing.T) {
 			var logs syncBuffer
 			h := newHarness(t, func(h *harness) {
 				h.d.Logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-				h.d.Git = fakeGit{links: tc.links, linksErr: tc.linksErr}
+				h.d.Git = fakeGit{links: tc.links, files: tc.files, linksErr: tc.linksErr}
 			})
 			files := []github.FileDelta{{Path: tc.path, Status: "modified", Patch: "@@ -1,2 +1,2 @@\n # Notes\n-Review the specs.\n+Run every hook."}}
 			pr := reviewedThenPushed(t, h, "", files)

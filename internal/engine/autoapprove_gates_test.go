@@ -487,6 +487,64 @@ func TestAutoApprovalRefusesAnyFileUnderALinkToTheRoot(t *testing.T) {
 	h.wantRefused(2, "it changes the review agents' instructions or hooks (.claude/skills)")
 }
 
+// Claude Code loads what an instruction file imports (@path), from the
+// importing file's directory, recursively: a team's AGENTS.md that imports
+// @.docs/datagrid-guide.md loads the PR's guide, and the guide's own
+// imports, while the PR's list names the guide alone. The gate reads the
+// imports of the head's instruction files (at any depth, the pages under a
+// .claude/, and the files a link of the agents' config leads to, which
+// Claude reads by the link's path too) from its tree, and refuses a list
+// that changes an imported file, by the importing file's label. A home or
+// an absolute import, and a page nothing imports, refuse nothing.
+func TestAutoApprovalRefusesAChangeToAFileTheInstructionsImport(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		links map[string]string
+		files map[string]string
+		list  []string
+		want  string // "" = approved
+	}{
+		{name: "an import", files: map[string]string{"AGENTS.md": "Read @.docs/datagrid-guide.md first.\n"},
+			list: []string{"app/x.rb", ".docs/datagrid-guide.md"}, want: "(AGENTS.md)"},
+		{name: "an import of an import", files: map[string]string{"AGENTS.md": "Read @.docs/datagrid-guide.md first.\n",
+			".docs/datagrid-guide.md": "See @patterns.md.\n"}, list: []string{".docs/patterns.md"}, want: "(AGENTS.md)"},
+		{name: "below the root", files: map[string]string{"app/CLAUDE.md": "@../shared/x.md\n"}, list: []string{"shared/x.md"},
+			want: "(app/CLAUDE.md)"},
+		{name: "a rules file", files: map[string]string{".claude/rules/api.md": "@../../docs/api.md\n", "docs/api.md": "x"},
+			list: []string{"docs/api.md"}, want: "(.claude/rules/api.md)"},
+		{name: "through a link, from the link's directory", links: map[string]string{"CLAUDE.md": "docs/guide.md"},
+			files: map[string]string{"docs/guide.md": "@notes.md\n"}, list: []string{"notes.md"}, want: "(CLAUDE.md)"},
+		{name: "through a link, from the file's directory", links: map[string]string{"CLAUDE.md": "docs/guide.md"},
+			files: map[string]string{"docs/guide.md": "@notes.md\n"}, list: []string{"docs/notes.md"}, want: "(CLAUDE.md)"},
+		{name: "in another case", files: map[string]string{"AGENTS.md": "@Docs/Guide.md\n", "docs/guide.md": "@more.md\n"},
+			list: []string{"docs/more.md"}, want: "(AGENTS.md)"},
+		{name: "a home or an absolute import", files: map[string]string{"CLAUDE.md": "@~/x.md and @/etc/x.md\n"},
+			list: []string{"x.md", "etc/x.md"}},
+		{name: "a page nothing imports", files: map[string]string{"AGENTS.md": "Read @.docs/datagrid-guide.md first.\n"},
+			list: []string{".docs/other.md"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newAutoHarness(t, func(h *harness) {
+				h.d.Git = fakeGit{links: map[string]map[string]string{"b1": tc.links}, files: map[string]map[string]string{"b1": tc.files}}
+			})
+			h.open(prSpec{n: 1, head: "base1"})
+			h.startup()
+			h.tick()
+			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: tc.list})
+			h.tick()
+			h.reviewTo(2, "b1")
+			h.flush()
+			if tc.want == "" {
+				if got := h.created(); len(got) != 1 || !strings.HasPrefix(got[0], "APPROVE@b1:") {
+					t.Fatalf("posted = %q (held back for %q), want the approval as the operator", got, h.autoRefused(2))
+				}
+				return
+			}
+			h.wantRefused(2, "it changes the review agents' instructions or hooks "+tc.want)
+		})
+	}
+}
+
 // A head whose links magnum cannot read (no clone with it, a git that
 // fails) may change what a link of the agents' config leads to: its
 // approval waits, refused without a class, and the next pass reads them

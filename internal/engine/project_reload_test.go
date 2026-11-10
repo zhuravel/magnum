@@ -293,7 +293,8 @@ func TestALiveClaudeSessionIsParkedWhenTheNewHeadChangesALinksTarget(t *testing.
 		files     []string
 		truncated bool
 		tree      map[string]map[string]string
-		disk      bool // the slot has .claude/skills -> ../.agents/skills on disk
+		imports   map[string]map[string]string // the tree's files, by head
+		disk      bool                         // the slot has .claude/skills -> ../.agents/skills on disk
 		changed   map[string][]string
 		wantQuit  bool
 		wantGit   string
@@ -301,6 +302,8 @@ func TestALiveClaudeSessionIsParkedWhenTheNewHeadChangesALinksTarget(t *testing.
 		{name: "a target in the fetched head's tree", files: skill, tree: tree, wantQuit: true},
 		{name: "a target on the slot's disk", files: skill, disk: true, wantQuit: true},
 		{name: "a target the head leaves alone", files: []string{"app/x.rb", ".agents/skillsx/a.md"}, tree: tree, disk: true},
+		{name: "a file the head's instructions import", files: []string{"app/x.rb", ".docs/guide.md"},
+			imports: map[string]map[string]string{"b2": {"CLAUDE.md": "@.docs/guide.md\n"}}, wantQuit: true},
 		{name: "a cut-off list, git finds a target changed", files: []string{"app/x.rb"}, truncated: true, disk: true,
 			changed: map[string][]string{"b2": {".agents/skills/x/SKILL.md"}}, wantQuit: true,
 			wantGit: "origin/master...b2"},
@@ -311,7 +314,7 @@ func TestALiveClaudeSessionIsParkedWhenTheNewHeadChangesALinksTarget(t *testing.
 			wantGit: "origin/master...b2"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			g := &projectGit{fakeGit: fakeGit{links: c.tree}, changed: c.changed}
+			g := &projectGit{fakeGit: fakeGit{links: c.tree, files: c.imports}, changed: c.changed}
 			h := newHarness(t, func(h *harness) { h.d.Git = g })
 			h.reviewedPR(2, "b1")
 			if c.disk {

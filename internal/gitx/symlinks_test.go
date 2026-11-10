@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/execx"
@@ -107,5 +108,56 @@ func TestTrackedSymlinksListsTheIndexsLinksThePathsName(t *testing.T) {
 	got, err = fx.c.TrackedSymlinks(ctx, dir, "CLAUDE.md", AnyDir+"CLAUDE.md", AnyDir+".claude", AnyDir+".claude"+AnyDirTree)
 	if want := []string{"app/CLAUDE.md", "packages/web/.claude/skills"}; err != nil || !slices.Equal(got, want) {
 		t.Fatalf("TrackedSymlinks = %q, %v; want %q", got, err, want)
+	}
+}
+
+// Tree lists, with a commit's links, the paths of its regular files the
+// caller keeps, from the same ls-tree; Blobs reads files of the commit by
+// path in one cat-file of "<rev>:<path>", leaving out a path the commit
+// lacks or that names a directory (a link gives its text), and refuses a
+// path the batch cannot ask; a cut output is ErrTreeTooLarge.
+func TestTreeAndBlobsReadACommitsFiles(t *testing.T) {
+	ctx := context.Background()
+	c, _ := newFake(execx.Rule{Prefix: []string{"git", "-C", slot, "cat-file"}, Result: execx.Result{Truncated: true}})
+	if _, err := c.Blobs(ctx, slot, sha1, []string{"CLAUDE.md"}); !errors.Is(err, ErrTreeTooLarge) {
+		t.Fatalf("a cut output: %v, want ErrTreeTooLarge", err)
+	}
+	if _, err := c.Blobs(ctx, slot, sha1, []string{"a\nb"}); err == nil {
+		t.Fatal("a path with a line feed must be refused")
+	}
+
+	fx := newFixture(t)
+	dir := fx.origin
+	fx.write(dir, "docs/guide.md", "@notes.md\n")
+	fx.write(dir, "docs/odd name.md", "odd\n")
+	fx.write(dir, "app/x.rb", "x\n")
+	if err := os.Symlink("docs/guide.md", filepath.Join(dir, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	fx.git(dir, "add", ".")
+	fx.git(dir, "commit", "--quiet", "-m", "Add docs")
+	head := fx.git(dir, "rev-parse", "HEAD")
+	tree, err := fx.c.Tree(ctx, dir, head, func(p string) bool { return strings.HasSuffix(p, ".md") })
+	if want := []string{"README.md", "docs/guide.md", "docs/odd name.md"}; err != nil || !slices.Equal(tree.Files, want) ||
+		!maps.Equal(tree.Links, map[string]string{"CLAUDE.md": "docs/guide.md"}) {
+		t.Fatalf("Tree = %+v, %v; want the files %q and the link", tree, err, want)
+	}
+	got, err := fx.c.Blobs(ctx, dir, head, []string{"docs/guide.md", "docs/odd name.md", "docs", "missing.md", "CLAUDE.md"})
+	want := map[string]string{"docs/guide.md": "@notes.md\n", "docs/odd name.md": "odd\n", "CLAUDE.md": "docs/guide.md"}
+	if err != nil || !maps.Equal(got, want) {
+		t.Fatalf("Blobs = %q, %v; want %q", got, err, want)
+	}
+}
+
+// TrackedFiles gives, with the index's links the paths name, its regular
+// files there, each once.
+func TestTrackedFilesListsTheIndexsFilesAndLinks(t *testing.T) {
+	ctx := context.Background()
+	c, _ := newFake(outRule("100644 1111111111111111111111111111111111111111 0\tCLAUDE.md\x00"+
+		"120000 2222222222222222222222222222222222222222 0\tapp/CLAUDE.md\x00"+
+		"100755 3333333333333333333333333333333333333333 0\t.claude/rules/x.md\x00", "git", "-C", slot, "ls-files"))
+	links, files, err := c.TrackedFiles(ctx, slot, AnyDir+"CLAUDE.md", AnyDir+".claude"+AnyDirTree)
+	if err != nil || !slices.Equal(links, []string{"app/CLAUDE.md"}) || !slices.Equal(files, []string{"CLAUDE.md", ".claude/rules/x.md"}) {
+		t.Fatalf("TrackedFiles = %q, %q, %v", links, files, err)
 	}
 }

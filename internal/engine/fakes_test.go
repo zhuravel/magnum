@@ -2301,21 +2301,48 @@ type fakeGit struct {
 	// stats are DiffStat's answers by "base...head"; a range without one
 	// cannot be measured.
 	stats map[string][]gitx.FileStat
-	// links are Symlinks' answers by commit: each link of its tree, by its
-	// path, with its text; a commit without one has no links. linksErr
-	// fails every read.
+	// links are the links of a commit's tree Tree gives: each link of its
+	// tree, by its path, with its text; a commit without one has no links.
+	// files are its regular files, by path, with their content, which
+	// Tree lists and Blobs reads. linksErr fails every read.
 	links    map[string]map[string]string
+	files    map[string]map[string]string
 	linksErr error
 }
 
-// Symlinks are the links of rev's tree a test names (links), none for
-// another commit: a gate that reads them finds nothing to refuse unless
-// the test says so.
-func (g fakeGit) Symlinks(_ context.Context, _, rev string) (map[string]string, error) {
+// Tree is the tree of rev a test names (links, files), an empty one for
+// another commit: a gate that reads it finds nothing to refuse unless the
+// test says so.
+func (g fakeGit) Tree(_ context.Context, _, rev string, keep func(string) bool) (gitx.Tree, error) {
+	if g.linksErr != nil {
+		return gitx.Tree{}, g.linksErr
+	}
+	t := gitx.Tree{Links: maps.Clone(g.links[rev])}
+	if t.Links == nil {
+		t.Links = map[string]string{}
+	}
+	for _, f := range slices.Sorted(maps.Keys(g.files[rev])) {
+		if keep != nil && keep(f) {
+			t.Files = append(t.Files, f)
+		}
+	}
+	return t, nil
+}
+
+// Blobs reads the files (and the links' texts) of rev's tree a test names.
+func (g fakeGit) Blobs(_ context.Context, _, rev string, paths []string) (map[string]string, error) {
 	if g.linksErr != nil {
 		return nil, g.linksErr
 	}
-	return maps.Clone(g.links[rev]), nil
+	out := map[string]string{}
+	for _, p := range paths {
+		if c, ok := g.files[rev][p]; ok {
+			out[p] = c
+		} else if c, ok := g.links[rev][p]; ok {
+			out[p] = c
+		}
+	}
+	return out, nil
 }
 
 func (g fakeGit) DiffStat(_ context.Context, _, base, head string) ([]gitx.FileStat, error) {

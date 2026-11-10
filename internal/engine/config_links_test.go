@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -126,8 +128,8 @@ func TestResolveConfigLinksStaysWithinItsBudget(t *testing.T) {
 	}
 }
 
-// symlinksGit counts the reads of a head's links (Symlinks), failing them
-// with err.
+// symlinksGit counts the reads of a head's tree (Tree), failing them with
+// err.
 type symlinksGit struct {
 	fakeGit
 	mu    sync.Mutex
@@ -135,11 +137,11 @@ type symlinksGit struct {
 	reads int
 }
 
-func (g *symlinksGit) Symlinks(_ context.Context, _, rev string) (map[string]string, error) {
+func (g *symlinksGit) Tree(context.Context, string, string, func(string) bool) (gitx.Tree, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.reads++
-	return nil, g.err
+	return gitx.Tree{}, g.err
 }
 
 func (g *symlinksGit) count() int {
@@ -183,5 +185,41 @@ func TestConfigLinksKeepsAHeadsFailure(t *testing.T) {
 				t.Fatalf("reads after %s = %d, want %d", linkRetryAfter, g.count(), want)
 			}
 		})
+	}
+}
+
+// The imports of a tree's instruction files are followed agents.MaxImportHops
+// hops deep (Claude Code's four, and one more), through the tree's links;
+// an import whose name has a byte outside ASCII may name a link a
+// case-insensitive filesystem opens for it (@ſkills/x.md, the link skills),
+// so both ways are targets.
+func TestResolveConfigTargetsFollowsTheInstructionsImports(t *testing.T) {
+	kinds := defaultKinds()
+	isConfig := func(p string) (string, bool) { return agentConfigPath(kinds, p) }
+	files := map[string]string{"CLAUDE.md": "@a1.md and @ſkills/x.md\n"}
+	for i := 1; i < 8; i++ {
+		files[fmt.Sprintf("a%d.md", i)] = fmt.Sprintf("@a%d.md\n", i+1)
+	}
+	tree := gitx.Tree{Links: map[string]string{"skills": "lib/skills"}, Files: slices.Sorted(maps.Keys(files))}
+	read := func(paths []string) (map[string]string, error) {
+		out := map[string]string{}
+		for _, p := range paths {
+			if c, ok := files[p]; ok {
+				out[p] = c
+			}
+		}
+		return out, nil
+	}
+	got, err := resolveConfigTargets(context.Background(), tree, isConfig, read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"a1.md", "a5.md", "skills", "lib/skills/x.md", "ſkills/x.md"} {
+		if got[want] != "CLAUDE.md" {
+			t.Errorf("target %q = %q, want CLAUDE.md's (all: %q)", want, got[want], got)
+		}
+	}
+	if _, ok := got["a6.md"]; ok {
+		t.Errorf("a6.md is a target: past %d hops", agents.MaxImportHops)
 	}
 }

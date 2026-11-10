@@ -261,9 +261,12 @@ type Git interface {
 	// pushed descends from the PR row's head, a push the poller saw during
 	// the run (the base merge `magnum fix-sync` replayed onto: recordFixPush).
 	IsAncestor(ctx context.Context, dir, ancestor, rev string) (bool, error)
-	// Symlinks are the links of a head's tree, which the files gate and
-	// the reload check follow to what they lead to (config_links.go).
-	Symlinks(ctx context.Context, dir, rev string) (map[string]string, error)
+	// Tree and Blobs read a head's tree: its links, which the files gate,
+	// the reload check and the trivial-delta check follow to what they lead
+	// to, and the instruction files whose @path imports they follow too
+	// (config_links.go).
+	Tree(ctx context.Context, dir, rev string, keep func(path string) bool) (gitx.Tree, error)
+	Blobs(ctx context.Context, dir, rev string, paths []string) (map[string]string, error)
 }
 
 // Cleaner plans and applies storage cleanup (*cleanup.Planner). PlanFrom
