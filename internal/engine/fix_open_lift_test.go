@@ -359,8 +359,9 @@ func TestACIFixByHandLeavesWhatWaitsForYouAlone(t *testing.T) {
 // An approval accepts its reviewer's items made before it: a thread, a
 // review body, a thread a fixer resolved. Never one whose comment the
 // approval itself holds (approve with comments: a new ask), nor another
-// reviewer's. A change request after it takes it back; a review that only
-// comments leaves it standing.
+// reviewer's, nor one whose latest word came after it: the reviewer's
+// reply in their thread, a review body edited since. A change request
+// after it takes it back; a review that only comments leaves it standing.
 func TestAnApprovalAcceptsTheReviewersEarlierItemsOnly(t *testing.T) {
 	at := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
 	old := extThread(100, "a.rb", 1, at, "Why?", "rev-ann")
@@ -370,10 +371,14 @@ func TestAnApprovalAcceptsTheReviewersEarlierItemsOnly(t *testing.T) {
 	alices := extThread(300, "c.rb", 3, at, "And this?", "alice")
 	resolved := extThread(400, "d.rb", 4, at, "Rename it", "rev-ann")
 	resolved.Resolved, resolved.ResolvedBy = true, "talkable[bot]"
+	repliedSince := extThread(500, "e.rb", 5, at, "Why twice?", "rev-ann", "rev-ann")
+	repliedSince.Comments[1].CreatedAt = at.Add(2 * time.Hour) // her reply after the approval
 	body := changeRequest(1, at)
 	approve := github.Review{DatabaseID: 2, State: "APPROVED", SubmittedAt: at.Add(time.Hour), AuthorLogin: "rev-ann", AuthorType: "User", AuthorAssociation: "MEMBER"}
-	in := externalInput{Threads: []github.Thread{old, inApproval, alices, resolved}, Reviews: []github.Review{body, approve}, CommentsComplete: true,
-		Author: "zhuravel", Own: []string{"talkable[bot]"}, Resolvers: []string{"talkable[bot]"}}
+	editedSince := github.Review{DatabaseID: 4, State: "COMMENTED", Body: "Also log it", URL: prPage + "#pullrequestreview-4", SubmittedAt: at,
+		EditedAt: at.Add(2 * time.Hour), AuthorLogin: "rev-ann", AuthorType: "User", AuthorAssociation: "MEMBER"}
+	in := externalInput{Threads: []github.Thread{old, inApproval, alices, resolved, repliedSince}, Reviews: []github.Review{body, approve, editedSince},
+		CommentsComplete: true, Author: "zhuravel", Own: []string{"talkable[bot]"}, Resolvers: []string{"talkable[bot]"}}
 	accepted := func() map[string]bool {
 		out := map[string]bool{}
 		for _, it := range othersItemsOf(externalReadOf(in, fixHead), quietRules{}) {
@@ -381,7 +386,9 @@ func TestAnApprovalAcceptsTheReviewersEarlierItemsOnly(t *testing.T) {
 		}
 		return out
 	}
-	want := map[string]bool{threadKey(100, 100): true, threadKey(200, 200): false, threadKey(300, 300): false, threadKey(400, 400): true, "remark:1": true}
+	edited := "remark:4@" + strconv.FormatInt(at.Add(2*time.Hour).Unix(), 10)
+	want := map[string]bool{threadKey(100, 100): true, threadKey(200, 200): false, threadKey(300, 300): false, threadKey(400, 400): true,
+		threadKey(500, 501): false, "remark:1": true, edited: false}
 	if got := accepted(); !maps.Equal(got, want) {
 		t.Errorf("accepted = %v, want %v", got, want)
 	}
@@ -390,7 +397,7 @@ func TestAnApprovalAcceptsTheReviewersEarlierItemsOnly(t *testing.T) {
 	if got := accepted(); !got[threadKey(100, 100)] || !got["remark:1"] || got["remark:3"] {
 		t.Errorf("after a comment review: accepted = %v, want the approval standing, and the new remark open", got)
 	}
-	in.Reviews[2].State = "CHANGES_REQUESTED"
+	in.Reviews[3].State = "CHANGES_REQUESTED"
 	for key, ok := range accepted() {
 		if ok {
 			t.Errorf("%s accepted after a later change request", key)
