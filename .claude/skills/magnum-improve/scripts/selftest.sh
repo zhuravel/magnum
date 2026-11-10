@@ -731,6 +731,20 @@ print('- SECRET_KEY_BASE=R58-RAILS-A RAILS_MASTER_KEY: R58-RAILS-B {"signing_key
 print('- DB_PASSWORD_FILE=/run/secrets/db API_KEY_ID=key-17')
 print("- " + '{"items":[' + '{"id":1,"name":"widget"},' * 100 + '{"password":"R58-LONG-PW","user":"alice"}]}')
 PYX
+# Task 23's notes hold R60's shapes, each with a made-up secret: a password in a URL and a Sentry DSN's key, the joined
+# env names (PGPASSWORD=), an npm token, curl -u and mysql -p, then what stays (a flag, a direction, a port, a user and
+# group, the verdict of a test), and a line of 60,000 curl words that is scrubbed in linear time.
+mkdir -p "$ev/factory-tasks/23"
+python3 - >"$ev/factory-tasks/23/notes.md" <<'PYX'
+print('- DATABASE_URL=postgres://app:R60-URL-PW@db/app and redis://:R60-REDIS-PW@cache:6379')
+print('- sentry https://R60DSNKEY@o1.ingest.example.com/2 and ssh://git@github.com/org/repo')
+print('- PGPASSWORD=R60-PGPW psql REDISPASS: R60-REDISPASS MYSQL_PWD=R60-MYSQLPWD')
+print('- BYPASS=1 COMPASS_URL=http://x OLDPWD=/home/runner --- PASS: TestX (0.00s)')
+print('- published with npm_' + 'aB3' * 12)
+print('- curl -sS -u admin:R60-CURL-PW https://api.example.com/x && docker run -u 1000:1000 img')
+print('- mysql -u root -pR60-MYSQL-PW app; ssh -p 22 h; docker run -p 8080:80 nginx')
+print('- ' + 'curl ' * 60000)
+PYX
 # Tasks 20 and 21's notes are a megabyte each of what made the first exact scrub search again to the text's end: a
 # GitHub token around each eyJ, and a JWT that takes in each -----BEGIN of keys with no END.
 mkdir -p "$ev/factory-tasks/20" "$ev/factory-tasks/21"
@@ -1018,5 +1032,25 @@ tsect 22 | grep -Fxq '> - DB_PASSWORD=<redacted>' && tsect 22 | grep -Fxq '> - e
 tsect 22 | grep -Fxq '> - {"password_hint":"R58-HINT-KEPT","tokens_used":3}' && tsect 22 | grep -Fxq '> - [...]' ||
     fail "a key that only holds a key word is kept, and a long minified JSON shows as [...]: $(tsect 22 | cut -c1-120 | tr '\n' ';')"
 ok "evidence.sh masks the value under a quoted secret key and an env-style name, also in a minified JSON over 2,000 characters"
+
+# 30. R60: the password in a URL, the user of an http URL, an all-caps name that ends in a key word, an npm token and the
+#     password of curl -u and mysql -p are masked as the Go scrub masks them, and the flag, direction, port, user and
+#     group, and verdict of a test stay. A line of 60,000 curl words, where Python's regex engine would search each
+#     word's line to its end again, is scrubbed in the time of the run, and its note is not left out.
+! grep -Eq 'R60-URL-PW|R60-REDIS-PW|R60DSNKEY|R60-PGPW|R60-REDISPASS|R60-MYSQLPWD|R60-CURL-PW|R60-MYSQL-PW|npm_aB3' "$f_md" ||
+    fail "the R60 secrets are masked: $(grep -Eo '.{0,40}(R60|npm_aB3).{0,20}' "$f_md" | tr '\n' ';')"
+tsect 23 | grep -Fxq '> - DATABASE_URL=postgres://app:<redacted>@db/app and redis://:<redacted>@cache:6379' &&
+    tsect 23 | grep -Fxq '> - sentry https://<redacted>@<host>/2 and ssh://<email>/org/repo' ||
+    fail "the password in a URL and a DSN's key are masked, and the host after them: $(tsect 23 | cut -c1-120 | tr '\n' ';')"
+tsect 23 | grep -Fxq '> - PGPASSWORD=<redacted> psql REDISPASS: <redacted> MYSQL_PWD=<redacted>' &&
+    tsect 23 | grep -Fxq '> - published with <redacted>' ||
+    fail "the joined env names and the npm token are masked: $(tsect 23 | cut -c1-120 | tr '\n' ';')"
+tsect 23 | grep -Fxq '> - curl -sS -u admin:<redacted> https://<host>/x && docker run -u 1000:1000 img' &&
+    tsect 23 | grep -Fxq '> - mysql -u root -p<redacted> app; ssh -p 22 h; docker run -p 8080:80 nginx' ||
+    fail "curl -u and mysql -p are masked, and the other tools' -u and -p stay: $(tsect 23 | cut -c1-120 | tr '\n' ';')"
+tsect 23 | grep -Fxq '> - BYPASS=1 COMPASS_URL=http://x OLDPWD=/home/runner --- PASS: TestX (0.00s)' &&
+    tsect 23 | grep -q '^> - curl curl curl ' && ! tsect 23 | grep -Fq 'took too long to scrub' ||
+    fail "the names that are no secret stay, and the long line of curl words is scrubbed: $(tsect 23 | cut -c1-120 | tr '\n' ';')"
+ok "evidence.sh masks a password in a URL, a joined env name, an npm token and a command line's password, in linear time"
 
 echo "selftest: $checks checks passed"

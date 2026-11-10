@@ -26799,11 +26799,15 @@ func Secrets(text string) string
     execx.Redact (GitHub tokens, JWTs, Authorization values, private keys), then
     AWS keys and other token shapes, then the values of password=, token: and
     the like, also under a quoted key ("password": "x") and an env-style name
-    (DB_PASSWORD=x). The key stays. It is for text where a host or an address is
+    (DB_PASSWORD=x), then (R60) the password of a URL (postgres://app:x@host),
+    the user of an http URL (a Sentry DSN's key), the password of curl -u
+    and mysql -p, and the value of an all-caps name that ends in a key word
+    (PGPASSWORD=x). The key stays. It is for text where a host or an address is
     what the reader needs, such as a failing test's output in a CI log.
 
 func Text(text string) string
-    Text masks what Secrets masks, then emails and host names. It is what the
+    Text masks what Secrets masks, then emails and host names (and the host
+    after a masked userinfo, which the email pass cannot read). It is what the
     factory keeps of the words that pass through it (runtime.Scrub).
 
 ```

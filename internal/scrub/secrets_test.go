@@ -52,6 +52,10 @@ func secretsPassesOf(redact *regexp.Regexp) []scrubPass {
 // replayOf runs passes over text as the scrub does.
 func replayOf(passes []scrubPass, text string) string {
 	for _, p := range passes {
+		if p.run != nil {
+			text = p.run(text)
+			continue
+		}
 		if p.with != "" {
 			text = p.re.ReplaceAllString(text, p.with)
 			continue
@@ -76,10 +80,11 @@ func secretsMaskWhatTextMasksOfSecrets(t *testing.T, redact *regexp.Regexp, text
 	if replayed := replayOf(secretsPassesOf(redact), text); replayed != secrets {
 		t.Fatalf("the replay of Secrets's passes parted from Secrets on %q:\nreplay:  %q\nSecrets: %q", brief(text), brief(replayed), brief(secrets))
 	}
-	if want := scrubHost.ReplaceAllString(scrubEmail.ReplaceAllString(secrets, "<email>"), "<host>"); full != want {
-		t.Fatalf("Text is not Secrets and then the email and host passes on %q:\nText: %q\nwant: %q", brief(text), brief(full), brief(want))
+	afterEmail := scrubUserinfoHost.ReplaceAllString(scrubEmail.ReplaceAllString(secrets, "<email>"), "$1<host>")
+	if want := scrubHost.ReplaceAllString(afterEmail, "<host>"); full != want {
+		t.Fatalf("Text is not Secrets and then the email, userinfo host and host passes on %q:\nText: %q\nwant: %q", brief(text), brief(full), brief(want))
 	}
-	if secrets != full && !scrubEmail.MatchString(secrets) && !scrubHost.MatchString(secrets) {
+	if secrets != full && !scrubEmail.MatchString(secrets) && !scrubUserinfoHost.MatchString(secrets) && !scrubHost.MatchString(secrets) {
 		t.Fatalf("Secrets and Text differ where no email or host is: %q\nSecrets: %q\nText:    %q", brief(text), brief(secrets), brief(full))
 	}
 	before := scrubBeforeR58(redact)

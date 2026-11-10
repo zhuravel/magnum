@@ -200,23 +200,33 @@ func goPasses(tb testing.TB, path, fn string, passesOf map[string]int) int {
 }
 
 // scrubPass is a pass of Text's replay: a pattern and ReplaceAllString's
-// template, or with "" Redact's own function.
+// template, or with "" Redact's own function. A pass with run set is applied
+// by that function of the package (maskJoinedEnv, which passes over the names
+// of an allow list), and re and with are the pattern and the template it is
+// built on, which the oracle of the older scrub follows.
 type scrubPass struct {
 	re   *regexp.Regexp
 	with string
+	run  func(string) string
 }
 
 // scrubPasses are Text's passes in its order (Secrets's, then the email and
 // host passes); redact is execx's secretPattern, compiled from its source.
 func scrubPasses(redact *regexp.Regexp) []scrubPass {
 	return []scrubPass{
-		{redact, ""},
-		{scrubTokens, "<redacted>"},
-		{scrubPairs, "$1$2<redacted>"},
-		{scrubQuotedPairs, "$1$2<redacted>"},
-		{scrubEnvPairs, "$1$2<redacted>"},
-		{scrubEmail, "<email>"},
-		{scrubHost, "<host>"},
+		{redact, "", nil},
+		{scrubTokens, "<redacted>", nil},
+		{scrubPairs, "$1$2<redacted>", nil},
+		{scrubQuotedPairs, "$1$2<redacted>", nil},
+		{scrubEnvPairs, "$1$2<redacted>", nil},
+		{scrubURLPassword, "$1<redacted>@", nil},
+		{scrubURLUser, "$1<redacted>@", nil},
+		{scrubCurlUser, "$1$2<redacted>", nil},
+		{scrubMySQLPassword, "$1$2<redacted>", nil},
+		{scrubJoinedEnv, "$1$2<redacted>", maskJoinedEnv},
+		{scrubEmail, "<email>", nil},
+		{scrubUserinfoHost, "$1<host>", nil},
+		{scrubHost, "<host>", nil},
 	}
 }
 
@@ -227,6 +237,10 @@ func scrubReplay(redact *regexp.Regexp, text string) (beforeHost, clean string) 
 	for _, p := range scrubPasses(redact) {
 		if p.re == scrubHost {
 			beforeHost = clean
+		}
+		if p.run != nil {
+			clean = p.run(clean)
+			continue
 		}
 		if p.with != "" {
 			clean = p.re.ReplaceAllString(clean, p.with)
@@ -398,13 +412,20 @@ func TestEvidenceScrubHoldsTheGoScrubsPatterns(t *testing.T) {
 
 	// In their lists, in their order.
 	for list, inGo := range map[string][]string{
-		"redact": execxSecretPatterns(t),
-		"tokens": scrubPats["scrubTokens"],
-		"pairs":  scrubPats["scrubPairs"],
-		"quoted": scrubPats["scrubQuotedPairs"],
-		"env":    scrubPats["scrubEnvPairs"],
-		"email":  scrubPats["scrubEmail"],
-		"host":   scrubPats["scrubHost"],
+		"redact":        execxSecretPatterns(t),
+		"tokens":        scrubPats["scrubTokens"],
+		"pairs":         scrubPats["scrubPairs"],
+		"quoted":        scrubPats["scrubQuotedPairs"],
+		"env":           scrubPats["scrubEnvPairs"],
+		"url_pass":      scrubPats["scrubURLPassword"],
+		"url_user":      scrubPats["scrubURLUser"],
+		"curl":          scrubPats["scrubCurlUser"],
+		"mysql":         scrubPats["scrubMySQLPassword"],
+		"joined":        scrubPats["scrubJoinedEnv"],
+		"joined_kept":   scrubPats["scrubJoinedKept"],
+		"email":         scrubPats["scrubEmail"],
+		"userinfo_host": scrubPats["scrubUserinfoHost"],
+		"host":          scrubPats["scrubHost"],
 	} {
 		if !slices.Equal(port[list], inGo) {
 			t.Errorf("scrub.py's %s patterns are not the Go scrub's, word for word:\nscrub.py: %q\nGo:       %q",
@@ -415,8 +436,9 @@ func TestEvidenceScrubHoldsTheGoScrubsPatterns(t *testing.T) {
 	// Text runs as many passes as its replay here, which the fuzz compares
 	// the port with: Secrets's, then the email and host passes. Secrets runs
 	// as many as the replay's up to the email pass.
-	redact := map[string]int{"execx.Redact": goPasses(t, execxGoPath, "Redact", nil)}
-	secrets := goPasses(t, scrubGoPath, "Secrets", redact)
+	// maskJoinedEnv is one pass (scrubJoinedEnv's, with its allow list) and has no ReplaceAll of its own to count.
+	passesOf := map[string]int{"execx.Redact": goPasses(t, execxGoPath, "Redact", nil), "maskJoinedEnv": 1}
+	secrets := goPasses(t, scrubGoPath, "Secrets", passesOf)
 	if want := len(secretsPassesOf(nil)); secrets != want {
 		t.Errorf("Secrets runs %d passes and its replay here %d: add the new pass to scrubPasses and to scrub.py", secrets, want)
 	}
@@ -533,6 +555,52 @@ var scrubSeeds = []scrubSeed{
 	// R59: an Authorization header under a quoted key, with a scheme and without one.
 	{`{"Authorization":"Bearer `, "t", 30, `","Accept":"json"}`},
 	{`'x-authorization': `, "r", 30, ` , next`},
+	// R60: the password in a URL's userinfo, the user of an http URL (a Sentry DSN's key), and the URLs that stay: an
+	// email address, no @ in the authority, another scheme's user, markup next to a URL.
+	{"DATABASE_URL=postgres://app:MADEUP-PW@db1.internal.example.com/app\nREDIS_URL=redis://:MADEUP@cache:6379\n", "", 0,
+		"dsn https://abc123def@o1.ingest.example.com/2 and ssh://git@github.com/org/repo mail alice@example.com\n"},
+	{"postgres://app:p@ss@db/app?x=a@b.co and amqp://guest:a:b@mq:5672/ ", "", 0,
+		`<a href="https://example.com">a@b.co</a> [x](https://example.com)a@b.co http://host:8080/@x https://:@h/x x://u:p@h,y://v:q@h2`},
+	{"clone https://x-access-token:ghs_abcDEF123_x@github.com/org/repo.git and https://ci:MADEUP@git.example.com\n", "", 0,
+		"mailto:a@b.co https://example.com/?to=a@b.co 'postgres://u:pw@h' \"mysql2://root:pw@127.0.0.1/db\" (http://k@h)"},
+	{"- ", "://", 2000, "u:p@h"},
+	{"- x://", ":", 5000, "@h"},
+	{"- x://u:", "p", 5000, "@h"},
+	{"- https://", "a", 5000, "@h"},
+	{"- ", "https://", 700, "k@h"},
+	// R60: an all-caps name that ends in a key word, the names of the allow list, the verdict of a test, and the
+	// lower-case, longer and glued names that stay.
+	{"PGPASSWORD=MADEUP psql\nREDISPASS: MADEUP\nexport MYSQL_PWD='MADEUP ONE'\nGITHUBTOKEN=\"MADEUP\" DB_PASS=x\n", "", 0,
+		"BYPASS=1 COMPASS_URL=http://x SKIP_BYPASS: true OLDPWD=/home/runner --- PASS: TestX (0.00s) PASS=ok\n"},
+	{"BYPASS:\nPGPASSWORD=MADEUP\nCOMPASS=north PGPASSWORD=MADEUP2 BYPASS_PASS=MADEUP3\n", "", 0,
+		"bypass=1 redispass=x PGPASSWORD_FILE=/f TOKEN_LIMIT=5 2PASS=x \u00e9PGPASSWORD=x PGPASSWORD\u00e9=x SURPASS=1 TRESPASS=2\n"},
+	{"PGPA\u017f\u017fWORD=LONG-S GITHUB\u00feTOKEN=x TO\u212aEN=KELVIN PGPASSWORD=MADEUP\n", "", 0, "xPGPASSWORD=nope PGPASSWORD\nSECOND=line"},
+	{"- ", "A", 5000, "PGPASSWORD=MADEUP"},
+	{"- ", "PASS", 1500, "=MADEUP PGPASSWORD=MADEUP2"},
+	{"- ", "A_", 3000, "TOKEN: MADEUP"},
+	{"- ", "BYPASS ", 800, "BYPASS: PGPASSWORD=MADEUP"},
+	// R60: npm tokens (36 letters or digits after npm_, or more), and the words that start the same way.
+	{"//registry.example.org/:_authToken=npm_abcdefghijABCDEFGHIJ0123456789abcdef\n", "", 0,
+		"npm_abcdefghijABCDEFGHIJ0123456789abcdefXYZ npm_abcdefghijABCDEFGHIJ0123456789abcde npm_config_cache=/x my_npm_abcdefghijABCDEFGHIJ0123456789abcdef\n"},
+	// R60: curl -u and --user, mysql and mysqldump's -p<password>, --password=<password> and --password <password>,
+	// and the options of other tools that stay (a port, a user and group, a database).
+	{"curl -u admin:MADEUP https://api.example.com/x\ncurl --user 'admin:MADEUP 2' x\ncurl -uadmin:MADEUP3 x\n", "", 0,
+		`curl -sS -X POST "https://x/?a=1&b=2" -H 'Accept: json' -u "admin:MADEUP4" -o out` + "\ncurl -sS \\\n  -u admin:MADEUP5 \\\n  https://x\n"},
+	{"mysql -u root -pMADEUP app\nmysqldump -h db --password=MADEUP2 app\nmysql --password MADEUP3 app\n", "", 0,
+		"mysql -u root -p'MADEUP 4' app and mysql --password=\"MADEUP 5\" app and gunzip < d.gz | mysql -pMADEUP6 app\n"},
+	{"ssh -p 22 h; ssh -p22 h; docker run -p 8080:80 -u 1000:1000 img; psql -p 5432 db\n", "", 0,
+		"mysql -u root -p app\nmysql -P3306 -h db\ncurl x && docker run -u 1000:1000 i\ncurl x | tar --user a:b\ncurl x ; ssh -p22 h\nmysql2 -p22\n"},
+	{"curl -s x\ndocker run -u 1000:1000 img\nmysql\nssh -p22 h\ncurl -u admin\ncurl -u $CREDS x\ncurl -u :MADEUP x\n", "", 0, ""},
+	{"PGPASSWORD=\ncurl -u admin:MADEUP x\nREDISPASS:\nredis://:MADEUP2@cache\nPGTOKEN=\nmysql -pMADEUP3\nDB_PASSWORD=\npostgres://u:MADEUP4@h/x\n", "", 0, ""},
+	{"- ", "curl ", 1200, "-u a:b"},
+	{"- curl ", "-x ", 2000, ""},
+	{"- ", "mysql ", 1000, "-pMADEUP"},
+	{"- curl -u ", "a", 5000, ":MADEUP"},
+	{"- curl -u a:", "p", 5000, ""},
+	{"- mysql --password ", "p", 5000, ""},
+	{"- curl ", "&", 3000, " -u a:b"},
+	{"- curl ", "\\\n", 1500, " -u a:b"},
+	{"curl -\u017fu a:b -u\u00e9x:y\n", "", 0, "mysql\u212a -pMADEUP \u017fmysql -pMADEUP2 curl\u00e9 -u a:b\n"},
 }
 
 // FuzzEvidenceScrubMasksEveryByteScrubMasks wants the port's output of a text

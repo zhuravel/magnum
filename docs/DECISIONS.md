@@ -23770,6 +23770,81 @@ skill versions); people add theirs to the sections before it, at the end of the 
   format too, where the old rule (a plain prefix) kept such a title without the key: a letter or a digit after the key
   makes it another key, a hyphen or a dot does not (TestATitleStartingWithALongerKeyStillGetsTheTasksKey).
 
+- **The scrub masks a password in a URL, an all-caps name that ends in a key word, an npm token and the password of
+  `curl -u` and `mysql -p`** (2026-11-10, R60). The review of the CI fix mode, which feeds the tails of failed CI job
+  logs through `scrub.Secrets`, found shapes the scrub left whole, with made-up values: `PGPASSWORD=hunter2`,
+  `REDISPASS=x`, `DATABASE_URL=postgres://app:S3cretPw@db.example.com/app`, `redis://:pw@cache:6379`, a Sentry DSN's
+  key (`https://abc123def@o1.ingest.example.com/2`), `curl -u admin:pw https://…`, `mysql --password pw` (and `-ppw`)
+  and a bare `npm_…` token. `Text` masked some of them by luck, as emails (`S3cretPw@db.example.com`); `Secrets`,
+  which keeps emails and hosts, masked none.
+  - **Five passes in `internal/scrub`, after the three key-value passes** and in this order, so that the older passes
+    see the text they saw before (the oracle of R58 holds it). `scrubURLPassword` is `(://[^\s/?#@:"']*:)[^\s/?#"']+@`
+    with `$1<redacted>@`: the user before the colon, the scheme and the host stay, and a password that holds an `@`
+    goes whole (it runs to the last `@` before the first `/`, `?`, `#`, white space or quote). `scrubURLUser` is
+    `(https?://)[A-Za-z0-9._~%+=-]+@`: the user of an http or https URL with no password, the shape of a Sentry DSN or
+    of a token used as a user name. `scrubCurlUser` masks the password of `-u user:pw`, `-uuser:pw` and `--user
+    user:pw` (quoted or not) anywhere after `curl` on its command. `scrubMySQLPassword` masks the value of `-p<pw>`,
+    `--password=<pw>` and `--password <pw>` after `mysql` or `mysqldump`; a quoted value goes whole. `scrubJoinedEnv`,
+    applied by `maskJoinedEnv`, masks the value of an all-caps name that ends in `PASSWORD`, `PASSWD`, `PASS`, `PWD`
+    or `TOKEN` with no boundary or underscore needed before the word (`PGPASSWORD`, `REDISPASS`, `MYSQL_PWD`). The
+    `npm_` shape (36 letters or digits, or more) joins `scrubTokens`.
+  - **A command is read only when its name comes first on the same command.** The text between `curl` or `mysql` and
+    the option may hold anything but a line end (a backslash continues the line), a pipe, a semicolon or `&&`
+    (`scrubCommandSpan`), so `curl x && docker run -u 1000:1000 img`, `curl x | tar --user a:b` and the next line's
+    `ssh -p22 h` stay. `-p` is bound to `mysql` and `mysqldump`: `ssh -p 22`, `docker run -p 8080:80` and `psql -p
+    5432` are ports that CI logs show all the time, and `mysql -u root -p app` (the password asked for, `app` the
+    database) stays.
+  - **The suffix rule keeps the names that only hold a key word.** The word must end the name, the name starts with a
+    capital after a boundary, and one character at least comes before the key word, so a lower-case word (`bypass=1`,
+    `compass: north`), a longer name (`PGPASSWORD_FILE`, `COMPASS_URL`, `REDISPASS_HINT`) and a test's verdict (`---
+    PASS: TestX`, `PASS=1`) stay. The English words that end in `PASS` and the shell's `OLDPWD` are an allow list
+    (`scrubJoinedKept`: `BYPASS`, `COMPASS`, `IMPASS`, `OVERPASS`, `SURPASS`, `TRESPASS`, `UNDERPASS`, `OLDPWD`; a
+    name that ends in one is kept, `SKIP_BYPASS=1` too). A kept name is passed over without its value, and the search
+    goes on after its separator, since a name with no value takes the next line's first word for its value
+    (`BYPASS:\nPGPASSWORD=x`). `maskJoinedEnv` is code because a pattern cannot say "not these names" and still keep a
+    name's value out of the next name's reach.
+  - **The pass of joined names runs last.** A name with no value takes the first word of the next line for its value
+    (the separator crosses a line break), as the older passes do. Run before the command passes, `PGPASSWORD=\ncurl -u
+    admin:pw x` would mask `curl` and leave `admin:pw` for a `curl` that is gone. Run last, the word it takes is
+    already masked text: `PGPASSWORD=\n<redacted> -u admin:<redacted> x`.
+  - **`Text` masks the host after a masked userinfo.** The oracle of R58 (no byte the scrub before R58 masked shows)
+    found that the URL passes broke it: `http://key@h.co` was `<email>` whole, and with `<redacted>@h.co` the email
+    pass reads no address and the host pass lists no `.co`. `scrubUserinfoHost`
+    (`(<redacted>@)[A-Za-z0-9.-]+\.[A-Za-z]{2,}` with `$1<host>`), a pass of `Text` only, takes the domain the email
+    pass would have taken. `Secrets` keeps the host. So `Text` of the database URL above is
+    `postgres://app:<redacted>@<host>/app`, where it was `postgres://app:<email>/app`.
+  - **scrub.py** has the same patterns word for word (its `--patterns` lists `url_pass`, `url_user`, `curl`, `mysql`,
+    `joined`, `joined_kept` and `userinfo_host`), in the same order. Its `go_class` knows `\n`, `\r` and `\t` in a
+    class. Python's engine backtracks: the lazy span of `curl` is tried again from each `curl` word of a long line, to
+    the line's end, and a line of 100,000 characters of those took minutes. `command()` goes on from the end of the
+    failed match's span (`SPAN`, its greedy form), since every option up to there was tried; a mutant without the skip
+    gives the same output and times out in selftest case 30. `joined()` is `maskJoinedEnv` with `search(text, pos)`
+    for Go's slice of the text. Pinned seeds: none of the 48 holds one of these shapes, so no pin changed; the shapes
+    are 30 seeds appended after the others.
+  - **False masks and gaps, known.** A user name in an http clone URL (`https://alice@host/x`) is masked, since
+    nothing in the URL tells it from a key; `ssh://git@host` and an email address stay. `mysql` earlier on a line than
+    an attached `-p` is read as the command: `docker run --name mysql -p3306:3306 mysql:8` masks `3306:3306`, and
+    `mysql --password mydb` masks the database name. An unexpanded variable is masked as any word: `curl -u
+    "$USER:$PASS"` gives `"$USER:<redacted>"`. A password with a space inside the quotes of a `curl -u` is masked up
+    to the space (a quoted value of `mysql` goes whole). Not read: a quoted joined name (`{"PGPASSWORD": "x"}`), a
+    lower-case `db_pass=`, a bare `PASS=` (a test's verdict; a bare `TOKEN=` is the older passes'), `--proxy-user` and
+    `-U` of curl, `mysqladmin`, `mariadb`, an `.npmrc` `_authToken=` whose token is not an `npm_` one, and a URL
+    password that holds a quote (the quote ends it).
+  - Rejected: a scheme in the URL patterns (`[A-Za-z][A-Za-z0-9+.-]*://` makes Python's engine search each letter of a
+    long run to its end; `://` is the anchor and the scheme stays either way); a general `pass` key word (`pass: 5`
+    and `--- PASS: TestX` are in every test log), or a case-folded joined rule (`bypass=` and `compass:` stay); a
+    userinfo shape test for the lone user (a DSN's key can be nine letters and digits, and a key of letters only is a
+    key); `-p` for every command (ports); an exclusion of the allow list inside the pattern (the complement of eight
+    endings is a page of alternatives); `ReplaceAllStringFunc` for the joined pass (it would consume the value of a
+    kept name); a change of the oracle (it found the host fault above, and stays as it was).
+  - Tests (failing first): `TestSecretsMasksThePasswordInAURLsUserinfo`,
+    `TestSecretsMasksAnAllCapsNameThatEndsInAKeyWord` (the allow list, `COMPASS_URL`, `--- PASS:` and the next-line
+    case), `TestSecretsMasksAnNPMToken`, `TestSecretsMasksThePasswordOfACurlOrMySQLCommandLine` (the ports and `-u
+    1000:1000` that stay), `TestAKeyWithNoValueLeavesTheNextR60SecretMasked` and
+    `TestTheR60PassesMaskNoLessThanTheScrubBeforeR58` (two grammars of 3,000 texts under the oracle's two checks), in
+    `internal/scrub`; 30 fuzz seeds there; selftest case 30. The parity test knows the seven new lists and counts the
+    passes (`maskJoinedEnv` is one). No new dependencies.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

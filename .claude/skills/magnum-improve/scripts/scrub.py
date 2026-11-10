@@ -1,15 +1,18 @@
 """The scrub the factory runs before it keeps text, for the improvement loop's evidence.sh.
 
 It is internal/scrub/scrub.go (Text, which the factory's runtime.Scrub calls) after execx.Redact: GitHub tokens, JWTs,
-Authorization values and private keys; AWS, Slack, OpenAI, Anthropic, GitLab, Stripe and Google keys; the values of
-password=, token: and the like (the key stays), in three passes: the pairs as they were before R58, the pairs under a
-quoted key as JSON, YAML and TOML write one, "password": "x", and the pairs with an env-style name, DB_PASSWORD=x;
-emails; host names and IPv4 addresses. Each pattern is the Go one word for word, in the lists below, and go() compiles
-it with Go's meaning. It masks every byte the Go scrub masks; it masks more only where a run of host characters is
-longer than a host name may be, and where a run of non-space characters is still over 2,000 after the masks. In
-internal/scrub, TestEvidenceScrubHoldsTheGoScrubsPatterns checks the lists against every pattern the Go source compiles
-(scrub.go and execx.go), and the passes of Text against its replay there; FuzzEvidenceScrubMasksEveryByteScrubMasks
-feeds both scrubs the same texts and wants this one's output to be the Go scrub's with these two extra masks.
+Authorization values and private keys; AWS, Slack, OpenAI, Anthropic, GitLab, Stripe, Google and npm keys; the values
+of password=, token: and the like (the key stays), in three passes: the pairs as they were before R58, the pairs under
+a quoted key as JSON, YAML and TOML write one, "password": "x", and the pairs with an env-style name, DB_PASSWORD=x;
+then (R60) the password of a URL (postgres://app:x@host), the user of an http URL (a Sentry DSN's key), the password
+of curl -u and mysql -p, and the value of an all-caps name that ends in a key word (PGPASSWORD=x, but not the names of
+an allow list, BYPASS=1); emails; host names and IPv4 addresses. Each pattern is the Go one word for word, in the
+lists below, and go() compiles it with Go's meaning. It masks every byte the Go scrub masks; it masks more only where
+a run of host characters is longer than a host name may be, and where a run of non-space characters is still over
+2,000 after the masks. In internal/scrub, TestEvidenceScrubHoldsTheGoScrubsPatterns checks the lists against every
+pattern the Go source compiles (scrub.go and execx.go), and the passes of Text against its replay there;
+FuzzEvidenceScrubMasksEveryByteScrubMasks feeds both scrubs the same texts and wants this one's output to be the Go
+scrub's with these two extra masks.
 
 Python's engine, unlike Go's, backtracks: the JWT pattern on an eyJ repeated, the email pattern on a long run of the
 characters an address is made of and the host pattern on a dotted run take minutes on a long word. So the JWT and the
@@ -46,8 +49,8 @@ def go(pattern):
 def go_syntax(pattern):
     """A Go pattern (RE2 syntax) in Python's, for re.ASCII, to match what Go's regexp matches: \\s and \\S
     are Go's (no vertical tab), $ is the end of the text, and (?i) folds s and k as Go does. It knows the constructs
-    the scrub's patterns use, and fails on another flag, a named group, a letter's escape in a class but \\s (and
-    [\\s\\S]), or a negated class under (?i) that holds s or k."""
+    the scrub's patterns use, and fails on another flag, a named group, a letter's escape in a class but \\s, \\n, \\r
+    and \\t (and [\\s\\S]), or a negated class under (?i) that holds s or k."""
     out, i, fold, groups = [], 0, False, []
     if pattern.startswith("(?i)"):
         out.append("(?i)")
@@ -100,7 +103,7 @@ def go_class(cls, fold):
     while k < len(body):
         if body[k] == "\\":
             e = body[k : k + 2]
-            if e == "\\S" or e[1:].isalpha() and e != "\\s":
+            if e == "\\S" or e[1:].isalpha() and e not in ("\\s", "\\n", "\\r", "\\t"):
                 raise ValueError("go: %s in a class" % e)
             members.append(GO_SPACE if e == "\\s" else e)
             k += 2
@@ -136,6 +139,7 @@ TOKENS_GO = [
     r"\bglpat-[A-Za-z0-9_-]{16,}",
     r"\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}",
     r"\bAIza[0-9A-Za-z_-]{35}\b",
+    r"\bnpm_[A-Za-z0-9]{36,}",
 ]
 # The key-value patterns, in the order scrub() runs them. PAIRS_GO is the pattern as it was before R58, word for word:
 # it runs first, on the text it saw then, so that no byte masked before is shown now (a newly covered key with no
@@ -151,7 +155,23 @@ PAIRS_GO = r'''(?i)\b((?:aws_)?(?:secret(?:_access)?_key|password|passwd|pwd|sec
 QUOTED_GO = (r"""(["'](?:[^"'\s]*[^0-9A-Za-z"'\s])?(?i:""" + KEYS_GO + r""")["'])(\s*[=:]\s*)"""
              + QUOTED_VALUE_GO + r"""|[^\s,}\]]+)""")
 ENV_GO = r"""(?i)((?:\b|_)""" + KEYS_GO + r""")(\s*[=:]\s*)""" + QUOTED_VALUE_GO + r"""|\S+)"""
+# R60: the passes after those, in the order scrub() runs them (scrub.go's comments say what each reads and leaves).
+# The pass of joined names runs last, since a name with no value takes the first word of the next line for its value,
+# and that word must already be masked text when a command or a URL starts it.
+URL_PASS_GO = r'''(://[^\s/?#@:"']*:)[^\s/?#"']+@'''
+URL_USER_GO = r"(https?://)[A-Za-z0-9._~%+=-]+@"
+SPAN_CHAR_GO = r"(?:[^\n|;&\\]|&[^&\n]|\\[\s\S])"
+COMMAND_SPAN_GO = SPAN_CHAR_GO + "*?"
+CURL_WORD_GO = r"\bcurl\b"
+MYSQL_WORD_GO = r"\bmysql(?:dump)?\b"
+CURL_GO = (r"(" + CURL_WORD_GO + COMMAND_SPAN_GO + r'''[ \t](?:-u[ \t]*|--user[ \t]+))(["']?[^\s:"']*:)([^\s"']+)''')
+MYSQL_GO = (r"(" + MYSQL_WORD_GO + COMMAND_SPAN_GO + r"[ \t])(--password=|--password[ \t]+|-p)" + QUOTED_VALUE_GO
+            + r'''|[^\s"']+)''')
+JOINED_GO = r"(\b[A-Z][A-Z0-9_]*(?:PASSWORD|PASSWD|PASS|PWD|TOKEN))(\s*[=:]\s*)" + QUOTED_VALUE_GO + r"|\S+)"
+JOINED_KEPT_GO = r"(?:BYPASS|COMPASS|IMPASS|OVERPASS|SURPASS|TRESPASS|UNDERPASS|OLDPWD)$"
 EMAIL_GO = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+# The host after a userinfo the URL passes masked, which the email pass cannot read (scrub.go's scrubUserinfoHost).
+USERINFO_HOST_GO = r"(<redacted>@)[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
 HOST_GO = r"(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|dev|app|ai|cloud|internal|local|lan|corp|intra|info|biz|tech|xyz|site|us|uk|de|ua|eu|me|cc|tv|gg)\b|\b(?:\d{1,3}\.){3}\d{1,3}\b"
 
 # Redact runs as merged searches: the JWT pattern apart (jwt_from), so that it skips the starts that fail; a private
@@ -188,7 +208,17 @@ TOKENS = go("|".join(TOKENS_GO))
 PAIRS = go(PAIRS_GO)
 QUOTED = go(QUOTED_GO)
 ENV = go(ENV_GO)
+URL_PASS = go(URL_PASS_GO)
+URL_USER = go(URL_USER_GO)
+CURL = go(CURL_GO)
+MYSQL = go(MYSQL_GO)
+CURL_WORD = go(CURL_WORD_GO)
+MYSQL_WORD = go(MYSQL_WORD_GO)
+SPAN = go(SPAN_CHAR_GO + "*")
+JOINED = go(JOINED_GO)
+JOINED_KEPT = go(JOINED_KEPT_GO)
 EMAIL = go(EMAIL_GO)
+USERINFO_HOST = go(USERINFO_HOST_GO)
 # an email that starts a run of the characters of its first part, after the place the search starts
 EMAIL_RUN = re.compile(r"(?<![A-Za-z0-9._%+-])" + EMAIL.pattern, re.ASCII)
 HOST = go(HOST_GO)
@@ -291,6 +321,45 @@ def capped(m):
     return "[...]" if len(m.group(0)) > WORD_MAX else m.group(0)
 
 
+def command(text, word, pattern):
+    """The matches of CURL or MYSQL (pattern) masked: the password (group 3) of each. Python tries pattern's lazy span
+    from every curl or mysql word of a long line again, to the line's end, and a line of those words takes minutes.
+    When the match at a word fails, every option in the words after it, up to where its span ends, was tried by it, so
+    the search goes on from that end (the span is deterministic: SPAN is its greedy form). No match is lost."""
+    out, pos, at = [], 0, 0
+    while True:
+        w = word.search(text, at)
+        if not w:
+            out.append(text[pos:])
+            return "".join(out)
+        m = pattern.match(text, w.start())
+        if m:
+            out.append(text[pos : m.start(3)] + "<redacted>")
+            pos = at = m.end()
+        else:
+            at = SPAN.match(text, w.end()).end()
+
+
+def joined(text):
+    """maskJoinedEnv: the value of every JOINED name masked, but for the names JOINED_KEPT ends. A kept name is passed
+    over without its value, and the search goes on from after its separator, since a name with no value takes the next
+    line's first word for its value, and that word may be the name of a secret (BYPASS:\\nPGPASSWORD=x). Go slices
+    the text where the search restarts; here the search starts at pos and sees the character before it, which is no
+    word character after a separator or a masked value, so the \\b is the same."""
+    out, pos = [], 0
+    while True:
+        m = JOINED.search(text, pos)
+        if not m:
+            out.append(text[pos:])
+            return "".join(out)
+        if JOINED_KEPT.search(m.group(1)):
+            out.append(text[pos : m.end(2)])
+            pos = m.end(2)
+        else:
+            out.append(text[pos : m.start(3)] + "<redacted>")
+            pos = m.end()
+
+
 def scrub(text):
     """The text scrubbed, every line and line break kept: the secret, token and key-value patterns on the whole text,
     in the Go scrub's order, then the emails and hosts of each line, then each run of non-space characters still
@@ -298,7 +367,11 @@ def scrub(text):
     text = TOKENS.sub("<redacted>", redact(text or ""))
     for pairs in (PAIRS, QUOTED, ENV):
         text = pairs.sub(r"\1\2<redacted>", text)
-    text = "".join(HOST_RUN.sub(host, emails(line)) for line in text.splitlines(keepends=True))
+    for url in (URL_PASS, URL_USER):
+        text = url.sub(r"\1<redacted>@", text)
+    text = command(command(text, CURL_WORD, CURL), MYSQL_WORD, MYSQL)
+    text = joined(text)
+    text = "".join(HOST_RUN.sub(host, USERINFO_HOST.sub(r"\1<host>", emails(line))) for line in text.splitlines(keepends=True))
     return WORD.sub(capped, text)
 
 
@@ -318,7 +391,8 @@ if __name__ == "__main__":
         serve(sys.stdin.buffer, sys.stdout.buffer)
     elif sys.argv[1:] == ["--patterns"]:
         json.dump({"redact": REDACT_GO, "tokens": TOKENS_GO, "pairs": [PAIRS_GO], "quoted": [QUOTED_GO],
-                   "env": [ENV_GO],
-                   "email": [EMAIL_GO], "host": [HOST_GO]}, sys.stdout)
+                   "env": [ENV_GO], "url_pass": [URL_PASS_GO], "url_user": [URL_USER_GO], "curl": [CURL_GO],
+                   "mysql": [MYSQL_GO], "joined": [JOINED_GO], "joined_kept": [JOINED_KEPT_GO],
+                   "email": [EMAIL_GO], "userinfo_host": [USERINFO_HOST_GO], "host": [HOST_GO]}, sys.stdout)
     else:
         sys.exit("usage: scrub.py --serve | --patterns")
