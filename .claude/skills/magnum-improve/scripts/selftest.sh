@@ -33,7 +33,8 @@
 #     files with a sample of each (values across a line break and past the 80-line cut too), a long dotted line and
 #     600 KB of eyJ scrubbed in seconds with no word dropped and no line cut, so no part of a long secret and no
 #     secret parted from its key shows, nor the secrets that go on past a word over 2,000 characters (a quote, a
-#     -----BEGIN or a key in it, a key before " :" or " =", a glued authorization:Bearer), no notes read through a
+#     -----BEGIN or a key in it, a key before " :" or " =", a glued authorization:Bearer), the value under a quoted
+#     key ("password": "x"), no notes read through a
 #     link, from a folder, an unreadable file, a file over 1 MiB or a foreign folder, notes that start as a left-out
 #     note does scrubbed all the same, lens 13's stats command with the local date of the factory's since, and a
 #     since that is no real time and wrong arguments refused.
@@ -713,6 +714,16 @@ print(X + "authorization:Bearer\nR54-GLUED-BEARER")
 print(X + "authorization: Bearer\nR54-NO-BOUNDARY")
 print("- Authorization: Bearer \v")
 PYX
+# Task 22's notes hold R58's shapes, a secret's value under a quoted key (JSON, YAML, TOML), each on a line of its own
+# with a made-up value, a key that only holds a key word, and a minified JSON over 2,000 characters with a password.
+mkdir -p "$ev/factory-tasks/22"
+python3 - >"$ev/factory-tasks/22/notes.md" <<'PYX'
+print('- {"password":"R58-JSON-PW","user":"alice"}')
+print("- \"api_key\": \"R58-API-KEY\" and 'secret': 'R58 SECRET WORDS'")
+print('- "token" = R58-TOML-TOKEN,"n":1 and {"X-Api-Key":"R58-HEADER-KEY"}')
+print('- {"password_hint":"R58-HINT-KEPT","tokens_used":3}')
+print("- " + '{"items":[' + '{"id":1,"name":"widget"},' * 100 + '{"password":"R58-LONG-PW","user":"alice"}]}')
+PYX
 # Tasks 20 and 21's notes are a megabyte each of what made the first exact scrub search again to the text's end: a
 # GitHub token around each eyJ, and a JWT that takes in each -----BEGIN of keys with no END.
 mkdir -p "$ev/factory-tasks/20" "$ev/factory-tasks/21"
@@ -935,6 +946,19 @@ ok "evidence.sh masks the token of authorization:Bearer glued at the end of a wo
 tsect 19 | grep -Fxq '> - password: <redacted>' && ! grep -Fq "(the factory's stage times" "$f_md" ||
     fail "task 19's notes are scrubbed, not left to evidence.sh's fallback line: $(tsect 19 | cut -c1-120 | tr '\n' ';')"
 ok "evidence.sh scrubs task 19's notes whole, with no fallback line"
+
+# 29. R58: the value of a secret's key in quotes is masked as the Go scrub masks it: JSON, a single-quoted key, a TOML
+#     key with an equals sign, a header name that ends in a key word, and a minified JSON over 2,000 characters (shown
+#     as [...] by the cap). The key and the user stay, and so does a key that only holds a key word.
+! grep -Eq 'R58-JSON-PW|R58-API-KEY|R58 SECRET|R58-TOML-TOKEN|R58-HEADER-KEY|R58-LONG-PW' "$f_md" ||
+    fail "the value under a quoted key is masked: $(grep -Eo '.{0,60}R58[- ](JSON|API|SECRET|TOML|HEADER|LONG).{0,20}' "$f_md" | tr '\n' ';')"
+tsect 22 | grep -Fxq '> - {"password":<redacted>,"user":"alice"}' &&
+    tsect 22 | grep -Fxq "> - \"api_key\": <redacted> and 'secret': <redacted>" &&
+    tsect 22 | grep -Fxq '> - "token" = <redacted>,"n":1 and {"X-Api-Key":<redacted>}' ||
+    fail "the keys under quotes stay and their values are masked: $(tsect 22 | cut -c1-120 | tr '\n' ';')"
+tsect 22 | grep -Fxq '> - {"password_hint":"R58-HINT-KEPT","tokens_used":3}' && tsect 22 | grep -Fxq '> - [...]' ||
+    fail "a key that only holds a key word is kept, and a long minified JSON shows as [...]: $(tsect 22 | cut -c1-120 | tr '\n' ';')"
+ok "evidence.sh masks the value under a quoted secret key, also in a minified JSON over 2,000 characters"
 
 # 26. The scrub runs before anything cuts the text: a note's trailing characters that Go's \S takes (a vertical tab
 #     after "Authorization: Bearer ") stay for the masks, and a wait's cause is cut at its first ( or : only after its

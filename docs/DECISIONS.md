@@ -23423,6 +23423,56 @@ skill versions); people add theirs to the sections before it, at the end of the 
   person's description there is the author's intent. Codex's reviewer runs `codex-review.sh` and has no prompt to
   change.
 
+- **The factory's scrub masks the value of a secret key in quotes, as JSON, YAML and TOML write it, and the evidence
+  scrub holds the same pattern** (2026-11-10, R58). `scrubPairs` needs its separator right after the key word, so
+  `{"password":"x"}`, `"api_key": "x"`, `'secret': 'x y'` and `"token" = x` kept their values in the prompt ledger,
+  the operator's inputs, the events and the improvement loop's evidence (R54's review found it; its cap on a run over
+  2,000 characters hid only a long minified JSON).
+  - `scrubQuotedPairs` is a new pass of `Scrub`, after the tokens and before `scrubPairs`: a key in double or single
+    quotes, optional white space, `:` or `=`, optional white space, and the value, a quoted string (also over lines)
+    or a word up to `,`, `}`, `]` or white space. The key with its quotes and the separator stay, and the value
+    becomes `<redacted>`, as `scrubPairs` does. One list of key words (`scrubKeyWords`, a constant) builds both
+    patterns, and `scrubPairs`' own text is the same as before.
+  - The key word follows `scrubPairs`' `\b` rule, with the quotes. It must end the key and start it or follow a
+    non-word character that is no space or quote. `"x-api-key"`, `"X-Auth-Token"` and `"app.secret"` are masked, as
+    `x-api-key: v` is. `"password_hint"`, `"tokens_used"`, `"passwords"`, `"my_password"` and `"db_password"` are left
+    as they are, as their unquoted forms are (`db_password=x` is not masked today either), and so is
+    `{"user":"password"}`: a quoted word with no separator after it is a value. Only the key word is under `(?i:...)`;
+    the prefix is a class outside it, since Go's `(?i)\W` leaves out the long s and the Kelvin sign that Python's `\W`
+    takes, so a `\W` there parted the port from Go.
+  - It runs before `scrubPairs`: after it, `{"token":"x password: y"}` came out as `{"token":<redacted> password:
+    <redacted>`, since the pair `password: y"}` took the closing quote and the quoted pass masked only the word `"x`.
+    Quoted first, the value is masked whole.
+  - The evidence scrub (scrub.py) has the same pattern as `QUOTED_GO`, built from the same key list, in the same
+    order, and `--patterns` prints it as `quoted`. A minified JSON over 2,000 characters still shows as `[...]` there
+    (the cap of R54, which runs after every mask); Go masks its value. `goPatterns` in the pattern test now reads
+    string constants and `+`, as the new pattern is built from the key list, and any other argument still fails it;
+    `scrubPasses` holds the new pass, which the pass count wants (6).
+  - `execx.Redact` is not changed. The same gap is there for its Authorization pattern (`{"Authorization":"Bearer x"}`
+    keeps the token, since `authorization:` needs the colon right after the word), but the fix is another pattern and
+    Redact's cut at the colon, not the same line. A GitHub token or a JWT in a value is masked by its shape.
+  Known gaps, not fixed here: a key with a space in it (`"my password": "x"`), a JSON inside a JSON string
+  (`{\"password\":\"x\"}`), a value that is an array or an object (`"token": ["a","b"]` masks `["a"`), and the
+  env-style names the `\b` rule leaves for both forms (`DB_PASSWORD`).
+  Rejected: one pattern for both forms (the value of a quoted key stops at a comma, a brace or a bracket, and
+  `scrubPairs`' `\S+` takes them); a `\W` in the prefix (the long s); running it after `scrubPairs`; a prefix that
+  takes white space (a quoted phrase that ends in a key word and a colon would mask the word after it);
+  `authorization` as a key word (the list stays the one of `scrubPairs`). Tests, each failing first:
+  TestScrubMasksTheValueOfAQuotedSecretKey (JSON, single quotes, TOML, a value over lines, a word value, a nested
+  object, a quoted value that holds a pair, a minified JSON over 2,000 characters) and
+  TestAQuotedKeyIsMaskedWhereTheUnquotedKeyIs (fifteen key names against their unquoted forms, and quoted words that
+  are no keys) in `internal/factory/runtime`; the pattern test and the fuzz's eleven new seeds (the JSON shapes, the
+  long s and the Kelvin sign in a key and a prefix, a key with no closing quote, a space or quote in the prefix, the
+  pass order, a minified JSON over 2,000 characters, runs of 1,900 and 5,000 characters before a key, and one of 5,000
+  word characters), of which 8 fail on the scrub.py before this change (the others hold what is left as it is, and the
+  cap or a timing); selftest.sh's case 29 on task 22's notes (two of its three checks fail on the old scrub.py).
+  Mutations of scrub.py: no fold in the key word, the other pass order, `\S+` as the value, no prefix and Python's
+  `\W` in it each fail a seed; the closing quote optional does not, since the next pass masks the same word (an
+  equivalent mutant). The fuzz ran 1,066,000 texts and a grammar of keys, prefixes, quotes, separators and values
+  120,000 more (43,639 of them changed by the new pass): the port equaled Scrub's output with its two extra masks on
+  all. 1 MiB texts of quotes, of `"a`, of a quote and a run of commas, and of unterminated keys scrub in 0.2 s at
+  most. No new dependencies.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

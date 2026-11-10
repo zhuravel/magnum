@@ -63,15 +63,17 @@ func isCall(call *ast.CallExpr, x, fn string) bool {
 
 // goPatterns reads the patterns of every regexp.MustCompile call in a Go file,
 // by the package variable it is assigned to ("" for any other). A call's
-// argument must be a string literal or strings.Join of a list of them with
-// "|": anything else fails, so that no pattern escapes the reading.
+// argument must be a string literal, string constants of the file and + of
+// them, or strings.Join of a list of these with "|": anything else fails, so
+// that no pattern escapes the reading.
 func goPatterns(tb testing.TB, path string) map[string][]string {
 	tb.Helper()
 	file := parseGo(tb, path)
 	names := map[*ast.CallExpr]string{}
+	consts := map[string]ast.Expr{}
 	for _, decl := range file.Decls {
 		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.VAR {
+		if !ok || (gen.Tok != token.VAR && gen.Tok != token.CONST) {
 			continue
 		}
 		for _, spec := range gen.Specs {
@@ -80,22 +82,42 @@ func goPatterns(tb testing.TB, path string) map[string][]string {
 				continue
 			}
 			for i, v := range vs.Values {
-				if call, ok := v.(*ast.CallExpr); ok && i < len(vs.Names) {
+				if call, ok := v.(*ast.CallExpr); ok && gen.Tok == token.VAR && i < len(vs.Names) {
 					names[call] = vs.Names[i].Name
+				}
+				if gen.Tok == token.CONST && i < len(vs.Names) {
+					consts[vs.Names[i].Name] = v
 				}
 			}
 		}
 	}
-	unquote := func(e ast.Expr) string {
-		lit, ok := e.(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			tb.Fatalf("%s compiles a pattern that is no string literal: %#v", path, e)
+	// unquote evaluates a string expression: a literal, a constant of the
+	// file, or + of them.
+	var unquote func(e ast.Expr) string
+	unquote = func(e ast.Expr) string {
+		switch e := e.(type) {
+		case *ast.BasicLit:
+			if e.Kind != token.STRING {
+				break
+			}
+			s, err := strconv.Unquote(e.Value)
+			if err != nil {
+				tb.Fatal(err)
+			}
+			return s
+		case *ast.Ident:
+			if v, ok := consts[e.Name]; ok {
+				return unquote(v)
+			}
+		case *ast.BinaryExpr:
+			if e.Op == token.ADD {
+				return unquote(e.X) + unquote(e.Y)
+			}
+		case *ast.ParenExpr:
+			return unquote(e.X)
 		}
-		s, err := strconv.Unquote(lit.Value)
-		if err != nil {
-			tb.Fatal(err)
-		}
-		return s
+		tb.Fatalf("%s compiles a pattern that is no string literal, string constant or + of them: %#v", path, e)
+		return ""
 	}
 	pats := map[string][]string{}
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -108,7 +130,7 @@ func goPatterns(tb testing.TB, path string) map[string][]string {
 		}
 		name := names[call]
 		switch arg := call.Args[0].(type) {
-		case *ast.BasicLit:
+		case *ast.BasicLit, *ast.Ident, *ast.BinaryExpr, *ast.ParenExpr:
 			pats[name] = append(pats[name], unquote(arg))
 		case *ast.CallExpr:
 			var list *ast.CompositeLit
@@ -186,6 +208,7 @@ func scrubPasses(redact *regexp.Regexp) []scrubPass {
 	return []scrubPass{
 		{redact, ""},
 		{scrubTokens, "<redacted>"},
+		{scrubQuotedPairs, "$1$2<redacted>"},
 		{scrubPairs, "$1$2<redacted>"},
 		{scrubEmail, "<email>"},
 		{scrubHost, "<host>"},
@@ -372,6 +395,7 @@ func TestEvidenceScrubHoldsTheGoScrubsPatterns(t *testing.T) {
 	for list, inGo := range map[string][]string{
 		"redact": execxSecretPatterns(t),
 		"tokens": scrubPats["scrubTokens"],
+		"quoted": scrubPats["scrubQuotedPairs"],
 		"pairs":  scrubPats["scrubPairs"],
 		"email":  scrubPats["scrubEmail"],
 		"host":   scrubPats["scrubHost"],
@@ -440,6 +464,28 @@ func FuzzEvidenceScrubMasksEveryByteScrubMasks(f *testing.F) {
 			"- mail bob@example.org about db1.internal.example.com and 10.0.4.12\n"},
 		{"-----BEGIN RSA PRIVATE KEY-----\nMIIEsecretbody\n-----END RSA PRIVATE KEY-----\n- the cut key follows\n", "", 0,
 			"-----BEGIN EC PRIVATE KEY-----\nMIIEtruncat"},
+		// R58: the value of a key in quotes, as JSON, YAML and TOML write it.
+		{`{"password":"MADEUP-PW-123","user":"alice"}`, "", 0, `, "api_key": "MADEUP", 'secret': 'x y', "token" = MADEUP-WORD,"n":1}`},
+		{`{"X-Api-Key":"MADEUP","x_auth-token": 12345, "client_secret":["MADEUP"]}`, "", 0, `["pwd": MADEUP]`},
+		{`{"password": "MADEUP-LINE-ONE`, "", 0, "\nMADEUP-LINE-TWO\", \"user\": \"alice\"}\n\"private_key\":\n\"MADEUP\""},
+		// A quoted value that holds an unquoted pair: the quoted pairs run before the unquoted ones.
+		{`{"token":"x password: y"}`, "", 0, ` {'secret': "a token=b c", "pwd" : 'it''s'}`},
+		// A key word before its separator with no closing quote is no quoted key (the unquoted pair masks one word), and a
+		// prefix has no space or quote in it.
+		{`"pwd: 'MADEUP ONE TWO' and "token: "MADEUP THREE"`, "", 0, ` {"my password": "MADEUP-SPACE", "a'password": "MADEUP-QUOTE"}`},
+		// A key that only holds a key word, and a quoted JSON key inside a JSON string, are left as they are.
+		{`{"password_hint":"the dog","tokens_used":3,"my_password":"MADEUP","user":"password","note":"token"}`, "", 0,
+			`{\"password\":\"ESCAPED-JSON\"} "password" is a word, and so is 'token' too`},
+		// R58: Go's (?i) folds s and k in a quoted key too, and a prefix that ends in the long s or the Kelvin sign is
+		// one of non-word characters.
+		{"{\"pa\u017f\u017fword\":\"LONG-S\",\"to\u212aen\":\"KELVIN\",\"a\u017f-api_\u212aey\":\"MADEUP\"}", "", 0,
+			"\"a\u212apassword\": \"MADEUP\", \"\u017fpwd\" = x"},
+		// R58: a minified JSON over 2,000 characters with a password in it: Scrub masks the value, and the port's cap
+		// shows the run as [...].
+		{`{"items":[`, `{"id":1,"name":"widget"},`, 400, `{"password":"MADEUP-PW-123","user":"alice"}]}`},
+		{`"`, `,`, 1900, `password": "MADEUP", "token":"MADEUP-2"`},
+		{`"`, `,`, 5000, `password": "MADEUP", "token":"MADEUP-2"`},
+		{`"`, `a`, 5000, `password": "MADEUP"`},
 		// The port's skips: a JWT after an eyJ that fails, an email that starts where the last one ended, and Go's $ (the
 		// text's end, not a line break before it).
 		{"- eyJshort.eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U", "", 0,

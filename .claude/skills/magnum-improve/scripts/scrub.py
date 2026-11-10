@@ -1,8 +1,9 @@
 """The scrub the factory runs before it keeps text, for the improvement loop's evidence.sh.
 
 It is internal/factory/runtime/scrub.go after execx.Redact: GitHub tokens, JWTs, Authorization values and private keys;
-AWS, Slack, OpenAI, Anthropic, GitLab, Stripe and Google keys; the values of password=, token: and the like (the key
-stays); emails; host names and IPv4 addresses. Each pattern is the Go one word for word, in the lists below, and go()
+AWS, Slack, OpenAI, Anthropic, GitLab, Stripe and Google keys; the values of password=, token: and the like, also
+under a quoted key as JSON, YAML and TOML write one, "password": "x" (the key stays); emails; host names and IPv4
+addresses. Each pattern is the Go one word for word, in the lists below, and go()
 compiles it with Go's meaning. It masks every byte the Go scrub masks; it masks more only where a run of host
 characters is longer than a host name may be, and where a run of non-space characters is still over 2,000 after the
 masks. In internal/factory/runtime, TestEvidenceScrubHoldsTheGoScrubsPatterns checks the lists against every pattern
@@ -135,7 +136,14 @@ TOKENS_GO = [
     r"\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}",
     r"\bAIza[0-9A-Za-z_-]{35}\b",
 ]
-PAIRS_GO = r'''(?i)\b((?:aws_)?(?:secret(?:_access)?_key|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret))(\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)'''
+# The key names of both key-value patterns (runtime.scrubKeyWords), and the pairs under a quoted key (R58): the key
+# word is the only part of the pattern under (?i:), so a prefix that ends in the long s or the Kelvin sign is one of
+# non-word characters, as \b counts it. Scrub runs the quoted pairs before the unquoted ones: a quoted value that
+# holds an unquoted pair ("token":"x password: y") is then masked whole, where the other order cut its quote off.
+KEYS_GO = r"(?:aws_)?(?:secret(?:_access)?_key|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret)"
+PAIRS_GO = r"""(?i)\b(""" + KEYS_GO + r""")(\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)"""
+QUOTED_GO = (r"""(["'](?:[^"'\s]*[^0-9A-Za-z_"'\s])?(?i:""" + KEYS_GO + r""")["'])(\s*[=:]\s*)"""
+             r"""("[^"]*"|'[^']*'|[^\s,}\]]+)""")
 EMAIL_GO = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
 HOST_GO = r"(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|dev|app|ai|cloud|internal|local|lan|corp|intra|info|biz|tech|xyz|site|us|uk|de|ua|eu|me|cc|tv|gg)\b|\b(?:\d{1,3}\.){3}\d{1,3}\b"
 
@@ -170,6 +178,7 @@ KEY_BODY_END = go(KEY_END)
 JWT = go(JWT_GO)
 JWT_RUN = re.compile(r"[A-Za-z0-9_-]*", re.ASCII)
 TOKENS = go("|".join(TOKENS_GO))
+QUOTED = go(QUOTED_GO)
 PAIRS = go(PAIRS_GO)
 EMAIL = go(EMAIL_GO)
 # an email that starts a run of the characters of its first part, after the place the search starts
@@ -181,7 +190,7 @@ HOST = go(HOST_GO)
 HOST_RUN = re.compile("[A-Za-z0-9_.\u017f\u212a-]+", re.ASCII)
 HOST_MAX = 253
 # After every mask, a run of non-space characters still over WORD_MAX shows as [...]: it masks only more, and a long
-# minified JSON shows no quoted secret the Go scrub's key-value pattern does not see.
+# minified JSON shows no quoted secret the Go scrub's key-value patterns do not see (also one whose key is no key word).
 WORD = re.compile("[^" + GO_SPACE + "]+")
 WORD_MAX = 2000
 
@@ -278,7 +287,8 @@ def scrub(text):
     """The text scrubbed, every line and line break kept: the secret, token and key-value patterns on the whole text,
     in the Go scrub's order, then the emails and hosts of each line, then each run of non-space characters still
     over WORD_MAX as [...]."""
-    text = PAIRS.sub(r"\1\2<redacted>", TOKENS.sub("<redacted>", redact(text or "")))
+    text = TOKENS.sub("<redacted>", redact(text or ""))
+    text = PAIRS.sub(r"\1\2<redacted>", QUOTED.sub(r"\1\2<redacted>", text))
     text = "".join(HOST_RUN.sub(host, emails(line)) for line in text.splitlines(keepends=True))
     return WORD.sub(capped, text)
 
@@ -298,7 +308,7 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["--serve"]:
         serve(sys.stdin.buffer, sys.stdout.buffer)
     elif sys.argv[1:] == ["--patterns"]:
-        json.dump({"redact": REDACT_GO, "tokens": TOKENS_GO, "pairs": [PAIRS_GO], "email": [EMAIL_GO], "host": [HOST_GO]},
-                  sys.stdout)
+        json.dump({"redact": REDACT_GO, "tokens": TOKENS_GO, "quoted": [QUOTED_GO], "pairs": [PAIRS_GO],
+                   "email": [EMAIL_GO], "host": [HOST_GO]}, sys.stdout)
     else:
         sys.exit("usage: scrub.py --serve | --patterns")
