@@ -319,6 +319,19 @@ func refusesForGood(p publicRefusal) bool {
 	return p == publicWorkflows || p == publicAgentConfig || p == publicTooManyFiles
 }
 
+// The judge prompt's fixed words of changedFilesRefusal's refusals
+// (filesGateWords).
+const (
+	filesUnknownShort = "magnum cannot tell which files the PR changes"
+	agentConfigShort  = "the PR changes " + agentConfigWhat
+	workflowsShort    = "the PR changes its own workflows or actions"
+)
+
+// filesGateWords are the words changedFilesRefusal gives for a head, which
+// a later file list of the same head may change (reviseNoApprovalReasons),
+// and the words of one that let go.
+var filesGateWords = []string{filesUnknownShort, agentConfigShort, workflowsShort, noApprovalLifted}
+
 // changedFilesRefusal says why auto-approval leaves pr to the operator for
 // the files its head changes, by the head's file list (pr_files, which the
 // poller reads with the Details; a round keeps no list of its own): what
@@ -332,7 +345,7 @@ func refusesForGood(p publicRefusal) bool {
 // is that of the files it found, or of a list GitHub cut short; a list
 // magnum cannot read or has none of has none (the next poll mends it).
 func (e *Engine) changedFilesRefusal(ctx context.Context, pr store.PR) (r autoRefusal, short string) {
-	const unknown = "magnum cannot tell which files the PR changes"
+	const unknown = filesUnknownShort
 	f, ok, err := e.st.PRFilesOf(ctx, pr.ID)
 	if err != nil {
 		e.warnUnlessStopped(ctx, err, "auto approval: the PR's files", "pr", pr.ID)
@@ -344,10 +357,10 @@ func (e *Engine) changedFilesRefusal(ctx context.Context, pr store.PR) (r autoRe
 		paths = f.Paths
 	}
 	if why := e.agentConfigRefusal(ctx, pr, paths); why != "" {
-		return autoRefusal{why: why, public: publicAgentConfig}, "the PR changes " + agentConfigWhat
+		return autoRefusal{why: why, public: publicAgentConfig}, agentConfigShort
 	}
 	if slices.ContainsFunc(paths, changesWorkflow) {
-		return autoRefusal{why: workflowsRefusal, public: publicWorkflows}, "the PR changes its own workflows or actions"
+		return autoRefusal{why: workflowsRefusal, public: publicWorkflows}, workflowsShort
 	}
 	const what = agentConfigWhat + ", or its own workflows or actions"
 	switch {

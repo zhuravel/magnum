@@ -531,3 +531,66 @@ func TestAWorkflowChangingPRReviewedCleanNeedsYouWithTheGatesReason(t *testing.T
 		t.Fatalf("a later review the gates let through left the record %q", v)
 	}
 }
+
+// The needs-you words of a clean review the files gate turned into a
+// comment follow what that gate says of the head now: talkable's PRs kept
+// "approve by hand: the PR changes the review agents' instructions or
+// hooks" once a build stopped refusing them for a session's record of the
+// slot, while another gate (a required check that never ran) held the
+// approval as the operator back. When the head's file list no longer gives
+// the gate's words (GitHub lists other files for it: a retarget, or a list
+// a later build reads otherwise), the PR stays in the needs-you list (the
+// review is still a comment) with words that say the gate let go; a list
+// that gives them again brings them back.
+func TestANeedsYouReasonTheFilesGateNoLongerGivesGoes(t *testing.T) {
+	const why = "the PR changes the review agents' instructions or hooks"
+	h := judgeApprovesHarness(t, noEveryReview)
+	cleanAsThePipeline(h)
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", gate: gateRequired, files: []string{".claude/settings.json", "app/x.rb"}})
+	h.tick()
+	for i := 0; i < 20 && h.pr(2).State != store.PRReviewed; i++ {
+		h.advance(5 * time.Minute)
+		h.tick()
+	}
+	if pr := h.wantState(2, store.PRReviewed); deref(pr.LastReviewEvent) != "COMMENTED" {
+		t.Fatalf("#2 posted %q, want the comment the gates asked for", deref(pr.LastReviewEvent))
+	}
+	reason := func(when string) string {
+		t.Helper()
+		list, err := h.st.NeedsMePRs(h.ctx, h.cfg.CommentsWhenClean, h.cfg.SelfMatch())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, n := range list {
+			if n.PR.Number == 2 && n.NeedsMe == store.NeedsMeApprove {
+				return n.Refused
+			}
+		}
+		t.Fatalf("%s: #2 left the needs-you list: %+v", when, list)
+		return ""
+	}
+	if got := reason("reviewed"); got != why {
+		t.Fatalf("reviewed: needs you because %q, want %q", got, why)
+	}
+	for _, step := range []struct {
+		name  string
+		files []string
+		want  string
+	}{
+		{"a list without agent config", []string{"app/x.rb"}, noApprovalLifted},
+		{"the agent config listed again", []string{".claude/settings.json", "app/x.rb"}, why},
+	} {
+		h.advance(time.Minute)
+		h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", gate: gateRequired, files: step.files})
+		h.tick()
+		if got := reason(step.name); got != step.want {
+			t.Fatalf("%s: needs you because %q, want %q", step.name, got, step.want)
+		}
+	}
+	if strings.Contains(noApprovalLifted, "instructions") {
+		t.Fatalf("the words of a gate that let go name one: %q", noApprovalLifted)
+	}
+}

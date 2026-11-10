@@ -1324,6 +1324,8 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.maybeGate(ctx)      // learn_gate.go
 	e.maybeLearnLand(ctx) // learn_land.go
 	e.autoApprove(ctx)    // before noteNeedsMe: a PR approved as the operator no longer needs them
+	// approval_gates.go: the needs-you words follow the files gate.
+	e.reviseNoApprovalReasons(ctx)
 	e.noteNeedsMe(ctx)
 	e.noteMachine(ctx)
 	e.noteGitHubBudget(ctx)  // github_cost.go: a run of low budget begins or ends

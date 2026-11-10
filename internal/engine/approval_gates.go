@@ -31,8 +31,10 @@ package engine
 // was asked.
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
@@ -47,6 +49,11 @@ func kvPRJudgeApprovalRefused(prID int64) string {
 
 // ciFailsJudge is the CI gate's refusal in the judge's prompt and its event.
 const ciFailsJudge = "the head's checks fail"
+
+// noApprovalLifted is the needs-you reason of a clean review the files
+// gate turned into a comment for words it no longer gives of the head
+// (reviseNoApprovalReasons).
+const noApprovalLifted = "the gate that held magnum's approval back no longer holds it"
 
 // approvalGated reports whether the round rs sets up for job is held to
 // the approval's gates: its judge would approve a clean review
@@ -136,6 +143,43 @@ func (e *Engine) noteApprovalRefused(ctx context.Context, repo store.Repo, pr st
 	}
 	e.event(ctx, "info", prSubject(repo, pr.Number), "round.approval_refused",
 		fmt.Sprintf("the judge does not approve %s#%d: %s; a clean verdict posts as a comment", repo.FullName(), pr.Number, why), data)
+}
+
+// reviseNoApprovalReasons keeps the needs-you words of a clean review the
+// files gate turned into a comment (store.KVPRNoApprovalReview, which the
+// round settled with that gate's words) to what the gate says of the head
+// now (changedFilesRefusal): GitHub may list other files for the same head
+// since (a retarget, the paths its renames leave), and a later build may
+// read a list otherwise (2026-11-10: a session's record of the slot no
+// longer refuses by itself). A reason the gate no longer gives becomes
+// noApprovalLifted, which keeps the PR in the needs-you list: its review
+// is still a comment, so only a person's approval counts (or the operator's
+// automatic one). A record of a review that stands for no longer the
+// head, of a PR not open, or with another gate's words is left alone. Every
+// tick, after the approvals as the operator and before the needs-you
+// toasts (which a reason never moves): one read of the records, and a PR
+// read for each of the files gate's.
+func (e *Engine) reviseNoApprovalReasons(ctx context.Context) {
+	recs, err := e.st.NoApprovalReviews(ctx)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "needs you: the gates' reasons")
+		return
+	}
+	for id, r := range recs {
+		if !slices.Contains(filesGateWords, r.Reason) {
+			continue
+		}
+		pr, err := e.st.PRByID(ctx, id)
+		if err != nil || pr.GHState != store.GHOpen || store.Deref(pr.LastReviewID) != r.ReviewID || store.Deref(pr.ReviewedSHA) != pr.HeadSHA {
+			continue
+		}
+		_, short := e.changedFilesRefusal(ctx, pr)
+		if short = cmp.Or(short, noApprovalLifted); short == r.Reason {
+			continue
+		}
+		e.setKV(ctx, store.KVPRNoApprovalReview(id), store.NoApprovalReview{ReviewID: r.ReviewID, Reason: short}.Value())
+		e.log.Info("needs you: the files gate's reason moved", "pr", id, "from", r.Reason, "to", short)
+	}
 }
 
 // settleNoApprovalReview keeps, for the needs-you list, whether the review
