@@ -244,7 +244,7 @@ func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
 		return v
 	}
 	needsYou := func(how string) OpenVerdict {
-		v.Needs = append(v.Needs, OpenNeed{Kind: "ci", URL: f.pr.URL})
+		v.Needs = append(v.Needs, OpenNeed{Kind: "ci_missing", URL: f.pr.URL})
 		v.Verdict, v.Why = OpenNeedsYou, fmt.Sprintf("%s did not run at %s: %s", what, short, how)
 		return v
 	}

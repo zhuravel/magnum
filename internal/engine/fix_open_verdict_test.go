@@ -255,6 +255,9 @@ func TestRedRequiredCINeedsYou(t *testing.T) {
 	f.ci = ci
 	v, _, _ := decideOpen(f)
 	wantVerdict(t, v, OpenNeedsYou, "required check rspec failed at a1a1a1a")
+	if len(v.Needs) != 1 || v.Needs[0].Kind != "ci" { // a check that ran and failed, never ci_missing
+		t.Errorf("needs = %+v, want the PR's failed CI (ci)", v.Needs)
+	}
 	failure := "FAILURE"
 	pr.CI, pr.CIState = nil, &failure // the stored checks cannot say: the rollup decides
 	f.ci = openCIOf(pr, store.RequiredChecks{}, false, nil)
@@ -330,8 +333,8 @@ func TestARequiredCheckThatDidNotRunAtTheHeadIsNeverGreen(t *testing.T) {
 			f.ci = openCIOf(pr, tc.required, tc.strict, tc.enforced)
 			v, _, _ := decideOpen(f)
 			wantVerdict(t, v, OpenNeedsYou, tc.what+" did not run at a1a1a1a: run its workflow on the PR's branch")
-			if len(v.Needs) != 1 || v.Needs[0].Kind != "ci" || v.Needs[0].URL != prPage {
-				t.Errorf("needs = %+v, want the PR's CI", v.Needs)
+			if len(v.Needs) != 1 || v.Needs[0].Kind != "ci_missing" || v.Needs[0].URL != prPage {
+				t.Errorf("needs = %+v, want the PR's CI that did not run (ci_missing)", v.Needs)
 			}
 			f.pr.HeadChangedAt = openNow.Add(-5 * time.Minute) // pushed five minutes ago: its run may not have started
 			v, _, _ = decideOpen(f)

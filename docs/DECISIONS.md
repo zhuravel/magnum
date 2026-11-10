@@ -4267,7 +4267,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
   HH:MM and no new attempt came; re-run it on GitHub"; and the waits "magnum re-ran run N of W at HH:MM, as
   required check C did not run", "C did not run; magnum re-runs run N of W once the pause ends" (or "once the
   GitHub budget allows") and "C did not run; magnum reads the head's runs once the GitHub budget allows" (no
-  read yet, below the floor, no ci_dispatch). Each needs-you keeps the need {kind ci, the PR's URL}; the run
+  read yet, below the floor, no ci_dispatch). Each needs-you of a required check that did not run, the
+  re-run's included, has the need {kind ci_missing, the PR's URL}, and a check that ran and failed keeps
+  {kind ci}: the factory screen's move reads the kind ("b: re-run CI on GitHub" for ci_missing, f only for
+  a failure) and no longer the words (`TestARequiredCheckThatDidNotRunAtTheHeadIsNeverGreen`,
+  `TestRedRequiredCINeedsYou`); the run
   id is GitHub's number and W passes ValidWorkflowFile, so the words hold no PR text. Events
   `fix.open_ci_rerun`, `fix.open_ci_rerun_failed` (GitHub's status, never its message),
   `fix.open_ci_rerun_refused` and `fix.open_ci_rerun_twice`, whose data name the head, the run, its workflow,

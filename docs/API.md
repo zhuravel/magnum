@@ -11443,7 +11443,9 @@ type OpenNeed struct {
 	URL  string `json:"url,omitempty"`
 }
     OpenNeed is one thing that needs the operator: its kind (thread, review,
-    comment, magnum, finding, conflict, ci, loop or magnum_late) and link.
+    comment, magnum, finding, conflict, ci for a required check that ran
+    and failed, ci_missing for one that did not run at the head, loop or
+    magnum_late) and link.
 
 type OpenPayload struct {
 	PRTarget
