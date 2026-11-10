@@ -472,9 +472,11 @@ func validateCheckGlobs(where, key string, entries []string) []error {
 // not a pool repository, no duplicates, shell-safe env keys, copy_files
 // that stay inside the clone, well-formed required_checks and
 // ignore_checks globs, a ci_dispatch that names a workflow file and a
-// ci_dispatch_as beside it that names an [[identity]] whose tokens may
-// start workflows (no App whose token_permissions leave out actions =
-// "write", such as a fixer App).
+// ci_dispatch_as, with or without it, that names an [[identity]] whose
+// tokens reach the repository (an App's token_repositories name it). An
+// App whose token_permissions leave out actions = "write", such as a fixer
+// App, may be one: the daemon mints its Actions calls a token of its own
+// with Actions write added (engine ci_actions.go).
 func (c *Config) validateRepos() []error {
 	var errs []error
 	seen := map[string]bool{}
@@ -505,14 +507,12 @@ func (c *Config) validateRepos() []error {
 		case r.CIDispatchAs == "": // alone it names who re-runs a run that started no job (the look's rule 11)
 		case id == nil:
 			errs = append(errs, fmt.Errorf("repo %s: ci_dispatch_as %q names no [[identity]]", r.Repo, r.CIDispatchAs))
-		case id.Kind == "app" && len(id.TokenPermissions) > 0 && id.TokenPermissions["actions"] != "write":
-			// Every token magnum mints for the App carries its
-			// token_permissions alone (identity.App.mint), the daemon's
-			// client's too.
-			errs = append(errs, fmt.Errorf("repo %s: ci_dispatch_as %q is an App whose token_permissions leave out actions = \"write\": "+
-				"its tokens cannot start workflows, and GitHub answers every start with HTTP 403; add actions = \"write\" there "+
-				"(a fixer App cannot: its tokens carry contents and pull_requests write alone), or name a gh identity or an App "+
-				"whose tokens carry it", r.Repo, r.CIDispatchAs))
+		case id.Kind == "app" && len(id.TokenRepositories) > 0 &&
+			!slices.ContainsFunc(id.TokenRepositories, func(t string) bool { return strings.EqualFold(t, name) }):
+			// Every token magnum mints for the App reaches these alone, the
+			// daemon's own for Actions too (engine ci_actions.go).
+			errs = append(errs, fmt.Errorf("repo %s: ci_dispatch_as %q is an App whose token_repositories leave out %q: "+
+				"GitHub refuses its every Actions call there; add %q to its token_repositories", r.Repo, r.CIDispatchAs, name, name))
 		}
 		for _, msg := range trackerProblems("repo "+r.Repo, r.Trackers) {
 			errs = append(errs, errors.New(msg))

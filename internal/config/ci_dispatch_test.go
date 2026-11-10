@@ -101,41 +101,52 @@ func TestABadCIDispatchAsFailsValidation(t *testing.T) {
 	}
 }
 
-// Every token magnum mints for an App that sets token_permissions carries
-// those permissions alone, the daemon's client's too, so an App whose
-// token_permissions leave out actions = "write" gets HTTP 403 on every
-// start: ci_dispatch_as naming one fails to load, saying why. A fixer App
-// is one (its tokens carry contents and pull_requests write alone, and
-// adding actions = "write" makes it no fixer App), and the error says so.
-// An App that sets actions = "write", or no token_permissions (the
-// installation's whole access), is accepted.
-func TestCIDispatchAsRefusesAnAppWhoseTokensCannotStartWorkflows(t *testing.T) {
-	readsActions := fixerApp("reader")
-	readsActions.TokenPermissions = map[string]string{"actions": "read", "contents": "read"}
-	for name, id := range map[string]Identity{"a fixer App": fixerApp("fixer"), "an App that reads Actions": readsActions} {
-		t.Run(name, func(t *testing.T) {
-			cfg := validPipelineConfig()
-			cfg.Identities = append(cfg.Identities, id)
-			cfg.Watches[0].FixIdentity = "fixer"
-			if id.Name != "fixer" {
-				cfg.Identities = append(cfg.Identities, fixerApp("fixer"))
-			}
-			cfg.Repos = []Repo{{Repo: "acme/app", CIDispatch: "ci.yml", CIDispatchAs: id.Name}}
-			wantError(t, cfg.Validate(), "repo acme/app: ", `ci_dispatch_as "`+id.Name+`"`,
-				`token_permissions leave out actions = "write"`, "HTTP 403", "a fixer App cannot", "name a gh identity")
-		})
+// A fixer App's tokens carry contents and pull_requests write alone, which
+// its panes hold; the daemon's Actions calls as it go over a token of the
+// daemon's own with Actions write added (engine ci_actions.go), so a fixer
+// App may be ci_dispatch_as, alone and with ci_dispatch, as may an App
+// whose token_permissions read Actions, one that writes it, and one with
+// its installation's whole access. Before, an App whose token_permissions
+// left out actions = "write" failed to load.
+func TestCIDispatchAsTakesAFixerApp(t *testing.T) {
+	reaching := func(id Identity) Identity {
+		id.TokenRepositories = []string{"talkable", "app"}
+		return id
 	}
-
-	writesActions := fixerApp("starter")
+	readsActions := reaching(fixerApp("reader"))
+	readsActions.TokenPermissions = map[string]string{"actions": "read", "contents": "read"}
+	writesActions := reaching(fixerApp("starter"))
 	writesActions.TokenPermissions = map[string]string{"actions": "write", "contents": "read"}
 	wholeAccess := fixerApp("whole")
 	wholeAccess.TokenRepositories, wholeAccess.TokenPermissions, wholeAccess.UserID = nil, nil, 0
-	for _, id := range []Identity{writesActions, wholeAccess} {
-		cfg := validPipelineConfig()
-		cfg.Identities = append(cfg.Identities, id)
-		cfg.Repos = []Repo{{Repo: "acme/app", CIDispatch: "ci.yml", CIDispatchAs: id.Name}}
-		if err := cfg.Validate(); err != nil {
-			t.Errorf("ci_dispatch_as %s (token_permissions %v): %v", id.Name, id.TokenPermissions, err)
+	for _, id := range []Identity{reaching(fixerApp("fixer")), readsActions, writesActions, wholeAccess} {
+		for _, dispatch := range []string{"", "ci.yml"} {
+			cfg := validPipelineConfig()
+			cfg.Identities = append(cfg.Identities, id)
+			if id.Name == "fixer" {
+				cfg.Watches[0].FixIdentity = "fixer"
+			}
+			cfg.Repos = []Repo{{Repo: "acme/app", CIDispatch: dispatch, CIDispatchAs: id.Name}}
+			if err := cfg.Validate(); err != nil {
+				t.Errorf("ci_dispatch_as %s (token_permissions %v), ci_dispatch %q: %v", id.Name, id.TokenPermissions, dispatch, err)
+			}
 		}
+	}
+}
+
+// An App's tokens reach its token_repositories alone, the daemon's own
+// for Actions too, so ci_dispatch_as naming an App whose list leaves the
+// repository out would have every Actions call refused: it fails to load,
+// naming the key. The list's names match in any case.
+func TestCIDispatchAsRefusesAnAppWhoseTokensDoNotReachTheRepository(t *testing.T) {
+	cfg := validPipelineConfig()
+	cfg.Identities = append(cfg.Identities, fixerApp("fixer"))
+	cfg.Watches[0].FixIdentity = "fixer"
+	cfg.Repos = []Repo{{Repo: "acme/app", CIDispatchAs: "fixer"}}
+	wantError(t, cfg.Validate(), "repo acme/app: ", `ci_dispatch_as "fixer"`, "token_repositories", `"app"`)
+
+	cfg.Repos = []Repo{{Repo: "acme/Example-Repo", CIDispatchAs: "fixer"}}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("a repository the list names in another case: %v", err)
 	}
 }
