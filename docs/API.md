@@ -2591,11 +2591,12 @@ func (m *Manager) ShellLine(ctx context.Context, prID int64, role config.Role, d
     defaults) unless d.Template is set, d.MCPOff, when nil, keeping out what a
     session of the role's tool kind must not load: the MCP servers and plugins
     of the Codex home (codexOff) and the PR's project config in d.Checkout
-    (checkoutProject against d.BaseSHA, else d.BaseRef; a rendered line records
-    the decision for PR prID, recordProject), and d.ToolOutput, when nil,
-    the kind's tool output ceiling (config.Kind.ToolOutputArgs), as a session of
-    the kind gets it. d.Magnum, when empty, is the daemon's own executable (the
-    layout's), which d.DBLockCommand runs for the checkout and the role.
+    (checkoutProject against d.BaseSHA, else d.BaseRef, or the default branch
+    for a stacked PR: shellProjectBase; a rendered line records the decision for
+    PR prID, recordProject), and d.ToolOutput, when nil, the kind's tool output
+    ceiling (config.Kind.ToolOutputArgs), as a session of the kind gets it.
+    d.Magnum, when empty, is the daemon's own executable (the layout's),
+    which d.DBLockCommand runs for the checkout and the role.
 
 func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role, paneID, resume string) error
     StartAgent launches (or adopts) the agent of an agent role in paneID and
@@ -3043,15 +3044,17 @@ type ProjectNote struct {
 	// auto-approval's gate reads none of the compare, residue or not: the
 	// PR's file list decides there, with Links.
 	Residue bool `json:"residue,omitempty"`
-	// Links map the target of each root entry among the kind's paths that
-	// is a symbolic link into the checkout (relative to its root: CLAUDE.md
-	// -> docs/guide.md) to the label of the link's path (CLAUDE.md), as the
-	// launch read them from the disk, not from git, so also when git could
-	// not compare. A PR that changes such a target changes what the CLI
-	// loads through the link, and its file list names the target alone:
-	// the auto-approval's gate asks ChangedLinks with that list. Kept out of
-	// the event (a link the PR added names a path it chose); none in a
-	// record written before they were kept.
+	// Links map the target of each symbolic link into the checkout that a
+	// root entry among the kind's paths is, or that lies under one of its
+	// directories or a directory such a link leads to (relative to the
+	// root: CLAUDE.md -> docs/guide.md, .claude/skills -> .agents/skills),
+	// to the label of that path (CLAUDE.md, .claude/), as the launch read
+	// them from the disk, not from git, so also when git could not compare.
+	// A PR that changes such a target changes what the CLI loads through
+	// the link, and its file list names the target alone: the
+	// auto-approval's gate asks ChangedLinks with that list. Kept out of the
+	// event (a link the PR added names a path it chose); none in a record
+	// written before they were kept.
 	Links map[string]string `json:"links,omitempty"`
 }
     ProjectNote is the PR's record of a session of one kind launched without the
@@ -3066,8 +3069,8 @@ func (n ProjectNote) ChangedLinks(paths []string) []string
     ChangedLinks names the links of the record (Links, by their paths' labels,
     each once, in the order of their targets) whose target paths, the files
     a PR's commits change (its file list, relative to the repository's root),
-    change: the target itself, or a file under a target that is a directory.
-    None for a record without links.
+    change: the target itself, or a file under a target that is a directory,
+    in any case (underTarget). None for a record without links.
 
 type Readiness struct {
 	Checks []ReadinessCheck
@@ -19099,9 +19102,12 @@ type PRDetails struct {
 	// Files are the paths the pull request changes at HeadRefOid, in
 	// GitHub's order: one page of at most 100 (a rename lists its new path
 	// only); nil when GitHub returned no list. FilesComplete is true when
-	// they are every changed file.
+	// they are every changed file. FilesRenamed is true when one of them is
+	// a rename (changeType RENAMED), whose previous path the list leaves
+	// out: ListFiles names both.
 	Files         []string
 	FilesComplete bool
+	FilesRenamed  bool
 	// CI is the head commit's checks.
 	CI CIRollup
 	// ActivityAt is the pull request's last activity: the latest of its
@@ -30585,7 +30591,9 @@ type PRFiles struct {
 	FetchedAt time.Time // when the list was written (set by the store)
 }
     PRFiles is the paths a PR changes at one head (pr_files): the first page of
-    at most 100 that the poller's Details read (a rename lists its new path).
+    at most 100 that the poller's Details read, with the previous paths of its
+    renames (the Details list a rename by its new path only; the poller adds the
+    paths it leaves from the REST list).
 
 type PRFilter struct {
 	RepoID int64

@@ -1765,15 +1765,16 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
 - it changes none of the review agents' instructions or hooks: no `AGENTS.md`, `AGENTS.override.md`,
   `CLAUDE.md` or `CLAUDE.local.md` at any depth and in any case, nothing under `.claude/` or `.codex/`
   and no `.mcp.json` (the head's file list, as the poller read it: GitHub's list of what the PR's
-  commits change), and nothing a root link of those paths leads to (`CLAUDE.md` -> `docs/guide.md`, as a
-  session of the head read the links from the slot's disk); they steer the review agents, and their hooks
-  run on every teammate's machine once merged. That a session of the head left the config out does not
-  count by itself: git compared the slot's files with the merge base the slot had, so an ignored
-  `__pycache__/*.pyc` an earlier PR's round left there, an uncommitted edit, the base branch's commits
-  behind a stacked PR's stale `origin/<base>`, or a compare git could not make would hold the PR back
-  for something its commits do not change, and each pass decides again. The file list names a rename by its
-  new path only, so a PR that moves such a file elsewhere is not held back for it (its review still sees
-  the move). A PR of more files than GitHub lists (100) is not approved either;
+  commits change, with the path each rename leaves, which the poller reads from GitHub's REST list for a
+  head whose list has a rename, so a PR that moves `.claude/hooks/x.rb` elsewhere changes `.claude/`), and
+  nothing a link of those paths leads to (`CLAUDE.md` -> `docs/guide.md`, or a link under `.claude/` or
+  `.codex/`: `.claude/skills` -> `.agents/skills`; in any case, as a session of the head read the links
+  from the slot's disk); they steer the review agents, and their hooks run on every teammate's machine
+  once merged. That a session of the head left the config out does not count by itself: git compared the
+  slot's files with a merge base, so an ignored `__pycache__/*.pyc` an earlier PR's round left there, an
+  uncommitted edit, a stacked PR's base branch, or a compare git could not make would hold the PR back for
+  something its commits do not change, and each pass decides again. A PR of more files than GitHub lists
+  (100) is not approved either;
 - it changes none of its own workflows or actions: nothing under `.github/workflows/` or `.github/actions/`
   (in any case; the same file list). A workflow the PR adds may declare the CI workflow's name, and one
   that edits the CI workflow or an action it runs controls what the checks below say, so such a PR waits
@@ -2637,7 +2638,12 @@ launch and resume of a claude role (claude-review, claude-simplify) passes `--se
 (`[kinds.claude] project_untrust`): the session loads your user settings, skills, agents and `CLAUDE.md`
 and nothing of the checkout's. A `CLAUDE.md` that links to `AGENTS.md` (or an `AGENTS.md` that links to
 `CLAUDE.md`, for Codex) loads the PR's file through the link: Magnum compares what an instruction file at
-the root links to as well. An ignored instruction file below the root (a package's `AGENTS.md` in
+the root links to as well, and what a link under `.claude/` or `.codex/` leads to in the checkout
+(`.claude/skills` -> `../.agents/skills`), and a link under a directory such a link leads to, matching git's
+paths in any case (a nested checkout, Claude Code's `.claude/worktrees/<name>`, is not looked into; past
+10,000 entries the session leaves the config out). A PR based on another branch than the repository's
+default (a stacked PR) is compared with `origin/<default branch>`: its base branch is another PR's, whose
+changes there nobody reviewed, so they count as its own and stay out. An ignored instruction file below the root (a package's `AGENTS.md` in
 `node_modules/`) is no change. An `agents.claude_project_declined` event records it, the board's card says
 "Claude ran without the PR's CLAUDE.md changes (its sessions loaded your user settings only)", naming the
 files, and so does the review's Checks of a round with a Claude role. Untracked logs under `.claude/` are no change, as
@@ -2648,7 +2654,7 @@ declines every later session in that slot: when none of the files that differ is
 (an untracked or ignored file, an uncommitted edit), for either CLI, the session declines all the same, but the
 card and the Checks say "Claude ran without the checkout's .claude/ files, which the PR's commits do not
 change". Auto-approval holds no PR for a session's decline by itself, residue or not: it asks the PR's
-file list (and the targets of the root links a session of the head read). A PR that leaves both alone keeps the team's project config. Claude Code reloads
+file list (and the targets of the links a session of the head read). A PR that leaves both alone keeps the team's project config. Claude Code reloads
 its settings and skills while it runs, and loads a `.claude/settings.json` a later commit adds, so a
 Claude session that started with the project config loaded is quit (its conversation parked) before
 Magnum moves the checkout to a new head that changes it, at a round's start and at a restart after a push,
@@ -6029,7 +6035,9 @@ approve the PR's current head (or, for an identity that comments when clean, `no
 or on a PR whose author the auto-approval author lists refuse, to comment with a clean verdict, as does a
 clean review the approval's gates turned from an approval into a comment: the card then says "approve by
 hand: the PR changes its own workflows or actions", the toast too, and `needs_me_reason` in `magnum tui
---json`; a comment whose round left optional findings only, P3s and simplifications with no P0, P1 or P2 new
+--json`; the words of the file list's gate follow the head's list as it is now, so a PR whose list no
+longer gives them, retargeted or read otherwise by a later build, says "approve by hand: the gate that held
+magnum's approval back no longer holds it"; a comment whose round left optional findings only, P3s and simplifications with no P0, P1 or P2 new
 or still open, counts as a clean one there, since `A` approves such a round as you, as auto-approval does for
 an author its lists do not refuse. An identity that approves when clean comments on such a round too, but
 that comment does not count: it is posted whether or not the round heard every reviewer or held its
