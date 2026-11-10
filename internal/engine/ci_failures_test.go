@@ -239,7 +239,9 @@ func TestTheCIReaderSaysWhatItCouldNotRead(t *testing.T) {
 // Two failed required checks of one run (a required list that names two
 // of its jobs) list each failed job once, under the check of its own name
 // (a job of no check's name under the run's first check), and read each
-// log once: the counts are of distinct jobs.
+// log once: the counts are of distinct jobs. A third check of the run with
+// no failed job of its own names the check its run's jobs are listed under
+// (jobs_with), in the file and its summary.
 func TestTwoFailedChecksOfOneRunListEachJobAndReadItsLogOnce(t *testing.T) {
 	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"), requiredCompletion)
 	h.openOwn(prSpec{head: fixHead})
@@ -251,6 +253,7 @@ func TestTwoFailedChecksOfOneRunListEachJobAndReadItsLogOnce(t *testing.T) {
 	read := h.e.readCIFailures(h.ctx, acts, repo, pr, []ciFailedCheck{
 		{Entry: "rspec (3)", Name: "rspec (3)", WorkflowFile: "ci.yml"},
 		{Entry: "capybara", Name: "capybara", WorkflowFile: "ci.yml"},
+		{Entry: "lint", Name: "lint", WorkflowFile: "ci.yml"},
 	})
 	acts.end()
 	if read.Unread || read.File == "" {
@@ -284,6 +287,13 @@ func TestTwoFailedChecksOfOneRunListEachJobAndReadItsLogOnce(t *testing.T) {
 	}
 	if read.Jobs != 2 || read.Steps != 2 || read.Lines != lines {
 		t.Errorf("counts = %d jobs, %d steps, %d lines (the file keeps %d); want the distinct jobs'", read.Jobs, read.Steps, read.Lines, lines)
+	}
+	if len(f.Checks) != 3 || f.Checks[2].JobsWith != "rspec (3)" || len(f.Checks[2].Jobs) != 0 || f.Checks[0].JobsWith != "" || f.Checks[1].JobsWith != "" {
+		t.Errorf("checks = %+v, want lint's jobs_with rspec (3) alone", f.Checks)
+	}
+	md, err := os.ReadFile(filepath.Join(filepath.Dir(read.File), ciFailuresMD))
+	if err != nil || !strings.Contains(string(md), "Its run's failed jobs are listed under required check rspec (3).") {
+		t.Errorf("summary = %q, %v; want it to say where lint's jobs are", md, err)
 	}
 }
 

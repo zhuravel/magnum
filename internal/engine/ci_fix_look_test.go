@@ -244,6 +244,84 @@ func TestAReRunByHandOfMagnumsRunIsReadAgainBeforeTheStart(t *testing.T) {
 	}
 }
 
+// ciHeldHarness is ciShape3Harness past the settle, with magnum's run's
+// failed jobs read once (attempt 1, two jobs) and the CI fix held: someone
+// typed into the PR's panes, so each look decides on the CI fix and the fix
+// job refuses it (unstarted) until the human cooldown ends.
+func ciHeldHarness(t *testing.T) *harness {
+	t.Helper()
+	h, git := ciShape3Harness(t)
+	cannotFixer(h, git, "flaky")
+	h.pastSettle()
+	pr := h.pr(2)
+	if err := h.st.TransitionPR(h.ctx, pr.ID, []string{pr.State}, pr.State, func(u *store.PRUpdate) { u.Set("human_active_at", h.clock.Now()) }); err != nil {
+		t.Fatal(err)
+	}
+	h.tick()
+	if rec := h.ciRecordOf(); rec.Read.Jobs != 2 || len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeUnstarted {
+		t.Fatalf("record = %+v", rec)
+	}
+	return h
+}
+
+// A read that stands while the CI fix waits is checked against the head's
+// runs once a settle_quiet, not at every look, and an unchanged run is not
+// read again: the check's time and the read's runs are kept.
+func TestAStandingReadChecksTheHeadsRunsOnceASettleQuiet(t *testing.T) {
+	h := ciHeldHarness(t)
+	runs, jobs := len(h.ghCalls("head_runs:")), len(h.ghCalls("run_jobs:"))
+	for i, step := range []struct {
+		advance time.Duration
+		reads   int
+	}{{4 * time.Minute, 1}, {time.Minute, 1}, {time.Minute, 1}, {time.Minute, 2}} {
+		h.advance(step.advance)
+		h.tick()
+		if n := len(h.ghCalls("head_runs:")) - runs; n != step.reads {
+			t.Fatalf("look %d: the head's runs read %d times, want %d", i+1, n, step.reads)
+		}
+	}
+	if n := len(h.ghCalls("run_jobs:")) - jobs; n != 0 {
+		t.Errorf("the run's jobs read %d times more, want none", n)
+	}
+}
+
+// A run still running at the attempt the standing read read (GitHub lists
+// a queued re-run at its old attempt) feeds no CI fix once the hold ends:
+// the look waits for it as for its own start.
+func TestARunStillRunningAtTheAttemptReadFeedsNoCIFix(t *testing.T) {
+	h := ciHeldHarness(t)
+	running := failedCIRun(fixHead, 1)
+	running.Event, running.Status, running.Conclusion = "workflow_dispatch", "in_progress", ""
+	h.setHeadRuns(fixHead, running)
+	h.setRuns(fixHead, running)
+	h.advance(2 * time.Hour) // past the cooldown
+	h.tick()
+	h.wantOpen(OpenWaits, "CI at a1a1a1a: ci.yml was run again after magnum's run of it failed")
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 0 {
+		t.Fatalf("a CI fix started on the attempt that still runs (%d fix runs)", n)
+	}
+}
+
+// A read of the head's runs that fails while the CI fix waits is tried
+// again a settle_quiet later, not at every look.
+func TestAFailedReadOfTheHeadsRunsWaitsASettleQuiet(t *testing.T) {
+	h := ciHeldHarness(t)
+	h.gh.mu.Lock()
+	h.gh.headRunsErr = &github.APIError{Op: "head runs", Status: 502}
+	h.gh.mu.Unlock()
+	runs := len(h.ghCalls("head_runs:"))
+	for i, step := range []struct {
+		advance time.Duration
+		reads   int
+	}{{4 * time.Minute, 1}, {time.Minute, 1}, {time.Minute, 1}, {time.Minute, 2}} {
+		h.advance(step.advance)
+		h.tick()
+		if n := len(h.ghCalls("head_runs:")) - runs; n != step.reads {
+			t.Fatalf("look %d: the head's runs read %d times, want %d", i+1, n, step.reads)
+		}
+	}
+}
+
 // `magnum fix --ci` finds a re-run by hand of magnum's failed run as the
 // look does: nothing failed to fix while it runs, and the start's record
 // takes the run, which the look then waits for.

@@ -747,25 +747,40 @@ func (e *Engine) ensureCIRead(ctx context.Context, acts *ciActions, repo store.R
 // acts, at most once per settle_quiet (the
 // standing read's Checked, recorded), before the start the read would
 // feed: a start that waits for a free slot costs no read a look. A read of
-// no named run, or one that fails, leaves the read standing.
+// no named run, or one that fails (tried again a settle_quiet later, as
+// one that found nothing moved), leaves the read standing.
 func (e *Engine) ciRunMoved(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR, f *openFacts) bool {
 	r := f.ciFix.read
 	named := slices.ContainsFunc(f.ci.failedRuns, func(c ciFailedCheck) bool { return c.Run != 0 })
 	if !named || f.now.Before(later(r.At, r.Checked).Add(f.settle.quiet)) {
 		return false
 	}
+	checked := func() bool { // the read stands; the next check is a settle_quiet away
+		now := e.now()
+		if err := e.updateCIFix(ctx, pr.ID, func(rec *ciFixRecord) bool {
+			if rec.Read.Head != r.Head || rec.Read.Key != r.Key {
+				return false
+			}
+			rec.Read.Checked = now
+			return true
+		}); err != nil {
+			e.warnUnlessStopped(ctx, err, "autofix open: record the check of the failed CI's runs", "pr", pr.ID)
+		}
+		f.ciFix.read.Checked = now
+		return false
+	}
 	gh, err := acts.client(ctx)
-	if err != nil {
-		return false
+	var runs []github.WorkflowRun
+	if err == nil {
+		lister, ok := gh.(headRunLister)
+		if !ok {
+			return false
+		}
+		runs, err = lister.HeadRuns(ctx, repo.Owner, repo.Name, pr.HeadSHA)
 	}
-	lister, ok := gh.(headRunLister)
-	if !ok {
-		return false
-	}
-	runs, err := lister.HeadRuns(ctx, repo.Owner, repo.Name, pr.HeadSHA)
-	if err != nil {
+	if err != nil { // tried again a settle_quiet later, not at every look while the start waits
 		e.log.Info("autofix open: the head's runs before a CI fix", "subject", prSubject(repo, pr.Number), "err", err)
-		return false
+		return checked()
 	}
 	for _, c := range f.ci.failedRuns {
 		run, moved := ciRunNow(runs, c)
@@ -779,18 +794,7 @@ func (e *Engine) ciRunMoved(ctx context.Context, acts *ciActions, repo store.Rep
 			return true
 		}
 	}
-	now := e.now()
-	if err := e.updateCIFix(ctx, pr.ID, func(rec *ciFixRecord) bool {
-		if rec.Read.Head != r.Head || rec.Read.Key != r.Key {
-			return false
-		}
-		rec.Read.Checked = now
-		return true
-	}); err != nil {
-		e.warnUnlessStopped(ctx, err, "autofix open: record the check of the failed CI's runs", "pr", pr.ID)
-	}
-	f.ciFix.read.Checked = now
-	return false
+	return checked()
 }
 
 // noteRunMoved records run, which now speaks for the run the look named
