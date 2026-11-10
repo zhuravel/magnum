@@ -241,9 +241,10 @@ type Git interface {
 	// commit, the base a post-merge round reviews from (postMergeBase).
 	RevParse(ctx context.Context, dir, ref string) (string, error)
 	FetchCommit(ctx context.Context, mainClone, sha string, number int) error
-	// ChangedUnder tells whether a head changes the project config a
-	// running agent reloads (parkReloading).
-	ChangedUnder(ctx context.Context, dir, base, head string, paths ...string) ([]string, error)
+	// ChangedNames tells whether a head changes the project config a
+	// running agent reloads (parkReloading): every file it changes, which
+	// the engine matches itself (git's pathspec folds ASCII case only).
+	ChangedNames(ctx context.Context, dir, base, head string) ([]string, error)
 	// DiffStat measures the PR's size at a full pass's baseline, in the
 	// round's checkout (prSize, fullpass.go).
 	DiffStat(ctx context.Context, dir, base, head string) ([]gitx.FileStat, error)

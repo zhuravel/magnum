@@ -2340,10 +2340,10 @@ func (fakeGit) RevParse(_ context.Context, _, ref string) (string, error) {
 
 func (fakeGit) FetchCommit(context.Context, string, string, int) error { return nil }
 
-// ChangedUnder cannot tell: a session that reloads its project config is
+// ChangedNames cannot tell: a session that reloads its project config is
 // quit unless a test's git (projectGit) or the stored file list says the
 // head leaves that config alone.
-func (fakeGit) ChangedUnder(_ context.Context, _, base, head string, _ ...string) ([]string, error) {
+func (fakeGit) ChangedNames(_ context.Context, _, base, head string) ([]string, error) {
 	return nil, fmt.Errorf("fake git: no diff of %s...%s", base, head)
 }
 

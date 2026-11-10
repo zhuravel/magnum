@@ -10,8 +10,9 @@ import (
 	"strings"
 )
 
-// ErrTreeTooLarge is Symlinks' error for a tree whose listing passes
-// execx.MaxOutput: a link it would leave out may be one that matters.
+// ErrTreeTooLarge is Symlinks' error for a tree, and ChangedNames' for a
+// list of names, whose listing passes execx.MaxOutput: a link or a path it
+// would leave out may be one that matters.
 var ErrTreeTooLarge = errors.New("gitx: tree too large to list")
 
 // symlinkMode is git's mode of a symbolic link in a tree.

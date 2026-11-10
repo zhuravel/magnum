@@ -2,11 +2,14 @@ package gitx
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/zhuravel/magnum/internal/execx"
 )
 
 // WorkTreeChanges compares the files on disk under one directory with a
@@ -357,5 +360,38 @@ func TestAPathspecNamesADirectoryInAnyDirectory(t *testing.T) {
 	fx.git(dir, "commit", "--quiet", "-m", "A .claude that is a link")
 	if got, err := fx.c.ChangedUnder(ctx, dir, head, fx.git(dir, "rev-parse", "HEAD"), specs...); err != nil || !slices.Equal(got, []string{"apps/.claude"}) {
 		t.Fatalf("ChangedUnder of a link in the place of a .claude/ = %q, %v", got, err)
+	}
+}
+
+// ChangedNames lists every file a head changes since its merge base, with
+// no pathspec, for a caller that matches the paths itself: git's icase
+// pathspec folds ASCII only, so a literal .agents/skills misses a commit's
+// .agents/ſkills/pwn/SKILL.md, which macOS's filesystem writes into
+// .agents/skills/pwn/. A listing cut at execx.MaxOutput fails
+// (ErrTreeTooLarge) rather than leave a path out.
+func TestChangedNamesListsWhatAPathspecWouldMiss(t *testing.T) {
+	ctx := context.Background()
+	c, f := newFake(execx.Rule{Prefix: []string{"git", "-C", slot, "diff"}, Result: execx.Result{Truncated: true, Stdout: []byte("a\x00")}})
+	if _, err := c.ChangedNames(ctx, slot, "origin/master", sha1); !errors.Is(err, ErrTreeTooLarge) {
+		t.Fatalf("a cut listing: %v, want ErrTreeTooLarge", err)
+	}
+	wantCall(t, f, 0, false, "git", "-C", slot, "diff", "--name-only", "-z", "--no-renames", "origin/master..."+sha1, "--")
+	for _, bad := range [][2]string{{"-x", sha1}, {"a..b", sha1}, {"origin/master", ""}} {
+		if _, err := c.ChangedNames(ctx, slot, bad[0], bad[1]); err == nil {
+			t.Errorf("ChangedNames(%q) must be refused", bad)
+		}
+	}
+
+	fx := newFixture(t)
+	dir := fx.origin
+	fx.commit(dir, ".agents/skills/x/SKILL.md", "the team's skill\n", "Add a skill")
+	fx.git(dir, "checkout", "--quiet", "-b", "topic")
+	blob := fx.git(dir, "hash-object", "-w", "--stdin")
+	fx.git(dir, "update-index", "--add", "--cacheinfo", "100644,"+blob+",.agents/ſkills/pwn/SKILL.md")
+	fx.git(dir, "commit", "--quiet", "-m", "A skill under another spelling")
+	head := fx.git(dir, "rev-parse", "HEAD")
+	got, err := fx.c.ChangedNames(ctx, dir, "main", head)
+	if want := []string{".agents/ſkills/pwn/SKILL.md"}; err != nil || !slices.Equal(got, want) {
+		t.Fatalf("ChangedNames = %q, %v; want %q", got, err, want)
 	}
 }

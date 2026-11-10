@@ -610,6 +610,35 @@ func (c *Client) ChangedUnder(ctx context.Context, dir, base, head string, paths
 	return c.diffNames(ctx, dir, base, head, nil, specs)
 }
 
+// ChangedNames lists every file head changes since its merge base with
+// base (git diff --name-only base...head, with no pathspec), a rename as a
+// deletion plus an addition, for a caller that matches the paths itself:
+// git's icase pathspec folds ASCII only, so a literal .agents/skills misses
+// a commit's .agents/ſkills/x/SKILL.md, which a case-insensitive filesystem
+// (macOS's) writes into .agents/skills/x/. A listing past execx.MaxOutput
+// fails (ErrTreeTooLarge): a path it would leave out may be one that
+// matters. nil when nothing changed.
+func (c *Client) ChangedNames(ctx context.Context, dir, base, head string) ([]string, error) {
+	if err := checkRange(base, head); err != nil {
+		return nil, err
+	}
+	label := fmt.Sprintf("diff --name-only %s...%s", base, head)
+	res, err := c.git(ctx, dir, call{label: label}, "diff", "--name-only", "-z", "--no-renames", base+"..."+head, "--")
+	if err != nil {
+		return nil, rangeErr(err, base, head)
+	}
+	if res.Truncated {
+		return nil, fmt.Errorf("gitx: %s: %w", label, ErrTreeTooLarge)
+	}
+	var paths []string
+	for p := range strings.SplitSeq(string(res.Stdout), "\x00") {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths, nil
+}
+
 // ChangedBetween lists the files whose content differs between the commits
 // from and to (git diff --name-only from to: the two trees, whatever the
 // history between them), a rename as a deletion plus an addition. Unlike

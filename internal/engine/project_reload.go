@@ -89,7 +89,9 @@ type headProbe struct {
 	filesOnce   bool
 	files       store.PRFiles
 	filesOK     bool
-	byKind      map[string]bool // kind -> the fetched head changes its config (or git could not tell)
+	namesOnce   bool
+	names       []string // every file the fetched head changes since its merge base (git)
+	namesErr    error
 }
 
 // leavesProjectAlone reports whether the head the checkout brings leaves
@@ -99,13 +101,14 @@ type headProbe struct {
 // when GitHub's moved since the radar read it. The PR's file list the
 // poller stored decides when it is complete and lists that head
 // (store.PRFiles); otherwise (a PR of more files than the list holds, a
-// list of another head, none) git does: the files the head changes at or
-// under the kind's paths and the links' targets since its merge base with
-// the PR's base branch (gitx.Client.ChangedUnder), read like the list
-// (agents.ProjectTouched: a glob of a path in any directory matches wider
-// than its name). Either way a file at or under a link's target counts
-// (linkTargets: .claude/skills -> ../.agents/skills loads what the head
-// changes there). A fetch that fails leaves the list of the radar's head;
+// list of another head, none) git does: every file the head changes since
+// its merge base with the PR's base branch (gitx.Client.ChangedNames, read
+// once for every session), matched here like the list (agents.ProjectTouched)
+// rather than by git's pathspec, whose icase folds ASCII only (a head's
+// .agents/ſkills/pwn/SKILL.md, which macOS writes into .agents/skills/pwn/).
+// Either way a file at or under a link's target counts (linkTargets:
+// .claude/skills -> ../.agents/skills loads what the head changes there,
+// agents.UnderTarget). A fetch that fails leaves the list of the radar's head;
 // a session of an unknown kind, links that cannot all be read, a git that
 // cannot tell and no answer at all are no proof, so the session is quit.
 func (p *headProbe) leavesProjectAlone(ctx context.Context, s store.Session) bool {
@@ -130,21 +133,24 @@ func (p *headProbe) leavesProjectAlone(ctx context.Context, s store.Session) boo
 	if head == "" || p.e.d.Git == nil {
 		return false
 	}
-	touched, ok := p.byKind[kind]
-	if !ok {
+	changed, err := p.changedNames(ctx, head)
+	return err == nil && !touches(changed)
+}
+
+// changedNames are the files head changes since its merge base with the
+// PR's base branch, read once (ChangedNames): a git that fails is logged
+// once and quits every session that reloads its config.
+func (p *headProbe) changedNames(ctx context.Context, head string) ([]string, error) {
+	if !p.namesOnce {
+		p.namesOnce = true
 		base := "origin/" + strings.TrimPrefix(prBase(p.job.repo, p.job.pr), "origin/")
-		changed, err := p.e.d.Git.ChangedUnder(ctx, p.job.slot.Path, base, head, append(slices.Clone(paths), targets...)...)
-		if err != nil {
+		p.names, p.namesErr = p.e.d.Git.ChangedNames(ctx, p.job.slot.Path, base, head)
+		if p.namesErr != nil {
 			p.e.log.Warn("project config: cannot compare the head with its merge base, so a session that reloads it is quit",
-				"pr", p.job.pr.ID, "head", head, "err", err)
+				"pr", p.job.pr.ID, "head", head, "err", p.namesErr)
 		}
-		touched = err != nil || touches(changed)
-		if p.byKind == nil {
-			p.byKind = map[string]bool{}
-		}
-		p.byKind[kind] = touched
 	}
-	return !touched
+	return p.names, p.namesErr
 }
 
 // linkTargets are where the links of kind's config lead: on the slot's
