@@ -33,7 +33,10 @@ package engine
 //     work to start on: the person's items then wait, listed and named in
 //     the verdict's words, while the loop works on the rest (its fixer
 //     leaves them alone: FixState.Waits) and while that work waits for its
-//     start, but at the daily cap they need you;
+//     start, but at the daily cap they need you. A person's change request
+//     made once one of their items waited for you counts as handed (their
+//     pushback), and an item whose reviewer approved the PR after its
+//     latest word waits for no one (fix_open_needs.go);
 //  9. work (an item never handed, magnum's review no loop worked on) starts
 //     a loop once settle allows, a person's handed items waiting or not:
 //     never on magnum's rebuttals alone with no review work, at most

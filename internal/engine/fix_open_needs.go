@@ -4,7 +4,10 @@ package engine
 // person's item, magnum's, a conflict or a bot's thread that a loop was
 // handed and that is still open at a later whole read raises the PR to
 // needs_attention, kind fix, with the items' links, and your answer to
-// every one of them lifts it again. The look raises only a reviewed PR:
+// every one of them, or a later approval by its reviewer (which accepts
+// it), lifts it again. A reviewer whose item waited for you is remembered:
+// a change request of theirs since waits for you too (pushback), and their
+// plain comment is new work. The look raises only a reviewed PR:
 // needsAttentionKeyed replaces last_error, so a raise on a PR in
 // needs_attention would wipe the loop's own Needs you (a failed push, a
 // declined P1, a description finding), whose entries have no key; there

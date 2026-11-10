@@ -4596,6 +4596,59 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `jobs_with` with its summary line in TestTwoFailedChecksOfOneRunListEachJobAndReadItsLogOnce;
   TestTheCIReaderWaitsForARunsNewestAttempt reads a named run's running attempt as moved.
 
+- **The look reads a PR its own raise holds despite a pending reply, and a reviewer's approval or change request
+  settles what waits for the author** (2026-11-10, talkable#12086, the operator's rule: no human step to get out).
+  The look raised a colleague's change request that a loop had left to the author (needs_attention, kind fix,
+  `fix.open_needs_you`). The author answered it on 2026-11-09 at 14:46Z with a conversation comment, which is
+  also a reply to magnum's review (`repliesOf`), so the PR held a reply the judge had not re-decided. The look's
+  read waited for that reply (`readWanted`), the 30-minute safety read too; with no read since the PR changed,
+  `openLift` never lifted; and `considerReplies` queues a reply round only for a reviewed or rereview_pending PR,
+  so the reply was never re-decided either. The look's own raise held its own lift for 20 hours, until a
+  `magnum fix` by hand (the merge of the parent moved the PR to reviewed, the reply queued, the loop pushed, the
+  PR merged). The colleague had approved the PR meanwhile, which closed nothing. Now:
+  - `readWanted` lets the read go on when the look's own raise holds the PR (`raisedHere`: needs_attention, kind
+    fix, last_error the look's message, keys raised; `openLift` uses the same test), and after a lift the look
+    calls `considerReplies`, so the reply queues its round as after a round's end. A loop's or a round's Needs
+    you keeps its rules: its read waits for the reply, and the look never lifts it. Chosen over a reply round
+    from needs_attention: that round's end (`onReplied`) clears last_error and moves the PR to reviewed without
+    the look's read, and the ledger, still holding the raised keys, would refuse to raise the same open items
+    again (`openRaise` raises a set of keys once), so the verdict would say needs you on a reviewed PR with no
+    toast. This way the look alone raises and lifts its attention, rounds still start only from reviewed or
+    rereview_pending, and a reply round never runs beside a loop or a lift: the lift runs before dispatch on
+    the look's goroutine, and the queued round then holds the look (rules 5 and 6). The read costs what it
+    costs on such a PR with no reply.
+  - An item that waits for the author (handed to a loop and still open, a thread a fixer resolved, one the
+    fixer answered twice) is accepted when its reviewer's decision, their latest review that approves or
+    requests changes among all GitHub lists (never the latest-reviews list, which showed the colleague as
+    commenting after his thread replies), is an approval submitted after the item's latest word that holds none
+    of the thread's comments: an approval's own inline comments are new asks, work as before. An accepted item
+    waits for no one (`sortOpen`), counts as closed for the lift, and a later loop's fixer still finds it marked
+    `waits` (else it would answer for the author, or name it under Needs you, a loop's attention the look never
+    lifts). A later change request by the same reviewer takes the acceptance back. An item never handed stays
+    work, accepted or not: a reviewer's comments and a separate approval still ask for the fix.
+  - The author's own word after a review body or comment still closes it (`ownWord`), and a reviewer's reply in
+    a thread still makes a new key, which is work. A reviewer's plain comment after the author's answer is an
+    item of its own, work. A change request review body by a reviewer one of whose person's items ever waited
+    for the author (the ledger's `waited`, first seen in the look's needs) waits for the author as a handed item
+    does: it pushes back on the answer, or asks again, which only the author can settle. Without the memory, the
+    lift that usually comes a tick after the answer would hand the reviewer's next change request to a fixer.
+  Rejected: clearing a reviewer from `waited` on their approval (an approval and a new change request can come in
+  one read), and accepting items never handed. Gaps: a dismissed approval (a branch that dismisses stale
+  approvals on push) accepts nothing, so its items wait for the author again; acceptance follows a thread's
+  first author even where another reviewer replied in it; the memory never clears for the PR, and covers review
+  bodies only (a change request made of inline comments follows the thread rules); the raise still says "items
+  the fixer left" for a pushback the fixer never had; a stalemate row still holds the read; and a reply of the
+  author's to magnum while a raised thread stays unanswered waits for that answer before its round. Items now
+  carry their reviewer's login in the ledger (the registry only). At the restart no other open PR was held by
+  the look's own raise: the one other own PR in needs_attention with a pending reply holds a loop's attention
+  (a merge of the parent the loop could not make), which the change leaves to the operator as before. Tests,
+  failing first by assertion with the fields in place: TestYourConversationReplyLiftsTheLooksOwnNeedsYou,
+  TestOnlyTheLooksOwnRaiseIsReadDespiteAReply, TestTheReviewersLaterApprovalLiftsWhatTheyAsked,
+  TestALaterLoopLeavesAnAcceptedItemAlone, TestAnApprovalAcceptsTheReviewersEarlierItemsOnly,
+  TestAnAcceptedItemWaitsForNoOneButWorkStaysWork, TestTheReviewersPlainReplyIsItsOwnItemAndAChangeRequestWaitsForYou
+  and TestAChangeRequestWaitsForYouOnceTheReviewersItemWaited; TestALoopsNeedsYouWithAReplyKeepsItsRules pins
+  the loop's rules.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

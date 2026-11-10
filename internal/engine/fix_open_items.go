@@ -34,8 +34,11 @@ package engine
 //
 // A key carries the thread's latest comment where it has one, so a new
 // reply makes a new key and opens the item again, and a remark's last
-// edit, so an edit in place does too (remarkKey). Items carry kinds, links
-// and counts only, never PR text.
+// edit, so an edit in place does too (remarkKey). Another reviewer's item
+// also names its reviewer, says whether it is a review body that requests
+// changes, and whether its reviewer approved the PR after its latest word,
+// which accepts it (acceptedBy): the ledger's sort reads them (sortOpen).
+// Items carry kinds, links, counts and logins only, never PR text.
 
 import (
 	"cmp"
