@@ -87,17 +87,18 @@ func TestScrubMasksTheValueOfAQuotedSecretKey(t *testing.T) {
 	}
 }
 
-// A quoted key is masked where the same key unquoted is, by scrubPairs' rules: the key word starts at a word
-// boundary (a hyphen or a dot before it is one, an underscore or a letter is not) and ends the key.
+// A quoted key is masked where the same key unquoted is, by one rule: the key word starts at a word boundary or after
+// an underscore (a hyphen or a dot before it is a boundary, a letter or a digit is not) and ends the key.
 func TestAQuotedKeyIsMaskedWhereTheUnquotedKeyIs(t *testing.T) {
 	for _, c := range []struct {
 		key    string
 		masked bool
 	}{
-		{"password", true}, {"api-key", true}, {"x-api-key", true}, {"X_Api_Key", false}, {"app.secret", true},
-		{"auth-token", true}, {"aws_secret_access_key", true},
-		{"password_hint", false}, {"tokens_used", false}, {"secrets", false}, {"mypassword", false}, {"db_password", false},
-		{"token_count", false}, {"passwords", false}, {"keyword", false},
+		{"password", true}, {"api-key", true}, {"x-api-key", true}, {"X_Api_Key", true}, {"app.secret", true},
+		{"auth-token", true}, {"aws_secret_access_key", true}, {"db_password", true}, {"GITHUB_TOKEN", true},
+		{"MY_APP.SECRET", true}, {"stripe-api-key", true}, {"__token", true}, {"db2_pwd", true},
+		{"password_hint", false}, {"tokens_used", false}, {"secrets", false}, {"mypassword", false}, {"secretary", false},
+		{"token_count", false}, {"passwords", false}, {"keyword", false}, {"MAX_TOKENS", false}, {"2password", false},
 	} {
 		quoted, _ := Scrub(`{"` + c.key + `": "MADEUP-QUOTED", "other": 1}`)
 		if got := !strings.Contains(quoted, "MADEUP-QUOTED"); got != c.masked {
@@ -116,6 +117,42 @@ func TestAQuotedKeyIsMaskedWhereTheUnquotedKeyIs(t *testing.T) {
 	} {
 		if clean, _ := Scrub(in); clean != in {
 			t.Errorf("a quoted word that is no key with a key word's name was changed:\n in:  %q\n got: %q", in, clean)
+		}
+	}
+}
+
+func TestScrubMasksTheValueOfAnEnvStyleName(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"a password after a prefix and an underscore", "DB_PASSWORD=MADEUP", "DB_PASSWORD=<redacted>"},
+		{"a token after a prefix, with a colon", "GITHUB_TOKEN: MADEUP", "GITHUB_TOKEN: <redacted>"},
+		{"a secret after a dot, with spaces around the equals sign", "MY_APP.SECRET = MADEUP", "MY_APP.SECRET = <redacted>"},
+		{"a quoted key", `"DB_PASSWORD": "MADEUP"`, `"DB_PASSWORD": <redacted>`},
+		{"a single-quoted key with hyphens", `'stripe-api-key': MADEUP`, `'stripe-api-key': <redacted>`},
+		{"an export line", "export OPENAI_API_KEY=MADEUP", "export OPENAI_API_KEY=<redacted>"},
+		{"a quoted value of two words", `GOOGLE_CLIENT_SECRET="MADEUP ONE"`, "GOOGLE_CLIENT_SECRET=<redacted>"},
+		{"two lines of an env file", "DB_PASSWORD=MADEUP\nREDIS_PASSWORD=MADEUP2\nDB_HOST=db", "DB_PASSWORD=<redacted>\nREDIS_PASSWORD=<redacted>\nDB_HOST=db"},
+		{"a name with the AWS prefix after another prefix", "DEPLOY_AWS_SECRET_ACCESS_KEY=MADEUP", "DEPLOY_AWS_SECRET_ACCESS_KEY=<redacted>"},
+		{"a JSON of env names", `{"DB_PASSWORD":"MADEUP","SLACK_BOT_TOKEN":"MADEUP2","DB_HOST":"db"}`, `{"DB_PASSWORD":<redacted>,"SLACK_BOT_TOKEN":<redacted>,"DB_HOST":"db"}`},
+		{"a name that is masked and holds a limit", "MAX_TOKEN=4096", "MAX_TOKEN=<redacted>"},
+	}
+	for _, c := range cases {
+		if clean, _ := Scrub(c.in); clean != c.want {
+			t.Errorf("%s:\n in:   %q\n got:  %q\n want: %q", c.name, c.in, clean, c.want)
+		}
+	}
+	for _, name := range []string{"DB_PASSWORD", "REDIS_PASSWORD", "POSTGRES_PASSWORD", "GITHUB_TOKEN", "GH_TOKEN", "NPM_TOKEN",
+		"SLACK_BOT_TOKEN", "CSRF_TOKEN", "OPENAI_API_KEY", "STRIPE_API_KEY", "STRIPE_SECRET_KEY", "GOOGLE_CLIENT_SECRET",
+		"JWT_SECRET", "SESSION_SECRET", "DEPLOY_AWS_SECRET_ACCESS_KEY"} {
+		for _, form := range []string{name + "=MADEUP", name + ": MADEUP", `"` + name + `": "MADEUP"`} {
+			if clean, _ := Scrub(form); strings.Contains(clean, "MADEUP") || !strings.Contains(clean, name) {
+				t.Errorf("the common name %s is not masked with its name kept: %q -> %q", name, form, clean)
+			}
+		}
+	}
+	for _, in := range []string{"password_hint=MADEUP", "TOKENS_USED=3", "MAX_TOKENS=4096", "secretary: Jo", "TOKEN_LIMIT=5",
+		`{"password_hint":"x","tokens_used":3,"DB_PASSWORD_FILE_HINT":"y"}`, "mypassword=MADEUP", "2password=MADEUP"} {
+		if clean, _ := Scrub(in); clean != in {
+			t.Errorf("a name that only holds a key word was changed:\n in:  %q\n got: %q", in, clean)
 		}
 	}
 }

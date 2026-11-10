@@ -34,18 +34,20 @@ var (
 		`\bAIza[0-9A-Za-z_-]{35}\b`,
 	}, "|"))
 	// scrubPairs are key=value and key: value pairs whose value is a secret;
-	// the key stays.
-	scrubPairs = regexp.MustCompile(`(?i)\b(` + scrubKeyWords + `)(\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)`)
+	// the key stays. The key word starts at a word boundary or after an
+	// underscore (DB_PASSWORD=, GITHUB_TOKEN:), and it ends the key.
+	scrubPairs = regexp.MustCompile(`(?i)((?:\b|_)` + scrubKeyWords + `)(\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)`)
 	// scrubQuotedPairs are the same pairs under a quoted key, as JSON, YAML
-	// and TOML write them: "password": "x", 'token' = y. The key word starts
-	// at a word boundary, as scrubPairs' does (a hyphen or a dot before it
-	// is one: "x-api-key"; an underscore or a letter is not), and ends the
-	// key. Only the key word is case-insensitive: a prefix that ends in the
-	// long s or the Kelvin sign is one of non-word characters, as \b counts
-	// them. A value is a quoted string (also over lines) or a word up to a
-	// comma, a brace, a bracket or white space. The key and the separator
-	// stay.
-	scrubQuotedPairs = regexp.MustCompile(`(["'](?:[^"'\s]*[^0-9A-Za-z_"'\s])?(?i:` + scrubKeyWords + `)["'])(\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,}\]]+)`)
+	// and TOML write them: "password": "x", 'token' = y. The key word follows
+	// the same rule as scrubPairs': it starts the key or follows a prefix of
+	// no space or quote that ends in a character that is no ASCII letter or digit
+	// (an underscore, a hyphen or a dot: "DB_PASSWORD", "x-api-key"), and it
+	// ends the key. Only the key word is case-insensitive: a prefix that ends
+	// in the long s or the Kelvin sign is one of non-word characters, as \b
+	// counts them. A value is a quoted string (also over lines) or a word up
+	// to a comma, a brace, a bracket or white space. The key and the
+	// separator stay.
+	scrubQuotedPairs = regexp.MustCompile(`(["'](?:[^"'\s]*[^0-9A-Za-z"'\s])?(?i:` + scrubKeyWords + `)["'])(\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,}\]]+)`)
 	scrubEmail       = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
 	// scrubHost is a dotted host name under a top-level domain a file name
 	// does not end in, and an IPv4 address.

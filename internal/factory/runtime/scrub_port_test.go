@@ -468,13 +468,22 @@ func FuzzEvidenceScrubMasksEveryByteScrubMasks(f *testing.F) {
 		{`{"password":"MADEUP-PW-123","user":"alice"}`, "", 0, `, "api_key": "MADEUP", 'secret': 'x y', "token" = MADEUP-WORD,"n":1}`},
 		{`{"X-Api-Key":"MADEUP","x_auth-token": 12345, "client_secret":["MADEUP"]}`, "", 0, `["pwd": MADEUP]`},
 		{`{"password": "MADEUP-LINE-ONE`, "", 0, "\nMADEUP-LINE-TWO\", \"user\": \"alice\"}\n\"private_key\":\n\"MADEUP\""},
+		// R58 round 1b: env-style names, a key word after an underscore, unquoted and quoted; the names that only hold a key
+		// word, and a digit or a letter before the key word, stay.
+		{"DB_PASSWORD=MADEUP\nGITHUB_TOKEN: MADEUP\nMY_APP.SECRET = MADEUP\nexport OPENAI_API_KEY=\"MADEUP ONE\"\n", "", 0,
+			"DEPLOY_AWS_SECRET_ACCESS_KEY=MADEUP\nMAX_TOKENS=4096 TOKEN_LIMIT=5 mypassword=x 2password=y secretary: Jo\n__token: x"},
+		{`{"DB_PASSWORD": "MADEUP", 'stripe-api-key': x, "__token":1, "db2_pwd":2, "2password": "x", "MAX_TOKENS": 4096}`, "", 0,
+			`{"SLACK_BOT_TOKEN":"MADEUP","DB_HOST":"db1.internal.example.com","DB_PASSWORD_HINT":"x"}`},
+		{"dB_pa\u017f\u017fword=LONG-S\nGITHUB_TO\u212aEN: KELVIN\n\"x\u017f_token\": 1, \"\u212a_\u017fecret\": 2", "", 0, ""},
+		{"DB_PASSWORD=db1.internal.example.com and ", "_", 1900, "token: x, \"_"},
+		{"- ", "_", 5000, "password=NO-BOUNDARY-NEEDED \"_token\": MADEUP"},
 		// A quoted value that holds an unquoted pair: the quoted pairs run before the unquoted ones.
 		{`{"token":"x password: y"}`, "", 0, ` {'secret': "a token=b c", "pwd" : 'it''s'}`},
 		// A key word before its separator with no closing quote is no quoted key (the unquoted pair masks one word), and a
 		// prefix has no space or quote in it.
 		{`"pwd: 'MADEUP ONE TWO' and "token: "MADEUP THREE"`, "", 0, ` {"my password": "MADEUP-SPACE", "a'password": "MADEUP-QUOTE"}`},
 		// A key that only holds a key word, and a quoted JSON key inside a JSON string, are left as they are.
-		{`{"password_hint":"the dog","tokens_used":3,"my_password":"MADEUP","user":"password","note":"token"}`, "", 0,
+		{`{"password_hint":"the dog","tokens_used":3,"mypassword":"MADEUP","user":"password","note":"token"}`, "", 0,
 			`{\"password\":\"ESCAPED-JSON\"} "password" is a word, and so is 'token' too`},
 		// R58: Go's (?i) folds s and k in a quoted key too, and a prefix that ends in the long s or the Kelvin sign is
 		// one of non-word characters.

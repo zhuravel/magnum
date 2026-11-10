@@ -136,13 +136,15 @@ TOKENS_GO = [
     r"\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}",
     r"\bAIza[0-9A-Za-z_-]{35}\b",
 ]
-# The key names of both key-value patterns (runtime.scrubKeyWords), and the pairs under a quoted key (R58): the key
-# word is the only part of the pattern under (?i:), so a prefix that ends in the long s or the Kelvin sign is one of
-# non-word characters, as \b counts it. Scrub runs the quoted pairs before the unquoted ones: a quoted value that
-# holds an unquoted pair ("token":"x password: y") is then masked whole, where the other order cut its quote off.
+# The key names of both key-value patterns (runtime.scrubKeyWords), and the pairs under a quoted key (R58). One rule
+# for both: the key word starts the key or follows a boundary or an underscore (DB_PASSWORD=, "x-api-key"), and ends
+# it. In the quoted pattern the key word is the only part under (?i:), so a prefix that ends in the long s or the
+# Kelvin sign is one of non-word characters, as \b counts it. Scrub runs the quoted pairs before the unquoted ones:
+# a quoted value that holds an unquoted pair ("token":"x password: y") is then masked whole, where the other order
+# cut its quote off.
 KEYS_GO = r"(?:aws_)?(?:secret(?:_access)?_key|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret)"
-PAIRS_GO = r"""(?i)\b(""" + KEYS_GO + r""")(\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)"""
-QUOTED_GO = (r"""(["'](?:[^"'\s]*[^0-9A-Za-z_"'\s])?(?i:""" + KEYS_GO + r""")["'])(\s*[=:]\s*)"""
+PAIRS_GO = r"""(?i)((?:\b|_)""" + KEYS_GO + r""")(\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)"""
+QUOTED_GO = (r"""(["'](?:[^"'\s]*[^0-9A-Za-z"'\s])?(?i:""" + KEYS_GO + r""")["'])(\s*[=:]\s*)"""
              r"""("[^"]*"|'[^']*'|[^\s,}\]]+)""")
 EMAIL_GO = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
 HOST_GO = r"(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|dev|app|ai|cloud|internal|local|lan|corp|intra|info|biz|tech|xyz|site|us|uk|de|ua|eu|me|cc|tv|gg)\b|\b(?:\d{1,3}\.){3}\d{1,3}\b"
