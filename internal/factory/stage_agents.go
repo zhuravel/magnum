@@ -281,6 +281,12 @@ const (
 	nextAnswers  = "answers"
 )
 
+// RetryFixTurns is how many more fix turns a role whose change the
+// factory's checks still refuse gets after your retry at its stage's prompt
+// cap (runtime.MaxStagePrompts prompts in the attempt), counted from that
+// retry; each later retry at the cap gives them again (fixBudgetOf).
+const RetryFixTurns = 2
+
 // nudgeLead starts a role's one nudge for its end fact, fixLead a fix turn
 // for its change, answersLead the prompt that hands a role your answers:
 // after a restart the ledger tells them from the other prompts by these.
@@ -1071,17 +1077,11 @@ func (e *Engine) ended(ctx context.Context, tp *registry.Task, st config.Factory
 	switch {
 	case p.operator:
 	case p.change:
-		n, err := e.attemptPrompts(ctx, t, a, r)
-		if err != nil {
-			e.log.Warn("count a role's prompts in its stage", "task", t.ID, "role", r.runAs.Name, "err", err)
+		if what := e.fixOrWait(ctx, t, a, r, p); what != "" {
+			r.failed = p.file
+			return what
 		}
-		if p.merge != "" && e.mergeAsked(ctx, t, a, r) {
-			break // a merge turn gets one fix turn for the base, then you
-		}
-		if err != nil || n < runtime.MaxStagePrompts {
-			r.next, r.problem = nextFix, p
-			return ""
-		}
+		return ""
 	case !r.nudged:
 		r.next, r.problem = nextNudge, p
 		return ""
@@ -1090,22 +1090,92 @@ func (e *Engine) ended(ctx context.Context, tp *registry.Task, st config.Factory
 	return noValidFile(r, p)
 }
 
-// attemptPrompts counts the prompts that went, or may have gone, to role r
-// in attempt a of task t's stage (the ledger's entries not settled as never
-// sent): a new attempt (your retry) counts from 0, as the runtime's count of
-// a loop without progress starts again on a new attempt.
-func (e *Engine) attemptPrompts(ctx context.Context, t registry.Task, a registry.Attempt, r *stageRole) (int, error) {
+// fixOrWait gives role r, whose change the factory's checks refused (p) in
+// attempt a of task t's stage, a fix turn ("") while its fix budget
+// (fixBudgetOf) has one left, or is the task's wait on you: a merge turn
+// whose one fix turn for the base went (mergeAsked), your retry or not, or
+// the budget spent, the wait naming it. A budget the registry cannot read
+// gives the turn.
+func (e *Engine) fixOrWait(ctx context.Context, t registry.Task, a registry.Attempt, r *stageRole, p *endProblem) string {
+	if p.merge != "" && e.mergeAsked(ctx, t, a, r) {
+		return noValidFile(r, p) // a merge turn gets one fix turn for the base, then you
+	}
+	b, err := e.fixBudgetOf(ctx, t, a, r)
+	if err != nil {
+		e.log.Warn("count a role's prompts in its stage", "task", t.ID, "role", r.runAs.Name, "err", err)
+	}
+	if err != nil || b.n < b.max {
+		r.next, r.problem = nextFix, p
+		return ""
+	}
+	if p.merge != "" {
+		return noValidFile(r, p)
+	}
+	return fmt.Sprintf("the %s agent's change does not pass after %s: %s", r.runAs.Name, b, p.why)
+}
+
+// fixBudget is a role's prompts in its stage's attempt against its cap of
+// fix turns (fixBudgetOf): n prompts counted against max, since your newest
+// retry at the cap when retried, else since the attempt began.
+type fixBudget struct {
+	n, max  int
+	retried bool
+}
+
+// String is the cap a change that still fails reached, as its wait names
+// it: "6 prompts in the stage", or after your retry at the cap "2 more
+// prompts since your retry".
+func (b fixBudget) String() string {
+	if b.retried {
+		return fmt.Sprintf("%d more prompts since your retry", b.max)
+	}
+	return fmt.Sprintf("%d prompts in the stage", b.max)
+}
+
+// fixBudgetOf counts the prompts that went, or may have gone, to role r in
+// attempt a of task t's stage (the ledger's entries not settled as never
+// sent) against its cap of fix turns: runtime.MaxStagePrompts in the
+// attempt. Your retry at that cap (a retry of the task at the stage,
+// recorded once the role had the cap's prompts) starts a cap of
+// RetryFixTurns prompts sent after it, and a retry at that cap starts
+// another. A retry while the role was under its cap (the task waited on you
+// for another cause: a question, a QA stop, a check that crashed) changes
+// nothing, and a let-go (recorded as a retry with its role) is none. A new
+// attempt counts from 0, as the runtime's count of a loop without progress
+// starts again on a new attempt.
+func (e *Engine) fixBudgetOf(ctx context.Context, t registry.Task, a registry.Attempt, r *stageRole) (fixBudget, error) {
+	b := fixBudget{max: runtime.MaxStagePrompts}
 	entries, err := e.reg.LedgerOf(ctx, t.ID)
 	if err != nil {
-		return 0, err
+		return b, err
 	}
-	n := 0
+	ins, err := e.reg.Inputs(ctx, t.ID)
+	if err != nil {
+		return b, err
+	}
+	var sent []time.Time
 	for _, en := range entries {
 		if en.Role == r.runAs.Name && en.AttemptID == a.ID && en.Delivered != registry.DeliveredNo {
-			n++
+			sent = append(sent, en.Sent)
 		}
 	}
-	return n, nil
+	from := 0 // the prompts sent before the cap in force began
+	for _, in := range ins {
+		if in.Kind != registry.InputRetry || in.Role != "" || in.Stage != a.Stage {
+			continue
+		}
+		before := 0 // sent at or before the retry, as the screen's let-go reads a retry after a prompt
+		for _, at := range sent {
+			if !in.At.Before(at) {
+				before++
+			}
+		}
+		if before-from >= b.max {
+			from, b.max, b.retried = before, RetryFixTurns, true
+		}
+	}
+	b.n = len(sent) - from
+	return b, nil
 }
 
 // mergeAsked reports whether role r got its fix turn for an unmerged base
@@ -1124,17 +1194,15 @@ func (e *Engine) mergeAsked(ctx context.Context, t registry.Task, a registry.Att
 }
 
 // noValidFile is the wait of a task whose role wrote no valid file after
-// its nudge, whose change still fails the factory's checks at the stage's
-// prompt cap, whose merge turn did not merge the base after its fix turn,
-// or whose end fact needs you (why).
+// its nudge, whose merge turn did not merge the base after its fix turn, or
+// whose end fact needs you (why). A change that still fails the factory's
+// checks at its cap has fixOrWait's wait.
 func noValidFile(r *stageRole, p *endProblem) string {
 	switch {
 	case p.operator:
 		return p.why
 	case p.merge != "":
 		return "the " + r.runAs.Name + " agent did not merge " + p.merge
-	case p.change:
-		return fmt.Sprintf("the %s agent's change does not pass after %d prompts in the stage: %s", r.runAs.Name, runtime.MaxStagePrompts, p.why)
 	}
 	return "the " + r.runAs.Name + " agent wrote no valid " + p.file
 }
@@ -1190,10 +1258,11 @@ func asStageRuns(st config.FactoryStage, role config.Role) config.Role {
 // told the agent to): a valid one is done, an invalid one is what the task
 // waits on you for again. A coding stage's role is done once the factory's
 // checks pass at its head (they run again: the task left the live states,
-// which forgot their result). A role whose turn was a prompt you let go is
-// checked so too: nothing watches that turn, so until its end fact holds the
-// task waits on you with a plain reason (letGoWait), never in silence, and
-// the prompt is never sent again.
+// which forgot their result); a change they still refuse gets a fix turn
+// while its budget has one left (fixOrWait). A role whose turn was a prompt
+// you let go is checked so too: nothing watches that turn, so until its end
+// fact holds the task waits on you with a plain reason (letGoWait), never in
+// silence, and the prompt is never sent again.
 func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.FactoryStage, a registry.Attempt, run *agentsRun, dir string) string {
 	for _, r := range run.roles {
 		if r.failed == "" && !r.letGo {
@@ -1233,6 +1302,12 @@ func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.
 		switch {
 		case p != nil && r.letGo && !p.operator:
 			return letGoWait(r, p, t.Branch)
+		case p != nil && p.change && !p.operator:
+			if what := e.fixOrWait(ctx, *t, a, r, p); what != "" {
+				return what
+			}
+			r.failed = "" // its fix turn is due
+			continue
 		case p != nil:
 			return noValidFile(r, p)
 		}

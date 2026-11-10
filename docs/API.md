@@ -14164,6 +14164,12 @@ const RedisOffsetEnv = "REDIS_DB_OFFSET"
     database from. A repository whose env names it gets each copy's own offset
     there, whatever value the env gives it.
 
+const RetryFixTurns = 2
+    RetryFixTurns is how many more fix turns a role whose change the factory's
+    checks still refuse gets after your retry at its stage's prompt cap
+    (runtime.MaxStagePrompts prompts in the attempt), counted from that retry;
+    each later retry at the cap gives them again (fixBudgetOf).
+
 const ReviewFixPrompt = "factory-review-fix.md"
     ReviewFixPrompt is the prompt of the writer's fix turn in the local review:
     the coding stage's roles get it in place of their own prompt.

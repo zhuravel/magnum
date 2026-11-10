@@ -24776,6 +24776,29 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestWithoutBackgroundWorkTheNudgeIsTheHungCommandsOne`, which pins the old text for a transcript with no tool use,
   a foreground tool, work that finished and no transcript, and passes before and after the change, all in
   internal/factory/runtime.
+- **A retry at the prompt cap gives the writer 2 more fix turns** (2026-11-11, found live 2026-11-10). A writer whose
+  change the factory's checks refuse gets fix turns up to `runtime.MaxStagePrompts` (6) prompts in its stage's
+  attempt; then the task waits on you. Your retry goes on in the same attempt, and the count was the attempt's every
+  prompt, so the checks ran again and a failure still there went straight back to you: after a retry, the precheck's
+  specs and migrations passed and one jest test failed, and the writer never saw it. Now a retry at the cap starts a
+  cap of `RetryFixTurns` (2, internal/factory) prompts sent after it (`fixBudgetOf`): the writer gets 2 fix turns for
+  checks that still fail, then the task waits on you with "the fx-writer agent's change does not pass after 2 more
+  prompts since your retry: <why>"; each retry at the cap gives 2 again, counted from it. A retry counts as at the cap
+  only when the role had the cap's prompts by then (since the attempt began, or since the last retry at the cap), so
+  a retry while the task waited on you for another cause (a question, a QA stop, a check that crashed) changes
+  nothing, and neither does a let-go (recorded as a retry with its role). The merge turn keeps its rule
+  (`mergeAsked`): one fix turn for the base, then you, retry or not. Every change the checks refuse goes through one
+  place (`fixOrWait`), the end of a turn and a recheck alike. The README's "your retry's new attempt gets its own"
+  was wrong: a retry goes on in the attempt that stopped.
+  Rejected: a new attempt on retry. It resets the whole stage's budget (6 prompts more) and the runtime's loop counts,
+  which then see no loop the attempt already had. Also rejected: a retry that only reruns the checks (as before), since
+  the writer never sees a failure its change still has, and the task comes back to you with nothing tried.
+  Tests (failing first): `TestARetryAtThePromptCapGivesTheWriterTwoMoreFixTurns` and
+  `TestASecondRetryAtThePromptCapGivesTwoMoreFixTurnsAgain`; and, passing before and after the change, as guards
+  against a wrong count: `TestAChangeThatFailsTheChecksGetsFixTurnsUpToTheStagesCap` (no retry: 6 prompts, the
+  wording as it was), `TestARetryBelowThePromptCapLeavesTheCapAsItWas` (a retry one prompt short of the cap, after a
+  lint that crashed, gives no turn more), `TestARetryAtThePromptCapWhoseChecksPassSendsNoFixTurn` and
+  `TestAMergeTurnGetsNoFixTurnMoreAfterARetry`, all in internal/factory.
 
 - **The precheck runs each migration folder's migrations on that folder's databases, and names one it does
   not run** (2026-11-11). The precheck and the ready card's FLAGS took only the `.rb` files added under

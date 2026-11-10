@@ -24,9 +24,13 @@ func newFactoryRetryCmd(c *Context) *cobra.Command {
 		"Let a factory task that waits on you (NEEDS YOU) go on at its stage, as the screen's retry does: <task> is "+
 			"the task's id or its Jira key, and the command waits for the daemon's answer as `start` does. The "+
 			"stage's own checks run again (a file you fixed, the local review's fresh loop after it stopped for you, "+
-			"what a check kept for you, the publish's checks before any step); a prompt whose delivery is unknown is "+
-			"still sent to nobody (`magnum factory let-go` lets one go, once you looked at its pane), and a task Codex never "+
-			"works on stays so. When the task waits on a precheck failure and nothing changed since (the branch's head, "+
+			"what a check kept for you, the publish's checks before any step). "+
+			fmt.Sprintf("A retry at the prompt cap (a writer whose change the factory's checks refuse after %d prompts in the "+
+				"stage) runs the checks again; for checks that still fail, the writer gets %d more fix turns, then the task "+
+				"waits on you again, and each retry at the cap gives %d again. ", runtime.MaxStagePrompts, factory.RetryFixTurns,
+				factory.RetryFixTurns)+
+			"A prompt whose delivery is unknown is still sent to nobody (`magnum factory let-go` lets one go, once you "+
+			"looked at its pane), and a task Codex never works on stays so. When the task waits on a precheck failure and nothing changed since (the branch's head, "+
 			"the precheck commands, their environment), the answer says so, and the task still goes on. A task that "+
 			"does not wait on you is refused, and so is one whose questions wait for your answers (`magnum factory answer`). "+
 			"--accept-qa also accepts what QA's newest run left you at the task's head. The QA defects that block which the writer "+
