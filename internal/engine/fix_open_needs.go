@@ -6,10 +6,11 @@ package engine
 // needs_attention, kind fix, with the items' links, and your answer to
 // every one of them, or a later approval by its reviewer (which accepts
 // it), lifts it again. A reviewer whose item waited for you is remembered,
-// with when the look first saw it wait: a change request of theirs made
-// since waits for you too (pushback), in the look's sort and in a loop's
-// later cycles (pushbackKey), and their plain comment is new work. The
-// look raises only a reviewed PR:
+// with when a loop was handed it (else when the look first saw it wait): a
+// change request of theirs made since waits for you too (pushback), in the
+// look's sort and in the later cycles of a loop it or you start
+// (pushbackKey), and their plain comment is new work. The look raises only
+// a reviewed PR:
 // needsAttentionKeyed replaces last_error, so a raise on a PR in
 // needs_attention would wipe the loop's own Needs you (a failed push, a
 // declined P1, a description finding), whose entries have no key; there
@@ -26,6 +27,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -104,9 +106,9 @@ func (l openLedger) leftToAuthor(it openItem) bool {
 }
 
 // pushback reports whether it is a person's review body that requests
-// changes made after the look first saw one of that reviewer's items wait
-// for the author (pushedBack): they push back on the author's answer, or
-// ask again, which only the author can settle. Their plain comment is no
+// changes made after one of that reviewer's items began to wait for the
+// author (pushedBack): they push back on the author's answer, or ask
+// again, which only the author can settle. Their plain comment is no
 // pushback: it is an item of its own, never handed, so work.
 func (l openLedger) pushback(it openItem) bool {
 	return it.Class == classPerson && pushedBack(l.Waited, it.By, it.ChangesAt)
@@ -114,10 +116,11 @@ func (l openLedger) pushback(it openItem) bool {
 
 // pushedBack reports whether a change request by by whose latest word
 // came at at (zero: no change request) is their pushback: made after
-// waited's time for them (openLedger.Waited), when the look first saw one
-// of their items wait for the author. One made before is a request of its
-// own, which a fixer works on, though the look sees their item wait only
-// later: it came while the loop that left the item ran, or before.
+// waited's time for them (openLedger.Waited), when one of their items
+// began to wait for the author (a loop's hand-off of it, seedWaited). One
+// made before is a request of its own, which a fixer works on, though the
+// look reads their item only later: it came while the loop that left the
+// item ran, or before.
 func pushedBack(waited map[string]time.Time, by string, at time.Time) bool {
 	since, ok := waited[strings.ToLower(by)]
 	return ok && !at.IsZero() && at.After(since)
@@ -173,33 +176,57 @@ func (l openLedger) loopWaits(items, needs []openItem) []string {
 
 // lastReadWaits are the FixState.Waits of a loop that starts outside the
 // look (a CI fix by hand, fix_ci.go): loopWaits over the other reviewers'
-// items of the look's last read (Read.Others), sorted as the look sorts
-// them (sortOpen), so its next cycles leave alone what a loop the look
-// starts would. The key of an item that moved since that read marks
-// nothing.
+// items of the look's last read (Read.Others), seeded and sorted as the
+// look seeds and sorts them (seedWaited, sortOpen) on a copy of l's
+// reviewers, so its next cycles leave alone what a loop the look starts
+// would. The key of an item that moved since that read marks nothing.
 func (l openLedger) lastReadWaits() []string {
+	l.Waited = maps.Clone(l.Waited)
+	l.seedWaited(l.Read.Others)
 	_, needs := sortOpen(l.Read.Others, l)
 	return l.loopWaits(l.Read.Others, needs)
 }
 
+// seedWaited records in l.Waited, before the look sorts items, the
+// reviewer of each person's item of items that a loop was handed, from the
+// earliest time a loop handed one of theirs (Handed: when openLoopsEnded
+// saw that loop end). Their change requests since are pushback from the
+// first look whose read shows the item, though a reply magnum had not
+// re-decided, a low budget or failed reads kept the look from seeing it
+// wait before; one made while that loop ran stays work.
+func (l *openLedger) seedWaited(items []openItem) {
+	for _, it := range items {
+		if at, ok := l.Handed[it.Key]; ok {
+			l.waitedFrom(it, at)
+		}
+	}
+}
+
 // noteWaited records in l.Waited, at now the first time, the reviewers
-// of the person's items of needs, which wait for the author. A reviewer
-// stays there for the PR's life: an approval of theirs and a new change
-// request can come in one read.
+// of the person's items of needs, which wait for the author (a thread a
+// fixer resolved, never handed, too). A reviewer stays there for the PR's
+// life: an approval of theirs and a new change request can come in one
+// read.
 func (l *openLedger) noteWaited(needs []openItem, now time.Time) {
 	for _, it := range needs {
-		by := strings.ToLower(it.By)
-		if it.Class != classPerson || by == "" || by == "ghost" {
-			continue
-		}
-		if _, ok := l.Waited[by]; ok {
-			continue
-		}
-		if l.Waited == nil {
-			l.Waited = map[string]time.Time{}
-		}
-		l.Waited[by] = now
+		l.waitedFrom(it, now)
 	}
+}
+
+// waitedFrom records in l.Waited that the reviewer of it, a person's item,
+// waited for the author from at on, unless an earlier time stands.
+func (l *openLedger) waitedFrom(it openItem, at time.Time) {
+	by := strings.ToLower(it.By)
+	if it.Class != classPerson || by == "" || by == "ghost" {
+		return
+	}
+	if since, ok := l.Waited[by]; ok && !at.Before(since) {
+		return
+	}
+	if l.Waited == nil {
+		l.Waited = map[string]time.Time{}
+	}
+	l.Waited[by] = at
 }
 
 // acceptedLeftover reports whether it would wait for you (left to you,

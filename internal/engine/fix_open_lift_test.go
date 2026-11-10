@@ -597,6 +597,74 @@ func TestAChangeRequestMadeBeforeTheReviewersItemWaitedIsWork(t *testing.T) {
 	}
 }
 
+// Pushback counts from when the loop handed the reviewer's item, not from
+// the first read that shows it wait: here your conversation comment, a
+// reply magnum has not re-decided, holds the look's read from the loop's
+// end (no raise holds the PR yet), and the reviewer asks for changes
+// meanwhile. The first read after the reply's round sorts her change
+// request as pushback beside her thread: both wait for you and are
+// raised, and no loop starts on it.
+func TestAChangeRequestAfterTheLoopHandedHerItemWaitsForYouBeforeAnyReadSawIt(t *testing.T) {
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"), onlyTheAppPosts)
+	h.setThreads(extThread(4322458360, "lib/sandbox.rb", 185, time.Date(2026, 10, 5, 9, 0, 0, 0, time.Local), "Why does it run twice?", "rev-ann"))
+	fixer(h, git, "", func(run store.Run) string {
+		return fixReport(run.ID, "nothing", "1 threads (0 fixed, 0 already fixed, 1 not a bug, 0 won't fix)", "none")
+	})
+	h.tick() // reviewed
+	emptyRepliedRounds(h)
+	h.pastSettle()
+	h.tick() // loop 1 leaves her thread to you
+	h.advance(time.Minute)
+	yourComment(h, 801, "@rev-ann It runs twice on purpose") // the look hands her thread; its read waits for the reply
+	if l := h.ledgerOf(2); len(l.Handed) == 0 || len(l.Waited) > 0 || len(l.Raised) > 0 {
+		t.Fatalf("ledger handed %v, waited %v, raised %v; want her thread handed, unread", l.Handed, l.Waited, l.Raised)
+	}
+	h.advance(time.Minute)
+	h.revAnnReviews(9002, "CHANGES_REQUESTED", "No, drop it")
+	for range 3 { // the reply's round, the look's read, the settle
+		h.advance(31 * time.Minute)
+		h.tick()
+	}
+	pr := h.pr(2)
+	if n := len(h.fixRuns(pr.ID)); n != 1 {
+		t.Errorf("fix runs = %d: her pushback went to a fixer", n)
+	}
+	pr = h.wantState(2, store.PRNeedsAttention)
+	if msg := deref(pr.LastError); !strings.Contains(msg, prPage+"#pullrequestreview-9002") || !strings.Contains(msg, prPage+"#discussion_r4322458360") {
+		t.Errorf("last_error = %q, want her thread and her change request", msg)
+	}
+}
+
+// A reviewer's pushback counts from the earliest hand-off of one of their
+// person's items to a loop (Handed), unless an earlier time stands: not
+// from a bot's, nor from an item never handed. A CI fix by hand seeds it
+// the same way from the look's last read (lastReadWaits), and leaves the
+// ledger it read as it was.
+func TestPushbackCountsFromTheLoopsHandOff(t *testing.T) {
+	ann1, ann2, fresh, alices := personThread(4100), personThread(4200), personThread(4300), personThread(4400)
+	ann1.By, ann2.By, fresh.By, alices.By = "rev-ann", "Rev-Ann", "carol", "alice"
+	bot := openItem{Key: threadKey(4500, 4500), Class: classBot, Kind: itemThread, By: "lint-bot[bot]"}
+	l := openLedger{
+		Handed: map[string]time.Time{ann1.Key: openNow.Add(-time.Hour), ann2.Key: openNow.Add(-2 * time.Hour), alices.Key: openNow.Add(-3 * time.Hour),
+			bot.Key: openNow.Add(-4 * time.Hour)},
+		Waited: map[string]time.Time{"alice": openNow.Add(-5 * time.Hour)},
+	}
+	items := []openItem{ann1, ann2, fresh, alices, bot}
+	l.Read.Others = items
+	waited := maps.Clone(l.Waited)
+	keys := l.lastReadWaits()
+	if want := "changes:rev-ann@" + strconv.FormatInt(openNow.Add(-2*time.Hour).UnixNano(), 10); !slices.Contains(keys, want) {
+		t.Errorf("a CI fix by hand's waits = %v, want %s", keys, want)
+	}
+	if !maps.Equal(l.Waited, waited) {
+		t.Errorf("lastReadWaits wrote the ledger it read: waited %v", l.Waited)
+	}
+	l.seedWaited(items)
+	if want := map[string]time.Time{"rev-ann": openNow.Add(-2 * time.Hour), "alice": openNow.Add(-5 * time.Hour)}; !maps.Equal(l.Waited, want) {
+		t.Errorf("waited = %v, want %v", l.Waited, want)
+	}
+}
+
 // A change request a reviewer makes while a loop runs beside her item that
 // waits for you is pushback all the same: the loop's waits name her
 // (FixState.Waits, pushbackKey), so the next cycle's file, read again from

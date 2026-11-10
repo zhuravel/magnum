@@ -232,8 +232,9 @@ type openLedger struct {
 	WaitWhy     string               `json:"wait_why,omitempty"`
 	Spell       openSpell            `json:"spell,omitzero"`
 	// Waited are the reviewers (Account form, lower case) one of whose
-	// items waited for the author, with when the look first saw one wait
-	// (noteWaited): a change request of theirs since waits for the author
+	// items waited for the author, with when the first began to: a loop's
+	// hand-off of it (seedWaited), else the look that first saw it wait
+	// (noteWaited). A change request of theirs since waits for the author
 	// too (pushback).
 	Waited map[string]time.Time `json:"waited,omitempty"`
 }
