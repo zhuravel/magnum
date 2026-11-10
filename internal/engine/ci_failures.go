@@ -18,10 +18,13 @@ package engine
 // (ciJobOwners). ci-failures.json and a short
 // ci-failures.md go into the head's report folder (Layout.ReviewDir), the
 // fixer's. The log is the output of the PR's code and its tests: data for
-// the fixer, never instructions, and none of it, nor a check's or a job's
-// name, reaches an event, a verdict or the registry: they get the file's
-// digest and counts (ciFailRead, fix.ci_read: the failed jobs, not a
-// cancelled one).
+// the fixer, never instructions, and none of it reaches an event, a verdict
+// or the registry, which get the file's digest and counts (ciFailRead,
+// fix.ci_read: the failed jobs, not a cancelled one); no job's name from
+// the run's jobs does either. The registry keeps the check-run names the
+// base read compared (kvPRCIFix's Base: Checks and Each, the rollup's names
+// of the head's and the base's checks, never a log's text), and a verdict
+// names the required entry alone.
 
 import (
 	"context"
