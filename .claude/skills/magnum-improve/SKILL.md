@@ -31,10 +31,10 @@ PR" and "never a second CODEX_HOME".
    With a factory registry it ends with the factory's tables, read from `factory since` (tasks, the PRs they
    published, their local review cycles and findings, failures, holds and alerts, operator inputs, the time per stage,
    the waits on you by cause, the take rate of the recommended answers by the role that raised the question, and each
-   task's `notes.md`, the liaison's notes, scrubbed), and `factory-reports.txt` lists the local review rounds' report
-   directories since then. A factory PR's comments by people are misses of its local review (lens 0), and the
-   factory's costs are lens 13's. A run whose lens 13 did not run leaves `factory since` where it was, so the next
-   run reads the factory's evidence this one left.
+   task's `notes.md`, the liaison's notes, scrubbed as the factory scrubs what it keeps, by `scripts/scrub.py`), and
+   `factory-reports.txt` lists the local review rounds' report directories since then. A factory PR's comments by
+   people are misses of its local review (lens 0), and the factory's costs are lens 13's. A run whose lens 13 did not
+   run leaves `factory since` where it was, so the next run reads the factory's evidence this one left.
    Read the summary yourself; it is the shared input of every analyst. Lens 13 runs whenever the factory's tables
    list a task.
 3. **Analysis wave.** Start the analysts in [lenses.md](lenses.md) in parallel, each with the evidence path and its

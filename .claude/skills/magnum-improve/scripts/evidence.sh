@@ -783,11 +783,11 @@ if [[ -f $fdb ]]; then
 	# liaison's notes. A span of task_spans lasts until the next span of its task; the last one runs to now, or to the
 	# task's last change when it is done or stopped (magnum factory stats measures its waits so), and every span is
 	# clipped to the window.
-	python3 - "$fdb" "$fsince" "$ftasks" >>"$out" <<'PY' ||
-import errno, json, os, re, stat, subprocess, sys
+	python3 - "$fdb" "$fsince" "$ftasks" "$(dirname "$0")/scrub.py" >>"$out" <<'PY' ||
+import errno, json, os, re, runpy, stat, subprocess, sys
 from datetime import datetime, timezone
 
-fdb, fsince, ftasks = sys.argv[1:4]
+fdb, fsince, ftasks, scrub_py = sys.argv[1:5]
 NOTES_LINES, NOTES_MAX = 80, 1 << 20
 
 
@@ -796,75 +796,12 @@ def sql(q):
     return json.loads(res.stdout or "[]")
 
 
-# The scrub the factory runs before it keeps text (internal/factory/runtime/scrub.go, after execx.Redact): GitHub
-# tokens, JWTs, Authorization values and private keys; AWS, Slack, OpenAI, Anthropic, GitLab, Stripe and Google keys;
-# the values of password=, token: and the like (the key stays); emails; host names and IPv4 addresses. Each pattern is
-# the Go one word for word (Go's end of text, $, is \Z here), which selftest.sh checks.
-REDACT = re.compile("|".join([
-    r"(?:gho_|ghs_|ghp_|ghu_|ghr_|github_pat_)[A-Za-z0-9_]+",
-    r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
-    r"(?i:authorization:\s*(?:bearer|token|basic)\s+)\S+",
-    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\Z)",
-]), re.ASCII)
-TOKENS = re.compile("|".join([
-    r"\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[0-9A-Z]{16}\b",
-    r"\bxox[abposr]-[A-Za-z0-9-]{10,}",
-    r"\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}",
-    r"\bglpat-[A-Za-z0-9_-]{16,}",
-    r"\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}",
-    r"\bAIza[0-9A-Za-z_-]{35}\b",
-]), re.ASCII)
-PAIRS = re.compile(r'''(?i)\b((?:aws_)?(?:secret(?:_access)?_key|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret))(\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)''', re.ASCII)
-EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", re.ASCII)
-HOST = re.compile(r"(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|dev|app|ai|cloud|internal|local|lan|corp|intra|info|biz|tech|xyz|site|us|uk|de|ua|eu|me|cc|tv|gg)\b|\b(?:\d{1,3}\.){3}\d{1,3}\b", re.ASCII)
-# REDACT, TOKENS and PAIRS run on the whole text, in the Go scrub's order, since a private key, an Authorization value
-# and a key's value (on the next line, or quoted over lines) cross a line break; EMAIL and HOST, which cannot, run on
-# each line kept. Python's engine, unlike Go's, backtracks for minutes on some long words (a dotted run, an eyJ
-# repeated), so first a word (a run of characters without whitespace) longer than WORD_MAX becomes [...], and keeps
-# the key it ends with, whose value is the next word. No line is cut: what the Go scrub masks across words is masked
-# here (a cut before the masks parted keys from their values). The slowest text measured at the notes' 1 MiB cap,
-# one line of 253-character dotted words, takes 5 s. And HOST runs on each run of the characters a host name or an address is made of: a match never leaves such a
-# run, and the characters around a run are no word characters, so the matches are the same as on the whole line; a
-# run longer than a host name may be (253 characters) is masked whole.
-WORD_MAX, HOST_MAX = 2000, 253
-WORD = re.compile(r"\S+")
-# the key (and its separator) a long word ends with: the word's value is the next word, which must stay masked
-KEYEND = re.compile(r"""(?i)(?<![A-Za-z0-9_])(?:authorization|(?:aws_)?(?:secret(?:_access)?_key|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret))[=:]["']?$""", re.ASCII)
-HOST_RUN = re.compile(r"[A-Za-z0-9_.-]+")
-
-
-def redacted(m):
-    s = m.group(0)
-    i = s.find(":")
-    return s[: i + 1] + " <redacted>" if i >= 0 and s.lower().startswith("authorization") else "<redacted>"
-
-
-def host(m):
-    run = m.group(0)
-    if "." not in run:
-        return run
-    return "<host>" if len(run) > HOST_MAX else HOST.sub("<host>", run)
-
-
-def capped(m):
-    w = m.group(0)
-    if len(w) <= WORD_MAX:
-        return w
-    k = KEYEND.search(w[-40:])
-    return "[...]" + (k.group(0) if k else "")
-
-
-def scrub_lines(text, keep=0):
-    """The lines of text scrubbed, the last keep of them (0: all), and how many it left out."""
-    text = WORD.sub(capped, text or "")
-    text = PAIRS.sub(r"\1\2<redacted>", TOKENS.sub("<redacted>", REDACT.sub(redacted, text)))
-    lines = text.splitlines()
-    left = max(0, len(lines) - keep) if keep else 0
-    return [HOST_RUN.sub(host, EMAIL.sub("<email>", line)) for line in lines[left:]], left
-
-
-def scrub(s):
-    return "\n".join(scrub_lines(s)[0])
+# The scrub the factory runs before it keeps text (internal/factory/runtime/scrub.go, after execx.Redact), in scrub.py
+# beside this script: Go's patterns word for word, with Go's meaning, so that it masks every byte the Go scrub masks.
+# Its docstring says how it stays fast without dropping text first; selftest.sh and the Go fuzz
+# FuzzEvidenceScrubMasksEveryByteScrubMasks hold it to the Go scrub.
+SCRUB = runpy.run_path(scrub_py, run_name="scrub")
+scrub, scrub_lines = SCRUB["scrub"], SCRUB["scrub_lines"]
 
 
 def clip(s, n):

@@ -24,8 +24,11 @@ files: resolve the files they render first, then `go test ./internal/agents -upd
 the commits whose subject master already has (a resolved commit no longer matches its patch), then gates, pushes
 and builds.
 
-`scripts/selftest.sh` tests land.sh, restart.sh and eval-at.sh against throwaway repositories with fakes; run it
-after changing a script.
+`scripts/selftest.sh` tests land.sh, restart.sh, eval-at.sh and evidence.sh against throwaway repositories with
+fakes; run it after changing a script. `scripts/scrub.py`, evidence.sh's port of the factory's scrub, must mask every
+byte the Go scrub masks: after changing it or the Go scrub, also fuzz it for a few minutes,
+`go test -run '^$' -fuzz FuzzEvidenceScrubMasksEveryByteScrubMasks ./internal/factory/runtime` (its seeds run in
+`make test`).
 
 After landing, tell every running agent that master moved: the new sha, the files the landed work touched, and the
 migration numbers now taken.

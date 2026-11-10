@@ -31,11 +31,12 @@
 #     own since (--factory-since: its tables, notes and report directories clipped to it), a since that is no time
 #     refused, the report directories since a UTC since in any time zone, the scrub's patterns against the Go
 #     files with a sample of each (values across a line break and past the 80-line cut too), a long dotted line and
-#     600 KB of eyJ scrubbed in seconds, a word over 2,000 characters dropped whole and no line cut, so no part of a
-#     long secret and no secret parted from its key shows, no notes read through a link, from a folder, an unreadable file, a file over
-#     1 MiB or a foreign folder, notes that start as a left-out note does scrubbed all the same, lens 13's stats
-#     command with the local date of the factory's since,
-#     and a since that is no real time and wrong arguments refused.
+#     600 KB of eyJ scrubbed in seconds with no word dropped and no line cut, so no part of a long secret and no
+#     secret parted from its key shows, nor the secrets that go on past a word over 2,000 characters (a quote, a
+#     -----BEGIN or a key in it, a key before " :" or " =", a glued authorization:Bearer), no notes read through a
+#     link, from a folder, an unreadable file, a file over 1 MiB or a foreign folder, notes that start as a left-out
+#     note does scrubbed all the same, lens 13's stats command with the local date of the factory's since, and a
+#     since that is no real time and wrong arguments refused.
 # git, make and sqlite3 are real; mise, go and bin/magnum are fakes on PATH.
 # It prints one line per check and stops at the first failure.
 set -euo pipefail
@@ -116,14 +117,14 @@ chmod +x "$tmp/bin/mise" "$tmp/bin/go" "$tmp/fake-magnum"
 export PATH=$tmp/bin:$PATH FAKE_MAGNUM=$tmp/fake-magnum FAKE_MAGNUM_ARGS=$tmp/magnum-args FAKE_GO_PWD=$tmp/go-pwd
 export MAGNUM_DB=$tmp/no-registry.db
 
-# The throwaway repository: the scripts at their place in the tree, a gate and
+# The throwaway repository: the scripts (and scrub.py, which evidence.sh loads) at their place in the tree, a gate and
 # a build that do nothing real, a DECISIONS.md, and a bare origin.
 repo=$tmp/repo
 scripts=$repo/.claude/skills/magnum-improve/scripts
 git init -q --bare -b master "$tmp/origin.git"
 git init -q -b master "$repo"
 mkdir -p "$scripts" "$repo/docs" "$repo/internal/agents/testdata"
-cp "$here"/*.sh "$scripts/"
+cp "$here"/*.sh "$here/scrub.py" "$scripts/"
 printf 'test:\n\t@true\nbuild:\n\t@mkdir -p bin && cp "$$FAKE_MAGNUM" bin/magnum\n' >"$repo/Makefile"
 printf 'bin/\n' >"$repo/.gitignore"
 cat >"$repo/docs/DECISIONS.md" <<'EOF'
@@ -672,7 +673,7 @@ echo '- UNREADABLE-NOTE' >"$ev/factory-tasks/15/notes.md"
 chmod 000 "$ev/factory-tasks/15/notes.md"
 echo 'a task folder that is a file' >"$ev/factory-tasks/16"
 # Task 17's notes hold two secrets of one word each, over 2,000 characters, each with a marker where its end would
-# show after the [...] marker if a long line were cut inside the word.
+# show if a long line were cut inside the word.
 mkdir -p "$ev/factory-tasks/17"
 python3 -c 'print("- Authorization: Bearer " + "T" * 1500 + "BEARER-END" + "U" * 900)
 print("- password: " + "P" * 1450 + "PASSWORD-END" + "Q" * 938)' >"$ev/factory-tasks/17/notes.md"
@@ -693,6 +694,22 @@ print(build("password: B1-SECRET "))
 print(build("Authorization: Bearer B2-SECRET "))
 print(build('password: "B3a-SECRET B3b-SECRET" '))
 print(build("-----BEGIN PRIVATE KEY----- B4a-SECRET B4b-SECRET -----END PRIVATE KEY-----  "))
+PYX
+# Task 19's notes hold R54's shapes: secrets that start inside a word over 2,000 characters, or right after one, and go
+# on past it, each with a marker on the next line (the notes' lines are cut to 400 characters when shown, so a marker
+# after the long word would be cut away whether masked or not). The scrub dropped such a word for speed, and the
+# quote, the -----BEGIN, the key or the Authorization: in it with it.
+mkdir -p "$ev/factory-tasks/19"
+python3 - >"$ev/factory-tasks/19/notes.md" <<'PYX'
+X = "- " + "x" * 2100
+print('- password: "' + "x" * 2100 + "\nR54-QUOTE-SECRET\"")
+print(X + '.password="R54-QUOTED-START\nR54-QUOTED-TAIL"')
+print(X + "-----BEGIN RSA PRIVATE KEY-----\nR54-KEY-BODY\n-----END RSA PRIVATE KEY-----")
+print("- -----BEGIN PRIVATE KEY-----" + "M" * 2100 + "\nR54-GLUED-BODY\n-----END PRIVATE KEY-----")
+print(X + ".password :\nR54-SPACED-COLON")
+print(X + ".token =\nR54-SPACED-EQUALS")
+print(X + "authorization:Bearer\nR54-GLUED-BEARER")
+print(X + "authorization: Bearer\nR54-NO-BOUNDARY")
 PYX
 started=$SECONDS
 MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$fdb MAGNUM_FACTORY_TASKS=$ev/factory-tasks \
@@ -805,13 +822,15 @@ TZ=Asia/Tokyo MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_
 ok "evidence.sh lists the report directories since its UTC since in any time zone"
 
 # 18. The scrub of the notes is the factory's own: every pattern of execx.Redact and runtime.Scrub stands in
-#     evidence.sh word for word (Go's end of text, $, is Python's \Z), and no sample of them is left in evidence.md.
-#     The first half reads only the backtick literals inside regexp.MustCompile( calls of the two Go files, so a
-#     pattern written another way escapes it, and a pattern that stands only in a comment of evidence.sh passes it.
+#     scrub.py, which evidence.sh loads, word for word (its go() compiles them with Go's meaning), and no sample of
+#     them is left in evidence.md. The first half reads only the backtick literals inside regexp.MustCompile( calls
+#     of the two Go files, so a pattern written another way escapes it, and a pattern that stands only in a comment of
+#     scrub.py passes it; the Go fuzz FuzzEvidenceScrubMasksEveryByteScrubMasks (internal/factory/runtime) checks
+#     what the patterns mask.
 #     Only the samples pin how the patterns are applied: their order, their replacements and on what text (the whole
 #     text, so that a value on the next line is masked as the Go scrub masks it).
 repo_root=$(cd "$here/../../../.." && pwd)
-run python3 - "$repo_root/internal/execx/execx.go" "$repo_root/internal/factory/runtime/scrub.go" "$scripts/evidence.sh" <<'PY'
+run python3 - "$repo_root/internal/execx/execx.go" "$repo_root/internal/factory/runtime/scrub.go" "$scripts/scrub.py" <<'PY'
 import re, sys
 
 *gos, port = sys.argv[1:]
@@ -827,11 +846,11 @@ for g in gos:
             depth += 0 if raw else (c == "(") - (c == ")")
             i += 1
         pats += re.findall(r"`([^`]*)`", src[m.end():i])
-missing = [p for p in pats if p.replace("|$)", r"|\Z)") not in text]
-print("%d patterns of the Go scrub, missing from evidence.sh: %s" % (len(pats), missing))
+missing = [p for p in pats if p not in text]
+print("%d patterns of the Go scrub, missing from scrub.py: %s" % (len(pats), missing))
 sys.exit(1 if len(pats) < 13 or missing else 0)
 PY
-[[ $rc == 0 ]] || fail "evidence.sh holds every pattern of the factory's scrub"
+[[ $rc == 0 ]] || fail "scrub.py holds every pattern of the factory's scrub"
 for leak in "${leaks[@]}"; do
     ! grep -Fq -- "$leak" "$ev/fout/evidence.md" || fail "the notes' sample $leak is scrubbed: $(grep -F -- "$leak" "$ev/fout/evidence.md" | cut -c1-200)"
 done
@@ -841,11 +860,12 @@ grep -A2 -Fx '### Task 9 (task 9, -)' "$ev/fout/evidence.md" | grep -Fxq '(1 ear
 ok "evidence.sh scrubs the notes with every pattern of the factory's scrub, and no sample of them is left"
 
 # 19. A long dotted line and a long run of eyJ, which Python's regex engine (unlike Go's) backtracks on for minutes,
-#     are scrubbed in seconds: a word over 2,000 characters becomes [...], so the dotted word that fills the line is
-#     dropped.
+#     are scrubbed in seconds with no word dropped first: the dotted word that fills the line is a run of host
+#     characters longer than a host name, masked whole, and the eyJ, no secret, shows cut to 400 characters.
 [[ $run1_secs -lt 20 ]] || fail "evidence.sh with a 20,000-character dotted line and 600 KB of eyJ in the notes took ${run1_secs}s"
-grep -Fxq '> - [...]' "$ev/fout/evidence.md" ||
-    fail "the long dotted line is cut away: $(grep -c '^> - a\.a\.' "$ev/fout/evidence.md")"
+grep -Fxq '> - <host>' "$ev/fout/evidence.md" && ! grep -q '^> - a\.a\.' "$ev/fout/evidence.md" &&
+    grep -A2 -Fx '### Task 13 (task 13, -)' "$ev/fout/evidence.md" | grep -Fxq "> - $(printf 'eyJ%.0s' $(seq 1 132))ey" ||
+    fail "the long dotted line is masked as a host, the eyJ cut to 400 characters: $(grep -c '^> - a\.a\.' "$ev/fout/evidence.md") $(grep -A2 -Fx '### Task 13 (task 13, -)' "$ev/fout/evidence.md" | cut -c1-80 | tr '\n' ';')"
 ok "evidence.sh scrubs a 20,000-character dotted line and 600 KB of eyJ in the notes in ${run1_secs}s"
 
 # 20. The notes are read only from a plain notes.md of 1 MiB at most, in a task folder that is no link and is named
@@ -894,12 +914,12 @@ for args in "--factory 3d $ev/bad" "3d $ev/bad extra" "--factory-since"; do
 done
 ok "evidence.sh refuses a since that is no real time and wrong arguments, and takes --factory-since anywhere"
 
-# 23. A word over 2,000 characters is dropped whole: a secret word that long shows no part of it after the [...]
-#     marker, and the key before it is masked with it.
+# 23. A secret word over 2,000 characters is masked whole, as the Go scrub masks it: no part of it shows, and the key
+#     before it stays.
 grep -Fxq '> - Authorization: <redacted>' "$f_md" && grep -Fxq '> - password: <redacted>' "$f_md" &&
     ! grep -Eq 'BEARER-END|PASSWORD-END|TTTTTTTTTT|UUUUUUUUUU|PPPPPPPPPP|QQQQQQQQQQ' "$f_md" ||
     fail "a secret word over 2,000 characters shows no part: $(grep -A3 -Fx '### Task 17 (task 17, -)' "$f_md" | cut -c1-200 | tr '\n' ';')"
-ok "evidence.sh drops a word over 2,000 characters whole, so no part of a long secret is shown"
+ok "evidence.sh masks a secret word over 2,000 characters whole, so no part of a long secret is shown"
 
 # 24. No line is cut before the masks run, so no secret is parted from its key: a value on the line after a key that
 #     ends a long line, and the value, token, quoted words or key body after a key that a 1,000-character window would
@@ -907,6 +927,23 @@ ok "evidence.sh drops a word over 2,000 characters whole, so no part of a long s
 ! grep -Eq 'NEXTLINE-SECRET-A|B1-SECRET|B2-SECRET|B3a-SECRET|B3b-SECRET|B4a-SECRET|B4b-SECRET' "$f_md" ||
     fail "a secret near the cut of a long line shows: $(grep -Eo '.{0,40}(NEXTLINE-SECRET-A|B[1-4][ab]?-SECRET).{0,10}' "$f_md" | tr '\n' ';')"
 ok "evidence.sh parts no secret from its key in a long line"
+
+# 25. R54: a secret that starts inside a word over 2,000 characters, or right after one, and goes on past it is masked
+#     as the Go scrub masks it, one check per shape: a quote or a -----BEGIN inside the word opens a value or a key
+#     that goes on (also a key's header glued to a long body), a long word ends in a key whose separator follows
+#     after a space, and a long word ends in authorization:Bearer glued (or Authorization: after a word character,
+#     which Go's pattern takes too).
+r54() { grep -Eo ".{0,60}($1).{0,10}" "$f_md" | tr '\n' ';'; }
+grep -Fxq '### Task 19 (task 19, -)' "$f_md" || fail "task 19's notes are listed: $(fsect 'Factory liaison notes' "$f_md" | cut -c1-300)"
+! grep -Eq 'R54-QUOTE-SECRET|R54-QUOTED-TAIL|R54-KEY-BODY|R54-GLUED-BODY' "$f_md" ||
+    fail "a quote or a -----BEGIN inside a word over 2,000 characters opens a secret that is masked: $(r54 'R54-QUOTE-SECRET|R54-QUOTED-TAIL|R54-KEY-BODY|R54-GLUED-BODY')"
+ok "evidence.sh masks a value or a key that a quote or a -----BEGIN inside a word over 2,000 characters opens"
+! grep -Eq 'R54-SPACED-COLON|R54-SPACED-EQUALS' "$f_md" ||
+    fail "the value of a key that ends a long word, its separator after a space, is masked: $(r54 'R54-SPACED-COLON|R54-SPACED-EQUALS')"
+ok "evidence.sh masks the value of a key that ends a word over 2,000 characters, its separator after a space"
+! grep -Eq 'R54-GLUED-BEARER|R54-NO-BOUNDARY' "$f_md" ||
+    fail "the token of an authorization: that ends a long word is masked: $(r54 'R54-GLUED-BEARER|R54-NO-BOUNDARY')"
+ok "evidence.sh masks the token of authorization:Bearer glued at the end of a word over 2,000 characters"
 
 
 echo "selftest: $checks checks passed"
