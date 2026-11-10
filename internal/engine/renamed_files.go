@@ -49,10 +49,12 @@ func (r renamedFiles) serves(d github.PRDetails, head string) bool {
 // again, since the path a rename leaves is the new base's.
 // It returns the record to keep once the PR is upserted (nil: none new).
 // When the REST list cannot be read (no lister, an error, the poll's file
-// fetches spent), in keeps no file list and no updatedAt: the registry
-// keeps the list it had, which for a head that moved is no list of the
-// head (the gates refuse without a class and decide again), and the next
-// poll reads the Details and tries again.
+// fetches spent), in keeps no file list and no updatedAt, and names the
+// head unlisted (store.GitHubPR.FilesUnlisted): the registry drops a list
+// it kept for that head (an earlier build's, without the paths its renames
+// leave, or one GitHub gave before a retarget) and keeps one of another
+// head, which is no list of this one either, so the gates refuse without a
+// class and decide again; the next poll reads the Details and tries again.
 func (e *Engine) withRenamedFrom(ctx context.Context, gh GitHub, repo store.Repo, prID int64, d github.PRDetails, in *store.GitHubPR, budget *int) *renamedFiles {
 	if !d.FilesRenamed || in.Files == nil {
 		return nil
@@ -80,7 +82,7 @@ func (e *Engine) withRenamedFrom(ctx context.Context, gh GitHub, repo store.Repo
 		files, complete, err = lister.ListFiles(ctx, repo.Owner, repo.Name, in.Number)
 	}
 	if err != nil {
-		in.Files, in.GHUpdatedAt = nil, nil
+		in.FilesUnlisted, in.Files, in.GHUpdatedAt = in.Files.HeadSHA, nil, nil
 		if e.changed("renamed:"+full, err.Error()) {
 			e.event(ctx, "warn", "repo:"+full, "poll.files_error",
 				fmt.Sprintf("the paths #%d's renames leave: %v (it has no file list until a later poll reads them)", in.Number, err), nil)

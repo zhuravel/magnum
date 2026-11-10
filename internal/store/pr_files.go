@@ -52,6 +52,17 @@ ON CONFLICT (pr_id) DO UPDATE SET head_sha = excluded.head_sha, paths_json = exc
 	return err
 }
 
+// dropPRFiles deletes prID's file list when it belongs to head (one the
+// poller could not list whole: GitHubPR.FilesUnlisted); "" and a list of
+// another head are left alone (inside the upsert's transaction).
+func (s *Store) dropPRFiles(ctx context.Context, tx *sql.Tx, prID int64, head string) error {
+	if head == "" {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, "DELETE FROM pr_files WHERE pr_id = ? AND head_sha = ?", prID, head)
+	return err
+}
+
 // scanPRFiles scans head_sha, paths_json, truncated and fetched_at.
 func scanPRFiles(dest *PRFiles) []any {
 	return []any{&dest.HeadSHA, jsonCol(&dest.Paths), &dest.Truncated, timeCol(&dest.FetchedAt)}

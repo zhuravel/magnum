@@ -144,6 +144,36 @@ func TestUpsertStoresTheFileListWhenTheHeadOrTheListMoves(t *testing.T) {
 	}
 }
 
+// An upsert that names a head unlisted (FilesUnlisted: the poller could not
+// read its whole list) drops a stored list of that head, which an earlier
+// build or a list before a retarget left, and keeps one of another head;
+// either way, the gates read no list of the head.
+func TestUpsertDropsTheListOfAHeadThePollerCannotList(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	in := GitHubPR{RepoID: repo.ID, NodeID: "PR_7", Number: 7, URL: "https://github.com/talkable/talkable/pull/7", HeadSHA: "h1",
+		GHState: GHOpen, InitialState: PRQueued, Identity: "talkable-app", Files: &PRFiles{HeadSHA: "h1", Paths: []string{"scripts/x.rb"}}}
+	res, err := st.UpsertPRFromGitHub(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Files, in.FilesUnlisted = nil, "h0"
+	if _, err := st.UpsertPRFromGitHub(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := st.PRFilesOf(ctx, res.PR.ID); err != nil || !ok || got.HeadSHA != "h1" {
+		t.Fatalf("a list of another head = %+v, %v, %v: want it kept", got, ok, err)
+	}
+	in.FilesUnlisted = "h1"
+	if res, err = st.UpsertPRFromGitHub(ctx, in); err != nil || res.Changed {
+		t.Fatalf("unlisted head: changed %v, %v", res.Changed, err)
+	}
+	if got, ok, err := st.PRFilesOf(ctx, res.PR.ID); err != nil || ok {
+		t.Fatalf("the unlisted head's list = %+v, %v, %v: want none", got, ok, err)
+	}
+}
+
 // filesPR upserts PR number of repo with a file list at its head, then sets
 // its GitHub state.
 func filesPR(t *testing.T, st *Store, repoID int64, number int, draft bool, ghState string, mergedAt *time.Time, paths ...string) PR {

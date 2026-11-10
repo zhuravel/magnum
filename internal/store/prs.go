@@ -174,6 +174,13 @@ type GitHubPR struct {
 	// head (pr_files). Not Changed either: the list moves no eligibility
 	// (skip_paths reads its own).
 	Files *PRFiles
+	// FilesUnlisted is a head the Details named whose whole list the
+	// poller could not read (the paths its renames leave, from the REST
+	// list), with Files nil: a stored list of that head is dropped
+	// (dropPRFiles), so nothing reads an older list of the same head (an
+	// earlier build's, one GitHub gave before a retarget) as its whole one.
+	// "" keeps the stored list.
+	FilesUnlisted string
 	// ActivityAt is the Details' activity time (nil = keep the stored one).
 	// The stored prs.activity_at is the later of it and the PR's last head
 	// move the poller saw (head_changed_at, but not its insertion); a head
@@ -283,6 +290,9 @@ func (s *Store) UpsertPRFromGitHub(ctx context.Context, in GitHubPR) (PRUpsert, 
 			if err := s.savePRFiles(ctx, tx, cur.ID, *in.Files); err != nil {
 				return err
 			}
+		}
+		if err := s.dropPRFiles(ctx, tx, cur.ID, in.FilesUnlisted); err != nil {
+			return err
 		}
 		if len(u.sets) == 0 && u.err == nil {
 			res.PR = cur
