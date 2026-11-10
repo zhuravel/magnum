@@ -176,18 +176,24 @@ func (e *Engine) requestCIFix(ctx context.Context, pr store.PR, dry bool, asked 
 		if _, ok := ciWorkOf(f, nil, nil); ok {
 			return nil
 		}
-		_, why, _, _ := ciFixWords(f, short)
+		_, why, _, _, _ := ciFixWords(f, short)
 		return errors.New(why)
 	}
 	if err := refusal(); err != nil {
-		return "", err
+		if _, _, _, _, recheck := ciFixWords(f, short); !recheck || e.d.DryRun { // a read that listed no failed job is checked again below
+			return "", err
+		}
 	}
 	if !e.d.DryRun {
 		acts := e.ciActions(e.ciDispatchIdentity(repo.FullName(), *w)) // ci_actions.go
 		e.ensureCIRead(ctx, acts, repo, pr, &f)
 		acts.end()
-		if f.ci.failed == "" { // noteRunMoved: magnum's run of the workflow ran again since it failed
-			return "", fmt.Errorf("%s was run again at %s after magnum's run of it failed: nothing failed to fix", f.ciStart.Workflow, short)
+		if f.ci.failed == "" { // noteRunMoved: the run the look named ran again since it failed
+			again := f.ciStart.Workflow + " was run again at " + short + " after magnum's run of it failed"
+			if f.ciStart.Moved.IsZero() && f.ciRerun.Run != nil {
+				again = f.ciRerun.Run.named() + " was run again at " + short + " after magnum's re-run of it failed"
+			}
+			return "", errors.New(again + ": nothing failed to fix")
 		}
 		if err := refusal(); err != nil {
 			return "", err

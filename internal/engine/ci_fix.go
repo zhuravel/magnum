@@ -9,10 +9,10 @@ package engine
 // Completion, whose `needs` has no always()), and the run the look started
 // (ci_dispatch) or re-ran that ended failure (ciShape3: GitHub's rollup
 // leaves a dispatched run out, and Completion is posted on success alone;
-// a re-run of the dispatched run by hand, or a later start of its workflow
-// at the head, that the head's runs read before a start show running or
-// passed takes the failure back: noteRunMoved). Before a start, all of
-// these hold (ciWorkOf): nothing else is open
+// a re-run of that run by hand, or a later start of the dispatched
+// workflow at the head, that the head's runs read before a start show
+// running or passed takes the failure back: noteRunMoved). Before a start,
+// all of these hold (ciWorkOf): nothing else is open
 // (findings first: a findings push moves the head and runs CI again, and
 // the fixer does one job at a time), no required check still runs, the PR's
 // own files at the head are listed whole and change no CI config
@@ -258,62 +258,66 @@ func ciWorkOf(f openFacts, work, needs []openItem) (openItem, bool) {
 
 // ciFixWords is rule 11's verdict on a failed required check that is no
 // work (no CI fix starts now): needs you with why, or waits; readBase asks
-// the look to read the base (lookOpen). A check the look gathered nothing
-// for (a rollup's failure, no facts) needs you as before CI fix mode.
-func ciFixWords(f openFacts, short string) (verdict, why string, until time.Time, readBase bool) {
+// the look to read the base (lookOpen), and recheck to check a read that
+// listed no failed job of a run the look named against the head's runs
+// (ensureCIRead, ciRunMoved: at most once a settle_quiet), so a re-run of
+// it by hand is read again. A check the look gathered nothing for (a
+// rollup's failure, no facts) needs you as before CI fix mode.
+func ciFixWords(f openFacts, short string) (verdict, why string, until time.Time, readBase, recheck bool) {
 	c := f.ciFix
 	failed := ciFailedAt(f, short)
 	base := cmp.Or(c.baseName, "the base")
 	clock := func(t time.Time) string { return waitClock(t, f.now) }
 	if !c.on || len(f.ci.failedRuns) == 0 {
-		return OpenNeedsYou, failed, time.Time{}, false
+		return OpenNeedsYou, failed, time.Time{}, false, false
 	}
 	if at := c.atHead; at.Head != "" {
 		switch {
 		case at.Outcome == ciOutcomeCannot, at.Outcome == ciOutcomeMerged && at.Why != "": // a cannot, or one on the parent's merge
-			return OpenNeedsYou, failed + ": the CI fix found " + cmp.Or(ciCannotClasses[at.Why], ciCannotClasses["unfixed"]), time.Time{}, false
+			return OpenNeedsYou, failed + ": the CI fix found " + cmp.Or(ciCannotClasses[at.Why], ciCannotClasses["unfixed"]), time.Time{}, false, false
 		case at.Outcome == ciOutcomeStopped:
-			return OpenNeedsYou, failed + ": the CI fix at " + short + " was stopped; it is yours", time.Time{}, false
+			return OpenNeedsYou, failed + ": the CI fix at " + short + " was stopped; it is yours", time.Time{}, false, false
 		case at.Outcome == ciOutcomePushed, at.Outcome == ciOutcomeMerged:
-			return OpenNeedsYou, failed + ": the CI fix at " + short + " ended; it is yours", time.Time{}, false
+			return OpenNeedsYou, failed + ": the CI fix at " + short + " ended; it is yours", time.Time{}, false, false
 		}
-		return OpenNeedsYou, failed + ": the CI fix at " + short + " failed; it is yours", time.Time{}, false
+		return OpenNeedsYou, failed + ": the CI fix at " + short + " failed; it is yours", time.Time{}, false, false
 	}
 	switch {
 	case c.refused != "":
-		return OpenNeedsYou, failed + ": " + c.refused, time.Time{}, false
+		return OpenNeedsYou, failed + ": " + c.refused, time.Time{}, false, false
 	case c.starts >= ciFixMax:
-		return OpenNeedsYou, fmt.Sprintf("%s after %s: the CI is yours", failed, textx.Count(c.starts, "CI fix", "CI fixes")), time.Time{}, false
+		return OpenNeedsYou, fmt.Sprintf("%s after %s: the CI is yours", failed, textx.Count(c.starts, "CI fix", "CI fixes")), time.Time{}, false, false
 	case f.ci.pending:
-		return OpenWaits, failed + "; a required check still runs", time.Time{}, false
+		return OpenWaits, failed + "; a required check still runs", time.Time{}, false, false
 	case c.filesWait:
-		return OpenWaits, failed + "; magnum reads the PR's files with the next poll", time.Time{}, false
+		return OpenWaits, failed + "; magnum reads the PR's files with the next poll", time.Time{}, false, false
 	case c.base == "" && c.baseDue && f.low:
-		return OpenWaits, failed + "; reading " + base + "'s CI waits for the GitHub budget", time.Time{}, false
+		return OpenWaits, failed + "; reading " + base + "'s CI waits for the GitHub budget", time.Time{}, false, false
 	case c.base == "" && c.baseDue:
-		return OpenWaits, failed + "; reading " + base + "'s CI", time.Time{}, true
+		return OpenWaits, failed + "; reading " + base + "'s CI", time.Time{}, true, false
 	case c.base == "" && c.baseFailed:
-		return OpenUnknown, failed + "; reading " + base + "'s CI failed; trying again at " + clock(c.baseRetry), c.baseRetry, false
+		return OpenUnknown, failed + "; reading " + base + "'s CI failed; trying again at " + clock(c.baseRetry), c.baseRetry, false, false
 	case c.base == ciBaseFailed:
 		return OpenNeedsYou, fmt.Sprintf("%s, and on %s at %s too: magnum fixes only a check that passes on the base", failed, base,
-			textx.ShortSHA(c.baseSHA)), time.Time{}, false
+			textx.ShortSHA(c.baseSHA)), time.Time{}, false, false
 	case c.base == ciBaseNever:
 		return OpenNeedsYou, fmt.Sprintf("%s; %s's last %d commits never ran it: magnum fixes only a check that passes on the base", failed, base,
-			ciBaseDepth), time.Time{}, false
+			ciBaseDepth), time.Time{}, false, false
 	case c.base == ciBaseRunning:
-		return OpenWaits, fmt.Sprintf("%s; it still runs on %s at %s", failed, base, textx.ShortSHA(c.baseSHA)), time.Time{}, c.baseDue && !f.low
+		return OpenWaits, fmt.Sprintf("%s; it still runs on %s at %s", failed, base, textx.ShortSHA(c.baseSHA)), time.Time{}, c.baseDue && !f.low, false
 	case c.read.UnreadWhy != "":
-		return OpenNeedsYou, failed + ": magnum cannot read why (" + c.read.UnreadWhy + ")", time.Time{}, false
+		return OpenNeedsYou, failed + ": magnum cannot read why (" + c.read.UnreadWhy + ")", time.Time{}, false, false
 	case c.read.Unread:
 		retry := c.read.At.Add(f.settle.max)
-		return OpenUnknown, failed + "; reading the failed jobs failed; trying again at " + clock(retry), retry, false
+		return OpenUnknown, failed + "; reading the failed jobs failed; trying again at " + clock(retry), retry, false, false
 	case c.read.Running:
 		retry := c.read.At.Add(f.settle.max)
-		return OpenWaits, failed + "; a re-run of its run has not ended", retry, false
+		return OpenWaits, failed + "; a re-run of its run has not ended", retry, false, false
 	case c.read.Head != "" && c.read.Jobs == 0:
-		return OpenNeedsYou, failed + ": its run lists no failed job magnum can read; it is yours", time.Time{}, false
+		return OpenNeedsYou, failed + ": its run lists no failed job magnum can read; it is yours", time.Time{}, false,
+			slices.ContainsFunc(f.ci.failedRuns, func(c ciFailedCheck) bool { return c.Run != 0 }) // a run the look named may run again
 	}
-	return OpenNeedsYou, failed, time.Time{}, false
+	return OpenNeedsYou, failed, time.Time{}, false, false
 }
 
 // ciAfter is what the waits and the idle verdict of f's head add when the
@@ -405,7 +409,7 @@ func ciEntries(runs []ciFailedCheck) []string {
 // ended otherwise, or never came, leaves ci as it is (ci_missing). The
 // start's run may be a re-run of it by hand or a later start of the
 // workflow the look found (s.Moved, noteRunMoved): "the newest run of
-// ci.yml ended failure".
+// ci.yml ended failure"; the re-run's attempt one by hand (r.Moved).
 func ciShape3(ci openCI, s ciStart, r ciRerun) openCI {
 	if len(ci.missing) == 0 || ci.running {
 		return ci
@@ -423,6 +427,9 @@ func ciShape3(ci openCI, s ciStart, r ciRerun) openCI {
 	case r.asked() && r.Seen.ended() && !r.Seen.NoJob && runFailed(r.Seen.Conclusion):
 		run, workflow = r.Run.ID, r.Run.Workflow
 		how = "magnum's re-run of " + r.Run.named() + " ended " + strings.ReplaceAll(r.Seen.Conclusion, "_", " ")
+		if !r.Moved.IsZero() {
+			how = "the newest attempt of " + r.Run.named() + " ended " + strings.ReplaceAll(r.Seen.Conclusion, "_", " ")
+		}
 	default:
 		return ci
 	}
@@ -440,22 +447,24 @@ func ciShape3(ci openCI, s ciStart, r ciRerun) openCI {
 // runFailed reports whether a run's conclusion is a failure of its jobs.
 func runFailed(conclusion string) bool { return conclusion == "failure" || conclusion == "timed_out" }
 
-// ciDispatchNow is the run that speaks for c, a failed check of magnum's
-// start of ci_dispatch's workflow (ciShape3: c.Dispatched, its run c.Run),
-// among runs, the head's runs: the newest run a dispatch started of c's
-// workflow file at the head after c.Run (someone's start by hand), else
-// c.Run at its newest attempt (a re-run by hand keeps the run's id). moved
+// ciRunNow is the run that speaks for c, a failed check of a run the look
+// named (ciShape3: c.Run, magnum's start of ci_dispatch's workflow or its
+// re-run of a run that started no job), among runs, the head's runs: c.Run
+// at its newest attempt (a re-run by hand keeps the run's id), or, for
+// magnum's start (c.Dispatched), the newest run a dispatch started of c's
+// workflow file at the head after c.Run (someone's start by hand). Zero
+// where c names no run, or GitHub no longer lists it at the head. moved
 // reports that it no longer says that c.Run failed: it is a later run, or
 // c.Run's newest attempt has not ended or ended without failing. No rollup
-// shows any of these runs, so only the head's runs tell.
-func ciDispatchNow(runs []github.WorkflowRun, c ciFailedCheck) (github.WorkflowRun, bool) {
+// shows a dispatched run, so only the head's runs tell.
+func ciRunNow(runs []github.WorkflowRun, c ciFailedCheck) (github.WorkflowRun, bool) {
 	i := slices.IndexFunc(runs, func(r github.WorkflowRun) bool { return r.ID == c.Run })
-	if !c.Dispatched || i < 0 {
+	if c.Run == 0 || i < 0 {
 		return github.WorkflowRun{}, false
 	}
 	now := runs[i]
 	for _, r := range runs {
-		if r.Event == "workflow_dispatch" && r.Workflow == c.WorkflowFile && r.CreatedAt.After(now.CreatedAt) {
+		if c.Dispatched && r.Event == "workflow_dispatch" && r.Workflow == c.WorkflowFile && r.CreatedAt.After(now.CreatedAt) {
 			now = r
 		}
 	}
@@ -703,10 +712,10 @@ func ciChecksFor(runs []ciFailedCheck, b ciBaseRead) []ciFailedCheck {
 // look decided on the CI item), in the look's batch acts, unless a read of
 // the failed set stands at the head and the runs it named did not move
 // since (ciRunMoved); it records the read (kvPRCIFix's Read) and reports
-// whether it read, so the look decides again. Where magnum's dispatched
-// run ran again since it failed (the read's Moved), it records that run in
-// the start instead (noteRunMoved), which takes the failure out of f, and
-// reports true.
+// whether it read, so the look decides again. Where the run the look named
+// ran again since it failed (the read's Moved), it records that run in the
+// start or the re-run instead (noteRunMoved), which takes the failure out
+// of f, records no read, and reports true.
 func (e *Engine) ensureCIRead(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR, f *openFacts) bool {
 	if f.ciFix.read.Head != "" && !e.ciRunMoved(ctx, acts, repo, pr, f) {
 		return false
@@ -732,10 +741,10 @@ func (e *Engine) ensureCIRead(ctx context.Context, acts *ciActions, repo store.R
 // ciRunMoved reports whether the standing read of f's failed checks is of
 // a run the look named (ciShape3: magnum's run or re-run of the head, which
 // no rollup shows, so a re-run of it by hand shows nowhere else) whose
-// newest attempt is no longer the one read, or has not ended, or, for
-// magnum's dispatched run, that a later start of its workflow at the head
-// speaks for (ciDispatchNow). It reads the head's runs, as the batch acts,
-// at most once per settle_quiet (the
+// newest attempt is no longer the one read, has not ended or did not fail,
+// or, for magnum's dispatched run, that a later start of its workflow at
+// the head speaks for (ciRunNow). It reads the head's runs, as the batch
+// acts, at most once per settle_quiet (the
 // standing read's Checked, recorded), before the start the read would
 // feed: a start that waits for a free slot costs no read a look. A read of
 // no named run, or one that fails, leaves the read standing.
@@ -759,14 +768,14 @@ func (e *Engine) ciRunMoved(ctx context.Context, acts *ciActions, repo store.Rep
 		return false
 	}
 	for _, c := range f.ci.failedRuns {
-		if _, moved := ciDispatchNow(runs, c); moved {
+		run, moved := ciRunNow(runs, c)
+		switch {
+		case moved: // a newer attempt or run that has not ended or did not fail
 			return true
-		}
-		run, ok := newestRunOf(runs, c)
-		if c.Run == 0 || !ok {
+		case run.ID == 0: // no run the look named, or one GitHub no longer lists
 			continue
 		}
-		if i := slices.IndexFunc(r.Runs, func(x ciReadRun) bool { return x.ID == run.ID }); !run.Done() || i < 0 || r.Runs[i].Attempt != run.Attempt {
+		if i := slices.IndexFunc(r.Runs, func(x ciReadRun) bool { return x.ID == run.ID }); i < 0 || r.Runs[i].Attempt != run.Attempt {
 			return true
 		}
 	}
@@ -784,25 +793,39 @@ func (e *Engine) ciRunMoved(ctx context.Context, acts *ciActions, repo store.Rep
 	return false
 }
 
-// noteRunMoved records run, which now speaks for magnum's run of
-// ci_dispatch's workflow that f's failed check named (ciDispatchNow: a
-// re-run of it by hand, someone's later start of the workflow at the
-// head), as the start's run (kvPRCIStart's Run) with when the look found it
-// (Moved), and takes the failure back out of f: the look waits for that run
-// as for its start's (openMissingCI), and the poll reads it and the head's
-// checks while it runs and until settle_max after Moved (awaitCIRuns), so
-// the Completion of a run that passed is read though it moves no count of
-// the rollup. A record it could not write is said (writeCIStart), and f
-// changes all the same: the next look finds the run again.
+// noteRunMoved records run, which now speaks for the run the look named
+// that f's failed check failed in (ciRunNow: a re-run of it by hand, or
+// someone's later start of ci_dispatch's workflow at the head), with when
+// the look found it (Moved): as the start's run (kvPRCIStart's Run) for
+// magnum's start, as the attempt (kvPRCIRerun's Seen) for its re-run of a
+// run that started no job. It takes the failure back out of f: the look
+// waits for that run as for its own (openMissingCI, openRerunVerdict), and
+// the poll reads it and the head's checks while it runs and until
+// settle_max after Moved (awaitCIRuns), so the Completion of a run that
+// passed is read though it moves no count of the rollup. A record it could
+// not write is said, and f changes all the same: the next look finds the
+// run again.
 func (e *Engine) noteRunMoved(ctx context.Context, repo store.Repo, pr store.PR, f *openFacts, run github.WorkflowRun) {
-	s := f.ciStart
-	s.Run, s.Moved = &ciRun{ID: run.ID, Status: run.Status, Conclusion: run.Conclusion}, e.now()
-	e.writeCIStart(ctx, pr, s)
-	e.log.Info("autofix open: the CI workflow ran again after magnum's run of it failed", "subject", prSubject(repo, pr.Number),
-		"head", textx.ShortSHA(pr.HeadSHA), "workflow", s.Workflow, "run", run.ID, "attempt", run.Attempt, "status", run.Status,
-		"conclusion", run.Conclusion)
-	f.ciStart = s
-	f.ci = ciShape3(e.openCI(ctx, repo.FullName(), pr), s, f.ciRerun)
+	now := e.now()
+	switch r := f.ciRerun; {
+	case slices.ContainsFunc(f.ci.failedRuns, func(c ciFailedCheck) bool { return c.Dispatched }):
+		s := f.ciStart
+		s.Run, s.Moved = &ciRun{ID: run.ID, Status: run.Status, Conclusion: run.Conclusion}, now
+		e.writeCIStart(ctx, pr, s)
+		f.ciStart = s
+	case r.Run != nil && r.Run.ID == run.ID:
+		r.Seen, r.Moved = &ciAttempt{Attempt: run.Attempt, Status: run.Status, Conclusion: run.Conclusion}, now
+		if err := writeKVJSON(ctx, e, kvPRCIRerun(pr.ID), "the look's re-run", r); err != nil {
+			e.warnUnlessStopped(ctx, err, "autofix open: record the re-run's attempt by hand", "pr", pr.ID)
+		}
+		f.ciRerun = r
+	default: // no record names the run: the failure stays out of this look
+		f.ci = e.openCI(ctx, repo.FullName(), pr)
+		return
+	}
+	e.log.Info("autofix open: a run that failed ran again", "subject", prSubject(repo, pr.Number), "head", textx.ShortSHA(pr.HeadSHA),
+		"workflow", run.Workflow, "run", run.ID, "attempt", run.Attempt, "status", run.Status, "conclusion", run.Conclusion)
+	f.ci = ciShape3(e.openCI(ctx, repo.FullName(), pr), f.ciStart, f.ciRerun)
 	f.ciFix = e.ciFixFactsOf(ctx, repo, pr, *f, f.ledger)
 }
 

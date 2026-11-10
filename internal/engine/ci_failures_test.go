@@ -356,7 +356,9 @@ func TestTheCIFailuresSummaryHeadsEachCheckByItsRequiredEntry(t *testing.T) {
 }
 
 // A run whose newest attempt has not ended (someone re-ran it) is read
-// as running: nothing else is read, and no file is written.
+// as running: nothing else is read, and no file is written. Where the
+// look named the run (magnum's start or re-run), the attempt is the run
+// that moved past the failure, for the look to record (noteRunMoved).
 func TestTheCIReaderWaitsForARunsNewestAttempt(t *testing.T) {
 	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"), requiredCompletion)
 	h.openOwn(prSpec{head: fixHead})
@@ -367,10 +369,14 @@ func TestTheCIReaderWaitsForARunsNewestAttempt(t *testing.T) {
 	h.setFailedJobs()
 	pr, repo := h.pr(2), store.Repo{Owner: "talkable", Name: "talkable", DefaultBranch: "main"}
 	acts := h.e.ciActions("zhuravel")
-	read := h.e.readCIFailures(h.ctx, acts, repo, pr, []ciFailedCheck{{Entry: "Completion", Name: "Completion", WorkflowFile: "ci.yml", Run: ciRunID}})
-	acts.end()
-	if !read.Running || read.Unread || read.File != "" {
+	read := h.e.readCIFailures(h.ctx, acts, repo, pr, []ciFailedCheck{{Entry: "Completion", Name: "Completion", WorkflowFile: "ci.yml"}})
+	if !read.Running || read.Unread || read.File != "" || read.Moved != nil {
 		t.Errorf("read = %+v, want running with no file", read)
+	}
+	read = h.e.readCIFailures(h.ctx, acts, repo, pr, []ciFailedCheck{{Entry: "Completion", Name: "Completion", WorkflowFile: "ci.yml", Run: ciRunID}})
+	acts.end()
+	if read.Moved == nil || read.Moved.Attempt != 2 || read.Running || read.Unread || read.File != "" {
+		t.Errorf("read of the run the look named = %+v, want its attempt 2 as moved, with no file", read)
 	}
 	if n := len(h.ghCalls("run_jobs:")) + len(h.ghCalls("job_log:")); n != 0 {
 		t.Errorf("%d jobs or log reads of a run that runs", n)

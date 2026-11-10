@@ -284,7 +284,7 @@ func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
 	case (f.ci.running || s.Run.running()) && started:
 		return waits(startedWhy(), startWait)
 	case (f.ci.running || f.ciRerun.Seen.running()) && f.ciRerun.asked(): // ci_rerun.go
-		return waits(rerunWhy(f, what), f.ciRerun.At.Add(f.settle.max))
+		return waits(rerunWhy(f, what), later(f.ciRerun.At, f.ciRerun.Moved).Add(f.settle.max))
 	case f.ci.running || f.now.Before(due):
 		return waits(what+" has not started", due)
 	}

@@ -53,7 +53,9 @@ func kvPRCIRerun(prID int64) string { return fmt.Sprintf("pr.%d.ci_rerun", prID)
 // still counts), Failed why GitHub refused (its status, never its message;
 // a 403 adds cannotStartWorkflows' words) and Refused why magnum did not
 // (At zero); Seen is the re-run's new attempt as the poll last read it
-// (nil: none seen).
+// (nil: none seen), and Moved when the look found that attempt, after it
+// failed, run again by hand (noteRunMoved: Seen is that attempt since),
+// which the poll waits for as for the re-run's (rerunWaits).
 type ciRerun struct {
 	Head         string     `json:"head"`
 	ReadAt       time.Time  `json:"read_at"`
@@ -66,6 +68,7 @@ type ciRerun struct {
 	Failed       string     `json:"failed,omitempty"`
 	Refused      string     `json:"refused,omitempty"`
 	Seen         *ciAttempt `json:"seen,omitempty"`
+	Moved        time.Time  `json:"moved,omitzero"`
 }
 
 // ciNoJob is a run that started no job: its id, its workflow file, the
@@ -374,9 +377,10 @@ func (e *Engine) openCIRerun(ctx context.Context, acts *ciActions, repo store.Re
 
 // rerunWaits reports whether the poll reads the head's runs for r, the
 // look's re-run (awaitCIRuns) at now: GitHub took it, and it is less than
-// settleMax old or its new attempt had not ended at the last read.
+// settleMax old (or its attempt by hand that the look found, Moved) or its
+// new attempt had not ended at the last read.
 func (r ciRerun) rerunWaits(now time.Time, settleMax time.Duration) bool {
-	return r.asked() && (now.Before(r.At.Add(settleMax)) || r.Seen.running())
+	return r.asked() && (now.Before(later(r.At, r.Moved).Add(settleMax)) || r.Seen.running())
 }
 
 // seeRerun is the poll's read of the new attempt of r's run (awaitCIRuns):
@@ -491,8 +495,10 @@ func openRerunVerdict(f openFacts, v *OpenVerdict, waits func(string, time.Time)
 		return needsYou(fmt.Sprintf("magnum's re-run of %s failed (%s)%s", run, r.Failed, onGitHub)), true
 	case r.asked() && r.Seen.ended() && r.Seen.NoJob:
 		return needsYou(fmt.Sprintf("%s failed to start twice%s%s, or push", run, runEnd(r.Seen.Conclusion), onGitHub)), true
-	case r.asked() && f.now.Before(r.At.Add(f.settle.max)):
-		return waits(rerunWhy(f, what), r.At.Add(f.settle.max)), true
+	case r.asked() && f.now.Before(later(r.At, r.Moved).Add(f.settle.max)):
+		return waits(rerunWhy(f, what), later(r.At, r.Moved).Add(f.settle.max)), true
+	case r.asked() && r.Seen.ended() && !r.Moved.IsZero():
+		return needsYou(fmt.Sprintf("%s; that attempt ended%s without it%s", rerunWhy(f, what), runEnd(r.Seen.Conclusion), onGitHub)), true
 	case r.asked() && r.Seen.ended():
 		return needsYou(fmt.Sprintf("magnum re-ran %s at %s and it ended%s without it%s", run, waitClock(r.At, f.now), runEnd(r.Seen.Conclusion), onGitHub)), true
 	case r.asked():
@@ -520,7 +526,12 @@ func queuedWhy(id int64, status string) string {
 }
 
 // rerunWhy is the wait for the look's re-run of f: "magnum re-ran run
-// 42673098082 of ci.yml at 20:47, as required check build did not run".
+// 42673098082 of ci.yml at 20:47, as required check build did not run", or
+// for an attempt by hand after its attempt failed (Moved): "run
+// 42673098082 of ci.yml was run again after magnum's re-run of it failed".
 func rerunWhy(f openFacts, what string) string {
+	if !f.ciRerun.Moved.IsZero() {
+		return f.ciRerun.Run.named() + " was run again after magnum's re-run of it failed"
+	}
 	return fmt.Sprintf("magnum re-ran %s at %s, as %s did not run", f.ciRerun.Run.named(), waitClock(f.ciRerun.At, f.now), what)
 }

@@ -296,7 +296,8 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 		v, work = e.openCIRerun(ctx, acts, repo, pr, &f, v, work)
 	}
 	ci := v.Verdict == OpenFixing && len(work) == 1 && work[0].Kind == itemCI
-	if !e.d.DryRun && ci && e.ensureCIRead(ctx, acts, repo, pr, &f) { // ci_failures.go: why it failed, once, before the start
+	// ci_failures.go: why it failed, once, before the start, or again where a read of a run it named listed no failed job
+	if !e.d.DryRun && (ci || v.recheckCIRead) && e.ensureCIRead(ctx, acts, repo, pr, &f) {
 		v, work, needs = decideOpen(f)
 		ci = v.Verdict == OpenFixing && len(work) == 1 && work[0].Kind == itemCI
 	}

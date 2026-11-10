@@ -326,6 +326,76 @@ func TestAPassedReRunByHandOfMagnumsFailedRunLeavesThePRIdle(t *testing.T) {
 	}
 }
 
+// The same holds for the look's re-run of a run that started no job
+// (ciRerun): its new attempt that ended failure is the failed check, and a
+// re-run of it by hand that passed takes the failure back where the reader
+// finds it. The look waits for it, the poll reads the head's checks, and
+// the PR is idle; no failed job is read and no CI fix starts. It said "its
+// run lists no failed job magnum can read; it is yours".
+func TestAPassedReRunByHandOfMagnumsFailedReRunLeavesThePRIdle(t *testing.T) {
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"), requiredCompletion, func(h *harness) {
+		h.gh.defaultFiles = []string{"app/models/offer.rb"}
+	})
+	cannotFixer(h, git, "flaky") // a CI fix that starts on the old failure ends
+	h.othersPassed(fixHead)
+	h.tick() // reviewed clean
+	h.setBaseCI(github.CheckPassed)
+	at := h.clock.Now().Add(-time.Hour)
+	if err := writeKVJSON(h.ctx, h.e, kvPRCIRerun(h.pr(2).ID), "the look's re-run", ciRerun{Head: fixHead, ReadAt: at,
+		Run: &ciNoJob{ID: ciRunID, Workflow: "ci.yml", Attempt: 1, Conclusion: "failure"}, At: at,
+		Seen: &ciAttempt{Attempt: 2, Status: "completed", Conclusion: "failure"}}); err != nil {
+		t.Fatal(err)
+	}
+	others := othersChecks()
+	h.setCounts(2, fakeCounts(others)) // the rollup's counts have not moved
+	passed := failedCIRun(fixHead, 3)
+	passed.Conclusion = "success"
+	h.setHeadRuns(fixHead, passed)
+	h.setJobs(ciRunID, 0)
+	h.setCI(2, "SUCCESS", append(others, ciCompletion(github.CheckPassed))...)
+	h.pastSettle()
+	h.tick()
+	h.wantOpen(OpenWaits, "CI at a1a1a1a: run 500 of ci.yml was run again after magnum's re-run of it failed")
+	h.advance(time.Minute)
+	h.tick()
+	h.wantOpen(OpenIdle, "nothing open at a1a1a1a")
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 0 || len(h.ghCalls("run_jobs:")) != 0 {
+		t.Errorf("%d fix runs and %d jobs reads, want none", n, len(h.ghCalls("run_jobs:")))
+	}
+}
+
+// A read of magnum's failed run that listed no failed job needs you, and
+// stands no longer than a settle_quiet: the look checks it against the
+// head's runs as it does before a start (ciRunMoved, at most once a
+// settle_quiet), so a re-run of that run by hand that failed again is read,
+// and its CI fix starts on the new attempt's logs.
+func TestAReadThatListedNoFailedJobIsCheckedAgainstTheHeadsRuns(t *testing.T) {
+	h, git := ciShape3Harness(t)
+	cannotFixer(h, git, "flaky")
+	h.setJobs(ciRunID, 0)
+	h.pastSettle()
+	h.tick()
+	h.wantOpen(OpenNeedsYou, "(magnum's run of ci.yml ended failure): its run lists no failed job magnum can read; it is yours")
+	reads := len(h.ghCalls("head_runs:"))
+	h.advance(time.Minute)
+	h.tick()
+	if n := len(h.ghCalls("head_runs:")); n != reads {
+		t.Errorf("the head's runs read %d times more within settle_quiet", n-reads)
+	}
+	attempt := failedCIRun(fixHead, 2)
+	attempt.Event = "workflow_dispatch"
+	h.setHeadRuns(fixHead, attempt)
+	h.setFailedJobs()
+	h.advance(3 * time.Minute)
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 1 {
+		t.Fatalf("fix runs = %d, want the CI fix on attempt 2", n)
+	}
+	if rec := h.ciRecordOf(); rec.Read.Jobs != 2 || len(rec.Read.Runs) != 1 || rec.Read.Runs[0].Attempt != 2 {
+		t.Errorf("read = %+v, want attempt 2's two failed jobs", rec.Read)
+	}
+}
+
 // A failure green on the base starts a CI fix once: the look reads the
 // failed jobs once (the head's runs, the run's jobs, two logs), writes
 // ci-failures.json and its summary beside the fixer's report, records only

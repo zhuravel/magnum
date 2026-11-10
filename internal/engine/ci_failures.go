@@ -106,7 +106,7 @@ func (b ciBaseCheck) passedOnBase(name string) bool {
 // none: the entry's runs), and the base's word on it (zero: not read).
 // Dispatched: Run is magnum's start of ci_dispatch's workflow, which no
 // rollup shows, nor a re-run of it or a later start of the workflow at the
-// head (ciDispatchNow).
+// head (ciRunNow).
 type ciFailedCheck struct {
 	Entry        string
 	Name         string
@@ -138,7 +138,8 @@ type ciFailRead struct {
 	Unread    bool      `json:"unread,omitempty"`
 	UnreadWhy string    `json:"unread_why,omitempty"`
 	// Running: the newest attempt of a failed check's run has not ended (a
-	// re-run someone started by hand): nothing was read, and the look reads
+	// re-run someone started by hand of a run the rollup shows; one of a
+	// run the look named is Moved): nothing was read, and the look reads
 	// again settle_max after At.
 	Running bool `json:"running,omitempty"`
 	// Runs are the runs the read read, at their attempts; Checked is when
@@ -146,10 +147,10 @@ type ciFailRead struct {
 	// at those attempts before a start (ciRunMoved).
 	Runs    []ciReadRun `json:"runs,omitempty"`
 	Checked time.Time   `json:"checked,omitzero"`
-	// Moved, never recorded: the run that now speaks for magnum's run of
-	// ci_dispatch's workflow that a failed check named moved past its
-	// failure (ciDispatchNow): nothing was read, and the look records the
-	// run in the start instead (noteRunMoved).
+	// Moved, never recorded: the run that now speaks for a run the look
+	// named (magnum's start or re-run) moved past its failure (ciRunNow):
+	// nothing was read, and the look records the run in the start or the
+	// re-run instead (noteRunMoved).
 	Moved *github.WorkflowRun `json:"-"`
 }
 
@@ -244,8 +245,8 @@ func ciReadKey(checks []ciFailedCheck, at func(ciFailedCheck) string) string {
 // client, a refused token, the runs or the jobs unread) is Unread with no
 // file: a log alone that could not be read is that job's Unread; a run whose
 // newest attempt has not ended is Running, with no file either, and a check
-// of magnum's dispatched run that ran again since it failed
-// (ciDispatchNow) is Moved, with no file.
+// of a run the look named (magnum's start or re-run) that ran again since
+// it failed (ciRunNow) is Moved, with no file.
 func (e *Engine) readCIFailures(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR, checks []ciFailedCheck) ciFailRead {
 	now := e.now()
 	read := ciFailRead{Head: pr.HeadSHA, At: now}
@@ -280,7 +281,7 @@ func (e *Engine) readCIFailures(ctx context.Context, acts *ciActions, repo store
 	found := make([]bool, len(checks))
 	byRun := map[int64][]github.WorkflowJob{}
 	for i, c := range checks {
-		if run, moved := ciDispatchNow(headRuns, c); moved { // magnum's run ran again: nothing failed to read
+		if run, moved := ciRunNow(headRuns, c); moved { // the run the look named ran again: nothing failed to read
 			read.Moved = &run
 			return read
 		}

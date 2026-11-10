@@ -141,8 +141,10 @@ type OpenVerdict struct {
 	// readRuns: rule 11 reads the runs at the head (openReadRuns,
 	// ci_rerun.go); rerun: it re-runs the head's run that started no job
 	// (openRerunCI); readCIBase: it reads the base's CI of a failed
-	// required check (readCIBase, ci_fix.go). None is stored.
-	readRuns, rerun, readCIBase bool
+	// required check (readCIBase, ci_fix.go); recheckCIRead: it checks a
+	// read that listed no failed job of a run it named against the head's
+	// runs (ensureCIRead, ci_fix.go). None is stored.
+	readRuns, rerun, readCIBase, recheckCIRead bool
 }
 
 // OpenNeed is one thing that needs the operator: its kind (thread, review,
@@ -629,11 +631,11 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 	}
 	switch {
 	case f.ci.failed != "": // ci_fix.go: no CI fix starts now
-		verdict, why, until, readBase := ciFixWords(f, short)
+		verdict, why, until, readBase, recheck := ciFixWords(f, short)
 		if verdict == OpenNeedsYou {
 			v.Needs = append(v.Needs, OpenNeed{Kind: "ci", URL: f.pr.URL})
 		}
-		v.Until, v.readCIBase = until, readBase
+		v.Until, v.readCIBase, v.recheckCIRead = until, readBase, recheck
 		return say(verdict, why), nil, needs
 	case len(f.ci.missing) > 0:
 		return openMissingCI(f, v), nil, needs
