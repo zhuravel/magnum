@@ -406,3 +406,19 @@ func TestTheLinksAnImportMayFoldToCountAgainstTheBudget(t *testing.T) {
 		t.Fatalf("an import beside %d links: %v, want errLinksTooMany", len(links), err)
 	}
 }
+
+// Claude Code ends an import's path where its Markdown text token ends: a
+// team's AGENTS.md that reads "Read **@docs/guide.md** first." or links
+// the import ([@docs/guide.md](docs/guide.md)) loads docs/guide.md, so a
+// PR that changes the guide changes what the agents load.
+func TestAnImportInMarkdownsEmphasisOrALinksTextIsATarget(t *testing.T) {
+	kinds := defaultKinds()
+	isConfig := func(p string) (string, bool) { return agentConfigPath(kinds, p) }
+	for _, text := range []string{"Read **@docs/guide.md** first.\n", "See [@docs/guide.md](docs/guide.md).\n"} {
+		tree, read := treeOf(map[string]string{"AGENTS.md": text, "docs/guide.md": "x\n"}, nil)
+		got, err := resolveConfigTargets(context.Background(), tree, isConfig, read)
+		if names, maybe := changedLinks(got, []string{"docs/guide.md"}); err != nil || !slices.Equal(names, []string{"AGENTS.md"}) || maybe {
+			t.Errorf("AGENTS.md %q: targets %q, %v: changedLinks = %q, %v; want AGENTS.md", text, got, err, names, maybe)
+		}
+	}
+}

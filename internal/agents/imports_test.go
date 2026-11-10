@@ -18,18 +18,19 @@ import (
 // relative path from the importing file's directory, a home (~) or an
 // absolute path as it is (code.claude.com/docs memory "Import additional
 // files"). ImportPaths reads them wider than Claude does, so magnum errs
-// toward a target: an @ at a line's start or after any character but a
-// letter or a digit (an e-mail address imports nothing), up to the first
-// blank a backslash does not escape, with and without the punctuation that
-// ends a sentence, in a code span or a fenced block too (Claude skips
-// those); a home or an absolute path is left out, since no commit's tree
-// holds it.
+// toward a target: an @ at a line's start, after a blank or where a text
+// token may start (here, after a code span's mark), up to the first blank
+// a backslash does not escape, with and without the punctuation that ends
+// a sentence, in a code span or a fenced block too (Claude skips those).
+// An @ inside a text token (after a letter in an e-mail address, a
+// parenthesis or a quote) imports nothing, and a home or an absolute path
+// is left out, since no commit's tree holds it.
 func TestImportPathsReadsClaudeCodesImports(t *testing.T) {
 	text := "# Team\n\n@AGENTS.md\nRead @.docs/datagrid-guide.md first, and @docs/style.md.\n" +
-		"- API conventions @Design\\ Docs/api-conventions.md\n(@notes/x.md) mail a@example.com\n" +
+		"- API conventions @Design\\ Docs/api-conventions.md\n(@notes/x.md) \"@y.md\" mail a@example.com\n" +
 		"`@README` keeps it literal for Claude.\n- @~/.claude/mine.md and @/etc/hosts\n@\n"
 	want := []string{"AGENTS.md", ".docs/datagrid-guide.md", "docs/style.md.", "docs/style.md", "Design Docs/api-conventions.md",
-		"notes/x.md)", "notes/x.md", "README`", "README"}
+		"README`", "README"}
 	if got, more := ImportPaths(text, 100); !slices.Equal(got, want) || more {
 		t.Fatalf("ImportPaths = %q, %v\nwant %q", got, more, want)
 	}
@@ -193,5 +194,83 @@ func TestASessionsImportsStayWithinTheWalksBudget(t *testing.T) {
 		}
 	case <-time.After(20 * time.Second):
 		t.Fatal("ProjectLinks of a CLAUDE.md with 300,000 imports still runs after 20s")
+	}
+}
+
+// Claude Code 2.1 lexes an instruction file with marked, without GFM, and
+// matches its import pattern only in the text tokens: a path ends where an
+// emphasis, a link's text, a code span, an image or inline HTML begins or
+// ends (**@docs/guide.md** loads docs/guide.md), a token after a code span
+// starts a path of its own, a zero-width no-break space ends one (JS's \s
+// holds it) while U+0085 does not, an escaped space at its end is trimmed,
+// and an HTML block that starts with a comment is read with its comments
+// taken out. ImportPaths gives each path Claude loads among its own;
+// an underscore inside a word is no emphasis, so @app_config gives no app.
+func TestImportPathsGivesThePathClaudeCodesMarkdownEnds(t *testing.T) {
+	for _, c := range []struct {
+		text string
+		want []string
+	}{
+		{"Read **@docs/guide.md** first.\n", []string{"docs/guide.md"}},
+		{"*@docs/b.md*\n", []string{"docs/b.md"}},
+		{"_x @docs/h.md_\n", []string{"docs/h.md"}},
+		{"See [@docs/guide.md](docs/guide.md).\n", []string{"docs/guide.md"}},
+		{"[@docs/d.md][r]\n\n[r]: x\n", []string{"docs/d.md"}},
+		{"@docs/e.md<br>\n", []string{"docs/e.md"}},
+		{"@docs/f.md<!-- x -->\n", []string{"docs/f.md"}},
+		{"<b>@docs/s.md</b>\n", []string{"docs/s.md"}},
+		{"@docs/t.md![i](x.png)\n", []string{"docs/t.md"}},
+		{"@docs/a.md`x`@docs/b.md\n", []string{"docs/a.md", "docs/b.md"}},
+		{"**@docs/my*file.md**\n", []string{"docs/my*file.md"}},
+		{"@docs/guide.md\ufeffsee\n", []string{"docs/guide.md"}},
+		{"@docs/a\u0085b.md\n", []string{"docs/a\u0085b.md"}},
+		{"Load @docs/a.md\\ \n", []string{"docs/a.md"}},
+		{"<!-- c --> @docs/a<!-- x -->.md\n", []string{"docs/a.md"}},
+	} {
+		got, more := ImportPaths(c.text, 100)
+		for _, w := range c.want {
+			if !slices.Contains(got, w) || more {
+				t.Errorf("ImportPaths(%q) = %q, %v; want %q among them", c.text, got, more, w)
+			}
+		}
+	}
+	if got, _ := ImportPaths("Use @app_config and @a__b.\n", 100); slices.Contains(got, "app") || slices.Contains(got, "a") {
+		t.Errorf("ImportPaths = %q: an underscore inside a word ends no path", got)
+	}
+}
+
+// Claude may end a path at any of the marks in a word, and start one after
+// each of them: read from each @ to each mark, a word of a million is a
+// quadratic count of paths. ImportPaths compares its readings within a
+// bound linear in the text and says more past it, at once; the imports of
+// ordinary text, however dense, stay within it.
+func TestImportPathsReadsWithinABoundLinearInItsText(t *testing.T) {
+	for _, text := range []string{"@" + strings.Repeat("a*", 1<<20), strings.Repeat("*@a", 1<<20), strings.Repeat("[@", 1<<20)} {
+		start := time.Now()
+		_, more := ImportPaths(text, 1_000_000)
+		if d := time.Since(start); !more || d > 10*time.Second {
+			t.Errorf("ImportPaths of %q... = more %v after %s; want more, at once", text[:12], more, d)
+		}
+	}
+	ruby := strings.Repeat("    @user = User.find(params[:id])\n    @posts = @user.posts.where(draft: false).order(:created_at)\n", 2000)
+	got, more := ImportPaths(ruby, 100_000)
+	for _, want := range []string{"user", "posts", "user.posts.where(draft:"} {
+		if !slices.Contains(got, want) || more {
+			t.Errorf("ImportPaths of Ruby = %q, %v; want %q", got, more, want)
+		}
+	}
+}
+
+// A session loads what Claude Code reads from an import in Markdown's
+// emphasis, a link's text or before a zero-width no-break space: the
+// imported file is one of ProjectLinks' targets, which the reload check
+// matches the new head's files with.
+func TestASessionReadsAnImportInMarkdownsEmphasis(t *testing.T) {
+	for _, text := range []string{"Read **@.docs/guide.md** first.\n", "See [@.docs/guide.md](.docs/guide.md).\n", "@.docs/guide.md\ufeffsee\n"} {
+		dir := t.TempDir()
+		writeFiles(t, dir, map[string]string{"CLAUDE.md": text, ".docs/guide.md": "x\n"})
+		if targets, partial := ProjectLinks(KindClaude, dir); !slices.Contains(targets, ".docs/guide.md") || partial {
+			t.Errorf("CLAUDE.md %q: ProjectLinks = %q, %v; want .docs/guide.md", text, targets, partial)
+		}
 	}
 }
