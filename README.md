@@ -3815,14 +3815,23 @@ its run ended (success) without it"). A run that never comes ("and no run came")
 would run its own CI with the repository's secrets, whose files GitHub did not list whole, or whose branch
 Magnum does not know) need you as above. The start waits for the end of `magnum pause` and for the GitHub
 budget of the poll identity and of the identity it starts as, not for quiet hours. That identity needs the
-right to run workflows: an App with Actions: write (and `actions = "write"` in its `token_permissions` where
-it sets them, since every token Magnum mints for it carries those alone), or a gh login that can push to the
-repository with the `repo` scope. A poll identity that is an App installation with Actions: read only
-cannot, and GitHub answers HTTP 403: set `ci_dispatch_as = "me"` (an `[[identity]]` name) to start it as one
-that can. Validation refuses a `ci_dispatch_as` that names no `[[identity]]`, and an App whose
-`token_permissions` leave out `actions = "write"`. A fixer App is such an App: its tokens
-carry contents and pull_requests write alone, and with `actions = "write"` it is no longer a valid fixer
-App, so name a gh identity or another App. A 403 that is no rate limit says so in
+right to run workflows: an App with Actions: write, or a gh login that can push to the repository with the
+`repo` scope. A poll identity that is an App installation with Actions: read only cannot, and GitHub answers
+HTTP 403: set `ci_dispatch_as = "me"` (an `[[identity]]` name) to start it as one that can. Validation refuses
+a `ci_dispatch_as` that names no `[[identity]]`, and an App whose `token_repositories` leave the repository
+out. An App whose `token_permissions` leave out `actions = "write"` may be `ci_dispatch_as`, a fixer App too
+(its tokens carry contents and pull_requests write alone, which its panes hold): for these calls alone (the
+start, the re-run below, and the reads of the runs and jobs they wait on) the daemon mints a token of its own
+with `actions = "write"` added to the App's `token_repositories` and `token_permissions`, one per look of a
+PR, poll of a repository or push of Magnum's, hands it to those gh calls in their environment alone and
+revokes it when they end, as it does for the push of a merge that carries workflow files. It is never written
+to a file, so no pane of the App gains it, and the App's own tokens stay as narrow as they were. Such an App
+needs Actions: write on its settings, accepted on its installation; until then GitHub refuses the mint, and
+the PR needs you with what to grant ("required check Completion did not run at a1b2c3d: magnum cannot read the
+head's runs (fixer-app may not use Actions: grant Actions: write on the App and accept it on the
+installation); run its workflow on the PR's branch, or push"); Magnum starts nothing then and reads the runs
+again `settle_max` later, and a start or a re-run GitHub refused so gives the same words in place of its
+status. A 403 that is no rate limit says so in
 `fix.open_ci_dispatch_failed` and in the verdict ("magnum's start of ci.yml failed (GitHub answered HTTP 403:
 talkable-app cannot start workflows, an App needs Actions: write; set [[repo]] ci_dispatch_as to an identity
 that can)"); the PR needs you as for any start GitHub refuses, and the head is not started again. The three
@@ -3862,7 +3871,8 @@ GitHub"), and when Magnum will not re-run it (`fix.open_ci_rerun_refused`: "magn
 for the end of `magnum pause` and for the GitHub budget as a start does ("required check build did not run;
 magnum re-runs run 42673098082 of ci.yml once the pause ends"), and the read waits for the budget ("magnum
 reads the head's runs once the GitHub budget allows"). The identity needs the right to run workflows, as for a
-start: `ci_dispatch_as` names one with or without `ci_dispatch`. A new head starts fresh.
+start (a fixer App's go over the daemon's own token, as above): `ci_dispatch_as` names one with or without
+`ci_dispatch`. A new head starts fresh.
 
 **What you see.**
 

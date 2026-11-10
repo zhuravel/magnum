@@ -4306,6 +4306,66 @@ skill versions); people add theirs to the sections before it, at the end of the 
   read of an attempt still queued or running past settle_max (else its second startup failure is never seen
   and the look waits for good).
 
+- **A fixer App as `ci_dispatch_as` makes the CI calls over a token of the daemon's own with Actions write**
+  (2026-11-10, the operator's choice for one repository, so that magnum's CI starts and re-runs on the
+  operator's own PRs show the factory's bot as their trigger). A fixer App's tokens carry contents and
+  pull_requests write alone (`fixerAppProblem`), which its panes hold in its gh config dir, so its own client
+  can neither read Actions runs nor re-run or start one (HTTP 403), and widening its `token_permissions` would
+  hand Actions write to every fixer pane, whose agent reads untrusted PR text and must never start workflows.
+  This partly reverses the 2026-11-08 entry on `ci_dispatch_as`, which refused such an App and rejected
+  starting as the fix identity: the pane still never holds a token that may use Actions. The precedent is the
+  daemon's push of a merge that carries workflow files (`identity.App.DaemonPushEnv`, push_token.go):
+  `identity.App.ActionsEnv` mints through the same code (`daemonEnv`: the mint, the list `sweepPushes` revokes
+  after `daemonPushHold`, the release that revokes the token once) a token narrowed to the App's
+  `token_repositories` with its `token_permissions` and `actions = "write"` added (write includes read, so one
+  token covers a batch's reads and its start), and hands it only as `GH_TOKEN` in the env of the gh commands,
+  over the App's `GH_CONFIG_DIR`, whose hosts.yml keeps the pane's token. The refresh's mint is unchanged, so
+  the panes' token never gains Actions. The engine makes the calls in batches (`ciActions`, ci_actions.go):
+  one per look of a PR (the read of the head's runs and of a run's jobs, the re-run, the start; ended before
+  the look starts a fixer), one per poll of a repository (`seeRerun`, `dispatchedRun`) and one per push magnum
+  made (`RecentRuns` and the start). A batch mints at its first call, at most once, and revokes at its end.
+  Every Actions endpoint of workflows.go needs Actions read on an App, so all six calls go through it. The
+  client over the token is the identity's own client `WithEnv` (`Deps.GitHubEnv`): the same runner and meter,
+  and no `Reauth` (a 401 of that token is no reason to refresh the App's own). It mints only for an App whose
+  `token_permissions` are set and leave out `actions = "write"` (`mintsActions`): a gh login keeps its client,
+  and so does an App without `token_permissions` (the installation's whole access, such as a poll App with
+  Actions: read only), whose mint with Actions write would get a 422 and break the reads that work today. The
+  record before the call is unchanged: the re-run and the start ask for their client after their record, so a
+  mint is never a start, and a mint that failed after the record counts as a failed start or re-run (needs
+  you, none again for the head), as a call whose answer was lost does. GitHub's 422 for the missing permission
+  is `identity.ErrActionsNotGranted`, and its words replace the 403's in a failed start's and re-run's record,
+  events and verdict ("fixer-app may not use Actions: grant Actions: write on the App and accept it on the
+  installation"; `actionsFailed`, one mapping for both, which replaced two copies). Since the batch's token is
+  write, a refused mint fails the read first: the re-run's record keeps the words (`ciRerun.UnreadWhy`), and
+  the look needs you with them before any start ("required check build did not run at a1a1a1a: magnum cannot
+  read the head's runs (...); run its workflow on the PR's branch, or push", kind ci_missing) and reads again
+  `settle_max` later. After magnum's push the refusal goes on to the start, which records it once for the
+  head, where a failed read would be asked again every tick. Validation accepts such an App as
+  `ci_dispatch_as`, alone or with `ci_dispatch`, and refuses an App whose `token_repositories` leave the
+  repository out (GitHub would refuse every call there). Rejected: widening the App's `token_permissions`
+  (every pane would hold Actions write), a token per call (a look that reads and re-runs would mint twice), a
+  read-only token for the poll's reads (a second mint for a look that reads and then re-runs; an installation
+  with Actions: read only now fails even the reads, which the grant words name), minting for every App (the
+  422 above), and a gh config dir of the daemon's own for the token (the App's panes run as the same user and
+  can read any file the daemon writes). The mint and the revoke are not metered (the identity's own HTTP
+  client), about two calls per batch. Tests, failing first by assertion with the seams in place (the batch
+  over the identity's own client, stubs of ActionsEnv and WithEnv):
+  TestAnActionsTokenAddsActionsAndIsWrittenNowhere, TestAnActionsTokenSaysWhenTheAppLacksActions,
+  TestWithEnvRunsAsTheParentOverTheBatchsToken,
+  TestTheLooksActionsCallsAsAFixerAppGoOverATokenOfTheDaemonsOwn,
+  TestTheLookStartsTheCIWorkflowAsAFixerAppOverATokenOfTheDaemonsOwn,
+  TestAPushMagnumMadeStartsTheCIWorkflowAsAFixerAppOverOneToken,
+  TestFromAppGivesABatchTheIdentitysClientOverItsToken,
+  TestAFixerAppThatMayNotUseActionsNeedsYouWithWhatToGrant, TestAFixerAppThatMayNotUseActionsStartsNothing,
+  TestAReRunAsAnAppThatMayNotUseActionsFailsWithWhatToGrant,
+  TestAPushMagnumMadeAsAnAppThatMayNotUseActionsMintsOnce, TestCIDispatchAsTakesAFixerApp (in place of
+  TestCIDispatchAsRefusesAnAppWhoseTokensCannotStartWorkflows) and
+  TestCIDispatchAsRefusesAnAppWhoseTokensDoNotReachTheRepository; guards that pass before the change:
+  TestAnActionsTokenLeftUnreleasedGoesAtTheNextRefreshAfterItsHold (the shared sweep),
+  TestTheLooksActionsCallsAsAGhLoginMintNothing, and the checks that talkable-app, an App without
+  `token_permissions`, mints nothing in TestTheReRunGoesAsCIDispatchAsWithoutCIDispatch and
+  TestTheLookStartsTheCIWorkflowAsCIDispatchAs.
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

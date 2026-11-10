@@ -225,11 +225,12 @@ func noJobRunAt(ctx context.Context, gh GitHub, owner, name, sha string) (found 
 }
 
 // openReadRuns is the look's one read of the runs at pr's head (rule 11
-// asked: v.readRuns), as startCI's identity (ciDispatchIdentity), and its
-// record (kvPRCIRerun): the run that started no job (noJobRunAt), a run
-// that has not ended, or a read that failed (Unread, said once per distinct
-// error: fix.open_ci_runs_error). A head the look re-ran or refused already
-// is not read again. ok is false when it did nothing (the record could not
+// asked: v.readRuns), in the look's batch acts (startCI's identity,
+// ciDispatchIdentity), and its record (kvPRCIRerun): the run that started
+// no job (noJobRunAt), a run that has not ended, or a read that failed
+// (Unread, said once per distinct error: fix.open_ci_runs_error; UnreadWhy
+// when GitHub would not mint the batch's token). A head the look re-ran or
+// refused already is not read again. ok is false when it did nothing (the record could not
 // be read or written).
 func (e *Engine) openReadRuns(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR) (ciRerun, bool) {
 	if stored, ok := e.storedRerun(ctx, pr); !ok || stored.decided() {

@@ -10311,7 +10311,11 @@ type Deps struct {
 	// slot or cleanup side effects, no toasts. See Recorder.
 	DryRun bool
 
-	GitHub     func(identity string) GitHub // poll client per identity (nil = none)
+	GitHub func(identity string) GitHub // poll client per identity (nil = none)
+	// GitHubEnv is identity's client over env, a token of the daemon's own
+	// for one batch of Actions calls (ci_actions.go; FromApp:
+	// github.Client.WithEnv); nil = none.
+	GitHubEnv  func(identity string, env map[string]string) GitHub
 	Herdr      Herdr
 	Agents     Agents
 	Rounds     func(identity string) Rounds // round runner per identity (nil = none)
@@ -18733,6 +18737,14 @@ func (c *Client) UpdateReviewBody(ctx context.Context, owner, repo string, numbe
     goes as JSON on gh's stdin, so a failing call logs none of it. It is marked
     Mutates, so execx.DryRun only plans it.
 
+func (c *Client) WithEnv(env map[string]string) *Client
+    WithEnv is a client that runs gh as c does with env laid over c's Env:
+    the daemon's client of one batch of Actions calls over a token minted for
+    it (GH_TOKEN, which gh answers with before GH_CONFIG_DIR's hosts.yml).
+    It keeps c's Run, Dir and Meter (the calls count against the identity's
+    budget) and has no Reauth: a 401 of that token is no reason to refresh the
+    identity's own. c is not changed.
+
 type CompareStats struct {
 	Commits   int // total_commits
 	Files     int // changed files; -1 when GitHub truncated the file list (CompareFileLimit)
@@ -20831,6 +20843,12 @@ const RefusedPushBase = "/use-magnum-push-not-git-push/"
 
 VARIABLES
 
+var ErrActionsNotGranted = errors.New("the App's installation lacks the Actions permission")
+    ErrActionsNotGranted is ActionsEnv's error when GitHub will not mint a token
+    with Actions write: the App, or its installation, lacks the permission (the
+    operator grants Actions: write on the App's settings and accepts it on the
+    installation).
+
 var ErrPlaceholderKey = errors.New("identity: placeholder private key")
     ErrPlaceholderKey matches (errors.Is) the error for a key variable that
     still holds the placeholder sentence the tracked mise.toml sets, instead of
@@ -20896,6 +20914,15 @@ func NewApp(cfg config.Identity, layout paths.Layout, client *http.Client, geten
     env var cfg.PrivateKeyEnv read through getenv (PEM text or a file path). Nil
     client, getenv or now default to a 30 s http.Client, os.Getenv and time.Now.
 
+func (a *App) ActionsEnv(ctx context.Context) (map[string]string, func(), error)
+    ActionsEnv mints a token for one batch of the daemon's Actions calls as
+    the App (engine ci_actions.go), narrowed to its token_repositories with its
+    token_permissions and actions = "write" added (write includes read), and
+    returns the env of those gh calls and the token's release as DaemonPushEnv
+    does: the token as GH_TOKEN over ConfigDir, whose hosts.yml keeps the
+    pane's token without Actions, no file written, revoked once released or past
+    daemonPushHold. GitHub's refusal of Actions is ErrActionsNotGranted.
+
 func (a *App) Check(ctx context.Context) (Report, error)
     Check verifies, in order: the private key, the JWT (GET /app), the
     installation and its permissions (pull_requests must be write; contents is
@@ -20931,7 +20958,8 @@ func (a *App) EnsureConfigDir(ctx context.Context) (string, error)
     it (hosts.yml + config.yml, 0600 files in a 0700 dir, written atomically).
     It rewrites the files whenever the token changed or a file is missing;
     call it on every daemon tick so long-lived panes never see an expired token.
-    It also drops the daemon's push tokens past their hold (DaemonPushEnv).
+    It also drops the daemon's own tokens past their hold (DaemonPushEnv,
+    ActionsEnv).
 
 func (a *App) Env(ctx context.Context) (map[string]string, error)
     Env implements Source: a fresh token written to ConfigDir, selected via
