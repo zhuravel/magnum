@@ -289,9 +289,13 @@ func (e *Engine) standingGateRefusal(ctx context.Context, a store.AutoApprovalPR
 // baseGateRefusal is the files gate's refusal (changedFilesRefusal) of
 // standing approval a's PR once its base branch is another than the one
 // the approval was made on, or last let stand on (kvAutoApprovalBase): a
-// retarget changes what GitHub lists the head as changing. An approval the
-// record does not name (one an earlier build made) takes the PR's base now
-// as its own, and stands.
+// retarget changes what GitHub lists the head as changing. The radar names
+// the base on every poll, the file list comes with the Details: until the
+// head's list was read against the base the PR names now
+// (store.PRFiles.BaseRef; a list stored without one too), it refuses and
+// records nothing, so the list GitHub gives for the new base is gated. An
+// approval the record does not name (one an earlier build made) takes the
+// PR's base now as its own, and stands.
 func (e *Engine) baseGateRefusal(ctx context.Context, a store.AutoApprovalPR) autoRefusal {
 	key, id, base := kvAutoApprovalBase(a.PRID), fmt.Sprintf("%d|", a.ID), deref(a.PR.BaseRef)
 	v, _ := e.getKV(ctx, key)
@@ -301,6 +305,10 @@ func (e *Engine) baseGateRefusal(ctx context.Context, a store.AutoApprovalPR) au
 		return autoRefusal{}
 	case was == base:
 		return autoRefusal{}
+	}
+	if f, ok, err := e.st.PRFilesOf(ctx, a.PRID); err == nil && ok && f.HeadSHA == a.PR.HeadSHA && f.BaseRef != base {
+		return autoRefusal{why: "Magnum cannot tell whether it changes " + agentConfigWhat + ", or its own workflows or actions: " +
+			"it has no list of the head's files against the base branch the PR now names"}
 	}
 	r, _ := e.changedFilesRefusal(ctx, a.PR)
 	if r.why == "" {
@@ -386,7 +394,10 @@ var filesGateWords = []string{filesUnknownShort, agentConfigShort, workflowsShor
 // (required_checks names workflows by a name any workflow file may declare,
 // and a PR that edits the CI workflow controls it outright). A head magnum
 // has no whole list of files for is refused too: what it does not list may
-// be one of them. short is the judge prompt's fixed words for why, which
+// be one of them, and so is a list GitHub gave against another base branch
+// than the PR names now (store.PRFiles.BaseRef: the Details of a retargeted
+// PR failed); a list stored without its base (an earlier build's) counts.
+// short is the judge prompt's fixed words for why, which
 // never name a path the PR chose (approvalGatesDue). The refusal's class
 // is that of the files it found, or of a list GitHub cut short; a list
 // magnum cannot read or has none of has none (the next poll mends it).
@@ -397,7 +408,8 @@ func (e *Engine) changedFilesRefusal(ctx context.Context, pr store.PR) (r autoRe
 		e.warnUnlessStopped(ctx, err, "auto approval: the PR's files", "pr", pr.ID)
 		return autoRefusal{why: "Magnum cannot read the files it changes"}, unknown
 	}
-	listed := ok && f.HeadSHA == pr.HeadSHA
+	base := deref(pr.BaseRef)
+	listed := ok && f.HeadSHA == pr.HeadSHA && (f.BaseRef == "" || base == "" || f.BaseRef == base)
 	var paths []string
 	if listed {
 		paths = f.Paths
@@ -411,6 +423,8 @@ func (e *Engine) changedFilesRefusal(ctx context.Context, pr store.PR) (r autoRe
 	}
 	const what = agentConfigWhat + ", or its own workflows or actions"
 	switch {
+	case !listed && ok && f.HeadSHA == pr.HeadSHA:
+		return autoRefusal{why: "Magnum cannot tell whether it changes " + what + ": its list of the head's files is of another base branch"}, unknown
 	case !listed:
 		return autoRefusal{why: "Magnum cannot tell whether it changes " + what + ": it has no list of the head's files"}, unknown
 	case f.Truncated:

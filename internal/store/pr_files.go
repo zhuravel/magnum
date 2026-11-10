@@ -14,16 +14,21 @@ import (
 // its renames (the Details list a rename by its new path only; the poller
 // adds the paths it leaves from the REST list).
 type PRFiles struct {
-	HeadSHA   string    // the head the paths belong to
+	HeadSHA string // the head the paths belong to
+	// BaseRef is the base branch GitHub compared the head with when it
+	// listed them (the Details' baseRefName); "" when unknown (a list
+	// stored before migration 0032).
+	BaseRef   string
 	Paths     []string  // never nil once stored
 	Truncated bool      // the PR changes more files than Paths lists
 	FetchedAt time.Time // when the list was written (set by the store)
 }
 
 // savePRFiles writes f as prID's file list when the PR has none, its list
-// belongs to another head, or GitHub lists other files for the same head
-// (a PR retargeted to another base changes what its commits change): the
-// same list again writes nothing (inside the upsert's transaction).
+// belongs to another head, or GitHub lists other files for the same head,
+// or the same files against another base (a PR retargeted to another base
+// changes what its commits change): the same list of the same base again
+// writes nothing (inside the upsert's transaction).
 func (s *Store) savePRFiles(ctx context.Context, tx *sql.Tx, prID int64, f PRFiles) error {
 	if f.HeadSHA == "" {
 		return nil
@@ -36,19 +41,20 @@ func (s *Store) savePRFiles(ctx context.Context, tx *sql.Tx, prID int64, f PRFil
 	if err != nil {
 		return err
 	}
-	var head, stored string
+	var head, stored, base string
 	var truncated bool
-	err = tx.QueryRowContext(ctx, "SELECT head_sha, paths_json, truncated FROM pr_files WHERE pr_id = ?", prID).Scan(&head, &stored, &truncated)
+	err = tx.QueryRowContext(ctx, "SELECT head_sha, paths_json, truncated, COALESCE(base_ref, '') FROM pr_files WHERE pr_id = ?", prID).
+		Scan(&head, &stored, &truncated, &base)
 	switch {
-	case err == nil && head == f.HeadSHA && stored == string(b) && truncated == f.Truncated:
+	case err == nil && head == f.HeadSHA && stored == string(b) && truncated == f.Truncated && base == f.BaseRef:
 		return nil
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO pr_files (pr_id, head_sha, paths_json, truncated, fetched_at) VALUES (?, ?, ?, ?, ?)
+	_, err = tx.ExecContext(ctx, `INSERT INTO pr_files (pr_id, head_sha, paths_json, truncated, fetched_at, base_ref) VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT (pr_id) DO UPDATE SET head_sha = excluded.head_sha, paths_json = excluded.paths_json,
-  truncated = excluded.truncated, fetched_at = excluded.fetched_at`,
-		prID, f.HeadSHA, string(b), f.Truncated, FormatTime(s.now()))
+  truncated = excluded.truncated, fetched_at = excluded.fetched_at, base_ref = excluded.base_ref`,
+		prID, f.HeadSHA, string(b), f.Truncated, FormatTime(s.now()), nullString(f.BaseRef))
 	return err
 }
 
@@ -63,15 +69,18 @@ func (s *Store) dropPRFiles(ctx context.Context, tx *sql.Tx, prID int64, head st
 	return err
 }
 
-// scanPRFiles scans head_sha, paths_json, truncated and fetched_at.
+// prFilesColumns are the columns scanPRFiles scans, of pr_files as f.
+const prFilesColumns = "f.head_sha, f.paths_json, f.truncated, f.fetched_at, COALESCE(f.base_ref, '')"
+
+// scanPRFiles scans prFilesColumns.
 func scanPRFiles(dest *PRFiles) []any {
-	return []any{&dest.HeadSHA, jsonCol(&dest.Paths), &dest.Truncated, timeCol(&dest.FetchedAt)}
+	return []any{&dest.HeadSHA, jsonCol(&dest.Paths), &dest.Truncated, timeCol(&dest.FetchedAt), &dest.BaseRef}
 }
 
 // PRFilesOf returns the PR's stored file list; ok is false when it has none.
 func (s *Store) PRFilesOf(ctx context.Context, prID int64) (PRFiles, bool, error) {
 	var f PRFiles
-	err := s.db.QueryRowContext(ctx, "SELECT head_sha, paths_json, truncated, fetched_at FROM pr_files WHERE pr_id = ?", prID).
+	err := s.db.QueryRowContext(ctx, "SELECT "+prFilesColumns+" FROM pr_files f WHERE f.pr_id = ?", prID).
 		Scan(scanPRFiles(&f)...)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -104,7 +113,7 @@ type FilesPR struct {
 // number.
 func (s *Store) PRsWithFiles(ctx context.Context, repoID, except int64, mergedSince, activeSince time.Time) ([]FilesPR, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.number, p.url, p.gh_state, p.is_draft, p.merged_at, p.reviewed_sha,
-  COALESCE(p.activity_at, p.gh_updated_at), f.head_sha, f.paths_json, f.truncated, f.fetched_at
+  COALESCE(p.activity_at, p.gh_updated_at), `+prFilesColumns+`
 FROM prs p JOIN pr_files f ON f.pr_id = p.id
 WHERE p.repo_id = ? AND p.id != ? AND (
   (p.gh_state = 'OPEN' AND COALESCE(p.activity_at, p.gh_updated_at, ?) >= ?) OR (p.gh_state = 'MERGED' AND p.merged_at >= ?))

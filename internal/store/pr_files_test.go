@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/zhuravel/magnum/internal/sqlitetest"
 )
 
 // TestMigrationV15ToV16AddsPRFiles builds a registry the v15 binary would
@@ -336,5 +338,83 @@ func TestPostedFindingPathsCountsPostedFindings(t *testing.T) {
 	}
 	if got, err := st.PostedFindingPaths(ctx, nil); err != nil || len(got) != 0 {
 		t.Fatalf("no PRs = %v, %v", got, err)
+	}
+}
+
+// A file list keeps the base branch GitHub compared the head with when it
+// listed the files: the same files against another base (a retarget whose
+// diff did not change) are written again with the new base, and a list
+// stored before migration 0032 has none ("").
+func TestAFileListKeepsTheBaseItWasReadAgainst(t *testing.T) {
+	st, clk := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	in := GitHubPR{RepoID: repo.ID, NodeID: "PR_7", Number: 7, URL: "https://github.com/talkable/talkable/pull/7", HeadSHA: "h1",
+		GHState: GHOpen, InitialState: PRQueued, Identity: "talkable-app",
+		Files: &PRFiles{HeadSHA: "h1", BaseRef: "master", Paths: []string{"app/a.rb"}}}
+	res, err := st.UpsertPRFromGitHub(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := res.PR.ID
+	if got, ok, err := st.PRFilesOf(ctx, id); err != nil || !ok || got.BaseRef != "master" {
+		t.Fatalf("PRFilesOf = %+v, %v, %v; want the list of master", got, ok, err)
+	}
+	clk.Add(time.Minute)
+	in.Files = &PRFiles{HeadSHA: "h1", BaseRef: "release", Paths: []string{"app/a.rb"}}
+	if _, err := st.UpsertPRFromGitHub(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := st.PRFilesOf(ctx, id); err != nil || !ok || got.BaseRef != "release" || !got.FetchedAt.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("PRFilesOf after a retarget = %+v, %v, %v; want the same files of release, written again", got, ok, err)
+	}
+	if _, err := st.DB().ExecContext(ctx, "UPDATE pr_files SET base_ref = NULL WHERE pr_id = ?", id); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := st.PRFilesOf(ctx, id); err != nil || !ok || got.BaseRef != "" {
+		t.Fatalf("PRFilesOf of a list without a base = %+v, %v, %v", got, ok, err)
+	}
+	all, err := st.PRsWithFiles(ctx, repo.ID, 0, t0.Add(-time.Hour), t0.Add(-time.Hour))
+	if err != nil || len(all) != 1 || all[0].Files.BaseRef != "" {
+		t.Fatalf("PRsWithFiles = %+v, %v", all, err)
+	}
+}
+
+// Migration 0032 adds the base each file list was read against: a list
+// stored before keeps its files and has no base.
+func TestMigrationV31ToV32KeepsTheFileListsWithoutABase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "magnum.db")
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)&"+sqlitetest.FastFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := FormatTime(t0)
+	var stmts []string
+	for _, m := range migrations[:31] {
+		stmts = append(stmts, m.SQL)
+	}
+	stmts = append(stmts, "PRAGMA user_version = 31",
+		`INSERT INTO repos (id, node_id, owner, name, watch_owner, mode, last_seen_at) VALUES (1, 'R_1', 'talkable', 'talkable', 'talkable', 'pool', '`+ts+`')`,
+		`INSERT INTO prs (id, repo_id, node_id, number, url, head_sha, head_changed_at, state, identity, created_at, updated_at)
+		 VALUES (1, 1, 'PR_1', 7, 'u7', 'h1', '`+ts+`', 'reviewed', 'talkable-app', '`+ts+`', '`+ts+`')`,
+		`INSERT INTO pr_files (pr_id, head_sha, paths_json, truncated, fetched_at) VALUES (1, 'h1', '["app/a.rb"]', 0, '`+ts+`')`)
+	for _, q := range stmts {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatalf("v31 setup: %v\n%s", err, q)
+		}
+	}
+	db.Close()
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open v31 database: %v", err)
+	}
+	defer st.Close()
+	if v, _ := st.SchemaVersion(ctx); v != LatestSchemaVersion() || v < 32 {
+		t.Fatalf("schema version = %d (latest %d)", v, LatestSchemaVersion())
+	}
+	if got, ok, err := st.PRFilesOf(ctx, 1); err != nil || !ok || got.HeadSHA != "h1" || got.BaseRef != "" || !reflect.DeepEqual(got.Paths, []string{"app/a.rb"}) {
+		t.Fatalf("a list stored before = %+v, %v, %v", got, ok, err)
 	}
 }

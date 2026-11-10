@@ -527,6 +527,44 @@ func TestARetargetHoldsAStandingApprovalToTheFilesGateAgain(t *testing.T) {
 	}
 }
 
+// The radar names the PR's base branch on every poll, while its file list
+// is the Details': when the Details of a retargeted PR fail (or list no
+// files), the registry keeps the list GitHub gave against the old base. The
+// gate of a standing approval must not take that list for the new base's
+// and record the new base as checked, or the list GitHub gives next (one
+// that changes .claude/ against the new base) is never gated: until the
+// list was read against the base the PR names, the gate refuses and records
+// nothing, and the approval is withdrawn.
+func TestARetargetWhoseFileListIsOfTheOldBaseIsNotGatedOnIt(t *testing.T) {
+	h, _ := newAutoHarness(t)
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: []string{"app/x.rb"}})
+	h.tick()
+	h.reviewTo(2, "b1")
+	h.flush()
+	if a := h.autoApproval(2); a.State != store.AutoStanding {
+		t.Fatalf("approval = %+v, want it standing", a)
+	}
+	h.advance(time.Minute)
+	h.gh.fail(errors.New("GitHub is down"), nil)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", base: "release", files: []string{"app/x.rb", ".claude/settings.json"}})
+	h.tick()
+	h.flush()
+	if v, _ := h.e.getKV(h.ctx, kvAutoApprovalBase(h.pr(2).ID)); strings.HasSuffix(v, "|release") {
+		t.Fatalf("%s = %q: the gate recorded the new base on the old base's list", kvAutoApprovalBase(h.pr(2).ID), v)
+	}
+	h.gh.fail(nil, nil)
+	h.advance(time.Minute)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", base: "release", files: []string{"app/x.rb", ".claude/settings.json"}})
+	h.tick()
+	h.flush()
+	if a := h.autoApproval(2); a.State == store.AutoStanding {
+		t.Fatalf("approval after a retarget whose list changes .claude/ = %+v, want it withdrawn", a)
+	}
+}
+
 // GitHub's GraphQL file list names a rename by its new path only, so a PR
 // that moves the team's hook out of .claude/ (git mv
 // .claude/hooks/pre_tool_use.rb scripts/audit/) lists scripts/audit/ alone,

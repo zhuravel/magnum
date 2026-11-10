@@ -316,10 +316,12 @@ func (e *Engine) pollRows(ctx context.Context, repoID int64, radar []github.PRRa
 // "1" (2026-11-09): a reply in a thread, which the timeline never lists
 // (DECISIONS "A reply in a thread is read from the PR's reviews, not its
 // timeline"). "2" (2026-11-10): the paths a head's renames leave, which
-// the file list an earlier build kept lacks (withRenamedFrom). Bump it
-// only for such a change: each bump costs one Details batch per
-// repository.
-const detailsEpoch = "2"
+// the file list an earlier build kept lacks (withRenamedFrom). "3"
+// (2026-11-10): the base branch each list was read against
+// (store.PRFiles.BaseRef), which the gate of a retargeted PR's standing
+// approval waits for (baseGateRefusal). Bump it only for such a change:
+// each bump costs one Details batch per repository.
+const detailsEpoch = "3"
 
 // kvRepoDetailsEpoch holds the detailsEpoch of the last poll of the
 // repository that read the Details of every open PR magnum reviewed at its
@@ -640,14 +642,14 @@ func fillDetails(in *store.GitHubPR, d github.PRDetails, logins []string, now ti
 }
 
 // prFiles is the registry's file list of the Details' head (the related
-// PRs' paths, the approval's gates); nil when GitHub listed none, which
-// keeps the stored one. A rename is in it by its new path only until
+// PRs' paths, the approval's gates), with the base branch GitHub compared
+// it with; nil when GitHub listed none, which keeps the stored one. A rename is in it by its new path only until
 // withRenamedFrom adds the path it leaves.
 func prFiles(d github.PRDetails) *store.PRFiles {
 	if d.Files == nil || d.HeadRefOid == "" {
 		return nil
 	}
-	return &store.PRFiles{HeadSHA: d.HeadRefOid, Paths: d.Files, Truncated: !d.FilesComplete}
+	return &store.PRFiles{HeadSHA: d.HeadRefOid, BaseRef: d.BaseRefName, Paths: d.Files, Truncated: !d.FilesComplete}
 }
 
 // ciStatus is the registry's view of the Details' head checks, read keyed
