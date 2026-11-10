@@ -159,13 +159,16 @@ func (r *importReader) add(p string) bool {
 }
 
 // importRun is a stretch of text with no blank a backslash does not escape,
-// from the character after an @ to end, and the offsets in it where a path
-// Claude reads may end: a backslash no space follows (lone), a # (hashes),
-// a mark of an inline token (cuts), and each "\ " pair (pairs), all
-// ascending.
+// from the character after an @ (start) to end, and the offsets in it where
+// a path Claude reads may end: a backslash no space follows (lone), a #
+// (hashes), a mark of an inline token (cuts), and each "\ " pair (pairs),
+// all ascending; spaced is the run with each pair made a space, copied
+// once for all its @ (copied), whose paths are slices of it.
 type importRun struct {
-	end                       int
+	start, end                int
 	lone, hashes, cuts, pairs []int
+	spaced                    string
+	copied                    bool
 }
 
 // read gives the paths of t's imports; an @ at one of joints (ascending
@@ -223,7 +226,7 @@ const asciiPunct = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
 
 // scanImportRun is the run of t from from.
 func scanImportRun(t string, from int) importRun {
-	run := importRun{end: len(t)}
+	run := importRun{start: from, end: len(t)}
 	for j := from; j < len(t); {
 		c, size := utf8.DecodeRuneInString(t[j:])
 		switch {
@@ -286,11 +289,15 @@ func (r *importReader) paths1(t string, at int, run *importRun) bool {
 	k, _ := slices.BinarySearch(run.pairs, from)
 	pairs := run.pairs[k:]
 	if len(pairs) > 0 {
-		text = strings.ReplaceAll(text, "\\ ", " ")
-		if r.work -= len(text); r.work < 0 {
-			r.more = true
-			return false
+		if !run.copied {
+			run.copied = true
+			run.spaced = strings.ReplaceAll(t[run.start:run.end], "\\ ", " ")
+			if r.work -= len(run.spaced); r.work < 0 {
+				r.more = true
+				return false
+			}
 		}
+		text = run.spaced[from-run.start-k:] // each of the k pairs before from is a byte shorter
 	}
 	length := func(end int) int { // the length in text of the token up to end
 		n, _ := slices.BinarySearch(pairs, end)

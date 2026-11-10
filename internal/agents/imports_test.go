@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -305,6 +306,29 @@ func TestImportPathsStartsAPathWhereACommentWasCut(t *testing.T) {
 			t.Errorf("ImportPaths(%q) = %q, %v; want %q among them", c.text, got, more, c.want)
 		}
 	}
+}
+
+// A path with an escaped space is a copy of its text ("\ " a space), and a
+// run of many @ holds many such paths, each the rest of the run: ImportPaths
+// copies a run once, whose paths all share it, so what it gives keeps at
+// most about its text's size (31 @ in 4 MiB kept 124 MiB when each @ copied
+// the rest of the run, and both walks keep a source's imports).
+func TestImportPathsKeepsOneCopyOfARunWithEscapedSpaces(t *testing.T) {
+	text := strings.Repeat("@a\\ ", 31) + strings.Repeat("b", 4<<20)
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got, more := ImportPaths(text, 100)
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	kept := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+	if len(got) < 31 || more {
+		t.Fatalf("ImportPaths = %d paths, more %v; want 31 or more", len(got), more)
+	}
+	if kept > 3*int64(len(text)) {
+		t.Fatalf("ImportPaths of %d bytes keeps %d MiB", len(text), kept>>20)
+	}
+	runtime.KeepAlive(got)
 }
 
 // A session loads what a rules file imports right after its frontmatter:
