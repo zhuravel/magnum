@@ -303,18 +303,21 @@ databases = [
 #   migrations = ["bin/rails db:migrate:up VERSION={version}", "bin/rails db:migrate:down VERSION={version}",
 #                 "bin/rails db:migrate:up VERSION={version}"]   # each new migration, in order ({version}, {file}): up,
 #                                          # down and up again; a gh-ost one is not run; db/schema.rb is put back after.
-#                                          # Without migration_databases only db/migrate's migrations run; one of
-#                                          # another folder (a db directory's child whose name holds "migrate", the
-#                                          # root's or an engine's) is listed and not run: "no databases are set for it"
+#                                          # A migration is a file directly in a db directory's child whose name
+#                                          # holds "migrate" (the root's or an engine's, none under spec/ or test/),
+#                                          # its name starting with its version. Without migration_databases only
+#                                          # db/migrate's migrations run; one of another folder is listed and not run:
+#                                          # "no databases are set for" its folder
 #   # migration_databases = { "db/migrate" = ["primary"], "db/reporting_migrate" = ["reporting"],
 #   #                         "db/sharded_migrate" = ["shard_1", "shard_1001"] }   # a multi-database app: each
 #                                          # folder's databases, by the app's names. Each migration's commands then run
 #                                          # on each database of its folder in turn (up, down, up on shard_1, then on
-#                                          # shard_1001), and every command must hold {database}, its name:
+#                                          # shard_1001), each command bounded by cap on its own, and every command
+#                                          # must hold {database}, its name:
 #                                          # migrations = ["bin/rails db:migrate:up:{database} VERSION={version}", …];
 #                                          # without the key none may. A folder it leaves out has no databases (its
 #                                          # migrations are not run, and precheck.md, FLAGS and the PR body say so);
-#                                          # one it names needs one database at least
+#                                          # one it names needs one database at least; {} is refused
 #   cap = "10m"                            # a precheck stops after this long (default 10m), cap_per_file longer
 #   cap_per_file = "15s"                   # for each file of the change (default 15s), cap_max at most (default
 #   cap_max = "30m"                        # 30m, or cap when longer; never below cap nor cap_per_file). A cap

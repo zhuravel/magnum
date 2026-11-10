@@ -1490,21 +1490,27 @@ const DefaultMigrationFolder = "db/migrate"
 // runs on (FactoryPrecheck.MigrationDatabases).
 const DatabasePlaceholder = "{database}"
 
-// MigrationFolder is the migration folder of path, a file relative to the
-// checkout as git names it, and whether path is in one: a db directory's
-// child whose name holds "migrate", the root's or an engine's (db/migrate,
-// db/sharded_migrate, engines/billing/db/migrate), at any depth below it,
-// as Rails reads a folder's migrations. It is the rule of internal/staging's
-// isMigration (a staging deploy migrates every such folder), with the
-// folder named.
+// migrationFileRe is a migration's file name: its version (digits), "_",
+// its name, .rb (20261111090000_add_x_to_credits.rb).
+var migrationFileRe = regexp.MustCompile(`^[0-9]+_[^/]*\.rb$`)
+
+// MigrationFolder is the folder of path, a file relative to the checkout as
+// git names it, and whether path is a migration: a file directly in a
+// migration folder whose name is a version, "_", a name and .rb. A
+// migration folder is a db directory's child whose name holds "migrate",
+// the root's or an engine's (db/migrate, db/sharded_migrate,
+// engines/billing/db/migrate), but never one under a spec or test directory
+// (spec/db/reporting_migrate holds the specs of migrations). It narrows
+// internal/staging's isMigration (a staging deploy migrates every such
+// folder) to the migrations themselves, and names their folder.
 func MigrationFolder(path string) (folder string, ok bool) {
 	parts := strings.Split(path, "/")
-	for i := 0; i+2 < len(parts); i++ {
-		if parts[i] == "db" && strings.Contains(parts[i+1], "migrate") {
-			return strings.Join(parts[:i+2], "/"), true
-		}
+	n := len(parts)
+	if n < 3 || parts[n-3] != "db" || !strings.Contains(parts[n-2], "migrate") || !migrationFileRe.MatchString(parts[n-1]) ||
+		slices.ContainsFunc(parts[:n-3], func(p string) bool { return p == "spec" || p == "test" }) {
+		return "", false
 	}
-	return "", false
+	return strings.Join(parts[:n-1], "/"), true
 }
 
 // databaseNameRe is a database's name in migration_databases: it goes into
@@ -1513,12 +1519,17 @@ var databaseNameRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]*$`)
 
 // validatePrecheckMigrations checks a repository's migrations commands
 // against its migration_databases (where names the repository): with the
-// key, each folder a migration folder as git names it (MigrationFolder),
-// with one database at least, each a name, once, and every command holding
-// {database}, which it fills in; without it, no command may hold it.
+// key, one folder at least ({} is refused, never read as no key), each a
+// migration folder as git names it (MigrationFolder), with one database at
+// least, each a name, once, and every command holding {database}, which it
+// fills in; without it, no command may hold it.
 func validatePrecheckMigrations(where string, pc FactoryPrecheck) []error {
 	var errs []error
 	bad := func(format string, a ...any) { errs = append(errs, fmt.Errorf(where+": "+format, a...)) }
+	if pc.MigrationDatabases != nil && len(pc.MigrationDatabases) == 0 {
+		bad("precheck.migration_databases lists no folder: name one, or leave the key out")
+		return errs
+	}
 	if len(pc.MigrationDatabases) == 0 {
 		for _, cmd := range pc.Migrations {
 			if strings.Contains(cmd, DatabasePlaceholder) {
@@ -1531,7 +1542,8 @@ func validatePrecheckMigrations(where string, pc FactoryPrecheck) []error {
 	for _, folder := range slices.Sorted(maps.Keys(pc.MigrationDatabases)) {
 		if got, ok := MigrationFolder(folder + "/0_x.rb"); !ok || got != folder || !filepath.IsLocal(folder) || filepath.Clean(folder) != folder {
 			bad("precheck.migration_databases names %q, which is not a migration folder: a db directory's child whose name holds "+
-				"\"migrate\", relative to the checkout, as git names it (db/migrate, db/sharded_migrate, engines/<name>/db/migrate)", folder)
+				"\"migrate\", relative to the checkout, as git names it, under no spec or test directory "+
+				"(db/migrate, db/sharded_migrate, engines/<name>/db/migrate)", folder)
 		}
 		dbs := pc.MigrationDatabases[folder]
 		if len(dbs) == 0 {

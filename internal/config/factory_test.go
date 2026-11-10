@@ -824,7 +824,9 @@ func TestMigrationsCommandsWithDatabaseNeedMigrationDatabases(t *testing.T) {
 
 // Each folder of migration_databases lists one database at least, each a
 // name, once; a key that is not a migration folder (a db directory's child
-// whose name holds "migrate", as git names it) is refused.
+// whose name holds "migrate", as git names it, under no spec or test
+// directory: spec/db/reporting_migrate holds the specs of migrations) is
+// refused.
 func TestMigrationDatabasesRefuseAnEmptyListOfDatabases(t *testing.T) {
 	cfg := validFactoryConfig()
 	pc := &cfg.Factory.Repos[0].Precheck
@@ -835,13 +837,28 @@ func TestMigrationDatabasesRefuseAnEmptyListOfDatabases(t *testing.T) {
 	wantError(t, cfg.Validate(), `precheck.migration_databases "db/migrate" names "primary" twice`)
 	pc.MigrationDatabases = map[string][]string{"db/migrate": {"primary; rm -rf tmp"}}
 	wantError(t, cfg.Validate(), `precheck.migration_databases "db/migrate" names "primary; rm -rf tmp", which is not a database name`)
-	for _, folder := range []string{"db/migrate/", "./db/migrate", "/db/migrate", "db", "app/migrate", "db/migrate/old", "../db/migrate"} {
+	for _, folder := range []string{"db/migrate/", "./db/migrate", "/db/migrate", "db", "app/migrate", "db/migrate/old", "../db/migrate",
+		"spec/db/reporting_migrate", "test/db/migrate", "engines/billing/spec/db/migrate"} {
 		pc.MigrationDatabases = map[string][]string{folder: {"primary"}}
 		wantError(t, cfg.Validate(), fmt.Sprintf("precheck.migration_databases names %q, which is not a migration folder", folder))
 	}
 	pc.MigrationDatabases = map[string][]string{"engines/billing/db/migrate": {"billing"}, "db/data_migrate": {"primary"}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("an engine's folder and another child of db holding migrate are migration folders: %v", err)
+	}
+}
+
+// An empty migration_databases ({}) names no folder: it is refused with
+// its own words, never read as no key.
+func TestAnEmptyMigrationDatabasesIsRefused(t *testing.T) {
+	_, err := loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml+`
+[factory.repo.precheck]
+migrations = ["bin/rails db:migrate:up:{database} VERSION={version}"]
+migration_databases = {}
+`)
+	wantError(t, err, "factory repo talkable/talkable", "precheck.migration_databases lists no folder: name one, or leave the key out")
+	if strings.Contains(err.Error(), "only precheck.migration_databases fills in") {
+		t.Fatalf("an empty migration_databases is read as no key: %v", err)
 	}
 }
 

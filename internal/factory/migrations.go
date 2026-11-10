@@ -87,11 +87,12 @@ func (f MigrationFlag) String() string {
 func notRunWords(folder string) string { return "not run: no databases are set for " + folder }
 
 // isMigration reports whether path, a file the change adds, is a
-// migration: a .rb file in a migration folder (config.MigrationFolder),
-// the rule a staging deploy migrates by.
+// migration (config.MigrationFolder): a file directly in a migration folder
+// whose name starts with its version, never a spec, a helper or a nested
+// file.
 func isMigration(path string) bool {
 	_, ok := config.MigrationFolder(path)
-	return ok && strings.HasSuffix(path, ".rb")
+	return ok
 }
 
 // migrationDatabases are the databases the precheck runs migration path

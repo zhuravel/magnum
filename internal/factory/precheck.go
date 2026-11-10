@@ -492,15 +492,14 @@ func (p *precheckRun) halted() bool {
 	return p.parent.Err() != nil || p.err != nil || p.kept || p.restoreErr != nil
 }
 
-// ownBound runs step on a context of its own, from the caller's (never the
-// precheck's, which its cap ends), bounded by the repository's cap (capOf),
-// as each of its commands is: the precheck's cap neither cuts it nor keeps
-// it from running.
+// ownBound runs step on the caller's context (never the precheck's, which
+// its cap ends), each of its commands bounded by the repository's cap
+// (capOf) on its own: the precheck's cap neither cuts it nor keeps it from
+// running, and no deadline of the whole step cuts a healthy command late in
+// a step of many (a migration on several shards).
 func (p *precheckRun) ownBound(step func()) {
-	ctx, cancel := context.WithTimeout(p.parent, capOf(p.repo))
-	defer cancel()
 	saved, limit, over := p.ctx, p.limit, p.overCap
-	p.ctx, p.limit, p.overCap = ctx, capOf(p.repo), false
+	p.ctx, p.limit, p.overCap = p.parent, capOf(p.repo), false
 	defer func() { p.ctx, p.limit, p.overCap = saved, limit, over || p.overCap }()
 	step()
 }
@@ -1089,8 +1088,8 @@ var migrationVersionRe = regexp.MustCompile(`^(\d+)_`)
 // person runs it on its environments), nor one of a folder with no
 // databases (its line says so): a skipped check, and no failure. A command
 // that fails fails the precheck, naming the migration and the database, and
-// its later commands on that database do not run; its other databases
-// still do.
+// its later commands on that database do not run (precheck.md says the
+// database may be left part-way: partWay); its other databases still do.
 func (p *precheckRun) migrations(repo config.FactoryRepo, cmds []string, added []string) {
 	if len(added) == 0 {
 		return
@@ -1159,12 +1158,33 @@ func (p *precheckRun) migrate(path, version, db string, cmds []string) {
 			check.Result, check.Cause = registry.CheckFail, "code"
 			p.record(check)
 			p.say("\n%s%s: `%s` exited %d:\n\n```\n%s\n```\n", path, on, script, run.Exit, run.Output)
+			p.say("\n%s\n", partWay(path, db))
 			p.fail(fmt.Sprintf("migration %s%s: %s exited %d", path, on, script, run.Exit))
 			return
 		}
 		p.record(check)
 	}
 	p.say("\n%s%s: passed\n", path, on)
+}
+
+// partWay says that a failed command of migration path can leave database
+// db ("" for the copy's one database) part-way migrated: nothing puts back
+// what it did (MySQL's DDL is no transaction), so the next run of the
+// migration starts from there. A migration outside db/migrate adds the gap
+// of the copy's next claim, which looks only at db/migrate's database
+// (foreignSchema) to decide whether to reset the databases.
+func partWay(path, db string) string {
+	which := "The copy's database"
+	if db != "" {
+		which = db
+	}
+	s := which + " may be left part-way migrated: the factory does not put back what the failed command did, " +
+		"so the migration's next run starts from there"
+	if folder, _ := config.MigrationFolder(path); folder != config.DefaultMigrationFolder {
+		s += "; and the copy's next claim looks only at db/migrate's database when it decides whether to reset the databases, " +
+			"never at " + which
+	}
+	return s + "."
 }
 
 // migrationsNotRun are the paths of the migrations of flags the precheck
