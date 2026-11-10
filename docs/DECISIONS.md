@@ -23385,6 +23385,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   role whose findings it cites) and TestStatsLeaveOutTheTakeRateAndTheRatingsWhenNothingIsRecorded
   (`internal/factory/stats`). No new dependencies.
 
+- **Agent panes keep the operator's access to local secrets, by the operator's choice** (2026-11-10). Every agent
+  pane (the reviewers, the fixer, the factory's roles, the staging resolver) runs as the operator's macOS user with
+  its HOME, so an agent a hostile PR tricked could read the GitHub App private keys under `~/.config/magnum/keys`
+  (from which both daemons mint App tokens), `~/.ssh`, and the operator's gh login through `gh auth token`. Git push
+  is blocked in those panes, and since ddee7015 an App's own GitHub calls run over a fresh gh config per call, so a
+  pane can no longer redirect a mint; reads of the files are not blocked. The operator weighed four ways (a macOS
+  sandbox profile around each pane, the keys in the login keychain for a signed magnum only, a separate macOS user
+  for the agents, or nothing) and kept it as is: the agents are the operator's own tools on private repositories,
+  the trade the factory already makes ("factory agent freedom"). Rejected for now: each of the three guards, with
+  their costs (a sandbox profile per pane, a stable signing identity for every local build, a second user's logins,
+  herdr and checkouts). Revisit when an agent works on a repository the operator does not own, or a PR from outside
+  the team reaches a pane.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
