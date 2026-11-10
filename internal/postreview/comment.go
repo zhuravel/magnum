@@ -322,7 +322,9 @@ func (o CommentOutcome) Summary() string {
 // again, a title already so is not sent, and a login asked already is
 // skipped, so after an unclear failure the same line runs again safely.
 // GitHub must show the App as each comment's author: another account
-// there is StatusInvalid (otherAuthor) and nothing more goes out. onPosted
+// there is StatusInvalid (otherAuthor) and nothing more goes out, and the
+// newest copy of the same comment found by another account is
+// StatusInvalid before the first write (alreadyByOther). onPosted
 // (nil: none) hears of each post, with the author GitHub showed when it is
 // not the App, and of a comment found already there.
 func RunComment(ctx context.Context, gh CommentGitHub, o CommentOptions, text []byte, onPosted func(Posted)) CommentOutcome {
@@ -373,6 +375,9 @@ func RunComment(ctx context.Context, gh CommentGitHub, o CommentOptions, text []
 			return out
 		}
 		problems = append(problems, found...)
+		if f := target.Other; f != nil {
+			problems = append(problems, o.alreadyByOther(*f))
+		}
 	}
 	if len(problems) > 0 {
 		out.Status, out.Problems = StatusInvalid, problems
@@ -477,6 +482,18 @@ func (o CommentOptions) otherAuthor(posted signedFound, by string) string {
 			"(it finds the comment and posts nothing twice)", o.Identity, posted.Author)
 	}
 	return head + "it went out under a person's login, not the App's; delete it on GitHub and do not run it again until magnum identities check passes"
+}
+
+// alreadyByOther is the problem of the same comment found on the pull
+// request by found.Author, not by the App o.Login: an earlier run posted
+// it under another account (a person's login, or the App of a login the
+// config named before). Only the App's own comments count as already
+// there, so posting would add another copy on every run.
+func (o CommentOptions) alreadyByOther(found signedFound) string {
+	by := cmp.Or(found.Author, "an account GitHub does not name")
+	return fmt.Sprintf("the same comment is already on the pull request: GitHub shows comment %d (%s) by %s, not %s, so an earlier run posted it "+
+		"under another account; nothing posted: delete it on GitHub, and once magnum identities check passes the same line posts it as the App",
+		found.ID, found.URL, by, o.Login)
 }
 
 // reviewedSince reports whether someone other than the App o.Login

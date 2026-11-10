@@ -474,10 +474,25 @@ type signedFound struct {
 
 // signedTarget is where a signed post goes, as findSigned read it: the
 // first comment of its thread (0: the conversation) and the same post
-// already there, nil when there is none.
+// already there, nil when there is none. Other is the newest copy of the
+// same post when an author the caller does not accept wrote it (nil:
+// none, or it is the caller's).
 type signedTarget struct {
 	Thread  int64
 	Already *signedFound
+	Other   *signedFound
+}
+
+// newestSame is the index among n comments, oldest first (at(i) gives
+// the body and author of comment i), of the newest that is body, whoever
+// wrote it; -1 when none is.
+func newestSame(n int, at func(int) (body, author string), body string) int {
+	for i := n - 1; i >= 0; i-- {
+		if b, _ := at(i); sameFixReply(b, body) {
+			return i
+		}
+	}
+	return -1
 }
 
 // findSigned reads where body, a signed post, goes on the pull request
@@ -488,7 +503,10 @@ type signedTarget struct {
 // (nil: none) finds wrong with the thread's comments. Already is the same
 // body posted with nobody else's comment after it (postedLast) among the
 // comments by an author mine accepts (nil: anyone): a retry's post, which
-// gets nothing more. A failed read is err.
+// gets nothing more. With mine, the newest copy of body by an author it
+// does not accept is Other, and Already stays nil: an earlier run's post
+// under another account, which the caller refuses to post again. A failed
+// read is err.
 func findSigned(ctx context.Context, gh FixReplyGitHub, owner, repo string, number int, commentID int64, issue bool, body string,
 	mine func(author string) bool, guard func(thread []github.ThreadComment) []string) (signedTarget, []string, error) {
 	accept := func(b, author string) (string, string) {
@@ -498,18 +516,25 @@ func findSigned(ctx context.Context, gh FixReplyGitHub, owner, repo string, numb
 		return b, author
 	}
 	if issue {
-		same := func(c github.PRComment) bool {
-			return sameFixReply(c.Body, body) && (mine == nil || mine(github.Account(c.AuthorLogin, c.AuthorType)))
-		}
+		same := func(c github.PRComment) bool { return sameFixReply(c.Body, body) }
 		comments, _, err := gh.IssueComments(ctx, owner, repo, number, same)
 		if err != nil {
 			return signedTarget{}, nil, fmt.Errorf("read the pull request's comments: %w", err)
 		}
-		if i := postedLast(len(comments), func(i int) (string, string) {
-			return accept(comments[i].Body, github.Account(comments[i].AuthorLogin, comments[i].AuthorType))
-		}, body); i >= 0 {
+		at := func(i int) (string, string) {
+			return comments[i].Body, github.Account(comments[i].AuthorLogin, comments[i].AuthorType)
+		}
+		found := func(i int) signedFound {
 			c := comments[i]
-			return signedTarget{Already: &signedFound{ID: c.ID, URL: c.URL, Author: github.Account(c.AuthorLogin, c.AuthorType), CreatedAt: c.CreatedAt}}, nil, nil
+			return signedFound{ID: c.ID, URL: c.URL, Author: github.Account(c.AuthorLogin, c.AuthorType), CreatedAt: c.CreatedAt}
+		}
+		if i := newestSame(len(comments), at, body); i >= 0 && mine != nil && !mine(found(i).Author) {
+			f := found(i)
+			return signedTarget{Other: &f}, nil, nil
+		}
+		if i := postedLast(len(comments), func(i int) (string, string) { return accept(at(i)) }, body); i >= 0 {
+			f := found(i)
+			return signedTarget{Already: &f}, nil, nil
 		}
 		return signedTarget{}, nil, nil
 	}
@@ -534,12 +559,20 @@ func findSigned(ctx context.Context, gh FixReplyGitHub, owner, repo string, numb
 		}
 	}
 	first, replies := all[0].ID, all[1:]
-	if j := postedLast(len(replies), func(j int) (string, string) {
-		return accept(replies[j].Body, github.Account(replies[j].AuthorLogin, replies[j].AuthorType))
-	}, body); j >= 0 {
+	at := func(j int) (string, string) {
+		return replies[j].Body, github.Account(replies[j].AuthorLogin, replies[j].AuthorType)
+	}
+	found := func(j int) signedFound {
 		c := replies[j]
-		return signedTarget{Thread: first, Already: &signedFound{ID: c.ID, URL: c.URL, Author: github.Account(c.AuthorLogin, c.AuthorType),
-			CreatedAt: c.CreatedAt}}, nil, nil
+		return signedFound{ID: c.ID, URL: c.URL, Author: github.Account(c.AuthorLogin, c.AuthorType), CreatedAt: c.CreatedAt}
+	}
+	if j := newestSame(len(replies), at, body); j >= 0 && mine != nil && !mine(found(j).Author) {
+		f := found(j)
+		return signedTarget{Thread: first, Other: &f}, nil, nil
+	}
+	if j := postedLast(len(replies), func(j int) (string, string) { return accept(at(j)) }, body); j >= 0 {
+		f := found(j)
+		return signedTarget{Thread: first, Already: &f}, nil, nil
 	}
 	return signedTarget{Thread: first}, nil, nil
 }

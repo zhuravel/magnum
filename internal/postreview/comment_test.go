@@ -278,8 +278,7 @@ func TestCommentRefusesAReplyInMagnumsOwnThread(t *testing.T) {
 // A retry posts the comment once: a thread, or the conversation, that
 // already holds the same comment of the App with nobody else's comment
 // after it gets nothing more (exit 0), and the caller hears of it again so
-// it can record a post the first run could not. The same words under
-// another login (the author's own) are no such comment.
+// it can record a post the first run could not.
 func TestCommentPostsOnceWhenTheSameCommentExists(t *testing.T) {
 	w, _ := commentWorld(t)
 	w.threads = []fakeThread{thread(rev(11, "Rename this?"))}
@@ -297,7 +296,6 @@ func TestCommentPostsOnceWhenTheSameCommentExists(t *testing.T) {
 		t.Errorf("summary = %q", s)
 	}
 
-	w.issueComments = []fakeComment{human(77, text+"\n\n"+CommentMarker)}
 	first, _ = w.runComment(copts(0), text)
 	again, _ = w.runComment(copts(0), text)
 	if first.Status != StatusPosted || again.Status != StatusAlreadyPosted || again.Comment.ID != first.Comment.ID || len(w.issuePosts) != 1 {
@@ -305,6 +303,50 @@ func TestCommentPostsOnceWhenTheSameCommentExists(t *testing.T) {
 	}
 	if s := again.Summary(); s != "as fixer-app[bot]: the comment is already on the conversation: "+first.Comment.URL {
 		t.Errorf("summary = %q", s)
+	}
+}
+
+// The same signed comment already on the pull request by another account
+// than the App (an earlier run's, posted under a person's login or as
+// another App) is a problem, exit 2, and nothing is posted: only the App's
+// own comments count as already there, so without it every run of the
+// same line would post another copy. It counts only as the newest copy:
+// the App's own after it is a retry's, as usual.
+func TestCommentPostsNothingWhereTheSameCommentIsByAnotherAccount(t *testing.T) {
+	text := "Renamed in a1b2c3d."
+	signed := text + "\n\n" + CommentMarker
+	for name, tc := range map[string]struct {
+		threads  []fakeThread
+		comments []fakeComment
+		replyTo  int64
+		want     string
+	}{
+		"a person's on the conversation": {comments: []fakeComment{human(77, signed)}, want: "comment 77 (https://github.com/talkable/talkable/pull/5#issuecomment-77) by alice"},
+		"another App's on the conversation": {comments: []fakeComment{{ID: 78, Author: "other-app", Bot: true, Body: signed}, rev(79, "Thanks.")},
+			want: "comment 78 (https://github.com/talkable/talkable/pull/5#issuecomment-78) by other-app[bot]"},
+		"a person's in the thread": {threads: []fakeThread{thread(rev(11, "Rename this?"), human(12, signed))}, replyTo: 11,
+			want: "comment 12 (https://github.com/talkable/talkable/pull/5#discussion_r12) by alice"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w, _ := commentWorld(t)
+			w.threads, w.issueComments = tc.threads, tc.comments
+			for run := range 2 {
+				out, posted := w.runComment(copts(tc.replyTo), text)
+				if out.Status != StatusInvalid || out.ExitCode() != 2 || len(out.Problems) != 1 || !strings.Contains(out.Problems[0], tc.want+", not fixer-app[bot]") ||
+					!strings.Contains(out.Problems[0], "nothing posted") {
+					t.Errorf("run %d: outcome = %+v", run+1, out)
+				}
+				if w.writes() != 0 || len(posted) != 0 {
+					t.Fatalf("run %d: %d writes, posted %+v: want nothing", run+1, w.writes(), posted)
+				}
+			}
+		})
+	}
+
+	w, _ := commentWorld(t)
+	w.issueComments = []fakeComment{human(77, signed), app(78, signed)}
+	if out, _ := w.runComment(copts(0), text); out.Status != StatusAlreadyPosted || out.Comment == nil || out.Comment.ID != 78 || w.writes() != 0 {
+		t.Errorf("the App's own after it: outcome = %+v, %d writes", out, w.writes())
 	}
 }
 

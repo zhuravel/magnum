@@ -546,7 +546,8 @@ func TestCommentRefusesALoginTheAppDoesNotPostAs(t *testing.T) {
 // GitHub showing the comment by a person, not the App (it went out under
 // someone's login), is exit 2, never 1, which would post it again, and
 // nothing more goes out. The post is still recorded, as a warning that
-// names the author GitHub showed.
+// names the author GitHub showed, and the same line run again finds that
+// copy and posts nothing.
 func TestCommentRecordsAPostGitHubShowsByAPerson(t *testing.T) {
 	h := newCommentHarness(t, nil)
 	h.poster = [2]string{"zhuravel", "User"}
@@ -574,6 +575,12 @@ func TestCommentRecordsAPostGitHubShowsByAPerson(t *testing.T) {
 	if evs[0].Level != "warn" || d["author"] != "zhuravel" || d["login"] != "fixer-app[bot]" || d["comment_id"] != float64(7001) ||
 		!strings.Contains(evs[0].Message, "GitHub shows it by zhuravel") {
 		t.Errorf("event %s %q, data %v", evs[0].Level, evs[0].Message, d)
+	}
+
+	code, got = h.exec("Renamed.", args...)
+	if code != 2 || got["status"] != "invalid" || !strings.Contains(h.out.String(), "the same comment is already on the pull request") ||
+		len(h.comments) != 1 || h.titleSends != 0 {
+		t.Errorf("the same line again: exit %d, stdout %s, %d comments, %d titles", code, h.out, len(h.comments), h.titleSends)
 	}
 }
 
