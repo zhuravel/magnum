@@ -271,15 +271,17 @@ func withCIReaderApp(h *harness) {
 	h.d.Identities[ciReaderApp] = app
 }
 
-// An App whose scope the operator chose keeps it: one whose
-// token_permissions name actions (read here), as ci_dispatch_as, and the
-// App a watch polls as, narrowed without actions, which ciDispatchIdentity
-// falls back to, read the head's runs and re-run with their own client,
-// and nothing is minted for them. A mint with Actions write would widen the
-// scope, and where the installation grants Actions read alone GitHub
-// answers it 422, so reads that work would fail and the PR would need you
-// to grant the App Actions write. Only a dedicated fixer App mints
-// (config's DaemonMintsActions): the fixer rule keeps its
+// An App whose scope the operator chose keeps it: the App a watch polls
+// as, which ciDispatchIdentity falls back to, narrowed to Actions read or
+// without actions, and one whose token_permissions read Actions as
+// ci_dispatch_as (a review App, a dedicated App; validation refuses these
+// two there, since their own tokens cannot start nor re-run, but the
+// engine never widens them either) read the head's runs and re-run with
+// their own client, and nothing is minted for them. A mint with Actions
+// write would widen the scope, and where the installation grants Actions
+// read alone GitHub answers it 422, so reads that work would fail and the
+// PR would need you to grant the App Actions write. Only a dedicated fixer
+// App mints (config's DaemonMintsActions): the fixer rule keeps its
 // token_permissions to contents and pull_requests write, with no actions
 // key.
 func TestAnAppThatChoseItsActionsScopeMintsNothing(t *testing.T) {
@@ -292,6 +294,10 @@ func TestAnAppThatChoseItsActionsScopeMintsNothing(t *testing.T) {
 	}{
 		{"a review App that reads Actions as ci_dispatch_as", "talkable-app", "talkable-app",
 			narrow(map[string]string{"actions": "read", "contents": "read", "pull_requests": "write"})},
+		{"the poll identity narrowed to Actions read", "talkable-app", "", func(h *harness) {
+			narrow(map[string]string{"actions": "read", "contents": "read", "pull_requests": "write"})(h)
+			h.cfg.Watches[0].PollIdentity = "talkable-app"
+		}},
 		{"the poll identity narrowed without actions", "talkable-app", "", func(h *harness) {
 			narrow(map[string]string{"contents": "read", "pull_requests": "write"})(h)
 			h.cfg.Watches[0].PollIdentity = "talkable-app"

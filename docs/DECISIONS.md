@@ -4390,12 +4390,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheLooksActionsCallsAsAGhLoginMintNothing, and the checks that talkable-app, an App without
   `token_permissions`, mints nothing in TestTheReRunGoesAsCIDispatchAsWithoutCIDispatch and
   TestTheLookStartsTheCIWorkflowAsCIDispatchAs. After review, failing first by assertion:
-  TestAnAppThatChoseItsActionsScopeMintsNothing (a review App and a dedicated App that read Actions as
-  `ci_dispatch_as`, and the poll identity narrowed without actions, read and re-run with their own client and
-  mint nothing) and TestCIDispatchAsRefusesAnAppWhoseOwnTokensCannotStartWorkflows; with the rule moved into
-  config, TestDaemonMintsActionsForADedicatedFixerAppAlone; a guard that fails with the revoke of a token
-  whose batch gh config dir could not be made deleted:
-  TestAnActionsTokenIsRevokedWhenItsGhConfigDirCannotBeMade.
+  TestAnAppThatChoseItsActionsScopeMintsNothing (the poll identity narrowed to Actions read or without
+  actions, and a review App and a dedicated App that read Actions as `ci_dispatch_as`, which validation
+  refuses, read and re-run with their own client and mint nothing) and
+  TestCIDispatchAsRefusesAnAppWhoseOwnTokensCannotStartWorkflows; with the rule moved into config,
+  TestDaemonMintsActionsForADedicatedFixerAppAlone; a guard that fails with the revoke of a token whose batch
+  gh config dir could not be made deleted: TestAnActionsTokenIsRevokedWhenItsGhConfigDirCannotBeMade.
 
 - **An App's own REST calls through gh read a gh config dir of each call's own** (2026-11-10, after review).
   With `[github] transport = "gh"`, the default, `identity.GhTransport` ran `gh api` with the daemon's

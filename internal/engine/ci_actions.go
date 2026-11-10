@@ -7,12 +7,11 @@ package engine
 // App whose scope the operator chose, make them with the identity's own
 // client, as before. A dedicated fixer App (config's DaemonMintsActions:
 // contents and pull_requests write alone, which its panes hold in its gh
-// config dir)
-// makes them over a token of the daemon's own with Actions write added
-// (identity.App.ActionsEnv, push_token.go's mint), minted at a batch's
-// first call, handed only in the env of its gh commands (GH_TOKEN, over a
-// gh config dir of the batch's own) and revoked at the batch's end: never
-// in a file, so no pane gains a token that may start workflows.
+// config dir) makes them over a token of the daemon's own with Actions
+// write added (identity.App.ActionsEnv, push_token.go's mint), minted at a
+// batch's first call, handed only in the env of its gh commands (GH_TOKEN,
+// over a gh config dir of the batch's own) and revoked at the batch's end:
+// never in a file, so no pane gains a token that may start workflows.
 
 import (
 	"context"
