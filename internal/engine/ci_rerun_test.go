@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,13 +26,20 @@ const liveRunID = 42673098082
 // test says one (setHeadRuns).
 func rerunHarness(t *testing.T, paths ...string) *harness {
 	t.Helper()
+	return rerunHarnessWith(t, paths)
+}
+
+// rerunHarnessWith is rerunHarness with mods applied before the engine is
+// built.
+func rerunHarnessWith(t *testing.T, paths []string, mods ...func(*harness)) *harness {
+	t.Helper()
 	if len(paths) == 0 {
 		paths = []string{"source/partials/ip_list.rst"}
 	}
-	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"), func(h *harness) {
+	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"), append([]func(*harness){func(h *harness) {
 		h.gh.required = map[string][]string{"talkable/talkable": {"build"}}
 		h.gh.defaultFiles = paths
-	})
+	}}, mods...)...)
 	h.openOwn(prSpec{head: fixHead})
 	h.tick() // reviewed clean
 	return h
@@ -517,8 +525,10 @@ func TestTheLookReRunsOnceThePauseAndTheBudgetAllow(t *testing.T) {
 }
 
 // The re-run's attempt that waits for a runner past settle_max keeps the
-// look waiting (the poll reads it), as a started run does.
-func TestAReRunStillQueuedPastSettleMaxKeepsTheLookWaiting(t *testing.T) {
+// look waiting, as a started run does, and the poll goes on reading it:
+// once it ends with no job started either, the PR needs you with the
+// second failure, which the poll says once.
+func TestAReRunStillQueuedPastSettleMaxKeepsTheLookWaitingUntilItEnds(t *testing.T) {
 	h := rerunHarness(t)
 	h.setHeadRuns(fixHead, noJobRun())
 	h.pastSettle()
@@ -528,6 +538,149 @@ func TestAReRunStillQueuedPastSettleMaxKeepsTheLookWaiting(t *testing.T) {
 	h.tick()
 	h.tick()
 	h.wantOpen(OpenWaits, "CI at a1a1a1a: magnum re-ran run 42673098082 of ci.yml at ")
+	run := noJobRun()
+	run.Attempt, run.Conclusion = 2, "startup_failure"
+	h.setHeadRuns(fixHead, run)
+	h.advance(time.Minute)
+	h.tick()
+	h.tick()
+	h.wantOpen(OpenNeedsYou, "required check build did not run at a1a1a1a: run 42673098082 of ci.yml failed to start twice "+
+		"(startup failure); re-run it on GitHub, or push")
+	if evs := h.fixEvents("fix.open_ci_rerun_twice"); len(evs) != 1 {
+		t.Errorf("fix.open_ci_rerun_twice events = %+v, want one", evs)
+	}
+}
+
+// probedRerunner is the poll identity's client whose re-run first calls
+// probe, which reads the registry as it stands at the call.
+type probedRerunner struct {
+	*fakeGH
+	probe func()
+}
+
+func (g probedRerunner) RerunRun(ctx context.Context, owner, repo string, runID int64) error {
+	g.probe()
+	return g.fakeGH.RerunRun(ctx, owner, repo, runID)
+}
+
+// The re-run is recorded before its call: at the call, the look's record
+// of the head already says that magnum re-ran the run, so a daemon that
+// stops between the call and the record after it finds the head re-run
+// when it starts again, and never re-runs it twice.
+func TestTheReRunIsRecordedBeforeItsCall(t *testing.T) {
+	var mu sync.Mutex
+	var atCall []ciRerun
+	h := rerunHarnessWith(t, nil, func(h *harness) {
+		plain := h.d.GitHub
+		h.d.GitHub = func(id string) GitHub {
+			f, ok := plain(id).(*fakeGH)
+			if !ok {
+				return plain(id)
+			}
+			return probedRerunner{f, func() {
+				pr, err := h.lookupPR(2)
+				if err != nil {
+					t.Errorf("PR #2 at the re-run's call: %v", err)
+					return
+				}
+				r, ok, err := readKVJSON[ciRerun](h.ctx, h.e, kvPRCIRerun(pr.ID), "the look's re-run")
+				if err != nil || !ok {
+					t.Errorf("the record at the re-run's call: %v, %v", ok, err)
+					return
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				atCall = append(atCall, r)
+			}}
+		}
+	})
+	h.setHeadRuns(fixHead, noJobRun())
+	h.pastSettle()
+	h.tick()
+	if n := len(h.ghCalls("rerun:")); n != 1 {
+		t.Fatalf("reruns = %d, want 1", n)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(atCall) != 1 || atCall[0].At.IsZero() || atCall[0].Run == nil || atCall[0].Run.ID != liveRunID || atCall[0].Failed != "" ||
+		!atCall[0].decided() {
+		t.Fatalf("the record at the re-run's call = %+v, want one that says magnum re-ran run %d", atCall, liveRunID)
+	}
+}
+
+// A head the record says magnum re-ran or refused to re-run is neither
+// read nor re-run again by a look whose own read of the record failed (it
+// saw no record): the read and the re-run each read the stored record
+// again before they act, and leave it as it is.
+func TestARecordedReRunIsNotRedoneByALookThatCouldNotReadTheRecord(t *testing.T) {
+	for _, c := range []struct {
+		name, path, event string
+	}{
+		{"re-run", "source/partials/ip_list.rst", "fix.open_ci_rerun"},
+		{"refused", ".github/workflows/ci.yml", "fix.open_ci_rerun_refused"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := rerunHarness(t, c.path)
+			h.setHeadRuns(fixHead, noJobRun())
+			h.pastSettle()
+			h.tick()
+			pr, w := h.pr(2), h.cfg.Watches[0]
+			stored := h.e.ciRerunAt(h.ctx, pr)
+			if !stored.decided() {
+				t.Fatalf("record = %+v, want the head decided", stored)
+			}
+			reads, reruns := len(h.ghCalls("head_runs:")), len(h.ghCalls("rerun:"))
+			if r, ok := h.e.openReadRuns(h.ctx, h.repo(), w, pr); !ok || !r.decided() || !r.At.Equal(stored.At) || r.Refused != stored.Refused {
+				t.Errorf("read = %+v, %v; want the stored record %+v", r, ok, stored)
+			}
+			unread := ciRerun{Head: fixHead, ReadAt: h.clock.Now(), Run: &ciNoJob{ID: liveRunID, Workflow: "ci.yml", Attempt: 1, Conclusion: "failure"}}
+			if r, ok := h.e.openRerunCI(h.ctx, h.repo(), w, pr, unread, "required check build"); !ok || !r.decided() || !r.At.Equal(stored.At) ||
+				r.Refused != stored.Refused {
+				t.Errorf("re-run = %+v, %v; want the stored record %+v", r, ok, stored)
+			}
+			if n := len(h.ghCalls("head_runs:")) - reads; n != 0 {
+				t.Errorf("read the head's runs %d more times", n)
+			}
+			if n := len(h.ghCalls("rerun:")) - reruns; n != 0 {
+				t.Errorf("re-ran %d more times", n)
+			}
+			if n := len(h.fixEvents(c.event)); n != 1 {
+				t.Errorf("%s said %d times, want once", c.event, n)
+			}
+			if r := h.e.ciRerunAt(h.ctx, pr); !r.decided() || !r.At.Equal(stored.At) || r.Refused != stored.Refused || r.Run == nil {
+				t.Errorf("record = %+v after, want %+v", r, stored)
+			}
+		})
+	}
+}
+
+// A run of the head that has not ended holds the re-run, and the wait says
+// what GitHub said of it: one it has not given a runner yet (queued,
+// pending) has started no job yet, and one that runs or waits for an
+// environment (in_progress, waiting) has not ended. Here it is a run of
+// ci.yml started by hand on the PR's branch, beside the run that started
+// no job.
+func TestTheWaitBesideARunOfTheHeadThatHasNotEndedSaysWhetherItStarted(t *testing.T) {
+	for _, c := range []struct{ status, why string }{
+		{"queued", "CI at a1a1a1a: run 42673098089 has started no job yet"},
+		{"pending", "CI at a1a1a1a: run 42673098089 has started no job yet"},
+		{"in_progress", "CI at a1a1a1a: run 42673098089 has not ended"},
+		{"waiting", "CI at a1a1a1a: run 42673098089 has not ended"},
+	} {
+		t.Run(c.status, func(t *testing.T) {
+			h := rerunHarness(t)
+			byHand := noJobRun()
+			byHand.ID, byHand.Event, byHand.Status, byHand.Conclusion = liveRunID+7, "workflow_dispatch", c.status, ""
+			h.setHeadRuns(fixHead, byHand, noJobRun())
+			h.pastSettle()
+			h.tick()
+			h.tick()
+			h.wantOpen(OpenWaits, c.why)
+			if calls := h.ghCalls("rerun:"); len(calls) != 0 {
+				t.Fatalf("re-ran %q beside a run that has not ended", calls)
+			}
+		})
+	}
 }
 
 // settle_max after the re-run with no new attempt seen, or with one that
@@ -587,9 +740,7 @@ func (g appRerunner) RerunRun(_ context.Context, owner, repo string, runID int64
 // ci_dispatch, and talkable-app's client in place (appRerunner).
 func rerunHarnessAs(t *testing.T, as string) *harness {
 	t.Helper()
-	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"), func(h *harness) {
-		h.gh.required = map[string][]string{"talkable/talkable": {"build"}}
-		h.gh.defaultFiles = []string{"source/partials/ip_list.rst"}
+	return rerunHarnessWith(t, nil, func(h *harness) {
 		h.cfg.Repos = append(h.cfg.Repos, config.Repo{Repo: "talkable/talkable", CIDispatchAs: as})
 		plain := h.d.GitHub
 		h.d.GitHub = func(id string) GitHub {
@@ -599,9 +750,6 @@ func rerunHarnessAs(t *testing.T, as string) *harness {
 			return plain(id)
 		}
 	})
-	h.openOwn(prSpec{head: fixHead})
-	h.tick() // reviewed clean
-	return h
 }
 
 // [[repo]] ci_dispatch_as alone (no ci_dispatch) names who reads the

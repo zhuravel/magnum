@@ -11,12 +11,13 @@ package engine
 // that the required check did not run and needed you. Now, at its "did not
 // run" verdict, the look reads the head's runs once (openReadRuns: every
 // workflow's, github.HeadRuns, as startCI's identity, recorded per head in
-// kvPRCIRerun, never a read per tick; a queued run or a failed read is read
-// again settle_max later). Where each .github/workflows file's newest run
-// for a pull_request or a push ended with no job started (noJobStarted:
-// startup_failure, or failure or cancelled with no job in its latest
-// attempt), no run of the head has not ended, and the PR changes no
-// workflow or action file (changesActions), it re-runs that run once for
+// kvPRCIRerun, never a read per tick; a run that has not ended or a failed
+// read is read again settle_max later). Where each .github/workflows
+// file's newest run for a pull_request or a push ended with no job started
+// (noJobStarted: startup_failure, or failure or cancelled with no job in
+// its latest attempt), no run of the head has not ended (queuedWhy), and
+// the PR changes no workflow or action file (changesActions), it re-runs
+// that run once for
 // the head (openRerunCI: POST actions/runs/{id}/rerun, recorded before the
 // call, so a restart or a second look never re-runs twice), and waits for
 // its new attempt (the same run id, a higher run_attempt) as for a started
@@ -45,23 +46,25 @@ func kvPRCIRerun(prID int64) string { return fmt.Sprintf("pr.%d.ci_rerun", prID)
 
 // ciRerun is what the look read of the runs at Head (at ReadAt) and did
 // about them: Run is the run that started no job (nil: none); Queued a run
-// of the head that had not ended at the read (its id), and Unread a read
-// that failed, either of which the look reads again settle_max after
-// ReadAt; At when the look asked GitHub to re-run Run (written before the
-// call, so a re-run whose answer was lost still counts), Failed why GitHub
-// refused (its status, never its message; a 403 adds cannotStartWorkflows'
-// words) and Refused why magnum did not (At zero); Seen is the re-run's
-// new attempt as the poll last read it (nil: none seen).
+// of the head that had not ended at the read (its id, QueuedStatus its
+// status then), and Unread a read that failed, either of which the look
+// reads again settle_max after ReadAt; At when the look asked GitHub to
+// re-run Run (written before the call, so a re-run whose answer was lost
+// still counts), Failed why GitHub refused (its status, never its message;
+// a 403 adds cannotStartWorkflows' words) and Refused why magnum did not
+// (At zero); Seen is the re-run's new attempt as the poll last read it
+// (nil: none seen).
 type ciRerun struct {
-	Head    string     `json:"head"`
-	ReadAt  time.Time  `json:"read_at"`
-	Queued  int64      `json:"queued,omitempty"`
-	Unread  bool       `json:"unread,omitempty"`
-	Run     *ciNoJob   `json:"run,omitempty"`
-	At      time.Time  `json:"at,omitzero"`
-	Failed  string     `json:"failed,omitempty"`
-	Refused string     `json:"refused,omitempty"`
-	Seen    *ciAttempt `json:"seen,omitempty"`
+	Head         string     `json:"head"`
+	ReadAt       time.Time  `json:"read_at"`
+	Queued       int64      `json:"queued,omitempty"`
+	QueuedStatus string     `json:"queued_status,omitempty"`
+	Unread       bool       `json:"unread,omitempty"`
+	Run          *ciNoJob   `json:"run,omitempty"`
+	At           time.Time  `json:"at,omitzero"`
+	Failed       string     `json:"failed,omitempty"`
+	Refused      string     `json:"refused,omitempty"`
+	Seen         *ciAttempt `json:"seen,omitempty"`
 }
 
 // ciNoJob is a run that started no job: its id, its workflow file, the
@@ -98,7 +101,7 @@ func (r ciRerun) decided() bool { return !r.At.IsZero() || r.Refused != "" }
 
 // readDue reports whether the look reads the runs of head (again) at now:
 // none read at the head, or settleMax passed since a read that found a run
-// still queued or that failed.
+// that had not ended or that failed.
 func (r ciRerun) readDue(head string, now time.Time, settleMax time.Duration) bool {
 	return r.Head != head || (r.Queued != 0 || r.Unread) && !now.Before(r.ReadAt.Add(settleMax))
 }
@@ -176,28 +179,27 @@ func noJobStarted(ctx context.Context, gh GitHub, owner, name string, run github
 // first, and returns the newest one that started no job (noJobStarted)
 // among the newest run of each .github/workflows file for each of a
 // pull_request and a push (an older run that a newer one of its workflow
-// and event followed is no longer the head's), and the id of a run of a
-// .github/workflows file, of any event, that has not ended (queued: none
-// is then returned, as a re-run beside it could cancel it or be cancelled
-// by it, the workflow's concurrency group being its workflow and ref).
-func noJobRunAt(ctx context.Context, gh GitHub, owner, name, sha string) (*ciNoJob, int64, error) {
+// and event followed is no longer the head's), and the id and the status
+// of the newest run of a .github/workflows file, of any event, that has
+// not ended (queued: none is then returned, as a re-run beside it could
+// cancel it or be cancelled by it, the workflow's concurrency group being
+// its workflow and ref).
+func noJobRunAt(ctx context.Context, gh GitHub, owner, name, sha string) (found *ciNoJob, queued int64, status string, err error) {
 	l, ok := gh.(headRunLister)
 	if !ok {
-		return nil, 0, errors.New("no GitHub client that lists a commit's runs")
+		return nil, 0, "", errors.New("no GitHub client that lists a commit's runs")
 	}
 	runs, err := l.HeadRuns(ctx, owner, name, sha)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
-	var found *ciNoJob
-	var queued int64
 	seen := map[[2]string]bool{}
 	for _, run := range runs { // newest first
 		if run.Workflow == "" {
 			continue // GitHub's own dynamic runs
 		}
 		if !run.Done() && queued == 0 {
-			queued = run.ID
+			queued, status = run.ID, run.Status
 		}
 		key := [2]string{run.Workflow, run.Event}
 		if run.Event != "pull_request" && run.Event != "push" || seen[key] {
@@ -207,9 +209,9 @@ func noJobRunAt(ctx context.Context, gh GitHub, owner, name, sha string) (*ciNoJ
 		if found != nil || queued != 0 || !run.Done() { // nothing is re-run beside a queued run: no jobs to read
 			continue
 		}
-		noJob, err := noJobStarted(ctx, gh, owner, name, run)
-		if err != nil {
-			return nil, 0, err
+		noJob, jobsErr := noJobStarted(ctx, gh, owner, name, run)
+		if jobsErr != nil {
+			return nil, 0, "", jobsErr
 		}
 		if noJob {
 			found = &ciNoJob{ID: run.ID, Workflow: run.Workflow, Attempt: run.Attempt, Conclusion: run.Conclusion}
@@ -218,13 +220,13 @@ func noJobRunAt(ctx context.Context, gh GitHub, owner, name, sha string) (*ciNoJ
 	if queued != 0 {
 		found = nil
 	}
-	return found, queued, nil
+	return found, queued, status, nil
 }
 
 // openReadRuns is the look's one read of the runs at pr's head (rule 11
 // asked: v.readRuns), as startCI's identity (ciDispatchIdentity), and its
-// record (kvPRCIRerun): the run that started no job (noJobRunAt), the run
-// still queued, or a read that failed (Unread, said once per distinct
+// record (kvPRCIRerun): the run that started no job (noJobRunAt), a run
+// that has not ended, or a read that failed (Unread, said once per distinct
 // error: fix.open_ci_runs_error). A head the look re-ran or refused already
 // is not read again. ok is false when it did nothing (the record could not
 // be read or written).
@@ -238,7 +240,7 @@ func (e *Engine) openReadRuns(ctx context.Context, repo store.Repo, w config.Wat
 	if gh := e.gh(identity); gh == nil {
 		err = errors.New("no GitHub client of " + identity)
 	} else {
-		r.Run, r.Queued, err = noJobRunAt(ctx, gh, repo.Owner, repo.Name, pr.HeadSHA)
+		r.Run, r.Queued, r.QueuedStatus, err = noJobRunAt(ctx, gh, repo.Owner, repo.Name, pr.HeadSHA)
 	}
 	if err != nil {
 		r = ciRerun{Head: pr.HeadSHA, ReadAt: r.ReadAt, Unread: true}
@@ -434,11 +436,11 @@ func (e *Engine) seeRerun(ctx context.Context, identity, owner, name string, pr 
 // or a read that failed). Where the head's runs are due a read it asks for
 // it (v.readRuns) unless the GitHub budget is low, and waits for the budget
 // where nothing was read and no ci_dispatch would start the workflow
-// instead; it waits while a run of the head is queued, asks for the re-run
-// (v.rerun) when nothing holds it (`magnum pause`, the budget), waits for
-// the re-run's attempt until settle_max after it, and needs you when
-// magnum or GitHub refused the re-run, when its attempt started no job
-// either, ended without the check, or never came.
+// instead; it waits while a run of the head has not ended (queuedWhy), asks
+// for the re-run (v.rerun) when nothing holds it (`magnum pause`, the
+// budget), waits for the re-run's attempt until settle_max after it, and
+// needs you when magnum or GitHub refused the re-run, when its attempt
+// started no job either, ended without the check, or never came.
 func openRerunVerdict(f openFacts, v *OpenVerdict, waits func(string, time.Time) OpenVerdict, needsYou func(string) OpenVerdict, what string) (OpenVerdict, bool) {
 	r, low := f.ciRerun, f.low || f.ciLow
 	if r.readDue(f.pr.HeadSHA, f.now, f.settle.max) {
@@ -451,7 +453,7 @@ func openRerunVerdict(f openFacts, v *OpenVerdict, waits func(string, time.Time)
 		}
 	}
 	if r.Queued != 0 {
-		return waits(fmt.Sprintf("run %d has started no job yet", r.Queued), r.ReadAt.Add(f.settle.max)), true
+		return waits(queuedWhy(r.Queued, r.QueuedStatus), r.ReadAt.Add(f.settle.max)), true
 	}
 	if r.Run == nil {
 		return OpenVerdict{}, false
@@ -478,6 +480,19 @@ func openRerunVerdict(f openFacts, v *OpenVerdict, waits func(string, time.Time)
 	}
 	v.rerun = true
 	return needsYou("magnum re-runs " + run), true
+}
+
+// queuedWhy is the wait beside run id of the head, which had not ended at
+// the read, by status, its status then: one GitHub has not given a runner
+// yet (requested, queued, pending) "run 42673098082 has started no job
+// yet", and any other (in_progress, waiting for an environment) "run
+// 42673098082 has not ended".
+func queuedWhy(id int64, status string) string {
+	switch status {
+	case "requested", "queued", "pending":
+		return fmt.Sprintf("run %d has started no job yet", id)
+	}
+	return fmt.Sprintf("run %d has not ended", id)
 }
 
 // rerunWhy is the wait for the look's re-run of f: "magnum re-ran run
