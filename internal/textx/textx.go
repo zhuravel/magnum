@@ -112,3 +112,42 @@ func MatchLogins(logins []string) func(login string) bool {
 	}
 	return func(login string) bool { k := FoldLogin(login); return k != "" && set[k] }
 }
+
+// StripTerminal is s without what a terminal acts on: CSI sequences (ESC
+// [, parameters, a final byte: colours, the cursor), OSC sequences (ESC ],
+// up to BEL or ESC \: titles, links), the two-byte escapes (ESC and one
+// byte, a charset's ESC ( B with its byte), and every C0 control but the
+// tab and the newline, a carriage return and DEL included. A sequence cut
+// at the end of s is dropped. The text, Unicode included, stays.
+func StripTerminal(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == 0x1b && i+1 < len(s) && s[i+1] == '[': // CSI: parameters and intermediates, then a final byte in @..~
+			i += 2
+			for i < len(s) && (s[i] < 0x40 || s[i] > 0x7e) {
+				i++
+			}
+		case c == 0x1b && i+1 < len(s) && s[i+1] == ']': // OSC: up to BEL or ST (ESC \)
+			i += 2
+			for i < len(s) && s[i] != 0x07 && !(s[i] == 0x1b && i+1 < len(s) && s[i+1] == '\\') {
+				i++
+			}
+			if i < len(s) && s[i] == 0x1b {
+				i++
+			}
+		case c == 0x1b && i+1 < len(s) && strings.IndexByte("()*+", s[i+1]) >= 0: // a charset: ESC ( B
+			i += 2
+		case c == 0x1b: // ESC and one byte (ESC = , ESC 7), or alone at the end
+			i++
+		case c == '\t' || c == '\n':
+			b.WriteByte(c)
+		case c < 0x20 || c == 0x7f:
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}

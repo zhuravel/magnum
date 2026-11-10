@@ -13531,6 +13531,16 @@ func Redact(s string) string
     Redact masks GitHub tokens, JWTs, Authorization header values and PEM
     private keys in free text. An Authorization header keeps its name.
 
+func Scrub(s string) string
+    Scrub cleans output of code magnum does not trust before a file an agent
+    reads keeps it (the CI reader's ci-failures.json, of a PR's own CI):
+    Redact (GitHub tokens, JWTs, Authorization values, private keys), then the
+    token shapes and secret pairs the factory's scrub masks (the values of
+    password=, token: and the like, the key kept) and emails. Host names stay:
+    an infrastructure failure names its host, and the file stays the fixer's.
+    Redact's private-key rule spans lines, so Scrub runs on a whole text,
+    never line by line.
+
 func ShellQuote(s string) string
     ShellQuote single-quotes s unless it consists only of characters a POSIX
     shell never interprets; the empty string becomes two single quotes. Newlines
@@ -13585,6 +13595,11 @@ type Cmd struct {
 	// memory probe warns once per cause): Real logs its line at Debug
 	// whatever the outcome, a timeout and a failed start included.
 	Quiet bool
+	// KeepTail, when positive, keeps the last KeepTail bytes of stdout
+	// (at most MaxOutput) in place of its first MaxOutput: a CI job's log
+	// ends where it failed. A longer stdout sets Result.Truncated, with no
+	// TruncationMarker; stderr is captured as always.
+	KeepTail int
 }
     Cmd describes one subprocess.
 
@@ -18150,6 +18165,10 @@ const ComparePushCommits = 100
 const FileAtLimit = 512 << 10
     FileAtLimit caps FileAt: a larger file is not returned.
 
+const FirstParentDepth = 5
+    FirstParentDepth is how many commits FirstParentChecks reads: a commit and
+    its first parents, four deep.
+
 const MaxAnnotations = 50
     MaxAnnotations is the most annotations AnnotationPaths reads of one check
     run: one page, GitHub's own limit per page being higher.
@@ -18582,6 +18601,16 @@ func (c *Client) FileAt(ctx context.Context, owner, repo, path, ref string) ([]b
     a file above FileAtLimit an error matching ErrFileTooLarge (checked on the
     bytes received).
 
+func (c *Client) FirstParentChecks(ctx context.Context, owner, repo, sha string) ([]CommitWithChecks, error)
+    FirstParentChecks reads commit sha of owner/repo and its first parents,
+    FirstParentDepth commits at most, newest first, each with its checks as
+    CommitChecks reads them, in one GraphQL query: the CI fix's read of whether
+    a check the PR failed passes on its base (internal/engine's ci_fix.go),
+    at the base tip the look fetched. The list ends early at a commit with no
+    parent. No branch name reaches the command line: the commit goes in the
+    query's variables. A missing repository or commit is an error matching
+    ErrNotFound; a sha that is no full commit id is refused before any call.
+
 func (c *Client) HeadRuns(ctx context.Context, owner, repo, sha string) ([]WorkflowRun, error)
     HeadRuns lists the runs of every workflow of owner/repo at commit sha,
     of any event, newest first, each with its event, its attempt and its
@@ -18602,6 +18631,19 @@ func (c *Client) IssueComments(ctx context.Context, owner, repo string, number i
     issueCommentsMaxPages pages with older comments, none of which stop was
     asked about, left unread. A missing repository or pull request is an error
     matching ErrNotFound.
+
+func (c *Client) JobLogTail(ctx context.Context, owner, repo string, jobID int64, keep int) (log string, cut bool, err error)
+    JobLogTail reads the log of job id of owner/repo and keeps its last
+    keep bytes (at most execx.MaxOutput), where a failed job's error is:
+    GET /repos/{o}/{r}/actions/jobs/{id}/logs, whose redirect to the log's
+    signed URL gh follows, with --allow-escape-sequences (a job whose tools
+    colour their output, FORCE_COLOR, has a log gh 2.103 otherwise refuses to
+    print, printing its refusal in place of the log). The whole log downloads;
+    execx keeps its tail (Cmd.KeepTail). cut reports that the log was longer
+    than keep. The log is the output of the PR's code and its tests: data for an
+    agent's file, never for an event or a log line. A log GitHub no longer keeps
+    (90 days) answers HTTP 404 or 410, and a job id that is no id is refused
+    before any call. The identity needs Actions: read.
 
 func (c *Client) ListFiles(ctx context.Context, owner, repo string, number int) (files []string, complete bool, err error)
     ListFiles reads the files a pull request changes: GET
@@ -18747,9 +18789,10 @@ func (c *Client) ReviewsWithMarker(ctx context.Context, owner, repo string, numb
     A missing repository or pull request is an error matching ErrNotFound.
 
 func (c *Client) RunJobs(ctx context.Context, owner, repo string, runID int64) ([]WorkflowJob, error)
-    RunJobs lists the jobs of the latest attempt of run id of owner/repo:
-    GET /repos/{o}/{r}/actions/runs/{id}/jobs?filter=latest, one page of
-    runJobsPage. No step or log is read.
+    RunJobs lists the jobs of the latest attempt of run
+    id of owner/repo, each with its steps and times: GET
+    /repos/{o}/{r}/actions/runs/{id}/jobs?filter=latest, one page of
+    runJobsPage. No log is read (JobLogTail).
 
 func (c *Client) SubmitReview(ctx context.Context, owner, repo string, number int, r ReviewRequest) (RESTReview, error)
     SubmitReview posts one review with its inline comments (POST
@@ -18780,6 +18823,13 @@ func (c *Client) WithEnv(env map[string]string) *Client
     It keeps c's Run, Dir and Meter (the calls count against the identity's
     budget) and has no Reauth: a 401 of that token is no reason to refresh the
     identity's own. c is not changed.
+
+type CommitWithChecks struct {
+	SHA    string
+	Checks []Check
+}
+    CommitWithChecks is a commit and its checks, normalized as CommitChecks
+    reads them (empty, never nil, for none).
 
 type CompareStats struct {
 	Commits   int // total_commits
@@ -18860,6 +18910,18 @@ type IssueComment struct {
 
 func (c IssueComment) Author() string
     Author is the comment's author in Account form.
+
+type JobStep struct {
+	Number      int
+	Name        string
+	Status      string
+	Conclusion  string
+	StartedAt   time.Time
+	CompletedAt time.Time
+}
+    JobStep is one step of a job: its number in the job (the log's group order),
+    name, status, conclusion once completed, and when it started and completed
+    (zero for a step that did not run).
 
 type LatestReview struct {
 	State       string // APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | PENDING
@@ -19274,13 +19336,22 @@ type ThreadComment struct {
     ThreadComment is one comment of a review thread.
 
 type WorkflowJob struct {
-	ID         int64
-	Name       string
-	Status     string
-	Conclusion string
+	ID          int64
+	Name        string
+	Status      string
+	Conclusion  string
+	Steps       []JobStep
+	StartedAt   time.Time
+	CompletedAt time.Time
+	URL         string
+	RunAttempt  int
 }
-    WorkflowJob is a job of a workflow run as RunJobs lists it. An Actions job's
-    id is also its check run's (AnnotationPaths).
+    WorkflowJob is a job of a workflow run as RunJobs lists it: its id,
+    name, status and conclusion once completed (success, failure, cancelled,
+    timed_out, skipped, ...), its steps, when it started and completed (zero
+    for neither yet), its page (URL) and the attempt of its run it ran in
+    (RunAttempt). An Actions job's id is also its check run's (AnnotationPaths),
+    and its name the check run's.
 
 type WorkflowRun struct {
 	ID         int64
@@ -31863,6 +31934,14 @@ func Plural(n int, one, many string) string
 
 func ShortSHA(sha string) string
     ShortSHA is a commit SHA cut to 7 characters; a shorter string is kept.
+
+func StripTerminal(s string) string
+    StripTerminal is s without what a terminal acts on: CSI sequences (ESC [,
+    parameters, a final byte: colours, the cursor), OSC sequences (ESC ],
+    up to BEL or ESC \: titles, links), the two-byte escapes (ESC and one byte,
+    a charset's ESC ( B with its byte), and every C0 control but the tab and the
+    newline, a carriage return and DEL included. A sequence cut at the end of s
+    is dropped. The text, Unicode included, stays.
 
 func Thousands(n int) string
     Thousands writes n with a comma between each three digits: "4,412".

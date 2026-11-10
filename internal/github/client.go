@@ -287,22 +287,20 @@ func BetweenCalls(ctx context.Context) {
 // BetweenCalls; expected (nil = none) picks the failed exits that are
 // answers (execx.Cmd.Expected).
 func (c *Client) gh(ctx context.Context, label string, args []string, stdin []byte, mutates bool, expected func(execx.Result) bool) (execx.Result, error) {
+	return c.ghCmd(ctx, execx.Cmd{Args: args, Stdin: stdin, Mutates: mutates, Label: "gh " + label, Expected: expected})
+}
+
+// ghCmd runs cmd as gh with the client's env and directory, after
+// BetweenCalls: gh's name, the directory and the env are the client's.
+func (c *Client) ghCmd(ctx context.Context, cmd execx.Cmd) (execx.Result, error) {
 	if c.Run == nil {
 		return execx.Result{}, errors.New("github: Client.Run is nil")
 	}
 	BetweenCalls(ctx)
 	env := maps.Clone(ghDefaults)
 	maps.Copy(env, c.Env)
-	return c.Run.Run(ctx, execx.Cmd{
-		Name:     "gh",
-		Args:     args,
-		Dir:      c.Dir,
-		Env:      env,
-		Stdin:    stdin,
-		Mutates:  mutates,
-		Label:    "gh " + label,
-		Expected: expected,
-	})
+	cmd.Name, cmd.Dir, cmd.Env = "gh", c.Dir, env
+	return c.Run.Run(ctx, cmd)
 }
 
 // rateLimitJSON is the shape of rateLimit{limit cost remaining used resetAt}.

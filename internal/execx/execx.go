@@ -68,6 +68,11 @@ type Cmd struct {
 	// memory probe warns once per cause): Real logs its line at Debug
 	// whatever the outcome, a timeout and a failed start included.
 	Quiet bool
+	// KeepTail, when positive, keeps the last KeepTail bytes of stdout
+	// (at most MaxOutput) in place of its first MaxOutput: a CI job's log
+	// ends where it failed. A longer stdout sets Result.Truncated, with no
+	// TruncationMarker; stderr is captured as always.
+	KeepTail int
 }
 
 // Result is the outcome of a finished subprocess.
@@ -357,6 +362,9 @@ func (r *Real) Run(ctx context.Context, c Cmd) (Result, error) {
 		cmd.Stdin = bytes.NewReader(c.Stdin)
 	}
 	stdout, stderr := &capWriter{limit: MaxOutput}, &capWriter{limit: MaxOutput}
+	if c.KeepTail > 0 {
+		stdout = &capWriter{limit: min(c.KeepTail, MaxOutput), tail: true}
+	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
@@ -465,9 +473,19 @@ type capWriter struct {
 	buf       bytes.Buffer
 	limit     int
 	truncated bool
+	// tail keeps the last limit bytes (Cmd.KeepTail): ring holds them,
+	// the oldest at next once total, the bytes written, passed limit.
+	tail  bool
+	ring  []byte
+	next  int
+	total int
 }
 
 func (w *capWriter) Write(p []byte) (int, error) {
+	if w.tail {
+		w.writeTail(p)
+		return len(p), nil
+	}
 	room := max(w.limit-w.buf.Len(), 0)
 	if len(p) > room {
 		w.truncated = true
@@ -476,7 +494,31 @@ func (w *capWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// writeTail writes p into the ring of the last limit bytes.
+func (w *capWriter) writeTail(p []byte) {
+	if w.ring == nil {
+		w.ring = make([]byte, 0, w.limit)
+	}
+	w.total += len(p)
+	w.truncated = w.total > w.limit
+	if len(p) >= w.limit {
+		w.ring, w.next = append(w.ring[:0], p[len(p)-w.limit:]...), 0
+		return
+	}
+	if room := w.limit - len(w.ring); room > 0 { // not full yet
+		k := min(room, len(p))
+		w.ring, p = append(w.ring, p[:k]...), p[k:]
+	}
+	for len(p) > 0 { // full: overwrite the oldest bytes
+		k := copy(w.ring[w.next:], p)
+		w.next, p = (w.next+k)%w.limit, p[k:]
+	}
+}
+
 func (w *capWriter) bytes() []byte {
+	if w.tail {
+		return append(slices.Clone(w.ring[w.next:]), w.ring[:w.next]...)
+	}
 	if w.truncated {
 		w.buf.WriteString(TruncationMarker)
 	}

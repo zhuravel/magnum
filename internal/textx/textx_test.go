@@ -130,3 +130,24 @@ func TestMatchLoginsFoldsLikeFoldLogin(t *testing.T) {
 		}
 	}
 }
+
+// A CI log is gh's raw output of a job whose tools colour it (FORCE_COLOR):
+// StripTerminal drops the CSI and OSC sequences and every C0 control but
+// the tab and the newline, a carriage return included, and keeps the text.
+func TestStripTerminal(t *testing.T) {
+	for in, want := range map[string]string{
+		"\x1b[31mFAIL\x1b[0m spec/a_spec.rb":                  "FAIL spec/a_spec.rb",
+		"\x1b[1;32m✓\x1b[39;49m ok\tdone\n":                   "✓ ok\tdone\n",
+		"\x1b]8;;https://example.com\x07link\x1b]8;;\x07 end": "link end",
+		"\x1b]0;title\x1b\\text":                              "text",
+		"bell\x07 and cr\r\nnul\x00x":                         "bell and cr\nnulx",
+		"\x1b[?25lcursor\x1b[?25h":                            "cursor",
+		"plain text":                                          "plain text",
+		"\x1b(Bcharset":                                       "charset",
+		"cut \x1b[3":                                          "cut ",
+	} {
+		if got := StripTerminal(in); got != want {
+			t.Errorf("StripTerminal(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

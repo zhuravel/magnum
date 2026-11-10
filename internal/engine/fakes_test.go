@@ -205,6 +205,47 @@ type fakeGH struct {
 	jobs        map[int64][]github.WorkflowJob
 	jobsErr     error
 	rerunErr    error
+	// logs answers JobLogTail by job id (absent: HTTP 404, a log GitHub no
+	// longer keeps), its tail of keep bytes; logsErr fails it
+	// ("job_log:<owner>/<repo>#<id>"). firstParents answers
+	// FirstParentChecks by sha (absent: the commit alone, without checks),
+	// firstParentsErr fails it ("first_parents:<owner>/<repo>@<sha>").
+	logs            map[int64]string
+	logsErr         error
+	firstParents    map[string][]github.CommitWithChecks
+	firstParentsErr error
+}
+
+func (g *fakeGH) JobLogTail(ctx context.Context, owner, repo string, jobID int64, keep int) (string, bool, error) {
+	github.BetweenCalls(ctx)
+	g.record(fmt.Sprintf("job_log:%s/%s#%d", owner, repo, jobID))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.logsErr != nil {
+		return "", false, g.logsErr
+	}
+	log, ok := g.logs[jobID]
+	if !ok {
+		return "", false, &github.APIError{Op: "job log", Status: 404, Message: "Not Found"}
+	}
+	if len(log) > keep {
+		return log[len(log)-keep:], true, nil
+	}
+	return log, false, nil
+}
+
+func (g *fakeGH) FirstParentChecks(ctx context.Context, owner, repo, sha string) ([]github.CommitWithChecks, error) {
+	github.BetweenCalls(ctx)
+	g.record(fmt.Sprintf("first_parents:%s/%s@%s", owner, repo, sha))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.firstParentsErr != nil {
+		return nil, g.firstParentsErr
+	}
+	if cs, ok := g.firstParents[sha]; ok {
+		return slices.Clone(cs), nil
+	}
+	return []github.CommitWithChecks{{SHA: sha, Checks: []github.Check{}}}, nil
 }
 
 func (g *fakeGH) HeadRuns(ctx context.Context, owner, repo, sha string) ([]github.WorkflowRun, error) {

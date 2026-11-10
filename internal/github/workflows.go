@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/zhuravel/magnum/internal/execx"
 )
 
 // workflowFileRe is a workflow's file name in .github/workflows ("ci.yml"):
@@ -179,21 +181,51 @@ func (c *Client) CommitRuns(ctx context.Context, owner, repo, workflow, sha stri
 	return runs, nil
 }
 
-// WorkflowJob is a job of a workflow run as RunJobs lists it. An Actions
-// job's id is also its check run's (AnnotationPaths).
+// WorkflowJob is a job of a workflow run as RunJobs lists it: its id, name,
+// status and conclusion once completed (success, failure, cancelled,
+// timed_out, skipped, ...), its steps, when it started and completed (zero
+// for neither yet), its page (URL) and the attempt of its run it ran in
+// (RunAttempt). An Actions job's id is also its check run's
+// (AnnotationPaths), and its name the check run's.
 type WorkflowJob struct {
-	ID         int64
-	Name       string
-	Status     string
-	Conclusion string
+	ID          int64
+	Name        string
+	Status      string
+	Conclusion  string
+	Steps       []JobStep
+	StartedAt   time.Time
+	CompletedAt time.Time
+	URL         string
+	RunAttempt  int
+}
+
+// conclusionOf is a nullable conclusion GitHub answered ("" for null).
+func conclusionOf(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// JobStep is one step of a job: its number in the job (the log's group
+// order), name, status, conclusion once completed, and when it started and
+// completed (zero for a step that did not run).
+type JobStep struct {
+	Number      int
+	Name        string
+	Status      string
+	Conclusion  string
+	StartedAt   time.Time
+	CompletedAt time.Time
 }
 
 // runJobsPage is how many jobs RunJobs reads of one run.
 const runJobsPage = 100
 
-// RunJobs lists the jobs of the latest attempt of run id of owner/repo: GET
+// RunJobs lists the jobs of the latest attempt of run id of owner/repo,
+// each with its steps and times: GET
 // /repos/{o}/{r}/actions/runs/{id}/jobs?filter=latest, one page of
-// runJobsPage. No step or log is read.
+// runJobsPage. No log is read (JobLogTail).
 func (c *Client) RunJobs(ctx context.Context, owner, repo string, runID int64) ([]WorkflowJob, error) {
 	if err := checkRepo(owner, repo); err != nil {
 		return nil, err
@@ -201,12 +233,25 @@ func (c *Client) RunJobs(ctx context.Context, owner, repo string, runID int64) (
 	if runID <= 0 {
 		return nil, fmt.Errorf("github: invalid run %d", runID)
 	}
+	type stepJSON struct {
+		Number      int        `json:"number"`
+		Name        string     `json:"name"`
+		Status      string     `json:"status"`
+		Conclusion  *string    `json:"conclusion"`
+		StartedAt   *time.Time `json:"started_at"`
+		CompletedAt *time.Time `json:"completed_at"`
+	}
 	var data struct {
 		Jobs []struct {
-			ID         int64   `json:"id"`
-			Name       string  `json:"name"`
-			Status     string  `json:"status"`
-			Conclusion *string `json:"conclusion"`
+			ID          int64      `json:"id"`
+			Name        string     `json:"name"`
+			Status      string     `json:"status"`
+			Conclusion  *string    `json:"conclusion"`
+			RunAttempt  int        `json:"run_attempt"`
+			URL         string     `json:"html_url"`
+			StartedAt   *time.Time `json:"started_at"`
+			CompletedAt *time.Time `json:"completed_at"`
+			Steps       []stepJSON `json:"steps"`
 		} `json:"jobs"`
 	}
 	path := fmt.Sprintf("repos/%s/%s/actions/runs/%d/jobs?filter=latest&per_page=%d", owner, repo, runID, runJobsPage)
@@ -214,15 +259,68 @@ func (c *Client) RunJobs(ctx context.Context, owner, repo string, runID int64) (
 	if err := c.rest(ctx, op, "GET", path, nil, false, &data); err != nil {
 		return nil, err
 	}
+	at := func(t *time.Time) time.Time {
+		if t == nil {
+			return time.Time{}
+		}
+		return *t
+	}
 	jobs := make([]WorkflowJob, 0, len(data.Jobs))
 	for _, j := range data.Jobs {
-		job := WorkflowJob{ID: j.ID, Name: j.Name, Status: j.Status}
-		if j.Conclusion != nil {
-			job.Conclusion = *j.Conclusion
+		job := WorkflowJob{ID: j.ID, Name: j.Name, Status: j.Status, Conclusion: conclusionOf(j.Conclusion), RunAttempt: j.RunAttempt, URL: j.URL,
+			StartedAt: at(j.StartedAt), CompletedAt: at(j.CompletedAt)}
+		for _, s := range j.Steps {
+			job.Steps = append(job.Steps, JobStep{Number: s.Number, Name: s.Name, Status: s.Status, Conclusion: conclusionOf(s.Conclusion),
+				StartedAt: at(s.StartedAt), CompletedAt: at(s.CompletedAt)})
 		}
 		jobs = append(jobs, job)
 	}
 	return jobs, nil
+}
+
+// JobLogTail reads the log of job id of owner/repo and keeps its last keep
+// bytes (at most execx.MaxOutput), where a failed job's error is: GET
+// /repos/{o}/{r}/actions/jobs/{id}/logs, whose redirect to the log's
+// signed URL gh follows, with --allow-escape-sequences (a job whose tools
+// colour their output, FORCE_COLOR, has a log gh 2.103 otherwise refuses
+// to print, printing its refusal in place of the log). The whole log
+// downloads; execx keeps its tail (Cmd.KeepTail). cut reports that the log
+// was longer than keep. The log is the output of the PR's code and its
+// tests: data for an agent's file, never for an event or a log line. A log
+// GitHub no longer keeps (90 days) answers HTTP 404 or 410, and a job id
+// that is no id is refused before any call. The identity needs Actions:
+// read.
+func (c *Client) JobLogTail(ctx context.Context, owner, repo string, jobID int64, keep int) (log string, cut bool, err error) {
+	if err := checkRepo(owner, repo); err != nil {
+		return "", false, err
+	}
+	if jobID <= 0 {
+		return "", false, fmt.Errorf("github: invalid job %d", jobID)
+	}
+	keep = min(max(keep, 1), execx.MaxOutput)
+	op := fmt.Sprintf("job log %s/%s#%d", owner, repo, jobID)
+	args := append([]string{"api", fmt.Sprintf("repos/%s/%s/actions/jobs/%d/logs", owner, repo, jobID)}, ghHost...)
+	args = append(args, "--allow-escape-sequences")
+	once := func() (execx.Result, error) {
+		res, err := c.ghCmd(ctx, execx.Cmd{Args: args, Label: "gh " + op, KeepTail: keep})
+		err = restFailure(op, res, err)
+		c.meter(ctx, op, false, RateLimit{}, err)
+		return res, err
+	}
+	res, err := once()
+	if retry, rerr := c.reauthorize(ctx, err); retry {
+		res, err = once()
+	} else {
+		err = rerr
+	}
+	if err != nil {
+		return "", false, err
+	}
+	out := res.Stdout
+	if len(out) > keep { // a runner that kept more than asked
+		out, res.Truncated = out[len(out)-keep:], true
+	}
+	return string(out), res.Truncated, nil
 }
 
 // MaxAnnotations is the most annotations AnnotationPaths reads of one check

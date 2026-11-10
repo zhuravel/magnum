@@ -90,6 +90,8 @@ var callKinds = func() [][2]string {
 		{"dispatched runs", "dispatched runs"},
 		{"commit runs", "commit runs"},
 		{"run jobs", "run jobs"},
+		{"job log", "job log"},
+		{"first parent checks", "first parent checks"},
 		{"annotations", "annotations"},
 		{"deployments", "deployments"},
 		{"deployment statuses", "deployment statuses"},
