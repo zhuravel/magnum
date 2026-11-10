@@ -329,6 +329,7 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 		// a person's handed items wait, and those their reviewer accepted: its fixer leaves them alone
 		v = e.openStart(ctx, repo, pr, &l, v, work, FixState{Waits: waitsOf(append(slices.Clone(needs), acceptedWaits(f.items, l)...))}, fp)
 	}
+	l.noteWaited(needs, now) // fix_open_needs.go: a change request of their reviewers waits for you from now on
 	e.openWrite(ctx, pr, c.raw, l, v)
 }
 

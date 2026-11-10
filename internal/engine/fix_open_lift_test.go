@@ -310,3 +310,84 @@ func TestAnAcceptedItemWaitsForNoOneButWorkStaysWork(t *testing.T) {
 		t.Errorf("waits = %v, want the handed accepted thread", got)
 	}
 }
+
+// revAnnComments adds rev-ann's conversation comment on PR #2 now, and
+// polls the PR.
+func (h *harness) revAnnComments(id int64, body string) {
+	h.t.Helper()
+	h.gh.mu.Lock()
+	if h.gh.prComments == nil {
+		h.gh.prComments = map[int][]github.PRComment{}
+	}
+	h.gh.prComments[2] = append(h.gh.prComments[2], github.PRComment{ID: id, URL: prPage + "#issuecomment-" + itoa(id), Body: body,
+		CreatedAt: h.clock.Now(), AuthorLogin: "rev-ann", AuthorType: "User", AuthorAssociation: "MEMBER"})
+	h.gh.mu.Unlock()
+	h.touch(fixHead)
+}
+
+// You answered the change request that waited for you, which lifted the
+// attention; then the reviewer wrote again. A plain comment of theirs is an
+// item of its own, which a loop works on. A change request instead is
+// pushback: it waits for you, as the item it answers did, never for a
+// fixer, and the look raises it.
+func TestTheReviewersPlainReplyIsItsOwnItemAndAChangeRequestWaitsForYou(t *testing.T) {
+	answered := func(t *testing.T) *harness {
+		h := raisedChangeRequest(t)
+		emptyRepliedRounds(h)
+		h.advance(10 * time.Minute)
+		yourComment(h, 801, "@rev-ann It is kept on purpose")
+		h.advance(10 * time.Minute)
+		h.tick() // the reply round
+		h.wantState(2, store.PRReviewed)
+		h.advance(10 * time.Minute)
+		return h
+	}
+	t.Run("a plain comment", func(t *testing.T) {
+		h := answered(t)
+		h.revAnnComments(802, "OK, then document it")
+		h.pastSettle()
+		h.tick()
+		if n := len(h.fixRuns(h.pr(2).ID)); n != 2 {
+			t.Errorf("fix runs = %d, want a loop on the reviewer's new comment", n)
+		}
+	})
+	t.Run("a change request", func(t *testing.T) {
+		h := answered(t)
+		h.revAnnReviews(9002, "CHANGES_REQUESTED", "No, drop it")
+		h.pastSettle()
+		h.tick()
+		if n := len(h.fixRuns(h.pr(2).ID)); n != 1 {
+			t.Errorf("fix runs = %d: the reviewer's pushback went to a fixer", n)
+		}
+		pr := h.wantState(2, store.PRNeedsAttention)
+		if !strings.Contains(deref(pr.LastError), prPage+"#pullrequestreview-9002") {
+			t.Errorf("last_error = %q, want the pushback's link", deref(pr.LastError))
+		}
+	})
+}
+
+// A change request of a reviewer one of whose items waited for you
+// (Waited) waits for you too: no work, a need. Their plain comment, and
+// another reviewer's change request, are work as before. The look records
+// a reviewer the first time one of their person's items waits for you.
+func TestAChangeRequestWaitsForYouOnceTheReviewersItemWaited(t *testing.T) {
+	pushback := openItem{Key: "remark:9002", Class: classPerson, Kind: itemReview, URL: prPage + "#pullrequestreview-9002", By: "Rev-Ann", Changes: true}
+	comment := openItem{Key: "remark:802", Class: classPerson, Kind: itemComment, URL: prPage + "#issuecomment-802", By: "rev-ann"}
+	alices := openItem{Key: "remark:9003", Class: classPerson, Kind: itemReview, URL: prPage + "#pullrequestreview-9003", By: "alice", Changes: true}
+	f := idleFacts()
+	f.items = []openItem{pushback, comment, alices}
+	f.ledger.noteWaited([]openItem{
+		{Key: "thread:100@100", Class: classPerson, Kind: itemThread, By: "rev-ann"},
+		{Key: "thread:200@200", Class: classBot, Kind: itemThread, By: "lint-bot[bot]"},
+		{Key: "rthread:300", Class: classMagnum, Kind: itemFinding},
+	}, openNow.Add(-time.Hour))
+	f.ledger.noteWaited([]openItem{{Key: "thread:100@101", Class: classPerson, Kind: itemThread, By: "rev-ann"}}, openNow)
+	if want := map[string]time.Time{"rev-ann": openNow.Add(-time.Hour)}; !maps.Equal(f.ledger.Waited, want) {
+		t.Errorf("waited = %v, want %v", f.ledger.Waited, want)
+	}
+	v, work, needs := decideOpen(f)
+	if len(needs) != 1 || needs[0].Key != pushback.Key || len(work) != 2 || work[0].Key != comment.Key || work[1].Key != alices.Key {
+		t.Errorf("work %v, needs %v; want rev-ann's change request waiting, her comment and alice's change request as work", work, needs)
+	}
+	wantVerdict(t, v, OpenFixing, "1 item waits for you: 1 review body of a person")
+}

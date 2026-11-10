@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/store"
@@ -88,13 +89,50 @@ func (l openLedger) raisedHere(pr store.PR, kind string) bool {
 		len(l.Raised) > 0
 }
 
-// acceptedLeftover reports whether it would wait for you (handed to a loop
-// and still open, a thread a fixer resolved, one the fixer answered twice)
-// but its reviewer approved the PR since (openItem.Accepted): it waits for
-// no one (sortOpen). An item never handed is work, accepted or not.
-func (l openLedger) acceptedLeftover(it openItem) bool {
+// leftToAuthor reports whether it, once still open, waits for the author
+// rather than a fixer where sortOpen sorts it: a loop was handed it
+// (Handed), or it is a reviewer's pushback.
+func (l openLedger) leftToAuthor(it openItem) bool {
 	_, handed := l.Handed[it.Key]
-	return it.Accepted && (handed || it.Resolved || it.Kind == itemThread && it.FixerReplies >= 2)
+	return handed || l.pushback(it)
+}
+
+// pushback reports whether it is a person's review body that requests
+// changes (openItem.Changes) while or after one of that reviewer's items
+// waited for the author (Waited): they push back on the author's answer,
+// or ask again, which only the author can settle. Their plain comment is
+// no pushback: it is an item of its own, never handed, so work.
+func (l openLedger) pushback(it openItem) bool {
+	_, waited := l.Waited[strings.ToLower(it.By)]
+	return it.Class == classPerson && it.Changes && waited
+}
+
+// noteWaited records in l.Waited, at now the first time, the reviewers
+// of the person's items of needs, which wait for the author. A reviewer
+// stays there for the PR's life: an approval of theirs and a new change
+// request can come in one read.
+func (l *openLedger) noteWaited(needs []openItem, now time.Time) {
+	for _, it := range needs {
+		by := strings.ToLower(it.By)
+		if it.Class != classPerson || by == "" || by == "ghost" {
+			continue
+		}
+		if _, ok := l.Waited[by]; ok {
+			continue
+		}
+		if l.Waited == nil {
+			l.Waited = map[string]time.Time{}
+		}
+		l.Waited[by] = now
+	}
+}
+
+// acceptedLeftover reports whether it would wait for you (left to you,
+// a thread a fixer resolved, one the fixer answered twice) but its
+// reviewer approved the PR since (openItem.Accepted): it waits for no one
+// (sortOpen). An item never handed is work, accepted or not.
+func (l openLedger) acceptedLeftover(it openItem) bool {
+	return it.Accepted && (l.leftToAuthor(it) || it.Resolved || it.Kind == itemThread && it.FixerReplies >= 2)
 }
 
 // acceptedWaits are the items of items that would wait for you and whose

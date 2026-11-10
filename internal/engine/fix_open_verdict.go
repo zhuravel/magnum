@@ -228,6 +228,11 @@ type openLedger struct {
 	WaitAt      time.Time            `json:"wait_at,omitzero"`
 	WaitWhy     string               `json:"wait_why,omitempty"`
 	Spell       openSpell            `json:"spell,omitzero"`
+	// Waited are the reviewers (Account form, lower case) one of whose
+	// items waited for the author, with when the look first saw one wait
+	// (noteWaited): a change request of theirs since waits for the author
+	// too (pushback).
+	Waited map[string]time.Time `json:"waited,omitempty"`
 }
 
 // openSpell is the PR's current spell of activity as the look saw it:
@@ -468,7 +473,7 @@ type openFacts struct {
 // summary or a note, it drops out.
 func sortOpen(items []openItem, l openLedger) (work, needs []openItem) {
 	for _, it := range items {
-		_, handed := l.Handed[it.Key]
+		handed := l.leftToAuthor(it) // fix_open_needs.go: handed to a loop, or a reviewer's pushback
 		switch {
 		case it.Kind == itemFindings:
 			if !l.handedReview(strings.TrimPrefix(it.Key, "review:")) {
