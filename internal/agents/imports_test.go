@@ -117,7 +117,9 @@ func TestASessionComparesWhatTheInstructionsImport(t *testing.T) {
 // (whose own imports resolve from the path the import named, lib/, as well
 // as from where the link leads). The session reads each of those files'
 // imports and declines when the PR changes one, named by the file's
-// project path.
+// project path. A file under a directory link is read by the link's path
+// (.claude/rules/api.md through .claude/rules -> ../docs/ai/rules), whose
+// imports resolve from there, by each such path.
 func TestASessionReadsTheImportsOfEveryInstructionFileItLoads(t *testing.T) {
 	for _, c := range []struct {
 		name    string
@@ -143,6 +145,16 @@ func TestASessionReadsTheImportsOfEveryInstructionFileItLoads(t *testing.T) {
 		{name: "an import through a directory link, resolved from the path it names", files: map[string]string{"CLAUDE.md": "@lib/guide.md\n",
 			"a/b/shared/guide.md": "@../x.md\n", "x.md": "x\n"}, links: map[string]string{"lib": "a/b/shared"}, changed: "x.md",
 			label: "CLAUDE.md"},
+		{name: "a rules directory link of another depth", files: map[string]string{".claude/settings.json": "{}",
+			"docs/ai/rules/api.md": "Follow @../../shared/conventions.md\n", "shared/conventions.md": "x\n", "docs/shared/conventions.md": "y\n"},
+			links: map[string]string{".claude/rules": "../docs/ai/rules"}, changed: "shared/conventions.md", label: ".claude/"},
+		{name: "a root .claude link of another depth", files: map[string]string{"config/claude/settings.json": "{}",
+			"config/claude/rules/api.md": "@../../x.md\n", "x.md": "x\n", "config/x.md": "y\n"},
+			links: map[string]string{".claude": "config/claude"}, changed: "x.md", label: ".claude/"},
+		{name: "tracked .claude links below the root that lead to one directory", files: map[string]string{".claude/settings.json": "{}",
+			".claude/rules/api.md": "@../../README.md\n", "README.md": "r\n", "packages/api/README.md": "a\n", "packages/web/README.md": "w\n"},
+			links: map[string]string{"packages/api/.claude": "../../.claude", "packages/web/.claude": "../../.claude"},
+			index: []string{"120000 packages/api/.claude", "120000 packages/web/.claude"}, changed: "packages/web/README.md", label: ".claude/"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e, dir, ws := projectEnv(t, c.files, []string{c.changed}, nil)

@@ -406,3 +406,20 @@ func TestLooseFoldKeysNamesAFilesystemMayOpenAsOne(t *testing.T) {
 		}
 	}
 }
+
+// The walk reads a directory once per path Claude reads it by, so a link
+// back to a directory on the way to it (.claude/rules/back -> .., a loop)
+// is not entered again from there: the walk ends, whole, rather than go
+// round it to its budget.
+func TestALinkLoopUnderTheClaudeDirectoryEndsTheWalk(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{".claude/settings.json": "{}", ".claude/rules/api.md": "x\n"})
+	for name, text := range map[string]string{".claude/rules/back": "..", ".claude/rules/self": "."} {
+		if err := os.Symlink(text, filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if targets, partial := ProjectLinks(t.Context(), KindClaude, dir); partial {
+		t.Fatalf("ProjectLinks = %d targets, partial", len(targets))
+	}
+}

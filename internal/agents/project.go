@@ -445,7 +445,8 @@ func (pc projectConfig) onDisk(dir string) (d diskPaths, present bool) {
 				found = append(found, e.Name())
 			}
 		}
-		var targets, walk []string
+		var targets []string
+		var walk []walkDir
 		for _, n := range found {
 			full := filepath.Join(dir, n)
 			if fi, err := os.Stat(full); err == nil && fi.IsDir() == p.dir || err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -457,7 +458,7 @@ func (pc projectConfig) onDisk(dir string) (d diskPaths, present bool) {
 				continue
 			case fi.Mode()&fs.ModeSymlink == 0:
 				if p.dir && fi.IsDir() {
-					walk = append(walk, n)
+					walk = append(walk, walkDir{real: n, asRead: n})
 				}
 				continue
 			}
@@ -467,7 +468,7 @@ func (pc projectConfig) onDisk(dir string) (d diskPaths, present bool) {
 					targets = append(targets, t)
 				}
 				if p.dir {
-					walk = append(walk, t)
+					walk = append(walk, walkDir{real: t, asRead: n})
 				}
 			}
 		}
@@ -554,7 +555,7 @@ func (pc projectConfig) addLinks(dir string, d *diskPaths, links []string) {
 		switch fi, err := os.Stat(full); {
 		case err != nil:
 		case fi.IsDir():
-			d.git = append(d.git, w.walk([]string{t}, p)...)
+			d.git = append(d.git, w.walk([]walkDir{{real: t, asRead: l}}, p)...)
 		case pc.imports && (p.docs || p.dir && rest != "" && strings.EqualFold(path.Ext(l), ".md")):
 			// Claude reads it by the link's path (app/CLAUDE.md -> ../.cursorrules),
 			// whatever the name of the file it leads to.
@@ -570,10 +571,10 @@ func (pc projectConfig) addLinks(dir string, d *diskPaths, links []string) {
 // its target.
 type linkWalk struct {
 	pc     projectConfig
-	root   string     // the checkout's real path
-	d      *diskPaths // links and partial are written here
-	seen   map[string]bool
-	budget int // entries left to read (maxLinkWalk)
+	root   string          // the checkout's real path
+	d      *diskPaths      // links and partial are written here
+	seen   map[string]bool // each directory read: its real path and the path it is read by
+	budget int             // entries left to read (maxLinkWalk)
 }
 
 // add records t, the target of a link of path p, unless it is one of pc's
@@ -604,34 +605,53 @@ func (w *linkWalk) add(t string, p projectPath) bool {
 	return true
 }
 
+// walkDir is a directory linkWalk reads: its path from the root as the
+// disk has it (real) and as Claude reads it (asRead, through the links the
+// walk followed to it: .claude/rules for docs/ai/rules), and the real paths
+// of the directories on the way to it (up), which the walk does not enter
+// again from it (a link back to one is a loop).
+type walkDir struct {
+	real, asRead string
+	up           []string
+}
+
 // walk reads the directories start (relative to the root, with forward
 // slashes) of the directory path p, and each directory inside the checkout
-// a link under them leads to, each once, and returns the targets it
-// recorded (add) for the links it found there, labelled p: a link out of
-// the checkout or to nothing is left out (linkTarget), a directory with a
-// .git entry (a nested checkout: Claude Code's .claude/worktrees/<name>) is
-// not entered, and a directory that cannot be read is skipped. Past the
-// budget it stops and marks the paths partial.
-func (w *linkWalk) walk(start []string, p projectPath) []string {
+// a link under them leads to, once per path Claude reads it by, and
+// returns the targets it recorded (add) for the links it found there,
+// labelled p: a link out of the checkout or to nothing is left out
+// (linkTarget), a directory with a .git entry (a nested checkout: Claude
+// Code's .claude/worktrees/<name>) is not entered, and a directory that
+// cannot be read is skipped. A file there is a source of imports by the
+// path Claude reads it by (source). Past the budget it stops and marks the
+// paths partial.
+func (w *linkWalk) walk(start []walkDir, p projectPath) []string {
 	var targets []string
 	queue := slices.Clone(start)
 	for len(queue) > 0 {
-		rel := queue[0]
+		dir := queue[0]
 		queue = queue[1:]
-		if w.seen[rel] || rel == "" { // the root: diskPaths.root
+		key := dir.real + "\x00" + dir.asRead
+		if w.seen[key] || dir.real == "" { // the root: diskPaths.root
 			continue
 		}
-		w.seen[rel] = true
-		entries, err := os.ReadDir(filepath.Join(w.root, filepath.FromSlash(rel)))
+		w.seen[key] = true
+		entries, err := os.ReadDir(filepath.Join(w.root, filepath.FromSlash(dir.real)))
 		if err != nil || slices.ContainsFunc(entries, func(e fs.DirEntry) bool { return e.Name() == ".git" }) {
 			continue
+		}
+		up := append(slices.Clip(dir.up), dir.real)
+		enter := func(to, asRead string) {
+			if !slices.Contains(up, to) {
+				queue = append(queue, walkDir{real: to, asRead: asRead, up: up})
+			}
 		}
 		for _, e := range entries {
 			if w.budget--; w.budget < 0 {
 				w.d.partial = true
 				return targets
 			}
-			child := rel + "/" + e.Name()
+			child, asRead := dir.real+"/"+e.Name(), dir.asRead+"/"+e.Name()
 			switch {
 			case e.Type()&fs.ModeSymlink != 0:
 				full := filepath.Join(w.root, filepath.FromSlash(child))
@@ -643,14 +663,14 @@ func (w *linkWalk) walk(start []string, p projectPath) []string {
 					targets = append(targets, t)
 				}
 				if fi, err := os.Stat(full); err == nil && fi.IsDir() {
-					queue = append(queue, t)
+					enter(t, asRead)
 				} else if err == nil {
-					w.source(child, p)
+					w.source(asRead, p)
 				}
 			case e.IsDir():
-				queue = append(queue, child)
+				enter(child, asRead)
 			case e.Type().IsRegular():
-				w.source(child, p)
+				w.source(asRead, p)
 			}
 		}
 	}
@@ -762,7 +782,7 @@ func (pc projectConfig) addImports(ctx context.Context, dir string, d *diskPaths
 						d.git = append(d.git, t)
 					}
 					if fi, err := os.Stat(target); err == nil && fi.IsDir() {
-						d.git = append(d.git, w.walk([]string{t}, src.p)...)
+						d.git = append(d.git, w.walk([]walkDir{{real: t, asRead: namedPath(root, target, t)}}, src.p)...)
 					} else if err == nil && t != "" {
 						next = append(next, importFile{namedPath(root, target, t), src.p})
 					}
