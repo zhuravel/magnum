@@ -3,6 +3,7 @@ package factory
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -685,5 +686,39 @@ func TestADropCutStoppedAfterItsRecordFinishesAtTheNextPass(t *testing.T) {
 	}
 	if dropped := r.reviewEvents(task.ID, registry.PhaseInfo, "does not run again"); len(dropped) != 1 {
 		t.Fatalf("events %+v, want one drop of the cut second opinion", dropped)
+	}
+}
+
+// With cycles = 10, a clean tenth round gets its second opinion as round
+// 11: evalrun numbers rounds 11 to 99 of their own (MaxLocalRound), so the
+// loop no longer stops it at the tenth. A P2 in each of rounds 1 to 9 (each
+// on a line of its own, fixed by the writer), round 10 clean, round 11 the
+// other judge's and clean: the stage passes after 11 rounds.
+func TestACleanTenthRoundGetsItsSecondOpinionAsRoundEleven(t *testing.T) {
+	answers := make([]func(evalrun.LocalCase) evalrun.LocalResult, 0, 11)
+	for i := range 9 {
+		f := unitFinding
+		f.Title, f.Line = fmt.Sprintf("%s (round %d)", unitFinding.Title, i+1), 14+i
+		answers = append(answers, result(f))
+	}
+	answers = append(answers, result(), result())
+	r := newReviewRig(t, answers...)
+	r.cfg.Factory.LocalReview.Cycles = 10
+	task, _ := r.wideReviewTask("PR-12395")
+	dir := r.layout.FactoryTaskDir(task.ID)
+	for n := 1; n <= 9; n++ {
+		r.run(10, func() bool { return len(r.rt.promptsTo("fx-writer")) >= n && fileIn(dir, reviewFile(n)) })
+		r.writerFixes(task, n, fixedCredit(n), nil)
+	}
+	r.run(20, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+	got, calls := r.reload(task.ID), r.rv.calls()
+	if got.Stage != "pr_body" || len(calls) != 11 {
+		t.Fatalf("task at %s waits %q after %d rounds, want pr_body after 11", got.Stage, got.WaitsWhat, len(calls))
+	}
+	if judge := roundsOf(calls)[10][0]; judge != "claude-judge" {
+		t.Fatalf("round 11's roles %v, want the second opinion's judge first", roundsOf(calls)[10])
+	}
+	if skips := r.reviewEvents(task.ID, registry.PhaseInfo, "would pass the"); len(skips) != 0 {
+		t.Fatalf("events %+v, want no skip at round 10", skips)
 	}
 }

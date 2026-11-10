@@ -323,14 +323,15 @@ func (e *Engine) endClean(ctx context.Context, t registry.Task, c Copy, cy regis
 
 // atCap reports whether round `round` of loop, which blocks, is the loop's
 // last: [factory.local_review] cycles rounds besides the second opinion
-// (secondIn), which runs outside the count, and never past the rounds a
-// loop numbers (config.MaxFactoryCycles).
+// (secondIn), which runs outside the count, and never more counted rounds
+// than config.MaxFactoryCycles. The second opinion's round may be the
+// eleventh: evalrun numbers rounds up to evalrun.MaxLocalRound.
 func (e *Engine) atCap(dir string, loop []registry.Cycle, round int) bool {
 	counted := round
 	if secondIn(dir, loop) >= 0 {
 		counted--
 	}
-	return counted >= max(1, e.cfg.Factory.LocalReview.Cycles) || round >= config.MaxFactoryCycles
+	return counted >= min(max(1, e.cfg.Factory.LocalReview.Cycles), config.MaxFactoryCycles)
 }
 
 // secondSpent reports whether task t's second opinion so is spent at clean
@@ -411,8 +412,6 @@ func (e *Engine) decideSecond(ctx context.Context, t registry.Task, c Copy, cy r
 		return skip(why)
 	case t.CodexNever:
 		return skip(fmt.Sprintf("Codex never works on %s again, so its rounds ran with %s already", TaskKey(t), fb.Name))
-	case round >= config.MaxFactoryCycles:
-		return skip(fmt.Sprintf("round %d would pass the %d rounds of a loop", round+1, config.MaxFactoryCycles))
 	}
 	so = secondOpinion{After: cy.N, Round: round, Head: cy.HeadBefore, Because: because, Again: unfinished.N, AgainExit: unfinished.Exit,
 		Judge: fb.Name, Kind: fb.AgentKind(), Replaces: judge.Name, ReplacesKind: judge.AgentKind(), Summary: sum}

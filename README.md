@@ -4852,8 +4852,7 @@ round it was and its judge; one with a P0 to P2 goes to the writer like any roun
 usual roles, follows. It runs outside `cycles`, so a clean last round still gets it, and one that then finds a P2
 has no round left: the task needs you at the cap. Its Codex reviewers keep the round's wait at `[usage]
 codex_soft`, as any round with a Codex role waits. A watch whose judge is not on Codex, a `judge_fallback` of no
-other kind, a task Codex never works on again (its rounds ran with the fallback already) and a loop at its tenth
-round skip it with one event that says why (`no second opinion after round 1 (cycle 1): ...`); a narrow change and
+other kind and a task Codex never works on again (its rounds ran with the fallback already) skip it with one event that says why (`no second opinion after round 1 (cycle 1): ...`); a narrow change and
 `"never"` skip it without a word. The second opinion holds only at the head its clean round reviewed: when the
 branch moves before it starts (a commit of yours while it waits), it is void (`the second opinion after round 1
 (cycle 1) is void: the branch moved from ... to ...`), the clean round's loop ends there, and a fresh loop of up to

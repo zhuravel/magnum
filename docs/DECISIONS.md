@@ -22995,6 +22995,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestDaemonGateReadsTheLocalCasesCorpusApart and TestLearnReviewMarksALocalRow. The other gate tests pass unchanged.
   No new dependencies.
 
+- **A clean tenth local round gets its second opinion as round 11** (2026-11-10, R42's parked M5). evalrun now numbers
+  a local round 11 to 99 of its own (`MaxLocalRound`, "A local round past the loop's ten takes a synthetic PR number
+  of its own"), so the reason R42 skipped the second opinion after a clean round 10 is gone: `decideSecond` no longer skips
+  it, and `atCap` caps the counted rounds (those besides the second opinion) at `config.MaxFactoryCycles` rather than
+  the round number, so a loop whose second opinion ran early still gets all its `cycles`. A loop runs at most
+  `cycles` + 1 rounds, 11 with `cycles = 10`. Test: TestACleanTenthRoundGetsItsSecondOpinionAsRoundEleven (10 rounds
+  and no second opinion before the change). No new dependencies.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
