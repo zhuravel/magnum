@@ -22900,11 +22900,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (and a revert's that does), TestALocalReplayOnASharedLaunchFailureIsADelay,
   TestALocalReplayAUsageLimitOrALogoutStoppedStopsTheGate (the proposal gating, one `learn.gate_waiting`, an attempt
   counted and no stop without a score), TestAHeldGateThatStoppedBeforeItsLocalGuardsSaysWhyTheirRowsHaveNoScore,
-  TestTheLocalCasesCorpusLeavesOutWhatTheGateCannotTake and
-  TestAGateTakesNoLocalCaseItCannotTellApart, each checked against a mutation of its rule (the stored base replays'
-  inputs, their cap of two, their order by replay time, `BothFound`, the failing gate's skip and its revert exception
-  among them); evalrun's TestALocalReplayWithoutAReviewersReportKeepsThePaneLineItDiedOn, the `config_error` of a role
-  the config lacks in TestRunCaseReportsALocalCaseItCannotScore and
+  TestTheLocalCasesCorpusLeavesOutWhatTheGateCannotTake and TestAGateTakesNoLocalCaseItCannotTellApart, each checked
+  against a mutation of its rule (the stored base replays' inputs, their cap of two, their order by replay time,
+  `BothFound`, the failing gate's skip and its revert exception among them); evalrun's
+  TestALocalReplayWithoutAReviewersReportKeepsThePaneLineItDiedOn (with three missing reviewers too, the first by name
+  without a pane line: it fails when `MissingDetail` takes the first one's detail, or the last one's with a line), the
+  `config_error` of a role the config lacks in TestRunCaseReportsALocalCaseItCannotScore and
   TestALocalReplayAUsageLimitOrALogoutStoppedEndsSoNotMissingRole (the judge's pause with a reviewer's report missing,
   a reviewer's own), each failing first; the cli's
   TestDaemonGateReadsTheLocalCasesCorpusApart and TestLearnReviewMarksALocalRow. The other gate tests pass unchanged.

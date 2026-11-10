@@ -296,23 +296,35 @@ func TestALocalReplayAUsageLimitOrALogoutStoppedEndsSoNotMissingRole(t *testing.
 
 // A local round that went without a reviewer's report keeps the pane line its agent died on at the
 // end of its error, as a posted replay's error carries it (agents.PaneErrorOf): the round's own error,
-// a judge's that died with it, else the line of a missing reviewer's report. A CLI's outage that kills
-// every launch (a Codex bootstrap failure) is then told from a lost pane of this round alone.
+// a judge's that died with it, else the line of a missing reviewer's report, the first by name whose
+// report has one (LocalResult.MissingDetail), never the first missing reviewer's when it has none,
+// nor a later one's. A CLI's outage that kills every launch (a Codex bootstrap failure) is then told
+// from a lost pane of this round alone.
 func TestALocalReplayWithoutAReviewersReportKeepsThePaneLineItDiedOn(t *testing.T) {
 	o := func(f *replayFixture) Options {
 		return Options{RunDir: filepath.Join(RunsRoot(f.d.Layout), "20261109-120000"), AgentTag: "eval-test"}
 	}
 	const judgeLine, reviewerLine = "Error: account/read failed during TUI bootstrap", "Error: the reviewer's launch failed"
+	const laterLine = "Error: a later reviewer's launch failed"
 	refused := func(role, line string) string {
 		return "agents: prompt mg-" + role + ": herdr agent.prompt: agent_not_found: agent target mg-" + role + " not found; the pane shows: " + line
 	}
 	for _, tc := range []struct {
 		name, roundErr, detail, want string
+		// reports, when set, are the round's reports in place of codex-review's with detail and
+		// claude-review's, and without names the missing reviewers the error starts with.
+		reports map[agents.Role]pipeline.RoleReport
+		without string
 	}{
-		{"the judge's", "pipeline: judge prompt refused, also after a restart of the judge: " + refused("codex-judge", judgeLine), "", judgeLine},
-		{"the reviewer's", "", refused("codex-review", reviewerLine), reviewerLine},
-		{"the judge's over the reviewer's", "pipeline: judge prompt refused: " + refused("codex-judge", judgeLine), refused("codex-review", reviewerLine), judgeLine},
-		{"none", "", "codex-review: no report after 30m0s", ""},
+		{"the judge's", "pipeline: judge prompt refused, also after a restart of the judge: " + refused("codex-judge", judgeLine), "", judgeLine, nil, ""},
+		{"the reviewer's", "", refused("codex-review", reviewerLine), reviewerLine, nil, ""},
+		{"the judge's over the reviewer's", "pipeline: judge prompt refused: " + refused("codex-judge", judgeLine), refused("codex-review", reviewerLine), judgeLine, nil, ""},
+		{"none", "", "codex-review: no report after 30m0s", "", nil, ""},
+		{"the first reviewer's by name that has one", "", "", reviewerLine, map[agents.Role]pipeline.RoleReport{
+			"claude-review":   {Status: pipeline.ReportTimeout, Detail: "claude-review: no report after 30m0s"},
+			"claude-simplify": {Status: pipeline.ReportFailed, Detail: refused("claude-simplify", reviewerLine)},
+			"codex-review":    {Status: pipeline.ReportFailed, Detail: refused("codex-review", laterLine)},
+		}, "claude-review, claude-simplify, codex-review"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newReplayFixture(t, questionResult)
@@ -322,8 +334,12 @@ func TestALocalReplayWithoutAReviewersReportKeepsThePaneLineItDiedOn(t *testing.
 			}
 			f.answer.Reports = map[agents.Role]pipeline.RoleReport{"codex-review": {Status: pipeline.ReportFailed, Detail: tc.detail},
 				"claude-review": {Status: pipeline.ReportOK}}
+			if tc.reports != nil {
+				f.answer.Reports = tc.reports
+			}
 			cr := RunCase(context.Background(), f.d, localEvalCase(t), o(f))
-			if cr.Outcome != eval.OutcomeMissingRole || cr.Score != nil || !strings.HasPrefix(cr.Error, "the round went without the report of codex-review") {
+			if cr.Outcome != eval.OutcomeMissingRole || cr.Score != nil ||
+				!strings.HasPrefix(cr.Error, "the round went without the report of "+cmpOr(tc.without, "codex-review")+":") {
 				t.Fatalf("case run %+v", cr)
 			}
 			if got := agents.PaneErrorOf(cr.Error); got != tc.want {
