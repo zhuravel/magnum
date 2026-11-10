@@ -32733,6 +32733,12 @@ type FactoryActions interface {
 	// P on a PR row, the plan first, then the merge bound to it.
 	MergeParentPlan(ctx context.Context, ref string) (ActionResult, error)
 	MergeParent(ctx context.Context, ref string, asked MergeAsked) (ActionResult, error)
+	// FixCIPlan and FixCI are DashboardActions' too: the factory's c on a PR
+	// row or card, a CI fix of the PR's failed required check (magnum fix
+	// --ci), the daemon's plan first (a dry run, whose Ask the screen puts
+	// as its y/N and whose CIFix binds the start), then the CI fix so bound.
+	FixCIPlan(ctx context.Context, ref string) (ActionResult, error)
+	FixCI(ctx context.Context, ref string, asked CIFixAsked) (ActionResult, error)
 	Abort(ctx context.Context, ref string) (ActionResult, error)
 	OpenPR(ctx context.Context, ref string) (ActionResult, error)
 	Review(ctx context.Context, ref string, o ReviewOpts) (ActionResult, error)

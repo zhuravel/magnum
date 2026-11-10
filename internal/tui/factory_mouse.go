@@ -140,7 +140,7 @@ func (m factoryModel) menuItems() []menuItem {
 		fixKeys := []menuItem{
 			{"fix what is open", "f", "f", acts && hasPR}, {prFixOffVerb(pr), "F", "F", acts && hasPR && (pr.FixOff || pr.Off == "")},
 			{"stop magnum's loop", "K", "K", acts && hasPR && pr.Fixing}, {"merge the parent", "P", "P", acts && hasPR && !pr.Fixing},
-			m.stagingItem(sel, row),
+			m.fixCIItem(sel, row), m.stagingItem(sel, row),
 		}
 		fixKeys = append(fixKeys, m.prMenu(sel, row, true)...)
 		if row && sel.yourPR() { // your PR: its PR's card, magnum's pane, no pane of the factory's
@@ -189,7 +189,7 @@ func (m factoryModel) menuItems() []menuItem {
 		}
 		fixKeys := []menuItem{
 			{"fix what is open", "f", "f", acts && hasPR}, {prFixOffVerb(pr), "F", "F", acts && hasPR && (pr.FixOff || pr.Off == "")},
-			{"stop magnum's loop", "K", "K", acts && hasPR && pr.Fixing}, m.stagingItem(r, r.ID != 0),
+			{"stop magnum's loop", "K", "K", acts && hasPR && pr.Fixing}, m.fixCIItem(r, r.ID != 0), m.stagingItem(r, r.ID != 0),
 		}
 		fixKeys = append(fixKeys, m.prMenu(r, r.ID != 0, !c.Retry)...)
 		if r.yourPR() { // your PR's card: no task to retry, diff or drop
@@ -206,6 +206,16 @@ func (m factoryModel) menuItems() []menuItem {
 			[]menuItem{{"back", "esc", "esc", true}})
 	}
 	return nil
+}
+
+// fixCIItem is the menu's c on row r (a row the menu is for when ok), in the
+// board's words: dimmed where c refuses (the board's refusals of a PR
+// merged, in a round or in a fix loop), on a row without a PR and when the
+// screen runs no actions; its run asks the plan, as the key does.
+func (m factoryModel) fixCIItem(r FactoryRow, ok bool) menuItem {
+	d := rowActDefs[actFixCI]
+	live := ok && m.act != nil && r.PR != nil && actionRefusal(actFixCI, m.prActRow(r, true)) == ""
+	return menuItem{d.label, d.key, d.key, live}
 }
 
 // stagingItem is the menu's E on row r (a row the menu is for when ok), in

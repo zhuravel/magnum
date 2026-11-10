@@ -99,6 +99,8 @@ var factoryKeyHelp = []struct {
 		{"b t", "the row's PR, its Jira issue in the browser (asks nothing)"},
 		{"f F K P", "on a row with a PR magnum read, yours or a task's: magnum fixes what is open, fix off (or on again), stop its fix loop, " +
 			"merge its parent as the fixer App's bot (the daemon's plan first; y/N)"},
+		{"c", "on a row with a PR magnum read, yours or a task's: fix its failed required CI as magnum's fixer, as the board's c " +
+			"(the daemon's plan first, then y/N; y starts it bound to the plan)"},
 		{"E", "on a row with a PR whose repository has staging servers: deploy to staging (choose, y/N): 1-9 toggle a server, " +
 			"a all, enter asks magnum's daemon for its plan, y deploys; the move, offered first, of a PR that waits on your merge, " +
 			"changes a migration and is on no staging"},
@@ -130,10 +132,11 @@ var factoryKeyHelp = []struct {
 		{"b t", "its PR, its Jira issue in the browser (asks nothing)"},
 		{reportKey, "the report of magnum's fixer, when its fix loop left you items, else QA's summary.md where A is offered (asks nothing)"},
 		{"f F K", "on a card with a PR: magnum fixes what is open, fix off (or on again), stop its fix loop (y/N)"},
+		{"c", "on a card with a PR: fix its failed required CI, as on home (the daemon's plan first; y/N)"},
 		{"E", "on a card with a PR and staging servers: deploy to staging (choose, y/N), as on home, offered first where the PR's " +
 			"deploy comes before its merge; its deploys show under STAGINGS"},
 		{"a", "the next card that needs you (a walk; off one, its first)"},
-		{"", "your PR's card has the PR's keys alone: f F K r R z M U, E (offered first where the PR's deploy comes before its merge), " +
+		{"", "your PR's card has the PR's keys alone: f c F K r R z M U, E (offered first where the PR's deploy comes before its merge), " +
 			"o magnum's pane, b t e, a the next; no task to retry, diff or drop"},
 		{"esc", "back"}}},
 	{"New task", []hint{{"enter", "start (y/N)"}, {"ctrl+j", "a new line"}, {"ctrl+g", "your editor"},

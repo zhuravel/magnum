@@ -325,6 +325,46 @@ func (m *factoryModel) prKey(k string, r FactoryRow) tea.Cmd {
 		func(ctx context.Context) (ActionResult, error) { return act.Abort(ctx, pr.Ref) })
 }
 
+// fixCIKey is c on row r (home's, or the card's): magnum's CI fix of the
+// failed required check of r's PR, yours or a published task's (the factory
+// opens it as you), as the board's c (ci_fix.go): the daemon's plan first (a
+// dry run, which also reads why the check failed), its sentence as the y/N,
+// wrapped over the footer so that all it names shows, and y starts the CI
+// fix bound to what the plan asked about (CIFixAsked), which the daemon
+// checks again. The board's refusals come before anything is asked (a PR
+// merged, in a round or in a fix loop); the daemon decides the rest, whose
+// PR it is, what failed, the base and the cap, and its refusal is the
+// footer's note. The plan is held, like E's and P's, when it answers away
+// from the row it was asked on. A row without a PR in magnum's registry
+// says so.
+func (m *factoryModel) fixCIKey(r FactoryRow) tea.Cmd {
+	if r.PR == nil {
+		return m.note("c acts on a PR in magnum's registry: " + cleanText(r.Key) + " has none there")
+	}
+	pr, key, act := *r.PR, prLabel(r), m.act
+	why := actionRefusal(actFixCI, m.prActRow(r, true))
+	if cmd, held := m.raiseHeldPlan(r.ID, "c", why); held { // its plan answered away from the row
+		return cmd
+	}
+	switch {
+	case why != "":
+		return m.note(why)
+	case act == nil:
+		return m.note(noActions)
+	}
+	view := m.view
+	return m.bar.start("Plan the CI fix of "+key, func(ctx context.Context) (ActionResult, error) {
+		res, err := act.FixCIPlan(ctx, pr.Ref)
+		if err == nil && res.Ask != "" && res.CIFix != nil { // y starts the CI fix bound to what the plan asked about
+			asked := *res.CIFix
+			res.nextFactory = &factoryQuestion{sentence: res.Ask, label: "Fix the CI of " + key, wrap: true,
+				plan: &planOf{row: r.ID, view: view, key: "c", name: key, ref: pr.Ref},
+				run:  func(ctx context.Context) (ActionResult, error) { return act.FixCI(ctx, pr.Ref, asked) }}
+		}
+		return res, err
+	})
+}
+
 // factoryPRActs are the board's row actions the factory screen offers on a
 // row with a PR (rowacts.go): review (r), fresh review (R), snooze or its
 // lift (z), mute (M) and unmute (U).
@@ -570,6 +610,10 @@ func (m *factoryModel) homeKey(k string) (tea.Cmd, bool) {
 	case "f", "F", "K", "x", "P":
 		if r, ok := m.selectedRow(); ok {
 			return m.prKey(k, r), true
+		}
+	case "c":
+		if r, ok := m.selectedRow(); ok {
+			return m.fixCIKey(r), true
 		}
 	case "E":
 		if r, ok := m.selectedRow(); ok {
@@ -1389,11 +1433,16 @@ func (m factoryModel) walkHint(hs []hint) []hint {
 	return slices.Insert(slices.Clone(hs), i, hint{"a", "next"})
 }
 
-// prCardHints are the hints of your PR's card c, of row r: the fix keys,
-// the review where r acts (the move of a PR whose review magnum owes names
-// it), magnum's pane, and the pages it has.
+// prCardHints are the hints of your PR's card c, of row r: the fix keys
+// (c, the CI fix, where it acts, as the move of a failed check names it), the
+// review where r acts (the move of a PR whose review magnum owes names it),
+// magnum's pane, and the pages it has.
 func (m factoryModel) prCardHints(r FactoryRow, c TaskCard) []hint {
-	hs := []hint{{"f", "fix"}, {"F", prFixOffVerb(*r.PR)}}
+	hs := []hint{{"f", "fix"}}
+	if m.act != nil && actionRefusal(actFixCI, m.prActRow(r, true)) == "" {
+		hs = append(hs, hint{"c", rowActDefs[actFixCI].label})
+	}
+	hs = append(hs, hint{"F", prFixOffVerb(*r.PR)})
 	if r.PR.Fixing {
 		hs = append(hs, hint{"K", "stop"})
 	}
@@ -1484,6 +1533,11 @@ func (m *factoryModel) taskCardKey(k string) (tea.Cmd, bool) {
 			return m.note("f, F and K act on a PR in magnum's registry: " + m.taskKey(task) + " has none there"), true
 		}
 		return m.prKey(k, r), true
+	case k == "c":
+		if r.ID == 0 {
+			return m.note("c acts on a PR in magnum's registry: " + m.taskKey(task) + " has none there"), true
+		}
+		return m.fixCIKey(r), true
 	case k == "E":
 		if r.ID == 0 {
 			return m.note("E acts on a PR in magnum's registry: " + m.taskKey(task) + " has none there"), true

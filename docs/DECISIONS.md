@@ -23845,6 +23845,56 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `internal/scrub`; 30 fuzz seeds there; selftest case 30. The parity test knows the seven new lists and counts the
     passes (`maskJoinedEnv` is one). No new dependencies.
 
+- **The factory screen offers c, the CI fix, on a PR with a failed required check, and its move names it**
+  (2026-11-10). The review side got a CI fix mode (`magnum fix --ci`, the board's and the dashboard's `c`: the fixer
+  fixes a failed required check of your own PR, behind the daemon's plan and a y/N), and the factory screen, where
+  your PRs and the factory's own live, had no way to start it: a failed check said "b opens its CI" and the fix
+  was a trip to the board. Now `c` on a row with a PR in magnum's registry and on its card asks the daemon's plan
+  (`FixCIPlan`, a dry run, which reads why the check failed), puts its sentence as the y/N wrapped over the footer, and
+  `y` starts the CI fix (`FixCI`) bound to the plan's `CIFixAsked`, which the daemon checks again (the head, the failed
+  checks and the count must not have moved, nor the question be 10 minutes old). It is P's flow
+  (`factoryModel.fixCIKey`): the plan is held, like E's and P's, when it answers away from the row it was asked on
+  (the rule says `c on its row asks`), and the right-click menu lists "fix CI" and asks the same question; a click
+  never confirms. The board's own refusals come first (`actionRefusal(actFixCI)`: a PR merged, in a round, in a fix
+  loop), a row without a PR says so, and the daemon's refusal (another's PR, a check that did not fail, red on the base,
+  3 CI fixes, an older daemon) is the footer's note, `Plan the CI fix of #4602 failed: …`, with no question. Offered on
+  every row that has a PR in magnum's registry, like `f` and `P`: yours, and a published task's, whose PR the factory
+  opened as you (`operatorIdentity`), so the daemon's `ownPR` accepts it; a PR of someone else's that a task links gets
+  the daemon's "not yours" refusal. `c` is free on every view of the screen (home and the task card; the question, ready,
+  recap and form views have their own keys). The `factoryActions` of the cli passes both calls to the board's
+  `screenActions`, and a screen without it refuses (`errNoBoard`). The help lists `c` on home and on the task card,
+  and your PR's card shows `c fix CI` in its hint bar where `c` acts, after `f fix` (at 100 columns the longest bar,
+  a muted and snoozed PR, now drops `b PR` as well as `esc`).
+  The move: a `ci` need whose words hold " failed at " says "c fixes its CI, b opens it" ("c CI fix"), unless its words
+  say the CI fix is refused, then it keeps "b opens its CI" ("b CI"). The refusals, read from `ciFixWords` and
+  `ciFixRefusal` (ci_fix.go): red on the base, or a base that never ran the check ("magnum fixes only a check that
+  passes on the base"); 3 CI fixes ("the CI is yours"); a CI fix that found a missing secret, an infrastructure
+  failure, a CI config change it may not make or a failure on the base; a run that lists no failed job magnum can read;
+  "magnum cannot read why" (no Actions job, or the log); a PR that changes its own CI config; a list of files cut short;
+  a record of its CI fixes that cannot be read. A CI fix that found a flaky test, or a failure it could not fix, or was
+  stopped or ended or failed, is not among them: `c` by hand may try again after those (`requestCIFix` ignores the CI
+  fix recorded at the head), and the daemon's plan decides. A `loop` need whose words add ", c a CI fix" (the day's loops
+  used up with a CI fix as the work, where `f` has no findings to take) says the CI fix move too, not "f fixes". The
+  engine's phrases are matched as before, as text, and `TestTheEnginesWordsThatTheMoveReadsAreStillTheEngines` reads
+  ci_fix.go and fix_open_verdict.go for each, so a reword fails the gate; a reword degrades to "c" on a refused check,
+  whose plan then refuses with a note, never to a start without y/N.
+  Rejected: a positive match of the plain failed words (the engine's plain "failed at" is also what a failure the look
+  gathered no run for says, so the words alone cannot tell it from a fixable check; the plan is the daemon's answer,
+  and `c` costs a note at worst); `c` without the plan (the y/N names the fixer, the check, the
+  head and the count, which only the daemon knows); a CI fix with no y/N, from the move or from the mouse (never);
+  offering `c` only on your own PRs (the factory's PRs are yours, and `f` and `P` already work on both); editing the
+  engine for exported phrases (another change's). Concern kept: the plain failed words are also what a rollup's failure with no run to read says,
+  so `c` there is refused by the plan with a note ("no required check names the failure").
+  Tests: `TestYourMoveFollowsTheReasonThePRNeedsYou` (a plain failure, each refusal's words, a flaky test, a stopped
+  CI fix, the loop with ", c a CI fix"; c only for the CI fix move), `TestAPRWhoseRequiredCheckFailedSaysToFixItWithC`
+  and `TestATasksPRAndYoursSayTheSameMoveForTheSameReason` (the screen's rows), `TestTheEnginesWordsThatTheMoveReadsAreStillTheEngines`,
+  `TestEveryMoveOfYourPRFitsTheMoveColumn` (golden frames moves-100, -140 and -200, one row more), `TestCOnYourPRsRowAsksThePlanThenFixesItsCI`,
+  `TestCOnYourPRsCardAsksThePlanThenFixesItsCI`, `TestCOnATasksPRRowAndCardAsksThePlan` (n starts nothing, y starts it bound to the plan),
+  `TestAPlanTheDaemonRefusesAsksNothingAndShowsItsWords`, `TestCWhereTheCIFixDoesNotApplyAsksNothing`, `TestCWithoutActionsSaysTheScreenRunsNone`,
+  `TestAHeldCIFixPlanWaitsForCOnItsRow`, `TestTheMenuListsFixCIAndAsksTheSameQuestion`, `TestTheHelpAndYourPRsCardOfferC` (internal/tui) and
+  `TestCOnAPRRowOfTheFactoryScreenIsTheBoardsCIFix` (internal/cli), each failing first. No new dependencies.
+
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

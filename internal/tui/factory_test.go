@@ -118,6 +118,9 @@ type fakeFactoryActions struct {
 	rates     []factoryRateCall // Rate's calls
 	plans     []string          // the PRs MergeParentPlan was asked for
 	merges    []string          // the merges MergeParent sent (mergeCall: the PR and its binding)
+	ciPlans   []string          // the PRs FixCIPlan was asked for
+	ciFixes   []string          // the CI fixes FixCI started (ciFixCall: the PR and its binding)
+	ciPlanErr error             // FixCIPlan's refusal, when set
 	// stagingPlans are StagingPlan's calls ("<ref> <env,env>"),
 	// stagingDeploys StagingDeploy's ("<ref> <env,env> at <head> seen
 	// <migration>"); stagingAsk, when set, is the plan's question,
@@ -317,7 +320,7 @@ func (a *fakeFactoryActions) calls() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return len(a.starts) + len(a.answers) + len(a.decides) + len(a.stops) + len(a.retries) + len(a.acceptsQA) + len(a.fixes) +
-		len(a.fixOffs) + len(a.aborts) + len(a.prActs) + len(a.rates)
+		len(a.fixOffs) + len(a.aborts) + len(a.prActs) + len(a.rates) + len(a.ciFixes)
 }
 
 // testClock is the screen's clock in tests: fixed until a test moves it.

@@ -67,6 +67,65 @@ func TestFOnAnOwnPRRowAsksAndQueuesMagnumsFix(t *testing.T) {
 	}
 }
 
+// c on a PR's row or card of the factory screen runs the board's own CI fix
+// (screenActions.FixCIPlan, FixCI; magnum fix --ci): the daemon's plan in a
+// dry run, whose sentence is the question and whose binding y sends, then
+// the start so bound, queued in magnum's registry and answered by magnum's
+// daemon. They never go through the factory daemon, and a screen built
+// without the board's actions refuses each.
+func TestCOnAPRRowOfTheFactoryScreenIsTheBoardsCIFix(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 4242
+	h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.ciFixDaemon()
+	board := newScreenActions(h.c)
+	defer board.Close()
+	src := &factoryScreenSource{c: h.c, now: inspNow}
+	act := newFactoryActions(h.c, src, board)
+	ctx := context.Background()
+	const ref = "talkable/talkable#5"
+
+	plan, err := act.FixCIPlan(ctx, ref)
+	if err != nil {
+		t.Fatalf("plan: %v (%s)", err, h.errb.String())
+	}
+	if want := "Fix the failed CI of " + ref + ": claude-fix fixes required check Completion at a1a1a1a (2 failed jobs) in review1 as fixer-app[bot], CI fix 1 of 3?"; plan.Ask != want {
+		t.Errorf("the plan asks %q, want %q", plan.Ask, want)
+	}
+	a := ciFixAsked
+	if c := plan.CIFix; c == nil || c.Head != a.Head || !slices.Equal(c.Entries, a.Entries) || c.Count != a.Count || !c.At.Equal(a.At) {
+		t.Fatalf("the plan binds %+v, want %+v", plan.CIFix, a)
+	}
+	res, err := act.FixCI(ctx, ref, *plan.CIFix)
+	if err != nil || !strings.Contains(res.Text, ciFixAnswer) {
+		t.Fatalf("the start = %+v, %v; want the daemon's answer", res, err)
+	}
+	reqs := h.requests()
+	if len(reqs) != 2 {
+		t.Fatalf("%d requests in magnum's registry, want the plan and the start: %+v", len(reqs), reqs)
+	}
+	if p := actDecode[engine.FixPayload](t, reqs[0].Payload); !p.DryRun || p.Mode != engine.FixModeCI || p.Number != 5 {
+		t.Errorf("the plan's payload = %+v, want a dry run of a CI fix of #5", p)
+	}
+	if p := actDecode[engine.FixPayload](t, reqs[1].Payload); p.DryRun || p.Mode != engine.FixModeCI || p.CIAsked == nil || p.CIAsked.Head != a.Head {
+		t.Errorf("the start's payload = %+v, want a CI fix bound to the plan", p)
+	}
+	if fsx.Exists(h.c.Layout.FactoryDB()) {
+		t.Error("c on a PR's row made the factory's registry")
+	}
+
+	bare := newFactoryActions(h.c, src, nil)
+	if _, err := bare.FixCIPlan(ctx, ref); !errors.Is(err, errNoBoard) {
+		t.Errorf("the plan without the board's actions: %v, want %v", err, errNoBoard)
+	}
+	if _, err := bare.FixCI(ctx, ref, *plan.CIFix); !errors.Is(err, errNoBoard) {
+		t.Errorf("the start without the board's actions: %v, want %v", err, errNoBoard)
+	}
+	if n := len(h.requests()); n != len(reqs) {
+		t.Errorf("%d requests after the refusals, want %d", n, len(reqs))
+	}
+}
+
 // o on a PR's row of the factory screen steps into magnum's pane of it
 // through the board's own open (magnum open): herdr focuses the judge's
 // live pane, and the terminal on magnum's session comes to the front. It

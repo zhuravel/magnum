@@ -307,6 +307,25 @@ func (a *factoryActions) MergeParent(ctx context.Context, ref string, asked tui.
 	return a.board.MergeParent(ctx, ref, asked)
 }
 
+// FixCIPlan asks the daemon's plan of a CI fix of your PR ref's failed
+// required check (a dry run), as the board's c does (magnum fix --ci): its
+// question and what the start is bound to.
+func (a *factoryActions) FixCIPlan(ctx context.Context, ref string) (tui.ActionResult, error) {
+	if a.board == nil {
+		return tui.ActionResult{}, errNoBoard
+	}
+	return a.board.FixCIPlan(ctx, ref)
+}
+
+// FixCI starts the CI fix the screen asked y/N for, bound to its plan
+// (asked), as the board's c does.
+func (a *factoryActions) FixCI(ctx context.Context, ref string, asked tui.CIFixAsked) (tui.ActionResult, error) {
+	if a.board == nil {
+		return tui.ActionResult{}, errNoBoard
+	}
+	return a.board.FixCI(ctx, ref, asked)
+}
+
 // FixOff switches your PR ref out of autofix (off) or back in, as the
 // board's F does; the screen asked first.
 func (a *factoryActions) FixOff(ctx context.Context, ref string, off bool) (tui.ActionResult, error) {

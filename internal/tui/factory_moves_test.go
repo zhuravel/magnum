@@ -11,10 +11,12 @@ import (
 
 // factoryMoves are the moves of your PR that needs you, by reason, as
 // factory.reasonMove words them (long, short): the check that did not run,
-// the one that failed, the threads, the fixer's report, magnum's review,
-// open findings, and the PR's page for the rest.
+// the one that failed (c, the CI fix, or its CI when the CI fix is
+// refused), the threads, the fixer's report, magnum's review, open
+// findings, and the PR's page for the rest.
 var factoryMoves = [][2]string{
 	{"b: re-run CI on GitHub, or push", "b re-run CI"},
+	{"c fixes its CI, b opens it", "c CI fix"},
 	{"b opens its CI", "b CI"},
 	{"b opens the threads", "b threads"},
 	{"e opens the report, b the PR", "e report · b PR"},
