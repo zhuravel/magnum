@@ -207,7 +207,11 @@ func (e *Engine) readCI(ctx context.Context, w config.Watch, gh GitHub, repos []
 }
 
 // pollRepo upserts one repository and its open PRs and applies the
-// resulting transitions.
+// resulting transitions. A repository in the per-PR checkout mode keeps
+// GitHub's default branch (rr.DefaultBranch; the stored one while the
+// radar names none, an empty repository's), which a session compares a
+// stacked PR's project config with (agents' projectBase); a pool's is the
+// pool's base.
 func (e *Engine) pollRepo(ctx context.Context, w config.Watch, gh GitHub, rr github.RepoRadar, ownerSynced bool, now time.Time) error {
 	full := rr.NameWithOwner
 	owner, name, ok := strings.Cut(full, "/")
@@ -221,7 +225,7 @@ func (e *Engine) pollRepo(ctx context.Context, w config.Watch, gh GitHub, rr git
 	}
 	firstSync := isNew || existing.FirstSyncedAt == nil
 	repoRow := store.Repo{NodeID: rr.NodeID, Owner: owner, Name: name, WatchOwner: w.Owner,
-		Mode: store.RepoModePerPR, DefaultBranch: existing.DefaultBranch}
+		Mode: store.RepoModePerPR, DefaultBranch: cmp.Or(rr.DefaultBranch, existing.DefaultBranch)}
 	staleClone := false
 	if pool := e.cfg.PoolFor(full); pool != nil {
 		repoRow.Mode, repoRow.DefaultBranch, repoRow.ClonePath = store.RepoModePool, pool.Base, new(pool.MainClone)

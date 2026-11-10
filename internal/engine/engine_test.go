@@ -759,6 +759,22 @@ func TestPerPRWorktreeRepo(t *testing.T) {
 	}
 }
 
+// A repository in the per-PR checkout mode keeps GitHub's default branch
+// (the fake radar's is main), not the "master" a row without one gets: a
+// session compares a stacked PR's project config with it (projectBase),
+// and with "master" every PR of a main repository counted as stacked.
+func TestAPerPRRepoKeepsGitHubsDefaultBranch(t *testing.T) {
+	h := newHarness(t)
+	h.gh.set("zhuravel/app", prSpec{n: 1, head: "x1", updated: h.clock.Now()})
+	h.startup()
+	h.tick()
+	h.tick()
+	repo, err := h.st.RepoByFullName(h.ctx, "zhuravel/app")
+	if err != nil || repo.Mode != store.RepoModePerPR || repo.DefaultBranch != "main" {
+		t.Fatalf("repo = %s, default branch %q (%v): want the per-PR repository's GitHub default branch, main", repo.Mode, repo.DefaultBranch, err)
+	}
+}
+
 func TestCrashRecovery(t *testing.T) {
 	h := newHarness(t)
 	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1"}, prSpec{n: 3, head: "c1"})
