@@ -3769,12 +3769,14 @@ came after its latest review: alone, with nothing else to fix, it needs you and 
 with such leftovers goes to needs attention (kind fix, "fix: 1 item the fixer left needs you: <link>",
 `fix.open_needs_you`), and your answer to every one of them puts it back (`fix.open_answered`), after which a
 new reply can start a new loop. A later approval by the item's reviewer puts it back too, though you never
-answered it: the reviewer's latest review that approves or requests changes decides (one that only comments
-changes nothing), an approval's own inline comments are new asks and stay work, and a later change request of
-theirs takes the approval back, so the item waits for you again. Once one of a reviewer's items waited for you,
-a change request of theirs (its review body) waits for you as well, never for the fixer: it pushes back on your
-answer or asks again, which only you can settle. A plain comment of theirs after your answer is an item of its
-own, which a loop works on, and so is their reply in a thread. A reply of yours that Magnum has not re-decided
+answered it (`fix.open_answered` then says that the reviewer approved): the reviewer's latest review that
+approves or requests changes decides (one that only comments changes nothing), an approval's own inline comments
+are new asks and stay work, and a later change request of theirs takes the approval back, so the item waits for
+you again. Once the look saw one of a reviewer's items wait for you, a change request of theirs made since (its
+review body) waits for you as well, never for the fixer, also when it comes while a loop runs (that loop's next
+cycle marks it `waits`): it pushes back on your answer or asks again, which only you can settle. One they made
+before the look saw their item wait (while the loop that left it ran) is work. A plain comment of theirs after
+your answer is an item of its own, which a loop works on, and so is their reply in a thread. A reply of yours that Magnum has not re-decided
 (your conversation comment answers Magnum's review too) holds the look's read until the reply's round, except on
 a PR that the look's own raise holds, where no reply round can start: the look reads your answer and lifts the
 attention, and the reply's round follows (`rereview_pending`). A loop's own Needs you (a failed push, a declined P1) is never rewritten or

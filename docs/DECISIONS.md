@@ -4622,32 +4622,46 @@ skill versions); people add theirs to the sections before it, at the end of the 
     requests changes among all GitHub lists (never the latest-reviews list, which showed the colleague as
     commenting after his thread replies), is an approval submitted after the item's latest word that holds none
     of the thread's comments: an approval's own inline comments are new asks, work as before. An accepted item
-    waits for no one (`sortOpen`), counts as closed for the lift, and a later loop's fixer still finds it marked
-    `waits` (else it would answer for the author, or name it under Needs you, a loop's attention the look never
-    lifts). A later change request by the same reviewer takes the acceptance back. An item never handed stays
-    work, accepted or not: a reviewer's comments and a separate approval still ask for the fix.
+    waits for no one (`sortOpen`), counts as closed for the lift (whose `fix.open_answered` then says that the
+    reviewer approved, not that the author answered, with an `accepted` count), and a later loop's fixer still
+    finds it marked `waits` (else it would answer for the author, or name it under Needs you, a loop's attention
+    the look never lifts). A later change request by the same reviewer takes the acceptance back. An item never
+    handed stays work, accepted or not: a reviewer's comments and a separate approval still ask for the fix.
   - The author's own word after a review body or comment still closes it (`ownWord`), and a reviewer's reply in
     a thread still makes a new key, which is work. A reviewer's plain comment after the author's answer is an
-    item of its own, work. A change request review body by a reviewer one of whose person's items ever waited
-    for the author (the ledger's `waited`, first seen in the look's needs) waits for the author as a handed item
-    does: it pushes back on the answer, or asks again, which only the author can settle. Without the memory, the
-    lift that usually comes a tick after the answer would hand the reviewer's next change request to a fixer.
+    item of its own, work. A change request review body by a reviewer, made after the look first saw one of their
+    person's items wait for the author (the ledger's `waited`: the reviewer and that time, from the look's
+    needs), waits for the author as a handed item does: it pushes back on the answer, or asks again, which only
+    the author can settle. One made before (while the loop that left the item ran) is a request of its own, work:
+    counted as pushback, it became an item "the fixer left" at the next look with nothing new on GitHub, raised
+    for the author though no fixer ever had it. A loop the look starts carries a pushback key per remembered
+    reviewer among `FixState.Waits` (`changes:<login>@<unix ns>`, `pushbackKey`), and every cycle's file marks
+    their change requests made since `waits`, so one that comes while the loop runs, which its next cycle reads
+    from GitHub again, reaches no fixer either; a key among the waits rather than a field of its own keeps the
+    loop's start in fix.go as it is. Without the memory, the lift that usually comes a tick after the answer
+    would hand the reviewer's next change request to a fixer.
   Rejected: clearing a reviewer from `waited` on their approval (an approval and a new change request can come in
   one read), and accepting items never handed. Gaps: a dismissed approval (a branch that dismisses stale
   approvals on push) accepts nothing, so its items wait for the author again; acceptance follows a thread's
   first author even where another reviewer replied in it; the memory never clears for the PR, and covers review
   bodies only (a change request made of inline comments follows the thread rules); the raise still says "items
-  the fixer left" for a pushback the fixer never had; a stalemate row still holds the read; and a reply of the
-  author's to magnum while a raised thread stays unanswered waits for that answer before its round. Items now
-  carry their reviewer's login in the ledger (the registry only). At the restart no other open PR was held by
-  the look's own raise: the one other own PR in needs_attention with a pending reply holds a loop's attention
-  (a merge of the parent the loop could not make), which the change leaves to the operator as before. Tests,
-  failing first by assertion with the fields in place: TestYourConversationReplyLiftsTheLooksOwnNeedsYou,
-  TestOnlyTheLooksOwnRaiseIsReadDespiteAReply, TestTheReviewersLaterApprovalLiftsWhatTheyAsked,
+  the fixer left" for a pushback the fixer never had; `waited` holds the look's clock and a change request
+  GitHub's, so one made within the clocks' skew of that look can sort either way; a stalemate row still holds
+  the read; and a reply of the author's to magnum while a raised thread stays unanswered waits for that answer
+  before its round. Items now carry their reviewer's login in the ledger (the registry only). At the restart no
+  other open PR was held by the look's own raise: the one other own PR in needs_attention with a pending reply
+  holds a loop's attention (a merge of the parent the loop could not make), which the change leaves to the
+  operator as before. Tests, failing first by assertion with the fields in place:
+  TestYourConversationReplyLiftsTheLooksOwnNeedsYou, TestOnlyTheLooksOwnRaiseIsReadDespiteAReply,
+  TestTheReviewersLaterApprovalLiftsWhatTheyAsked (with the lift's words, after review),
   TestALaterLoopLeavesAnAcceptedItemAlone, TestAnApprovalAcceptsTheReviewersEarlierItemsOnly,
-  TestAnAcceptedItemWaitsForNoOneButWorkStaysWork, TestTheReviewersPlainReplyIsItsOwnItemAndAChangeRequestWaitsForYou
-  and TestAChangeRequestWaitsForYouOnceTheReviewersItemWaited; TestALoopsNeedsYouWithAReplyKeepsItsRules pins
-  the loop's rules.
+  TestAnAcceptedItemWaitsForNoOneButWorkStaysWork,
+  TestTheReviewersPlainReplyIsItsOwnItemAndAChangeRequestWaitsForYou,
+  TestAChangeRequestWaitsForYouOnceTheReviewersItemWaited, and after review
+  TestAChangeRequestMadeBeforeTheReviewersItemWaitedIsWork and
+  TestAChangeRequestDuringALoopWaitsForYouInItsNextCycle; TestAPushbackKeyMarksTheReviewersLaterChangeRequestsWaiting
+  and TestTheLiftSaysWhoClosedWhatTheFixerLeft test the keys and the words alone;
+  TestALoopsNeedsYouWithAReplyKeepsItsRules pins the loop's rules.
 
 ## Screens and commands
 
