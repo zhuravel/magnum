@@ -10978,7 +10978,8 @@ type FixState struct {
     them while cycles are left. Waits are the keys of other reviewers' items
     (fix_open_items.go) that an earlier loop was handed and that wait for the
     author, a person's, beside which autofix = "open" started this loop on work
-    never handed (rule 9): every cycle's external file marks them waiting,
+    never handed (rule 9), or a CI fix, the look's or by hand, whose next cycles
+    read the other reviewers: every cycle's external file marks them waiting,
     and the fixer leaves them alone (writeExternal); a pushback key among them
     (pushbackKey) names a reviewer one of whose items waited, and marks their
     change requests made since. Mode is what the loop does: "" fixes findings,

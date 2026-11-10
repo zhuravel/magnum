@@ -3772,10 +3772,13 @@ new reply can start a new loop. A later approval by the item's reviewer puts it 
 answered it (`fix.open_answered` then says that the reviewer approved): the reviewer's latest review that
 approves or requests changes decides (one that only comments changes nothing), an approval's own inline comments
 are new asks and stay work, and a later change request of theirs takes the approval back, so the item waits for
-you again. Once the look saw one of a reviewer's items wait for you, a change request of theirs made since (its
-review body) waits for you as well, never for the fixer, also when it comes while a loop runs (that loop's next
-cycle marks it `waits`): it pushes back on your answer or asks again, which only you can settle. One they made
-before the look saw their item wait (while the loop that left it ran) is work. A plain comment of theirs after
+you again. An accepted item waits for no one, but a later loop, a CI fix too (the look's or by hand), still finds it
+marked `waits` and leaves it alone, as the loop before left it to you. Once a loop left one of a reviewer's items
+to you, a change request of theirs made since (its review body) waits for you as well, never for the fixer, also
+when it comes while a later loop or CI fix runs (that loop's next cycle marks it `waits`): it pushes back on your
+answer or asks again, which only you can settle. It counts from that loop's end as the look recorded it, however
+late the look then reads the PR (a reply of yours it has not re-decided, a low GitHub budget and failed reads hold
+the read). One they made before (while the loop that left their item ran) is work. A plain comment of theirs after
 your answer is an item of its own, which a loop works on, and so is their reply in a thread. A reply of yours that Magnum has not re-decided
 (your conversation comment answers Magnum's review too) holds the look's read until the reply's round, except on
 a PR that the look's own raise holds, where no reply round can start: the look reads your answer and lifts the
@@ -3937,7 +3940,8 @@ fixer reproduces the failure with the checkout's own test commands, fixes the PR
 skipped, deleted or loosened, a timeout raised, a retry added, a workflow or action edited, a deploy or a
 secret used), runs the failing tests, and pushes once with the push line, which carries `--ci` and refuses a
 change to CI config. It replies nowhere. The push gets the forced re-review as any fixer's push ("fixing,
-re-review of b2b2b2b (the CI fix's push)"), whose findings the next cycles fix; then CI runs ("CI at b2b2b2b
+re-review of b2b2b2b (the CI fix's push)"), whose findings the next cycles fix, leaving alone what waits for you
+as any loop the look starts does; then CI runs ("CI at b2b2b2b
 after CI fix 1 of 3") and, once green, the PR is idle ("… · CI fix 1 of 3 made required check Completion
 pass"). A fixer that cannot fix it (a flaky test, an infrastructure failure, a missing secret, a CI config
 change, a failure on the base) ends the loop quietly, and the head needs you with its words ("required check
