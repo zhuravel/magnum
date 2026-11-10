@@ -438,7 +438,9 @@ func TestDetailsCIFixture(t *testing.T) {
 
 // details_files.json is synthetic, in the shape GitHub answers the fragment
 // with: #201 lists its three files, #202 (a draft) more than one page of
-// them, #203 none, and #204 came back without a list (files: null).
+// them, one a rename (its new path only: FilesRenamed tells a caller to read
+// the paths it left elsewhere), #203 none, and #204 came back without a list
+// (files: null).
 func TestDetailsReadsChangedFilePaths(t *testing.T) {
 	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Result: execx.Result{Stdout: fixture(t, "details_files.json")}}}}
 	got, missing, err := (&Client{Run: f}).Details(context.Background(), "talkable", "talkable", []int{201, 202, 203, 204})
@@ -446,14 +448,14 @@ func TestDetailsReadsChangedFilePaths(t *testing.T) {
 		t.Fatalf("got %d, missing %v, err %v", len(got), missing, err)
 	}
 	q := oneLine(decodeReq(t, f.Calls[0]).Query)
-	if want := "files(first: 100) { totalCount pageInfo { hasNextPage } nodes { path } }"; !strings.Contains(q, want) {
+	if want := "files(first: 100) { totalCount pageInfo { hasNextPage } nodes { path changeType } }"; !strings.Contains(q, want) {
 		t.Errorf("query lacks %q: %s", want, q)
 	}
-	if d := got[201]; !reflect.DeepEqual(d.Files, []string{"Gemfile.lock", "app/models/order.rb", "spec/models/order_spec.rb"}) || !d.FilesComplete {
-		t.Errorf("#201 files = %v complete %v", d.Files, d.FilesComplete)
+	if d := got[201]; !reflect.DeepEqual(d.Files, []string{"Gemfile.lock", "app/models/order.rb", "spec/models/order_spec.rb"}) || !d.FilesComplete || d.FilesRenamed {
+		t.Errorf("#201 files = %v complete %v renamed %v", d.Files, d.FilesComplete, d.FilesRenamed)
 	}
-	if d := got[202]; !reflect.DeepEqual(d.Files, []string{"app/a.rb", "app/b.rb"}) || d.FilesComplete {
-		t.Errorf("#202 (a second page) files = %v complete %v", d.Files, d.FilesComplete)
+	if d := got[202]; !reflect.DeepEqual(d.Files, []string{"app/a.rb", "app/b.rb"}) || d.FilesComplete || !d.FilesRenamed {
+		t.Errorf("#202 (a second page, a rename) files = %v complete %v renamed %v", d.Files, d.FilesComplete, d.FilesRenamed)
 	}
 	if d := got[203]; d.Files == nil || len(d.Files) != 0 || !d.FilesComplete {
 		t.Errorf("#203 (no files) = %#v complete %v: want an empty, non-nil list", d.Files, d.FilesComplete)

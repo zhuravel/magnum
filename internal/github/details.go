@@ -62,9 +62,12 @@ type PRDetails struct {
 	// Files are the paths the pull request changes at HeadRefOid, in
 	// GitHub's order: one page of at most 100 (a rename lists its new path
 	// only); nil when GitHub returned no list. FilesComplete is true when
-	// they are every changed file.
+	// they are every changed file. FilesRenamed is true when one of them is
+	// a rename (changeType RENAMED), whose previous path the list leaves
+	// out: ListFiles names both.
 	Files         []string
 	FilesComplete bool
+	FilesRenamed  bool
 	// CI is the head commit's checks.
 	CI CIRollup
 	// ActivityAt is the pull request's last activity: the latest of its
@@ -315,7 +318,7 @@ const detailsFragment = `fragment PRDetails on PullRequest {
   headRefName baseRefName isCrossRepository
   state merged mergedAt closedAt createdAt updatedAt lastEditedAt isDraft headRefOid baseRefOid mergeStateStatus
   additions deletions changedFiles commits { totalCount }
-  files(first: 100) { totalCount pageInfo { hasNextPage } nodes { path } }
+  files(first: 100) { totalCount pageInfo { hasNextPage } nodes { path changeType } }
   assignees(first: 10) { nodes { login } }
   reviewRequests(first: 30) { nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Mannequin { login } ... on Team { slug } } } }
   latestReviews(first: 100) { totalCount pageInfo { hasNextPage } nodes { state submittedAt author { login __typename } commit { oid } } }
@@ -408,7 +411,8 @@ type detailsJSON struct {
 	Files *struct {
 		connInfo
 		Nodes []struct {
-			Path string `json:"path"`
+			Path       string `json:"path"`
+			ChangeType string `json:"changeType"` // ADDED, CHANGED, COPIED, DELETED, MODIFIED, RENAMED
 		} `json:"nodes"`
 	} `json:"files"` // null: GitHub listed no files
 	Assignees struct {
@@ -639,6 +643,7 @@ func (d detailsJSON) details() PRDetails {
 		out.Files = make([]string, 0, len(d.Files.Nodes))
 		for _, f := range d.Files.Nodes {
 			out.Files = append(out.Files, f.Path)
+			out.FilesRenamed = out.FilesRenamed || f.ChangeType == "RENAMED"
 		}
 		out.FilesComplete = d.Files.complete(len(d.Files.Nodes))
 	}

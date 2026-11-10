@@ -311,9 +311,11 @@ func (e *Engine) pollRows(ctx context.Context, repoID int64, radar []github.PRRa
 // (kvRepoDetailsEpoch), so what the earlier build missed on them is read.
 // "1" (2026-11-09): a reply in a thread, which the timeline never lists
 // (DECISIONS "A reply in a thread is read from the PR's reviews, not its
-// timeline"). Bump it only for such a change: each bump costs one Details
-// batch per repository.
-const detailsEpoch = "1"
+// timeline"). "2" (2026-11-10): the paths a head's renames leave, which
+// the file list an earlier build kept lacks (withRenamedFrom). Bump it
+// only for such a change: each bump costs one Details batch per
+// repository.
+const detailsEpoch = "2"
 
 // kvRepoDetailsEpoch holds the detailsEpoch of the last poll of the
 // repository that read the Details of every open PR magnum reviewed at its
@@ -414,10 +416,16 @@ func (e *Engine) applyRadarPRs(ctx context.Context, w config.Watch, gh GitHub, r
 		if exists {
 			in.URL = cur.URL
 		}
+		var renamed *renamedFiles
 		if hasD {
 			fillDetails(&in, d, selfLogins, now)
 			in.Replies = repliesOf(d, e.ownLogins(ctx, w, cur), e.cfg.FixerLogins(&w))
 			e.noteTruncatedLabels(ctx, w, repo, d)
+			var known int64
+			if exists {
+				known = cur.ID
+			}
+			renamed = e.withRenamedFrom(ctx, gh, repo, known, d, &in, &fileFetches) // renamed_files.go
 		}
 		if !exists {
 			in.InitialState = store.PRBaseline
@@ -435,6 +443,7 @@ func (e *Engine) applyRadarPRs(ctx context.Context, w config.Watch, gh GitHub, r
 			errs = append(errs, err)
 			continue
 		}
+		e.keepRenamedFiles(ctx, res.PR.ID, renamed)
 		if !firstSync && e.wantsFiles(ctx, w, res, now) && e.fetchChangedFiles(ctx, gh, w, repo, res.PR, &fileFetches) {
 			res.Changed = true // a fresh file list: classify again (skip_paths)
 		}
@@ -627,7 +636,9 @@ func fillDetails(in *store.GitHubPR, d github.PRDetails, logins []string, now ti
 }
 
 // prFiles is the registry's file list of the Details' head (the related
-// PRs' paths); nil when GitHub listed none, which keeps the stored one.
+// PRs' paths, the approval's gates); nil when GitHub listed none, which
+// keeps the stored one. A rename is in it by its new path only until
+// withRenamedFrom adds the path it leaves.
 func prFiles(d github.PRDetails) *store.PRFiles {
 	if d.Files == nil || d.HeadRefOid == "" {
 		return nil

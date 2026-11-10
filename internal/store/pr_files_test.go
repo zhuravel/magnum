@@ -63,10 +63,12 @@ func TestMigrationV15ToV16AddsPRFiles(t *testing.T) {
 }
 
 // A PR's file list is written with the Details that carry it when the PR has
-// none or its head moved, and only then: a later list for the same head (a
-// Details refresh for a label, a check, a review) leaves it, and an upsert
-// without a list keeps it. Writing it never counts as a GitHub change.
-func TestUpsertStoresTheFileListOnlyWhenTheHeadMoves(t *testing.T) {
+// none, its head moved or GitHub lists other files for the same head (the PR
+// was retargeted to another base, whose merge base changes what its commits
+// change): the same list again (a Details refresh for a label, a check, a
+// review) writes nothing, and an upsert without a list keeps it. Writing it
+// never counts as a GitHub change.
+func TestUpsertStoresTheFileListWhenTheHeadOrTheListMoves(t *testing.T) {
 	st, clk := newStore(t)
 	ctx := context.Background()
 	repo := mustRepo(t, st)
@@ -96,20 +98,33 @@ func TestUpsertStoresTheFileListOnlyWhenTheHeadMoves(t *testing.T) {
 	}
 	check("first list", PRFiles{HeadSHA: "h1", Paths: []string{"app/models/order.rb", "spec/models/order_spec.rb"}, FetchedAt: t0})
 
-	// Another list for the same head is not written.
+	// The same list for the same head writes nothing.
 	clk.Add(time.Minute)
-	in.Files = &PRFiles{HeadSHA: "h1", Paths: []string{"app/models/order.rb"}, Truncated: true}
+	in.Files = &PRFiles{HeadSHA: "h1", Paths: []string{"app/models/order.rb", "spec/models/order_spec.rb"}}
+	if res, err = st.UpsertPRFromGitHub(ctx, in); err != nil || res.Changed {
+		t.Fatalf("same list: changed %v, %v", res.Changed, err)
+	}
+	check("same list", PRFiles{HeadSHA: "h1", Paths: []string{"app/models/order.rb", "spec/models/order_spec.rb"}, FetchedAt: t0})
+
+	// Another list for the same head (a retarget) replaces it, and is no
+	// GitHub change either.
+	in.Files = &PRFiles{HeadSHA: "h1", Paths: []string{".claude/settings.json", "app/models/order.rb"}}
+	if res, err = st.UpsertPRFromGitHub(ctx, in); err != nil || res.Changed {
+		t.Fatalf("retargeted list: changed %v, %v", res.Changed, err)
+	}
+	check("retargeted list", PRFiles{HeadSHA: "h1", Paths: []string{".claude/settings.json", "app/models/order.rb"}, FetchedAt: t0.Add(time.Minute)})
+	in.Files = &PRFiles{HeadSHA: "h1", Paths: []string{".claude/settings.json", "app/models/order.rb"}, Truncated: true}
 	if _, err = st.UpsertPRFromGitHub(ctx, in); err != nil {
 		t.Fatal(err)
 	}
-	check("same head", PRFiles{HeadSHA: "h1", Paths: []string{"app/models/order.rb", "spec/models/order_spec.rb"}, FetchedAt: t0})
+	check("cut list", PRFiles{HeadSHA: "h1", Paths: []string{".claude/settings.json", "app/models/order.rb"}, Truncated: true, FetchedAt: t0.Add(time.Minute)})
 
 	// A new head without a list (its Details failed) keeps the old one.
 	in.HeadSHA, in.Files = "h2", nil
 	if _, err = st.UpsertPRFromGitHub(ctx, in); err != nil {
 		t.Fatal(err)
 	}
-	check("no list", PRFiles{HeadSHA: "h1", Paths: []string{"app/models/order.rb", "spec/models/order_spec.rb"}, FetchedAt: t0})
+	check("no list", PRFiles{HeadSHA: "h1", Paths: []string{".claude/settings.json", "app/models/order.rb"}, Truncated: true, FetchedAt: t0.Add(time.Minute)})
 
 	// The new head's list replaces it, truncated flag and all.
 	in.Files = &PRFiles{HeadSHA: "h2", Paths: []string{"app/a.rb"}, Truncated: true}

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -369,6 +370,53 @@ func TestAutoApprovalIgnoresAgentConfigTheFileListDoesNotChange(t *testing.T) {
 				t.Fatalf("held back: %q", got)
 			}
 		})
+	}
+}
+
+// GitHub's GraphQL file list names a rename by its new path only, so a PR
+// that moves the team's hook out of .claude/ (git mv
+// .claude/hooks/pre_tool_use.rb scripts/audit/) lists scripts/audit/ alone,
+// yet takes the hook away from every teammate's Claude once merged. For a
+// head whose Details list a rename, the poller reads the REST list, which
+// names both paths, and keeps the paths the renames leave in the head's
+// list (once per list GitHub gives), so the gate refuses it. While the REST
+// list cannot be read the head has no list, and the next poll tries again.
+func TestAutoApprovalRefusesAPRThatMovesAgentConfigElsewhere(t *testing.T) {
+	fg := &filesGH{}
+	h, _ := newAutoHarness(t, func(h *harness) {
+		fg.fakeGH = h.gh
+		h.d.GitHub = func(id string) GitHub {
+			if id == "zhuravel" {
+				return fg
+			}
+			return nil
+		}
+	})
+	fg.set(2, "scripts/audit/pre_tool_use.rb", ".claude/hooks/pre_tool_use.rb")
+	fg.fail(errors.New("GitHub is down"))
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: []string{"scripts/audit/pre_tool_use.rb"}, renamed: true})
+	h.tick()
+	if f, ok, err := h.st.PRFilesOf(h.ctx, h.pr(2).ID); err != nil || ok {
+		t.Fatalf("a head whose renames' paths magnum could not read has the list %+v (%v)", f, err)
+	}
+	fg.fail(nil)
+	h.reviewTo(2, "b1")
+	h.flush()
+	if f, ok, err := h.st.PRFilesOf(h.ctx, h.pr(2).ID); err != nil || !ok ||
+		!slices.Equal(f.Paths, []string{"scripts/audit/pre_tool_use.rb", ".claude/hooks/pre_tool_use.rb"}) {
+		t.Fatalf("the head's list = %+v, %v (%v): want the rename's previous path in it", f, ok, err)
+	}
+	h.wantRefused(2, "it changes the review agents' instructions or hooks (.claude/hooks/pre_tool_use.rb)")
+	for range 3 {
+		h.advance(time.Minute)
+		h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: []string{"scripts/audit/pre_tool_use.rb"}, renamed: true})
+		h.tick()
+	}
+	if n := fg.fetches(2); n != 2 {
+		t.Fatalf("ListFiles asked %d times, want 2: the failure and the one read of this list", n)
 	}
 }
 

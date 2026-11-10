@@ -73,9 +73,11 @@ type prSpec struct {
 	noBaseOid bool
 	noBase    bool
 	// files are the paths Details lists for the head (nil = no list);
-	// filesTruncated makes it report a cut-off list (FilesComplete false).
+	// filesTruncated makes it report a cut-off list (FilesComplete false),
+	// renamed one with a rename (FilesRenamed).
 	files          []string
 	filesTruncated bool
+	renamed        bool
 	// activity is the Details' activity time (zero = GitHub returned no
 	// timeline).
 	activity time.Time
@@ -856,7 +858,7 @@ func (g *fakeGH) Details(ctx context.Context, owner, repo string, numbers []int)
 				files = g.defaultFiles
 			}
 			if files != nil {
-				d.Files, d.FilesComplete = slices.Clone(files), !p.filesTruncated
+				d.Files, d.FilesComplete, d.FilesRenamed = slices.Clone(files), !p.filesTruncated, p.renamed
 			}
 			d.ActivityAt = p.activity
 			d.ReviewGate = p.gate

@@ -10,7 +10,9 @@ import (
 )
 
 // PRFiles is the paths a PR changes at one head (pr_files): the first page of
-// at most 100 that the poller's Details read (a rename lists its new path).
+// at most 100 that the poller's Details read, with the previous paths of
+// its renames (the Details list a rename by its new path only; the poller
+// adds the paths it leaves from the REST list).
 type PRFiles struct {
 	HeadSHA   string    // the head the paths belong to
 	Paths     []string  // never nil once stored
@@ -18,20 +20,13 @@ type PRFiles struct {
 	FetchedAt time.Time // when the list was written (set by the store)
 }
 
-// savePRFiles writes f as prID's file list when the PR has none or its list
-// belongs to another head: a list is refreshed only when the head moves
-// (inside the upsert's transaction).
+// savePRFiles writes f as prID's file list when the PR has none, its list
+// belongs to another head, or GitHub lists other files for the same head
+// (a PR retargeted to another base changes what its commits change): the
+// same list again writes nothing (inside the upsert's transaction).
 func (s *Store) savePRFiles(ctx context.Context, tx *sql.Tx, prID int64, f PRFiles) error {
 	if f.HeadSHA == "" {
 		return nil
-	}
-	var head string
-	err := tx.QueryRowContext(ctx, "SELECT head_sha FROM pr_files WHERE pr_id = ?", prID).Scan(&head)
-	switch {
-	case err == nil && head == f.HeadSHA:
-		return nil
-	case err != nil && !errors.Is(err, sql.ErrNoRows):
-		return err
 	}
 	paths := f.Paths
 	if paths == nil {
@@ -39,6 +34,15 @@ func (s *Store) savePRFiles(ctx context.Context, tx *sql.Tx, prID int64, f PRFil
 	}
 	b, err := json.Marshal(paths)
 	if err != nil {
+		return err
+	}
+	var head, stored string
+	var truncated bool
+	err = tx.QueryRowContext(ctx, "SELECT head_sha, paths_json, truncated FROM pr_files WHERE pr_id = ?", prID).Scan(&head, &stored, &truncated)
+	switch {
+	case err == nil && head == f.HeadSHA && stored == string(b) && truncated == f.Truncated:
+		return nil
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO pr_files (pr_id, head_sha, paths_json, truncated, fetched_at) VALUES (?, ?, ?, ?, ?)
