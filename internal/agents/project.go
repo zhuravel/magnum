@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -219,9 +220,9 @@ type projectScope struct {
 	// the merge base change (committedChanges): they are untracked or
 	// ignored files a round left in the slot, or uncommitted edits.
 	residue bool
-	// links: declined, the targets of the checkout's root links into it,
-	// with their paths' labels (diskPaths.links), git or no git
-	// (ProjectNote.Links).
+	// links: declined, the targets of the checkout's links into it at the
+	// root and under its project directories, with their paths' labels
+	// (diskPaths.links), git or no git (ProjectNote.Links).
 	links   map[string]string
 	servers []config.ProjectServer // the MCP servers of the checkout's unchanged Codex config.toml (project_mcp "off")
 }
@@ -237,8 +238,9 @@ type projectScope struct {
 // directory). A PR controls them, so when the files on disk there differ
 // from the merge base of HEAD and base (gitx.WorkTreeChanges: the PR's
 // commits, and files a round left there, untracked logs aside: logFile;
-// the paths in any case, onDisk, and what an instruction file at the root
-// links to), or git cannot tell (a git that fails is a warning; a launch
+// the paths in any case, onDisk, and what a link at the root or under a
+// project directory leads to; base is the default branch's for a stacked
+// PR, projectBase), or git cannot tell (a git that fails is a warning; a launch
 // without a base and a dir that is no git checkout, as the retro's and the
 // curation's are, never reach git and log at debug: errNoBase,
 // errNoCheckout), the session gets the kind's
@@ -275,7 +277,11 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 		g := gitx.New(m.d.Runner)
 		files, mb, err := m.projectChanges(ctx, g, dir, base, pc.logFile, disk.git)
 		changed := pc.changed(files, disk.links)
-		if err != nil || len(changed) > 0 {
+		if disk.partial {
+			m.logAt(slog.LevelWarn, "agents: %s: more than %d entries to look through for links under %s, so the session leaves them out",
+				role.Name, maxLinkWalk, pc.labels(nil))
+		}
+		if err != nil || len(changed) > 0 || disk.partial {
 			switch {
 			case errors.Is(err, errNoBase), errors.Is(err, errNoCheckout):
 				// Decided without asking git: the retro and the notes
@@ -316,15 +322,43 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 	return s
 }
 
+// projectBase is what a session of pr compares the checkout's project
+// config with (checkoutProject): base, the PR's base ref or its merge base
+// with the head, when the PR is based on the repository's default branch
+// (or names no base), else origin/<default branch>. The team's config is
+// the default branch's: a stacked PR's base branch is another PR's head,
+// whose own .claude/ or .codex/ changes nobody reviewed, and compared with
+// origin/<that branch> once it is fresh (the operator's fetch, a fix's: a
+// pool slot fetches only the pool's base) they would load as the team's,
+// hooks and all, outside the sandbox. Against the default branch they
+// count as the PR's, and the session leaves them out.
+func projectBase(pr store.PR, repo store.Repo, base string) string {
+	def := cmp.Or(strings.TrimPrefix(repo.DefaultBranch, "origin/"), "master")
+	if b := strings.TrimPrefix(store.Deref(pr.BaseRef), "origin/"); b == "" || b == def {
+		return base
+	}
+	return "origin/" + def
+}
+
 // diskPaths are what git compares for one checkout (projectConfig.onDisk).
 type diskPaths struct {
 	// git: each path (a path in any directory as gitx.AnyDir and its
 	// globName), each root entry folding to one, and each link target.
 	git []string
-	// links: the target, relative to the root, of a path at the root that
-	// is a symbolic link into the checkout, and that path.
+	// links: the target, relative to the root, of each symbolic link into
+	// the checkout that a path at the root is, or that lies under a
+	// directory path (linkWalk), and that path.
 	links map[string]projectPath
+	// partial: the walk for links under a directory path stopped at
+	// maxLinkWalk entries, so one may lead where git compares nothing.
+	partial bool
 }
+
+// maxLinkWalk caps the entries onDisk reads under a checkout's project
+// directories, and the directories inside it their links lead to, for
+// symbolic links (linkWalk); past it, the session leaves the config out
+// (diskPaths.partial).
+const maxLinkWalk = 10000
 
 // onDisk lists what git compares for pc's paths in the checkout dir: each
 // path; every root entry other than it whose name folds to it
@@ -332,15 +366,26 @@ type diskPaths struct {
 // filesystem (macOS's, which folds Unicode too) opens for it and git's
 // ASCII-only icase pathspec would not always match (gitx.WorkTreeChanges
 // compares each by its own name); a path in any directory as a glob
-// (gitx.AnyDir, globName); and the target of a root entry that is a
-// symbolic link into the checkout (a CLAUDE.md linking to AGENTS.md loads
-// the PR's AGENTS.md: the CLIs follow links). present reports whether one
-// of them is there as its path's type (a directory for .claude) or cannot
-// be told, and, for a path in any directory, whether the root is there; a
-// root that cannot be read adds no entries.
+// (gitx.AnyDir, globName); the target of a root entry that is a symbolic
+// link into the checkout (a CLAUDE.md linking to AGENTS.md loads the PR's
+// AGENTS.md: the CLIs follow links); and the target of each link into the
+// checkout under a directory path (.claude/skills -> ../.agents/skills,
+// linkWalk). present reports whether one of them is there as its path's
+// type (a directory for .claude) or cannot be told, and, for a path in any
+// directory, whether the root is there; a root that cannot be read adds no
+// entries.
 func (pc projectConfig) onDisk(dir string) (d diskPaths, present bool) {
 	entries, rerr := os.ReadDir(dir)
 	root := ""
+	realRoot := func() string {
+		if root == "" {
+			if root, _ = filepath.EvalSymlinks(dir); root == "" {
+				root = dir
+			}
+		}
+		return root
+	}
+	w := linkWalk{pc: pc, d: &d, seen: map[string]bool{}, budget: maxLinkWalk}
 	for _, p := range pc.paths {
 		found := []string{p.name}
 		for _, e := range entries {
@@ -348,30 +393,35 @@ func (pc projectConfig) onDisk(dir string) (d diskPaths, present bool) {
 				found = append(found, e.Name())
 			}
 		}
-		var targets []string
+		var targets, walk []string
 		for _, n := range found {
 			full := filepath.Join(dir, n)
 			if fi, err := os.Stat(full); err == nil && fi.IsDir() == p.dir || err != nil && !errors.Is(err, fs.ErrNotExist) {
 				present = true
 			}
-			if fi, err := os.Lstat(full); err != nil || fi.Mode()&fs.ModeSymlink == 0 {
+			fi, err := os.Lstat(full)
+			switch {
+			case err != nil:
+				continue
+			case fi.Mode()&fs.ModeSymlink == 0:
+				if p.dir && fi.IsDir() {
+					walk = append(walk, n)
+				}
 				continue
 			}
-			if root == "" {
-				if root, _ = filepath.EvalSymlinks(dir); root == "" {
-					root = dir
-				}
-			}
 			// A target that is one of pc's paths is compared, and named, as itself.
-			if t, ok := linkTarget(root, full); ok && !slices.Contains(targets, t) {
-				if _, _, own := pc.pathOf(t); !own {
-					if d.links == nil {
-						d.links = map[string]projectPath{}
-					}
-					d.links[t] = p
+			if t, ok := linkTarget(realRoot(), full); ok {
+				if w.add(t, p) {
 					targets = append(targets, t)
 				}
+				if p.dir {
+					walk = append(walk, t)
+				}
 			}
+		}
+		if len(walk) > 0 {
+			w.root = realRoot()
+			targets = append(targets, w.walk(walk, p)...)
 		}
 		if p.anyDir {
 			present = present || !errors.Is(rerr, fs.ErrNotExist)
@@ -380,6 +430,85 @@ func (pc projectConfig) onDisk(dir string) (d diskPaths, present bool) {
 		d.git = append(append(d.git, found...), targets...)
 	}
 	return d, present
+}
+
+// linkWalk finds the symbolic links under a checkout's project directories
+// (onDisk): Claude and Codex follow them (.claude/skills ->
+// ../.agents/skills loads the skills there), while git compares the link
+// alone, so what the CLI loads through one is compared, and recorded, as
+// its target.
+type linkWalk struct {
+	pc     projectConfig
+	root   string     // the checkout's real path
+	d      *diskPaths // links and partial are written here
+	seen   map[string]bool
+	budget int // entries left to read (maxLinkWalk)
+}
+
+// add records t, the target of a link of path p, unless it is one of pc's
+// paths (compared, and named, as itself) or recorded already; it reports
+// whether it recorded it.
+func (w *linkWalk) add(t string, p projectPath) bool {
+	if _, _, own := w.pc.pathOf(t); own {
+		return false
+	}
+	if _, dup := w.d.links[t]; dup {
+		return false
+	}
+	if w.d.links == nil {
+		w.d.links = map[string]projectPath{}
+	}
+	w.d.links[t] = p
+	return true
+}
+
+// walk reads the directories start (relative to the root, with forward
+// slashes) of the directory path p, and each directory inside the checkout
+// a link under them leads to, each once, and returns the targets it
+// recorded (add) for the links it found there, labelled p: a link out of
+// the checkout or to nothing is left out (linkTarget), a directory with a
+// .git entry (a nested checkout: Claude Code's .claude/worktrees/<name>) is
+// not entered, and a directory that cannot be read is skipped. Past the
+// budget it stops and marks the paths partial.
+func (w *linkWalk) walk(start []string, p projectPath) []string {
+	var targets []string
+	queue := slices.Clone(start)
+	for len(queue) > 0 {
+		rel := queue[0]
+		queue = queue[1:]
+		if w.seen[rel] {
+			continue
+		}
+		w.seen[rel] = true
+		entries, err := os.ReadDir(filepath.Join(w.root, filepath.FromSlash(rel)))
+		if err != nil || slices.ContainsFunc(entries, func(e fs.DirEntry) bool { return e.Name() == ".git" }) {
+			continue
+		}
+		for _, e := range entries {
+			if w.budget--; w.budget < 0 {
+				w.d.partial = true
+				return targets
+			}
+			child := rel + "/" + e.Name()
+			switch {
+			case e.Type()&fs.ModeSymlink != 0:
+				full := filepath.Join(w.root, filepath.FromSlash(child))
+				t, ok := linkTarget(w.root, full)
+				if !ok {
+					continue
+				}
+				if w.add(t, p) {
+					targets = append(targets, t)
+				}
+				if fi, err := os.Stat(full); err == nil && fi.IsDir() {
+					queue = append(queue, t)
+				}
+			case e.IsDir():
+				queue = append(queue, child)
+			}
+		}
+	}
+	return targets
 }
 
 // linkTarget is where the symbolic link path leads, relative to root (the
@@ -429,13 +558,24 @@ func (pc projectConfig) changed(files []string, links map[string]projectPath) []
 			continue
 		}
 		for t, p := range links {
-			if f == t || strings.HasPrefix(f, t+"/") {
+			if underTarget(f, t) {
 				out = append(out, p)
 				break
 			}
 		}
 	}
 	return out
+}
+
+// underTarget reports whether f, a path relative to the checkout's root,
+// is the link target t or lies under it, element by element in any case and
+// under Unicode folding (strings.EqualFold), as a case-insensitive
+// filesystem (macOS's) opens it: git names a tracked file in its own case,
+// while a link's text, which its target keeps (linkTarget), may spell it in
+// another.
+func underTarget(f, t string) bool {
+	fp, tp := strings.Split(f, "/"), strings.Split(t, "/")
+	return len(fp) >= len(tp) && slices.EqualFunc(fp[:len(tp)], tp, strings.EqualFold)
 }
 
 // pathOf returns the project path f (relative to the checkout's root) is,
@@ -603,7 +743,7 @@ func (m *Manager) projectChanges(ctx context.Context, g *gitx.Client, dir, base 
 
 // committedChanges reports whether the commits from the merge base mb to
 // HEAD change the project config disk names (git diff mb...HEAD over the
-// same paths, a root link's target mapped to the link as for the work
+// same paths, a link's target mapped to the link as for the work
 // tree), which a PR's file list shows; false when only the work tree
 // differs (untracked or ignored files, uncommitted edits: what a round left
 // in the slot). A git that cannot tell counts as a change, so the record
@@ -716,15 +856,17 @@ type ProjectNote struct {
 	// auto-approval's gate reads none of the compare, residue or not: the
 	// PR's file list decides there, with Links.
 	Residue bool `json:"residue,omitempty"`
-	// Links map the target of each root entry among the kind's paths that
-	// is a symbolic link into the checkout (relative to its root: CLAUDE.md
-	// -> docs/guide.md) to the label of the link's path (CLAUDE.md), as the
-	// launch read them from the disk, not from git, so also when git could
-	// not compare. A PR that changes such a target changes what the CLI
-	// loads through the link, and its file list names the target alone:
-	// the auto-approval's gate asks ChangedLinks with that list. Kept out of
-	// the event (a link the PR added names a path it chose); none in a
-	// record written before they were kept.
+	// Links map the target of each symbolic link into the checkout that a
+	// root entry among the kind's paths is, or that lies under one of its
+	// directories or a directory such a link leads to (relative to the
+	// root: CLAUDE.md -> docs/guide.md, .claude/skills -> .agents/skills),
+	// to the label of that path (CLAUDE.md, .claude/), as the launch read
+	// them from the disk, not from git, so also when git could not compare.
+	// A PR that changes such a target changes what the CLI loads through
+	// the link, and its file list names the target alone: the
+	// auto-approval's gate asks ChangedLinks with that list. Kept out of the
+	// event (a link the PR added names a path it chose); none in a record
+	// written before they were kept.
 	Links map[string]string `json:"links,omitempty"`
 }
 
@@ -732,12 +874,13 @@ type ProjectNote struct {
 // labels, each once, in the order of their targets) whose target paths,
 // the files a PR's commits change (its file list, relative to the
 // repository's root), change: the target itself, or a file under a target
-// that is a directory. None for a record without links.
+// that is a directory, in any case (underTarget). None for a record
+// without links.
 func (n ProjectNote) ChangedLinks(paths []string) []string {
 	var out []string
 	for _, t := range slices.Sorted(maps.Keys(n.Links)) {
 		l := n.Links[t]
-		if !slices.Contains(out, l) && slices.ContainsFunc(paths, func(f string) bool { return f == t || strings.HasPrefix(f, t+"/") }) {
+		if !slices.Contains(out, l) && slices.ContainsFunc(paths, func(f string) bool { return underTarget(f, t) }) {
 			out = append(out, l)
 		}
 	}

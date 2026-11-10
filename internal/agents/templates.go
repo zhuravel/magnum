@@ -1403,13 +1403,30 @@ func promptLine(role config.Role, d ShellData) (string, error) {
 	return line, nil
 }
 
+// shellProjectBase is projectBase for PR prID's shell line: base unless
+// the PR is stacked on another branch than its repository's default; ""
+// (the session leaves the project config out) when the registry cannot
+// tell.
+func (m *Manager) shellProjectBase(ctx context.Context, prID int64, base string) string {
+	pr, err := m.d.Store.PRByID(ctx, prID)
+	if err == nil {
+		var repo store.Repo
+		if repo, err = m.d.Store.RepoByID(ctx, pr.RepoID); err == nil {
+			return projectBase(pr, repo, base)
+		}
+	}
+	m.logErr(ctx, err, "agents: pr %d: cannot read its base branch, so its shell line leaves the project config out: %v", prID, err)
+	return ""
+}
+
 // ShellLine is ShellLine with the role's full-line template (role.Prompt)
 // resolved through the configuration (pipeline.prompts_dir, then the
 // embedded defaults) unless d.Template is set, d.MCPOff, when nil,
 // keeping out what a session of the role's tool kind must not load: the MCP
 // servers and plugins of the Codex home (codexOff) and the PR's project config in
-// d.Checkout (checkoutProject against d.BaseSHA, else d.BaseRef; a rendered
-// line records the decision for PR prID, recordProject), and d.ToolOutput,
+// d.Checkout (checkoutProject against d.BaseSHA, else d.BaseRef, or the
+// default branch for a stacked PR: shellProjectBase; a rendered line
+// records the decision for PR prID, recordProject), and d.ToolOutput,
 // when nil, the kind's tool output ceiling (config.Kind.ToolOutputArgs), as
 // a session of the kind gets it. d.Magnum, when
 // empty, is the daemon's own executable (the layout's), which d.DBLockCommand
@@ -1419,7 +1436,7 @@ func (m *Manager) ShellLine(ctx context.Context, prID int64, role config.Role, d
 	var project projectScope
 	if k, ok := m.kindSpec(role.AgentKind()); ok {
 		if d.MCPOff == nil {
-			project = m.checkoutProject(ctx, role, d.Checkout, cmp.Or(d.BaseSHA, d.BaseRef), d.HeadSHA)
+			project = m.checkoutProject(ctx, role, d.Checkout, m.shellProjectBase(ctx, prID, cmp.Or(d.BaseSHA, d.BaseRef)), d.HeadSHA)
 			servers, plugins := m.codexOff(role)
 			d.MCPOff = k.ConfigOffArgs(servers, plugins, project.servers, project.paths, project.docsOff)
 		}

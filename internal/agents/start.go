@@ -239,7 +239,7 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 	ref := paneRef{name: name, pane: paneID}
 	model, onFallback := m.startModel(ctx, role, kind)
 	base := cmp.Or(store.Deref(pr.BaseRef), repo.DefaultBranch)
-	project := m.checkoutProject(ctx, role, dir, "origin/"+strings.TrimPrefix(base, "origin/"), "")
+	project := m.checkoutProject(ctx, role, dir, projectBase(pr, repo, "origin/"+strings.TrimPrefix(base, "origin/")), "")
 	servers, plugins := m.codexOff(role)
 	args := kind.Argv(config.LaunchArgs{Session: resume, Title: title, Model: model, Effort: role.Effort,
 		Subagents: role.MaxSubagents, MCPServers: servers, Plugins: plugins, ProjectServers: project.servers, Untrusted: project.paths, DocsOff: project.docsOff,
