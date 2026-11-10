@@ -222,7 +222,8 @@ func changedLinks(targets map[string]string, paths []string) (names []string, ma
 // ASCII case, the fold every such filesystem agrees on. A name outside
 // ASCII folds by the filesystem's own rules (APFS: ſ is s, ß is ss, ﬁ is
 // fi, a decomposed name its composed spelling), which magnum does not
-// model: a tree with such a link, when any link steers the agents (or,
+// model: a tree with such a link (at a path git checks out, no longer
+// than maxPathBytes), when any link steers the agents (or,
 // in resolveConfigTargets, where it may stand for a path the agents load
 // through imports: foldsOnto), fails (errLinksFoldUnknown). It returns each path the agents load through
 // such a link, with the link's label: the link itself, each link it passes
@@ -250,14 +251,14 @@ func resolveConfigTargets(ctx context.Context, tree gitx.Tree, isConfig func(str
 		via: map[string][]string{}, sources: map[string]bool{}}
 	paths := slices.Sorted(maps.Keys(links))
 	steering := map[string]string{}
-	var odd []string // the links whose path or text has a byte outside ASCII
+	var odd []string // the links whose path or text has a byte outside ASCII, at a path git checks out
 	for _, l := range paths {
 		k := foldKey(l)
 		r.byFold[k] = append(r.byFold[k], l)
 		if label, ok := isConfig(l); ok {
 			steering[l] = label
 		}
-		if !isASCII(l) || !isASCII(links[l]) {
+		if (!isASCII(l) || !isASCII(links[l])) && len(l) <= maxPathBytes {
 			odd = append(odd, l)
 		}
 	}
@@ -292,11 +293,18 @@ func resolveConfigTargets(ctx context.Context, tree gitx.Tree, isConfig func(str
 // filesystem may check such a link out in place of one of those (APFS:
 // docſ -> evil for docs/, which @docs/guide.md then reads) by rules magnum
 // does not model. A link elsewhere (a test fixture café.txt) changes
-// nothing they load. Each comparison is a step of the walk.
+// nothing they load, nor does a path longer than maxPathBytes, which git
+// checks out nowhere (resolveConfigTargets leaves such a link out of
+// odd). Each comparison is a step of the walk.
 func (r *linkResolver) foldsOnto(odd []string) bool {
-	loaded := slices.Sorted(maps.Keys(r.out))
+	var loaded []string
+	for _, p := range slices.Sorted(maps.Keys(r.out)) {
+		if len(p) <= maxPathBytes {
+			loaded = append(loaded, p)
+		}
+	}
 	for _, f := range slices.Sorted(maps.Keys(r.sources)) {
-		if _, ok := r.out[f]; !ok {
+		if _, ok := r.out[f]; !ok && len(f) <= maxPathBytes {
 			loaded = append(loaded, f)
 		}
 	}

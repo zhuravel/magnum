@@ -675,3 +675,19 @@ func TestAnImportOfADirectoryIsThatPathAlone(t *testing.T) {
 		}
 	}
 }
+
+// A tree may list a link at a path longer than PATH_MAX (git fsck only
+// warns), which git checks out nowhere: it stands for nothing the agents
+// load, so its name outside ASCII refuses nothing, and the walk compares
+// it with nothing (each comparison split and folded its whole path: a
+// 4 MiB name beside 3,000 imports took 34 s per head).
+func TestALinkLongerThanPathMaxStandsForNothing(t *testing.T) {
+	kinds := defaultKinds()
+	isConfig := func(p string) (string, bool) { return agentConfigPath(kinds, p) }
+	links := map[string]string{"docs": "real/docs", "Docs/" + strings.Repeat("a", maxPathBytes) + "é": "x"}
+	tree, read := treeOf(map[string]string{"AGENTS.md": "@docs/guide.md\n", "real/docs/guide.md": "x\n"}, links)
+	got, err := resolveConfigTargets(context.Background(), tree, isConfig, read)
+	if err != nil || got["real/docs/guide.md"] != "AGENTS.md" {
+		t.Fatalf("resolveConfigTargets = %d targets, %v; want real/docs/guide.md of AGENTS.md", len(got), err)
+	}
+}
