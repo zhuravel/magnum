@@ -20980,7 +20980,8 @@ func (a *App) EnsureConfigDir(ctx context.Context) (string, error)
     It rewrites the files whenever the token changed or a file is missing;
     call it on every daemon tick so long-lived panes never see an expired token.
     It also drops the daemon's own tokens past their hold (DaemonPushEnv,
-    ActionsEnv).
+    ActionsEnv), and the gh config dirs of a batch's or a REST call's own that a
+    process which died left behind (sweepDirs).
 
 func (a *App) Env(ctx context.Context) (map[string]string, error)
     Env implements Source: a fresh token written to ConfigDir, selected via
