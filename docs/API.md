@@ -8992,6 +8992,9 @@ const BudgetOverruledNote = "the Codex budget caps wait for Codex's next reading
     BudgetOverruledNote is what a resume of a budget-cap pause means (the CLI's
     offline resume says it too).
 
+const CIFixDry = "dry run: would fix the failed CI of "
+    CIFixDry is how the words of a CI fix's plan start (CIFixPlan.Text).
+
 const CLIChangeRecent = 24 * time.Hour
     CLIChangeRecent is how long a change of a kind's CLI is news: `magnum
     status` says "(changed at 11:24)", and a launch failure of one of the kind's
@@ -9999,6 +10002,31 @@ func (b Build) Label() string
     Label is how messages name the build: its version, with the commit when the
     version does not say it ("dev (8ad5bb2)").
 
+type CIFixAsked struct {
+	Head    string    `json:"head"`
+	Entries []string  `json:"entries"`
+	Count   int       `json:"count"`
+	At      time.Time `json:"at"`
+}
+    CIFixAsked is what the y/N of a CI fix asked about, which the start it
+    confirms is bound to: the PR's head, the failed required entries, the CI
+    fixes the PR had then, and when the daemon planned it.
+
+type CIFixPlan struct {
+	Ref   string     `json:"ref"`
+	Asked CIFixAsked `json:"ci_asked"`
+	Text  string     `json:"text"`
+}
+    CIFixPlan is the daemon's answer to a dry run of a CI fix: the PR
+    (owner/name#N), what its y/N asks about, and the plan in words (Text, the
+    answer's last line: "dry run: would fix the failed CI of <PR>: claude-fix
+    fixes required check Completion at a1a1a1a (2 failed jobs) in review1 as
+    fixer-app[bot], CI fix 1 of 3").
+
+func ParseCIFixPlan(result string) (CIFixPlan, bool)
+    ParseCIFixPlan reads the answer to a dry run of a CI fix (its first line);
+    false when it is none (a refusal's words, a merge's plan).
+
 type Claim struct {
 	// Has unexported fields.
 }
@@ -10814,14 +10842,15 @@ func ParseFixOff(s string) (FixOff, bool)
 
 type FixPayload struct {
 	PRTarget
-	DryRun bool          `json:"dry_run,omitempty"`
-	Off    bool          `json:"off,omitempty"`
-	On     bool          `json:"on,omitempty"`
-	Done   bool          `json:"done,omitempty"`
-	Seen   string        `json:"seen,omitempty"`
-	Decide []FixDecision `json:"decide,omitempty"`
-	Mode   string        `json:"mode,omitempty"`
-	Asked  *MergeAsked   `json:"asked,omitempty"`
+	DryRun  bool          `json:"dry_run,omitempty"`
+	Off     bool          `json:"off,omitempty"`
+	On      bool          `json:"on,omitempty"`
+	Done    bool          `json:"done,omitempty"`
+	Seen    string        `json:"seen,omitempty"`
+	Decide  []FixDecision `json:"decide,omitempty"`
+	Mode    string        `json:"mode,omitempty"`
+	Asked   *MergeAsked   `json:"asked,omitempty"`
+	CIAsked *CIFixAsked   `json:"ci_asked,omitempty"`
 }
     FixPayload is a `magnum fix` request: start a fix loop on the PR (DryRun:
     answer what would happen and do nothing), or switch the fix job off for it
@@ -10836,6 +10865,9 @@ type FixPayload struct {
     and nothing else; a merge names Asked, what the y/N of its plan asked about
     (fix_parent_bind.go: a merge whose head, base, tip or conflicts moved since
     is refused), or nil when nothing was asked (`magnum merge-parent --yes`).
+    Mode FixModeCI fixes the PR's failed required CI (fix_ci.go, `magnum fix
+    --ci`), with DryRun and nothing else; CIAsked is what the y/N of its plan
+    asked about (nil: nothing was asked).
 
 type FixReport struct {
 	// Pushed are the commits on GitHub, none for "nothing".
@@ -32231,6 +32263,9 @@ type ActionResult struct {
 	// Parent is what a merge of the parent's plan (MergeParentPlan) binds
 	// its merge to, which y sends (MergeParent); nil for none.
 	Parent *MergeAsked
+	// CIFix is what a CI fix's plan (FixCIPlan) binds its start to, which y
+	// sends (FixCI); nil for none.
+	CIFix *CIFixAsked
 
 	// Has unexported fields.
 }
@@ -32284,6 +32319,16 @@ type Badge struct {
 }
     Badge marks a PR that carries a GitHub label: Text (e.g. "🚩") shows before
     the title, Label names it on the card.
+
+type CIFixAsked struct {
+	Head    string
+	Entries []string
+	Count   int
+	At      time.Time
+}
+    CIFixAsked is what a CI fix's y/N binds its start to: the PR's head,
+    the failed required entries, the CI fixes the PR had, and when the daemon
+    planned it.
 
 type CIInfo struct {
 	// State is "passed" | "failed" | "pending" | "skipped" (every check
@@ -32569,6 +32614,14 @@ type DashboardActions interface {
 	// question named moved since.
 	MergeParentPlan(ctx context.Context, ref string) (ActionResult, error)
 	MergeParent(ctx context.Context, ref string, asked MergeAsked) (ActionResult, error)
+	// FixCIPlan asks the daemon what a CI fix of the operator's own PR
+	// whose required check failed would do (magnum fix --ci --dry-run) and
+	// returns the plan as the result's Ask, the y/N the screen puts before
+	// it, and what it asks about as CIFix. FixCI starts the CI fix bound to
+	// that, once the screen's y/N said yes (c): the daemon refuses it when
+	// the head, the failed checks or the count of CI fixes moved since.
+	FixCIPlan(ctx context.Context, ref string) (ActionResult, error)
+	FixCI(ctx context.Context, ref string, asked CIFixAsked) (ActionResult, error)
 	// StagingPlan asks the daemon's plan of a staging deploy of the
 	// operator's own PR to envs (magnum staging --deploy --dry-run) and
 	// returns its y/N as the result's Ask and its binding as Staging (the

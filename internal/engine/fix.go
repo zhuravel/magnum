@@ -63,17 +63,20 @@ const ReqFix = "fix"
 // with DryRun and nothing else; a merge names Asked, what the y/N of its
 // plan asked about (fix_parent_bind.go: a merge whose head, base, tip or
 // conflicts moved since is refused), or nil when nothing was asked
-// (`magnum merge-parent --yes`).
+// (`magnum merge-parent --yes`). Mode FixModeCI fixes the PR's failed
+// required CI (fix_ci.go, `magnum fix --ci`), with DryRun and nothing else;
+// CIAsked is what the y/N of its plan asked about (nil: nothing was asked).
 type FixPayload struct {
 	PRTarget
-	DryRun bool          `json:"dry_run,omitempty"`
-	Off    bool          `json:"off,omitempty"`
-	On     bool          `json:"on,omitempty"`
-	Done   bool          `json:"done,omitempty"`
-	Seen   string        `json:"seen,omitempty"`
-	Decide []FixDecision `json:"decide,omitempty"`
-	Mode   string        `json:"mode,omitempty"`
-	Asked  *MergeAsked   `json:"asked,omitempty"`
+	DryRun  bool          `json:"dry_run,omitempty"`
+	Off     bool          `json:"off,omitempty"`
+	On      bool          `json:"on,omitempty"`
+	Done    bool          `json:"done,omitempty"`
+	Seen    string        `json:"seen,omitempty"`
+	Decide  []FixDecision `json:"decide,omitempty"`
+	Mode    string        `json:"mode,omitempty"`
+	Asked   *MergeAsked   `json:"asked,omitempty"`
+	CIAsked *CIFixAsked   `json:"ci_asked,omitempty"`
 }
 
 const (
@@ -422,12 +425,18 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 	}
 	subject := prSubject(repo, pr.Number)
 	switch {
-	case p.Mode != "" && p.Mode != FixModeMerge:
+	case p.Mode != "" && p.Mode != FixModeMerge && p.Mode != FixModeCI:
 		return "", fmt.Errorf("magnum fix: no mode %q", p.Mode)
 	case p.Mode == FixModeMerge && (len(p.Decide) > 0 || p.Done || p.Off || p.On):
 		return "", errors.New("magnum merge-parent goes alone, without --decide, --done, --off or --on")
+	case p.Mode == FixModeCI && (len(p.Decide) > 0 || p.Done || p.Off || p.On):
+		return "", errors.New("magnum fix --ci goes alone, without --decide, --done, --off or --on")
 	case p.Asked != nil && p.Mode != FixModeMerge:
 		return "", errors.New("magnum fix: a merge's plan (asked) goes with magnum merge-parent alone")
+	case p.CIAsked != nil && p.Mode != FixModeCI:
+		return "", errors.New("magnum fix: a CI fix's plan (ci_asked) goes with magnum fix --ci alone")
+	case p.Mode == FixModeCI:
+		return e.requestCIFix(ctx, pr, p.DryRun || e.d.DryRun, p.CIAsked) // fix_ci.go
 	case p.Mode == FixModeMerge:
 		return e.requestMerge(ctx, pr, p.DryRun || e.d.DryRun, p.Asked) // fix_parent.go
 	case len(p.Decide) > 0 && (p.Done || p.Off || p.On):

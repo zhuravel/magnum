@@ -279,6 +279,45 @@ func (s *screenActions) MergeParent(ctx context.Context, ref string, asked tui.M
 	})
 }
 
+// FixCIPlan asks the daemon in a dry run what a CI fix of the PR would do
+// (magnum fix --ci --dry-run) and returns its plan as the result's Ask
+// ("Fix the failed CI of <ref>: claude-fix fixes required check Completion
+// at a1a1a1a (2 failed jobs) in review1 as <login>, CI fix 1 of 3?"), the
+// y/N the screen puts before the start, and what the plan asks about as
+// CIFix; a refusal (nothing failed, red on the base, the cap) is the
+// request's failure, and the words of a daemon from before the plan the
+// error (errCIFixPlanPredates).
+func (s *screenActions) FixCIPlan(ctx context.Context, ref string) (tui.ActionResult, error) {
+	res, err := s.do(ctx, "fix", func(ctx context.Context, c *Context, d *actDeps) int {
+		return fixMain(ctx, c, d, ref, fixOpts{ci: true, dryRun: true, yes: true})
+	})
+	if err != nil {
+		return res, err
+	}
+	for _, r := range res.Requests {
+		plan, ok := engine.ParseCIFixPlan(r.Result)
+		switch {
+		case r.State != tui.RequestDone:
+		case ok:
+			a := plan.Asked
+			res.Ask, res.CIFix = ciFixQuestion(plan), &tui.CIFixAsked{Head: a.Head, Entries: a.Entries, Count: a.Count, At: a.At}
+		default:
+			return res, errCIFixPlanPredates
+		}
+	}
+	return res, nil
+}
+
+// FixCI starts the CI fix of the PR (magnum fix --ci), bound to asked, what
+// the plan's question the screen asked y/N for named (FixCIPlan's CIFix):
+// the daemon refuses it when that moved since.
+func (s *screenActions) FixCI(ctx context.Context, ref string, asked tui.CIFixAsked) (tui.ActionResult, error) {
+	a := engine.CIFixAsked{Head: asked.Head, Entries: asked.Entries, Count: asked.Count, At: asked.At}
+	return s.do(ctx, "fix", func(ctx context.Context, c *Context, d *actDeps) int {
+		return fixMain(ctx, c, d, ref, fixOpts{ci: true, yes: true, ciAsked: &a})
+	})
+}
+
 // FixOff takes the PR out of autofix (off) or puts it back (magnum fix --off
 // and --on); the screen asked first.
 func (s *screenActions) FixOff(ctx context.Context, ref string, off bool) (tui.ActionResult, error) {

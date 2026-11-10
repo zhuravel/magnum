@@ -50,6 +50,7 @@ const (
 	actFixDone
 	actMergeParent
 	actStaging
+	actFixCI
 )
 
 // boardSnooze is how long the board's z snoozes a PR.
@@ -88,6 +89,7 @@ var rowActDefs = [...]rowActDef{
 	actFixDone:        {"d", "fixer's calls done", "done", "fix --done"},
 	actMergeParent:    {"P", "merge parent", "parent", "merge-parent"},
 	actStaging:        {"E", "deploy to staging", "staging", "staging deploy"},
+	actFixCI:          {"c", "fix CI", "fix CI", "fix --ci"},
 }
 
 // The actions each screen offers, in the order its menu (and the card) lists
@@ -95,9 +97,10 @@ var rowActDefs = [...]rowActDef{
 // shows and hides the manual worktrees, as its t switches to the board, and
 // a star orders the board's rows, not the dashboard's queue.
 var (
-	boardActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actFixDone, actMergeParent, actStaging, actAbort, actIgnore, actApprove,
-		actRequestChanges, actUnapprove, actOpen, actBrowser, actTracker, actWhiteboard, actPin, actUnpin, actStar, actRelease, actMute, actUnmute, actSnooze}
-	dashActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actMergeParent, actStaging, actAbort, actIgnore,
+	boardActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixCI, actFixOff, actFixDone, actMergeParent, actStaging, actAbort, actIgnore,
+		actApprove, actRequestChanges, actUnapprove, actOpen, actBrowser, actTracker, actWhiteboard, actPin, actUnpin, actStar, actRelease, actMute,
+		actUnmute, actSnooze}
+	dashActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixCI, actFixOff, actMergeParent, actStaging, actAbort, actIgnore,
 		actOpen, actBrowser, actPin, actUnpin, actRelease, actMute, actUnmute}
 )
 
@@ -189,6 +192,12 @@ type actRow struct {
 	// (PRBoardRow.Fixer, PRRow.Fixer; "" when the screen does not know),
 	// which f's question names.
 	fixer string
+	// own says the PR's author is one of the self logins, author its
+	// login; ownKnown says the screen knows (only the board does), so c
+	// refuses another's PR at once. The daemon decides the rest of a CI
+	// fix: what failed, the base, the cap.
+	own, ownKnown bool
+	author        string
 	// attentionKind is why the PR needs attention (PRBoardRow.AttentionKind;
 	// "" when it does not, or the screen does not know: only the board
 	// does), which d checks: only the fixer's calls (kind fix) are yours to
@@ -379,6 +388,20 @@ func actionRefusal(a rowAct, r actRow) string {
 	// The daemon decides the rest: whose PR it is, a loop already running,
 	// the slot, and, for a review that found nothing, whether another
 	// reviewer's thread or comment waits for an answer (spec 96).
+	// The daemon decides the rest of a CI fix (fix_ci.go): a required check
+	// that failed at the head (talkable's dispatched run is outside the
+	// rollup the board reads), the base, the cap, the review's work.
+	case actFixCI:
+		switch {
+		case r.ownKnown && !r.own:
+			return l + " is " + cmp.Or(r.author, "someone else") + "'s, not yours: magnum fixes the CI of your own PRs alone"
+		case r.merged() || r.closed() || r.ended():
+			return l + " is " + cmp.Or(r.ghWord(), r.state) + ": nothing to fix"
+		case r.running():
+			return l + ": round in progress (" + stateLabel(r.state) + ")" + r.orKey(actAbort, "; %k kills it")
+		case r.fixLoop:
+			return l + ": a fix loop works on it" + r.orKey(actAbort, "; %k stops it")
+		}
 	case actFix:
 		switch f := r.findings; {
 		case !r.verdicts:
@@ -767,6 +790,8 @@ func actionRun(a rowAct, r actRow) (what string, fn actionFunc) {
 		return what, on(DashboardActions.OpenWhiteboard)
 	case actMergeParent: // the daemon's plan first (a dry run changes nothing); its question puts the merge, bound to it, behind y
 		return mergeParentRun(target)
+	case actFixCI: // the daemon's plan first, as for P; its question puts the CI fix, bound to it, behind y
+		return fixCIRun(target)
 	case actFixDone:
 		seen := r.seen
 		return what, func(ctx context.Context, act DashboardActions) (ActionResult, error) {

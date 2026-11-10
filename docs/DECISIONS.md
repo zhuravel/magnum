@@ -5334,6 +5334,30 @@ skill versions); people add theirs to the sections before it, at the end of the 
   so it reads "Approve talkable#5 at e88f4b3 as zhuravel?", not the older commit. Test, failing first:
   TestAAndCOnAHeadThatOnlyMergedTheBaseAskOnThatHead.
 
+- **`c` and `magnum fix --ci` start a CI fix by hand, behind the daemon's plan** (2026-11-10, with CI fix
+  mode, the operator's Q3). `c` was free on the PR board, the status dashboard and the factory screen (only
+  the settings screen uses it, for the scope); the board and the dashboard take it (`actFixCI`, "fix CI"),
+  and the factory screen's own key is left to its session. As `P` does, `c` asks the daemon's plan first
+  (`magnum fix --ci --dry-run`, a CIFixPlan: "Fix the failed CI of talkable#12218: claude-fix fixes required
+  check Completion at e1b947b (2 failed jobs) in review2 as fixer-app[bot], CI fix 2 of 3?") and `y` sends
+  the start bound to what it named (CIFixAsked: the head, the failed entries, the count of CI fixes, when),
+  which the daemon refuses when any of them moved or the question is 10 minutes old. The board refuses at
+  once only what it knows for sure: another's PR (the row's author against the self logins), a merged or
+  closed PR, a round or a fix loop at work; "nothing failed" is the daemon's call, since talkable's
+  dispatched run is outside the rollup the board reads and a red CI there shows as a check that did not run.
+  The engine (fix_ci.go) runs the look's CI fix with its record and cap, skipping what a start by hand
+  skips as `magnum fix` does (the settle, hands off, quiet hours, the daily cap and the once per head: a
+  try after a CI fix that said it cannot counts), reads the base and the failed jobs itself when the record
+  lacks them, and refuses with rule 11's words where they say why (red or never run on the base, CI config,
+  the cap), plus another's PR, a head where nothing failed, a head magnum has not reviewed or whose review
+  leaves work ("f fixes it first, then the CI after its push"), and a drain or a low budget: a CI fix is
+  never held (the critic's point: `heldFix` has no mode, and a held CI fix would restart as a findings fix).
+  Tests, failing first: TestMagnumFixCIRefusesOthersPRsNothingFailedRedBaseAndTheCap,
+  TestMagnumFixCIDryRunAnswersThePlan, TestACIFixMergesTheParentFirstThenNamesCIFailuresInThePrompt,
+  TestFixCIFlagSendsModeCIAndGoesAlone, TestCFixesCIOnYourOwnPRWithTheDaemonsPlan,
+  TestCRefusesAnothersPRAndAPRWithNothingFailed, TestDashboardCFixesCIAfterThePlan and
+  TestTheHelpNamesCForACIFix; TestEveryRowActionRunsItsOwnCall and the menus' tests know c.
+
 ## Operations
 
 - **The daemon exits when the schema was migrated under it** (another binary ran a newer migration);

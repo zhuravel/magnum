@@ -359,6 +359,7 @@ func TestBoardRightClickMenu(t *testing.T) {
 		"withdraw approval":  false, // nor an approval magnum posted as the operator
 		"snooze 2h":          true,
 		"fix findings":       false, // nor a review to fix
+		"fix CI":             false, // ann's PR, not yours
 		"fix off":            true,
 		"fixer's calls done": false, // it needs nothing of the operator
 		"open whiteboard":    false, // nor a whiteboard
@@ -369,7 +370,7 @@ func TestBoardRightClickMenu(t *testing.T) {
 	if got := menuState(m.menuItems()); !maps.Equal(got, want) {
 		t.Errorf("menu of #11920:\n got %v\nwant %v", got, want)
 	}
-	if len(m.menuItems()) != 26 {
+	if len(m.menuItems()) != 27 {
 		t.Errorf("%d items", len(m.menuItems()))
 	}
 
@@ -615,7 +616,7 @@ func TestDashboardMouse(t *testing.T) {
 	want := map[string]bool{
 		"review": false, "fresh review": false, "simplify review": false, "kill review": false, "ignore": false,
 		"open pane": false, "browser": false, "pin": true, "unpin": false, "release": true,
-		"mute": false, "unmute": false, "reset column widths": false, "fix findings": false, "fix off": false, "merge parent": false,
+		"mute": false, "unmute": false, "reset column widths": false, "fix findings": false, "fix CI": false, "fix off": false, "merge parent": false,
 		"deploy to staging": false,
 	}
 	if !m.menu.open || m.cursor != 1 || !maps.Equal(got, want) {

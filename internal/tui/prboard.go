@@ -952,7 +952,11 @@ func (m prBoardModel) actRow() actRow {
 	if !ok {
 		return actRow{}
 	}
-	return boardActRow(r, m.questionLabel(r, prRef(r)), m.opts.Now())
+	row := boardActRow(r, m.questionLabel(r, prRef(r)), m.opts.Now())
+	if self := selfSet(m.opts.SelfLogins); len(self) > 0 && r.Author != "" { // c refuses another's PR at once
+		row.own, row.ownKnown, row.author = self[textx.FoldLogin(r.Author)], true, r.Author
+	}
+	return row
 }
 
 // questionLabel names the row's PR in a question as the table does:

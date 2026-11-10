@@ -51,7 +51,8 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"its slot), A/C approve and request changes (on a row that needs you, A approves as you), D withdraws "+
 			"the approval magnum posted as you, z snoozes it for 2h (or lifts its snooze), f fixes its findings as the fixer's login "+
 			"(F takes it out of autofix or puts it back; on a PR whose fix loop left you calls, d says you did them all: "+
-			"back to reviewed, with no review), P merges its base into it as the fixer App's bot (asking y/N with the daemon's "+
+			"back to reviewed, with no review), c fixes your PR's failed required CI as the fixer's login (asking y/N with the "+
+			"daemon's plan), P merges its base into it as the fixer App's bot (asking y/N with the daemon's "+
 			"plan), E deploys your PR to its staging envs (1-3 choose them, a all, enter asks y/N with the daemon's plan, as "+
 			"`magnum staging --deploy` does), w opens its whiteboard, o opens the judge's pane, "+
 			"p/u pin and unpin, * stars it or unstars it (`magnum star`), x releases, M/U mute and unmute, b opens the "+

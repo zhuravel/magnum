@@ -242,6 +242,14 @@ type DashboardActions interface {
 	// question named moved since.
 	MergeParentPlan(ctx context.Context, ref string) (ActionResult, error)
 	MergeParent(ctx context.Context, ref string, asked MergeAsked) (ActionResult, error)
+	// FixCIPlan asks the daemon what a CI fix of the operator's own PR
+	// whose required check failed would do (magnum fix --ci --dry-run) and
+	// returns the plan as the result's Ask, the y/N the screen puts before
+	// it, and what it asks about as CIFix. FixCI starts the CI fix bound to
+	// that, once the screen's y/N said yes (c): the daemon refuses it when
+	// the head, the failed checks or the count of CI fixes moved since.
+	FixCIPlan(ctx context.Context, ref string) (ActionResult, error)
+	FixCI(ctx context.Context, ref string, asked CIFixAsked) (ActionResult, error)
 	// StagingPlan asks the daemon's plan of a staging deploy of the
 	// operator's own PR to envs (magnum staging --deploy --dry-run) and
 	// returns its y/N as the result's Ask and its binding as Staging (the
@@ -1395,6 +1403,7 @@ func dashboardKeys(judge string) []hint {
 		{"R", "fresh review in new agent sessions (asks y/N)"},
 		{"i", "review with /simplify (asks y/N)"},
 		{"f", "fix the PR's findings as the fixer's login (asks y/N)"},
+		{"c", "fix your PR's failed required CI as the fixer's login (asks y/N with the daemon's plan)"},
 		{"P", "merge the PR's base into it as the fixer App's bot (asks y/N with the daemon's plan)"},
 		{"E", "deploy your PR to staging: 1-3 toggle an env, a all, enter asks y/N with the daemon's plan"},
 		{"F", "leave its findings to you: no autofix (asks y/N)"},

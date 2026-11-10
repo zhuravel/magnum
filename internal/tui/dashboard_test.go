@@ -71,6 +71,9 @@ type fakeActions struct {
 	seen string
 	// ask is StagingPlan's question ("" = stagingAsk's).
 	ask string
+	// ciRefuse is the ref whose FixCIPlan the daemon refuses
+	// (errNothingFailed).
+	ciRefuse string
 }
 
 func (f *fakeActions) record(s string) (ActionResult, error) {

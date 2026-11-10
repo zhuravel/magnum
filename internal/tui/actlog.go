@@ -35,6 +35,9 @@ type ActionResult struct {
 	// Parent is what a merge of the parent's plan (MergeParentPlan) binds
 	// its merge to, which y sends (MergeParent); nil for none.
 	Parent *MergeAsked
+	// CIFix is what a CI fix's plan (FixCIPlan) binds its start to, which y
+	// sends (FixCI); nil for none.
+	CIFix *CIFixAsked
 	// next and nextFactory are that next step on the board and the
 	// dashboard (actionRun), and on the factory screen (prKey): the screen
 	// asks Ask y/N, and y runs it.

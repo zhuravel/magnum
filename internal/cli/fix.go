@@ -32,7 +32,7 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-const fixUsage = "fix <url|owner/repo#N|repo#N|N> [--off | --on | --done | --decide <thread>=<reply>...] [--wait] [--timeout <duration>] [--dry-run] [--json] [--yes]"
+const fixUsage = "fix <url|owner/repo#N|repo#N|N> [--off | --on | --done | --ci | --decide <thread>=<reply>...] [--wait] [--timeout <duration>] [--dry-run] [--json] [--yes]"
 
 // fixDefaultTimeout is how long --wait follows a loop by default.
 const fixDefaultTimeout = reviewDefaultTimeout
@@ -50,8 +50,13 @@ type fixOpts struct {
 	// merge is `magnum merge-parent`: a merge of the PR's parent alone
 	// (engine.FixModeMerge), asked y/N with the daemon's plan. asked is the
 	// plan a screen's y/N named (its P), which the merge is bound to.
-	merge   bool
-	asked   *engine.MergeAsked
+	merge bool
+	asked *engine.MergeAsked
+	// ci is `magnum fix --ci`: a CI fix of the PR's failed required CI
+	// (engine.FixModeCI), asked y/N with the daemon's plan. ciAsked is the
+	// plan a screen's y/N named (its c), which the start is bound to.
+	ci      bool
+	ciAsked *engine.CIFixAsked
 	timeout time.Duration // --timeout: stop following after this long (0 = no limit)
 	// decide are the --decide values as typed, decisions what they say
 	// (parseDecide).
@@ -108,12 +113,20 @@ func newFixCmd(c *Context) *cobra.Command {
 			"thread, while no fix run of the PR is at work, is a decision too, for the next `magnum fix`; under autofix = "+
 			"\"open\" the loop starts by itself once the PR settles only when every call the fixer left is a decision you "+
 			"made: with anything else asked of you, run `magnum fix` or --decide. "+
+			"--ci fixes your PR's failed required CI instead (a CI fix, as autofix = \"open\" starts by itself): the fixer "+
+			"gets why the check failed (ci-failures.json beside its report), fixes the PR's own code, runs the failing tests and "+
+			"pushes, at most 3 CI fixes a PR across its heads; it goes alone (no --off, --on, --done or --decide), asks y/N "+
+			"with the daemon's plan (--yes does not; with no terminal it needs --yes), and the daemon refuses another's PR, a "+
+			"head where no required check failed, a check red or never run on the base, a PR that changes its own CI config, "+
+			"the cap, a head magnum has not reviewed or whose review leaves work (fix that first), a drain and a low GitHub "+
+			"budget (a CI fix is never held). "+
 			"--dry-run only asks the daemon what would happen.",
 		func(pos []string) int { return runFix(c, o, pos) })
 	fs := cmd.Flags()
 	fs.BoolVar(&o.off, "off", false, "take the PR out of autofix: its findings stay yours (starts no loop)")
 	fs.BoolVar(&o.on, "on", false, "put the PR back into autofix (starts no loop)")
 	fs.BoolVar(&o.done, "done", false, "you did what the fix loop left you: back to reviewed with no review (starts no loop)")
+	fs.BoolVar(&o.ci, "ci", false, "fix your PR's failed required CI (a CI fix, at most 3 a PR; asks y/N with the daemon's plan)")
 	fs.StringArrayVar(&o.decide, "decide", nil, "post your decision in a `thread=reply` the fixer left you, as you, then fix (repeatable)")
 	fs.BoolVar(&o.wait, "wait", false, "follow the loop until it ends: clean, needs you, pushed nothing, aborted or ended")
 	fs.DurationVar(&o.timeout, "timeout", fixDefaultTimeout, "with --wait: stop following after this `duration` (0 = no limit); the loop goes on")
@@ -156,6 +169,8 @@ func runFix(c *Context, o fixOpts, pos []string) int {
 		return actUsage(c, "fix", "--off and --on start no loop, so there is nothing for --wait to follow", fixUsage)
 	case len(o.decide) > 0 && (o.done || o.off || o.on):
 		return actUsage(c, "fix", "--decide goes without --done, --off and --on", fixUsage)
+	case o.ci && (o.done || o.off || o.on || len(o.decide) > 0):
+		return actUsage(c, "fix", "--ci goes alone, without --off, --on, --done or --decide", fixUsage)
 	}
 	if len(o.decide) > 0 {
 		decisions, err := parseDecide(o.decide)
@@ -216,10 +231,13 @@ type fixJSON struct {
 	// Plan is the daemon's plan of a merge of the parent (its answer to
 	// `magnum merge-parent --dry-run`, or to any merge under a daemon run
 	// with --dry-run); Request's result is then the plan's words.
-	Plan  *engine.MergePlan `json:"plan,omitempty"`
-	State string            `json:"state"`
-	End   *fixEnding        `json:"end,omitempty"` // with --wait: how the loop ended
-	Error string            `json:"error,omitempty"`
+	Plan *engine.MergePlan `json:"plan,omitempty"`
+	// CIPlan is the daemon's plan of a CI fix (its answer to `magnum fix
+	// --ci --dry-run`).
+	CIPlan *engine.CIFixPlan `json:"ci_plan,omitempty"`
+	State  string            `json:"state"`
+	End    *fixEnding        `json:"end,omitempty"` // with --wait: how the loop ended
+	Error  string            `json:"error,omitempty"`
 }
 
 // fixProgress is where progress lines go: stdout, or stderr with --json.
@@ -236,6 +254,10 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 		return actUsage(c, o.verb(), "a merge of the parent asks y/N on a terminal, and there is none: pass --yes to merge without asking, "+
 			"or --dry-run to see the plan; nothing queued", o.usage())
 	}
+	if o.ci && !o.dryRun && !o.yes && (!d.StdinTTY || !d.StdoutTTY) {
+		return actUsage(c, o.verb(), "a CI fix asks y/N on a terminal, and there is none: pass --yes to start it without asking, "+
+			"or --dry-run to see the plan; nothing queued", o.usage())
+	}
 	t, err := d.resolveRef(ctx, ref)
 	if err != nil {
 		return cmdFail(c, o.verb(), verbFix(o.verb(), err))
@@ -248,6 +270,9 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 	payload := engine.FixPayload{PRTarget: t.prTarget(), DryRun: o.dryRun, Off: o.off, On: o.on, Decide: o.decisions}
 	if o.merge {
 		payload.Mode, payload.Asked = engine.FixModeMerge, o.asked
+	}
+	if o.ci {
+		payload.Mode, payload.CIAsked = engine.FixModeCI, o.ciAsked
 	}
 	if !o.json {
 		for _, d := range o.decisions { // what goes out as you, before the y/N
@@ -269,7 +294,7 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 		b, _ := json.Marshal(payload)
 		fmt.Fprintf(fixProgress(c, o), "dry run: the daemon is asked what would happen (request %s %s); nothing is changed\n", engine.ReqFix, b)
 	}
-	if t.PR.Pinned && !o.off && !o.on && !o.done && !o.merge {
+	if t.PR.Pinned && !o.off && !o.on && !o.done && !o.merge && !o.ci {
 		fmt.Fprintf(fixProgress(c, o), "%s is pinned: this fix unpins it (a person's changes in its slot still hold the fix)\n", label)
 	}
 	question := ""
@@ -284,6 +309,14 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 		}
 		question = mergeParentQuestion(plan)
 		payload.Asked = &plan.Asked // y binds the merge to what the question named
+	}
+	if o.ci && fixAsks(d, o) && !o.json { // the y/N names the check, the head, the fixer and the count of CI fixes
+		plan, err := ciFixPlan(ctx, c.Stderr, d, payload)
+		if err != nil {
+			return fixFail(c, o, out, err)
+		}
+		question = ciFixQuestion(plan)
+		payload.CIAsked = &plan.Asked // y binds the start to what the question named
 	}
 	if code, ok := fixConfirm(ctx, c, d, label, cmp.Or(fixerLogin(d.Cfg, t.full()), "you"), question, o); !ok {
 		return code
@@ -313,6 +346,11 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 	plan, planned := engine.ParseMergePlan(res.Result())
 	if planned = planned && o.merge && !res.Pending(); planned {
 		out.Plan, rv.Result = &plan, plan.Text
+	}
+	ciPlan, ciPlanned := engine.ParseCIFixPlan(res.Result())
+	if ciPlanned = ciPlanned && o.ci && !res.Pending(); ciPlanned {
+		out.CIPlan, rv.Result, plan.Text = &ciPlan, ciPlan.Text, ciPlan.Text
+		planned = true
 	}
 	if !o.json {
 		if planned {
@@ -441,6 +479,43 @@ func mergeParentPlan(ctx context.Context, ew io.Writer, d *actDeps, payload engi
 		return engine.MergePlan{}, "", errMergePlanPredates
 	}
 	return engine.MergePlan{}, actClean(res.Result()), nil
+}
+
+// ciFixPlan asks the daemon, in a dry run, what a CI fix of payload's PR
+// would do, for its y/N: its plan; a refusal (nothing failed, the base, the
+// cap, …), an answer still pending, or the words of a daemon from before
+// CI fix mode is the error.
+func ciFixPlan(ctx context.Context, ew io.Writer, d *actDeps, payload engine.FixPayload) (engine.CIFixPlan, error) {
+	payload.DryRun = true
+	q := d.quick()
+	q.NeedDaemon = true
+	res, err := d.reqs().send(ctx, engine.ReqFix, payload, q)
+	if err != nil {
+		return engine.CIFixPlan{}, err
+	}
+	if plan, ok := engine.ParseCIFixPlan(res.Result()); ok && res.Req.State == store.RequestDone {
+		return plan, nil
+	}
+	res.printNotes(ew)
+	switch {
+	case res.Failed():
+		return engine.CIFixPlan{}, errors.New(res.Result())
+	case res.Pending():
+		return engine.CIFixPlan{}, fmt.Errorf("the daemon has not planned the CI fix within %s (request %d): ask again later", q.Wait, res.ID())
+	}
+	return engine.CIFixPlan{}, errCIFixPlanPredates
+}
+
+// errCIFixPlanPredates refuses the answer to a dry run of a CI fix that is
+// no plan: a daemon from before CI fix mode, which would start a findings
+// fix of its own.
+var errCIFixPlanPredates = errors.New("this daemon predates the CI fix's plan: restart it (`magnum daemon-restart`), then ask again; nothing queued")
+
+// ciFixQuestion is the y/N of plan: "Fix the failed CI of <PR>: claude-fix
+// fixes required check Completion at a1a1a1a (2 failed jobs) in review1 as
+// fixer-app[bot], CI fix 1 of 3?".
+func ciFixQuestion(plan engine.CIFixPlan) string {
+	return "Fix the failed CI of " + actClean(strings.TrimPrefix(plan.Text, engine.CIFixDry)) + "?"
 }
 
 // errMergePlanPredates refuses the answer to a dry run of a merge of the
