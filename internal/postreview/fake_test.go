@@ -86,6 +86,11 @@ type world struct {
 	// issueAnswerLost: the next comment POST makes the comment and then
 	// fails, as a call whose answer is lost does.
 	issueAnswerLost bool
+	// postAs, when set, is the GraphQL login of the App every reply and
+	// conversation comment is posted as (magnum comment's fixer App): the
+	// comment GitHub adds is the App's, and the answer carries its REST
+	// login as user.login, or answerAs when that is set.
+	postAs, answerAs string
 
 	fake    *execx.Fake
 	sent    []github.ReviewRequest
@@ -344,11 +349,33 @@ func (w *world) postReply(c execx.Cmd, path string) (execx.Result, error) {
 	newID := int64(5000 + len(w.replies))
 	for i, t := range w.threads {
 		if len(t.Comments) > 0 && t.Comments[0].ID == id {
-			w.threads[i].Comments = append(w.threads[i].Comments, bot(newID, req.Body))
+			w.threads[i].Comments = append(w.threads[i].Comments, w.poster(newID, req.Body, bot))
 		}
 	}
-	return ok(map[string]any{"id": newID, "html_url": fmt.Sprintf("https://github.com/talkable/talkable/pull/5#discussion_r%d", newID),
-		"created_at": "2026-10-06T12:30:00Z", "in_reply_to_id": id})
+	return ok(w.answer(map[string]any{"id": newID, "html_url": fmt.Sprintf("https://github.com/talkable/talkable/pull/5#discussion_r%d", newID),
+		"created_at": "2026-10-06T12:30:00Z", "in_reply_to_id": id}))
+}
+
+// poster is the comment GitHub adds for a post: the App's of postAs when
+// it is set, else def's.
+func (w *world) poster(id int64, body string, def func(int64, string) fakeComment) fakeComment {
+	if w.postAs != "" {
+		return fakeComment{ID: id, Author: w.postAs, Bot: true, Body: body}
+	}
+	return def(id, body)
+}
+
+// answer is a post's answer with the poster's user.login when postAs is
+// set.
+func (w *world) answer(a map[string]any) map[string]any {
+	if w.postAs != "" {
+		login, typ := cmpOr(w.answerAs, w.postAs+"[bot]"), "User"
+		if strings.HasSuffix(login, "[bot]") {
+			typ = "Bot"
+		}
+		a["user"] = map[string]any{"login": login, "type": typ}
+	}
+	return a
 }
 
 // listIssueComments answers the conversation's GraphQL list: every comment
@@ -379,10 +406,10 @@ func (w *world) postIssueComment(c execx.Cmd) (execx.Result, error) {
 	}
 	w.issuePosts = append(w.issuePosts, req.Body)
 	newID := int64(7000 + len(w.issuePosts))
-	w.issueComments = append(w.issueComments, human(newID, req.Body))
+	w.issueComments = append(w.issueComments, w.poster(newID, req.Body, human))
 	if w.issueAnswerLost {
 		w.issueAnswerLost = false
 		return apiFail(c, 502, "Bad Gateway")
 	}
-	return ok(map[string]any{"id": newID, "html_url": fmt.Sprintf("https://github.com/talkable/talkable/pull/5#issuecomment-%d", newID)})
+	return ok(w.answer(map[string]any{"id": newID, "html_url": fmt.Sprintf("https://github.com/talkable/talkable/pull/5#issuecomment-%d", newID)}))
 }
