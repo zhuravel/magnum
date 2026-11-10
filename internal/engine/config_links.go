@@ -341,7 +341,7 @@ func (r *linkResolver) imports(files []string, isConfig func(string) (string, bo
 	at := map[string]int{}
 	for _, f := range files { // the tree's every file, which the listing's cap bounds: only a source is a step
 		label, ok := steers(f)
-		for _, l := range r.via[foldKey(f)] { // a link of the walk that leads to f: Claude reads f by l
+		for _, l := range r.via[agents.LooseFold(f)] { // a link of the walk that leads to f: Claude reads f by l
 			if ok {
 				break
 			}
@@ -503,8 +503,9 @@ func coveredBy(covers map[string]string, f string) (string, bool) {
 
 // dirsOf are the directories an import in f is resolved from: those of
 // each path Claude may read f by, f itself and, for each link the walk
-// followed to f or to a directory above it (or to the root), the link's
-// path with the rest of f's, and so on for that path's own links
+// followed to f or to a directory above it (or to the root, or to a path
+// a case-insensitive filesystem may open for one: agents.LooseFold), the
+// link's path with the rest of f's, and so on for that path's own links
 // (.claude/rules -> ../shared/rules, shared/rules/api.md -> ../../x.txt:
 // x.txt is read as .claude/rules/api.md). Each path counts a step.
 func (r *linkResolver) dirsOf(f string) []string {
@@ -514,7 +515,7 @@ func (r *linkResolver) dirsOf(f string) []string {
 		q := paths[i]
 		for t := q; ; {
 			rest := strings.TrimPrefix(q[len(t):], "/")
-			for _, l := range r.via[foldKey(t)] {
+			for _, l := range r.via[agents.LooseFold(t)] {
 				a := l
 				if rest != "" {
 					a += "/" + rest
@@ -570,7 +571,7 @@ type linkResolver struct {
 	keys   []string            // byFold's keys, sorted: the links under a path are a run of them (under)
 	out    map[string]string   // target -> label
 	walked map[string]bool     // the targets whose links below were followed
-	via    map[string][]string // foldKey of a target -> the links that lead to it (dirsOf)
+	via    map[string][]string // agents.LooseFold of a target -> the links that lead to it (dirsOf)
 	steps  int
 	err    error // errLinksTooMany, or the context's: the walk stopped
 }
@@ -635,7 +636,7 @@ func (r *linkResolver) follow(l, label string) {
 				return
 			}
 			r.add(t, label)
-			if k := foldKey(t); !slices.Contains(r.via[k], l) {
+			if k := agents.LooseFold(t); !slices.Contains(r.via[k], l) {
 				r.via[k] = append(r.via[k], l)
 			}
 			if r.walked[t] {

@@ -471,3 +471,83 @@ func TestALongPathStaysWithinTheWalksBudget(t *testing.T) {
 		})
 	}
 }
+
+// countingRead is treeOf's read that counts how often each path is asked.
+func countingRead(files map[string]string) (func([]string) (map[string]string, error), map[string]int) {
+	asks := map[string]int{}
+	_, read := treeOf(files, nil)
+	return func(paths []string) (map[string]string, error) {
+		for _, p := range paths {
+			asks[p]++
+		}
+		return read(paths)
+	}, asks
+}
+
+// What the walk reads of a tree's files, and how: a source is read once
+// however many hops reach it; every linkBytesPerStep bytes read is a step
+// (fifty instruction files of 8 MiB, each within the budget, pass it
+// together); a file whose readings ImportPaths cannot all compare within
+// its bound fails as one of too many imports; an import is resolved as
+// the filesystem walks dir/imp (lib/../x.md through lib -> a/b/shared is
+// a/b/x.md) and from each path a file is read by, through each link on the
+// way (pkg/.claude -> ../.claude, then .claude/rules -> ../shared/rules:
+// shared/rules/api.md is read as pkg/.claude/rules/api.md), one a
+// case-insensitive filesystem opens for a link's target among them
+// (a/b/ruleſ for a/b/rules).
+func TestTheWalkReadsTheTreesFilesAsClaudeDoes(t *testing.T) {
+	kinds := defaultKinds()
+	isConfig := func(p string) (string, bool) { return agentConfigPath(kinds, p) }
+	resolve := func(files, links map[string]string, read func([]string) (map[string]string, error)) (map[string]string, error) {
+		tree, plain := treeOf(files, links)
+		if read == nil {
+			read = plain
+		}
+		return resolveConfigTargets(context.Background(), tree, isConfig, read)
+	}
+
+	t.Run("a source reached on two hops is read once", func(t *testing.T) {
+		files := map[string]string{"AGENTS.md": "@a.md @b.md\n", "a.md": "@b.md\n", "b.md": "@c.md\n"}
+		read, asks := countingRead(files)
+		if got, err := resolve(files, nil, read); err != nil || got["c.md"] != "AGENTS.md" || asks["b.md"] != 1 {
+			t.Fatalf("resolveConfigTargets = %q, %v; b.md asked %d times, want once", got, err, asks["b.md"])
+		}
+	})
+	t.Run("bytes read count against the budget", func(t *testing.T) {
+		big := strings.Repeat("no imports in this line\n", (8<<20)/24)
+		files := map[string]string{}
+		for i := range 50 {
+			files[fmt.Sprintf("d%d/CLAUDE.md", i)] = big
+		}
+		if _, err := resolve(files, nil, nil); !errors.Is(err, errLinksTooMany) {
+			t.Fatalf("fifty instruction files of 8 MiB: %v, want errLinksTooMany", err)
+		}
+	})
+	t.Run("a file of more readings than ImportPaths compares", func(t *testing.T) {
+		files := map[string]string{"AGENTS.md": "@" + strings.Repeat("a*", 1<<20) + "\n"}
+		if _, err := resolve(files, nil, nil); !errors.Is(err, errLinksTooMany) {
+			t.Fatalf("resolveConfigTargets = %v, want errLinksTooMany", err)
+		}
+	})
+	t.Run("an import resolved as the filesystem walks it", func(t *testing.T) {
+		files := map[string]string{"AGENTS.md": "@lib/../x.md\n"}
+		if got, err := resolve(files, map[string]string{"lib": "a/b/shared"}, nil); err != nil || got["a/b/x.md"] != "AGENTS.md" ||
+			got["x.md"] != "AGENTS.md" {
+			t.Fatalf("resolveConfigTargets = %q, %v; want a/b/x.md and x.md", got, err)
+		}
+	})
+	t.Run("a file read through two links on the way", func(t *testing.T) {
+		files := map[string]string{"shared/rules/api.md": "@../../../x.md\n"}
+		links := map[string]string{".claude/rules": "../shared/rules", "pkg/.claude": "../.claude"}
+		if got, err := resolve(files, links, nil); err != nil || got["x.md"] != ".claude/rules" {
+			t.Fatalf("resolveConfigTargets = %q, %v; want x.md, read as pkg/.claude/rules/api.md", got, err)
+		}
+	})
+	t.Run("a file the filesystem opens for a link's target", func(t *testing.T) {
+		files := map[string]string{"a/b/ruleſ/api.md": "@../../x.md\n"}
+		got, err := resolve(files, map[string]string{".claude/rules": "../a/b/rules"}, nil)
+		if err != nil || got["x.md"] != ".claude/rules" || got["a/x.md"] != ".claude/rules" {
+			t.Fatalf("resolveConfigTargets = %q, %v; want x.md (read as .claude/rules/api.md) and a/x.md", got, err)
+		}
+	})
+}
