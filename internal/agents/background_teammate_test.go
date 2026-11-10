@@ -448,7 +448,7 @@ func TestATeammateWatchReadsABoundedPartOfItsTranscriptPerReading(t *testing.T) 
 		if n := r.read.Load() - before; n > mateRead+int64(len(long))+transcriptChunk {
 			t.Fatalf("reading %d read %d bytes, want about %d at most (and the long line)", readings, n, mateRead)
 		}
-		if !w.atWork() {
+		if !w.atWork(t0) {
 			t.Fatalf("reading %d: not at work, want at work (behind %v, tasks %v)", readings, w.behind, w.tasks)
 		}
 		if !w.behind {
@@ -472,7 +472,7 @@ func TestATeammateWatchReadsABoundedPartOfItsTranscriptPerReading(t *testing.T) 
 	if n := r.read.Load(); n > int64(len(more)) {
 		t.Fatalf("read %d bytes, want only the %d appended", n, len(more))
 	}
-	if w.atWork() {
+	if w.atWork(t0) {
 		t.Fatalf("at work after the launch's notification and its answer (tasks %v, in turn %v)", w.tasks, w.inTurn)
 	}
 }
@@ -525,7 +525,7 @@ func TestATeammatesTurnEndsOnlyWhereClaudeCodeWaitsForItsNextPrompt(t *testing.T
 				tline{"type": "file-history-snapshot", "agentId": mateA})
 			w := newMateWatch()
 			w.readSide(bytes.NewReader(data), int64(len(data)))
-			if got := w.atWork(); got != tc.atWork {
+			if got := w.atWork(t0); got != tc.atWork {
 				t.Fatalf("at work = %v, want %v", got, tc.atWork)
 			}
 		})
@@ -892,4 +892,150 @@ func TestAnotherSessionsMessageIsNoPromptTypedIntoThePane(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A prompt the operator types stays a human's when it quotes another
+// session's message: Claude Code's origin for it (human) decides, and with
+// no origin (an older Claude Code) the text is such a message only when it
+// starts with one. The review daemon's human activity (ObsHumanActive) and
+// ClaudeUserTurns read it as the operator's.
+func TestAPromptTheOperatorTypesThatQuotesAnotherSessionsMessageIsHuman(t *testing.T) {
+	quoted := "Why did the drafts teammate say this?\n" + teammateMessageText
+	for _, tc := range []struct {
+		name   string
+		prompt func(at time.Time) tline
+		text   string
+	}{
+		{"with its origin, quoting a teammate's message", func(at time.Time) tline { return humanPrompt(at, quoted) }, quoted},
+		{"with its origin, starting with a teammate's message", func(at time.Time) tline {
+			return humanPrompt(at, teammateMessageText+"\nIs this right?")
+		}, teammateMessageText + "\nIs this right?"},
+		{"with its origin, starting with a cross-session message", func(at time.Time) tline {
+			return humanPrompt(at, crossSessionMessageText+"\nAnswer it.")
+		}, crossSessionMessageText + "\nAnswer it."},
+		{"with no origin, quoting a teammate's message", func(at time.Time) tline { return userPrompt(at, quoted) }, quoted},
+		{"with no origin, quoting a cross-session message", func(at time.Time) tline {
+			return userPrompt(at, "See below.\n"+crossSessionMessageText)
+		}, "See below.\n" + crossSessionMessageText},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			tr := e.claudeTranscript()
+			id := e.promptClaude()
+			now := e.clock.Now()
+			tr.add(humanPrompt(now, "/code-review https://github.com/talkable/talkable/pull/11920 high"),
+				assistantSays(now.Add(time.Second), "Report written."), turnEnded(now.Add(time.Second)))
+			if o := e.idleTicks(2); o.Kind != ObsCompleted || o.Run == nil || o.Run.ID != id {
+				t.Fatalf("run = %+v, want completed", o)
+			}
+
+			e.clock.Add(10 * time.Minute) // well past the grace after magnum's last prompt
+			at := e.clock.Now()
+			tr.add(tc.prompt(at), toolUse(at.Add(time.Second), "toolu_look1", "Bash", map[string]any{"command": "git log -1"}))
+			e.h.setAgentStatus(claudeAgent, herdr.StatusWorking)
+			if o, pr := e.observe()[RoleClaude], e.reloadPR(); o.Kind != ObsHumanActive || pr.HumanActiveAt == nil {
+				t.Fatalf("observation %q, human_active_at %v; want human activity", o.Kind, pr.HumanActiveAt)
+			}
+			turns, err := ClaudeUserTurns(tr.path, at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(turns) != 1 || turns[0].Text != tc.text {
+				t.Fatalf("ClaudeUserTurns = %+v, want the operator's prompt", turns)
+			}
+		})
+	}
+}
+
+// monitorTimeout is the timeout monitorStarted gives a Monitor (its
+// timeoutMs).
+const monitorTimeout = 15 * time.Minute
+
+// A Monitor whose notifications never come (none of its stream's end, none
+// at its expiry) holds the run no longer than its timeout and
+// monitorGrace past its result, the lead's and a teammate's alike: the
+// notification is its usual end, the bound is the last.
+func TestAMonitorHoldsTheRunNoLongerThanItsTimeoutAndAGrace(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		start func(e *env, tr *transcript, at time.Time) (result time.Time)
+	}{
+		{"the agent's", func(e *env, tr *transcript, at time.Time) time.Time {
+			tr.addAll(monitorStarted(at, "toolu_mon1", "bmon1", false))
+			tr.add(assistantSays(at.Add(2*time.Second), "Waiting for the spec run."), turnEnded(at.Add(2*time.Second)))
+			return at.Add(time.Second)
+		}},
+		{"a teammate's", func(e *env, tr *transcript, at time.Time) time.Time {
+			tr.addAll(teammateSpawned(at, "toolu_mate1", mateA))
+			mt := tr.teammate(mateA)
+			mt.add(mateMail(at, mateA))
+			mt.addAll(mates(mateA, monitorStarted(at.Add(time.Second), "toolu_mon1", "bmon1", false)), mateDone(at.Add(3*time.Second), mateA))
+			leadIdle(tr, at.Add(4*time.Second))
+			return at.Add(2 * time.Second)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			tr := e.claudeTranscript()
+			id := e.promptClaude()
+			now := e.clock.Now()
+			tr.add(userPrompt(now, "review"))
+			end := tc.start(e, tr, now.Add(time.Second)).Add(monitorTimeout + monitorGrace)
+			e.heldFor(1, 1, "while the Monitor watches")
+			e.clock.Add(end.Sub(e.clock.Now()) - 40*time.Second)
+			e.heldFor(1, 1, "just before the Monitor's bound")
+			e.ends(id, "past the Monitor's timeout and grace")
+		})
+	}
+}
+
+// At most maxMates teammates are watched per run: a further spawn holds
+// nothing, however busy its transcript, so the readings of one observe
+// pass stay bounded.
+func TestObserveWatchesAtMostSixteenTeammatesPerRun(t *testing.T) {
+	e := newEnv(t)
+	tr := e.claudeTranscript()
+	id := e.promptClaude()
+	now := e.clock.Now()
+	tr.add(userPrompt(now, "build it"))
+	for i := range 17 {
+		agent := fmt.Sprintf("amate%02d-0123456789abcdef", i)
+		tr.addAll(teammateSpawned(now.Add(time.Duration(i)*time.Second), fmt.Sprintf("toolu_mate%02d", i), agent))
+		mt := tr.teammate(agent)
+		mt.addAll(mateWorks(now.Add(20*time.Second), agent, "toolu_m1"))
+		if i < 16 {
+			mt.addAll(mateDone(now.Add(21*time.Second), agent))
+		}
+	}
+	leadIdle(tr, now.Add(22*time.Second))
+	if p := e.m.BackgroundProgress(e.ctx, e.run1(id)); strings.Count(p, ":") != 16 || strings.Contains(p, "amate16") {
+		t.Fatalf("BackgroundProgress = %q, want the first 16 teammates", p)
+	}
+	e.ends(id, "with the 17th teammate at work")
+}
+
+// A teammate's own teammates are never watched: a spawn's result in a
+// teammate's transcript is neither a teammate nor a task of its watch, so
+// it holds nothing.
+func TestATeammatesOwnTeammatesAreNotWatched(t *testing.T) {
+	w := newMateWatch()
+	for _, l := range mates(mateA, teammateSpawned(t0, "toolu_nested1", mateB)) {
+		w.apply(mustJSON(t, l))
+	}
+	if len(w.mates) != 0 || len(w.tasks) != 0 {
+		t.Fatalf("a teammate's watch after its own spawn: mates %v, tasks %v; want none", w.mates, w.tasks)
+	}
+
+	e := newEnv(t)
+	tr := e.claudeTranscript()
+	id := e.promptClaude()
+	now := e.clock.Now()
+	tr.add(userPrompt(now, "build it"))
+	tr.addAll(teammateSpawned(now.Add(time.Second), "toolu_mate1", mateA))
+	mt := tr.teammate(mateA)
+	mt.add(mateMail(now.Add(2*time.Second), mateA))
+	mt.addAll(mates(mateA, teammateSpawned(now.Add(3*time.Second), "toolu_nested1", mateB)), mateDone(now.Add(5*time.Second), mateA))
+	tr.teammate(mateB).addAll(mateWorks(now.Add(4*time.Second), mateB, "toolu_m1")) // where its transcript would be
+	leadIdle(tr, now.Add(6*time.Second))
+	e.ends(id, "with only a teammate's own teammate at work")
 }

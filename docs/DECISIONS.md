@@ -4712,54 +4712,68 @@ skill versions); people add theirs to the sections before it, at the end of the 
   launch shapes) that nothing ever finished, so a writer whose two teammates had ended their last turns at
   17:23Z and 17:56Z held its run from its own turn's end at 18:17Z until the watchdog's nudge (a Tell) at
   18:31Z. A spawn's result is now a teammate (its agent id, the result's stamp and a watch of its own) and no
-  task. Every reading (`backgroundWait`, and `BackgroundTasks`, which the pipeline reads, so both see one
-  number) reads on in each teammate's own transcript, `<the lead's transcript dir>/<session
-  id>/subagents/agent-<agentId>.jsonl`, from its start (it begins at the spawn) and outside the lead's offset
-  (the lead's transcript stays the same while a teammate works), the way the lead's is read with its sidechain
-  entries taken: about 1 MiB per reading at most (a longer line whole, once), and a teammate whose readings are
-  behind counts as at work. A teammate is at work while its last user or assistant entry leaves a turn in
-  progress, its own background work has not finished, or a notification it got is not answered; it counts as one
-  background task in the count and in the `agent.background_wait` event ("waiting for 2 background tasks"). A
-  turn ends on an assistant entry whose stop_reason is `end_turn`, `stop_sequence` or `refusal`, or that Claude
-  Code wrote itself for an API error (`isApiErrorMessage`); a user entry, and an assistant entry stopped on
-  `tool_use`, `pause_turn` or `max_tokens` or with no stop_reason, is a turn in progress, since Claude Code goes
-  on (or may) after it: an end read as work holds the run until Tell, work read as an end lets the factory check
-  a half-written change. A missing transcript holds for 2 minutes from the spawn's result (Claude Code may
-  create it late); one that cannot be read holds nothing; an agent id that is not one path segment (empty, `.`,
-  `..`, a slash, a backslash or a NUL) holds nothing and names no file. A `<task-notification>` or a TaskStop
-  naming the agent id or the spawn's tool use ends a teammate, and Tell releases it, as for tasks.
-  `BackgroundProgress` (the teammates' agent ids and transcript sizes) changes whenever a teammate's transcript
-  grows, for the factory watchdog to tell a lead waiting on its teammates from a stuck one; this change does not
-  use it. A Monitor whose result is `{taskId, timeoutMs, persistent: false}` is now a background task, the
-  lead's or a teammate's: each event notifies the agent (an `<event>` and no status), which must answer it,
-  without ending the task, and the notification of its stream's end does; a persistent one watches for the whole
-  session and is none (it would hold the run until Tell). Before, no Monitor was, so a lead that ended its turn
-  waiting on one ended its run. A message another Claude session sent is no prompt typed into the pane: a
-  teammate's reaches the lead as a user entry with no origin, "Another Claude session sent a message:" and a
-  `<teammate-message>` (the live writer's lead got one at 18:17:28Z), a peer's as one with origin and turnOrigin
-  `peer`, or as a queued command with origin `peer` taken into the turn, around a `<cross-session-message>` or
-  an `<agent-message>`. `notTyped` (formerly `fromNotification`) takes them for nobody's typing by those tags or
-  by the peer origin, so with no run in flight the turn one begins is no human activity (humanTurn), it is no
-  typing during a run (TypedDuringRun, the fix job's settle), and ClaudeUserTurns and ClaudeQueuedTurns (the
-  factory's count of your messages) leave it out. Rejected: dropping teammates from the hold entirely, since a
-  lead that ends its turn while its teammates still edit files would let the factory check a half-written
-  change; and the first version, which read only the last 256 KiB of a teammate's transcript and its last user
-  or assistant entry, so a teammate that ended its turn to wait on its own specs read as idle (the review's
-  probe) and a result line over 256 KiB (a screenshot's Read) hid a turn in progress. Gaps: a teammate an
-  earlier run spawned is not read when this run's SendMessage wakes it (its spawn is before the run), nor is a
-  teammate that a background subagent or a teammate spawned (its spawn is a sidechain entry of another thread);
-  the factory watchdog's signature still reads only the lead (`BackgroundProgress` prepares it, another change
-  uses it); a teammate shut down mid-turn holds the run until Tell. Tests, failing first by assertion:
-  TestObserveIsNotHeldByATeammateWhoseTurnEnded, TestObserveHoldsTheRunWhileATeammateWorks,
+  task. A run's watch watches at most 16 teammates: a further spawn holds nothing, so one observe pass reads a
+  bounded number of files. A teammate's own teammates are never watched (a spawn's result in a teammate's
+  transcript is neither a teammate nor a task of its watch). Every reading (`backgroundWait`, and
+  `BackgroundTasks`, which the pipeline reads, so both see one number) reads on in each teammate's own
+  transcript, `<the lead's transcript dir>/<session id>/subagents/agent-<agentId>.jsonl`, from its start (it
+  begins at the spawn) and outside the lead's offset (the lead's transcript stays the same while a teammate
+  works), the way the lead's is read with its sidechain entries taken: about 1 MiB per reading at most (a longer
+  line whole, once), and a teammate whose readings are behind counts as at work. A teammate is at work while its
+  last user or assistant entry leaves a turn in progress, its own background work has not finished, or a
+  notification it got is not answered; it counts as one background task in the count and in the
+  `agent.background_wait` event ("waiting for 2 background tasks"). A turn ends on an assistant entry whose
+  stop_reason is `end_turn`, `stop_sequence` or `refusal`, or that Claude Code wrote itself for an API error
+  (`isApiErrorMessage`); a user entry, and an assistant entry stopped on `tool_use`, `pause_turn` or
+  `max_tokens` or with no stop_reason, is a turn in progress, since Claude Code goes on (or may) after it: an
+  end read as work holds the run until Tell, work read as an end lets the factory check a half-written change. A
+  missing transcript holds for 2 minutes from the spawn's result (Claude Code may create it late); one that
+  cannot be read holds nothing; an agent id that is not one path segment (empty, `.`, `..`, a slash, a backslash
+  or a NUL) holds nothing and names no file. A `<task-notification>` or a TaskStop naming the agent id or the
+  spawn's tool use ends a teammate, and Tell releases it, as for tasks. `BackgroundProgress` (the teammates'
+  agent ids and transcript sizes) changes whenever a teammate's transcript grows, for the factory watchdog to
+  tell a lead waiting on its teammates from a stuck one; this change does not use it. A Monitor whose result is
+  `{taskId, timeoutMs, persistent: false}` is now a background task, the lead's or a teammate's: each event
+  notifies the agent (an `<event>` and no status), which must answer it, without ending the task, and the
+  notification of its stream's end does (the live one names its tool use and task, status completed); a
+  notification that never comes holds the run no longer than the result's stamp plus its timeoutMs plus 2
+  minutes; a persistent one watches for the whole session and is none (it would hold the run until Tell).
+  Before, no Monitor was, so a lead that ended its turn waiting on one ended its run. A message another Claude
+  session sent is no prompt typed into the pane: a teammate's reaches the lead as a user entry with no origin,
+  "Another Claude session sent a message:" and a `<teammate-message>` (the live writer's lead got one at
+  18:17:28Z), a peer's as one with origin and turnOrigin `peer`, or as a queued command with origin `peer` taken
+  into the turn, around a `<cross-session-message>` or an `<agent-message>`. `notTyped` (formerly
+  `fromNotification`) takes Claude Code's own record first: a turnOrigin, an origin.kind or a commandMode
+  decides (`peer` and the task notification's are nobody's typing, `human` is the operator's, and isMeta entries
+  start no turn). Only an entry with none of them, as 2.1.322 writes a teammate's message (its `turnPosition`
+  does not move to a new prompt, but that field is too new to lean on), is read by its text, and only by what it
+  starts with past blanks: the line "Another Claude session sent a message:" and a `<teammate-message`,
+  `<cross-session-message` or `<agent-message` tag, or the tag alone (a queued message's enqueue line). A prompt
+  the operator types that quotes such a message stays the operator's: by its origin, and with no origin when the
+  quote is not at its start. So with no run in flight the turn a message from another session begins is no human
+  activity (humanTurn), it is no typing during a run (TypedDuringRun, the fix job's settle), and ClaudeUserTurns
+  and ClaudeQueuedTurns (the factory's count of your messages) leave it out. Rejected: dropping teammates from
+  the hold entirely, since a lead that ends its turn while its teammates still edit files would let the factory
+  check a half-written change; and the first version, which read only the last 256 KiB of a teammate's
+  transcript and its last user or assistant entry, so a teammate that ended its turn to wait on its own specs
+  read as idle (the review's probe) and a result line over 256 KiB (a screenshot's Read) hid a turn in progress.
+  Gaps: a teammate an earlier run spawned is not read when this run's SendMessage wakes it (its spawn is before
+  the run), nor is a teammate that a background subagent or a teammate spawned (its spawn is a sidechain entry
+  of another thread); the factory watchdog's signature still reads only the lead (`BackgroundProgress` prepares
+  it, another change uses it); a teammate shut down mid-turn holds the run until Tell. Tests, failing first by
+  assertion: TestObserveIsNotHeldByATeammateWhoseTurnEnded, TestObserveHoldsTheRunWhileATeammateWorks,
   TestBackgroundWaitCountsTeammatesAtWorkWithTheTasks,
   TestObserveHoldsTheRunForAMissingTeammateFileOnlyWithinItsGrace,
   TestObserveATeammateWhoseAgentIDIsNoFileNameHoldsNothing, TestObserveATeammateFileItCannotReadHoldsNothing,
   TestBackgroundTasksCountsATeammateAtWorkAndNotAnIdleOne, TestObserveHoldsTheRunAgainWhenAnIdleTeammateWakes,
   TestObserveStopsHoldingForATeammateItsNotificationOrStopNames (its agent-id cases), and in the fix round
   TestObserveHoldsTheRunWhileATeammateWaitsOnItsOwnBackgroundWork (the review's probe),
-  TestObserveHoldsTheRunWhileAMonitorItStartedWatches (all but its persistent case) and
-  TestAnotherSessionsMessageIsNoPromptTypedIntoThePane;
-  TestObserveHoldsTheRunWhileATeammateRunsAForegroundCommand and
+  TestObserveHoldsTheRunWhileAMonitorItStartedWatches (all but its persistent case),
+  TestAnotherSessionsMessageIsNoPromptTypedIntoThePane,
+  TestAPromptTheOperatorTypesThatQuotesAnotherSessionsMessageIsHuman (its cases that start with a quoted
+  message; those that quote one further on guard the anchor),
+  TestAMonitorHoldsTheRunNoLongerThanItsTimeoutAndAGrace, TestObserveWatchesAtMostSixteenTeammatesPerRun and
+  TestATeammatesOwnTeammatesAreNotWatched; TestObserveHoldsTheRunWhileATeammateRunsAForegroundCommand and
   TestATeammatesTurnEndsOnlyWhereClaudeCodeWaitsForItsNextPrompt pin the ends of a turn (an assistant entry that
   means idle, or a null stop_reason that does, fails them),
   TestATeammateWatchReadsABoundedPartOfItsTranscriptPerReading the bounded incremental read (a whole read fails
