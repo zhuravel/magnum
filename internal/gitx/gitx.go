@@ -658,8 +658,14 @@ func (c *Client) namesBetween(ctx context.Context, dir, from, to string, specs [
 }
 
 // AnyDir is the prefix of a path that names a file in any directory of
-// the repository, its top included ("**/CLAUDE.md"; pathspecs).
+// the repository, its top included ("**/CLAUDE.md"; pathspecs), or, with
+// AnyDirTree after the name, every file under a directory of that name
+// in any directory ("**/.claude/**").
 const AnyDir = "**/"
+
+// AnyDirTree follows a name after AnyDir for the files under a directory
+// of that name in any directory (pathspecs).
+const AnyDirTree = "/**"
 
 // pathspecs are paths as pathspecs from the repository's top, matched in
 // any (ASCII) case: on a case-insensitive filesystem, macOS's default, a
@@ -670,7 +676,9 @@ const AnyDir = "**/"
 // followed by a name (no "/"; git's glob wildcards apply) matches every
 // file of that name in any directory, the top included (git's glob
 // magic: Claude Code loads the CLAUDE.md of each directory it reads files
-// in). At least one path, none empty.
+// in), and one with AnyDirTree after the name every file under a
+// directory of that name in any directory (Claude Code loads the skills of
+// a .claude/skills/ below the root). At least one path, none empty.
 func pathspecs(paths []string) ([]string, error) {
 	if len(paths) == 0 || slices.Contains(paths, "") {
 		return nil, errors.New("gitx: the comparison needs a path")
@@ -678,11 +686,12 @@ func pathspecs(paths []string) ([]string, error) {
 	specs := make([]string, len(paths))
 	for i, p := range paths {
 		name, nested := strings.CutPrefix(p, AnyDir)
+		base := strings.TrimSuffix(name, AnyDirTree)
 		switch {
 		case !nested:
 			specs[i] = ":(top,literal,icase)" + p
-		case name == "" || strings.Contains(name, "/"):
-			return nil, fmt.Errorf("gitx: %q must name a file after %s", p, AnyDir)
+		case base == "" || strings.Contains(base, "/"):
+			return nil, fmt.Errorf("gitx: %q must name a file or a directory (%s) after %s", p, AnyDirTree, AnyDir)
 		default:
 			specs[i] = ":(top,icase,glob)" + p
 		}

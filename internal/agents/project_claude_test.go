@@ -64,7 +64,7 @@ func TestClaudeOfAPRChangingClaudeConfigLoadsOnlyTheUserSettings(t *testing.T) {
 			t.Fatalf("resume %q: args = %q\nwant %q", resume, got, want)
 		}
 		if calls := e.run.CallsWithPrefix("git", "-C", dir, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", projectMergeBase, "--",
-			":(top,literal,icase).claude", ":(top,literal,icase).mcp.json"); len(calls) != 1 {
+			":(top,literal,icase).claude", ":(top,icase,glob)**/.claude", ":(top,icase,glob)**/.claude/**", ":(top,literal,icase).mcp.json"); len(calls) != 1 {
 			t.Fatalf("diff calls = %v", e.run.Calls)
 		}
 		evs := claudeProjectEvents(t, e)
@@ -397,7 +397,9 @@ func TestClaudeProjectPathsMatchInAnyCase(t *testing.T) {
 					specs = append(specs, ":(top,literal,icase)"+top)
 				}
 			}
-			specs = append(specs, ":(top,literal,icase).mcp.json")
+			// A .claude/ in any directory (the entry itself, and what lies
+			// under it).
+			specs = append(specs, ":(top,icase,glob)**/.claude", ":(top,icase,glob)**/.claude/**", ":(top,literal,icase).mcp.json")
 			if _, ok := c.files[longS]; ok {
 				specs = append(specs, ":(top,literal,icase)"+longS)
 			}
@@ -417,7 +419,9 @@ func TestClaudeProjectPathsMatchInAnyCase(t *testing.T) {
 // Codex too opens a .Codex/config.toml for .codex/config.toml on macOS: a
 // PR adding one untrusts the checkout. A PR's file list names the project
 // config in any case, so the engine parks a Claude session before such a
-// head too; a longer name is another path.
+// head too; a longer name is another path, and so is a .mcp.json below the
+// root (Claude reads its root's; a .claude/ below it is Claude's config:
+// TestAClaudeDirectoryBelowTheRootIsClaudesProjectConfig).
 func TestCodexProjectAndThePRsFileListMatchInAnyCase(t *testing.T) {
 	e, dir, ws := projectEnv(t, map[string]string{".Codex/config.toml": "[mcp_servers.evil]\n"}, []string{".Codex/config.toml"}, nil)
 	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], ""); err != nil {
@@ -436,7 +440,7 @@ func TestCodexProjectAndThePRsFileListMatchInAnyCase(t *testing.T) {
 			}
 		}
 	}
-	for _, p := range []string{".claudex/settings.json", "app/.claude/settings.json", ".mcp.json.bak", ".MCP.JSON/x"} {
+	for _, p := range []string{".claudex/settings.json", "app/.claudex/settings.json", ".mcp.json.bak", ".MCP.JSON/x", "app/.mcp.json"} {
 		if ProjectTouched(KindClaude, []string{p}) {
 			t.Errorf("%s touches no Claude project config", p)
 		}

@@ -77,7 +77,10 @@ type projectPath struct {
 	name string
 	dir  bool // a directory; else a file (one of the other type is not loaded)
 	// anyDir: a file of that name in any directory below the root too
-	// (Claude Code loads the CLAUDE.md of each directory it reads files in).
+	// (Claude Code loads the CLAUDE.md of each directory it reads files in),
+	// or, for a directory, one of that name in any directory and what lies
+	// under it (Claude Code loads the skills of a .claude/skills/ below the
+	// root the first time it reads a file there).
 	anyDir bool
 	// docs: an instruction file (AGENTS.md, CLAUDE.md), which the kind's
 	// project_docs_off keeps out on its own.
@@ -120,7 +123,12 @@ var projectConfigs = map[string]projectConfig{
 	// permissions), .claude/settings.local.json, the skills, commands,
 	// agents and rules under .claude/ and .mcp.json from the directory it
 	// starts in, and walks up to the repository root for skills, commands
-	// and agents; magnum starts at the checkout's root. It watches the
+	// and agents; magnum starts at the checkout's root. A .claude/skills/
+	// below it loads the first time the session reads or edits a file in
+	// that directory (code.claude.com/docs skills "Load skills in monorepos
+	// and subdirectories"), and a skill's frontmatter can declare hooks, so
+	// a .claude/ in any directory is its config (anyDir); .mcp.json and the
+	// settings load from the start directory only. It watches the
 	// settings files and skills and applies a change (hooks included) to
 	// the running session, a .claude/settings.json created later too
 	// (code.claude.com/docs settings "When edits take effect"). 2.1.292
@@ -132,7 +140,7 @@ var projectConfigs = map[string]projectConfig{
 	KindClaude: {
 		cli:     "Claude",
 		reloads: true,
-		paths: []projectPath{{name: ".claude", dir: true}, {name: ".mcp.json"},
+		paths: []projectPath{{name: ".claude", dir: true, anyDir: true}, {name: ".mcp.json"},
 			{name: "CLAUDE.md", anyDir: true, docs: true}, {name: "CLAUDE.local.md", anyDir: true, docs: true},
 			{name: "AGENTS.md", anyDir: true, docs: true}},
 		kept: "the session loads the user's settings only (none of the checkout's settings, hooks, MCP servers, skills, " +
@@ -343,7 +351,8 @@ func projectBase(pr store.PR, repo store.Repo, base string) string {
 // diskPaths are what git compares for one checkout (projectConfig.onDisk).
 type diskPaths struct {
 	// git: each path (a path in any directory as gitx.AnyDir and its
-	// globName), each root entry folding to one, and each link target.
+	// globName, a directory's with gitx.AnyDirTree too), each root entry
+	// folding to one, and each link target.
 	git []string
 	// links: the target, relative to the root, of each symbolic link into
 	// the checkout that a path at the root is, or that lies under a
@@ -366,9 +375,10 @@ const maxLinkWalk = 10000
 // filesystem (macOS's, which folds Unicode too) opens for it and git's
 // ASCII-only icase pathspec would not always match (gitx.WorkTreeChanges
 // compares each by its own name); a path in any directory as a glob
-// (gitx.AnyDir, globName); the target of a root entry that is a symbolic
-// link into the checkout (a CLAUDE.md linking to AGENTS.md loads the PR's
-// AGENTS.md: the CLIs follow links); and the target of each link into the
+// (gitx.AnyDir, globName; a directory's with what lies under it); the
+// target of a root entry that is a symbolic link into the checkout (a
+// CLAUDE.md linking to AGENTS.md loads the PR's AGENTS.md: the CLIs follow
+// links); and the target of each link into the
 // checkout under a directory path (.claude/skills -> ../.agents/skills,
 // linkWalk). present reports whether one of them is there as its path's
 // type (a directory for .claude) or cannot be told, and, for a path in any
@@ -425,7 +435,7 @@ func (pc projectConfig) onDisk(dir string) (d diskPaths, present bool) {
 		}
 		if p.anyDir {
 			present = present || !errors.Is(rerr, fs.ErrNotExist)
-			found = append(found, gitx.AnyDir+globName(p.name))
+			found = append(found, p.anyDirSpecs()...)
 		}
 		d.git = append(append(d.git, found...), targets...)
 	}
@@ -584,7 +594,9 @@ func underTarget(f, t string) bool {
 // case-insensitive filesystem (macOS's) opens .Claude/settings.json or
 // .mcp.jſon for .claude/settings.json or .mcp.json. Nothing lies under a
 // file's path; a path in any directory (anyDir) matches f's base name
-// there too.
+// there too, and a directory's matches the first directory of f below the
+// root of its name (packages/web/.claude/skills/x/SKILL.md lies under
+// .claude/, the rest skills/x/SKILL.md).
 func (pc projectConfig) pathOf(f string) (p projectPath, rest string, ok bool) {
 	top, rest, nested := strings.Cut(f, "/")
 	for _, p := range pc.paths {
@@ -596,6 +608,14 @@ func (pc projectConfig) pathOf(f string) (p projectPath, rest string, ok bool) {
 	for _, p := range pc.paths {
 		if p.anyDir && strings.EqualFold(base, p.name) {
 			return p, "", true
+		}
+	}
+	elems := strings.Split(f, "/")
+	for i := 1; i < len(elems)-1; i++ {
+		for _, p := range pc.paths {
+			if p.anyDir && p.dir && strings.EqualFold(elems[i], p.name) {
+				return p, strings.Join(elems[i+1:], "/"), true
+			}
 		}
 	}
 	return projectPath{}, "", false
@@ -633,26 +653,36 @@ func (m *Manager) noteSessionProject(ctx context.Context, id int64, kind string,
 // ProjectPaths are the paths, relative to the checkout's root, that kind
 // loads its project config from (claude: .claude, .mcp.json and CLAUDE.md,
 // CLAUDE.local.md and AGENTS.md at the root and, as gitx.AnyDir globs, in
-// any directory), for a comparison limited to them
-// (gitx.Client.ChangedUnder, whose answer ProjectTouched reads); nil for a
-// kind magnum does not compare.
+// any directory, .claude/ and what lies under it too: anyDirSpecs), for a
+// comparison limited to them (gitx.Client.ChangedUnder, whose answer
+// ProjectTouched reads); nil for a kind magnum does not compare.
 func ProjectPaths(kind string) []string {
 	var out []string
 	for _, p := range projectConfigs[kind].paths {
-		out = append(out, p.name)
-		if p.anyDir {
-			out = append(out, gitx.AnyDir+globName(p.name))
-		}
+		out = append(append(out, p.name), p.anyDirSpecs()...)
 	}
 	return out
+}
+
+// anyDirSpecs are p in any directory as gitx.AnyDir globs (globName): the
+// file's name, or the directory's name and every file under it
+// (gitx.AnyDirTree); none for a path at the root only.
+func (p projectPath) anyDirSpecs() []string {
+	if !p.anyDir {
+		return nil
+	}
+	if p.dir {
+		return []string{gitx.AnyDir + globName(p.name), gitx.AnyDir + globName(p.name) + gitx.AnyDirTree}
+	}
+	return []string{gitx.AnyDir + globName(p.name)}
 }
 
 // ProjectTouched reports whether paths (a PR's changed files, relative to
 // the repository root) name the project config kind loads from the
 // checkout: a file at or under one of its paths, or of the name of a path
-// in any directory, in any case (pathOf: macOS opens .Claude/settings.json
-// for .claude/settings.json). A kind magnum does not compare touches
-// nothing.
+// in any directory, or under a directory of such a name (a .claude/ below
+// the root), in any case (pathOf: macOS opens .Claude/settings.json for
+// .claude/settings.json). A kind magnum does not compare touches nothing.
 func ProjectTouched(kind string, paths []string) bool {
 	pc, ok := projectConfigs[kind]
 	if !ok {

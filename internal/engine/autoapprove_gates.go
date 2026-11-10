@@ -426,17 +426,21 @@ func agentConfigPath(kinds []string, p string) (string, bool) {
 }
 
 // projectLabel names the path of kind's project config p is or lies under
-// as the kind spells it (".claude/", ".mcp.json"), for a p not shown as is.
+// as the kind spells it (".claude/", ".mcp.json"), for a p not shown as is:
+// a directory below the root too (packages/web/.claude/skills/x is under
+// .claude/).
 func projectLabel(kind, p string) string {
-	top, _, nested := strings.Cut(p, "/")
-	base := path.Base(p)
+	elems := strings.Split(p, "/")
+	base := elems[len(elems)-1]
 	for _, name := range agents.ProjectPaths(kind) {
 		switch {
 		case strings.ContainsAny(name, "/*"): // an any-directory glob of a name listed too
-		case strings.EqualFold(top, name) && nested:
+		case strings.EqualFold(elems[0], name) && len(elems) > 1:
 			return name + "/"
-		case strings.EqualFold(top, name), strings.EqualFold(base, name):
+		case strings.EqualFold(elems[0], name), strings.EqualFold(base, name):
 			return name
+		case len(elems) > 2 && slices.ContainsFunc(elems[1:len(elems)-1], func(e string) bool { return strings.EqualFold(e, name) }):
+			return name + "/"
 		}
 	}
 	return "its project config"

@@ -209,3 +209,51 @@ func TestAStackedPRsSessionsCompareTheProjectConfigWithTheDefaultBranch(t *testi
 		}
 	}
 }
+
+// Claude Code loads the skills of a .claude/skills/ below the directory it
+// starts in the first time it reads a file there, and a skill's frontmatter
+// can declare hooks: a .claude/ in any directory is Claude's project config
+// (ProjectTouched, ProjectPaths, the session's compare), in any case, while
+// Codex reads .codex/ only from its start directory up, and Claude reads
+// .mcp.json at the root only. A PR that adds
+// packages/web/.claude/skills/review/SKILL.md starts Claude with the user's
+// settings only, named as .claude/.
+func TestAClaudeDirectoryBelowTheRootIsClaudesProjectConfig(t *testing.T) {
+	for _, c := range []struct {
+		kind string
+		path string
+		want bool
+	}{
+		{KindClaude, "packages/web/.claude/skills/review/SKILL.md", true},
+		{KindClaude, "lib/.CLAUDE/agents/a.md", true},
+		{KindClaude, "apps/.claude", true},
+		{KindClaude, "packages/web/claude/skills/x.md", false},
+		{KindClaude, "packages/web/.mcp.json", false},
+		{KindCodex, "packages/web/.codex/config.toml", false},
+	} {
+		if got := ProjectTouched(c.kind, []string{c.path}); got != c.want {
+			t.Errorf("ProjectTouched(%s, %q) = %v, want %v", c.kind, c.path, got, c.want)
+		}
+	}
+	if got := ProjectPaths(KindClaude); !slices.Contains(got, "**/.claude") || !slices.Contains(got, "**/.claude/**") {
+		t.Fatalf("ProjectPaths(claude) = %q: want a .claude/ in any directory", got)
+	}
+	if got := ProjectPaths(KindCodex); slices.ContainsFunc(got, func(p string) bool { return strings.Contains(p, ".codex") && strings.HasPrefix(p, "**/") }) {
+		t.Fatalf("ProjectPaths(codex) = %q: Codex reads its root's .codex/ only", got)
+	}
+
+	e, dir, ws := projectEnv(t, map[string]string{"packages/web/.claude/skills/review/SKILL.md": "---\nhooks: {}\n---\n"},
+		[]string{"packages/web/.claude/skills/review/SKILL.md"}, nil)
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], ""); err != nil {
+		t.Fatal(err)
+	}
+	if n, ok := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindClaude); !ok || !slices.Equal(n.Paths, []string{".claude/"}) {
+		raw, _, _ := e.st.GetKV(e.ctx, store.KVPRProject(e.pr.ID, KindClaude))
+		t.Fatalf("record %s: want a decline for .claude/", raw)
+	}
+	for _, d := range e.run.CallsWithPrefix("git", "-C", dir, "diff") {
+		if !slices.Contains(d.Args, ":(top,icase,glob)**/.claude/**") {
+			t.Fatalf("git %q: want every .claude/ compared", d.Args)
+		}
+	}
+}

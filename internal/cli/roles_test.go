@@ -363,7 +363,7 @@ func TestRolesKinds(t *testing.T) {
 		"project:", "-c projects={projects} when the PR changes .codex/, AGENTS.md or AGENTS.override.md (the checkout untrusted for the session); "+
 			"-c project_doc_max_bytes=0 instead when it changes only AGENTS.md or AGENTS.override.md (no AGENTS.md of the checkout); else its MCP servers: off "+
 			`(first -c mcp_servers.{server}.url="https://mcp.invalid" for a url server and -c mcp_servers.{server}.command="true" for a command server that your config does not declare)`,
-		"--setting-sources user when the PR changes .claude/ or .mcp.json, or a CLAUDE.md, CLAUDE.local.md or AGENTS.md in any directory "+
+		"--setting-sources user when the PR changes .mcp.json, or a .claude/, CLAUDE.md, CLAUDE.local.md or AGENTS.md in any directory "+
 			"(the session loads your user settings only)\n")
 	if i, j := strings.Index(out, "droid (used by"), strings.Index(out, "omp (no role"); i < 0 || j < i {
 		t.Errorf("kinds the roles use come first:\n%s", out)

@@ -300,3 +300,62 @@ func TestWorkTreeChangesOfAFileInAnyDirectory(t *testing.T) {
 		t.Fatalf("ChangedUnder = %q, %v", got, err)
 	}
 }
+
+// Claude Code loads the skills of a .claude/skills/ below the directory it
+// starts in the first time it reads a file there, so a comparison may name
+// a directory in any directory: "**/.claude/**" (AnyDir, the name and
+// "/**") is git's glob of every file under a .claude/ at any depth, the
+// top's included, and "**/.claude" the entry of that name itself (a link
+// in its place), in any case. An untracked file there counts unless
+// ignored, as for a file in any directory. Nothing else may follow the
+// name.
+func TestAPathspecNamesADirectoryInAnyDirectory(t *testing.T) {
+	ctx := context.Background()
+	c, f := newFake(outRule("packages/web/.claude/skills/review/SKILL.md\x00", "git", "-C", slot, "diff"))
+	got, err := c.ChangedUnder(ctx, slot, "origin/master", sha1, AnyDir+".claude", AnyDir+".claude/**")
+	if want := []string{"packages/web/.claude/skills/review/SKILL.md"}; err != nil || !slices.Equal(got, want) {
+		t.Fatalf("ChangedUnder = %q, %v; want %q", got, err, want)
+	}
+	wantCall(t, f, 0, false, "git", "-C", slot, "diff", "--name-only", "-z", "--no-renames", "origin/master..."+sha1, "--",
+		":(top,icase,glob)**/.claude", ":(top,icase,glob)**/.claude/**")
+	for _, p := range []string{AnyDir + "/**", AnyDir + "x/.claude/**", AnyDir + ".claude/*", AnyDir + ".claude/**/x"} {
+		if _, err := c.ChangedUnder(ctx, slot, "origin/master", sha1, p); err == nil {
+			t.Errorf("ChangedUnder(%q) must be refused", p)
+		}
+	}
+
+	fx := newFixture(t)
+	dir := fx.origin
+	fx.write(dir, ".gitignore", "node_modules/\n")
+	base := fx.commit(dir, ".claude/settings.json", "{}\n", "Add the team's Claude settings")
+	specs := []string{".claude", AnyDir + ".claude", AnyDir + ".claude/**"}
+	changes := func(want ...string) {
+		t.Helper()
+		got, err := fx.c.WorkTreeChanges(ctx, dir, base, nil, specs...)
+		if err != nil || !slices.Equal(got, want) {
+			t.Fatalf("WorkTreeChanges = %q, %v; want %q", got, err, want)
+		}
+	}
+	changes()
+	fx.write(dir, "node_modules/x/.claude/skills/s/SKILL.md", "a package's\n")
+	fx.commit(dir, "packages/web/claude.md.txt", "x\n", "A file beside no .claude/")
+	changes()
+	head := fx.commit(dir, "packages/web/.claude/skills/review/SKILL.md", "---\nhooks: {}\n---\n", "Add a skill below the root")
+	changes("packages/web/.claude/skills/review/SKILL.md")
+	fx.write(dir, "lib/.CLAUDE/agents/a.md", "untracked\n")
+	changes("lib/.CLAUDE/agents/a.md", "packages/web/.claude/skills/review/SKILL.md")
+	if got, err := fx.c.ChangedUnder(ctx, dir, base, head, specs...); err != nil || !slices.Equal(got, []string{"packages/web/.claude/skills/review/SKILL.md"}) {
+		t.Fatalf("ChangedUnder = %q, %v", got, err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "apps"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../shared", filepath.Join(dir, "apps", ".claude")); err != nil {
+		t.Fatal(err)
+	}
+	fx.git(dir, "add", "--", "apps/.claude")
+	fx.git(dir, "commit", "--quiet", "-m", "A .claude that is a link")
+	if got, err := fx.c.ChangedUnder(ctx, dir, head, fx.git(dir, "rev-parse", "HEAD"), specs...); err != nil || !slices.Equal(got, []string{"apps/.claude"}) {
+		t.Fatalf("ChangedUnder of a link in the place of a .claude/ = %q, %v", got, err)
+	}
+}

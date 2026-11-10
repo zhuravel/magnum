@@ -298,6 +298,11 @@ func TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions(t *testing.T) {
 		{name: "mcp servers", files: []string{".mcp.json"}, want: "(.mcp.json)"},
 		{name: "an unsafe path", files: []string{"docs/a`b\n/AGENTS.md"}, want: "(AGENTS.md)"},
 		{name: "an unsafe settings path", files: []string{".claude/hooks/$(x).sh"}, want: "(.claude/)"},
+		// Claude Code loads a .claude/skills/ below the root once it reads
+		// a file there, and a skill can declare hooks.
+		{name: "a skill below the root", files: []string{"app/x.rb", "packages/web/.claude/skills/review/SKILL.md"},
+			want: "it changes the review agents' instructions or hooks (packages/web/.claude/skills/review/SKILL.md)"},
+		{name: "an unsafe path below the root", files: []string{"packages/w$b/.Claude/skills/x/SKILL.md"}, want: "(.claude/)"},
 		{name: "a root link's target", files: []string{"app/x.rb", "docs/guide.md"}, declined: agents.KindClaude,
 			declinedPaths: []string{".claude/", "CLAUDE.md"}, links: map[string]string{"docs/guide.md": "CLAUDE.md"},
 			want: "it changes the review agents' instructions or hooks (CLAUDE.md)"},
