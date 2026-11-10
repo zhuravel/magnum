@@ -255,8 +255,8 @@ func (p *cardPainter) readyHints(c ReadyCard) []hint {
 	if c.QAReport != "" {
 		hs = append(hs, hint{reportKey, "QA shots"})
 	}
-	if c.Known > 0 {
-		hs = append(hs, hint{knownKey, "send known back"})
+	if c.Known > 0 { // how many of the KNOWN lines it sends
+		hs = append(hs, hint{knownKey, "send " + strconv.Itoa(c.Known) + " of " + strconv.Itoa(max(len(c.Leftovers), c.Known))})
 	}
 	return append(hs, hint{"1-3", "pick"}, hint{"j k", "move"}, hint{"enter", "do it"}, hint{"esc", "back"})
 }

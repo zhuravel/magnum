@@ -1116,8 +1116,9 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 	if err != nil {
 		return false, err
 	}
+	heldByLeft := false // the round blocks only because left_blocks makes its P3 defects block
 	if !blocks && slices.ContainsFunc(seen, func(s seenFinding) bool { return e.blocksLoop(s.f) && !blockingSeverity(s.f.Severity) }) {
-		blocks = true // left_blocks: a P3 defect is what stops the loop's exit
+		blocks, heldByLeft = true, true
 	}
 	answered, err := e.answeredQuestions(ctx, t)
 	if err != nil {
@@ -1173,6 +1174,16 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 	case len(live)+len(questions) == 0:
 		sum.Exit = registry.ExitOscillation
 		return e.endLoop(ctx, t, cy, withSecond(dir, loop, sum))
+	case heldByLeft && e.atCap(dir, loop, round) && len(questions)+len(doubts) == 0 &&
+		!slices.ContainsFunc(live, func(i ReviewItem) bool { return blockingSeverity(i.Severity) }):
+		// The last round blocks only through left_blocks: the writer had the
+		// earlier rounds for the P3s, and parking the task on you for the
+		// last round's would never end (a fresh loop finds more). They stay
+		// for the card, and its w sends them.
+		e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("round %d (cycle %d) is the last and leaves %s only because left_blocks "+
+			"makes them block: the loop ends clean, they stay for the card and its w", round, cy.N, plural(len(live), "P3 finding")))
+		sum.Exit, sum.Leftovers = registry.ExitClean, slices.Concat(leftovers, live, questions)
+		return e.endClean(ctx, t, c, cy, loop, sum)
 	case e.atCap(dir, loop, round):
 		return false, e.stopForYou(ctx, t, cy, registry.ExitCap, fmt.Sprintf("%s after %s", plural(len(live)+len(questions)+len(doubts), "blocking finding"),
 			plural(round, "review round")), "the local review's cap")
@@ -1224,14 +1235,22 @@ type seenFinding struct {
 	reg  registry.Finding
 }
 
+// The classes of a finding in the registry (registry.Finding.Class).
+const (
+	classDefect         = "defect"
+	classSimplification = "simplification"
+)
+
 // blocksLoop reports whether finding f stops the loop's exit: a P0 to P2
-// one, and with [factory.local_review] left_blocks a P3 one too; never a
-// simplification, whatever its priority.
+// one, and with [factory.local_review] left_blocks a P3 defect too; never a
+// simplification, whatever its priority, and never a P3 product question
+// (left_blocks is about defects: the question stays a leftover, as without
+// the setting, and is not put to you).
 func (e *Engine) blocksLoop(f evalrun.LocalFinding) bool {
 	if f.Simplification {
 		return false
 	}
-	return blockingSeverity(f.Severity) || (e.cfg.Factory.LocalReview.LeftBlocks && f.Severity == "P3")
+	return blockingSeverity(f.Severity) || (e.cfg.Factory.LocalReview.LeftBlocks && f.Severity == "P3" && !f.Question)
 }
 
 // seeFindings records every finding of cycle cy's round in the registry
@@ -1242,10 +1261,10 @@ func (e *Engine) seeFindings(ctx context.Context, cy registry.Cycle, res evalrun
 	out := make([]seenFinding, 0, len(res.Findings))
 	for i, f := range res.Findings {
 		fp := Fingerprint(f)
-		class := "defect"
+		class := classDefect
 		switch {
 		case f.Simplification:
-			class = "simplification"
+			class = classSimplification
 		case f.Question:
 			class = "question"
 		}
@@ -1254,8 +1273,12 @@ func (e *Engine) seeFindings(ctx context.Context, cy registry.Cycle, res evalrun
 		if err != nil {
 			return nil, err
 		}
+		title := f.Title
+		if f.Severity == "P3" && e.blocksLoop(f) { // left_blocks: the writer must answer it, so it is no longer "optional"
+			title = optionalSuffix.ReplaceAllString(title, "")
+		}
 		out = append(out, seenFinding{f: f, reg: reg, item: ReviewItem{ID: fmt.Sprintf("F%d", i+1), Fingerprint: fp, Severity: f.Severity,
-			Title: f.Title, Path: f.Path, Line: f.Line, Body: f.Body, Question: f.Question, Simplification: f.Simplification}})
+			Title: title, Path: f.Path, Line: f.Line, Body: f.Body, Question: f.Question, Simplification: f.Simplification}})
 	}
 	return out, nil
 }

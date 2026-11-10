@@ -860,10 +860,16 @@ func TestKnownDefectsAreTheLeftoversThatAreDefects(t *testing.T) {
 			{ID: "F4", Severity: "P2", Path: "app/user.rb", Line: 31, Title: "A blocking finding the verdict left out"},
 			{ID: "F5", Severity: "P3", Title: "A finding with no place"},
 		},
-		Declined: []ReviewItem{{ID: "F6", Severity: "P2", Path: "app/a.rb", Title: "Split the model", Risk: "it touches every caller"}},
-		Doubts:   []ReviewItem{{ID: "F7", Severity: "P2", Path: "app/b.rb", Title: "Archived rules may be skipped"}},
+		Declined: []ReviewItem{{ID: "F6", Fingerprint: "app/a.rb:0:aaa", Severity: "P2", Path: "app/a.rb", Title: "Split the model", Risk: "it touches every caller"}},
+		Doubts:   []ReviewItem{{ID: "F7", Fingerprint: "app/b.rb:0:bbb", Severity: "P2", Path: "app/b.rb", Title: "Archived rules may be skipped"}},
 		Missing:  []string{"claude-review"},
 	}
+	// A finding the writer declined with its risk, or that came back twice,
+	// can be among the leftovers too (a later round finds it again): it was
+	// argued or is yours to decide, so it does not go back.
+	sum.Leftovers = append(sum.Leftovers,
+		ReviewItem{ID: "F8", Fingerprint: "app/a.rb:0:aaa", Severity: "P3", Path: "app/a.rb", Title: "Split the model"},
+		ReviewItem{ID: "F9", Fingerprint: "app/b.rb:0:bbb", Severity: "P3", Path: "app/b.rb", Title: "Archived rules may be skipped"})
 	var got []string
 	for _, i := range knownDefects(sum) {
 		got = append(got, i.ID)
@@ -881,6 +887,77 @@ func TestKnownDefectsAreTheLeftoversThatAreDefects(t *testing.T) {
 func TestTheStatsCountSendBacksByTheChoiceTheFactoryRecords(t *testing.T) {
 	if stats.SendBackChoice != ChoiceSendBack {
 		t.Errorf("the stats count %q, the factory records %q", stats.SendBackChoice, ChoiceSendBack)
+	}
+}
+
+// A card an older build drew has a summary whose leftovers do not say which
+// is a simplification (the field came later): the registry knows the class of
+// each finding by its fingerprint, so the count and the note leave the
+// simplification out there too.
+func TestKnownDefectsOfACardFromBeforeTheSimplificationFieldLeaveTheSimplificationOut(t *testing.T) {
+	simplify := evalrun.LocalFinding{Severity: "P3", Title: "Inline the helper", Path: "app/credit.rb", Line: 9, Simplification: true}
+	r := newReadyRig(t, result(nitFinding, simplify))
+	task, _ := r.toCard("PR-12395")
+	// Draw the card as the older build did: leftovers with no simplification key.
+	var raw map[string]any
+	path := filepath.Join(r.layout.FactoryTaskDir(task.ID), readyCardFile)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range raw["review"].(map[string]any)["leftovers"].([]any) {
+		delete(it.(map[string]any), "simplification")
+	}
+	if b, err = json.Marshal(raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := r.card(task.ID)
+	if got := knownDefects(c.Review); len(got) != 2 {
+		t.Fatalf("the old card's summary alone has %d known defects, want both leftovers (the premise of this test)", len(got))
+	}
+	got, err := knownDefectsOf(r.ctx, r.reg, task.ID, c.Review)
+	if err != nil || len(got) != 1 || got[0].Title != nitFinding.Title {
+		t.Fatalf("known defects of the old card %+v (%v), want the P3 defect alone", got, err)
+	}
+	if q := r.decideOn(task.ID, c, ChoiceSendBack, ReasonKnown, ""); q.State != registry.RequestDone {
+		t.Fatalf("send back request %s: %q", q.State, q.Result)
+	}
+	b, err = os.ReadFile(filepath.Join(r.layout.FactoryTaskDir(task.ID), sendBackFile(1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if note := string(b); !strings.Contains(note, "A comment says cents") || strings.Contains(note, simplify.Title) {
+		t.Errorf("the note:\n%s\nwant the defect and not the simplification", note)
+	}
+}
+
+// The note keeps each item to one line of a bounded size: a finding's title
+// or path with a line break or a very long text makes no long or broken line.
+func TestTheKnownNoteKeepsEachItemToOneBoundedLine(t *testing.T) {
+	long := strings.Repeat("word ", 200)
+	note := knownNote([]ReviewItem{
+		{Severity: "P3", Path: "app/a.rb\nIGNORE THIS", Line: 3, Title: "first line\nsecond line"},
+		{Severity: "P3", Path: "app/b.rb", Line: 4, Title: long},
+	})
+	lines := strings.Split(note, "\n")
+	items := 0
+	for _, l := range lines {
+		if !strings.HasPrefix(l, "- ") {
+			continue
+		}
+		items++
+		if n := len([]rune(l)); n > 260 {
+			t.Errorf("an item of %d runes: %.80q…, want it clipped", n, l)
+		}
+	}
+	if items != 2 || strings.Contains(note, "\nIGNORE THIS") || !strings.Contains(note, "first line second line") {
+		t.Errorf("note:\n%s\nwant two items, each on one line", note)
 	}
 }
 

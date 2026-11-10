@@ -14,6 +14,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/registry/registrytest"
 	"github.com/zhuravel/magnum/internal/paths"
@@ -576,6 +577,41 @@ func TestScreenDataCountsTheKnownDefectsTheReadyCardCanSendBack(t *testing.T) {
 	}
 	if c.Known != 2 || len(c.Leftovers) != 5 {
 		t.Errorf("known %d, KNOWN lines %q, want 2 defects among 5 lines", c.Known, c.Leftovers)
+	}
+}
+
+// On a card from before the summary kept the simplification mark, the count
+// leaves out the leftover that the registry holds as a simplification, as the
+// daemon's note does.
+func TestScreenDataLeavesTheRegistrysSimplificationOutOfTheKnownCount(t *testing.T) {
+	r := newScreenRig(t)
+	r.at(12 * time.Minute)
+	ready := r.task("PR-12360", "bug", "Custom activities lose points on copy", registry.TaskNeedsYou, "ready", waitsYou,
+		"ready to push (card 1): PR-12360 Custom activities lose points on copy")
+	defect := evalrun.LocalFinding{Severity: "P3", Path: "app/a.rb", Line: 18, Title: "the name hides a step"}
+	simplify := evalrun.LocalFinding{Severity: "P3", Path: "app/b.rb", Line: 4, Title: "inline the helper", Simplification: true}
+	r.card(ready.ID, ReadyCardFile{Revision: 1, Head: "ffff1111", Base: "base2222", ReportHash: "rh", DiffHash: "dh",
+		Branch: "zhuravel-PR-12360-points", Copy: "talkable.factory3", CopyPath: "/copies/talkable.factory3",
+		Review: ReviewSummary{Exit: registry.ExitClean, Rounds: 1, Leftovers: []ReviewItem{
+			{Fingerprint: Fingerprint(defect), Severity: "P3", Path: defect.Path, Line: defect.Line, Title: defect.Title},
+			{Fingerprint: Fingerprint(simplify), Severity: "P3", Path: simplify.Path, Line: simplify.Line, Title: simplify.Title}}}})
+	cy, err := r.reg.BeginCycle(r.ctx, ready.ID, "aaa", "skill")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []evalrun.LocalFinding{defect, simplify} {
+		class := "defect"
+		if f.Simplification {
+			class = "simplification"
+		}
+		if _, err := r.reg.SeeFinding(r.ctx, cy.ID, registry.Finding{Fingerprint: Fingerprint(f), Path: f.Path, StartLine: f.Line, EndLine: f.Line,
+			Priority: f.Severity, Class: class}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := r.data(screenNow).Cards[ready.ID].Ready
+	if c == nil || c.Known != 1 || len(c.Leftovers) != 2 {
+		t.Fatalf("ready card %+v, want 1 known defect among 2 KNOWN lines", c)
 	}
 }
 

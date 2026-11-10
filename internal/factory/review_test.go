@@ -891,8 +891,8 @@ func TestLeftBlocksMakesALeftP3BlockTheExitOfTheLoop(t *testing.T) {
 	if len(ps) != 1 || !strings.Contains(ps[0].Text, reviewFile(1)) {
 		t.Fatalf("the writer's prompts %+v, want its fix turn naming %s", ps, reviewFile(1))
 	}
-	if got := r.readTask(task.ID, reviewFile(1)); !strings.Contains(got, nitFinding.Title) {
-		t.Fatalf("%s:\n%s, want the P3", reviewFile(1), got)
+	if got := r.readTask(task.ID, reviewFile(1)); !strings.Contains(got, nitTitle) || strings.Contains(got, "no reply needed") {
+		t.Fatalf("%s:\n%s, want the P3 under its title, without the suffix that says no reply is needed", reviewFile(1), got)
 	}
 	if got := r.reload(task.ID); got.Stage != "local_review" {
 		t.Fatalf("the task is at %s after a round whose only finding is a P3, want the loop still going", got.Stage)
@@ -938,8 +938,90 @@ func TestLeftBlocksLeavesASimplificationAndADeclinedP3Alone(t *testing.T) {
 	if err := json.Unmarshal([]byte(r.readTask(task.ID, reviewSummaryFile)), &sum); err != nil {
 		t.Fatal(err)
 	}
-	if sum.Exit != registry.ExitClean || len(sum.Declined) != 1 || sum.Declined[0].Title != nitFinding.Title || len(sum.Leftovers) != 0 {
+	if sum.Exit != registry.ExitClean || len(sum.Declined) != 1 || sum.Declined[0].Title != nitTitle || len(sum.Leftovers) != 0 {
 		t.Fatalf("summary %+v, want the P3 among the declined, with its risk", sum)
+	}
+}
+
+// nitTitle is nitFinding's title as the writer gets it under left_blocks:
+// without the "(optional, no reply needed)" the judge adds to a P3, which
+// would let the writer skip a finding it must answer.
+const nitTitle = "A comment says cents"
+
+// left_blocks is about defects: a P3 the judge marked a product question
+// stays a leftover as without the setting. The loop ends clean, the question
+// is among the leftovers and no questions file is written for you.
+func TestLeftBlocksLeavesAP3ProductQuestionAmongTheLeftovers(t *testing.T) {
+	question := nitFinding
+	question.Title, question.Question = "Should archived campaigns copy too", true
+	r := newReviewRig(t, result(question), result())
+	r.cfg.Factory.LocalReview.LeftBlocks = true
+	task, _ := r.reviewTask("PR-12375")
+	r.run(8, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	var sum ReviewSummary
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, reviewSummaryFile)), &sum); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.reload(task.ID); got.Stage != "pr_body" || sum.Exit != registry.ExitClean || len(sum.Leftovers) != 1 || !sum.Leftovers[0].Question {
+		t.Fatalf("task %s at %s, summary %+v, want a clean exit with the question left", got.State, got.Stage, sum)
+	}
+	if ps := r.rt.promptsTo("fx-writer"); len(ps) != 0 || fileIn(r.layout.FactoryTaskDir(task.ID), roleQuestionsFile("local_review")) {
+		t.Errorf("writer prompts %+v, questions file %v, want neither", ps, fileIn(r.layout.FactoryTaskDir(task.ID), roleQuestionsFile("local_review")))
+	}
+	if q := r.findings(task.ID)[Fingerprint(question)]; q.Blocking {
+		t.Errorf("the P3 question %+v, want it not to block", q)
+	}
+}
+
+// At the cap a round that blocks only through left_blocks (a P3 defect, no
+// P0 to P2, no question, no doubt) ends the loop clean instead of parking
+// the task on you: the writer had the earlier rounds to fix the P3s, and
+// the last round's stay for the card and its w. An event says so.
+func TestLeftBlocksEndsTheLoopCleanAtTheCapWhenOnlyP3sBlock(t *testing.T) {
+	nit := func(title string, line int) evalrun.LocalFinding {
+		f := nitFinding
+		f.Title, f.Line = title+" (optional, no reply needed)", line
+		return f
+	}
+	r := newReviewRig(t, result(nit("First nit", 1)), result(nit("Second nit", 12)), result(nit("Third nit", 25)))
+	r.cfg.Factory.LocalReview.LeftBlocks = true
+	task, _ := r.reviewTask("PR-12376")
+	for n := 1; n <= 2; n++ {
+		r.run(6, func() bool {
+			return fileIn(r.layout.FactoryTaskDir(task.ID), reviewFile(n)) && len(r.rt.promptsTo("fx-writer")) >= n
+		})
+		r.writerFixes(task, n, fixedCredit(n), nil)
+	}
+	r.run(10, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	got := r.reload(task.ID)
+	cs := r.cycles(task.ID)
+	if got.State != registry.TaskActive || got.Stage != "pr_body" || len(cs) != 3 || cs[2].Exit != registry.ExitClean {
+		t.Fatalf("task %s at %s waits %q; cycles %+v, want the loop ended clean at its third round", got.State, got.Stage, got.WaitsWhat, cs)
+	}
+	var sum ReviewSummary
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, reviewSummaryFile)), &sum); err != nil {
+		t.Fatal(err)
+	}
+	if sum.Exit != registry.ExitClean || len(sum.Leftovers) != 1 || sum.Leftovers[0].Title != "Third nit" || len(knownDefects(sum)) != 1 {
+		t.Fatalf("summary %+v, want the third round's P3 left, as a known defect", sum)
+	}
+	if !slices.ContainsFunc(r.eventTexts(task.ID, "review"), func(s string) bool { return strings.Contains(s, "left_blocks") && strings.Contains(s, "1 P3") }) {
+		t.Errorf("review events %q, want one that says left_blocks left 1 P3 for the card at the cap", r.eventTexts(task.ID, "review"))
+	}
+
+	// A blocking finding at the cap still parks the task, left_blocks or not.
+	r = newReviewRig(t, result(refundFinding), result(unitFinding), result(nit("Third nit", 25), logFinding))
+	r.cfg.Factory.LocalReview.LeftBlocks = true
+	task, _ = r.reviewTask("PR-12377")
+	for n := 1; n <= 2; n++ {
+		r.run(6, func() bool {
+			return fileIn(r.layout.FactoryTaskDir(task.ID), reviewFile(n)) && len(r.rt.promptsTo("fx-writer")) >= n
+		})
+		r.writerFixes(task, n, fixedCredit(n), nil)
+	}
+	r.run(10, func() bool { return !isLive(r.reload(task.ID)) })
+	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "blocking finding") {
+		t.Fatalf("task %s waits %q, want the cap's stop for a round with a P1 in it", got.State, got.WaitsWhat)
 	}
 }
 

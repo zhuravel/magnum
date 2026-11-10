@@ -917,10 +917,11 @@ second_judge = "wide"             # a second opinion: after a clean round whose 
                                   # change, "never". It runs past cycles when the clean round was the last; one with
                                   # findings goes to the writer like any round, within cycles. A watch whose judge is
                                   # not on Codex, or no judge_fallback of another kind, skips it with an event
-left_blocks = false               # true: the P3 defects a round leaves open (not its simplifications) block the loop's
-                                  # exit as P2 ones do, so the writer fixes them before the card; false: they are
-                                  # listed under KNOWN on the ready card, and its w sends them to the writer. Must be
-                                  # true or false
+left_blocks = false               # true: the P3 defects a round leaves open (not its simplifications or product
+                                  # questions) block the loop's exit as P2 ones do, so the writer fixes them before the
+                                  # card; a last round (cycles) that blocks only through this ends the loop clean, its
+                                  # P3s left for the card. false: they are listed under KNOWN on the ready card, and its
+                                  # w sends them to the writer. Must be true or false
 
 [factory.kind_words]              # the words of a free prompt that suggest a kind of task (you can change it before the start)
 bug = ["bug", "fix", "broken", "crash", "error", "regression", "fails"]

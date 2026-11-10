@@ -70,7 +70,7 @@ func TestNDoesNotSendTheKnownDefectsBack(t *testing.T) {
 func TestWDoesNothingOnACardWithoutKnownDefects(t *testing.T) {
 	h := withKnown(t, 0)
 	v := ansi.Strip(h.view())
-	if strings.Contains(v, "w send known") {
+	if strings.Contains(v, "w send ") {
 		t.Errorf("the hints of a card with no known defect show w:\n%s", v)
 	}
 	h.press("w")
@@ -83,11 +83,12 @@ func TestWDoesNothingOnACardWithoutKnownDefects(t *testing.T) {
 	}
 }
 
-// With known defects the hints and the menu offer w, and the menu's item
-// asks the same question as the key.
+// With known defects the hints and the menu offer w, the hint saying how many
+// of the KNOWN lines it sends, and the menu's item asks the same question as
+// the key.
 func TestTheHintsAndTheMenuOfferWOnACardWithKnownDefects(t *testing.T) {
 	h := withKnown(t, 2)
-	mustContain(t, h.view(), "w send known back")
+	mustContain(t, h.view(), "w send 2 of 4") // 2 of the 4 lines KNOWN lists
 	h.feed(tea.MouseClickMsg{X: 20, Y: 10, Button: tea.MouseRight})
 	i := slices.IndexFunc(h.m.menuItems(), func(it menuItem) bool { return it.key == "w" })
 	if !h.m.menu.open || i < 0 || !h.m.menuItems()[i].ok || h.m.menuItems()[i].label != "send the known defects back" {

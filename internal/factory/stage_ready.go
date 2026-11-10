@@ -962,8 +962,14 @@ func (e *Engine) decide(ctx context.Context, p DecidePayload) error {
 			return fmt.Errorf("the branch changed after you read it: %s; the card is drawn again", why)
 		}
 	}
-	if p.Choice == ChoiceSendBack && p.Reason == ReasonKnown && len(knownDefects(card.Review)) == 0 {
-		return fmt.Errorf("%s's card lists no known defect to send back", TaskKey(t))
+	var known []ReviewItem // the defects the reason known sends back
+	if p.Choice == ChoiceSendBack && p.Reason == ReasonKnown {
+		if known, err = knownDefectsOf(ctx, e.reg, t.ID, card.Review); err != nil {
+			return err
+		}
+		if len(known) == 0 {
+			return fmt.Errorf("%s's card lists no known defect to send back", TaskKey(t))
+		}
 	}
 	if p.Choice == ChoicePush {
 		if _, why := e.readyProblem(t); why != "" {
@@ -998,7 +1004,7 @@ func (e *Engine) decide(ctx context.Context, p DecidePayload) error {
 			u.Because(fmt.Sprintf("you pushed card %d", card.Revision))
 		})
 	case ChoiceSendBack:
-		return e.sendBack(ctx, t, card, p, surface)
+		return e.sendBack(ctx, t, card, p, surface, known)
 	}
 	return e.endTask(ctx, t, "dropped by you at its ready card", registry.Input{TaskID: t.ID, Kind: registry.InputDrop, Surface: surface,
 		Stage: t.Stage})
@@ -1007,24 +1013,23 @@ func (e *Engine) decide(ctx context.Context, p DecidePayload) error {
 // sendBack writes your note on card to send-back-<revision>.md (data the
 // writer reads, never a prompt's text), records it as your input
 // (scrubbed), and returns task t to its coding stage with the reason's key.
-// For the reason ReasonKnown the note is the factory's, from the card's
-// known defects (knownNote); you typed nothing, so no input of your words is
-// recorded (the decision's input says the reason), and the task's event says
-// how many items went back and in which file.
-func (e *Engine) sendBack(ctx context.Context, t registry.Task, card ReadyCardFile, p DecidePayload, surface string) error {
+// For the reason ReasonKnown the note is the factory's, from the known
+// defects (knownDefectsOf, passed as known; knownNote); you typed nothing, so
+// no input of your words is recorded (the decision's input says the reason),
+// and the task's event says how many items went back and in which file.
+func (e *Engine) sendBack(ctx context.Context, t registry.Task, card ReadyCardFile, p DecidePayload, surface string, known []ReviewItem) error {
 	note := sendBackFile(card.Revision)
 	body, because := strings.TrimSpace(p.Note), "you sent card "+fmt.Sprint(card.Revision)+" back: "+p.Reason
-	known := p.Reason == ReasonKnown
-	if known {
-		items := knownDefects(card.Review)
-		body = knownNote(items)
-		because = fmt.Sprintf("you sent card %d back with %s (%s)", card.Revision, plural(len(items), "known defect"), note)
+	isKnown := p.Reason == ReasonKnown
+	if isKnown {
+		body = knownNote(known)
+		because = fmt.Sprintf("you sent card %d back with %s (%s)", card.Revision, plural(len(known), "known defect"), note)
 	}
 	text := "# Sent back from the ready card " + fmt.Sprint(card.Revision) + " (" + p.Reason + ")\n\n" + body + "\n"
 	if err := fsx.WriteFileAtomic(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), note), []byte(text), 0o600); err != nil {
 		return err
 	}
-	if !known {
+	if !isKnown {
 		in := withWords(registry.Input{TaskID: t.ID, Kind: registry.InputSendBack, Surface: surface, Stage: t.Stage}, p.Note)
 		if _, err := e.recordInput(ctx, in); err != nil {
 			e.log.Warn("record a send back", "task", t.ID, "err", err)
@@ -1037,21 +1042,57 @@ func (e *Engine) sendBack(ctx context.Context, t registry.Task, card ReadyCardFi
 // knownDefects are the items of a review summary that the ready card's key
 // for them sends back to the writer: the leftovers that are defects, in the
 // summary's order. The simplifications are suggestions, a product question
-// you answered was decided by you, and the declined findings, the doubts
-// and the reviewers a round went without are told on the card, not defects
-// to fix before the push. A summary written before the simplifications were
-// marked lists them among the defects.
+// you answered was decided by you, and a finding the writer declined with its
+// risk or that came back twice (a later round can find either again, so it is
+// among the leftovers too) was argued or is yours to decide: none of them is
+// a defect to fix before the push. A summary written before the
+// simplifications were marked lists them among the defects (knownDefectsOf
+// reads their class from the registry).
 func knownDefects(sum ReviewSummary) []ReviewItem {
-	return slices.DeleteFunc(slices.Clone(sum.Leftovers), func(i ReviewItem) bool { return i.Simplification || i.Question })
+	told := map[string]bool{}
+	for _, i := range slices.Concat(sum.Declined, sum.Doubts) {
+		told[i.Fingerprint] = i.Fingerprint != ""
+	}
+	return slices.DeleteFunc(slices.Clone(sum.Leftovers), func(i ReviewItem) bool {
+		return i.Simplification || i.Question || told[i.Fingerprint]
+	})
 }
 
+// knownDefectsOf are the known defects of task id's review summary sum, as
+// the card counts them and the note lists them: knownDefects, less each one
+// the registry holds as a simplification by its fingerprint. The registry has
+// the class of every finding it saw, which a summary of an older build does
+// not carry. A nil reg trusts the summary.
+func knownDefectsOf(ctx context.Context, reg *registry.Registry, id int64, sum ReviewSummary) ([]ReviewItem, error) {
+	items := knownDefects(sum)
+	if len(items) == 0 || reg == nil {
+		return items, nil
+	}
+	fs, err := reg.Findings(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	simplify := map[string]bool{}
+	for _, f := range fs {
+		simplify[f.Fingerprint] = f.Class == classSimplification
+	}
+	return slices.DeleteFunc(items, func(i ReviewItem) bool { return i.Fingerprint != "" && simplify[i.Fingerprint] }), nil
+}
+
+// knownNoteTitleLimit bounds the title and the path of an item of the note
+// (runes).
+const knownNoteTitleLimit = 200
+
 // knownNote is the note of a send back for the known defects: each one's
-// priority, place and title (the finding's own words, one line each), and
+// priority, place and title, on one line each and clipped (the finding's own
+// words, a line break or a very long text made into one bounded line), and
 // nothing of the PR, the ticket or the finding's body.
 func knownNote(items []ReviewItem) string {
 	var b strings.Builder
 	b.WriteString("The local review left these defects open; none of them blocked the card. Fix each one:\n\n")
 	for _, i := range items {
+		i.Title = textx.Clip(oneLine(i.Title), knownNoteTitleLimit)
+		i.Path = textx.Clip(oneLine(strings.ReplaceAll(i.Path, "`", "'")), knownNoteTitleLimit)
 		fmt.Fprintf(&b, "- %s\n", knownItem(i, true))
 	}
 	return strings.TrimRight(b.String(), "\n")

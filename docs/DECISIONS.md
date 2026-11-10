@@ -23898,19 +23898,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
   exit** (2026-11-10, R34, audit finding B #9). The local review can end clean with P3 defects left (the card's KNOWN
   row, `review-summary.json`'s leftovers); twice GitHub's review then posted the same line after the push (talkable#12213,
   #12215) and a fix loop followed, and the only way to have the writer fix them first was a send back with a typed note.
-  - The key: `w` on the ready card, offered (hint `w send known back`, a right-click menu item, the help) only when the
-    card counts known defects (`ReadyCard.Known`), and doing nothing otherwise. It asks "Send 2 known defects back to the
+  - The key: `w` on the ready card, offered (hint `w send 2 of 5`, 2 known defects of the 5 lines KNOWN lists; a
+    right-click menu item; the help) only when the card counts known defects (`ReadyCard.Known`), and doing nothing
+    otherwise. It asks "Send 2 known defects back to the
     writer? y/N" and on y sends the ready card's send back with the reason `known` (`tui.FactoryReasonKnown`,
     `factory.ReasonKnown`; a test in the cli pins the two) and no note: the daemon writes the note,
     `send-back-<revision>.md`, from the card's `Review` (the summary the card reads), one line a defect (priority,
     `file:line`, title), never a finding's body, the PR or the ticket. The path after that is a send back's: rework.json,
     the coding stage's first prompt naming the note and the reason, and a new head starts a fresh local loop (round 1)
     before a new card. The task's event says `you sent card 1 back with 2 known defects (send-back-1.md)`.
-  - What a known defect is: a leftover that is not a simplification and not a product question you answered
-    (`knownDefects`). `ReviewItem` gains `Simplification` (the leftovers did not say), so a summary written before this
-    build lists its simplifications among the defects (a task already at its card keeps that summary until a new head
-    starts a new loop): the y/N names the count and the note lists each. The declined findings, the doubts, the reviewers a round went without and QA's
-    notes are told on the card and are not sent: the first two were argued or are yours to decide.
+  - What a known defect is: a leftover that is not a simplification, not a product question you answered, and not a
+    finding the writer declined with its risk or that came back twice (a later round can find either again, so it is among
+    the leftovers too): `knownDefects`. `ReviewItem` gains `Simplification`. A summary of an older build does not carry
+    it, so `knownDefectsOf` also drops each leftover whose finding the registry holds as a simplification by its
+    fingerprint (the registry has the class of every finding it saw): the card's count and the daemon's note both come from
+    that one helper and agree. The reviewers a round went without and QA's notes are told on the card and are not sent.
   - The daemon refuses the reason `known` with a note of yours (it takes none: it writes it) and on a card with no known
     defect, before any decision is recorded. The CLI's `factory decide <task> send_back --card N --reason known` takes
     no `--note` and is refused with one.
@@ -23922,11 +23924,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
     in their note, left out for a task with none), so `known` shows there beside the screen's four reasons.
   - The setting: `[factory.local_review] left_blocks = false` (the audit's second option). True makes a P3 defect that a
     round leaves (never a simplification) block the loop's exit as a P2 one does: it goes to the writer in the round's
-    findings, counts as blocking in the registry, and the loop ends clean only when a round leaves none; a P3 the writer
-    declines with its risk is kept for the card as a declined P2 is.
+    findings, counts as blocking in the registry, and the loop ends clean after a round that leaves none; a P3 the writer
+    declines with its risk is kept for the card as a declined P2 is. A P3 product question is no defect: it stays a
+    leftover as without the setting and is not put to you. The "(optional, no reply needed)" the judge adds to a P3 is
+    stripped before the finding goes into `review-<n>.json`, so the writer does not take it for a finding it may skip.
     Any non-boolean is refused when the config loads. Off by default: a P3 is often taste, and each one that blocks costs
-    the loop another round. The writer's fix prompt is unchanged, so with it on a title still ends in "(optional, no reply
-    needed)" where the judge wrote it, while the prompt asks a reply for every finding.
+    the loop another round.
+  - The cap: a round at the cap (`cycles`) that blocks only through `left_blocks` (the judge's counts and verdict do not
+    block, no P0 to P2 is among its findings, no question, no doubt) ends the loop clean, its P3s left for the card and its
+    `w`, with a review event that says so. The writer had the earlier rounds for them, and parking the task on you for the
+    last round's P3s would not end: "go on" starts a fresh loop that finds new ones. A round with a P0 to P2 finding, a
+    question or a doubt at the cap stops as before (`ExitCap`, "N blocking findings after 3 review rounds"). Rejected: the
+    stop worded as "left by left_blocks" (the same parking, with a better message).
   - Rejected: a note built by the screen from the card's lines (the daemon is the one that reads the summary at the
     decision, and the reason would then carry words the daemon cannot check); sending the doubts and the declined findings
     too (the operator must decide them, and a decline names a risk the writer already argued); a note for the key on a card with no known
@@ -23934,8 +23943,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
     sends the known defects on its own before the card (the operator decides each send back, and `left_blocks` is that
     automation for those who want it); changing the liaison's prompt to offer the reason (another change's).
   - Tests (failing first): `TestWSendsTheKnownDefectsBackToTheWriterOnY`, `TestNDoesNotSendTheKnownDefectsBack`,
-    `TestWDoesNothingOnACardWithoutKnownDefects`, `TestTheHintsAndTheMenuOfferWOnACardWithKnownDefects` and
-    `TestTheHelpNamesWOnTheReadyCard` (internal/tui); `TestKnownDefectsAreTheLeftoversThatAreDefects`,
+    `TestWDoesNothingOnACardWithoutKnownDefects`, `TestTheHintsAndTheMenuOfferWOnACardWithKnownDefects` (the hint's "2 of 4")
+    and `TestTheHelpNamesWOnTheReadyCard` (internal/tui); `TestKnownDefectsAreTheLeftoversThatAreDefects` (the declined and
+    doubted leftovers), `TestKnownDefectsOfACardFromBeforeTheSimplificationFieldLeaveTheSimplificationOut`,
+    `TestTheKnownNoteKeepsEachItemToOneBoundedLine`, `TestScreenDataLeavesTheRegistrysSimplificationOutOfTheKnownCount`,
+    `TestLeftBlocksLeavesAP3ProductQuestionAmongTheLeftovers`, `TestLeftBlocksEndsTheLoopCleanAtTheCapWhenOnlyP3sBlock`,
     `TestSendBackKnownHandsTheWriterTheCardsKnownDefects` (the note, the rework, the writer's prompt, the decision, the
     events, no typed input, the fresh round at the new head), `TestSendBackKnownIsRefusedWithANoteOrWithoutKnownDefects`,
     `TestScreenDataCountsTheKnownDefectsTheReadyCardCanSendBack`, `TestLeftBlocksMakesALeftP3BlockTheExitOfTheLoop`,

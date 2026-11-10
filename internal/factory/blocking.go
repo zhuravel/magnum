@@ -60,6 +60,10 @@ var (
 	titleSuffix   = regexp.MustCompile(`\s*\((optional, no reply needed|missed earlier|in the fix for [^)]*)\)\s*$`)
 )
 
+// optionalSuffix is the suffix the judge adds to a P3: "(optional, no reply
+// needed)".
+var optionalSuffix = regexp.MustCompile(`\s*\(optional, no reply needed\)\s*$`)
+
 // normTitle is a finding's title as its fingerprint hashes it: lowercase,
 // without bold, priority and the skill's suffixes, its spaces collapsed.
 func normTitle(title string) string {
