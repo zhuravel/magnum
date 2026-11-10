@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -231,6 +232,49 @@ func TestALinkOfTheAgentsConfigBelowTheRootIsComparedAsItsTarget(t *testing.T) {
 						t.Fatalf("git %q: want %s, a link's target, compared", d.Args, spec)
 					}
 				}
+			}
+		})
+	}
+}
+
+// The walk for links under .claude/ reads at most maxLinkWalk (10,000)
+// entries: a checkout of exactly that many keeps the team's config when
+// git finds nothing changed, and one entry more leaves it out, since a link
+// past the walk could lead where git compares nothing; the record says git
+// compared and found no file, and the log says why.
+func TestAWalkPastTheLinkBudgetLeavesTheConfigOut(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		files    int // under .claude/many/, beside .claude/settings.json and .claude/many itself
+		declined bool
+	}{{"at the budget", maxLinkWalk - 2, false}, {"one entry past it", maxLinkWalk - 1, true}} {
+		t.Run(c.name, func(t *testing.T) {
+			e, dir, ws := projectEnv(t, map[string]string{".claude/settings.json": "{}"}, nil, nil)
+			many := filepath.Join(dir, ".claude", "many")
+			if err := os.MkdirAll(many, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for i := range c.files {
+				if err := os.WriteFile(filepath.Join(many, strconv.Itoa(i)), nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], ""); err != nil {
+				t.Fatal(err)
+			}
+			want := claudeLaunchArgs
+			if c.declined {
+				want = slices.Concat(claudeLaunchArgs, userSettingsOnly)
+			}
+			if got := e.h.starts[0].Args; !slices.Equal(got, want) {
+				t.Fatalf("args = %q\nwant %q", got, want)
+			}
+			n, ok := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindClaude)
+			if ok != c.declined || ok && (!n.Compared || n.Files != 0) {
+				t.Fatalf("record = %+v, %v; want one (git compared, no file) only past the budget", n, ok)
+			}
+			if recs := e.logs.records("more than 10000 entries"); (len(recs) == 1) != c.declined {
+				t.Fatalf("log records = %+v", recs)
 			}
 		})
 	}
