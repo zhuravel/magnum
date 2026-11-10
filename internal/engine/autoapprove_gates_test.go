@@ -540,6 +540,10 @@ func TestAutoApprovalRefusesAChangeToAFileTheInstructionsImport(t *testing.T) {
 		{name: "through a directory link, from the path the import names", links: map[string]string{"lib": "a/b/shared"},
 			files: map[string]string{"CLAUDE.md": "@lib/guide.md\n", "a/b/shared/guide.md": "@../x.md\n"}, list: []string{"x.md"},
 			want: "(CLAUDE.md)"},
+		// Claude lexes what follows a rules file's frontmatter on its own:
+		// an @ right after the closing --- imports.
+		{name: "an import right after the frontmatter", files: map[string]string{".claude/rules/api.md": "---\npaths: src/**\n---@../../docs/evil.md\n"},
+			list: []string{"docs/evil.md"}, want: "(.claude/rules/api.md)"},
 		// Claude ends a path at a #fragment.
 		{name: "an import with a fragment", files: map[string]string{"CLAUDE.md": "Setup: @docs/guide.md#setup\n"},
 			list: []string{"docs/guide.md"}, want: "(CLAUDE.md)"},

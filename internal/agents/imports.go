@@ -56,18 +56,77 @@ const (
 // a link's text, an image or inline HTML (* _ ` < [ ] and ![; an underscore
 // inside a word is none, so @app_config gives no app), each with and
 // without the punctuation that may end a sentence after it and an escaped
-// space at its end. It reads on after such a mark for a further @, and
-// reads the text again with its HTML comments taken out. A home (~) or an
+// space at its end. It reads on after such a mark for a further @, reads
+// the text after a YAML frontmatter on its own (Claude strips one before
+// it lexes the rest, so an @ right after the closing --- imports), and
+// reads each again with its HTML comments taken out. A home (~) or an
 // absolute path is left out: no commit's tree holds it, and Claude loads a
 // file outside its working directory only once the user approves the
 // project's external imports, which magnum never does.
 func ImportPaths(text string, limit int) (paths []string, more bool) {
-	r := importReader{seen: map[string]bool{}, limit: limit, work: importWorkPerByte*len(text) + importWorkSlack}
-	r.read(text)
-	if !r.more && strings.Contains(text, "<!--") {
-		r.read(withoutComments(text))
+	texts := []string{text}
+	if body, ok := frontmatterBody(text); ok {
+		texts = append(texts, body)
+	}
+	work := importWorkSlack
+	for _, t := range texts {
+		work += importWorkPerByte * len(t)
+	}
+	r := importReader{seen: map[string]bool{}, limit: limit, work: work}
+	for _, t := range texts {
+		if r.read(t); r.more {
+			break
+		}
+		if strings.Contains(t, "<!--") {
+			r.read(withoutComments(t))
+		}
 	}
 	return r.paths, r.more
+}
+
+// frontmatterBody is what follows the YAML frontmatter text opens with,
+// which Claude Code strips before it lexes the rest: after a BOM,
+// /^---\s*\n([\s\S]*?)---\s*\n?/ (JS's \s: jsSpace), whose closing ---
+// need not stand on its own line. false when text opens with none.
+func frontmatterBody(text string) (string, bool) {
+	t := strings.TrimPrefix(text, "\ufeff")
+	if !strings.HasPrefix(t, "---") {
+		return "", false
+	}
+	open := -1 // the last line feed of the blanks after the opening ---
+	i := 3
+	for i < len(t) {
+		c, size := utf8.DecodeRuneInString(t[i:])
+		if !jsSpace(c) {
+			break
+		}
+		if c == '\n' {
+			open = i
+		}
+		i += size
+	}
+	if open < 0 {
+		return "", false
+	}
+	k := strings.Index(t[open+1:], "---")
+	if k < 0 {
+		return "", false
+	}
+	end := open + 1 + k + 3
+	for end < len(t) {
+		c, size := utf8.DecodeRuneInString(t[end:])
+		if !jsSpace(c) {
+			break
+		}
+		end += size
+	}
+	return t[end:], true
+}
+
+// jsSpace reports whether c is a blank JS's \s matches: Go's
+// unicode.IsSpace but U+0085, and U+FEFF.
+func jsSpace(c rune) bool {
+	return c == '\ufeff' || c != '\u0085' && unicode.IsSpace(c)
 }
 
 // importReader is one ImportPaths read: the paths it gave, each once, and
@@ -188,7 +247,7 @@ func scanImportRun(t string, from int) importRun {
 			}
 			j = k
 			continue
-		case c == '\ufeff' || c != '\u0085' && unicode.IsSpace(c):
+		case jsSpace(c):
 			run.end = j
 			return run
 		}

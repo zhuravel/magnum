@@ -252,6 +252,49 @@ func TestImportPathsGivesThePathClaudeCodesMarkdownEnds(t *testing.T) {
 	}
 }
 
+// Claude Code strips a file's YAML frontmatter before it lexes the rest
+// (/^---\s*\n([\s\S]*?)---\s*\n?/ after a BOM, read from its 2.1.322
+// binary): the closing --- need not stand on its own line, and the text
+// after it starts a text token, so an @ right after it imports. ImportPaths
+// reads that text as its own too; a --- that opens no frontmatter starts
+// nothing.
+func TestImportPathsReadsTheTextAfterAFrontmatterAsClaudeCodeDoes(t *testing.T) {
+	for _, c := range []struct {
+		text string
+		want []string
+	}{
+		{"---\npaths: src/**\n---@docs/evil.md\n", []string{"docs/evil.md"}},
+		{"---\n---@docs/a.md\n", []string{"docs/a.md"}},
+		{"\ufeff---\n---@docs/b.md\n", []string{"docs/b.md"}},
+		{"---\ntitle: x---@docs/c.md\n", []string{"docs/c.md"}},
+		{"---  \r\ntitle: x\r\n--- @docs/d.md\n", []string{"docs/d.md"}},
+		{"---\ntitle: x\n---<!-- a -->@docs/e.md\n", []string{"docs/e.md"}},
+		{"Notes\n---@docs/no.md\n", nil},
+		{"----\n---@docs/no.md\n", nil},
+	} {
+		got, more := ImportPaths(c.text, 100)
+		if more || len(c.want) == 0 && slices.Contains(got, "docs/no.md") {
+			t.Errorf("ImportPaths(%q) = %q, %v; want no docs/no.md", c.text, got, more)
+		}
+		for _, w := range c.want {
+			if !slices.Contains(got, w) {
+				t.Errorf("ImportPaths(%q) = %q, %v; want %q among them", c.text, got, more, w)
+			}
+		}
+	}
+}
+
+// A session loads what a rules file imports right after its frontmatter:
+// the imported file is one of ProjectLinks' targets.
+func TestASessionReadsAnImportAfterAFrontmatter(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{".claude/settings.json": "{}", ".claude/rules/api.md": "---\npaths: src/**\n---@../../.docs/evil.md\n",
+		".docs/evil.md": "x\n"})
+	if targets, partial := ProjectLinks(t.Context(), KindClaude, dir); !slices.Contains(targets, ".docs/evil.md") || partial {
+		t.Fatalf("ProjectLinks = %q, %v; want .docs/evil.md", targets, partial)
+	}
+}
+
 // Claude may end a path at any of the marks in a word, and start one after
 // each of them: read from each @ to each mark, a word of a million is a
 // quadratic count of paths. ImportPaths compares its readings within a
