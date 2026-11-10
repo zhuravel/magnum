@@ -64,6 +64,10 @@ func newFactoryStatsCmd(c *Context) *cobra.Command {
 			"and \"unknown\" when magnum recorded none of the findings its round counts; the commits magnum's fixers pushed on the PR "+
 			"(from magnum's registry); and the PR's CI failures after the "+
 			"publish, one per head, those not ours apart. "+
+			"Your explicit signals follow: the take rate, of the answered questions that carried a recommendation the share "+
+			"whose answer took it, in all, per raising role and per kind of task, and of the decisions on a card that carried "+
+			"one the share that followed it; and the ratings the task card's + and − gave: how many, how many of each, "+
+			"their reasons, and how many were given without the diff opened first, which count as noise. "+
 			"The numbers come from the evidence records of the factory's "+
 			"registry, which this command only reads (it never creates one, and it refuses to migrate one while a "+
 			"factory daemon of an older build runs on it). The default output is markdown, which sets each task "+

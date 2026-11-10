@@ -42,6 +42,15 @@ var (
 		{"ticket-answers", "the ticket answers it"}, {"code-answers", "the code answers it"},
 		{"any-answer", "any answer works"}, {"asked-before", "you asked it before"},
 	}
+	// factoryRatingReasons are the reasons of a rating, one set for + and −:
+	// what the verdict is about, not a fault, so a + reads "the tests were
+	// right" as a − reads "the tests were not". The send back's reasons
+	// (wrong cause or fix, changed too much, ...) name only faults, which a +
+	// cannot give.
+	factoryRatingReasons = []factoryReason{
+		{"cause", "the cause and the fix"}, {"scope", "how much it changed"}, {"words", "how it followed my words"},
+		{"tests", "the tests"}, {"time", "the time it took me"},
+	}
 )
 
 func reasonWords(rs []factoryReason) []string {
@@ -638,6 +647,7 @@ func (m *factoryModel) openCard(id int64) {
 		return
 	}
 	m.cardName = m.taskKey(id)
+	m.rating = factoryRating{}
 	cards := m.data.Cards[id]
 	r, _ := m.row(id)
 	m.selID = id
@@ -649,7 +659,7 @@ func (m *factoryModel) openCard(id int64) {
 	case r.Group == GroupNeedsYou && cards.Ready != nil:
 		m.view, m.task = fvReady, id
 		if m.readies[id] == nil {
-			m.readies[id] = newReady(cards.Bind, m.now())
+			m.freshReady(id, cards.Bind)
 		}
 	default:
 		m.view, m.task = fvTask, id
@@ -687,6 +697,7 @@ func (m factoryModel) nextDecision() (int64, bool) {
 func (m *factoryModel) goHome() {
 	m.view, m.walk = fvHome, false
 	m.q.typing, m.q.reasons = false, false
+	m.rating = factoryRating{}
 	if rs := m.readies[m.task]; rs != nil {
 		rs.reasons, rs.noting = false, false
 	}
@@ -1169,8 +1180,7 @@ func (m *factoryModel) readyKey(k string) (tea.Cmd, bool) {
 	}
 	rs := m.readies[m.task]
 	if rs == nil {
-		rs = newReady(m.data.Cards[m.task].Bind, m.now())
-		m.readies[m.task] = rs
+		rs = m.freshReady(m.task, m.data.Cards[m.task].Bind)
 	}
 	if rs.reasons { // send back asked for a reason's digit
 		switch i, err := strconv.Atoi(k); {
@@ -1270,6 +1280,9 @@ func (m *factoryModel) openDiff(task int64) tea.Cmd {
 	if rs := m.readies[task]; rs != nil && m.view == fvReady {
 		rs.opening = m.now()
 	}
+	if m.diffs[task] != diffRead {
+		m.diffs[task] = diffOpening
+	}
 	return tea.ExecProcess(cmd, func(err error) tea.Msg { return factoryPagerMsg{task: task, err: err} })
 }
 
@@ -1277,6 +1290,13 @@ func (m *factoryModel) openDiff(task int64) tea.Cmd {
 // (when it was first opened, and for how long in all), and the mark goes
 // to the recommendation unless the operator put it somewhere.
 func (m *factoryModel) pagerDone(msg factoryPagerMsg) tea.Cmd {
+	if m.diffs[msg.task] == diffOpening { // the pager of the diff (d), not of a report: the diff was opened if the pager ran
+		if msg.err == nil {
+			m.diffs[msg.task] = diffRead
+		} else {
+			delete(m.diffs, msg.task)
+		}
+	}
 	rs := m.readies[msg.task]
 	var opening time.Time
 	if rs != nil {
@@ -1315,6 +1335,9 @@ func (m factoryModel) taskCard() TaskCard {
 	c.Ask, c.askWrap = m.bar.question(), m.bar.asksWrapped()
 	c.rule = m.rule()
 	p := newCardPainter(m.viewWidth(), m.st, m.g, m.now())
+	if v := m.pendingRating(); v != 0 && c.Ask == "" {
+		c.rateAsk, c.rateReasons = "Why "+p.ratingSign(v)+"?", reasonWords(factoryRatingReasons)
+	}
 	r, _ := m.row(m.task)
 	if r.PR != nil {
 		c.StagingDeploys = r.PR.StagingDeploys
@@ -1327,7 +1350,11 @@ func (m factoryModel) taskCard() TaskCard {
 		}
 		return c
 	}
-	c.Hints = m.reportHints(pageHints(dropHints(p.taskHints(c), "enter", "l", "+ −", "+ -"), c), m.task, "d", "b", "t")
+	unoffered := []string{"enter", "l"} // the painter's own hints that the screen draws otherwise or has no key for
+	if !c.Rate {
+		unoffered = append(unoffered, "+ −", "+ -") // + and − rate a published or a done task only
+	}
+	c.Hints = m.reportHints(pageHints(dropHints(p.taskHints(c), unoffered...), c), m.task, "d", "b", "t")
 	if what := m.waitingDecision(m.task); what != "" && len(c.Hints) > 0 {
 		c.Hints = slices.Insert(c.Hints, 1, hint{"enter", what}) // after j k
 	}
@@ -1437,6 +1464,9 @@ func (m *factoryModel) taskCardKey(k string) (tea.Cmd, bool) {
 	n, cur := taskStops(c), c.Cursor
 	task, act := m.task, m.act
 	r, _ := m.row(task)
+	if v := m.pendingRating(); v != 0 { // + or − asked for a reason's digit
+		return m.rateKey(v, k), true
+	}
 	switch {
 	case k == "f" || k == "F" || k == "K":
 		if r.ID == 0 {
@@ -1489,12 +1519,67 @@ func (m *factoryModel) taskCardKey(k string) (tea.Cmd, bool) {
 			func(ctx context.Context) (ActionResult, error) { return act.Stop(ctx, task) }), true
 	case acceptQAKey:
 		return m.askAcceptQA(c), true
+	case "+", "-", "−":
+		switch {
+		case !c.Rate: // a task at work is not rated: nothing happens
+		case act == nil:
+			return m.note(noActions), true
+		case k == "+":
+			m.rating = factoryRating{task: task, value: 1}
+		default:
+			m.rating = factoryRating{task: task, value: -1}
+		}
 	case "esc":
 		m.goHome()
 	default:
 		return nil, false
 	}
 	return nil, true
+}
+
+// pendingRating is the value (1 or -1) of the + or − the open task card
+// waits for a reason's digit of; 0 when none, and for one asked on another
+// card.
+func (m factoryModel) pendingRating() int {
+	if m.view == fvTask && m.rating.task == m.task {
+		return m.rating.value
+	}
+	return 0
+}
+
+// rateKey is a key while a rating of value (1 or -1) waits for its reason: a
+// digit of factoryRatingReasons gives the rating with that reason's key,
+// esc gives it with none; any other key waits.
+func (m *factoryModel) rateKey(value int, k string) tea.Cmd {
+	task := m.task
+	switch i, err := strconv.Atoi(k); {
+	case k == "esc":
+		m.rating = factoryRating{}
+		return m.rate(task, value, "")
+	case err == nil && i >= 1 && i <= len(factoryRatingReasons):
+		m.rating = factoryRating{}
+		return m.rate(task, value, factoryRatingReasons[i-1].key)
+	}
+	return nil
+}
+
+// rate gives task the rating value with the key of a reason ("" for none),
+// asking nothing: a rating is undoable (rating again stores a new one). The
+// factory is told whether this run of the screen opened the task's diff
+// first; what it answers goes to the footer.
+func (m *factoryModel) rate(task int64, value int, reason string) tea.Cmd {
+	act := m.act
+	if act == nil {
+		return m.note(noActions)
+	}
+	diff := m.diffs[task] == diffRead
+	sign := "+"
+	if value < 0 {
+		sign = "−"
+	}
+	return m.bar.start("Rate "+m.taskKey(task)+" "+sign, func(ctx context.Context) (ActionResult, error) {
+		return act.Rate(ctx, task, value, reason, diff)
+	})
 }
 
 // cardPRActKey is r, R, z, M or U on the task card of row r (prActKey):

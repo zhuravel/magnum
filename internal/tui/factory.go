@@ -169,6 +169,11 @@ func (e *QuestionsChangedError) Is(target error) bool { return target == ErrQues
 //     the reason's key and the note) or FactoryDrop.
 //   - Stop drops a task (frees its copy, keeps its branch); Retry lets a
 //     task that waits on the operator go on at its stage.
+//   - Rate rates a published or a done task + (value 1) or − (-1), with the
+//     key of a reason ("" for none); diffOpened says the screen showed the
+//     operator the task's diff first (the factory adds the diff its decision
+//     on the ready card recorded as opened). It asks no y/N: a rating is
+//     undoable, rating again stores a new one.
 //   - Open steps into the task's pane (asks nothing).
 //   - OpenBrowser opens url in the browser: b a task's PR, t its Jira issue
 //     (asks nothing, as the board's b and t).
@@ -206,6 +211,7 @@ type FactoryActions interface {
 	Decide(ctx context.Context, taskID int64, choice, reason, note string, bound ReadyBinding) (ActionResult, error)
 	Stop(ctx context.Context, taskID int64) (ActionResult, error)
 	Retry(ctx context.Context, taskID int64) (ActionResult, error)
+	Rate(ctx context.Context, taskID int64, value int, reason string, diffOpened bool) (ActionResult, error)
 	Open(ctx context.Context, taskID int64) (ActionResult, error)
 	OpenBrowser(ctx context.Context, url string) error
 	Seen(ctx context.Context, at time.Time) error
@@ -376,9 +382,35 @@ func newReady(bind ReadyBinding, now time.Time) *factoryReady {
 	return &factoryReady{bind: bind, cursor: -1, shown: now}
 }
 
+// freshReady is the state of a ready card first shown now, bound to what the
+// factory drew. The diff you read, for a rating, is the diff of the newest
+// card: one read for a card you sent back is not this one's, so it starts
+// over; a card that is gone after a push keeps it.
+func (m *factoryModel) freshReady(task int64, bind ReadyBinding) *factoryReady {
+	rs := newReady(bind, m.now())
+	m.readies[task] = rs
+	delete(m.diffs, task)
+	return rs
+}
+
 // sameCard reports whether two bindings name one drawn card.
 func sameCard(a, b ReadyBinding) bool {
 	return a.HeadSHA == b.HeadSHA && a.ReportHash == b.ReportHash && a.DiffHash == b.DiffHash
+}
+
+// diffState is where the operator is with a task's diff.
+type diffState int
+
+const (
+	diffOpening diffState = iota + 1 // the pager runs
+	diffRead                         // the pager ended: the diff was opened
+)
+
+// factoryRating is a + or − just pressed on the task card of task, whose
+// reason's digit (or esc) the screen waits for: value is 1 or -1.
+type factoryRating struct {
+	task  int64
+	value int
 }
 
 // factoryDraft is the new task's text and what the factory made of it.
@@ -466,9 +498,14 @@ type factoryModel struct {
 	batches map[int64]*factoryBatch
 	readies map[int64]*factoryReady
 	cursors map[int64]int // the task card's mark, by task
-	q       factoryQuestions
-	input   textinput.Model // your own answer, a send back's note
-	form    factoryDraft
+	// diffs is where the operator is with each task's diff in this run of
+	// the screen (d, on the task card or the ready card): the pager
+	// opening, or its end read; a rating says whether it was read first.
+	diffs  map[int64]diffState
+	rating factoryRating
+	q      factoryQuestions
+	input  textinput.Model // your own answer, a send back's note
+	form   factoryDraft
 
 	asked, inflight *factoryFollow
 	selectKey       string // after a start: the row to put the cursor on once it shows
@@ -516,6 +553,7 @@ func newFactoryModel(ctx context.Context, src FactorySource, act FactoryActions,
 		bar: newFactoryBar(ctx, nil, opts.Now, opts.Tick), ctx: ctx, src: src, act: act, opts: opts,
 		g: newGlyphs(opts.Icons), loading: true, selIdx: 0,
 		walked: map[int64]bool{}, batches: map[int64]*factoryBatch{}, readies: map[int64]*factoryReady{}, cursors: map[int64]int{},
+		diffs: map[int64]diffState{},
 		input: in, filter: filter, form: factoryDraft{area: area}, editor: defaultEditor, pager: defaultPager, cache: &frameCache[factoryFrameKey]{},
 		owner: strings.TrimSpace(opts.DefaultOwner),
 	}
@@ -740,7 +778,7 @@ func (m *factoryModel) rebindReady() tea.Cmd {
 			cancel, _ := m.bar.cancel()
 			cmds = append(cmds, cancel)
 			m.asked = nil
-			m.readies[id] = newReady(cards.Bind, m.now())
+			m.freshReady(id, cards.Bind)
 		}
 	}
 	return tea.Batch(cmds...)

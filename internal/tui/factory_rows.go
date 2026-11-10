@@ -576,6 +576,10 @@ type TaskCard struct {
 	// a stage that checks again what stopped it (magnum factory retry), not
 	// for its questions. The card's hints then offer r.
 	Retry bool
+	// Rate is true on the card of a task that is published or done: + and −
+	// rate it (a rating is undoable and asks no y/N), and the card's hints
+	// offer them. A task at work, waiting or stopped is rated by neither.
+	Rate bool
 	// AcceptQA is what A accepts: the QA defects the writer declined at the
 	// task's head, which its QA fix loop stopped on ("1 QA defect the writer
 	// declined at abc1234 (flow on /settings/security)", magnum factory
@@ -595,6 +599,11 @@ type TaskCard struct {
 
 	rule    string // the screen's note on the rule (styled)
 	askWrap bool   // Ask wraps over as many of the footer's lines as it needs (factoryQuestion.wrap)
+	// rateAsk and rateReasons are the footer's question for the reason of a
+	// rating just given ("Why +?") and the reasons it takes, picked by their
+	// digit; esc gives the rating with none. The screen sets them.
+	rateAsk     string
+	rateReasons []string
 }
 
 // CardPR is what a PR is, on its card (your PR's, or a published task's),

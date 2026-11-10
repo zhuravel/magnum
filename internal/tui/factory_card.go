@@ -418,11 +418,17 @@ func (p *cardPainter) askLinesIn(most int, sentences ...string) []string {
 // question, then each reason after its digit, over as many lines as they
 // need, so that no reason is cut.
 func (p *cardPainter) reasonLines(question string, reasons []string) []string {
+	return p.reasonLinesEsc(question, "cancels", reasons)
+}
+
+// reasonLinesEsc is reasonLines with the words esc has: "cancels" where esc
+// drops the action, "skips" where it gives the rating with no reason.
+func (p *cardPainter) reasonLinesEsc(question, esc string, reasons []string) []string {
 	hs := make([]hint, 0, len(reasons)+1)
 	for i, r := range reasons {
 		hs = append(hs, hint{strconv.Itoa(i + 1), r})
 	}
-	hs = append(hs, hint{"esc", "cancels"})
+	hs = append(hs, hint{"esc", esc})
 	q := p.st.Warn.Render(question) + "  "
 	qw := ansi.StringWidth(q)
 	if p.width-1-qw < 24 { // too narrow beside the question: the reasons go under it
@@ -514,6 +520,15 @@ func (p *cardPainter) minus() string {
 		return "-"
 	}
 	return "−"
+}
+
+// ratingSign is the sign of a rating of value: +, or the minus sign (a
+// hyphen in the ASCII glyphs).
+func (p *cardPainter) ratingSign(value int) string {
+	if value > 0 {
+		return "+"
+	}
+	return p.minus()
 }
 
 func (p *cardPainter) mark(selected bool) seg {

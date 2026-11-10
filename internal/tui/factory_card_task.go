@@ -56,6 +56,8 @@ func (p *cardPainter) task(c TaskCard, height, scroll int) (string, int) {
 		foot = p.askLinesIn(most, c.Ask)
 	case c.Ask != "":
 		foot = p.askLines(c.Ask)
+	case len(c.rateReasons) > 0:
+		foot = p.reasonLinesEsc(c.rateAsk, "skips", c.rateReasons)
 	}
 	start := scroll
 	if height > 0 && cursor >= 0 {

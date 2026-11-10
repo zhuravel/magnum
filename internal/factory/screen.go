@@ -101,7 +101,7 @@ var holdWords = map[string]string{
 
 // flashKinds are the requests whose answer is news for the status rule:
 // yours, not the screen's own focus reports and previews.
-var flashKinds = []string{ReqStart, ReqAnswer, ReqDecide, ReqStop, ReqRetry, ReqLetGo}
+var flashKinds = []string{ReqStart, ReqAnswer, ReqDecide, ReqStop, ReqRetry, ReqLetGo, ReqRate}
 
 // ScreenData is the factory screen's data at now for an operator last seen
 // on home at lastSeen (zero: never): see the file's comment. agents may be
@@ -800,7 +800,8 @@ func (s *screen) firstQueued() *registry.Task {
 func (s *screen) taskCard(v *taskView, row tui.FactoryRow) tui.TaskCard {
 	t := v.t
 	c := tui.TaskCard{Key: TaskKey(t), Kind: t.Kind, Title: t.Title, Repo: row.Repo, Branch: cmp.Or(t.RemoteBranch, t.Branch), Copy: t.Copy,
-		Started: t.Created, PR: row.GitHub, PRURL: prURL(t, v.link), Issue: t.JiraKey, IssueURL: s.issueURL(t), Retry: v.retry}
+		Started: t.Created, PR: row.GitHub, PRURL: prURL(t, v.link), Issue: t.JiraKey, IssueURL: s.issueURL(t), Retry: v.retry,
+		Rate: t.State == registry.TaskPublished || t.State == registry.TaskDone} // + and − rate a task once it is out or merged
 	parts := make([]string, 0, len(row.WaitsOn)+len(v.letGo))
 	for _, w := range row.WaitsOn {
 		parts = append(parts, w.Who+": "+w.What)

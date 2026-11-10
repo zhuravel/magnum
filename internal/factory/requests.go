@@ -41,6 +41,7 @@ const (
 	ReqRetry   = "retry"
 	ReqFocus   = "focus"
 	ReqTalk    = "talk"
+	ReqRate    = "rate"
 )
 
 // FocusPayload is a ReqFocus: the factory screen of process PID gained
@@ -176,6 +177,8 @@ func (e *Engine) handleRequest(ctx context.Context, q registry.Request) {
 		respond(e, ctx, q, e.retryTask)
 	case ReqFocus:
 		respond(e, ctx, q, e.focusRequest)
+	case ReqRate:
+		respond(e, ctx, q, e.rateTask)
 	case ReqTalk:
 		e.talkRequest(ctx, q)
 	default:

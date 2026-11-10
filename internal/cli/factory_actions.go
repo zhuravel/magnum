@@ -7,8 +7,8 @@ package cli
 // its answer (waitFactoryRequest); the daemon's handler records your input,
 // once, so the adapter records none. Stepping into a pane, the time you saw
 // home and the terminal's focus carry no words and no decision: they record
-// no input. The screen asks y/N before each action; the adapter confirms
-// nothing itself. f, F, K, P, E, o, r, R, z, M and U on a row with a PR
+// no input. The screen asks y/N before each action but a rating, which is
+// undoable; the adapter confirms nothing itself. f, F, K, P, E, o, r, R, z, M and U on a row with a PR
 // (your own PR's, or a task's) are not the factory's: they run the board's
 // own code (screenActions: magnum's fix, fix off, abort, merge-parent,
 // staging deploy, review, snooze, mute and unmute requests in magnum's
@@ -195,6 +195,14 @@ func (a *factoryActions) Retry(ctx context.Context, taskID int64) (tui.ActionRes
 // reach), as `magnum factory retry --accept-qa`.
 func (a *factoryActions) AcceptQA(ctx context.Context, taskID int64) (tui.ActionResult, error) {
 	return a.send(ctx, factory.ReqRetry, factory.RetryPayload{TaskID: taskID, Surface: screenSurface, AcceptQA: true})
+}
+
+// Rate rates a published or a done task + (value 1) or − (-1) with the key of
+// a reason ("" for none), as the task card's + and − do; diffOpened is that
+// the screen showed you the task's diff first (RatePayload). The screen asks
+// no y/N for it: a rating is undoable, as rating again stores a new one.
+func (a *factoryActions) Rate(ctx context.Context, taskID int64, value int, reason string, diffOpened bool) (tui.ActionResult, error) {
+	return a.send(ctx, factory.ReqRate, factory.RatePayload{TaskID: taskID, Value: value, Reason: reason, DiffOpened: diffOpened, Surface: screenSurface})
 }
 
 // Open steps into the task's pane: herdr focuses its agent on the

@@ -219,5 +219,5 @@ func (r Report) ratingsMarkdown(b *strings.Builder) {
 	fmt.Fprintf(b, "\n## Ratings\n\n%s on %s: %d +, %d −. Reasons: %s. %d %s given without the diff opened first (noise, not signal).\n",
 		plural(rt.Count, "rating"), plural(rt.Tasks, "task"), rt.Plus, rt.Minus, strings.Join(reasons, ", "), rt.Noise, were)
 	b.WriteString("\nThe task card's + and − store a rating each; a task rated again keeps both. A rating given without the diff opened " +
-		"first, on the screen or as your decision on the ready card recorded, counts as noise.\n")
+		"first, on the screen or as your newest push on the ready card recorded, counts as noise.\n")
 }

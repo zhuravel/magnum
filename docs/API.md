@@ -13783,6 +13783,7 @@ const (
 	ReqRetry   = "retry"
 	ReqFocus   = "focus"
 	ReqTalk    = "talk"
+	ReqRate    = "rate"
 )
     Request kinds.
 
@@ -15086,6 +15087,20 @@ type QuestionFile struct {
     and what it means for the example), the index of the recommended one (nil:
     no recommendation) and why, the role that raised it and what it rests on.
     The gate turns each into a registry.Question.
+
+type RatePayload struct {
+	TaskID     int64
+	Value      int
+	Reason     string
+	DiffOpened bool
+	Surface    string
+}
+    RatePayload is a ReqRate: task TaskID is rated Value, 1 for + and -1 for −,
+    with the key of a reason (a word: lowercase letters, digits, - and _;
+    "" for none). DiffOpened says the screen showed you the task's diff before
+    (the d key, or the ready card's diff in this run of the screen); the daemon
+    adds the diff your newest push on the task's ready card recorded as opened.
+    Surface is where you asked, for the record of your input.
 
 type ReadyCardFile struct {
 	Revision   int           `json:"revision"`
@@ -17586,6 +17601,20 @@ type QualityTotals struct {
     failures after the publish with those not ours apart; and, when SetFixLoops
     read them, the fixers' pushes and their commits (nil: not read).
 
+type RatingTotals struct {
+	Count    int            `json:"count"`
+	Tasks    int            `json:"tasks"`
+	Plus     int            `json:"plus"`
+	Minus    int            `json:"minus"`
+	Reasons  map[string]int `json:"reasons"`
+	NoReason int            `json:"no_reason"`
+	Noise    int            `json:"noise"`
+}
+    RatingTotals are the ratings the operator gave with + and −: how many (every
+    rating is kept, so one task rated twice counts twice) on how many tasks, how
+    many of them + and −, by the key of the reason (NoReason: given with none),
+    and how many were given without the diff opened first, which is noise.
+
 type Report struct {
 	Since          time.Time
 	Tasks          []TaskStats
@@ -17595,6 +17624,11 @@ type Report struct {
 	// JiraMoves are the factory's plans of its Jira moves over the tasks
 	// (nil when none has one): the shadow week's evidence.
 	JiraMoves *JiraMoves
+	// Take is whether your answers took the recommendations, and Ratings
+	// what you rated with + and −, over the tasks (nil when none is
+	// recorded): your explicit signals, from the registry's records.
+	Take    *TakeTotals
+	Ratings *RatingTotals
 }
     Report is the stats of the tasks started at or after Since (the zero time:
     all of them), oldest first, and the baseline to read them against (nil when
@@ -17681,6 +17715,28 @@ type Skipped struct {
 
 func (s Skipped) Total() int
     Total is how many transcripts were left out.
+
+type Take struct {
+	Of   int `json:"of"`
+	Took int `json:"took"`
+}
+    Take counts the cases Of, out of which the operator Took the recommendation:
+    the answered questions that carried one, or the decisions on a card that did
+    (and followed it).
+
+type TakeTotals struct {
+	Questions Take            `json:"questions"`
+	ByRole    map[string]Take `json:"by_role"`
+	ByKind    map[string]Take `json:"by_kind"`
+	Decisions Take            `json:"decisions"`
+}
+    TakeTotals are the take rates over a report's tasks: the answered questions
+    with a recommendation in all (Questions), by the source that raised them
+    (ByRole: the sources the stats count a question under, several joined with
+    "+") and by the kind of the task (ByKind); and the decisions on a card
+    that carried a recommendation (Decisions, whose Took is the decisions that
+    followed it). A question counts once per task, by its text, with its current
+    answer.
 
 type TaskStats struct {
 	TaskID   int64
@@ -32385,6 +32441,7 @@ type FactoryActions interface {
 	Decide(ctx context.Context, taskID int64, choice, reason, note string, bound ReadyBinding) (ActionResult, error)
 	Stop(ctx context.Context, taskID int64) (ActionResult, error)
 	Retry(ctx context.Context, taskID int64) (ActionResult, error)
+	Rate(ctx context.Context, taskID int64, value int, reason string, diffOpened bool) (ActionResult, error)
 	Open(ctx context.Context, taskID int64) (ActionResult, error)
 	OpenBrowser(ctx context.Context, url string) error
 	Seen(ctx context.Context, at time.Time) error
@@ -32426,6 +32483,11 @@ type FactoryActions interface {
         reason's key and the note) or FactoryDrop.
       - Stop drops a task (frees its copy, keeps its branch); Retry lets a task
         that waits on the operator go on at its stage.
+      - Rate rates a published or a done task + (value 1) or − (-1), with the
+        key of a reason ("" for none); diffOpened says the screen showed the
+        operator the task's diff first (the factory adds the diff its decision
+        on the ready card recorded as opened). It asks no y/N: a rating is
+        undoable, rating again stores a new one.
       - Open steps into the task's pane (asks nothing).
       - OpenBrowser opens url in the browser: b a task's PR, t its Jira issue
         (asks nothing, as the board's b and t).
@@ -34192,6 +34254,10 @@ type TaskCard struct {
 	// a stage that checks again what stopped it (magnum factory retry), not
 	// for its questions. The card's hints then offer r.
 	Retry bool
+	// Rate is true on the card of a task that is published or done: + and −
+	// rate it (a rating is undoable and asks no y/N), and the card's hints
+	// offer them. A task at work, waiting or stopped is rated by neither.
+	Rate bool
 	// AcceptQA is what A accepts: the QA defects the writer declined at the
 	// task's head, which its QA fix loop stopped on ("1 QA defect the writer
 	// declined at abc1234 (flow on /settings/security)", magnum factory
