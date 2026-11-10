@@ -13,12 +13,28 @@ import (
 type IssueComment struct {
 	ID  int64  // REST comment id
 	URL string // html_url
+	// AuthorLogin and AuthorType are who GitHub shows wrote it (user.login,
+	// an App's with its "[bot]", and user.type); "" when it did not say.
+	AuthorLogin, AuthorType string
 }
+
+// Author is the comment's author in Account form.
+func (c IssueComment) Author() string { return Account(c.AuthorLogin, c.AuthorType) }
 
 // issueCommentJSON is the part of GitHub's issue comment the client reads.
 type issueCommentJSON struct {
-	ID      int64  `json:"id"`
-	HTMLURL string `json:"html_url"`
+	ID      int64     `json:"id"`
+	HTMLURL string    `json:"html_url"`
+	User    *restUser `json:"user"`
+}
+
+// comment is the IssueComment GitHub answered.
+func (j issueCommentJSON) comment() IssueComment {
+	out := IssueComment{ID: j.ID, URL: j.HTMLURL}
+	if j.User != nil {
+		out.AuthorLogin, out.AuthorType = j.User.Login, j.User.Type
+	}
+	return out
 }
 
 // CreateIssueComment posts body on the conversation of pull request (or
@@ -41,7 +57,7 @@ func (c *Client) CreateIssueComment(ctx context.Context, owner, repo string, num
 	if err := c.restInput(ctx, op, "POST", path, map[string]string{"body": body}, true, &out); err != nil {
 		return IssueComment{}, err
 	}
-	return IssueComment{ID: out.ID, URL: out.HTMLURL}, nil
+	return out.comment(), nil
 }
 
 // EditIssueComment replaces the body of issue comment commentID (PATCH
@@ -65,7 +81,7 @@ func (c *Client) EditIssueComment(ctx context.Context, owner, repo string, comme
 	if err := c.restInput(ctx, op, "PATCH", path, map[string]string{"body": body}, true, &out); err != nil {
 		return IssueComment{}, err
 	}
-	return IssueComment{ID: out.ID, URL: out.HTMLURL}, nil
+	return out.comment(), nil
 }
 
 // PRComment is a comment on a pull request's conversation (an issue

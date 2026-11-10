@@ -12,7 +12,13 @@ type ReviewCommentReply struct {
 	ID        int64     // REST comment id
 	URL       string    // html_url
 	CreatedAt time.Time // created_at
+	// AuthorLogin and AuthorType are who GitHub shows wrote it (user.login,
+	// an App's with its "[bot]", and user.type); "" when it did not say.
+	AuthorLogin, AuthorType string
 }
+
+// Author is the reply's author in Account form.
+func (r ReviewCommentReply) Author() string { return Account(r.AuthorLogin, r.AuthorType) }
 
 // ReplyToReviewComment posts body as a reply in the thread whose first
 // comment is commentID (POST /repos/{o}/{r}/pulls/{n}/comments/{id}/replies)
@@ -34,11 +40,16 @@ func (c *Client) ReplyToReviewComment(ctx context.Context, owner, repo string, n
 		ID        int64     `json:"id"`
 		HTMLURL   string    `json:"html_url"`
 		CreatedAt time.Time `json:"created_at"`
+		User      *restUser `json:"user"`
 	}
 	path := fmt.Sprintf("repos/%s/%s/pulls/%d/comments/%d/replies", owner, repo, number, commentID)
 	op := fmt.Sprintf("reply to review comment %s/%s#%d/%d", owner, repo, number, commentID)
 	if err := c.restInput(ctx, op, "POST", path, map[string]string{"body": body}, true, &out); err != nil {
 		return ReviewCommentReply{}, err
 	}
-	return ReviewCommentReply{ID: out.ID, URL: out.HTMLURL, CreatedAt: out.CreatedAt}, nil
+	reply := ReviewCommentReply{ID: out.ID, URL: out.HTMLURL, CreatedAt: out.CreatedAt}
+	if out.User != nil {
+		reply.AuthorLogin, reply.AuthorType = out.User.Login, out.User.Type
+	}
+	return reply, nil
 }

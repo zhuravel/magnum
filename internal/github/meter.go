@@ -70,6 +70,8 @@ var callKinds = func() [][2]string {
 		{"list files", "list files"},
 		{"pull files", "pull files"},
 		{"pull", "pull"},
+		{"request reviews", "request reviews"},
+		{"retitle", "retitle"},
 		{"review answers", "review answers"},
 		{"rules", "branch rules"},
 		{"branch protection", "branch protection"},
