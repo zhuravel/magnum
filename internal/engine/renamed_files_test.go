@@ -85,3 +85,21 @@ func TestARESTFailureLeavesASameHeadListAnOlderBuildKeptUnread(t *testing.T) {
 		t.Fatalf("held back for %q once REST answers: want the path the rename leaves", got)
 	}
 }
+
+// A REST read of the paths renames leave that fails ends the poll's REST
+// reads of the repository, as a failed file list does (fetchChangedFiles):
+// the next PR's renames wait for the next poll rather than ask a GitHub
+// that just failed.
+func TestARESTFailureEndsThePollsReadsOfTheRenamesPaths(t *testing.T) {
+	h, fg := renamesHarness(t)
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	fg.fail(errors.New("GitHub is down"))
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: []string{"scripts/x.rb"}, renamed: true},
+		prSpec{n: 3, head: "c1", files: []string{"lib/y.rb"}, renamed: true})
+	h.tick()
+	if n := fg.fetches(-1); n != 1 {
+		t.Fatalf("ListFiles asked %d times in the poll, want 1: a failure ends the poll's reads", n)
+	}
+}

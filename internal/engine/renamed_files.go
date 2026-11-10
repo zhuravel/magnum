@@ -55,6 +55,7 @@ func (r renamedFiles) serves(d github.PRDetails, head string) bool {
 // leave, or one GitHub gave before a retarget) and keeps one of another
 // head, which is no list of this one either, so the gates refuse without a
 // class and decide again; the next poll reads the Details and tries again.
+// A failure spends the poll's file reads (budget), as fetchChangedFiles'.
 func (e *Engine) withRenamedFrom(ctx context.Context, gh GitHub, repo store.Repo, prID int64, d github.PRDetails, in *store.GitHubPR, budget *int) *renamedFiles {
 	if !d.FilesRenamed || in.Files == nil {
 		return nil
@@ -82,6 +83,7 @@ func (e *Engine) withRenamedFrom(ctx context.Context, gh GitHub, repo store.Repo
 		files, complete, err = lister.ListFiles(ctx, repo.Owner, repo.Name, in.Number)
 	}
 	if err != nil {
+		*budget = 0 // as fetchChangedFiles: the rest of the poll asks a GitHub that just failed nothing more
 		in.FilesUnlisted, in.Files, in.GHUpdatedAt = in.Files.HeadSHA, nil, nil
 		if e.changed("renamed:"+full, err.Error()) {
 			e.event(ctx, "warn", "repo:"+full, "poll.files_error",
