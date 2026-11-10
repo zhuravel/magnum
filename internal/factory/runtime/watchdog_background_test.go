@@ -158,7 +158,8 @@ func TestAnIdleAgentHeldByBackgroundWorkIsToldWhatHoldsItNotThatItSeemsStuck(t *
 		t.Fatal("the agent got the nudge of a hung command")
 	}
 	// Tell lets the agent's background work go, so ending its turn ends magnum's wait: the text says it.
-	for _, want := range []string{"wait for it", "before you end this turn", "no longer waits for that work", "end your turn"} {
+	for _, want := range []string{"wait for it", "before you end this turn", "once this turn ends, magnum no longer waits for that work",
+		"end your turn", "If a command you run hangs, stop it and go on another way"} {
 		if !strings.Contains(nudge, want) {
 			t.Fatalf("the nudge %q lacks %q: it must tell the agent that once it ends its turn magnum no longer waits for its work", nudge, want)
 		}
@@ -176,8 +177,8 @@ func TestOneBackgroundTaskIsNamedInTheSingular(t *testing.T) {
 
 	nudge := g.h.promptTexts()[1]
 	if !strings.Contains(nudge, "1 background task ") || strings.Contains(nudge, "1 background tasks") || strings.Contains(nudge, "wait for one") ||
-		!strings.Contains(nudge, "no longer waits for that work") {
-		t.Fatalf("the nudge %q, want 1 background task, in the singular throughout, and the end of magnum's wait", nudge)
+		!strings.Contains(nudge, "no longer waits for that work") || !strings.Contains(nudge, "If a command you run hangs") {
+		t.Fatalf("the nudge %q, want 1 background task, in the singular throughout, the end of magnum's wait and the hung command's clause", nudge)
 	}
 }
 
@@ -248,13 +249,11 @@ func TestWithoutBackgroundWorkTheNudgeIsTheHungCommandsOne(t *testing.T) {
 	}
 }
 
-// A lead whose own screen and transcript are still, past its role's timeout,
-// is not stuck while a teammate it spawned works: the teammate's transcript
-// grows. BackgroundProgress, a text of each teammate's transcript size, is part
-// of what the watchdog reads, so the lead is not nudged on a teammate's
-// progress, and is nudged (with the teammate counted) once that stops too.
-func TestALeadIsNotNudgedWhileATeammatesTranscriptGrows(t *testing.T) {
-	g := newRig(t)
+// leadOnATeammate starts fx-repro's turn on conversation sid-1, has it spawn a
+// teammate and go idle (its run held open by the teammate at work), and
+// returns the function that makes the teammate write step i.
+func (g *rig) leadOnATeammate() (step func(i int)) {
+	g.t.Helper()
 	const mate = "adrafts-0123456789abcdef"
 	g.startTurn("build it", func(time.Time) []transcriptLine { return nil })
 	lead := g.transcriptFile("sid-1")
@@ -268,14 +267,24 @@ func TestALeadIsNotNudgedWhileATeammatesTranscriptGrows(t *testing.T) {
 	)
 	g.appendJSONL(mateFile, rawEntry(at.Add(2*time.Second), "user", true, mate, `<teammate-message teammate_id="team-lead">Build it.</teammate-message>`, nil))
 	if ended := only(g.goIdle(), EventEnded); len(ended) != 0 {
-		t.Fatalf("the lead's run ended with its teammate at work: %+v", ended)
+		g.t.Fatalf("the lead's run ended with its teammate at work: %+v", ended)
 	}
-	step := func(i int) {
+	return func(i int) {
 		now, id := g.clock.Now(), fmt.Sprintf("toolu_m%d", i)
 		g.appendJSONL(mateFile,
 			rawEntry(now, "assistant", true, mate, []map[string]any{{"type": "tool_use", "id": id, "name": "Bash", "input": map[string]any{"command": "bin/rspec"}}}, nil),
 			rawEntry(now.Add(time.Second), "user", true, mate, []map[string]any{{"type": "tool_result", "tool_use_id": id, "content": "12 examples, 0 failures"}}, nil))
 	}
+}
+
+// A lead whose own screen and transcript are still, past its role's timeout,
+// is not stuck while a teammate it spawned works: the teammate's transcript
+// grows. BackgroundProgress, a text of each teammate's transcript size, is part
+// of what the watchdog reads, so the lead is not nudged on a teammate's
+// progress, and is nudged (with the teammate counted) once that stops too.
+func TestALeadIsNotNudgedWhileATeammatesTranscriptGrows(t *testing.T) {
+	g := newRig(t)
+	step := g.leadOnATeammate()
 
 	g.clock.Add(g.role("fx-repro").Timeout.Duration - NoProgressAfter)
 	g.watchdog()
@@ -300,6 +309,34 @@ func TestALeadIsNotNudgedWhileATeammatesTranscriptGrows(t *testing.T) {
 	prompts := g.h.promptTexts()
 	if len(prompts) != 2 || !strings.Contains(prompts[1], "1 background task ") {
 		t.Fatalf("prompts %q, want the nudge naming the teammate once it stopped writing for NoProgressAfter", prompts)
+	}
+}
+
+// A lead whose teammate stopped writing takes the later steps like any hung
+// turn: the resume comes NoProgressAfter after the nudge, not a pass later
+// (the reading taken at the nudge carries the teammates' part, so the next
+// pass sees no movement in it).
+func TestALeadWhoseTeammateStoppedWritingGoesOnToTheResumeAfterTheNudge(t *testing.T) {
+	g := newRig(t)
+	step := g.leadOnATeammate()
+	g.clock.Add(g.role("fx-repro").Timeout.Duration - NoProgressAfter)
+	g.watchdog()
+	g.clock.Add(NoProgressAfter / 2)
+	step(0) // the teammate's last words
+	g.watchdog()
+	g.clock.Add(NoProgressAfter)
+	g.watchdog()
+	if prompts := g.h.promptTexts(); len(prompts) != 2 || !strings.Contains(prompts[1], "1 background task ") {
+		t.Fatalf("prompts %q, want the nudge naming the teammate", prompts)
+	}
+	starts := len(g.h.startCalls())
+
+	g.clock.Add(NoProgressAfter)
+	g.watchdog()
+
+	s := g.h.startCalls()
+	if len(s) != starts+1 || !strings.Contains(strings.Join(s[len(s)-1].Args, " "), "--resume sid-1") {
+		t.Fatalf("starts after the nudge %+v, want the conversation resumed NoProgressAfter after it", s[starts:])
 	}
 }
 

@@ -5,15 +5,15 @@ package runtime
 // and whose teammates' transcripts did not grow for NoProgressAfter climbs
 // three steps, each NoProgressAfter of stillness after the last: the shell
 // stopped and a nudge, the session quit hard and resumed, a fresh session
-// from the attempt's first prompt; then EventStuck with the pane's last line. A lost pane is resumed from its
-// conversation, at most MaxResumes times an attempt, then starts fresh from
-// the files; a role whose pane is lost before its first prompt (its CLI
-// exited at its start) is relaunched once, its stage sending that prompt
-// next; a recovery that shows no progress within NoProgressAfter takes the
-// next step, and EventLost ends them. A loop without progress (Send) is
-// compacted, then started fresh once, then left to the operator. A role a
-// heal of the factory's herdr server holds (volume.go) takes none of these
-// steps.
+// from the attempt's first prompt; then EventStuck with the pane's last
+// line. A lost pane is resumed from its conversation, at most MaxResumes
+// times an attempt, then starts fresh from the files; a role whose pane is
+// lost before its first prompt (its CLI exited at its start) is relaunched
+// once, its stage sending that prompt next; a recovery that shows no
+// progress within NoProgressAfter takes the next step, and EventLost ends
+// them. A loop without progress (Send) is compacted, then started fresh
+// once, then left to the operator. A role a heal of the factory's herdr
+// server holds (volume.go) takes none of these steps.
 
 import (
 	"context"
@@ -49,11 +49,14 @@ const (
 		"but magnum still counts "
 	backgroundNudgeOne = "1 background task you started (a command, an agent, a teammate or a monitor) as running. " +
 		"If you still need it, wait for it and make sure that it makes progress before you end this turn: " +
-		"once you end it, magnum no longer waits for that work. If you do not need it, stop it with TaskStop. "
+		"once this turn ends, magnum no longer waits for that work. If you do not need it, stop it with TaskStop. "
 	backgroundNudgeMany = "%d background tasks you started (commands, agents, teammates or monitors) as running. " +
 		"If you still need one, wait for it and make sure that it makes progress before you end this turn: " +
-		"once you end it, magnum no longer waits for that work. Stop the ones you do not need with TaskStop. "
-	backgroundNudgeEnd = "If you are done, write your output files and end your turn."
+		"once this turn ends, magnum no longer waits for that work. Stop the ones you do not need with TaskStop. "
+	// backgroundNudgeEnd keeps the hung command's clause: a count above 0
+	// does not prove that the agent is idle.
+	backgroundNudgeEnd = "If a command you run hangs, stop it and go on another way. " +
+		"If you are done, write your output files and end your turn."
 )
 
 // backgroundNudge is the nudge of an idle agent whose turn n background
@@ -183,7 +186,7 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 		if err != nil {
 			r.log.Warn("the next recovery of a role", "attempt", a.ID, "role", st.role.Name, "err", err)
 		}
-		r.baseline(ctx, st)
+		r.baseline(ctx, st, store.Run{})
 		return Event{}, false
 	}
 	return r.climb(ctx, t, a, st, run)
@@ -236,9 +239,11 @@ func stillScreen(text string) string {
 }
 
 // baseline takes the role's reading now: the stillness a next step waits
-// for counts from here.
-func (r *Runtime) baseline(ctx context.Context, st *roleState) {
-	sig := r.signature(ctx, st, store.Run{})
+// for counts from here. run is the run the next pass will read the role
+// through (the nudge's, which stays in flight; none when a step starts a new
+// session), so the reading carries the same teammates' part as that pass's.
+func (r *Runtime) baseline(ctx context.Context, st *roleState, run store.Run) {
+	sig := r.signature(ctx, st, run)
 	r.mu.Lock()
 	st.sig, st.since = sig, r.now()
 	r.mu.Unlock()
@@ -253,12 +258,14 @@ func (r *Runtime) climb(ctx context.Context, t registry.Task, a registry.Attempt
 	st.step++
 	r.mu.Unlock()
 	r.log.Warn("a turn is hung: the watchdog takes a step", "task", t.ID, "role", st.role.Name, "step", step+1)
+	after := store.Run{} // the run the next pass reads the role through: only the nudge keeps the hung one
 	switch step {
 	case 0:
 		if err := r.mgr.StopShell(ctx, run); err != nil {
 			r.log.Warn("stop a hung turn's shell", "run", run.ID, "err", err)
 		}
 		r.nudge(ctx, t, a, st, run)
+		after = run
 	case 1:
 		if err := r.restart(ctx, t, a, st, true, "its turn hung"); err != nil {
 			r.log.Warn("resume a hung session", "role", st.role.Name, "err", err)
@@ -278,14 +285,15 @@ func (r *Runtime) climb(ctx context.Context, t registry.Task, a registry.Attempt
 		}
 		return Event{TaskID: t.ID, Role: st.role.Name, RunID: run.ID, Kind: EventStuck, Reason: line}, true
 	}
-	r.baseline(ctx, st)
+	r.baseline(ctx, st, after)
 	return Event{}, false
 }
 
 // nudge tells a hung run's agent, within the run, that it seems stuck, or,
 // when the agents manager counts background work of the agent as running
-// (it ended its turn and the work holds the run open), what holds its turn:
-// a ledger entry of the text, then agents.Manager.Tell.
+// (the work may hold the run open after the agent ended its turn), what it
+// counts and what ending the turn means: a ledger entry of the text, then
+// agents.Manager.Tell.
 func (r *Runtime) nudge(ctx context.Context, t registry.Task, a registry.Attempt, st *roleState, run store.Run) {
 	text := nudgeText
 	if n, ok := r.mgr.BackgroundTasks(ctx, run); ok && n > 0 {
@@ -448,7 +456,7 @@ func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.A
 	default:
 		_, err = r.fromFiles(ctx, t, a, st, why, "")
 	}
-	r.baseline(ctx, st)
+	r.baseline(ctx, st, store.Run{})
 	return err
 }
 
