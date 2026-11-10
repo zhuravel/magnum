@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
@@ -200,21 +199,18 @@ func TestALaterRoundsWithdrawalBringsTheLineBackOnTheNewHead(t *testing.T) {
 }
 
 // A reason that changes within its class (a second link of the agents'
-// configuration whose target the head changes, as the head's session
-// recorded it) is a new event and a new card, and nothing on GitHub: the
-// comment reads as before.
+// configuration whose target the head changes, once GitHub lists another
+// file for the head) is a new event and a new card, and nothing on GitHub:
+// the comment reads as before.
 func TestAnUnchangedClassEditsNothing(t *testing.T) {
-	h, _ := newAutoHarness(t, approvesAsAlice)
-	declined := func(links map[string]string) {
-		b, _ := json.Marshal(agents.ProjectNote{Head: "b1", At: h.clock.Now(), Files: 1, Compared: true, Links: links})
-		h.e.setKV(h.ctx, store.KVPRProject(h.pr(2).ID, agents.KindClaude), string(b))
-	}
+	h, _ := newAutoHarness(t, approvesAsAlice, func(h *harness) {
+		h.d.Git = fakeGit{links: map[string]map[string]string{"b1": {"CLAUDE.md": "docs/guide.md", ".claude": "shared/claude"}}}
+	})
 	h.open(prSpec{n: 1, head: "base1"})
 	h.startup()
 	h.tick()
-	h.open(prSpec{n: 1, head: "base1"}, bobRevs(prSpec{head: "b1", files: []string{"docs/guide.md", "shared/claude/settings.json"}}))
+	h.open(prSpec{n: 1, head: "base1"}, bobRevs(prSpec{head: "b1", files: []string{"docs/guide.md"}}))
 	h.tick()
-	declined(map[string]string{"docs/guide.md": "CLAUDE.md"})
 	h.reviewTo(2, "b1")
 	h.flush()
 	h.flush()
@@ -222,11 +218,12 @@ func TestAnUnchangedClassEditsNothing(t *testing.T) {
 	h.wantApprovalLine(aliceAgentConfig)
 	edits, calls := h.statusComment(2).edits, h.gh.count("edit_issue_comment:")
 
-	declined(map[string]string{"docs/guide.md": "CLAUDE.md", "shared/claude": ".claude/"})
+	h.advance(time.Minute)
+	h.open(prSpec{n: 1, head: "base1"}, bobRevs(prSpec{head: "b1", files: []string{"docs/guide.md", "shared/claude/settings.json"}}))
+	h.tick()
 	h.flush()
 	h.flush()
-	h.flush()
-	if got := h.autoRefused(2); !strings.Contains(got, "(CLAUDE.md, .claude/)") {
+	if got := h.autoRefused(2); !strings.Contains(got, "(CLAUDE.md, .claude)") {
 		t.Fatalf("held back for %q, want the new reason", got)
 	}
 	if n := len(h.events("review.auto_approve_refused")); n != 2 {

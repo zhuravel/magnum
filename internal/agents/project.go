@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -228,10 +227,6 @@ type projectScope struct {
 	// the merge base change (committedChanges): they are untracked or
 	// ignored files a round left in the slot, or uncommitted edits.
 	residue bool
-	// links: declined, the targets of the checkout's links into it at the
-	// root and under its project directories, with their paths' labels
-	// (diskPaths.links), git or no git (ProjectNote.Links).
-	links   map[string]string
 	servers []config.ProjectServer // the MCP servers of the checkout's unchanged Codex config.toml (project_mcp "off")
 }
 
@@ -300,12 +295,6 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 				m.logErr(ctx, err, "agents: %s: cannot compare %s with the merge base, so the session leaves them out: %v", role.Name, pc.labels(nil), err)
 			}
 			s.declined, s.compared, s.files = true, err == nil, len(changed)
-			for t, p := range disk.links {
-				if s.links == nil {
-					s.links = map[string]string{}
-				}
-				s.links[t] = p.label()
-			}
 			if err == nil {
 				for _, p := range changed {
 					if l := p.label(); !slices.Contains(s.names, l) {
@@ -568,7 +557,7 @@ func (pc projectConfig) changed(files []string, links map[string]projectPath) []
 			continue
 		}
 		for t, p := range links {
-			if underTarget(f, t) {
+			if UnderTarget(f, t) {
 				out = append(out, p)
 				break
 			}
@@ -577,13 +566,13 @@ func (pc projectConfig) changed(files []string, links map[string]projectPath) []
 	return out
 }
 
-// underTarget reports whether f, a path relative to the checkout's root,
+// UnderTarget reports whether f, a path relative to the checkout's root,
 // is the link target t or lies under it, element by element in any case and
 // under Unicode folding (strings.EqualFold), as a case-insensitive
 // filesystem (macOS's) opens it: git names a tracked file in its own case,
 // while a link's text, which its target keeps (linkTarget), may spell it in
 // another.
-func underTarget(f, t string) bool {
+func UnderTarget(f, t string) bool {
 	fp, tp := strings.Split(f, "/"), strings.Split(t, "/")
 	return len(fp) >= len(tp) && slices.EqualFunc(fp[:len(tp)], tp, strings.EqualFold)
 }
@@ -883,38 +872,9 @@ type ProjectNote struct {
 	// round left in the slot, or uncommitted edits, so they say nothing of
 	// the PR (the card and the review's Checks say so). False when git
 	// could not tell, and in a record written before it was kept. The
-	// auto-approval's gate reads none of the compare, residue or not: the
-	// PR's file list decides there, with Links.
+	// auto-approval's gate reads no record: the PR's file list decides
+	// there, with the links of the head's tree.
 	Residue bool `json:"residue,omitempty"`
-	// Links map the target of each symbolic link into the checkout that a
-	// root entry among the kind's paths is, or that lies under one of its
-	// directories or a directory such a link leads to (relative to the
-	// root: CLAUDE.md -> docs/guide.md, .claude/skills -> .agents/skills),
-	// to the label of that path (CLAUDE.md, .claude/), as the launch read
-	// them from the disk, not from git, so also when git could not compare.
-	// A PR that changes such a target changes what the CLI loads through
-	// the link, and its file list names the target alone: the
-	// auto-approval's gate asks ChangedLinks with that list. Kept out of the
-	// event (a link the PR added names a path it chose); none in a record
-	// written before they were kept.
-	Links map[string]string `json:"links,omitempty"`
-}
-
-// ChangedLinks names the links of the record (Links, by their paths'
-// labels, each once, in the order of their targets) whose target paths,
-// the files a PR's commits change (its file list, relative to the
-// repository's root), change: the target itself, or a file under a target
-// that is a directory, in any case (underTarget). None for a record
-// without links.
-func (n ProjectNote) ChangedLinks(paths []string) []string {
-	var out []string
-	for _, t := range slices.Sorted(maps.Keys(n.Links)) {
-		l := n.Links[t]
-		if !slices.Contains(out, l) && slices.ContainsFunc(paths, func(f string) bool { return underTarget(f, t) }) {
-			out = append(out, l)
-		}
-	}
-	return out
 }
 
 // ProjectDeclined reads the PR's record of a session of kind launched
@@ -1002,7 +962,7 @@ func (m *Manager) recordProject(ctx context.Context, prID int64, role config.Rol
 		return
 	}
 	note, _ := json.Marshal(ProjectNote{Head: s.head, At: m.now().UTC(), Files: s.files, Compared: s.compared, Paths: s.names, DocsOnly: s.docsOff,
-		Residue: s.residue, Links: s.links})
+		Residue: s.residue})
 	if err := m.d.Store.SetKV(ctx, key, string(note)); err != nil {
 		m.logErr(ctx, err, "agents: %s: record %s: %v", role.Name, key, err)
 	}

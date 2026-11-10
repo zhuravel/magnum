@@ -286,7 +286,7 @@ func TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions(t *testing.T) {
 		// declinedPaths are the paths of its config the record names (none:
 		// a record written before it named them)
 		declinedPaths []string
-		links         map[string]string // the root links' targets the record names, with their paths' labels
+		tree          map[string]string // the links of the head's tree, by path, with their text
 		want          string
 	}{
 		{name: "a nested CLAUDE.md", files: []string{"app/x.rb", "devops/k8s/claude.MD"},
@@ -304,22 +304,36 @@ func TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions(t *testing.T) {
 			want: "it changes the review agents' instructions or hooks (packages/web/.claude/skills/review/SKILL.md)"},
 		{name: "an unsafe path below the root", files: []string{"packages/w$b/.Claude/skills/x/SKILL.md"}, want: "(.claude/)"},
 		{name: "a root link's target", files: []string{"app/x.rb", "docs/guide.md"}, declined: agents.KindClaude,
-			declinedPaths: []string{".claude/", "CLAUDE.md"}, links: map[string]string{"docs/guide.md": "CLAUDE.md"},
+			declinedPaths: []string{".claude/", "CLAUDE.md"}, tree: map[string]string{"CLAUDE.md": "docs/guide.md"},
 			want: "it changes the review agents' instructions or hooks (CLAUDE.md)"},
-		{name: "a file under a linked directory", files: []string{"shared/codex/config.toml"}, declined: agents.KindCodex,
-			links: map[string]string{"shared/codex": ".codex/"}, want: "(.codex/)"},
+		{name: "a file under a linked directory", files: []string{"shared/codex/config.toml"},
+			tree: map[string]string{".codex": "shared/codex"}, want: "(.codex)"},
+		// The links of the head's tree, whatever a session read: an
+		// instruction file below the root that links elsewhere, a link
+		// under a directory a link of .claude/ leads to, a link in the
+		// path of a link's text (followed before its ".."), a target in
+		// another case.
+		{name: "an instruction file below the root", files: []string{"docs/app.md"},
+			tree: map[string]string{"app/CLAUDE.md": "../docs/app.md"}, want: "(app/CLAUDE.md)"},
+		{name: "a link under a linked directory", files: []string{"tools/lint/SKILL.md"},
+			tree: map[string]string{".claude/skills": "../.agents/skills", ".agents/skills/lint": "../../tools/lint"},
+			want: "(.claude/skills)"},
+		{name: "a directory link in a link's text", files: []string{"a/x.md"},
+			tree: map[string]string{"CLAUDE.md": "docs/../x.md", "docs": "a/b"}, want: "(CLAUDE.md)"},
+		{name: "a target in another case", files: []string{"docs/guide.md"},
+			tree: map[string]string{"AGENTS.md": "Docs/Guide.md"}, want: "(AGENTS.md)"},
 		{name: "a cut file list", files: []string{"app/x.rb"}, truncated: true,
 			want: "Magnum cannot tell whether it changes the review agents' instructions or hooks"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _ := newAutoHarness(t)
+			h, _ := newAutoHarness(t, func(h *harness) { h.d.Git = fakeGit{links: map[string]map[string]string{"b1": tc.tree}} })
 			h.open(prSpec{n: 1, head: "base1"})
 			h.startup()
 			h.tick()
 			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: tc.files, filesTruncated: tc.truncated})
 			h.tick()
 			if tc.declined != "" {
-				b, _ := json.Marshal(agents.ProjectNote{Head: "b1", At: h.clock.Now(), Files: 1, Compared: true, Paths: tc.declinedPaths, Links: tc.links})
+				b, _ := json.Marshal(agents.ProjectNote{Head: "b1", At: h.clock.Now(), Files: 1, Compared: true, Paths: tc.declinedPaths})
 				h.e.setKV(h.ctx, store.KVPRProject(h.pr(2).ID, tc.declined), string(b))
 			}
 			h.reviewTo(2, "b1")
@@ -359,7 +373,9 @@ func TestAutoApprovalIgnoresAgentConfigTheFileListDoesNotChange(t *testing.T) {
 		{"a link whose target the PR leaves alone", `{"head":"b1","files":1,"compared":true,"paths":["CLAUDE.md"],"links":{"docs/guide.md":"CLAUDE.md"}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _ := newAutoHarness(t)
+			h, _ := newAutoHarness(t, func(h *harness) {
+				h.d.Git = fakeGit{links: map[string]map[string]string{"b1": {"CLAUDE.md": "docs/guide.md", ".claude/home": "/Users/x"}}}
+			})
 			h.open(prSpec{n: 1, head: "base1"})
 			h.startup()
 			h.tick()
@@ -375,6 +391,49 @@ func TestAutoApprovalIgnoresAgentConfigTheFileListDoesNotChange(t *testing.T) {
 				t.Fatalf("held back: %q", got)
 			}
 		})
+	}
+}
+
+// The links a CLI loads the review agents' config through are the head's
+// own, read from its tree in the clone, whatever head the PR's sessions
+// launched on: a push writes no record while they stay live (ensureAgent
+// starts nothing for a live session), so a record names an older head,
+// and one of a head whose config loaded names no links at all. The base
+// has CLAUDE.md -> docs/guide.md; the sessions launched on b1, and b2
+// changes docs/guide.md: refused, by the label of the link.
+func TestAutoApprovalRefusesAChangeToALinksTargetAtTheHeadWhateverHeadItsSessionsSaw(t *testing.T) {
+	h, _ := newAutoHarness(t, func(h *harness) {
+		h.d.Git = fakeGit{links: map[string]map[string]string{"b2": {"CLAUDE.md": "docs/guide.md"}}}
+	})
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", files: []string{"app/x.rb", "docs/guide.md"}})
+	h.tick()
+	b, _ := json.Marshal(agents.ProjectNote{Head: "b1", At: h.clock.Now(), Files: 1, Compared: true, Paths: []string{"CLAUDE.md"}})
+	h.e.setKV(h.ctx, store.KVPRProject(h.pr(2).ID, agents.KindClaude), string(b))
+	h.reviewTo(2, "b2")
+	h.flush()
+	h.wantRefused(2, "it changes the review agents' instructions or hooks (CLAUDE.md)")
+}
+
+// A head whose links magnum cannot read (no clone with it, a git that
+// fails) may change what a link of the agents' config leads to: its
+// approval waits, refused without a class, and the next pass reads them
+// again.
+func TestAutoApprovalRefusesAHeadWhoseLinksItCannotRead(t *testing.T) {
+	h, _ := newAutoHarness(t, func(h *harness) { h.d.Git = fakeGit{linksErr: errors.New("git broke")} })
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: []string{"app/x.rb"}})
+	h.tick()
+	h.reviewTo(2, "b1")
+	h.flush()
+	h.wantRefused(2, "Magnum cannot tell whether it changes the review agents' instructions or hooks: it cannot read where the head's links lead")
+	v, _ := h.e.getKV(h.ctx, KVPRAutoApproveRefused(h.pr(2).ID))
+	if r, _ := ParseAutoApproveRefused(v); r.Public != "" {
+		t.Fatalf("the refusal's class = %q: want none", r.Public)
 	}
 }
 

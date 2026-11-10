@@ -2301,6 +2301,21 @@ type fakeGit struct {
 	// stats are DiffStat's answers by "base...head"; a range without one
 	// cannot be measured.
 	stats map[string][]gitx.FileStat
+	// links are Symlinks' answers by commit: each link of its tree, by its
+	// path, with its text; a commit without one has no links. linksErr
+	// fails every read.
+	links    map[string]map[string]string
+	linksErr error
+}
+
+// Symlinks are the links of rev's tree a test names (links), none for
+// another commit: a gate that reads them finds nothing to refuse unless
+// the test says so.
+func (g fakeGit) Symlinks(_ context.Context, _, rev string) (map[string]string, error) {
+	if g.linksErr != nil {
+		return nil, g.linksErr
+	}
+	return maps.Clone(g.links[rev]), nil
 }
 
 func (g fakeGit) DiffStat(_ context.Context, _, base, head string) ([]gitx.FileStat, error) {

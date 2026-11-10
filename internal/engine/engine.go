@@ -260,6 +260,9 @@ type Git interface {
 	// pushed descends from the PR row's head, a push the poller saw during
 	// the run (the base merge `magnum fix-sync` replayed onto: recordFixPush).
 	IsAncestor(ctx context.Context, dir, ancestor, rev string) (bool, error)
+	// Symlinks are the links of a head's tree, which the files gate and
+	// the reload check follow to what they lead to (config_links.go).
+	Symlinks(ctx context.Context, dir, rev string) (map[string]string, error)
 }
 
 // Cleaner plans and applies storage cleanup (*cleanup.Planner). PlanFrom
@@ -680,6 +683,11 @@ type Engine struct {
 	autoSeen, autoFollow, autoRefused map[int64]string
 	baseMu                            sync.Mutex
 	baseChecks                        map[baseTip]baseTipRead
+	// links are, by head, where the links of its tree that steer the
+	// review agents lead (config_links.go), under their own mutex: a
+	// round's dispatch gates, auto-approval and the needs-you words read
+	// them.
+	links headLinks
 	// ciFixMu guards the read-modify-write of a PR's CI fixes (kvPRCIFix,
 	// ci_fix.go): the look, a request and a loop's end write it.
 	ciFixMu        sync.Mutex
