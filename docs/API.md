@@ -20919,9 +20919,11 @@ func (a *App) ActionsEnv(ctx context.Context) (map[string]string, func(), error)
     the App (engine ci_actions.go), narrowed to its token_repositories with its
     token_permissions and actions = "write" added (write includes read), and
     returns the env of those gh calls and the token's release as DaemonPushEnv
-    does: the token as GH_TOKEN over ConfigDir, whose hosts.yml keeps the
-    pane's token without Actions, no file written, revoked once released or past
-    daemonPushHold. GitHub's refusal of Actions is ErrActionsNotGranted.
+    does: the token as GH_TOKEN, no file holding it, revoked once released or
+    past daemonPushHold. Its GH_CONFIG_DIR is not ConfigDir, which the pane can
+    write, but a dir made for the batch alone (batchConfigDir), removed with
+    the token; ConfigDir's hosts.yml keeps the pane's token without Actions.
+    GitHub's refusal of Actions is ErrActionsNotGranted.
 
 func (a *App) Check(ctx context.Context) (Report, error)
     Check verifies, in order: the private key, the JWT (GET /app), the

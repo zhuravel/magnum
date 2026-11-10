@@ -93,7 +93,8 @@ func (g plainGH) RecentRuns(context.Context, string, string, string) ([]github.W
 
 // withFixerAppClients gives the fixer App (withFixerApp) its own client,
 // plainGH, and its client over a token of the daemon's own, tokenGH, whose
-// env must be the App's config dir.
+// env must be the minted one: its token over the batch's gh config dir,
+// never the pane's.
 func withFixerAppClients(h *harness) {
 	plain := h.d.GitHub
 	h.d.GitHub = func(id string) GitHub {
@@ -103,7 +104,7 @@ func withFixerAppClients(h *harness) {
 		return plain(id)
 	}
 	h.d.GitHubEnv = func(id string, env map[string]string) GitHub {
-		if id != fixerAppName || env["GH_CONFIG_DIR"] != "/state/gh/"+fixerAppName {
+		if id != fixerAppName || !strings.HasPrefix(env["GH_CONFIG_DIR"], "/state/gh/.actions-"+fixerAppName+"-") || !strings.HasPrefix(env["GH_TOKEN"], fixerAppName+"-actions-token") {
 			h.t.Errorf("GitHubEnv(%s, %v)", id, env)
 		}
 		return tokenGH{h.gh, env["GH_TOKEN"]}
@@ -199,6 +200,31 @@ func TestAPushMagnumMadeStartsTheCIWorkflowAsAFixerAppOverOneToken(t *testing.T)
 	if mints, released := h.ids[fixerAppName].actionsTokens(); mints != 1 || released != 1 {
 		t.Errorf("mints = %d, released = %d; want one, released", mints, released)
 	}
+}
+
+// While a run of the PR's branch is in progress, magnum's push waits, and
+// every tick reads the workflow's newest runs again: as a fixer App, over
+// a token of that tick's own, released by the tick's end, so no token
+// outlives the tick that minted it; nothing starts meanwhile.
+func TestAPushMagnumMadeThatWaitsOnTheBranchsRunMintsOneTokenPerTick(t *testing.T) {
+	h, _ := pushedCIHarness(t, []string{"app/models/order.rb"}, withFixerAppClients, func(h *harness) {
+		h.cfg.Repos[len(h.cfg.Repos)-1].CIDispatchAs = fixerAppName
+	})
+	h.gh.mu.Lock()
+	h.gh.recent = []github.WorkflowRun{{ID: 7, Status: "in_progress", HeadSHA: fixHead, HeadBranch: "feature", Event: "workflow_dispatch"}}
+	h.gh.mu.Unlock()
+	h.advance(ciPushGrace)
+	for tick := 1; tick <= 3; tick++ {
+		h.tick()
+		if mints, released := h.ids[fixerAppName].actionsTokens(); mints != tick || released != mints {
+			t.Fatalf("after tick %d: mints = %d, released = %d; want one per tick, each released", tick, mints, released)
+		}
+		h.advance(30 * time.Second)
+	}
+	if calls := h.ghCalls("dispatch:"); len(calls) != 0 {
+		t.Errorf("dispatched %q while a run of the branch ran", calls)
+	}
+	h.wantNoPlainActions()
 }
 
 // A gh login as ci_dispatch_as (the operator's main repository) keeps

@@ -12,7 +12,9 @@ package identity
 // The daemon's Actions calls as such an App (engine ci_actions.go: the
 // start of a CI workflow, the re-run of a run that started no job, the
 // reads of runs and jobs) need Actions, which the pane must never hold
-// either: ActionsEnv mints their token the same way.
+// either: ActionsEnv mints their token the same way, and runs their gh
+// over a gh config dir of the batch's own, since the pane can write the
+// config.yml of its own (http_unix_socket would send gh's GH_TOKEN to it).
 
 import (
 	"context"
@@ -20,9 +22,13 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/zhuravel/magnum/internal/fsx"
 )
 
 // ErrWorkflowsNotGranted is DaemonPushEnv's error when GitHub will not
@@ -44,9 +50,11 @@ var ErrActionsNotGranted = errors.New("the App's installation lacks the Actions 
 const daemonPushHold = 5 * time.Minute
 
 // daemonPush is one token of the daemon's own that DaemonPushEnv or
-// ActionsEnv minted.
+// ActionsEnv minted, and ActionsEnv's gh config dir of the batch's own
+// (dir; "" for a push), which goes with the token.
 type daemonPush struct {
 	token string
+	dir   string
 	at    time.Time
 }
 
@@ -71,16 +79,18 @@ func (a *App) DaemonPushEnv(ctx context.Context, workflows bool) (map[string]str
 		perms["workflows"] = "write"
 		refused = ErrWorkflowsNotGranted
 	}
-	return a.daemonEnv(ctx, "a push token", perms, refused)
+	return a.daemonEnv(ctx, "a push token", perms, refused, false)
 }
 
 // ActionsEnv mints a token for one batch of the daemon's Actions calls as
 // the App (engine ci_actions.go), narrowed to its token_repositories with
 // its token_permissions and actions = "write" added (write includes read),
 // and returns the env of those gh calls and the token's release as
-// DaemonPushEnv does: the token as GH_TOKEN over ConfigDir, whose hosts.yml
-// keeps the pane's token without Actions, no file written, revoked once
-// released or past daemonPushHold. GitHub's refusal of Actions is
+// DaemonPushEnv does: the token as GH_TOKEN, no file holding it, revoked
+// once released or past daemonPushHold. Its GH_CONFIG_DIR is not ConfigDir,
+// which the pane can write, but a dir made for the batch alone
+// (batchConfigDir), removed with the token; ConfigDir's hosts.yml keeps
+// the pane's token without Actions. GitHub's refusal of Actions is
 // ErrActionsNotGranted.
 func (a *App) ActionsEnv(ctx context.Context) (map[string]string, func(), error) {
 	perms := maps.Clone(a.cfg.TokenPermissions)
@@ -88,13 +98,15 @@ func (a *App) ActionsEnv(ctx context.Context) (map[string]string, func(), error)
 		perms = map[string]string{}
 	}
 	perms["actions"] = "write"
-	return a.daemonEnv(ctx, "an Actions token", perms, ErrActionsNotGranted)
+	return a.daemonEnv(ctx, "an Actions token", perms, ErrActionsNotGranted, true)
 }
 
 // daemonEnv mints a token of the daemon's own with perms (what names it in
 // errors), keeps it for sweepPushes, and returns the env that carries it
-// and its release; GitHub's 422 is refused (nil: no such error).
-func (a *App) daemonEnv(ctx context.Context, what string, perms map[string]string, refused error) (map[string]string, func(), error) {
+// and its release; GitHub's 422 is refused (nil: no such error). With
+// ownDir the env's GH_CONFIG_DIR is a dir of the token's own
+// (batchConfigDir), else ConfigDir.
+func (a *App) daemonEnv(ctx context.Context, what string, perms map[string]string, refused error, ownDir bool) (map[string]string, func(), error) {
 	a.sweepPushes(ctx)
 	jwt, err := a.privateKeyJWT()
 	if err != nil {
@@ -114,23 +126,54 @@ func (a *App) daemonEnv(ctx context.Context, what string, perms map[string]strin
 		return nil, nil, fmt.Errorf("identity %s: mint %s: response without token", a.cfg.Name, what)
 	}
 	p := &daemonPush{token: out.Token, at: a.now()}
+	env := appEnv(a.ConfigDir())
+	if ownDir {
+		dir, err := a.batchConfigDir()
+		if err != nil {
+			a.revoke(context.WithoutCancel(ctx), out.Token)
+			return nil, nil, fmt.Errorf("identity %s: %s: %w", a.cfg.Name, what, err)
+		}
+		p.dir, env = dir, appEnv(dir)
+	}
 	a.pmu.Lock()
 	a.pushes = append(a.pushes, p)
 	a.pmu.Unlock()
 	var once sync.Once
 	release := func() { once.Do(func() { a.dropPush(context.WithoutCancel(ctx), p) }) }
-	env := appEnv(a.ConfigDir())
 	env["GH_TOKEN"] = out.Token
 	return env, release, nil
 }
 
-// dropPush forgets p and revokes its token (best effort: a token GitHub
-// does not revoke expires within the hour).
+// batchConfigDir makes a gh config dir for one batch of Actions calls in
+// GhRoot: fresh (0700, a name no pane's env holds, so nothing a pane wrote
+// is in it), with magnum's config.yml alone and no token (GH_TOKEN carries
+// it).
+func (a *App) batchConfigDir() (string, error) {
+	root := a.layout.GhRoot()
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", fmt.Errorf("gh config dir: %w", err)
+	}
+	dir, err := os.MkdirTemp(root, ".actions-"+a.cfg.Name+"-")
+	if err != nil {
+		return "", fmt.Errorf("gh config dir: %w", err)
+	}
+	if err := fsx.WriteFileAtomic(filepath.Join(dir, "config.yml"), renderConfigYML(a.cfg.Name), 0o600); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", fmt.Errorf("gh config dir: %w", err)
+	}
+	return dir, nil
+}
+
+// dropPush forgets p, revokes its token (best effort: a token GitHub does
+// not revoke expires within the hour) and removes its gh config dir.
 func (a *App) dropPush(ctx context.Context, p *daemonPush) {
 	a.pmu.Lock()
 	a.pushes = slices.DeleteFunc(a.pushes, func(q *daemonPush) bool { return q == p })
 	a.pmu.Unlock()
 	a.revoke(ctx, p.token)
+	if p.dir != "" {
+		_ = os.RemoveAll(p.dir)
+	}
 }
 
 // sweepPushes drops the daemon's own tokens older than daemonPushHold.

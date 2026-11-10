@@ -4318,12 +4318,22 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `identity.App.ActionsEnv` mints through the same code (`daemonEnv`: the mint, the list `sweepPushes` revokes
   after `daemonPushHold`, the release that revokes the token once) a token narrowed to the App's
   `token_repositories` with its `token_permissions` and `actions = "write"` added (write includes read, so one
-  token covers a batch's reads and its start), and hands it only as `GH_TOKEN` in the env of the gh commands,
-  over the App's `GH_CONFIG_DIR`, whose hosts.yml keeps the pane's token. The refresh's mint is unchanged, so
-  the panes' token never gains Actions. The engine makes the calls in batches (`ciActions`, ci_actions.go):
-  one per look of a PR (the read of the head's runs and of a run's jobs, the re-run, the start; ended before
-  the look starts a fixer), one per poll of a repository (`seeRerun`, `dispatchedRun`) and one per push magnum
-  made (`RecentRuns` and the start). A batch mints at its first call, at most once, and revokes at its end.
+  token covers a batch's reads and its start), and hands it only as `GH_TOKEN` in the env of the gh commands.
+  Their `GH_CONFIG_DIR` is a dir made fresh for the batch in the gh root (`batchConfigDir`: 0700, magnum's
+  config.yml alone, no token), removed with the token at its release or sweep, not the App's ConfigDir, whose
+  hosts.yml keeps the pane's token: the pane's env names that dir and its agent can write its config.yml
+  (`gh config set http_unix_socket <socket>` makes gh send its `GH_TOKEN` to that socket and take the answers
+  as GitHub's), so the pane would receive a token that may start workflows and could forge the runs the
+  batch reads. A same-user agent that races a batch could still write the fresh dir, as it could read the
+  App's key; the dir closes the path that a plain `gh config set` takes and keeps nothing a pane wrote. The
+  push needs no such dir: git sends its token, and `gh auth git-credential` makes no HTTP call. The refresh's
+  mint is unchanged, so the panes' token never gains Actions. The engine makes the calls in batches
+  (`ciActions`, ci_actions.go): one per look of a PR (the read of the head's runs and of a run's jobs, the
+  re-run, the start; ended before the look starts a fixer), one per poll of a repository (`seeRerun`,
+  `dispatchedRun`) and one per tick of a push magnum made that waits (`RecentRuns`, and the start once nothing
+  holds it): while a run of the PR's branch is in progress the push mints and revokes a token every tick, as
+  the poll does while a re-run or a start waits, about two a minute, each living seconds. A batch mints at
+  its first call, at most once, and revokes at its end.
   Every Actions endpoint of workflows.go needs Actions read on an App, so all six calls go through it. The
   client over the token is the identity's own client `WithEnv` (`Deps.GitHubEnv`): the same runner and meter,
   and no `Reauth` (a 401 of that token is no reason to refresh the App's own). It mints only for an App whose
@@ -4346,9 +4356,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (every pane would hold Actions write), a token per call (a look that reads and re-runs would mint twice), a
   read-only token for the poll's reads (a second mint for a look that reads and then re-runs; an installation
   with Actions: read only now fails even the reads, which the grant words name), minting for every App (the
-  422 above), and a gh config dir of the daemon's own for the token (the App's panes run as the same user and
-  can read any file the daemon writes). The mint and the revoke are not metered (the identity's own HTTP
-  client), about two calls per batch. Tests, failing first by assertion with the seams in place (the batch
+  422 above), a hosts.yml of the daemon's own for the token (the App's panes run as the same user and can
+  read any file the daemon writes), and a token kept across a waiting push's ticks (a token that may start
+  workflows would outlive the calls it was minted for). The mint and the revoke are not metered (the
+  identity's own HTTP client), about two calls per batch. Tests, failing first by assertion with the seams in place (the batch
   over the identity's own client, stubs of ActionsEnv and WithEnv):
   TestAnActionsTokenAddsActionsAndIsWrittenNowhere, TestAnActionsTokenSaysWhenTheAppLacksActions,
   TestWithEnvRunsAsTheParentOverTheBatchsToken,
@@ -4360,8 +4371,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAReRunAsAnAppThatMayNotUseActionsFailsWithWhatToGrant,
   TestAPushMagnumMadeAsAnAppThatMayNotUseActionsMintsOnce, TestCIDispatchAsTakesAFixerApp (in place of
   TestCIDispatchAsRefusesAnAppWhoseTokensCannotStartWorkflows) and
-  TestCIDispatchAsRefusesAnAppWhoseTokensDoNotReachTheRepository; guards that pass before the change:
-  TestAnActionsTokenLeftUnreleasedGoesAtTheNextRefreshAfterItsHold (the shared sweep),
+  TestCIDispatchAsRefusesAnAppWhoseTokensDoNotReachTheRepository, and, after review,
+  TestAnActionsTokenGoesOverAGhConfigDirOfTheBatchsOwn; guards that pass before the change:
+  TestAnActionsTokenLeftUnreleasedGoesAtTheNextRefreshAfterItsHold (the shared sweep, which removes the
+  batch's dir too), TestThePanesHostsNeverGainAnActionsToken,
+  TestAnActionsTokenIsRevokedThoughTheBatchsContextEnded,
+  TestAPushMagnumMadeThatWaitsOnTheBranchsRunMintsOneTokenPerTick,
   TestTheLooksActionsCallsAsAGhLoginMintNothing, and the checks that talkable-app, an App without
   `token_permissions`, mints nothing in TestTheReRunGoesAsCIDispatchAsWithoutCIDispatch and
   TestTheLookStartsTheCIWorkflowAsCIDispatchAs.

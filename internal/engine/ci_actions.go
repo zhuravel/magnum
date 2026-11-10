@@ -10,8 +10,9 @@ package engine
 // its panes hold in its gh config dir) makes them over a token of the
 // daemon's own with Actions write added (identity.App.ActionsEnv,
 // push_token.go's mint), minted at a batch's first call, handed only in
-// the env of its gh commands (GH_TOKEN) and revoked at the batch's end:
-// never in a file, so no pane gains a token that may start workflows.
+// the env of its gh commands (GH_TOKEN, over a gh config dir of the
+// batch's own) and revoked at the batch's end: never in a file, so no pane
+// gains a token that may start workflows.
 
 import (
 	"context"

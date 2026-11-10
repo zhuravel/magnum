@@ -3823,9 +3823,12 @@ out. An App whose `token_permissions` leave out `actions = "write"` may be `ci_d
 (its tokens carry contents and pull_requests write alone, which its panes hold): for these calls alone (the
 start, the re-run below, and the reads of the runs and jobs they wait on) the daemon mints a token of its own
 with `actions = "write"` added to the App's `token_repositories` and `token_permissions`, one per look of a
-PR, poll of a repository or push of Magnum's, hands it to those gh calls in their environment alone and
-revokes it when they end, as it does for the push of a merge that carries workflow files. It is never written
-to a file, so no pane of the App gains it, and the App's own tokens stay as narrow as they were. Such an App
+PR, per poll of a repository and per tick while a push of Magnum's waits (a run of the PR's branch in
+progress makes it mint one every tick until that run ends), hands it to those gh calls in their environment
+alone and revokes it when they end, as it does for the push of a merge that carries workflow files. It is
+never written to a file, so no pane of the App gains it, and the App's own tokens stay as narrow as they were;
+those gh calls read a gh config directory made for them alone (removed with the token), not the App's, whose
+`config.yml` the panes can change. Such an App
 needs Actions: write on its settings, accepted on its installation; until then GitHub refuses the mint, and
 the PR needs you with what to grant ("required check Completion did not run at a1b2c3d: magnum cannot read the
 head's runs (fixer-app may not use Actions: grant Actions: write on the App and accept it on the

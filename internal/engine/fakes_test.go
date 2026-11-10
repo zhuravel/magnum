@@ -2408,8 +2408,10 @@ func (f *fakeAppIdentity) DaemonPushEnv(_ context.Context, workflows bool) (map[
 }
 
 // ActionsEnv is identity.App's: a token of the daemon's own with Actions
-// write as GH_TOKEN ("<name>-actions-token<n>") over /state/gh/<name>, or
-// actionsErr; actionsMints counts the mints, actionsReleased the releases.
+// write as GH_TOKEN ("<name>-actions-token<n>") over a gh config dir of
+// the batch's own (/state/gh/.actions-<name>-<n>, not the pane's
+// /state/gh/<name>), or actionsErr; actionsMints counts the mints,
+// actionsReleased the releases.
 func (f *fakeAppIdentity) ActionsEnv(context.Context) (map[string]string, func(), error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -2425,8 +2427,8 @@ func (f *fakeAppIdentity) ActionsEnv(context.Context) (map[string]string, func()
 			f.mu.Unlock()
 		})
 	}
-	tok := fmt.Sprintf("%s-actions-token%d", f.name, f.actionsMints)
-	return map[string]string{"GH_CONFIG_DIR": "/state/gh/" + f.name, "GH_TOKEN": tok, "GITHUB_TOKEN": "", "GH_HOST": "github.com"}, release, nil
+	tok, dir := fmt.Sprintf("%s-actions-token%d", f.name, f.actionsMints), fmt.Sprintf("/state/gh/.actions-%s-%d", f.name, f.actionsMints)
+	return map[string]string{"GH_CONFIG_DIR": dir, "GH_TOKEN": tok, "GITHUB_TOKEN": "", "GH_HOST": "github.com"}, release, nil
 }
 
 func (f *fakeAppIdentity) EnsureConfigDir(context.Context) (string, error) {
