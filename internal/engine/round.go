@@ -177,7 +177,7 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	// config from it are out of its way.
 	fetched := ""
 	if !(job.kind == kindContinue && job.target != "") && job.evalHead == "" {
-		if _, fetched, err = e.parkReloading(ctx, job, pr.HeadSHA); err != nil {
+		if _, fetched, err = e.parkReloading(ctx, job); err != nil {
 			return fail(err)
 		}
 		// Never switch the slot under a command that still runs in it (a
@@ -785,7 +785,7 @@ func (e *Engine) switchHead(job *roundJob, rs roundSetup, base string, ws agents
 		if job.pool != nil {
 			pool = *job.pool
 		}
-		parked, fetched, err := e.parkReloading(ctx, job, sha)
+		parked, fetched, err := e.parkReloading(ctx, job)
 		if err != nil {
 			return pipeline.Switched{}, err
 		}

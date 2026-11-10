@@ -196,10 +196,11 @@ func (g *projectGit) all() []string {
 // cannot stop the agent (its MCP servers still in the pane's foreground)
 // held such a round for good. The checkout's fetch runs first, once, and
 // the head it fetched decides: by the PR's file list when it is complete
-// and for that head, else by git (the head's changes at or under .claude
-// and .mcp.json since its merge base with the base branch), which a PR of
-// more files than the list holds needs. A head that changes the config, and
-// a git that cannot tell, still quit the session.
+// and for that head, else by git (every file the head changes since its
+// merge base with the base branch, matched to .claude, .mcp.json and the
+// instruction files), which a PR of more files than the list holds needs.
+// A head that changes the config, a git that cannot tell, and a fetch that
+// fails still quit the session.
 func TestALiveClaudeSessionStaysWhenTheNewHeadLeavesItsConfigAlone(t *testing.T) {
 	untouched := []string{"app/models/order.rb", "spec/models/order_spec.rb"}
 	for _, c := range []struct {
@@ -231,7 +232,9 @@ func TestALiveClaudeSessionStaysWhenTheNewHeadLeavesItsConfigAlone(t *testing.T)
 		{name: "no list, git finds the config alone", wantGit: "origin/master...b2"},
 		{name: "list for another head than the fetched one", files: untouched, moveHead: "b3",
 			changed: map[string][]string{"b3": {".mcp.json"}}, wantQuit: true, wantGit: "origin/master...b3"},
-		{name: "the fetch fails, the radar head's list decides", files: untouched, fetchErr: errors.New("fetch: network down")},
+		// The checkout's own fetch may then bring a newer head than the
+		// radar's list is of: no head fetched, no proof.
+		{name: "the fetch fails", files: untouched, fetchErr: errors.New("fetch: network down"), wantQuit: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			g := &projectGit{changed: c.changed, err: c.gitErr}

@@ -11,7 +11,6 @@ package engine
 // changes .claude/ or .mcp.json runs Claude with the user's settings only").
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -33,17 +32,16 @@ import (
 // cannot be quit safely, so that is an error wrapping agents.ErrBusy (the
 // round retries uncharged); one Quit cannot stop fails the round's setup
 // (charged: it backs off and asks for attention after its attempts), as the
-// checkout must not move under it either. target is the head the checkout
-// is asked for. It returns the roles it quit, which a
+// checkout must not move under it either. It returns the roles it quit, which a
 // round.project_reload_parked event names, and the head it fetched for the
 // decision (headProbe), which the checkout then checks out without fetching
 // again ("" = none fetched).
-func (e *Engine) parkReloading(ctx context.Context, job *roundJob, target string) ([]string, string, error) {
+func (e *Engine) parkReloading(ctx context.Context, job *roundJob) ([]string, string, error) {
 	sessions, err := e.st.SessionsByPR(ctx, job.pr.ID)
 	if err != nil {
 		return nil, "", fmt.Errorf("sessions before the checkout: %w", err)
 	}
-	probe := &headProbe{e: e, job: job, target: target}
+	probe := &headProbe{e: e, job: job}
 	var quit []string
 	for _, s := range sessions {
 		if s.State != store.SessionLive || deref(s.AgentName) == "" || !e.d.Agents.ReloadsProject(ctx, s) {
@@ -77,12 +75,11 @@ func (e *Engine) parkReloading(ctx context.Context, job *roundJob, target string
 // headProbe answers, for one checkout, whether the head it brings changes
 // the project config a session's agent reloads, reading each source once:
 // the checkout's fetch (Slots.Fetch, whose head the checkout then checks
-// out with Slots.CheckoutFetched), the PR's stored file list, and git per
-// kind.
+// out with Slots.CheckoutFetched), the PR's stored file list, and git's
+// list of the files the fetched head changes.
 type headProbe struct {
-	e      *Engine
-	job    *roundJob
-	target string // the head the checkout is asked for (the radar's)
+	e   *Engine
+	job *roundJob
 
 	fetchedOnce bool
 	fetched     string // the head the fetch found ("" = not fetched, or it failed)
@@ -108,9 +105,11 @@ type headProbe struct {
 // .agents/ſkills/pwn/SKILL.md, which macOS writes into .agents/skills/pwn/).
 // Either way a file at or under a link's target counts (linkTargets:
 // .claude/skills -> ../.agents/skills loads what the head changes there,
-// agents.UnderTarget). A fetch that fails leaves the list of the radar's head;
-// a session of an unknown kind, links that cannot all be read, a git that
-// cannot tell and no answer at all are no proof, so the session is quit.
+// agents.UnderTarget). A fetch that fails (or none, for a checkout not in
+// place) leaves no head to decide on, while the checkout's own fetch may
+// then bring a newer one than the radar's list is of; that, a session of
+// an unknown kind, links that cannot all be read, a git that cannot tell
+// and no answer at all are no proof, so the session is quit.
 func (p *headProbe) leavesProjectAlone(ctx context.Context, s store.Session) bool {
 	kind := deref(s.AgentKind)
 	paths := agents.ProjectPaths(kind)
@@ -118,6 +117,9 @@ func (p *headProbe) leavesProjectAlone(ctx context.Context, s store.Session) boo
 		return false
 	}
 	head := p.fetch(ctx)
+	if head == "" {
+		return false
+	}
 	targets, ok := p.linkTargets(ctx, kind, head)
 	if !ok {
 		return false
@@ -127,10 +129,10 @@ func (p *headProbe) leavesProjectAlone(ctx context.Context, s store.Session) boo
 			return slices.ContainsFunc(targets, func(t string) bool { return agents.UnderTarget(f, t) })
 		})
 	}
-	if f, ok := p.list(ctx); ok && !f.Truncated && f.HeadSHA == cmp.Or(head, p.target) {
+	if f, ok := p.list(ctx); ok && !f.Truncated && f.HeadSHA == head {
 		return !touches(f.Paths)
 	}
-	if head == "" || p.e.d.Git == nil {
+	if p.e.d.Git == nil {
 		return false
 	}
 	changed, err := p.changedNames(ctx, head)
@@ -195,7 +197,7 @@ func (p *headProbe) fetch(ctx context.Context) string {
 	}
 	sha, err := p.e.d.Slots.Fetch(ctx, p.job.slot, p.job.pr, pool)
 	if err != nil {
-		p.e.log.Warn("project config: fetch before the checkout", "pr", p.job.pr.ID, "err", err)
+		p.e.log.Warn("project config: fetch before the checkout failed, so a session that reloads the config is quit", "pr", p.job.pr.ID, "err", err)
 		return ""
 	}
 	p.fetched = sha
