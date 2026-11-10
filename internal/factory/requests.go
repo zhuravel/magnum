@@ -501,7 +501,11 @@ func (e *Engine) letGo(ctx context.Context, p LetGoPayload) (string, error) {
 // again. With p.AcceptQA it accepts what QA's newest run left you at the
 // task's head (acceptQA): the defects the writer declined, its fixes or
 // declines the run did not walk again, or the states it could not reach;
-// it is refused when QA left you none of them.
+// it is refused when QA left you none of them. Your retry's record (an
+// input) is what gives a writer at its prompt cap more fix turns
+// (fixBudgetOf) and starts the runtime's ladders over: a record that fails
+// to write still lets the task go on, and the answer says so
+// (retryUnrecorded).
 func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) {
 	t, err := e.reg.TaskByID(ctx, p.TaskID)
 	if err != nil {
@@ -531,6 +535,7 @@ func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) 
 	}
 	if _, err := e.recordInput(ctx, registry.Input{TaskID: t.ID, Kind: registry.InputRetry, Surface: p.Surface, Stage: t.Stage}); err != nil {
 		e.log.Warn("record a retry", "task", t.ID, "err", err)
+		same += "; " + retryUnrecorded
 	}
 	delete(e.panics, t.ID)
 	delete(e.lastFail, t.ID)
@@ -545,6 +550,10 @@ func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) 
 	e.checksMu.Unlock()
 	return fmt.Sprintf("%s goes on at %s", TaskKey(t), cmp.Or(t.Stage, "its first stage")) + same, nil
 }
+
+// retryUnrecorded is what the answer to your retry adds when its record
+// failed to write: the task goes on as if you had not retried at the cap.
+const retryUnrecorded = "your retry was not recorded: the writer gets no more fix turns; retry again"
 
 // unchangedSince is what your retry of task t adds when the precheck's
 // failure for you it waits on (precheck.json) would only come again:

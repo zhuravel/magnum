@@ -764,7 +764,11 @@ const (
 // step, the same failing output SameFailures times in a row, or a context
 // over MaxContext. The first time the session is compacted (and the prompt
 // goes out), the second a fresh session starts from the files (in place of
-// the prompt), the third is ErrNoProgress with EventNoProgress.
+// the prompt), the third is ErrNoProgress with EventNoProgress. A new
+// attempt of the stage climbs again from a ladder that ran out; so does
+// your retry, which goes on in the same attempt (retryStartsOver): the
+// ladder starts over at step 0 from the stage's prompts now, its failures
+// forgotten, and a loop after it is told again.
 func (r *Runtime) loopStep(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, pr store.PR,
 	entries []registry.LedgerEntry) (int, error) {
 	n, err := r.stagePrompts(ctx, t.ID, a.Stage, role.Name, entries)
@@ -781,11 +785,19 @@ func (r *Runtime) loopStep(ctx context.Context, t registry.Task, a registry.Atte
 	if l.reset {
 		l.base, l.reset = n, false
 	}
-	if l.attempt != a.ID { // a new attempt of the stage (the operator's retry): a loop left to them climbs again
+	if l.attempt != a.ID { // a new attempt of the stage: a loop left to you climbs again
 		l.attempt = a.ID
 		if l.step > loopFresh {
 			l.step, l.base = 0, n
 		}
+	}
+	stepped := l.step > loopNone
+	r.mu.Unlock()
+	over := r.retryStartsOver(ctx, t, a, role.Name, stepped, entries)
+	r.mu.Lock()
+	if over {
+		l.step, l.base, l.fails = loopNone, n, nil
+		delete(r.once, noProgressKey(k))
 	}
 	if l.step > loopFresh {
 		r.mu.Unlock()
@@ -831,6 +843,34 @@ func (r *Runtime) loopStep(ctx context.Context, t registry.Task, a registry.Atte
 	}
 	r.emit(noProgressKey(k), Event{TaskID: t.ID, Role: role.Name, Kind: EventNoProgress, Reason: "no progress: " + why})
 	return loopNone, fmt.Errorf("send to %s: %s: %w", role.Name, why, ErrNoProgress)
+}
+
+// retryStartsOver reports whether your retry of task t starts the ladder
+// of role's loop over before its next prompt in attempt a: a retry since
+// the role's newest prompt in the attempt (entries; the attempt's start
+// before any), which the task went to you after (its last turn ended, or the
+// ladder ran out before the prompt left), when the ladder took a step since
+// it last started (stepped) or the role has the factory's cap of prompts in
+// the attempt (MaxStagePrompts). The prompt it lets out is newer than it,
+// so a retry starts a ladder over once, and a restart in between changes
+// nothing. A retry while neither held (the task waited on you for another
+// cause) leaves the ladder as it was. A registry that cannot be read starts
+// nothing over.
+func (r *Runtime) retryStartsOver(ctx context.Context, t registry.Task, a registry.Attempt, role string, stepped bool,
+	entries []registry.LedgerEntry) bool {
+	newest, prompts := a.Started, 0
+	for _, e := range entries {
+		if e.Role == role && e.AttemptID == a.ID && e.Delivered != registry.DeliveredNo {
+			prompts++
+			if e.Sent.After(newest) {
+				newest = e.Sent
+			}
+		}
+	}
+	if !stepped && prompts < MaxStagePrompts {
+		return false
+	}
+	return r.retriedSince(ctx, t.ID, newest)
 }
 
 // noProgressKey keys the one EventNoProgress of a loop.

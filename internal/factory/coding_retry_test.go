@@ -1,11 +1,16 @@
 package factory
 
 import (
+	"database/sql"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/factory/registry/registrytest"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
 )
 
@@ -18,7 +23,7 @@ const capWait = "the fx-writer agent's change does not pass after 6 prompts in t
 
 // retryCapWait starts the wait after the fix turns your retry at the cap
 // gave.
-const retryCapWait = "the fx-writer agent's change does not pass after 2 more prompts since your retry: "
+const retryCapWait = "the fx-writer agent's change does not pass after 2 more prompts since your retry at the cap: "
 
 // setLint makes bin/lint print out for every run ("": no offense).
 func (r *codingRig) setLint(out string) {
@@ -107,13 +112,138 @@ func TestARetryAtThePromptCapGivesTheWriterTwoMoreFixTurns(t *testing.T) {
 	r.retryFixTurns(task, runtime.MaxStagePrompts)
 }
 
-// Each retry at the cap gives RetryFixTurns again, counted from that retry:
-// the first retry's turns spent, a second retry gives the writer two more.
-func TestASecondRetryAtThePromptCapGivesTwoMoreFixTurnsAgain(t *testing.T) {
+// Each retry at the cap gives RetryFixTurns again, counted from that retry,
+// however often the same check fails the same way: three retries, two fix
+// turns each.
+func TestEveryRetryAtThePromptCapGivesTwoMoreFixTurnsAgain(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.toPromptCap("PR-12402")
-	r.retryFixTurns(task, runtime.MaxStagePrompts)
-	r.retryFixTurns(task, runtime.MaxStagePrompts+RetryFixTurns)
+	for i := range 3 {
+		r.retryFixTurns(task, runtime.MaxStagePrompts+i*RetryFixTurns)
+	}
+}
+
+// The count lives in the registry (the ledger and your inputs): a daemon
+// restart between your retry and its fix turns gives the writer the same
+// two.
+func TestARestartBetweenARetryAndItsFixTurnsKeepsTheirCount(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.toPromptCap("PR-12406")
+	r.retryAnswer(task.ID)
+	r.restart()
+	r.afterRetry(task, runtime.MaxStagePrompts+1, nil)
+	r.endTurns(task, 2*RetryFixTurns)
+	got := r.reload(task.ID)
+	if n := r.writerPrompts(); n != runtime.MaxStagePrompts+RetryFixTurns || got.State != registry.TaskNeedsYou ||
+		!strings.HasPrefix(got.WaitsWhat, retryCapWait) {
+		t.Fatalf("task %s waits %q after %d writer prompts; want you after %d, as with no restart", got.State, got.WaitsWhat, n,
+			runtime.MaxStagePrompts+RetryFixTurns)
+	}
+}
+
+// A retry for another cause (a lint that crashed) after one fix turn of
+// your retry at the cap is no retry at the cap: the count goes on from the
+// retry at the cap, and the writer gets its one turn left, not two more.
+func TestARetryBelowTheCapAfterARetryAtTheCapGivesNoTurnMore(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.toPromptCap("PR-12407")
+	r.retryAnswer(task.ID)
+	r.afterRetry(task, runtime.MaxStagePrompts+1, nil)
+	if n := r.writerPrompts(); n != runtime.MaxStagePrompts+1 {
+		t.Fatalf("the writer got %d prompts after your retry at the cap, want %d", n, runtime.MaxStagePrompts+1)
+	}
+	r.commit("PR-12407 another try at the lint", map[string]string{"README": "shop, with credits\n"})
+	r.setLintCrash("Error: boom\n") // the checks of the new head stop on it
+	r.endTurns(task, 2)
+	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou || strings.Contains(got.WaitsWhat, "does not pass") {
+		t.Fatalf("task %s waits %q; want you for the lint's crash", got.State, got.WaitsWhat)
+	}
+
+	r.setLintCrash("")
+	r.retryAnswer(task.ID)
+	r.afterRetry(task, runtime.MaxStagePrompts+RetryFixTurns, nil)
+	r.endTurns(task, 2*RetryFixTurns)
+	got := r.reload(task.ID)
+	if n := r.writerPrompts(); n != runtime.MaxStagePrompts+RetryFixTurns || got.State != registry.TaskNeedsYou ||
+		!strings.HasPrefix(got.WaitsWhat, retryCapWait) {
+		t.Fatalf("task %s waits %q after %d writer prompts; want you after %d: the turn left of your retry at the cap, no more",
+			got.State, got.WaitsWhat, n, runtime.MaxStagePrompts+RetryFixTurns)
+	}
+}
+
+// A let-go is recorded as a retry with its role. Recorded once the role
+// had its cap of prompts, it is no retry of yours at the cap: the budget
+// stays spent. Your retry after it is one.
+func TestALetGoAtThePromptCapIsNoRetry(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12408", "bug", "coding")
+	a, err := h.reg.BeginAttempt(h.ctx, task.ID, "coding")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range runtime.MaxStagePrompts {
+		h.clock.Add(time.Minute)
+		text := "fix turn " + strconv.Itoa(i)
+		if _, err := h.reg.AppendLedger(h.ctx, registry.LedgerEntry{TaskID: task.ID, AttemptID: a.ID, Role: "fx-writer",
+			Hash: runtime.PromptHash(text), Text: text}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record := func(role string) {
+		t.Helper()
+		h.clock.Add(time.Minute)
+		if _, err := h.reg.RecordInput(h.ctx, registry.Input{TaskID: task.ID, Kind: registry.InputRetry, Surface: "cli", Stage: "coding",
+			Role: role}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writer := &stageRole{runAs: config.Role{Name: "fx-writer"}}
+	record("fx-writer") // as a let-go of a prompt to it records itself
+	if b, err := h.e.fixBudgetOf(h.ctx, task, a, writer); err != nil || b != (fixBudget{n: runtime.MaxStagePrompts, max: runtime.MaxStagePrompts}) {
+		t.Fatalf("the budget after a let-go at the cap is %+v (%v), want it spent: %d of %d, no retry", b, err, runtime.MaxStagePrompts,
+			runtime.MaxStagePrompts)
+	}
+	record("") // your retry
+	if b, err := h.e.fixBudgetOf(h.ctx, task, a, writer); err != nil || b != (fixBudget{n: 0, max: RetryFixTurns, retried: true}) {
+		t.Fatalf("the budget after your retry at the cap is %+v (%v), want 0 of %d since it", b, err, RetryFixTurns)
+	}
+}
+
+// Your retry's record is what gives the writer its fix turns at the cap:
+// a record that fails to write leaves the task going on, and the answer
+// says the writer gets no more fix turns and to retry again.
+func TestARetryWhoseRecordFailsSaysTheWriterGetsNoMoreFixTurns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "factory.db")
+	h := newHarness(t, func(d *Deps) { d.Registry = registrytest.OpenFile(t, path, registry.Options{Clock: d.Clock}) })
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.Exec(`CREATE TRIGGER lose_retries BEFORE INSERT ON operator_inputs WHEN NEW.kind = 'retry'
+		BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
+		t.Fatal(err)
+	}
+	task := h.kindTask("PR-12409", "bug", "coding")
+	if err := h.reg.TransitionTask(h.ctx, task.ID, []string{registry.TaskActive}, registry.TaskNeedsYou, func(u *registry.TaskUpdate) {
+		u.Set("waits_who", waitsYou)
+		u.Set("waits_what", capWait+"precheck: lint: 1 offense on the changed lines (bin/lint)")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	qid, err := h.reg.EnqueueRequest(h.ctx, ReqRetry, RetryPayload{TaskID: task.ID, Surface: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.e.handleRequests(h.ctx)
+	q, err := h.reg.RequestByID(h.ctx, qid)
+	const lost = "your retry was not recorded: the writer gets no more fix turns; retry again"
+	if err != nil || q.State != registry.RequestDone || !strings.Contains(q.Result, "goes on") || !strings.Contains(q.Result, lost) {
+		t.Fatalf("your retry: %+v (%v); want it to go on, saying %q", q, err, lost)
+	}
+	if got := h.reload(task.ID); got.State != registry.TaskActive {
+		t.Fatalf("task %s, want it active: the retry goes on", got.State)
+	}
 }
 
 // Your retry while the task waits on you for another cause (here a lint

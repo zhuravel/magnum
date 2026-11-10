@@ -24783,22 +24783,44 @@ skill versions); people add theirs to the sections before it, at the end of the 
   specs and migrations passed and one jest test failed, and the writer never saw it. Now a retry at the cap starts a
   cap of `RetryFixTurns` (2, internal/factory) prompts sent after it (`fixBudgetOf`): the writer gets 2 fix turns for
   checks that still fail, then the task waits on you with "the fx-writer agent's change does not pass after 2 more
-  prompts since your retry: <why>"; each retry at the cap gives 2 again, counted from it. A retry counts as at the cap
-  only when the role had the cap's prompts by then (since the attempt began, or since the last retry at the cap), so
-  a retry while the task waited on you for another cause (a question, a QA stop, a check that crashed) changes
-  nothing, and neither does a let-go (recorded as a retry with its role). The merge turn keeps its rule
-  (`mergeAsked`): one fix turn for the base, then you, retry or not. Every change the checks refuse goes through one
-  place (`fixOrWait`), the end of a turn and a recheck alike. The README's "your retry's new attempt gets its own"
-  was wrong: a retry goes on in the attempt that stopped.
+  prompts since your retry at the cap: <why>" (the words name the retry they count from: a retry for another cause
+  since is not it); each retry at the cap gives 2 again, counted from it. A retry counts as at the cap only when the
+  role had the cap's prompts by then (since the attempt began, or since the last retry at the cap), so a retry while
+  the task waited on you for another cause (a question, a QA stop, a check that crashed) changes nothing, and neither
+  does a let-go (recorded as a retry with its role). The merge turn keeps its rule (`mergeAsked`): one fix turn for
+  the base, then you, retry or not. A recheck of a role this run of the stage failed (`recheckFailed`) keeps its wait
+  as before, a merge problem it finds included: your retry rebuilds the stage, so no recheck follows one. The README's
+  "your retry's new attempt gets its own" was wrong: a retry goes on in the attempt that stopped.
+  The runtime's loop guard had the same blind spot: its ladder (compact the session, start a fresh one, then
+  `ErrNoProgress`, "the agent makes no progress") climbed again only on a new attempt, and the precheck's whys repeat
+  (`jest: bin/jest exited 1` whichever test fails), so the first retry's fix turn was a fresh session, the second
+  retry's second turn was refused, and every retry after it until a daemon restart. Now a retry since the role's
+  newest prompt in the attempt starts the ladder over (`retryStartsOver`, the idea of `retriedSince` that the lost and
+  stuck ladders use): step 0, its base the stage's prompts now, its failures forgotten, and a loop after it told again
+  (`EventNoProgress`). It does so only when the ladder took a step since it last started or the role has the
+  factory's cap of prompts in the attempt, so a retry for another cause under the cap leaves it as it was. The prompt
+  the retry lets out is newer than it, so a retry starts the ladder over once, with nothing kept in memory, and a
+  restart in between changes nothing. A retry whose record fails to write still lets the task go on, and its answer
+  ends "your retry was not recorded: the writer gets no more fix turns; retry again", since the record is what both
+  counts read.
   Rejected: a new attempt on retry. It resets the whole stage's budget (6 prompts more) and the runtime's loop counts,
   which then see no loop the attempt already had. Also rejected: a retry that only reruns the checks (as before), since
-  the writer never sees a failure its change still has, and the task comes back to you with nothing tried.
-  Tests (failing first): `TestARetryAtThePromptCapGivesTheWriterTwoMoreFixTurns` and
-  `TestASecondRetryAtThePromptCapGivesTwoMoreFixTurnsAgain`; and, passing before and after the change, as guards
-  against a wrong count: `TestAChangeThatFailsTheChecksGetsFixTurnsUpToTheStagesCap` (no retry: 6 prompts, the
-  wording as it was), `TestARetryBelowThePromptCapLeavesTheCapAsItWas` (a retry one prompt short of the cap, after a
-  lint that crashed, gives no turn more), `TestARetryAtThePromptCapWhoseChecksPassSendsNoFixTurn` and
-  `TestAMergeTurnGetsNoFixTurnMoreAfterARetry`, all in internal/factory.
+  the writer never sees a failure its change still has, and the task comes back to you with nothing tried. And for the
+  ladder, a time of its last step kept in memory as the anchor of the retry it waits for: the role's newest prompt in
+  the ledger anchors the same retries and survives a restart.
+  Tests (failing first): `TestARetryAtThePromptCapGivesTheWriterTwoMoreFixTurns`,
+  `TestEveryRetryAtThePromptCapGivesTwoMoreFixTurnsAgain` (three retries, the same failure, two turns each),
+  `TestARestartBetweenARetryAndItsFixTurnsKeepsTheirCount` and `TestARetryBelowTheCapAfterARetryAtTheCapGivesNoTurnMore`
+  (these two on the new words only), `TestARetryWhoseRecordFailsSaysTheWriterGetsNoMoreFixTurns`, all in internal/factory;
+  `TestARetryInTheSameAttemptStartsARunOutLadderOver` and `TestARetryAtTheCapStartsTheLadderOverForItsFixTurns` in
+  internal/factory/runtime. Passing before and after, as guards against a wrong count:
+  `TestAChangeThatFailsTheChecksGetsFixTurnsUpToTheStagesCap` (no retry: 6 prompts, the wording as it was),
+  `TestARetryBelowThePromptCapLeavesTheCapAsItWas` (a retry one prompt short of the cap, after a lint that crashed,
+  gives no turn more), `TestARetryAtThePromptCapWhoseChecksPassSendsNoFixTurn`,
+  `TestAMergeTurnGetsNoFixTurnMoreAfterARetry` and `TestALetGoAtThePromptCapIsNoRetry` (a mutation that counts a
+  let-go fails it, as one that counts from the attempt's start fails
+  `TestARetryBelowTheCapAfterARetryAtTheCapGivesNoTurnMore`), and `TestARetryBelowTheCapBeforeAnyStepLeavesTheLadderAsItWas`
+  in internal/factory/runtime (a ladder that starts over on every retry fails it).
 
 - **The precheck runs each migration folder's migrations on that folder's databases, and names one it does
   not run** (2026-11-11). The precheck and the ready card's FLAGS took only the `.rb` files added under

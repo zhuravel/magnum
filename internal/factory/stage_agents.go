@@ -1111,6 +1111,12 @@ func (e *Engine) fixOrWait(ctx context.Context, t registry.Task, a registry.Atte
 	if p.merge != "" {
 		return noValidFile(r, p)
 	}
+	return changeWait(r, p, b)
+}
+
+// changeWait is the wait of a task whose role r's change the factory's
+// checks still refuse (p) at its fix budget's cap b.
+func changeWait(r *stageRole, p *endProblem, b fixBudget) string {
 	return fmt.Sprintf("the %s agent's change does not pass after %s: %s", r.runAs.Name, b, p.why)
 }
 
@@ -1124,10 +1130,11 @@ type fixBudget struct {
 
 // String is the cap a change that still fails reached, as its wait names
 // it: "6 prompts in the stage", or after your retry at the cap "2 more
-// prompts since your retry".
+// prompts since your retry at the cap" (the newest such retry: a retry for
+// another cause since is not the one it counts from).
 func (b fixBudget) String() string {
 	if b.retried {
-		return fmt.Sprintf("%d more prompts since your retry", b.max)
+		return fmt.Sprintf("%d more prompts since your retry at the cap", b.max)
 	}
 	return fmt.Sprintf("%d prompts in the stage", b.max)
 }
@@ -1194,15 +1201,20 @@ func (e *Engine) mergeAsked(ctx context.Context, t registry.Task, a registry.Att
 }
 
 // noValidFile is the wait of a task whose role wrote no valid file after
-// its nudge, whose merge turn did not merge the base after its fix turn, or
-// whose end fact needs you (why). A change that still fails the factory's
-// checks at its cap has fixOrWait's wait.
+// its nudge, whose change still fails the factory's checks at the stage's
+// prompt cap, whose merge turn did not merge the base after its fix turn,
+// or whose end fact needs you (why). For a change it names the stage's cap:
+// a recheck (recheckFailed) checks a role this run of the stage failed, and
+// your retry rebuilds the stage, whose end of the turn (fixOrWait) names the
+// cap your retry at the cap set.
 func noValidFile(r *stageRole, p *endProblem) string {
 	switch {
 	case p.operator:
 		return p.why
 	case p.merge != "":
 		return "the " + r.runAs.Name + " agent did not merge " + p.merge
+	case p.change:
+		return changeWait(r, p, fixBudget{max: runtime.MaxStagePrompts})
 	}
 	return "the " + r.runAs.Name + " agent wrote no valid " + p.file
 }
@@ -1258,11 +1270,10 @@ func asStageRuns(st config.FactoryStage, role config.Role) config.Role {
 // told the agent to): a valid one is done, an invalid one is what the task
 // waits on you for again. A coding stage's role is done once the factory's
 // checks pass at its head (they run again: the task left the live states,
-// which forgot their result); a change they still refuse gets a fix turn
-// while its budget has one left (fixOrWait). A role whose turn was a prompt
-// you let go is checked so too: nothing watches that turn, so until its end
-// fact holds the task waits on you with a plain reason (letGoWait), never in
-// silence, and the prompt is never sent again.
+// which forgot their result). A role whose turn was a prompt you let go is
+// checked so too: nothing watches that turn, so until its end fact holds the
+// task waits on you with a plain reason (letGoWait), never in silence, and
+// the prompt is never sent again.
 func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.FactoryStage, a registry.Attempt, run *agentsRun, dir string) string {
 	for _, r := range run.roles {
 		if r.failed == "" && !r.letGo {
@@ -1302,12 +1313,6 @@ func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.
 		switch {
 		case p != nil && r.letGo && !p.operator:
 			return letGoWait(r, p, t.Branch)
-		case p != nil && p.change && !p.operator:
-			if what := e.fixOrWait(ctx, *t, a, r, p); what != "" {
-				return what
-			}
-			r.failed = "" // its fix turn is due
-			continue
 		case p != nil:
 			return noValidFile(r, p)
 		}

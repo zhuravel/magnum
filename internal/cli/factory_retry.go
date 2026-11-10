@@ -27,11 +27,15 @@ func newFactoryRetryCmd(c *Context) *cobra.Command {
 			"what a check kept for you, the publish's checks before any step). "+
 			fmt.Sprintf("A retry at the prompt cap (a writer whose change the factory's checks refuse after %d prompts in the "+
 				"stage) runs the checks again; for checks that still fail, the writer gets %d more fix turns, then the task "+
-				"waits on you again, and each retry at the cap gives %d again. ", runtime.MaxStagePrompts, factory.RetryFixTurns,
-				factory.RetryFixTurns)+
+				"waits on you again (\"does not pass after %d more prompts since your retry at the cap\"), and each retry at "+
+				"the cap gives %d again. The agent's loop guard starts over at your retry too, so it lets those turns "+
+				"out rather than stop them as a loop without progress. When your retry cannot be recorded, its answer says so: the task "+
+				"goes on, and the writer gets no more fix turns. ", runtime.MaxStagePrompts, factory.RetryFixTurns,
+				factory.RetryFixTurns, factory.RetryFixTurns)+
 			"A prompt whose delivery is unknown is still sent to nobody (`magnum factory let-go` lets one go, once you "+
-			"looked at its pane), and a task Codex never works on stays so. When the task waits on a precheck failure and nothing changed since (the branch's head, "+
-			"the precheck commands, their environment), the answer says so, and the task still goes on. A task that "+
+			"looked at its pane), and a task Codex never works on stays so. When the task waits on a precheck failure and "+
+			"nothing changed since (the branch's head, the precheck commands, their environment), the answer says so, and "+
+			"the task still goes on. A task that "+
 			"does not wait on you is refused, and so is one whose questions wait for your answers (`magnum factory answer`). "+
 			"--accept-qa also accepts what QA's newest run left you at the task's head. The QA defects that block which the writer "+
 			"declined with its risk, when QA's fix loop stopped for you on them: the next QA run at the task's head lets exactly "+

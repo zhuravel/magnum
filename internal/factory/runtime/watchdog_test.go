@@ -275,7 +275,8 @@ func TestALoopWithoutProgressCompactsThenStartsFresh(t *testing.T) {
 		t.Fatalf("the loop was reported again: %+v", evs)
 	}
 
-	// The operator's retry is a new attempt of the stage: the ladder climbs again.
+	// A new attempt of the stage (a send back, a merge turn) climbs again. Your
+	// retry goes on in the same attempt: TestARetryInTheSameAttemptStartsARunOutLadderOver.
 	g.attempt = g.begin(g.task, "investigate")
 	g.launch("fx-repro")
 	if _, err := send(1); err != nil {

@@ -614,7 +614,8 @@ wrote no valid <file>". A writer whose change fails the factory's checks gets fi
 and the file of the runs (`factory-proof.json` or `precheck.md`), up to 6 prompts in the stage's attempt;
 then the task waits on you, "the fx-writer agent's change does not pass after 6 prompts in the stage: <why>". Your
 retry at that cap runs the checks again, and for checks that still fail the writer gets 2 more fix turns, then
-"... does not pass after 2 more prompts since your retry: <why>"; each retry at the cap gives 2 again.
+"... does not pass after 2 more prompts since your retry at the cap: <why>"; each retry at the cap gives 2
+again.
 What the writer cannot fix (a command the deny list refuses or that is missing or not executable, lint output
 not by `path:line`, no specs command, an unreadable `table_stats`, changes the checks cannot tell from yours)
 goes to you at once, naming the configuration key or the paths. Every plan gets a critic: the `critic` stage (`when = "wide"`,
