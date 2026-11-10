@@ -576,22 +576,24 @@ func TestALastAttemptTheNextDaemonSettlesAsFailedSaysTheLoginWasTold(t *testing.
 // A standing approval a later round's gates refuse is dismissed on GitHub
 // in the class's words alone, also when the first dismissal fails and a
 // later one (after a restart) sends it again, while the operator's
-// withdrawal events and toast keep the gate's own words ("(AGENTS.md)").
+// withdrawal events and toast keep the gate's own words ("(CLAUDE.md)": b2
+// changes what CLAUDE.md links to in b2's own tree, which only b2's round
+// reads).
 func TestAWithdrawalKeepsItsDetailLocalAndItsGitHubWordsPublic(t *testing.T) {
-	h, _ := newAutoHarness(t, approvesAsAlice)
+	h, _ := newAutoHarness(t, approvesAsAlice, linkOfB2)
 	h.reviewedFor(prSpec{head: "b1"})
 	if a := h.autoApproval(2); a.State != store.AutoStanding {
 		t.Fatalf("approval = %+v", a)
 	}
 	h.gh.dismissErr = &github.APIError{Op: "dismiss review", Status: 502, Message: "Bad Gateway"}
-	h.moveTo(prSpec{head: "b2", files: []string{"app/models/order.rb", "AGENTS.md"}})
+	h.moveTo(prSpec{head: "b2", files: []string{"app/models/order.rb", "docs/guide.md"}})
 	h.reviewTo(2, "b2")
 	h.tick()
 	const (
 		public = "the PR changes the instructions or configuration of the AI review agents, so alice must review and approve it in person"
-		local  = "it changes the review agents' instructions or hooks (AGENTS.md)"
+		local  = "it changes the review agents' instructions or hooks (CLAUDE.md)"
 	)
-	if a := h.autoApproval(2); a.State != store.AutoDismissing || !strings.Contains(a.EndReason, public) || strings.Contains(a.EndReason, "AGENTS.md") {
+	if a := h.autoApproval(2); a.State != store.AutoDismissing || !strings.Contains(a.EndReason, public) || strings.Contains(a.EndReason, "CLAUDE.md") {
 		t.Fatalf("approval = %+v, want it being withdrawn with the public words", a)
 	}
 	h.gh.dismissErr = nil
@@ -605,11 +607,11 @@ func TestAWithdrawalKeepsItsDetailLocalAndItsGitHubWordsPublic(t *testing.T) {
 		t.Fatalf("dismissals = %q, want the failed one and its retry", d)
 	}
 	for _, m := range d {
-		if !strings.Contains(m, public) || strings.Contains(m, "AGENTS.md") || strings.Contains(m, "instructions or hooks") {
+		if !strings.Contains(m, public) || strings.Contains(m, "CLAUDE.md") || strings.Contains(m, "instructions or hooks") {
 			t.Fatalf("a dismissal on GitHub says %q", m)
 		}
 	}
-	if a := h.autoApproval(2); a.State != store.AutoDismissed || strings.Contains(a.EndReason, "AGENTS.md") {
+	if a := h.autoApproval(2); a.State != store.AutoDismissed || strings.Contains(a.EndReason, "CLAUDE.md") {
 		t.Fatalf("approval = %+v", a)
 	}
 	begins, withdrawn := h.events("review.auto_approval_withdraw_begin"), h.events("review.auto_approval_withdrawn")
@@ -660,17 +662,19 @@ func TestEveryEndOfAWithdrawalDropsItsNote(t *testing.T) {
 		}, store.AutoDismissed, store.AutoEndedClosed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _ := newAutoHarness(t, approvesAsAlice)
+			h, _ := newAutoHarness(t, approvesAsAlice, func(h *harness) {
+				h.d.Git = fakeGit{links: map[string]map[string]string{"b2": {"CLAUDE.md": "docs/guide.md"}}} // the review of b2 refuses it
+			})
 			h.reviewedFor(prSpec{head: "b1"})
 			h.gh.dismissErr = failing
-			h.moveTo(prSpec{head: "b2", files: []string{"app/models/order.rb", "AGENTS.md"}})
+			h.moveTo(prSpec{head: "b2", files: []string{"app/models/order.rb", "docs/guide.md"}})
 			h.reviewTo(2, "b2")
 			h.tick()
 			key := kvAutoWithdrawNote(h.pr(2).ID)
 			if a := h.autoApproval(2); a.State != store.AutoDismissing {
 				t.Fatalf("approval = %+v, want it being withdrawn", a)
 			}
-			if v, ok := h.kvOf(key); !ok || !strings.Contains(v, "(AGENTS.md)") {
+			if v, ok := h.kvOf(key); !ok || !strings.Contains(v, "(CLAUDE.md)") {
 				t.Fatalf("%s = %q, %v: want the gate's words kept for the next attempt", key, v, ok)
 			}
 			tc.end(h)
@@ -768,24 +772,29 @@ func TestAFinalPostFailureSaysTheLoginWasTold(t *testing.T) {
 
 // A standing approval a later clean round's gates refuse is dismissed with
 // the class's words, never the gate's own ("it changes the review agents'
-// instructions or hooks (AGENTS.md)"); a gate without a class says only
+// instructions or hooks (CLAUDE.md)"); a gate without a class says only
 // that magnum no longer approves the PR automatically.
 func TestTheWithdrawalMessageUsesThePublicWords(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		next prSpec
-		mod  func(*harness)
-		want string
-		raw  []string
+		name  string
+		next  prSpec
+		setup func(*harness) // at the harness's start
+		mod   func(*harness) // before the push
+		want  string
+		raw   []string
 	}{
-		{name: "the agents' instructions", next: prSpec{head: "b2", files: []string{"app/models/order.rb", "AGENTS.md"}},
+		{name: "the agents' instructions", next: prSpec{head: "b2", files: []string{"app/models/order.rb", "docs/guide.md"}}, setup: linkOfB2,
 			want: "the PR changes the instructions or configuration of the AI review agents, so alice must review and approve it in person",
-			raw:  []string{"AGENTS.md", "instructions or hooks"}},
+			raw:  []string{"CLAUDE.md", "instructions or hooks"}},
 		{name: "a gate without a class", next: prSpec{head: "b2"}, mod: func(h *harness) { h.gh.defaultFiles = nil },
 			want: "Magnum no longer approves it automatically", raw: []string{"no list of the head's files", "cannot tell"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _ := newAutoHarness(t, approvesAsAlice)
+			mods := []func(*harness){approvesAsAlice}
+			if tc.setup != nil {
+				mods = append(mods, tc.setup)
+			}
+			h, _ := newAutoHarness(t, mods...)
 			h.reviewedFor(prSpec{head: "b1"})
 			if a := h.autoApproval(2); a.State != store.AutoStanding {
 				t.Fatalf("approval = %+v", a)

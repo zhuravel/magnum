@@ -565,6 +565,61 @@ func TestARetargetWhoseFileListIsOfTheOldBaseIsNotGatedOnIt(t *testing.T) {
 	}
 }
 
+// A push starts no gate of a standing approval by itself: the round on the
+// new head does, after the push's quiet period and the round's own run, and
+// on a repository that keeps approvals across pushes the operator's
+// approval of the old head stands on the new one meanwhile. When the new
+// head's file list (read with the poll's Details) is one the files gate
+// refuses for good, the approval is withdrawn at once, before any round,
+// saying the new head; a list the gate lets through, or none of the new
+// head yet, leaves it to the round.
+func TestAPushTheFilesGateRefusesWithdrawsAStandingApprovalAtOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		files    []string
+		withdraw bool
+	}{
+		{"agents' config", []string{"app/x.rb", ".claude/settings.json"}, true},
+		{"workflows", []string{".github/workflows/ci.yml"}, true},
+		{"code only", []string{"app/y.rb"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newAutoHarness(t)
+			h.open(prSpec{n: 1, head: "base1"})
+			h.startup()
+			h.tick()
+			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: []string{"app/x.rb"}})
+			h.tick()
+			h.reviewTo(2, "b1")
+			h.flush()
+			if a := h.autoApproval(2); a.State != store.AutoStanding {
+				t.Fatalf("approval = %+v, want it standing", a)
+			}
+			rounds := len(h.rd.all())
+			h.advance(time.Minute)
+			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", files: tc.files})
+			h.tick()
+			h.flush()
+			if n := len(h.rd.all()); n != rounds {
+				t.Fatalf("rounds = %d, want none on b2 yet", n)
+			}
+			a := h.autoApproval(2)
+			if !tc.withdraw {
+				if a.State != store.AutoStanding {
+					t.Fatalf("approval = %+v, want it standing until the round on b2", a)
+				}
+				return
+			}
+			if a.State != store.AutoDismissed || a.EndedBy != store.AutoEndedMagnum {
+				t.Fatalf("approval = %+v, want magnum's withdrawal before the round on b2", a)
+			}
+			if d := h.ghCalls("dismiss:"); len(d) != 1 || !strings.Contains(d[0], "found nothing to fix, but on b2 the PR changes") {
+				t.Fatalf("dismissals = %q, want one that says the new head", d)
+			}
+		})
+	}
+}
+
 // GitHub's GraphQL file list names a rename by its new path only, so a PR
 // that moves the team's hook out of .claude/ (git mv
 // .claude/hooks/pre_tool_use.rb scripts/audit/) lists scripts/audit/ alone,
@@ -680,6 +735,13 @@ func approvedThenReviewedOn(t *testing.T, next prSpec, r autoRound, mods ...func
 	return h
 }
 
+// linkOfB2 gives b2's tree CLAUDE.md -> docs/guide.md, which b1's lacks: a
+// b2 that changes docs/guide.md is refused by the gates of its own round
+// alone (a push's are of the approved head's links: movedHeadRefusal).
+func linkOfB2(h *harness) {
+	h.d.Git = fakeGit{links: map[string]map[string]string{"b2": {"CLAUDE.md": "docs/guide.md"}}}
+}
+
 // The words a withdrawal as zhuravel says of each class of the gates'
 // refusals (publicReason), in place of the gate's own.
 const (
@@ -722,24 +784,32 @@ func (h *harness) wantGateWithdrawal(public, local string) {
 
 // A standing approval of b1 is checked again when magnum reviews a new
 // head: a clean review of b2 that a new approval's gates would refuse (b2
-// adds AGENTS.md, its review went without codex-review, its checks fail)
-// withdraws the operator's approval in the words of the gate's class, and
-// the card then says the gate's own why magnum does not approve b2.
+// changes what a link of its own tree leads to, its review went without
+// codex-review, its checks fail) withdraws the operator's approval in the
+// words of the gate's class, and the card then says the gate's own why
+// magnum does not approve b2. (A list the files gate refuses with the
+// approved head's links withdraws it at the push already:
+// TestAPushTheFilesGateRefusesWithdrawsAStandingApprovalAtOnce.)
 func TestAStandingApprovalIsWithdrawnWhenTheGatesRefuseANewHead(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		next   prSpec
 		round  autoRound
+		mod    func(*harness)
 		want   string // the card's
 		public string // the withdrawal's
 	}{
-		{"b2 adds AGENTS.md", prSpec{n: 2, head: "b2", files: []string{"app/models/order.rb", "AGENTS.md"}}, cleanRound,
-			"it changes the review agents' instructions or hooks (AGENTS.md)", withdrawnAgentConfig},
-		{"b2 reviewed without codex-review", prSpec{n: 2, head: "b2"}, withoutCodexReview, heardNothingReason, withdrawnUnheard},
-		{"b2's checks fail", prSpec{n: 2, head: "b2", ci: "FAILURE"}, cleanRound, "its head's checks fail", withdrawnCIFails},
+		{"b2 changes a link's target", prSpec{n: 2, head: "b2", files: []string{"app/models/order.rb", "docs/guide.md"}}, cleanRound, linkOfB2,
+			"it changes the review agents' instructions or hooks (CLAUDE.md)", withdrawnAgentConfig},
+		{"b2 reviewed without codex-review", prSpec{n: 2, head: "b2"}, withoutCodexReview, nil, heardNothingReason, withdrawnUnheard},
+		{"b2's checks fail", prSpec{n: 2, head: "b2", ci: "FAILURE"}, cleanRound, nil, "its head's checks fail", withdrawnCIFails},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := approvedThenReviewedOn(t, tc.next, tc.round)
+			var mods []func(*harness)
+			if tc.mod != nil {
+				mods = append(mods, tc.mod)
+			}
+			h := approvedThenReviewedOn(t, tc.next, tc.round, mods...)
 			h.wantGateWithdrawal(tc.public, tc.want)
 			if got := h.autoRefused(2); !strings.Contains(got, tc.want) {
 				t.Fatalf("the card says %q, want %q", got, tc.want)
@@ -776,15 +846,17 @@ func TestAStandingApprovalWaitsWhileTheNewHeadsChecksRun(t *testing.T) {
 	}
 }
 
-// A head magnum has not reviewed changes nothing: the approval of b1 stands
-// while b2, which adds AGENTS.md and fails its checks, waits for its round,
-// and that round decides.
+// A head magnum has not reviewed changes nothing the poll's file list of it
+// does not refuse for good: the approval of b1 stands while b2, which fails
+// its checks, waits for its round, and that round decides. (A list the
+// files gate refuses for good withdraws it at the push:
+// TestAPushTheFilesGateRefusesWithdrawsAStandingApprovalAtOnce.)
 func TestAStandingApprovalStandsUntilMagnumReviewsTheNewHead(t *testing.T) {
 	h, _ := newAutoHarness(t)
 	h.reviewedPR(2, "b1")
 	h.tick()
 	h.advance(time.Minute)
-	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", ci: "FAILURE", files: []string{"AGENTS.md"}})
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", ci: "FAILURE", files: []string{"app/models/order.rb"}})
 	h.tick()
 	h.advance(time.Minute)
 	h.tick()
@@ -799,13 +871,13 @@ func TestAStandingApprovalStandsUntilMagnumReviewsTheNewHead(t *testing.T) {
 	}
 	h.reviewTo(2, "b2")
 	h.tick()
-	h.wantGateWithdrawal(withdrawnAgentConfig, "it changes the review agents' instructions or hooks (AGENTS.md)")
+	h.wantGateWithdrawal(withdrawnCIFails, ciFailsWords)
 }
 
 // The gates decide once on each round, as before a new approval: once
 // magnum's review of b2 passes them the approval stands until the next
 // round, though b2's checks fail afterwards and the daemon restarts, and a
-// push of b3 that adds AGENTS.md waits for b3's round.
+// push of b3 whose checks fail waits for b3's round.
 func TestAStandingApprovalThatPassedTheGatesWaitsForTheNextRound(t *testing.T) {
 	h := approvedThenReviewedOn(t, prSpec{n: 2, head: "b2", ci: "SUCCESS"}, cleanRound)
 	h.flush()
@@ -815,7 +887,7 @@ func TestAStandingApprovalThatPassedTheGatesWaitsForTheNextRound(t *testing.T) {
 	h.startup()
 	h.flush()
 	h.advance(time.Minute)
-	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b3", files: []string{"AGENTS.md"}})
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b3", ci: "FAILURE", files: []string{"app/models/order.rb"}})
 	h.tick()
 	if d := h.ghCalls("dismiss:"); len(d) != 0 {
 		t.Fatalf("dismissals = %q", d)

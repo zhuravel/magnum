@@ -71,11 +71,20 @@ func TestAPRThatChangesItsWorkflowsIsNotAutoApproved(t *testing.T) {
 	}
 }
 
-// A standing approval of b1 is withdrawn when magnum's clean review of b2
-// finds that b2 changes a workflow, as for any gate a new approval runs.
+// A standing approval of b1 is withdrawn once the poll's file list of b2
+// says that b2 changes a workflow, as for any gate a new approval runs that
+// refuses a head for good: at the push, before magnum reviews b2, in the
+// class's words for GitHub, saying the head.
 func TestAStandingApprovalIsWithdrawnWhenTheNewHeadChangesAWorkflow(t *testing.T) {
 	h := approvedThenReviewedOn(t, prSpec{n: 2, head: "b2", files: []string{"app/models/order.rb", ".github/workflows/ci.yml"}}, cleanRound)
-	h.wantGateWithdrawal(withdrawnWorkflows, workflowsWords)
+	d := h.ghCalls("dismiss:")
+	if len(d) != 1 || !strings.HasPrefix(d[0], "dismiss:talkable/talkable#2:9001:Magnum's review of b1 found nothing to fix, but on b2 "+withdrawnWorkflows) ||
+		strings.Contains(d[0], workflowsWords) {
+		t.Fatalf("dismissals = %q, want one at the push in the class's words", d)
+	}
+	if evs := h.events("review.auto_approval_withdrawn"); len(evs) != 1 || !strings.Contains(evs[0].Message, "but on b2 "+workflowsWords) {
+		t.Fatalf("withdrawn events = %+v, want one with the gate's own words", evs)
+	}
 }
 
 // Since spec 84 the stored checks kept one run per workflow name and check

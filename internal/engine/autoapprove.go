@@ -897,7 +897,9 @@ func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.Au
 // cannot tell) withdraws it, and so does one the gates refuse (gate:
 // standingGateRefusal): public says the class's words (publicReason),
 // never the gate's own, "Magnum no longer approves it automatically" for a
-// gate without a class, and local says the gate's.
+// gate without a class, and local says the gate's; both name the head a
+// refusal of a head no round reviewed yet is of ("but on 602da9d the PR
+// changes …": movedHeadRefusal).
 func standingWithdrawal(sum store.ReviewSummary, body string, gate autoRefusal, login string) (public, local string) {
 	var what, own string
 	switch blocks, known := roundBlocks(sum, body); {
@@ -906,8 +908,12 @@ func standingWithdrawal(sum store.ReviewSummary, body string, gate autoRefusal, 
 	case !known:
 		what = "left earlier findings open"
 	case gate.why != "":
-		what = "found nothing to fix, but " + cmp.Or(publicReason(gate.public, login), "Magnum no longer approves it automatically")
-		own = "found nothing to fix, but " + gate.why
+		but := "found nothing to fix, but "
+		if gate.head != "" && gate.head != sum.SHA {
+			but += "on " + textx.ShortSHA(gate.head) + " " // a head no round reviewed yet (movedHeadRefusal)
+		}
+		what = but + cmp.Or(publicReason(gate.public, login), "Magnum no longer approves it automatically")
+		own = but + gate.why
 	default:
 		return "", ""
 	}

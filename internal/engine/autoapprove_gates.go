@@ -91,6 +91,10 @@ type autoRefusal struct {
 	why    string
 	public publicRefusal
 	waits  bool
+	// head is the head the refusal is of when it is not the reviewed one
+	// (a standing approval's new head, movedHeadRefusal); "" for the
+	// reviewed head.
+	head string
 }
 
 // fingerprint is what noteAutoRefused compares a refusal recorded for the
@@ -249,9 +253,13 @@ func (e *Engine) noteApprovalBase(ctx context.Context, id int64, pr store.PR) {
 // (autoGateRefusal) refuse sum, magnum's latest posted round of standing
 // approval a's PR, which then withdraws a: a new head that adds an
 // AGENTS.md, whose review went without codex-review or whose checks fail
-// is not covered by the operator's approval of an earlier head. "" when a
-// stands: sum is none, the PR's head is not the one sum reviewed (a head
-// magnum has not reviewed changes nothing: its round decides), sum is a's
+// is not covered by the operator's approval of an earlier head. On a head
+// sum did not review, the files gate decides at once when the poll's file
+// list of it refuses for good (movedHeadRefusal): a push starts no gate
+// until its round ends, and on a repository that keeps approvals across
+// pushes the approval would stand on that head meanwhile. "" when a
+// stands: sum is none, the PR's head is not the one sum reviewed and its
+// list refuses nothing for good (its round decides), sum is a's
 // own round, sum leaves something to fix (that withdraws a anyway), the
 // head's checks still run (magnum waits for them, asked again every tick),
 // or the gates let sum's round through already (kvAutoApprovalGated). On
@@ -260,8 +268,11 @@ func (e *Engine) noteApprovalBase(ctx context.Context, id int64, pr store.PR) {
 // on (baseGateRefusal): a PR retargeted to another base changes other
 // files.
 func (e *Engine) standingGateRefusal(ctx context.Context, a store.AutoApprovalPR, sum *store.ReviewSummary) autoRefusal {
-	if sum == nil || sum.SHA != a.PR.HeadSHA {
+	switch {
+	case sum == nil:
 		return autoRefusal{}
+	case sum.SHA != a.PR.HeadSHA:
+		return e.movedHeadRefusal(ctx, a)
 	}
 	if r := e.baseGateRefusal(ctx, a); r.why != "" {
 		return r
@@ -283,6 +294,25 @@ func (e *Engine) standingGateRefusal(ctx context.Context, a store.AutoApprovalPR
 	case r.why == "":
 		e.setKV(ctx, key, mark)
 	}
+	return r
+}
+
+// movedHeadRefusal is the files gate's refusal of the head standing
+// approval a's PR moved to, which no round of magnum's reviewed yet, when
+// it refuses that head for good (refusesForGood: its file list changes
+// the review agents' config, its own workflows or actions, or more files
+// than GitHub lists), with that head named; else none, and the head's
+// round decides. The links it follows are those of the approved head
+// (a.HeadSHA, which the clone holds since its round): the poll sees the
+// new head before any fetch brings it, and a link the push itself adds is
+// a path of the agents' config in its list. Each tick asks it again: a
+// registry read and the approved head's links, kept by head.
+func (e *Engine) movedHeadRefusal(ctx context.Context, a store.AutoApprovalPR) autoRefusal {
+	r, _ := e.filesRefusal(ctx, a.PR, a.HeadSHA)
+	if !refusesForGood(r.public) {
+		return autoRefusal{}
+	}
+	r.head = a.PR.HeadSHA
 	return r
 }
 
@@ -402,6 +432,13 @@ var filesGateWords = []string{filesUnknownShort, agentConfigShort, workflowsShor
 // is that of the files it found, or of a list GitHub cut short; a list
 // magnum cannot read or has none of has none (the next poll mends it).
 func (e *Engine) changedFilesRefusal(ctx context.Context, pr store.PR) (r autoRefusal, short string) {
+	return e.filesRefusal(ctx, pr, pr.HeadSHA)
+}
+
+// filesRefusal is changedFilesRefusal following the links of commit
+// linksAt's tree (configLinks), pr's head's or another's
+// (movedHeadRefusal's approved head).
+func (e *Engine) filesRefusal(ctx context.Context, pr store.PR, linksAt string) (r autoRefusal, short string) {
 	const unknown = filesUnknownShort
 	f, ok, err := e.st.PRFilesOf(ctx, pr.ID)
 	if err != nil {
@@ -414,7 +451,9 @@ func (e *Engine) changedFilesRefusal(ctx context.Context, pr store.PR) (r autoRe
 	if listed {
 		paths = f.Paths
 	}
-	why, unknownWhy := e.agentConfigRefusal(ctx, pr, paths)
+	at := pr
+	at.HeadSHA = linksAt
+	why, unknownWhy := e.agentConfigRefusal(ctx, at, paths)
 	if why != "" {
 		return autoRefusal{why: why, public: publicAgentConfig}, agentConfigShort
 	}
