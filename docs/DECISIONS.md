@@ -4529,7 +4529,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   at most once a settle_quiet (ciRunMoved, the read's Runs and Checked), and a newer attempt that failed
   again is read again. A re-run by hand of magnum's dispatched run, or someone's later start of the workflow
   at the head (a newer `workflow_dispatch` run of its file), that has not ended or ended without failing
-  takes the failure back (ciDispatchNow, in the head's runs the CI reader or ciRunMoved reads anyway, so no
+  takes the failure back (ciRunNow, in the head's runs the CI reader or ciRunMoved reads anyway, so no
   read of its own and none a tick): the look records that run as the start's, with when it found it
   (`pr.<id>.ci_dispatch`'s `run` and `moved`), and waits for it as for its own start ("CI at a1a1a1a: ci.yml
   was run again after magnum's run of it failed"), and the poll reads the run and the head's checks while it
@@ -4562,6 +4562,39 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAnAbortedCIFixIsStopped, TestACIFixWhoseRunFailedIsFailed, TestACIFixLostInARestartIsLost,
   TestTheFixPromptOfACIFixGetsItsFile, and the read-once and no-other-reviewers checks added to
   TestTheCIFixRecordIsWrittenBeforeTheStart and TestMagnumFixCIDryRunAnswersThePlan.
+
+- **The CI fix after its second review: the base past a running tip only to a pass, one CI-config rule,
+  every run the look named followed, the head's runs once a settle_quiet** (2026-11-10, a reviewer of the
+  fix stage). The base read passed over a tip that still runs the failed check to the first parent that
+  finished it, so a parent that failed it decided "failed", and as only a failed read or a running word is
+  read again, the verdict said for hours after the tip turned green that the check is red on main; a running
+  commit is now passed over only to an older one that passed it, and above one that failed it the word is
+  running (it waits, read again settle_max later). The look refused a CI fix for a PR that changes its
+  workflows, actions or an action.yml (changesActions), while `magnum push --ci` and the fix skill also
+  count .github/bin, so a PR that changes `.github/bin/rspec-shard` got a CI fix that could only answer
+  config and spent one of 3; `engine.CIConfigPath` (changesActions or `.github/bin/`, in lower case) is now
+  the one rule of both (push.go's own copy matched its prefixes in one case only), and the look's re-run of
+  a run that started no job keeps changesActions. Beside the re-run by hand of magnum's start (the entry
+  above), its re-run of a run that started no job is followed the same way (ciRunNow): a newer attempt that
+  runs or did not fail is written back as the re-run's `seen` with `moved`, no read is recorded (no Jobs:0
+  read, no running read of a named run), the poll's wait for it holds settle_max after (rerunWaits), and the
+  look waits with "run 500 of ci.yml was run again after magnum's re-run of it failed". A read that listed
+  no failed job of a run the look named ("its run lists no failed job magnum can read; it is yours") goes
+  through ciRunMoved too, within its settle_quiet limit (the verdict's recheckCIRead, and `magnum fix
+  --ci`), so a later re-run by hand that fails again is read and its CI fix starts. ciRunMoved records its
+  check's time after a failed read of the head's runs (or of the batch's token) as after one that found
+  nothing moved, so it is tried again a settle_quiet later, not at every look while the start waits. The CI
+  reader's comment says what the registry keeps: the check-run names the base read compared (the record's
+  `base`, `checks` and `each`: the rollup's names), never a log's text. The reviewer's secret shapes that
+  scrub.Secrets misses are master's internal/scrub's, sent to its owner. Tests, failing first:
+  TestTheNewestBaseCommitThatFinishedTheCheckDecides (a failed parent below a running tip is running now),
+  TestCIConfigPathIsTheLooksAndThePushsOneRule, TestAPRThatChangesItsCIConfigGetsNoCIFix (`.github/bin`, in
+  two cases), TestAPassedReRunByHandOfMagnumsFailedReRunLeavesThePRIdle,
+  TestAReadThatListedNoFailedJobIsCheckedAgainstTheHeadsRuns and
+  TestAFailedReadOfTheHeadsRunsWaitsASettleQuiet; and, for what no test held:
+  TestAStandingReadChecksTheHeadsRunsOnceASettleQuiet, TestARunStillRunningAtTheAttemptReadFeedsNoCIFix and
+  `jobs_with` with its summary line in TestTwoFailedChecksOfOneRunListEachJobAndReadItsLogOnce;
+  TestTheCIReaderWaitsForARunsNewestAttempt reads a named run's running attempt as moved.
 
 ## Screens and commands
 
