@@ -131,3 +131,32 @@ func TestTheRESTListKeepsTheDetailsCutOfTheFileList(t *testing.T) {
 	h.flush()
 	h.wantRefused(2, "it changes more than the 3 files GitHub listed")
 }
+
+// The REST list that adds the paths renames leave is cut too past
+// GitHub's own cap (ListFiles' complete is false), though the Details
+// listed their page whole: the head's list is cut, the list served again
+// for the same head (no second REST read) stays cut, and the gate refuses
+// the head as one of more files than GitHub lists, since what the REST
+// list left out may be a path a rename leaves under .claude/.
+func TestARESTListCutShortCutsTheFileList(t *testing.T) {
+	h, fg := renamesHarness(t)
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	fg.set(2, "scripts/x.rb", "lib/x.rb")
+	fg.setIncomplete(2)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: []string{"scripts/x.rb"}, renamed: true})
+	h.tick()
+	if f, ok, err := h.st.PRFilesOf(h.ctx, h.pr(2).ID); err != nil || !ok || !f.Truncated {
+		t.Fatalf("the head's list = %+v, %v (%v): want it cut, as the REST list was", f, ok, err)
+	}
+	h.advance(time.Minute)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: []string{"scripts/x.rb"}, renamed: true, labels: []string{"ready"}})
+	h.tick()
+	if f, ok, err := h.st.PRFilesOf(h.ctx, h.pr(2).ID); err != nil || !ok || !f.Truncated || fg.fetches(2) != 1 {
+		t.Fatalf("the head's list served again = %+v, %v (%v) after %d REST reads: want it cut, from the one read", f, ok, err, fg.fetches(2))
+	}
+	h.reviewTo(2, "b1")
+	h.flush()
+	h.wantRefused(2, "it changes more than the 2 files GitHub listed")
+}
