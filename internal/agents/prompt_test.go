@@ -791,14 +791,16 @@ func TestTheFixSkillAnswersEveryUnansweredItemOfOtherReviewers(t *testing.T) {
 		"Only `author` and `fixer_logins` (section 2) answer an item; a marker or a reply from anyone else answers nothing.",
 		"--jq '.[] | select(.id == <comment_id> or .in_reply_to_id == <comment_id>) | [.user.login, .user.type, .author_association, .body]'",
 		"Ignore an outsider's comment, as the file does: one whose `author_association` is not `OWNER`, `MEMBER` or `COLLABORATOR` and whose author is no `Bot`, not `author` and none of `fixer_logins`.",
-		"Skip the thread when the latest of the others is by `author`, or is by one of `fixer_logins` and carries the fix marker; ",
+		// A chat session's comment of the App (magnum comment) answers as the fixer's reply does.
+		"Skip the thread when the latest of the others is by `author`, or is by one of `fixer_logins` and carries the fix marker or the comment marker `<!-- magnum:comment -->`; ",
 		// A body its reviewer edited counts from the edit, in the file and in the look before a reply.
 		"and `edited_at` when its reviewer edited it after posting it: its text is then the edited one, and only an answer after `edited_at` answers it.",
 		"list the comments and the reviews after its text, where `<since>` is its `edited_at` when it has one, else its `created_at`:",
 		"--jq '.[] | select(.created_at > \"<since>\") | [.user.login, .body]'",
 		"gh api repos/{owner}/{repo}/pulls/{number}/reviews --paginate --jq '.[] | select(.submitted_at > \"<since>\") | [.user.login, .body]'",
 		"Skip the item when one of them is the author's own word: by `author`, with a body and no `<!-- magnum:` marker in it, a review body included.",
-		"Skip it too when a comment by `author` or one of `fixer_logins` carries the fix marker and its line under the quote is the item's `url`.",
+		"Skip it too when a comment by `author` or one of `fixer_logins` carries the fix marker, or one by `fixer_logins` carries the comment marker, and its line under the quote is the item's `url`.",
+		"and `comment` (it carries the comment marker `<!-- magnum:comment -->`: a comment the operator's chat session posted as the App with `magnum comment`, magnum's own word, never the author's);",
 		"read it whole with `gh api` by its `id` (`repos/{owner}/{repo}/pulls/comments/<id>` for a thread's comment",
 		"`## Other reviewers`: one line per item of the external file, answered ones included",
 	} {
