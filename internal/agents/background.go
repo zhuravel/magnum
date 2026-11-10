@@ -41,9 +41,12 @@ import (
 // the whole session, is none). A teammate (an Agent tool use with a name),
 // which never notifies the agent and idles until a message wakes it, holds
 // the run while its own transcript, read on the same way, shows a turn in
-// progress, background work of its own or a notification it has not
-// answered (matesAtWork); at most maxMates per run are watched, never a
-// teammate's own. With no run in flight
+// progress, background work of its own or a notification it took in and has
+// not answered (matesAtWork); at most maxMates per run are watched, never a
+// teammate's own. Claude Code queues the notification of a teammate's work
+// in the lead's transcript and wakes neither the lead nor an idle teammate
+// with it: it ends the teammate's work there (ended), and it is not the
+// lead's to answer. With no run in flight
 // the agent still works on its own: on background work an earlier run left
 // running (the subagents of a turn the restart's esc cut short) or on the
 // turn a task notification began. The observer takes it for a human's only
@@ -97,8 +100,17 @@ type bgWatch struct {
 	// when it stops holding the run (pending).
 	until map[string]time.Time
 	stops map[string]string // TaskStop/KillShell tool_use id -> the task it stops
-	note  time.Time         // the newest task notification
-	reply time.Time         // the newest assistant entry
+	// notes are the task notifications read that no assistant entry
+	// answered yet (unanswered).
+	notes []notice
+	reply time.Time // the newest assistant entry
+	// launched are the tool use and task ids of the background work started
+	// (a teammate's watch tells its lead which notifications are its own).
+	launched map[string]bool
+	// ended are the tool use and task ids the transcript's notifications
+	// ended: in a lead's, they end its teammates' work too (endAll), read
+	// before or after the launch.
+	ended map[string]bool
 	// mates are the teammates spawned during the run: the spawn's tool_use
 	// id -> the teammate. Unlike tasks they never finish by themselves: each
 	// reading reads on in their own transcripts (matesAtWork).
@@ -134,6 +146,13 @@ type bgWatch struct {
 	failed   string // the last read error logged ("" = none)
 }
 
+// notice is one task notification read: when, and the tool use and task it
+// names.
+type notice struct {
+	at            time.Time
+	toolUse, task string
+}
+
 // teammate is an in-process teammate the agent spawned: its agent id, which
 // names its transcript, when the spawn's result was written, and the watch
 // of its own transcript (side; the lead's watch's mu guards it).
@@ -153,7 +172,8 @@ func newMateWatch() *bgWatch {
 
 // reset forgets what was read (a new session id, a transcript that shrank).
 func (w *bgWatch) reset() {
-	w.offset, w.tasks, w.stops, w.note, w.reply = -1, map[string]string{}, map[string]string{}, time.Time{}, time.Time{}
+	w.offset, w.tasks, w.stops, w.notes, w.reply = -1, map[string]string{}, map[string]string{}, nil, time.Time{}
+	w.launched, w.ended = map[string]bool{}, map[string]bool{}
 	w.mates, w.watched, w.until, w.inTurn, w.behind = map[string]*teammate{}, 0, map[string]time.Time{}, false, false
 	w.cut, w.typed, w.queued = time.Time{}, time.Time{}, map[string][]time.Time{}
 }
@@ -208,7 +228,7 @@ func (m *Manager) backgroundWait(ctx context.Context, s store.Session, sid strin
 	}
 	now := m.now()
 	tasks = w.pending(now) + w.matesAtWork(now)
-	hold = (tasks > 0 && !w.released) || w.note.After(w.reply)
+	hold = (tasks > 0 && !w.released) || w.unanswered()
 	if tasks > 0 && !w.released && !w.told {
 		w.told = true
 		noun := "tasks"
@@ -309,7 +329,39 @@ func (w *bgWatch) mateAtWork(mt *teammate, now time.Time) bool {
 		return false
 	}
 	mt.w.readSide(f, st.Size())
+	mt.w.endAll(w.ended)
 	return mt.w.atWork(now)
+}
+
+// endAll ends the work of w (a teammate's watch) whose tool use or task id
+// is in ended (its lead's).
+func (w *bgWatch) endAll(ended map[string]bool) {
+	for id, task := range w.tasks {
+		if ended[id] || (task != "" && ended[task]) {
+			delete(w.tasks, id)
+		}
+	}
+}
+
+// unanswered reports whether a task notification w read is not answered
+// yet, leaving out the notifications of its teammates' work (no teammate of
+// w's launched what they name): Claude Code queues those in the lead's
+// transcript but does not wake the lead with them.
+func (w *bgWatch) unanswered() bool {
+	return slices.ContainsFunc(w.notes, func(n notice) bool {
+		return n.at.After(w.reply) && !w.matesWork(n)
+	})
+}
+
+// matesWork reports whether notification n names work a teammate of w's
+// launched.
+func (w *bgWatch) matesWork(n notice) bool {
+	for _, mt := range w.mates {
+		if (n.toolUse != "" && mt.w.launched[n.toolUse]) || (n.task != "" && mt.w.launched[n.task]) {
+			return true
+		}
+	}
+	return false
 }
 
 // pending counts the background work in w.tasks that still holds at now: a
@@ -341,6 +393,10 @@ func (w *bgWatch) readSide(r io.ReaderAt, size int64) {
 		w.reset()
 	}
 	w.offset = max(w.offset, 0)
+	if w.offset == size { // nothing new: no buffer for an idle teammate's reading
+		w.behind = false
+		return
+	}
 	br := bufio.NewReaderSize(io.NewSectionReader(r, w.offset, size-w.offset), transcriptChunk)
 	var n int64
 	w.behind = false
@@ -362,10 +418,12 @@ func (w *bgWatch) readSide(r io.ReaderAt, size int64) {
 // atWork reports whether a teammate's watch shows it at work at now: its
 // last user or assistant entry leaves a turn in progress (a user entry, or
 // an assistant entry that does not end the turn: endsTurn), background work
-// it started still holds (pending), a notification it got is not answered
-// yet, or the readings are behind its transcript.
+// it started still holds (pending), a notification it took in is not
+// answered yet (one queued in its lead's transcript and not taken in is
+// not its to answer: an idle teammate is not woken by it), or the readings
+// are behind its transcript.
 func (w *bgWatch) atWork(now time.Time) bool {
-	return w.inTurn || w.pending(now) > 0 || w.note.After(w.reply) || w.behind
+	return w.inTurn || w.pending(now) > 0 || w.unanswered() || w.behind
 }
 
 // humanTurn reports whether the agent of session s (Claude Code session
@@ -928,13 +986,14 @@ func (w *bgWatch) apply(line []byte) {
 	case "assistant":
 		if e.Timestamp.After(w.reply) {
 			w.reply = e.Timestamp
+			w.notes = slices.DeleteFunc(w.notes, func(n notice) bool { return !n.at.After(w.reply) })
 		}
 		for _, b := range blocks {
 			if b.Type != "tool_use" || b.ID == "" {
 				continue
 			}
 			if b.Input["run_in_background"] == true {
-				w.tasks[b.ID] = ""
+				w.launch(b.ID, "")
 			}
 			if stopTools[b.Name] {
 				if id := cmp.Or(str(b.Input["task_id"]), str(b.Input["shell_id"]), str(b.Input["bash_id"])); id != "" {
@@ -948,8 +1007,11 @@ func (w *bgWatch) apply(line []byte) {
 			switch b.Type {
 			case "text":
 				w.notified(b.Text, e.Timestamp)
-				if e.interruption(b.Text) && e.Timestamp.After(w.cut) {
-					w.cut = e.Timestamp
+				if e.interruption(b.Text) {
+					w.inTurn = false // the turn ended there
+					if e.Timestamp.After(w.cut) {
+						w.cut = e.Timestamp
+					}
 				}
 			case "tool_result":
 				w.result(b, result, i == 0, e.Timestamp)
@@ -967,6 +1029,22 @@ func (w *bgWatch) apply(line []byte) {
 		case e.Operation == "remove": // taken into the turn (its attachment says when it was queued), or dropped
 			w.unqueue(text)
 		}
+	case "attachment":
+		// A teammate's transcript gets no enqueue (its lead's does): only the
+		// queued command of a notification it took into a turn.
+		if a, _ := e.Attachment.(map[string]any); w.side && str(a["type"]) == "queued_command" && str(a["commandMode"]) == "task-notification" {
+			w.notified(str(a["prompt"]), e.Timestamp)
+		}
+	}
+}
+
+// launch records background work started by tool use id (task: its task
+// id, "" until its result names one).
+func (w *bgWatch) launch(id, task string) {
+	w.tasks[id] = task
+	w.launched[id] = true
+	if task != "" {
+		w.launched[task] = true
 	}
 }
 
@@ -1013,12 +1091,12 @@ func (w *bgWatch) result(b tBlock, res map[string]any, first bool, at time.Time)
 			w.mates[id] = &teammate{agent: agent, spawned: at, w: newMateWatch()}
 		}
 	case str(res["backgroundTaskId"]) != "":
-		w.tasks[id] = str(res["backgroundTaskId"])
+		w.launch(id, str(res["backgroundTaskId"]))
 	case res["background"] == true || res["status"] == "async_launched":
-		w.tasks[id] = cmp.Or(str(res["agentId"]), str(res["taskId"]), str(res["task_id"]), id)
+		w.launch(id, cmp.Or(str(res["agentId"]), str(res["taskId"]), str(res["task_id"]), id))
 	case str(res["taskId"]) != "" && res["timeoutMs"] != nil: // a Monitor
 		if ms, _ := res["timeoutMs"].(float64); res["persistent"] != true && ms > 0 {
-			w.tasks[id] = str(res["taskId"])
+			w.launch(id, str(res["taskId"]))
 			w.until[id] = at.Add(time.Duration(ms)*time.Millisecond + monitorGrace)
 		}
 	}
@@ -1036,9 +1114,10 @@ var (
 
 // notified reads the task notifications in text, a user message or a
 // queued one, stamped at: each ends the task it names (by tool use or task
-// id) unless its status says the task still runs or it is one event of a
-// Monitor that watches on (an <event> and no status), and the newest is
-// what the agent must answer.
+// id, kept in ended) unless its status says the task still runs or it is
+// one event of a Monitor that watches on (an <event> and no status), and
+// each but those of a running task is one for the agent to answer (notes;
+// see unanswered).
 func (w *bgWatch) notified(text string, at time.Time) {
 	if !strings.Contains(text, "<task-notification>") {
 		return
@@ -1050,20 +1129,26 @@ func (w *bgWatch) notified(text string, at time.Time) {
 		if st != nil && (st[1] == "running" || st[1] == "pending") {
 			continue
 		}
-		if at.After(w.note) {
-			w.note = at
+		var n notice
+		if x := notifiedToolUse.FindStringSubmatch(block); x != nil {
+			n.toolUse = x[1]
+		}
+		if x := notifiedTask.FindStringSubmatch(block); x != nil {
+			n.task = x[1]
+		}
+		if at.After(w.reply) {
+			n.at = at
+			w.notes = append(w.notes, n)
 		}
 		if st == nil && event {
 			continue
 		}
-		toolUse, task := "", ""
-		if x := notifiedToolUse.FindStringSubmatch(block); x != nil {
-			toolUse = x[1]
+		w.finish(n.toolUse, n.task)
+		for _, id := range []string{n.toolUse, n.task} {
+			if id != "" {
+				w.ended[id] = true
+			}
 		}
-		if x := notifiedTask.FindStringSubmatch(block); x != nil {
-			task = x[1]
-		}
-		w.finish(toolUse, task)
 	}
 }
 

@@ -465,7 +465,11 @@ func TestATeammateWatchReadsABoundedPartOfItsTranscriptPerReading(t *testing.T) 
 		t.Fatalf("tasks %v in turn %v, want the launch at the start still pending and the turn ended", w.tasks, w.inTurn)
 	}
 
-	more := lines(t, append(mates(mateA, notification(t0.Add(4*time.Hour), "toolu_m1", "bgm1", "completed")), mateDone(t0.Add(4*time.Hour), mateA)...)...)
+	// A message wakes the teammate, which takes the launch's notification in
+	// (the queued command, the live shape) and answers.
+	more := lines(t, append([]tline{mateMail(t0.Add(4*time.Hour), mateA),
+		mateTookIn(t0.Add(4*time.Hour), mateA, notificationText("toolu_m1", "bgm1", "completed"))},
+		mateDone(t0.Add(4*time.Hour+time.Second), mateA)...)...)
 	data = append(data, more...)
 	r = &countingReader{r: bytes.NewReader(data)}
 	w.readSide(r, int64(len(data)))
@@ -641,52 +645,189 @@ func (e *env) ends(id, what string) {
 	}
 }
 
+// mateTookIn is the queued command Claude Code 2.1.322 writes into
+// teammate agentID's transcript when the teammate takes the notification
+// (text) of its background work into a turn, stamped when the notification
+// was queued (at).
+func mateTookIn(at time.Time, agentID, text string) tline {
+	return mate(agentID, tline{"type": "attachment", "timestamp": stamp(at), "attachment": map[string]any{
+		"type": "queued_command", "prompt": text, "commandMode": "task-notification",
+		"origin": map[string]any{"kind": "task-notification", "producer": "session-task"}, "timestamp": stamp(at)}})
+}
+
+// mateNotified is how Claude Code 2.1.322 delivers the notification (text)
+// of a teammate's background work: the enqueue goes to the lead's
+// transcript tr, not marked as a sidechain, and an idle teammate is not
+// woken by it. Only when the teammate takes it into a turn (taken: one in
+// progress, or one a message began) does the teammate's own transcript mt
+// get the queued command and the lead's the remove.
+func mateNotified(tr, mt *transcript, at time.Time, agentID, text string, taken bool) {
+	tr.add(tline{"type": "queue-operation", "operation": "enqueue", "timestamp": stamp(at), "sessionId": claudeSID, "content": text})
+	if taken {
+		tr.add(tline{"type": "queue-operation", "operation": "remove", "timestamp": stamp(at.Add(3 * time.Second)), "sessionId": claudeSID, "content": text})
+		mt.add(mateTookIn(at, agentID, text))
+	}
+}
+
 // A teammate that ends its turn while its own background work runs (specs
-// in the background, a Monitor on a gate) wakes on that work's notification
-// and edits on: it is at work until the work ended and it answered, as the
-// lead is (the review's probe: the first version read only the teammate's
-// last entry, so this run ended while the teammate waited on its specs).
+// in the background, a Monitor on a gate, an async subagent) holds the run
+// until that work ends. Claude Code 2.1.322 writes the work's notification
+// into the lead's transcript, and an idle teammate is not woken by it (one
+// recorded teammate sat idle 73 minutes with three finished tasks, until a
+// message woke it): the notification there ends the teammate's work, and
+// with the teammate idle the run ends, its lead not woken either. Whether
+// the lead's watch read the notification after the teammate's launch or
+// before (the lead's first reading came after both), the work ends. The
+// first version read only the teammate's last entry and ended this run
+// while the work ran (the review's probe); the second waited for the
+// notification in the teammate's own transcript, where it never comes.
 func TestObserveHoldsTheRunWhileATeammateWaitsOnItsOwnBackgroundWork(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		launch func(at time.Time) []tline
-		finish func(at time.Time) []tline
+		text   string
 	}{
-		{"a Bash in the background",
-			func(at time.Time) []tline { return bashInBackground(at, "toolu_m1", "bgm1") },
-			func(at time.Time) []tline { return notification(at, "toolu_m1", "bgm1", "completed") }},
-		{"a Monitor",
-			func(at time.Time) []tline { return monitorStarted(at, "toolu_mon1", "bmon1", false) },
-			func(at time.Time) []tline { return noticed(at, monitorEndedText("toolu_mon1", "bmon1")) }},
-		{"a subagent launched asynchronously",
-			func(at time.Time) []tline { return agentAsync(at, "toolu_m2", "a3f00d") },
-			func(at time.Time) []tline { return notification(at, "toolu_m2", "a3f00d", "completed") }},
+		{"a Bash in the background", func(at time.Time) []tline { return bashInBackground(at, "toolu_m1", "bgm1") },
+			notificationText("toolu_m1", "bgm1", "completed")},
+		{"a Monitor", func(at time.Time) []tline { return monitorStarted(at, "toolu_mon1", "bmon1", false) },
+			monitorEndedText("toolu_mon1", "bmon1")},
+		{"a subagent launched asynchronously", func(at time.Time) []tline { return agentAsync(at, "toolu_m2", "a3f00d") },
+			notificationText("toolu_m2", "a3f00d", "completed")},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newEnv(t)
-			tr := e.claudeTranscript()
-			id := e.promptClaude()
-			now := e.clock.Now()
-			tr.add(userPrompt(now, "build it"))
-			tr.addAll(teammateSpawned(now.Add(time.Second), "toolu_mate1", mateA))
-			mt := tr.teammate(mateA)
-			mt.add(mateMail(now.Add(2*time.Second), mateA))
-			mt.addAll(mates(mateA, tc.launch(now.Add(3*time.Second))))
-			mt.add(mate(mateA, stopped(assistantSays(now.Add(5*time.Second), "Waiting for the specs to report."), "end_turn")),
-				mate(mateA, tline{"type": "system", "subtype": "stop_hook_summary", "timestamp": stamp(now.Add(5 * time.Second))}))
-			leadIdle(tr, now.Add(6*time.Second))
-			e.heldFor(3, 1, "while the teammate's own work runs")
-
-			// The work ends; the teammate's notification is queued, not yet taken.
-			at := e.clock.Now()
-			end := mates(mateA, tc.finish(at))
-			mt.add(end[0])
-			e.heldFor(1, 1, "with the teammate's notification queued and unanswered")
-			mt.add(end[1:]...)
-			mt.addAll(mateDone(at.Add(2*time.Second), mateA))
-			e.ends(id, "after the teammate answered")
-		})
+		for _, readFirst := range []bool{true, false} {
+			name := tc.name + ", notified before the lead's first reading"
+			if readFirst {
+				name = tc.name + ", notified after the lead's readings held the run"
+			}
+			t.Run(name, func(t *testing.T) {
+				e := newEnv(t)
+				tr := e.claudeTranscript()
+				id := e.promptClaude()
+				now := e.clock.Now()
+				tr.add(userPrompt(now, "build it"))
+				tr.addAll(teammateSpawned(now.Add(time.Second), "toolu_mate1", mateA))
+				mt := tr.teammate(mateA)
+				mt.add(mateMail(now.Add(2*time.Second), mateA))
+				mt.addAll(mates(mateA, tc.launch(now.Add(3*time.Second))))
+				mt.add(mate(mateA, stopped(assistantSays(now.Add(5*time.Second), "Waiting for the specs to report."), "end_turn")),
+					mate(mateA, tline{"type": "system", "subtype": "stop_hook_summary", "timestamp": stamp(now.Add(5 * time.Second))}))
+				leadIdle(tr, now.Add(6*time.Second))
+				if readFirst {
+					e.heldFor(3, 1, "while the teammate's own work runs")
+				}
+				mateNotified(tr, mt, e.clock.Now(), mateA, tc.text, false)
+				e.ends(id, "after the teammate's work ended, the teammate idle")
+			})
+		}
 	}
+}
+
+// The re-review's probe: a teammate takes the notification of its work into
+// a turn a message began, works, and ends its turn; its idle message wakes
+// the lead, which answers. The run then ends.
+func TestObserveEndsTheRunOnceATeammatesWorkIsNotifiedTheLiveWay(t *testing.T) {
+	e := newEnv(t)
+	tr := e.claudeTranscript()
+	id := e.promptClaude()
+	now := e.clock.Now()
+	tr.add(userPrompt(now, "build it"))
+	tr.addAll(teammateSpawned(now.Add(time.Second), "toolu_mate1", mateA))
+	mt := tr.teammate(mateA)
+	mt.add(mateMail(now.Add(2*time.Second), mateA))
+	mt.addAll(mates(mateA, bashInBackground(now.Add(3*time.Second), "toolu_m1", "bgm1")))
+	mt.add(mate(mateA, stopped(assistantSays(now.Add(5*time.Second), "Waiting for the specs."), "end_turn")))
+	leadIdle(tr, now.Add(6*time.Second))
+	e.heldFor(2, 1, "while the teammate's specs run")
+
+	at := e.clock.Now()
+	mt.add(mateMail(at, mateA)) // a message wakes it; it takes the notification in
+	mateNotified(tr, mt, at, mateA, notificationText("toolu_m1", "bgm1", "completed"), true)
+	mt.addAll(mateWorks(at.Add(4*time.Second), mateA, "toolu_m2"), mateDone(at.Add(6*time.Second), mateA))
+	tr.add(userPrompt(at.Add(7*time.Second), "Another Claude session sent a message:\n<teammate-message teammate_id=\"drafts\" color=\"blue\">\n{\"type\":\"idle_notification\",\"from\":\"drafts\"}\n</teammate-message>"),
+		stopped(assistantSays(at.Add(8*time.Second), "The drafts teammate is idle; done."), "end_turn"), turnEnded(at.Add(8*time.Second)))
+	e.ends(id, "after the teammate took its notification, worked and ended its turn, and the lead answered its idle message")
+}
+
+// The live ai-drafts case, by BackgroundTasks (the re-review's probe): the
+// teammate launched specs in the background, took their notification into
+// the turn it was in, and ended the turn. No work of its is left.
+func TestBackgroundTasksCountsNoTeammateWorkItsLiveNotificationEnded(t *testing.T) {
+	e := newEnv(t)
+	tr := e.claudeTranscript()
+	id := e.promptClaude()
+	now := e.clock.Now()
+	tr.add(userPrompt(now, "build it"))
+	tr.addAll(teammateSpawned(now.Add(time.Second), "toolu_mate1", mateA))
+	mt := tr.teammate(mateA)
+	mt.add(mateMail(now.Add(2*time.Second), mateA))
+	mt.addAll(mates(mateA, bashInBackground(now.Add(3*time.Second), "toolu_m1", "bgm1")))
+	mateNotified(tr, mt, now.Add(10*time.Second), mateA, notificationText("toolu_m1", "bgm1", "completed"), true)
+	mt.addAll(mateDone(now.Add(12*time.Second), mateA))
+	leadIdle(tr, now.Add(13*time.Second))
+	if n, ok := e.m.BackgroundTasks(e.ctx, e.run1(id)); !ok || n != 0 {
+		t.Fatalf("BackgroundTasks = %d, %v; want 0 (the teammate's work ended and it is idle)", n, ok)
+	}
+}
+
+// The notification of a teammate's work reaches the lead's transcript but
+// does not wake the lead: it is not the lead's to answer, so it holds the
+// lead's run no more than the teammate's work does (the re-review's
+// probes; before, the lead's watch held the run until something woke the
+// lead, past even a teammate's Monitor's bound).
+func TestATeammatesNotificationInTheLeadsTranscriptIsNotTheLeadsToAnswer(t *testing.T) {
+	t.Run("taken into a turn the teammate ended", func(t *testing.T) {
+		e := newEnv(t)
+		tr := e.claudeTranscript()
+		id := e.promptClaude()
+		now := e.clock.Now()
+		tr.add(userPrompt(now, "build it"))
+		tr.addAll(teammateSpawned(now.Add(time.Second), "toolu_mate1", mateA))
+		mt := tr.teammate(mateA)
+		mt.add(mateMail(now.Add(2*time.Second), mateA))
+		mt.addAll(mates(mateA, bashInBackground(now.Add(3*time.Second), "toolu_m1", "bgm1")))
+		mt.add(mate(mateA, stopped(assistantSays(now.Add(5*time.Second), "Waiting for the specs."), "end_turn")))
+		leadIdle(tr, now.Add(6*time.Second))
+		at := now.Add(20 * time.Second)
+		mt.add(mateMail(at, mateA))
+		mateNotified(tr, mt, at, mateA, notificationText("toolu_m1", "bgm1", "completed"), true)
+		mt.addAll(mateWorks(at.Add(4*time.Second), mateA, "toolu_m2"), mateDone(at.Add(6*time.Second), mateA))
+		e.ends(id, "after the teammate took its notification and ended its turn, with no idle message to the lead")
+	})
+	t.Run("a Monitor's end past its bound", func(t *testing.T) {
+		e := newEnv(t)
+		tr := e.claudeTranscript()
+		id := e.promptClaude()
+		now := e.clock.Now()
+		tr.add(userPrompt(now, "build it"))
+		tr.addAll(teammateSpawned(now.Add(time.Second), "toolu_mate1", mateA))
+		mt := tr.teammate(mateA)
+		mt.add(mateMail(now.Add(2*time.Second), mateA))
+		mt.addAll(mates(mateA, monitorStarted(now.Add(3*time.Second), "toolu_mon1", "bmon1", false)), mateDone(now.Add(5*time.Second), mateA))
+		leadIdle(tr, now.Add(6*time.Second))
+		e.heldFor(1, 1, "while the teammate's Monitor watches")
+		mateNotified(tr, mt, e.clock.Now().Add(time.Minute), mateA, monitorEndedText("toolu_mon1", "bmon1"), false)
+		e.clock.Add(monitorTimeout + monitorGrace + time.Minute)
+		e.ends(id, "past the teammate's Monitor's bound, its end enqueued in the lead's transcript")
+	})
+}
+
+// A teammate whose turn esc cut short, or whose tool use was refused
+// (Claude Code writes "[Request interrupted by user..." as a user entry),
+// is idle, as the lead's cut turn is.
+func TestObserveIsNotHeldByATeammateWhoseTurnWasInterrupted(t *testing.T) {
+	e := newEnv(t)
+	tr := e.claudeTranscript()
+	id := e.promptClaude()
+	now := e.clock.Now()
+	tr.add(userPrompt(now, "build it"))
+	tr.addAll(teammateSpawned(now.Add(time.Second), "toolu_mate1", mateA))
+	mt := tr.teammate(mateA)
+	mt.add(mateMail(now.Add(2*time.Second), mateA),
+		mate(mateA, stopped(toolUse(now.Add(3*time.Second), "toolu_m1", "Bash", map[string]any{"command": "rm -rf tmp/cache"}), "tool_use")),
+		mate(mateA, toolResult(now.Add(4*time.Second), "toolu_m1", "The user doesn't want to proceed with this tool use.", nil, true)),
+		mate(mateA, interruption(now.Add(4*time.Second), "p1")))
+	leadIdle(tr, now.Add(5*time.Second))
+	e.ends(id, "with the teammate's turn interrupted")
 }
 
 // A teammate in the middle of a long foreground command (its last entry the
@@ -754,12 +895,11 @@ func TestObserveHoldsTheRunWhileAMonitorItStartedWatches(t *testing.T) {
 		leadIdle(tr, now.Add(5*time.Second))
 		e.heldFor(2, 1, "while the teammate's Monitor watches")
 
-		at := e.clock.Now()
-		mt.addAll(mates(mateA, noticed(at, monitorEventText("bmon1"))), mateDone(at.Add(time.Second), mateA))
-		e.heldFor(2, 1, "after an event the teammate answered")
-
-		at = e.clock.Now()
-		mt.addAll(mates(mateA, noticed(at, monitorEndedText("toolu_mon1", "bmon1"))), mateDone(at.Add(time.Second), mateA))
+		// Its events and its end reach the lead's transcript; the idle
+		// teammate takes none of them, and they are not the lead's to answer.
+		mateNotified(tr, mt, e.clock.Now(), mateA, monitorEventText("bmon1"), false)
+		e.heldFor(2, 1, "after an event the idle teammate did not take")
+		mateNotified(tr, mt, e.clock.Now(), mateA, monitorEndedText("toolu_mon1", "bmon1"), false)
 		e.ends(id, "after the teammate's Monitor ended")
 	})
 	t.Run("a persistent one", func(t *testing.T) {
