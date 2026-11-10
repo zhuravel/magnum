@@ -26,7 +26,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -146,12 +145,23 @@ func (e *Engine) ciAfterPush(ctx context.Context, id int64, now time.Time) {
 	if _, low := e.githubLow(identity); low {
 		return
 	}
-	l, ok := e.gh(identity).(recentRunLister)
-	if !ok {
+	acts := e.ciActions(identity) // ci_actions.go: the read and the start share one token
+	defer acts.end()
+	gh, err := acts.client(ctx)
+	switch {
+	case errors.Is(err, errNoGitHub):
 		done()
 		return
 	}
-	runs, err := l.RecentRuns(ctx, repo.Owner, repo.Name, workflow)
+	var runs []github.WorkflowRun
+	if err == nil && gh != nil {
+		l, ok := gh.(recentRunLister)
+		if !ok {
+			done()
+			return
+		}
+		runs, err = l.RecentRuns(ctx, repo.Owner, repo.Name, workflow)
+	}
 	if err != nil {
 		if e.changed("ci_recent_runs:"+full, err.Error()) {
 			e.event(ctx, "warn", "repo:"+full, "poll.ci_runs_error", fmt.Sprintf("the newest runs of %s, before starting it after magnum's push: %v", workflow, err), nil)
@@ -171,7 +181,7 @@ func (e *Engine) ciAfterPush(ctx context.Context, id int64, now time.Time) {
 		return // a start would cancel it: the next tick looks again
 	}
 	lead := "magnum pushed " + short
-	if _, ok := e.startCI(ctx, repo, *w, pr, workflow, ciWords{
+	if _, ok := e.startCI(ctx, acts, repo, pr, workflow, ciWords{
 		kind:    "fix.push_ci_dispatch",
 		refused: func(why string) string { return fmt.Sprintf("%s; it does not start %s: %s", lead, workflow, why) },
 		failed: func(identity, why string) string {
@@ -197,7 +207,7 @@ func (e *Engine) ciAfterPush(ctx context.Context, id int64, now time.Time) {
 // _failed (the status only: the message of GitHub's refusal can name the
 // branch, the PR's text; a 403 says that the identity cannot start
 // workflows, cannotStartWorkflows) or its _refused.
-func (e *Engine) startCI(ctx context.Context, repo store.Repo, w config.Watch, pr store.PR, workflow string, words ciWords) (ciStart, bool) {
+func (e *Engine) startCI(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR, workflow string, words ciWords) (ciStart, bool) {
 	s := ciStart{Head: pr.HeadSHA, Workflow: workflow}
 	files, listed, err := e.st.PRFilesOf(ctx, pr.ID)
 	switch {
@@ -214,7 +224,7 @@ func (e *Engine) startCI(ctx context.Context, repo store.Repo, w config.Watch, p
 		s.Refused = "the PR's branch is not known"
 	}
 	subject := prSubject(repo, pr.Number)
-	identity := e.ciDispatchIdentity(repo.FullName(), w)
+	identity := acts.identity
 	data := map[string]any{"head": pr.HeadSHA, "workflow": workflow, "identity": identity}
 	if s.Refused != "" {
 		if !e.writeCIStart(ctx, pr, s) {
@@ -227,19 +237,16 @@ func (e *Engine) startCI(ctx context.Context, repo store.Repo, w config.Watch, p
 	if !e.writeCIStart(ctx, pr, s) {
 		return ciStart{}, false
 	}
-	gh := e.gh(identity)
-	d, ok := gh.(workflowDispatcher)
-	if gh == nil || !ok {
-		s.Failed = "no GitHub client of " + identity
-	} else if err := d.DispatchWorkflow(ctx, repo.Owner, repo.Name, workflow, deref(pr.HeadRef)); err != nil {
-		s.Failed = "the call failed"
-		var api *github.APIError
-		if errors.As(err, &api) && api.Status != 0 {
-			s.Failed = fmt.Sprintf("GitHub answered HTTP %d", api.Status)
+	gh, err := acts.client(ctx) // after the record: a mint is no start
+	if err == nil {
+		if d, ok := gh.(workflowDispatcher); !ok {
+			err = fmt.Errorf("%w of %s", errNoGitHub, identity)
+		} else {
+			err = d.DispatchWorkflow(ctx, repo.Owner, repo.Name, workflow, deref(pr.HeadRef))
 		}
-		if errors.Is(err, github.ErrForbidden) {
-			s.Failed += ": " + e.cannotStartWorkflows(identity)
-		}
+	}
+	if err != nil {
+		s.Failed = e.actionsFailed(identity, err)
 	}
 	e.writeCIStart(ctx, pr, s)
 	if s.Failed != "" {

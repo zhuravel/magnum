@@ -284,8 +284,10 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	l.Spell = l.Spell.next(pr, f.settle.quiet, gap, now, f.fix != nil || f.fixBad || f.held != "")
 	f.ledger = l
 	v, work, needs := decideOpen(f)
+	acts := e.ciActions(e.ciDispatchIdentity(repo.FullName(), *c.w)) // ci_actions.go: one token for the look's Actions calls
+	defer acts.end()
 	if !e.d.DryRun && (v.readRuns || v.rerun) { // ci_rerun.go: rule 11 reads the head's runs, re-runs the one that started no job
-		v, work = e.openCIRerun(ctx, repo, *c.w, pr, &f, v, work)
+		v, work = e.openCIRerun(ctx, acts, repo, pr, &f, v, work)
 	}
 	switch {
 	case e.d.DryRun:
@@ -296,11 +298,12 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	case v.late:
 		e.openLate(ctx, repo, pr, &l, v.Why)
 	case v.dispatch: // fix_open_ci.go: a required check did not run at the head
-		if s, ok := e.openStartCI(ctx, repo, *c.w, pr, f.ciWorkflow, missingWhat(f.ci.missing)); ok {
+		if s, ok := e.openStartCI(ctx, acts, repo, pr, f.ciWorkflow, missingWhat(f.ci.missing)); ok {
 			f.ciStart = s
 			v, work, _ = decideOpen(f)
 		}
 	}
+	acts.end() // before the fixer starts: the deferred end does nothing more
 	if v.Verdict == OpenFixing && len(work) > 0 {
 		v = e.openStart(ctx, repo, pr, &l, v, work, waitsOf(needs), fp)
 	}

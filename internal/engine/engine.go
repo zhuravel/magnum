@@ -308,7 +308,11 @@ type Deps struct {
 	// slot or cleanup side effects, no toasts. See Recorder.
 	DryRun bool
 
-	GitHub     func(identity string) GitHub // poll client per identity (nil = none)
+	GitHub func(identity string) GitHub // poll client per identity (nil = none)
+	// GitHubEnv is identity's client over env, a token of the daemon's own
+	// for one batch of Actions calls (ci_actions.go; FromApp:
+	// github.Client.WithEnv); nil = none.
+	GitHubEnv  func(identity string, env map[string]string) GitHub
 	Herdr      Herdr
 	Agents     Agents
 	Rounds     func(identity string) Rounds // round runner per identity (nil = none)

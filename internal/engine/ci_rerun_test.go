@@ -624,17 +624,17 @@ func TestARecordedReRunIsNotRedoneByALookThatCouldNotReadTheRecord(t *testing.T)
 			h.setHeadRuns(fixHead, noJobRun())
 			h.pastSettle()
 			h.tick()
-			pr, w := h.pr(2), h.cfg.Watches[0]
+			pr, acts := h.pr(2), h.e.ciActions("zhuravel")
 			stored := h.e.ciRerunAt(h.ctx, pr)
 			if !stored.decided() {
 				t.Fatalf("record = %+v, want the head decided", stored)
 			}
 			reads, reruns := len(h.ghCalls("head_runs:")), len(h.ghCalls("rerun:"))
-			if r, ok := h.e.openReadRuns(h.ctx, h.repo(), w, pr); !ok || !r.decided() || !r.At.Equal(stored.At) || r.Refused != stored.Refused {
+			if r, ok := h.e.openReadRuns(h.ctx, acts, h.repo(), pr); !ok || !r.decided() || !r.At.Equal(stored.At) || r.Refused != stored.Refused {
 				t.Errorf("read = %+v, %v; want the stored record %+v", r, ok, stored)
 			}
 			unread := ciRerun{Head: fixHead, ReadAt: h.clock.Now(), Run: &ciNoJob{ID: liveRunID, Workflow: "ci.yml", Attempt: 1, Conclusion: "failure"}}
-			if r, ok := h.e.openRerunCI(h.ctx, h.repo(), w, pr, unread, "required check build"); !ok || !r.decided() || !r.At.Equal(stored.At) ||
+			if r, ok := h.e.openRerunCI(h.ctx, acts, h.repo(), pr, unread, "required check build"); !ok || !r.decided() || !r.At.Equal(stored.At) ||
 				r.Refused != stored.Refused {
 				t.Errorf("re-run = %+v, %v; want the stored record %+v", r, ok, stored)
 			}

@@ -566,7 +566,7 @@ func TestTheLookStartsTheCIWorkflowOncePerHeadByThatHeadsFiles(t *testing.T) {
 	}
 	pr := h.pr(2)
 	pr.HeadSHA = fixPushed // pushed, its files not listed yet
-	if s, ok := h.e.openStartCI(h.ctx, h.repo(), h.cfg.Watches[0], pr, "ci.yml", "required check Completion"); ok || s != (ciStart{}) {
+	if s, ok := h.e.openStartCI(h.ctx, h.e.ciActions("zhuravel"), h.repo(), pr, "ci.yml", "required check Completion"); ok || s != (ciStart{}) {
 		t.Fatalf("start = %+v, %v with the files of the older head", s, ok)
 	}
 	if n := len(h.ghCalls("dispatch:")); n != 1 {
@@ -612,7 +612,7 @@ func TestTheLookRefusesToStartTheCIWorkflowOfAHeadItCannotCheck(t *testing.T) {
 		h := ciDispatched(t, "app/models/order.rb")
 		pr := h.pr(2)
 		pr.HeadRef = nil
-		s, ok := h.e.openStartCI(h.ctx, h.repo(), h.cfg.Watches[0], pr, "ci.yml", "required check Completion")
+		s, ok := h.e.openStartCI(h.ctx, h.e.ciActions("zhuravel"), h.repo(), pr, "ci.yml", "required check Completion")
 		if !ok || s.Refused != "the PR's branch is not known" || !s.At.IsZero() {
 			t.Fatalf("start = %+v, %v; want refused", s, ok)
 		}

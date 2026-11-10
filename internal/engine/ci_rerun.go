@@ -34,7 +34,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -230,23 +229,21 @@ func noJobRunAt(ctx context.Context, gh GitHub, owner, name, sha string) (found 
 // error: fix.open_ci_runs_error). A head the look re-ran or refused already
 // is not read again. ok is false when it did nothing (the record could not
 // be read or written).
-func (e *Engine) openReadRuns(ctx context.Context, repo store.Repo, w config.Watch, pr store.PR) (ciRerun, bool) {
+func (e *Engine) openReadRuns(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR) (ciRerun, bool) {
 	if stored, ok := e.storedRerun(ctx, pr); !ok || stored.decided() {
 		return stored, ok && stored.decided()
 	}
-	full, identity := repo.FullName(), e.ciDispatchIdentity(repo.FullName(), w)
+	full, who := repo.FullName(), acts.identity
 	r := ciRerun{Head: pr.HeadSHA, ReadAt: e.now()}
-	var err error
-	if gh := e.gh(identity); gh == nil {
-		err = errors.New("no GitHub client of " + identity)
-	} else {
+	gh, err := acts.client(ctx)
+	if err == nil {
 		r.Run, r.Queued, r.QueuedStatus, err = noJobRunAt(ctx, gh, repo.Owner, repo.Name, pr.HeadSHA)
 	}
 	if err != nil {
 		r = ciRerun{Head: pr.HeadSHA, ReadAt: r.ReadAt, Unread: true}
 		if e.changed("open_ci_runs:"+full, err.Error()) {
 			e.event(ctx, "warn", prSubject(repo, pr.Number), "fix.open_ci_runs_error",
-				fmt.Sprintf("the runs at %s, read as %s: %v", textx.ShortSHA(pr.HeadSHA), identity, err), map[string]any{"head": pr.HeadSHA, "identity": identity})
+				fmt.Sprintf("the runs at %s, read as %s: %v", textx.ShortSHA(pr.HeadSHA), who, err), map[string]any{"head": pr.HeadSHA, "identity": who})
 		}
 	} else {
 		e.changed("open_ci_runs:"+full, "")
@@ -279,7 +276,7 @@ func changesActions(p string) bool {
 // (GitHub's status, never its message) and fix.open_ci_rerun_refused, whose
 // data names the head, the run, its workflow, attempt and conclusion, and
 // the identity.
-func (e *Engine) openRerunCI(ctx context.Context, repo store.Repo, w config.Watch, pr store.PR, r ciRerun, what string) (ciRerun, bool) {
+func (e *Engine) openRerunCI(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR, r ciRerun, what string) (ciRerun, bool) {
 	if stored, ok := e.storedRerun(ctx, pr); !ok || stored.decided() {
 		return stored, ok && stored.decided()
 	}
@@ -296,7 +293,7 @@ func (e *Engine) openRerunCI(ctx context.Context, repo store.Repo, w config.Watc
 		r.Refused = "GitHub did not list every file of the PR"
 	}
 	subject, run := prSubject(repo, pr.Number), r.Run.named()
-	identity := e.ciDispatchIdentity(repo.FullName(), w)
+	identity := acts.identity
 	lead := fmt.Sprintf("%s did not run at %s, as %s started no job%s", what, textx.ShortSHA(pr.HeadSHA), run, runEnd(r.Run.Conclusion))
 	data := map[string]any{"head": pr.HeadSHA, "run": r.Run.ID, "workflow": r.Run.Workflow, "attempt": r.Run.Attempt,
 		"conclusion": r.Run.Conclusion, "identity": identity}
@@ -318,18 +315,16 @@ func (e *Engine) openRerunCI(ctx context.Context, repo store.Repo, w config.Watc
 	if !write() {
 		return ciRerun{}, false
 	}
-	gh := e.gh(identity)
-	if rr, ok := gh.(runRerunner); gh == nil || !ok {
-		r.Failed = "no GitHub client of " + identity
-	} else if err := rr.RerunRun(ctx, repo.Owner, repo.Name, r.Run.ID); err != nil {
-		r.Failed = "the call failed"
-		var api *github.APIError
-		if errors.As(err, &api) && api.Status != 0 {
-			r.Failed = fmt.Sprintf("GitHub answered HTTP %d", api.Status)
+	gh, err := acts.client(ctx) // after the record: a mint is no re-run
+	if err == nil {
+		if rr, ok := gh.(runRerunner); !ok {
+			err = fmt.Errorf("%w of %s", errNoGitHub, identity)
+		} else {
+			err = rr.RerunRun(ctx, repo.Owner, repo.Name, r.Run.ID)
 		}
-		if errors.Is(err, github.ErrForbidden) {
-			r.Failed += ": " + e.cannotStartWorkflows(identity)
-		}
+	}
+	if err != nil {
+		r.Failed = e.actionsFailed(identity, err)
 	}
 	write()
 	if r.Failed != "" {
@@ -345,15 +340,15 @@ func (e *Engine) openRerunCI(ctx context.Context, repo store.Repo, w config.Watc
 // of the head's runs it asked for (v.readRuns, openReadRuns), then the
 // re-run (v.rerun, openRerunCI), each followed by the verdict decided again
 // on what it did, which it returns with its work.
-func (e *Engine) openCIRerun(ctx context.Context, repo store.Repo, w config.Watch, pr store.PR, f *openFacts, v OpenVerdict, work []openItem) (OpenVerdict, []openItem) {
+func (e *Engine) openCIRerun(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR, f *openFacts, v OpenVerdict, work []openItem) (OpenVerdict, []openItem) {
 	if v.readRuns {
-		if r, ok := e.openReadRuns(ctx, repo, w, pr); ok {
+		if r, ok := e.openReadRuns(ctx, acts, repo, pr); ok {
 			f.ciRerun = r
 			v, work, _ = decideOpen(*f)
 		}
 	}
 	if v.rerun {
-		if r, ok := e.openRerunCI(ctx, repo, w, pr, f.ciRerun, missingWhat(f.ci.missing)); ok {
+		if r, ok := e.openRerunCI(ctx, acts, repo, pr, f.ciRerun, missingWhat(f.ci.missing)); ok {
 			f.ciRerun = r
 			v, work, _ = decideOpen(*f)
 		}
@@ -376,12 +371,9 @@ func (r ciRerun) rerunWaits(now time.Time, settleMax time.Duration) bool {
 // identity's GitHub budget is low or once the attempt ended; a failed read
 // is said once per distinct error (poll.ci_runs_error) and leaves the last
 // read standing.
-func (e *Engine) seeRerun(ctx context.Context, identity, owner, name string, pr store.PR, r ciRerun) {
+func (e *Engine) seeRerun(ctx context.Context, acts *ciActions, owner, name string, pr store.PR, r ciRerun) {
+	identity := acts.identity
 	if _, low := e.githubLow(identity); low || r.Seen.ended() {
-		return
-	}
-	gh := e.gh(identity)
-	if gh == nil {
 		return
 	}
 	full, short := owner+"/"+name, textx.ShortSHA(r.Head)
@@ -389,6 +381,14 @@ func (e *Engine) seeRerun(ctx context.Context, identity, owner, name string, pr 
 		if e.changed("ci_head_runs:"+full, err.Error()) {
 			e.event(ctx, "warn", "repo:"+full, "poll.ci_runs_error", fmt.Sprintf("the runs at %s, after magnum re-ran %s: %v", short, r.Run.named(), err), nil)
 		}
+	}
+	gh, err := acts.client(ctx)
+	if errors.Is(err, errNoGitHub) {
+		return
+	}
+	if err != nil {
+		fail(err)
+		return
 	}
 	l, ok := gh.(headRunLister)
 	if !ok {

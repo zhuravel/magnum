@@ -27,6 +27,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -150,6 +151,8 @@ func (e *Engine) ciStartAt(ctx context.Context, pr store.PR) ciStart {
 func (e *Engine) awaitCIRuns(ctx context.Context, w config.Watch, full string, prs []github.PRRadar, byNode map[string]store.PR, now time.Time) map[int]bool {
 	owner, name, _ := strings.Cut(full, "/")
 	identity, dispatch, settleMax := e.ciDispatchIdentity(full, w), e.cfg.CIDispatch(full) != "", e.openSettle().max
+	acts := e.ciActions(identity) // ci_actions.go: one token for the poll's reads of the repository
+	defer acts.end()
 	var awaited map[int]bool
 	for _, p := range prs {
 		pr, ok := byNode[p.NodeID]
@@ -171,12 +174,12 @@ func (e *Engine) awaitCIRuns(ctx context.Context, w config.Watch, full string, p
 		}
 		awaited[p.Number] = true
 		if rerun {
-			e.seeRerun(ctx, identity, owner, name, pr, r)
+			e.seeRerun(ctx, acts, owner, name, pr, r)
 		}
 		if !start {
 			continue
 		}
-		if run, ok := e.dispatchedRun(ctx, identity, owner, name, s); ok && (s.Run == nil || *s.Run != run) {
+		if run, ok := e.dispatchedRun(ctx, acts, owner, name, s); ok && (s.Run == nil || *s.Run != run) {
 			s.Run = &run
 			e.writeCIStart(ctx, pr, s)
 		}
@@ -190,16 +193,23 @@ func (e *Engine) awaitCIRuns(ctx context.Context, w config.Watch, full string, p
 // runs that were not read: identity's GitHub budget is low, it has no
 // client that lists them, or the call failed (said once per distinct
 // error, poll.ci_runs_error), which leaves the last read standing.
-func (e *Engine) dispatchedRun(ctx context.Context, identity, owner, name string, s ciStart) (ciRun, bool) {
-	if _, low := e.githubLow(identity); low {
+func (e *Engine) dispatchedRun(ctx context.Context, acts *ciActions, owner, name string, s ciStart) (ciRun, bool) {
+	if _, low := e.githubLow(acts.identity); low {
 		return ciRun{}, false
 	}
-	l, ok := e.gh(identity).(dispatchedRunLister)
-	if !ok {
+	gh, err := acts.client(ctx)
+	if errors.Is(err, errNoGitHub) {
 		return ciRun{}, false
 	}
 	full := owner + "/" + name
-	runs, err := l.DispatchedRuns(ctx, owner, name, s.Workflow, s.Head)
+	var runs []github.WorkflowRun
+	if err == nil {
+		l, ok := gh.(dispatchedRunLister)
+		if !ok {
+			return ciRun{}, false
+		}
+		runs, err = l.DispatchedRuns(ctx, owner, name, s.Workflow, s.Head)
+	}
 	if err != nil {
 		if e.changed("ci_runs:"+full, err.Error()) {
 			e.event(ctx, "warn", "repo:"+full, "poll.ci_runs_error",
@@ -330,9 +340,9 @@ func missingWhat(missing []string) string {
 // startCI's (ci_dispatch.go), with the look's events:
 // fix.open_ci_dispatch, fix.open_ci_dispatch_failed or
 // fix.open_ci_dispatch_refused.
-func (e *Engine) openStartCI(ctx context.Context, repo store.Repo, w config.Watch, pr store.PR, workflow, what string) (ciStart, bool) {
+func (e *Engine) openStartCI(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR, workflow, what string) (ciStart, bool) {
 	lead := what + " did not run at " + textx.ShortSHA(pr.HeadSHA)
-	return e.startCI(ctx, repo, w, pr, workflow, ciWords{
+	return e.startCI(ctx, acts, repo, pr, workflow, ciWords{
 		kind:    "fix.open_ci_dispatch",
 		refused: func(why string) string { return fmt.Sprintf("%s; magnum does not start %s: %s", lead, workflow, why) },
 		failed: func(identity, why string) string {
