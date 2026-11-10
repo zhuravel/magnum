@@ -930,10 +930,10 @@ func MayFold(a, b string) bool {
 // where one is ASCII (MayFold).
 func LooseFold(s string) string {
 	b := make([]byte, 0, len(s))
-	for _, r := range s {
+	for i, r := range s {
 		switch {
 		case r < utf8.RuneSelf:
-			c := byte(r)
+			c := s[i]
 			if 'A' <= c && c <= 'Z' {
 				c += 'a' - 'A'
 			}
