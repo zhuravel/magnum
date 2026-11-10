@@ -332,6 +332,7 @@ func (h *harness) revAnnComments(id int64, body string) {
 // fixer, and the look raises it.
 func TestTheReviewersPlainReplyIsItsOwnItemAndAChangeRequestWaitsForYou(t *testing.T) {
 	answered := func(t *testing.T) *harness {
+		t.Helper()
 		h := raisedChangeRequest(t)
 		emptyRepliedRounds(h)
 		h.advance(10 * time.Minute)
