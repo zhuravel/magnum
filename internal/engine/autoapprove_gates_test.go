@@ -433,20 +433,29 @@ func TestAutoApprovalRefusesAChangeToALinksTargetAtTheHeadWhateverHeadItsSession
 // link's target could name approves.
 func TestAutoApprovalCannotTellANameOutsideASCIIThroughALink(t *testing.T) {
 	const unknown = "Magnum cannot tell whether it changes the review agents' instructions or hooks"
+	guide := map[string]string{"AGENTS.md": "Read @docs/guide.md first.\n", "docs/guide.md": "x\n"}
 	for _, tc := range []struct {
-		name  string
-		links map[string]string
-		files []string
-		want  string
+		name    string
+		links   map[string]string
+		content map[string]string // the tree's files
+		files   []string
+		want    string
 	}{
-		{"a sharp s for ss", map[string]string{"CLAUDE.md": "docs/class.md"}, []string{"app/x.rb", "docs/claß.md"}, unknown},
-		{"a ligature for fi", map[string]string{"CLAUDE.md": "docs/first.md"}, []string{"docs/ﬁrst.md"}, unknown},
-		{"a decomposed name", map[string]string{"CLAUDE.md": "docs/caf\u00e9.md"}, []string{"docs/cafe\u0301.md"}, unknown},
-		{"a link outside ASCII", map[string]string{"CLAUDE.md": "docs/ﬁrst.md"}, []string{"docs/first.md"}, unknown},
-		{"a path no target could name", map[string]string{"CLAUDE.md": "docs/class.md"}, []string{"app/日本.rb"}, ""},
+		{"a sharp s for ss", map[string]string{"CLAUDE.md": "docs/class.md"}, nil, []string{"app/x.rb", "docs/claß.md"}, unknown},
+		{"a ligature for fi", map[string]string{"CLAUDE.md": "docs/first.md"}, nil, []string{"docs/ﬁrst.md"}, unknown},
+		{"a decomposed name", map[string]string{"CLAUDE.md": "docs/caf\u00e9.md"}, nil, []string{"docs/cafe\u0301.md"}, unknown},
+		{"a link outside ASCII", map[string]string{"CLAUDE.md": "docs/ﬁrst.md"}, nil, []string{"docs/first.md"}, unknown},
+		// APFS checks docſ -> evil out in place of docs/, so the team's
+		// @docs/guide.md loads the PR's evil/guide.md: a link outside ASCII
+		// in a tree whose instructions import anything cannot be followed,
+		// though no link steers the agents.
+		{"a link outside ASCII on the way to an import", map[string]string{"docſ": "evil"}, guide, []string{"docſ", "evil/guide.md"}, unknown},
+		{"a path no target could name", map[string]string{"CLAUDE.md": "docs/class.md"}, nil, []string{"app/日本.rb"}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _ := newAutoHarness(t, func(h *harness) { h.d.Git = fakeGit{links: map[string]map[string]string{"b1": tc.links}} })
+			h, _ := newAutoHarness(t, func(h *harness) {
+				h.d.Git = fakeGit{links: map[string]map[string]string{"b1": tc.links}, files: map[string]map[string]string{"b1": tc.content}}
+			})
 			h.open(prSpec{n: 1, head: "base1"})
 			h.startup()
 			h.tick()
@@ -518,6 +527,22 @@ func TestAutoApprovalRefusesAChangeToAFileTheInstructionsImport(t *testing.T) {
 			files: map[string]string{"docs/guide.md": "@notes.md\n"}, list: []string{"docs/notes.md"}, want: "(CLAUDE.md)"},
 		{name: "in another case", files: map[string]string{"AGENTS.md": "@Docs/Guide.md\n", "docs/guide.md": "@more.md\n"},
 			list: []string{"docs/more.md"}, want: "(AGENTS.md)"},
+		// Claude reads the file a link of an instruction file or a rules
+		// file leads to by the link's path, whatever the file's own name,
+		// and expands its imports.
+		{name: "through a link to a file of another name", links: map[string]string{"CLAUDE.md": ".cursorrules"},
+			files: map[string]string{".cursorrules": "Follow @docs/style.md.\n"}, list: []string{"docs/style.md"}, want: "(CLAUDE.md)"},
+		{name: "a rules file that links to a file of another name", links: map[string]string{".claude/rules/api.md": "../../shared/api-rules.txt"},
+			files: map[string]string{"shared/api-rules.txt": "@../docs/api.md\n"}, list: []string{"docs/api.md"}, want: "(.claude/rules/api.md)"},
+		// An import through a directory link resolves its own imports from
+		// the path it named (lib/), as Claude does, not only from where
+		// the link leads.
+		{name: "through a directory link, from the path the import names", links: map[string]string{"lib": "a/b/shared"},
+			files: map[string]string{"CLAUDE.md": "@lib/guide.md\n", "a/b/shared/guide.md": "@../x.md\n"}, list: []string{"x.md"},
+			want: "(CLAUDE.md)"},
+		// Claude ends a path at a #fragment.
+		{name: "an import with a fragment", files: map[string]string{"CLAUDE.md": "Setup: @docs/guide.md#setup\n"},
+			list: []string{"docs/guide.md"}, want: "(CLAUDE.md)"},
 		{name: "a home or an absolute import", files: map[string]string{"CLAUDE.md": "@~/x.md and @/etc/x.md\n"},
 			list: []string{"x.md", "etc/x.md"}},
 		{name: "a page nothing imports", files: map[string]string{"AGENTS.md": "Read @.docs/datagrid-guide.md first.\n"},
@@ -639,6 +664,30 @@ func TestARetargetWhoseFileListIsOfTheOldBaseIsNotGatedOnIt(t *testing.T) {
 	if a := h.autoApproval(2); a.State == store.AutoStanding {
 		t.Fatalf("approval after a retarget whose list changes .claude/ = %+v, want it withdrawn", a)
 	}
+}
+
+// The files gate of a new approval takes the head's list only when GitHub
+// read it against the base branch the PR names: a PR retargeted while its
+// Details fail keeps the old base's list, which says nothing of what the
+// head changes against the new base (a .claude/ the new base lacks), so
+// the approval waits, refused without a class, and the next pass reads
+// the list again.
+func TestAnApprovalIsNotDecidedOnAFileListOfAnotherBase(t *testing.T) {
+	h, _ := newAutoHarness(t)
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: []string{"app/x.rb"}})
+	h.tick()
+	h.gh.fail(errors.New("GitHub is down"), nil)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", base: "release", files: []string{"app/x.rb", ".claude/settings.json"}})
+	h.tick()
+	if f, ok, err := h.st.PRFilesOf(h.ctx, h.pr(2).ID); err != nil || !ok || f.BaseRef != "master" {
+		t.Fatalf("file list = %+v, %v, %v; want the old base's", f, ok, err)
+	}
+	h.reviewTo(2, "b1")
+	h.flush()
+	h.wantRefused(2, "its list of the head's files is of another base branch")
 }
 
 // A push starts no gate of a standing approval by itself: the round on the

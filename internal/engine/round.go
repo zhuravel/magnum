@@ -428,6 +428,7 @@ func (e *Engine) checkout(ctx context.Context, job *roundJob, fetched string) (s
 	if target == "" {
 		target = pr.HeadSHA
 	}
+	e.headFetched(target) // the clone has it now: its links are read again (planApprovalGates)
 	if target != pr.HeadSHA {
 		e.event(ctx, "info", prSubject(job.repo, pr.Number), "round.head_moved", fmt.Sprintf("GitHub head moved to %s; reviewing that", textx.ShortSHA(target)), nil)
 	}
@@ -811,6 +812,7 @@ func (e *Engine) switchHead(job *roundJob, rs roundSetup, base string, ws agents
 		}
 		job.slot = sl
 		out := pipeline.Switched{TargetSHA: cmp.Or(deref(sl.CheckedOutSHA), sha)}
+		e.headFetched(out.TargetSHA)
 		reviewed := ""
 		if kind != pipeline.KindInitial {
 			reviewed = deref(pr.ReviewedSHA)

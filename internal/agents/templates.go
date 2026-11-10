@@ -1403,7 +1403,7 @@ func promptLine(role config.Role, d ShellData) (string, error) {
 	return line, nil
 }
 
-// shellProjectBase is projectBase for PR prID's shell line: base unless
+// shellProjectBase is ProjectBase for PR prID's shell line: base unless
 // the PR is stacked on another branch than its repository's default; ""
 // (the session leaves the project config out) when the registry cannot
 // tell.
@@ -1412,7 +1412,7 @@ func (m *Manager) shellProjectBase(ctx context.Context, prID int64, base string)
 	if err == nil {
 		var repo store.Repo
 		if repo, err = m.d.Store.RepoByID(ctx, pr.RepoID); err == nil {
-			return projectBase(pr, repo, base)
+			return ProjectBase(pr, repo, base)
 		}
 	}
 	m.logErr(ctx, err, "agents: pr %d: cannot read its base branch, so its shell line leaves the project config out: %v", prID, err)

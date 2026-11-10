@@ -485,8 +485,9 @@ func (e *Engine) filesRefusal(ctx context.Context, pr store.PR, linksAt string) 
 // head's tree leads elsewhere (CLAUDE.md -> docs/guide.md, app/CLAUDE.md
 // -> ../docs/app.md, .claude/skills -> ../.agents/skills), and the list
 // names a change there by the target alone: the head's links, read from
-// its tree (configLinks), refuse a list that changes a target, by the
-// label of its link, in ASCII case. unknown says why magnum cannot tell,
+// its tree (configLinks), refuse a list that changes a target or a path on
+// the way to one (changedLinks), by the label of its link, in ASCII case.
+// unknown says why magnum cannot tell,
 // for a list with files in it: the links could not be read, or a listed
 // path with a byte outside ASCII may name a target under the
 // filesystem's own fold (agents.MaybeUnder); the caller refuses without a

@@ -45,12 +45,14 @@ const maxHeadLinks = 256
 // more than maxLinkSteps to follow.
 var errLinksTooMany = errors.New("the links take too many steps to follow")
 
-// errLinksFoldUnknown is resolveConfigLinks' error for a tree with links
-// that steer the review agents and a link whose path or text has a byte
-// outside ASCII: a case-insensitive filesystem folds such a name by rules
-// of its own (APFS opens .agents/ſkills for .agents/skills, ﬁrst.md for
-// first.md), which magnum does not model, so where the links lead cannot
-// be told.
+// errLinksFoldUnknown is resolveConfigTargets' error for a tree with a
+// link whose path or text has a byte outside ASCII and anything the agents
+// load through links or imports (a link that steers them, an import): a
+// case-insensitive filesystem folds such a name by rules of its own (APFS
+// opens .agents/ſkills for .agents/skills, ﬁrst.md for first.md, and
+// checks docſ -> evil out in place of docs/, which @docs/guide.md then
+// reads), which magnum does not model, so where the links lead cannot be
+// told.
 var errLinksFoldUnknown = errors.New("a link's path or text has a byte outside ASCII, which the filesystem folds by rules magnum does not model")
 
 // linkRetryAfter is how long configLinks keeps a head's failure that a
@@ -154,6 +156,19 @@ func (e *Engine) configLinks(ctx context.Context, pr store.PR) (map[string]strin
 	return t, nil
 }
 
+// headFetched drops what configLinks keeps of head's failure, unless the
+// tree itself gives it (lastingLinkFailure): a fetch or a checkout just
+// brought head into the clone, which may have lacked it when a tick asked
+// (a fork's head before any round), so its links are read again rather
+// than taken as unreadable until linkRetryAfter.
+func (e *Engine) headFetched(head string) {
+	e.links.mu.Lock()
+	defer e.links.mu.Unlock()
+	if f, ok := e.links.failed[head]; ok && !f.until.IsZero() {
+		delete(e.links.failed, head)
+	}
+}
+
 // headClone is the clone that holds pr's head: its repository's main
 // clone, into which a round's checkout fetches the head (a pool slot's and
 // a per-PR worktree's alike), else the main clone of the slot the PR holds;
@@ -170,15 +185,21 @@ func (e *Engine) headClone(ctx context.Context, pr store.PR) string {
 
 // changedLinks names, by their labels, each once, in the order of their
 // targets, the links of targets (configLinks) whose target paths, a PR's
-// changed files, change: the target itself, or a file under it, in ASCII
-// case (agents.MatchTarget). maybe reports a path with a byte outside
-// ASCII that may name a target under the filesystem's own fold, which
-// magnum cannot tell.
+// changed files, change: the target itself, a file under it, or a path on
+// the way to it (a push can turn docs into a link that leads anywhere
+// before docs/guide.md), in ASCII case (agents.MatchTarget). maybe reports
+// a path with a byte outside ASCII that may name a target, or a path on
+// the way to one, under the filesystem's own fold (docſ, which APFS opens
+// for docs), which magnum cannot tell.
 func changedLinks(targets map[string]string, paths []string) (names []string, maybe bool) {
 	for _, t := range slices.Sorted(maps.Keys(targets)) {
 		l := targets[t]
 		for _, f := range paths {
-			switch agents.MatchTarget(f, t) {
+			m := agents.MatchTarget(f, t)
+			if m == agents.NotUnder {
+				m = agents.MatchTarget(t, f)
+			}
+			switch m {
 			case agents.Under:
 				if !slices.Contains(names, l) {
 					names = append(names, l)
@@ -200,8 +221,9 @@ func changedLinks(targets map[string]string, paths []string) (names []string, ma
 // ASCII case, the fold every such filesystem agrees on. A name outside
 // ASCII folds by the filesystem's own rules (APFS: ſ is s, ß is ss, ﬁ is
 // fi, a decomposed name its composed spelling), which magnum does not
-// model: a tree with such a link, when any link steers the agents, fails
-// (errLinksFoldUnknown), so every target returned is ASCII. It returns each path the agents load through
+// model: a tree with such a link, when any link steers the agents (or,
+// in resolveConfigTargets, the instructions import anything), fails
+// (errLinksFoldUnknown). It returns each path the agents load through
 // such a link, with the link's label: the link itself, each link it passes
 // through on the way (re-pointing one changes what loads), where it ends
 // (a file, or a directory and what lies under it; "" for the tree's root,
@@ -227,14 +249,16 @@ func resolveConfigTargets(ctx context.Context, tree gitx.Tree, isConfig func(str
 		via: map[string][]string{}}
 	paths := slices.Sorted(maps.Keys(links))
 	steering := map[string]string{}
+	odd := false // a link's path or text has a byte outside ASCII
 	for _, l := range paths {
 		k := foldKey(l)
 		r.byFold[k] = append(r.byFold[k], l)
 		if label, ok := isConfig(l); ok {
 			steering[l] = label
 		}
+		odd = odd || !isASCII(l) || !isASCII(links[l])
 	}
-	if len(steering) > 0 && slices.ContainsFunc(paths, func(l string) bool { return !isASCII(l) || !isASCII(links[l]) }) {
+	if len(steering) > 0 && odd {
 		return nil, errLinksFoldUnknown
 	}
 	r.keys = slices.Sorted(maps.Keys(r.byFold))
@@ -246,87 +270,165 @@ func resolveConfigTargets(ctx context.Context, tree gitx.Tree, isConfig func(str
 	if read != nil && r.err == nil {
 		r.imports(tree.Files, isConfig, read)
 	}
-	if r.err != nil {
+	switch {
+	case r.err != nil:
 		return nil, r.err
+	case odd && len(r.out) > 0:
+		// No link steers the agents, but the instructions import: APFS
+		// checks docſ -> evil out in place of docs/, and @docs/guide.md
+		// then loads evil/guide.md.
+		return nil, errLinksFoldUnknown
 	}
 	return r.out, nil
 }
 
-// importSource is a file of the tree whose @path imports load: its path
-// and the label of the instruction file or link it is reached from.
-type importSource struct{ path, label string }
+// importSource is a file of the tree whose @path imports load: its path,
+// the label of the instruction file or link it is reached from, and the
+// directories it was named from besides its own and its links' (dirsOf):
+// an import's @lib/guide.md, through lib -> a/b/shared, is read by
+// Claude as lib/guide.md, whose own imports resolve from lib/.
+type importSource struct {
+	path, label string
+	dirs        []string
+	has         map[string]bool // foldKey of each of dirs
+}
+
+// linkBytesPerStep is how many bytes of a file's text the import walk
+// scans for one step of its budget.
+const linkBytesPerStep = 4096
 
 // imports adds to the walk the files the tree's instruction files import
 // (agents.ImportPaths), and what those import, to agents.MaxImportHops
 // hops, each with its source's label. The sources are the tree's Markdown
 // files (files: its regular files) that steer the agents themselves
-// (isConfig: an instruction file at any depth, a page under .claude/), and
+// (isConfig: an instruction file at any depth, a page under .claude/),
 // those at or under where a link that steers them leads (CLAUDE.md ->
-// docs/guide.md, .claude/rules -> ../shared/rules), read with read in one
-// batch per hop. A relative import is resolved from the source's
-// directory and, for a file reached through a link, from the link's (the
-// path Claude reads it by: an import in docs/guide.md read as CLAUDE.md
-// is from the root), following the tree's links on the way (realpath);
-// the links under a directory it names are followed too. A file it names
-// becomes a source of the next hop, in any ASCII case. Every source and
-// every import counts against the walk's steps (a tree of more files than
-// maxLinkSteps is no error by itself).
+// docs/guide.md, .claude/rules -> ../shared/rules), and a file of any name
+// a link leads to that Claude reads by the link's path, an instruction
+// file's or a page's (CLAUDE.md -> .cursorrules), read with read in one
+// batch per hop, each file once. An import resolves as Claude opens it:
+// joined to the directory of each path the source is read by (dirsOf: its
+// own, a link's that leads to it or to a directory above it, the one an
+// import named it from), as the filesystem resolves that path (realpath,
+// through the tree's links) and as it is with its ".." taken first
+// (path.resolve's); the links under a directory it names are followed too.
+// A file the filesystem may open for it (agents.LooseFold: Docs/Guide.md,
+// docſ/guide.md for docs/guide.md) becomes a source of the next hop. Every
+// source, every import and every linkBytesPerStep bytes scanned count
+// against the walk's steps (a tree of more files than maxLinkSteps is no
+// error by itself), and a file of more imports than the budget left fails
+// at once (errLinksTooMany).
 func (r *linkResolver) imports(files []string, isConfig func(string) (string, bool), read func(paths []string) (map[string]string, error)) {
-	byFold := map[string][]string{} // foldKey of a file's path -> the tree's files that fold to it
+	byName := map[string][]string{} // agents.LooseFold of a file's path -> the tree's files with that key
 	for _, f := range files {
-		k := foldKey(f)
-		byFold[k] = append(byFold[k], f)
+		k := agents.LooseFold(f)
+		byName[k] = append(byName[k], f)
 	}
-	covers := map[string]string{} // foldKey of a target -> its label
+	covers := map[string]string{} // agents.LooseFold of a target -> its label
 	for t, label := range r.out {
-		covers[foldKey(t)] = label
+		covers[agents.LooseFold(t)] = label
+	}
+	steers := func(f string) (string, bool) { // a Markdown file that steers the agents, by its own path
+		if !strings.EqualFold(path.Ext(f), ".md") {
+			return "", false
+		}
+		if label, ok := isConfig(f); ok {
+			return label, true
+		}
+		return coveredBy(covers, f)
 	}
 	var srcs []importSource
+	at := map[string]int{}
 	for _, f := range files { // the tree's every file, which the listing's cap bounds: only a source is a step
-		if !strings.EqualFold(path.Ext(f), ".md") {
-			continue
-		}
-		label, ok := isConfig(f)
-		if !ok {
-			label, ok = coveredBy(covers, f)
-		}
-		if ok {
-			if !r.step() {
-				return
+		label, ok := steers(f)
+		for _, l := range r.via[foldKey(f)] { // a link of the walk that leads to f: Claude reads f by l
+			if ok {
+				break
 			}
-			srcs = append(srcs, importSource{f, label})
+			label, ok = steers(l)
 		}
-	}
-	read1 := map[string]bool{}
-	for hop := 1; hop <= agents.MaxImportHops && len(srcs) > 0; hop++ {
-		var paths []string
-		for _, src := range srcs {
-			if !read1[src.path] {
-				read1[src.path] = true
-				paths = append(paths, src.path)
-			}
-		}
-		blobs, err := read(paths)
-		if err != nil {
-			r.err = err
+		if ok && !r.addSource(&srcs, at, f, label) {
 			return
 		}
-		var next []importSource
+	}
+	parsed := map[string][]string{} // a source's path -> its imports, read once
+	asked := map[string]bool{}
+	done := map[string]map[string]bool{} // a source's path -> foldKey of the directories its imports were resolved from
+	for hop := 1; hop <= agents.MaxImportHops && len(srcs) > 0; hop++ {
+		var need []string
 		for _, src := range srcs {
-			text, ok := blobs[src.path]
-			if !ok {
+			if !asked[src.path] {
+				asked[src.path] = true
+				need = append(need, src.path)
+			}
+		}
+		if len(need) > 0 {
+			blobs, err := read(need)
+			if err != nil {
+				r.err = err
+				return
+			}
+			for _, p := range need {
+				text, ok := blobs[p]
+				if !ok {
+					continue
+				}
+				for range len(text)/linkBytesPerStep + 1 {
+					if !r.step() {
+						return
+					}
+				}
+				if err := r.ctx.Err(); err != nil { // a scan of up to the read's cap: ask before it
+					r.err = err
+					return
+				}
+				imps, more := agents.ImportPaths(text, max(maxLinkSteps-r.steps, 0))
+				if more {
+					r.err = fmt.Errorf("%w (more than %d)", errLinksTooMany, maxLinkSteps)
+					return
+				}
+				parsed[p] = imps
+			}
+		}
+		var next []importSource
+		nextAt := map[string]int{}
+		for _, src := range srcs {
+			imps := parsed[src.path]
+			if len(imps) == 0 {
 				continue
 			}
-			for _, imp := range agents.ImportPaths(text) {
-				for _, dir := range r.dirsOf(src.path) {
-					for _, t := range r.realpath(dir, imp, 0, src.label) {
-						if !r.step() {
-							return
-						}
-						r.add(t, src.label)
-						r.expand(t, src.label)
-						for _, f := range byFold[foldKey(t)] {
-							next = append(next, importSource{f, src.label})
+			if done[src.path] == nil {
+				done[src.path] = map[string]bool{}
+			}
+			var dirs []string
+			for _, d := range append(r.dirsOf(src.path), src.dirs...) {
+				if k := foldKey(d); !done[src.path][k] {
+					done[src.path][k] = true
+					dirs = append(dirs, d)
+				}
+			}
+			for _, imp := range imps {
+				if !r.step() {
+					return
+				}
+				for _, dir := range dirs {
+					opened, named := importOpens(dir, imp)
+					for _, p := range opened {
+						for _, t := range r.realpath("", p, 0, src.label) {
+							if !r.step() {
+								return
+							}
+							r.add(t, src.label)
+							r.expand(t, src.label)
+							for _, f := range byName[agents.LooseFold(t)] {
+								var from []string
+								if named != "" {
+									from = append(from, linkDir(named))
+								}
+								if !r.addSource(&next, nextAt, f, src.label, from...) {
+									return
+								}
+							}
 						}
 					}
 				}
@@ -336,14 +438,58 @@ func (r *linkResolver) imports(files []string, isConfig func(string) (string, bo
 	}
 }
 
-// coveredBy is the label of the target in covers (folded) that f is or
-// lies under, in ASCII case; false for none. The target "" covers every
-// path.
+// addSource puts f, with label and the directories dirs, in list once (at
+// its index in at), merging the directories of a second entry, and counts
+// a step; false once the walk must stop.
+func (r *linkResolver) addSource(list *[]importSource, at map[string]int, f, label string, dirs ...string) bool {
+	if !r.step() {
+		return false
+	}
+	i, ok := at[f]
+	if !ok {
+		i = len(*list)
+		at[f] = i
+		*list = append(*list, importSource{path: f, label: label, has: map[string]bool{}})
+	}
+	src := &(*list)[i]
+	for _, d := range dirs {
+		if k := foldKey(d); !src.has[k] {
+			src.has[k] = true
+			src.dirs = append(src.dirs, d)
+		}
+	}
+	return true
+}
+
+// importOpens are the paths, from the top, Claude may open for imp, an
+// import of a file read from the directory dir: dir/imp as the filesystem
+// resolves it (a ".." after a link: the link's target's parent), and
+// named, dir/imp with its ".." taken first as Node's path.resolve does
+// ("" when that leaves the tree), which is also the path the imported file
+// is then read by.
+func importOpens(dir, imp string) (opened []string, named string) {
+	joined := imp
+	if dir != "" {
+		joined = dir + "/" + imp
+	}
+	opened = []string{joined}
+	switch named = path.Clean(joined); {
+	case named == "." || named == ".." || strings.HasPrefix(named, "../"):
+		named = ""
+	case named != joined:
+		opened = append(opened, named)
+	}
+	return opened, named
+}
+
+// coveredBy is the label of the target in covers (keyed by
+// agents.LooseFold) that f is or lies under; false for none. The target
+// "" covers every path.
 func coveredBy(covers map[string]string, f string) (string, bool) {
 	if label, ok := covers[""]; ok {
 		return label, true
 	}
-	for k := foldKey(f); ; {
+	for k := agents.LooseFold(f); ; {
 		if label, ok := covers[k]; ok {
 			return label, true
 		}
@@ -355,33 +501,44 @@ func coveredBy(covers map[string]string, f string) (string, bool) {
 	}
 }
 
-// dirsOf are the directories an import in f is resolved from: f's own, and
-// for each link the walk followed to f or to a directory above it (or to
-// the root), the link's path with the rest of f's (the path Claude reads f
-// by).
+// dirsOf are the directories an import in f is resolved from: those of
+// each path Claude may read f by, f itself and, for each link the walk
+// followed to f or to a directory above it (or to the root), the link's
+// path with the rest of f's, and so on for that path's own links
+// (.claude/rules -> ../shared/rules, shared/rules/api.md -> ../../x.txt:
+// x.txt is read as .claude/rules/api.md). Each path counts a step.
 func (r *linkResolver) dirsOf(f string) []string {
-	out := []string{linkDir(f)}
-	alias := func(t string) {
-		rest := strings.TrimPrefix(f[len(t):], "/")
-		for _, l := range r.via[foldKey(t)] {
-			a := l
-			if rest != "" {
-				a += "/" + rest
+	seen := map[string]bool{foldKey(f): true}
+	paths := []string{f}
+	for i := 0; i < len(paths); i++ {
+		q := paths[i]
+		for t := q; ; {
+			rest := strings.TrimPrefix(q[len(t):], "/")
+			for _, l := range r.via[foldKey(t)] {
+				a := l
+				if rest != "" {
+					a += "/" + rest
+				}
+				if k := foldKey(a); !seen[k] {
+					if !r.step() {
+						return nil
+					}
+					seen[k] = true
+					paths = append(paths, a)
+				}
 			}
-			if d := linkDir(a); !slices.Contains(out, d) {
-				out = append(out, d)
+			if t == "" {
+				break
 			}
+			t = linkDir(t)
 		}
 	}
-	for t := f; ; {
-		alias(t)
-		i := strings.LastIndexByte(t, '/')
-		if i < 0 {
-			break
+	var out []string
+	for _, p := range paths {
+		if d := linkDir(p); !slices.Contains(out, d) {
+			out = append(out, d)
 		}
-		t = t[:i]
 	}
-	alias("")
 	return out
 }
 

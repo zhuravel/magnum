@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -302,6 +303,9 @@ func TestALiveClaudeSessionIsParkedWhenTheNewHeadChangesALinksTarget(t *testing.
 		{name: "a target in the fetched head's tree", files: skill, tree: tree, wantQuit: true},
 		{name: "a target on the slot's disk", files: skill, disk: true, wantQuit: true},
 		{name: "a target the head leaves alone", files: []string{"app/x.rb", ".agents/skillsx/a.md"}, tree: tree, disk: true},
+		// A path on the way to a target may become a link that leads
+		// anywhere: .agentſ, which APFS opens for .agents, -> evil.
+		{name: "a path on the way to a target", files: []string{".agentſ", "evil/skills/x/SKILL.md"}, disk: true, wantQuit: true},
 		{name: "a file the head's instructions import", files: []string{"app/x.rb", ".docs/guide.md"},
 			imports: map[string]map[string]string{"b2": {"CLAUDE.md": "@.docs/guide.md\n"}}, wantQuit: true},
 		{name: "a cut-off list, git finds a target changed", files: []string{"app/x.rb"}, truncated: true, disk: true,
@@ -447,5 +451,103 @@ func TestAQuitThatFailsIsChargedNotRetriedForGood(t *testing.T) {
 	}
 	if pr := h.pr(2); pr.Attempts != 1 {
 		t.Fatalf("attempts = %d, want the failed quit charged once", pr.Attempts)
+	}
+}
+
+// A stacked PR's sessions compare the project config with the default
+// branch (agents.ProjectBase), since its base branch is another PR's head:
+// a new head that merges what that branch's own .claude/ changes lists
+// nothing under .claude/ against the PR's base. The reload check compares
+// the new head with the same base as the session, by git, whatever the
+// PR's list against its base branch says; and so for a PR retargeted from
+// the default branch to another since its session started.
+func TestAReloadCheckOfAStackedPRComparesWithTheDefaultBranch(t *testing.T) {
+	untouched := []string{"app/models/order.rb"}
+	for _, c := range []struct {
+		name       string
+		retargeted bool
+		changed    map[string][]string
+		wantQuit   bool
+	}{
+		{name: "stacked, the base branch's config merged", changed: map[string][]string{"b2": {".claude/settings.json"}}, wantQuit: true},
+		{name: "stacked, the config alone"},
+		{name: "retargeted, the base branch's config merged", retargeted: true, changed: map[string][]string{"b2": {".claude/settings.json"}},
+			wantQuit: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g := &projectGit{changed: c.changed}
+			h := newHarness(t, func(h *harness) { h.d.Git = g })
+			first := prSpec{n: 2, head: "b1", base: "feature-a"}
+			if c.retargeted {
+				first.base = ""
+			}
+			h.open(prSpec{n: 1, head: "base1"})
+			h.startup()
+			h.tick()
+			h.open(prSpec{n: 1, head: "base1"}, first)
+			h.tick()
+			h.advance(5 * time.Minute)
+			h.tick()
+			h.wantState(2, store.PRReviewed)
+			at := reloadingClaude(h)
+			h.advance(30 * time.Minute)
+			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", base: "feature-a", files: untouched})
+			h.tick()
+			h.advance(5 * time.Minute)
+			h.tick()
+			if n := len(h.rd.all()); n != 2 {
+				t.Fatalf("rounds = %d, want the re-review", n)
+			}
+			if quit := len(*at) > 0; quit != c.wantQuit {
+				t.Fatalf("quits = %v, want a quit: %v", *at, c.wantQuit)
+			}
+			if calls := g.all(); !slices.Equal(calls, []string{"origin/master...b2"}) {
+				t.Fatalf("git comparisons = %q, want the default branch's", calls)
+			}
+		})
+	}
+}
+
+// lackingGit's clone lacks the heads in lacks: their trees cannot be read
+// until the test drops them (a fetch brought them).
+type lackingGit struct {
+	projectGit
+	lacks sync.Map // head -> true
+}
+
+func (g *lackingGit) Tree(ctx context.Context, dir, rev string, keep func(string) bool) (gitx.Tree, error) {
+	if _, ok := g.lacks.Load(rev); ok {
+		return gitx.Tree{}, fmt.Errorf("gitx: ls-tree -r %s: exit status 128", rev)
+	}
+	return g.projectGit.Tree(ctx, dir, rev, keep)
+}
+
+// A head the clone lacked when a tick asked its links (a fork's, before
+// any fetch) fails, and configLinks keeps that failure a while: the reload
+// check's own fetch, or the checkout's, brings the head, and from then on
+// its links are read again rather than taken as unreadable, which would
+// quit every session that reloads the config and post a comment in place
+// of the approval.
+func TestAReloadCheckReadsAHeadAgainOnceItsFetchBringsIt(t *testing.T) {
+	g := &lackingGit{}
+	h := newHarness(t, func(h *harness) { h.d.Git = g })
+	h.reviewedPR(2, "b1")
+	at := reloadingClaude(h)
+	h.advance(30 * time.Minute)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", files: []string{"app/models/order.rb"}})
+	h.tick()
+	h.advance(5 * time.Minute)
+	g.lacks.Store("b2", true)
+	pr := h.pr(2)
+	if _, err := h.e.configLinks(h.ctx, pr); pr.HeadSHA != "b2" || err == nil {
+		t.Fatalf("configLinks of %s, a head the clone lacks: %v, want an error", pr.HeadSHA, err)
+	}
+	g.lacks.Delete("b2")
+	h.tick()
+	if n := len(h.rd.all()); n != 2 {
+		t.Fatalf("rounds = %d, want the re-review", n)
+	}
+	if len(*at) > 0 {
+		t.Fatalf("quits = %v: the fetch brought b2, whose list leaves the config alone", *at)
 	}
 }

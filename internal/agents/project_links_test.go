@@ -104,7 +104,10 @@ func TestALinksTargetMatchesAChangedFileInAnyCase(t *testing.T) {
 // has a byte outside ASCII and the two differ, whether the path is the
 // target or under it cannot be told (MaybeUnder), and UnderTarget, which
 // the session and the reload check ask, counts it. ASCII elements decide
-// in ASCII case, exactly, as every such filesystem agrees.
+// in ASCII case, exactly, as every such filesystem agrees, and so does an
+// element outside ASCII against an ASCII one: only the few runes that fold
+// into ASCII (ſ, the Kelvin sign, ı, İ, ß, the Latin ligatures, two Greek
+// marks) or that HFS+ ignores can make them one.
 func TestMatchTargetCannotTellANameOutsideASCII(t *testing.T) {
 	for _, c := range []struct {
 		f, t string
@@ -120,6 +123,15 @@ func TestMatchTargetCannotTellANameOutsideASCII(t *testing.T) {
 		{"docs/José.md", "docs/app.md", NotUnder}, // no fold makes José app
 		{"José/guide.md", "docs", NotUnder},
 		{"s\u200ckills/x", "skills", MaybeUnder}, // HFS+ ignores U+200C
+		// A name outside ASCII equals an ASCII one only when every rune
+		// outside ASCII folds into ASCII (LooseFold): CJK never does, nor é.
+		{"docs/日本.md", "docs/abc.md", NotUnder},
+		{"docs/jobs.json", "docs/José", NotUnder},
+		{"docs/\u212aey.md", "docs/key.md", MaybeUnder}, // the Kelvin sign
+		{"docs/\u0131ndex.md", "docs/index.md", MaybeUnder},
+		{"docs/gu\u0130de.md", "docs/guide.md", MaybeUnder},
+		{"docs/ﬆyle.md", "docs/style.md", MaybeUnder},
+		{"docs/a\u037eb", "docs/a;b", MaybeUnder}, // the Greek question mark decomposes to ;
 		{"docs/guide.mdx", "docs/guide.md", NotUnder},
 		{"docs/guide.md", "", Under}, // a link to the checkout's root
 	} {
@@ -369,5 +381,28 @@ func TestALinkToTheCheckoutsRootLeavesTheConfigOut(t *testing.T) {
 	}
 	if targets, partial := ProjectLinks(KindClaude, dir); !slices.Contains(targets, "") || partial {
 		t.Fatalf("ProjectLinks = %q, %v; want the root among the targets", targets, partial)
+	}
+}
+
+// LooseFold keys the names a case-insensitive filesystem may open as one:
+// ASCII case, the runes that fold into ASCII, the code points HFS+ ignores,
+// and the case of any other script (Cyrillic, Greek) alike; a rune that
+// folds into no ASCII keeps the key apart (José is not Jose).
+func TestLooseFoldKeysNamesAFilesystemMayOpenAsOne(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		same bool
+	}{
+		{"Docs/ſkills/ﬁrst.md", "docs/skills/first.md", true},
+		{"ДОКУМЕНТ.md", "документ.md", true},
+		{"s\u200ckills", "skills", true},
+		{"cla\u00df.md", "class.md", true},
+		{"\u212aey", "KEY", true},
+		{"José", "Jose", false},
+		{"日本", "abc", false},
+	} {
+		if got := LooseFold(c.a) == LooseFold(c.b); got != c.same {
+			t.Errorf("LooseFold(%q) = %q, LooseFold(%q) = %q: one key %v, want %v", c.a, LooseFold(c.a), c.b, LooseFold(c.b), got, c.same)
+		}
 	}
 }

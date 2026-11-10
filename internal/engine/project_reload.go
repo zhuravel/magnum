@@ -75,8 +75,8 @@ func (e *Engine) parkReloading(ctx context.Context, job *roundJob) ([]string, st
 // headProbe answers, for one checkout, whether the head it brings changes
 // the project config a session's agent reloads, reading each source once:
 // the checkout's fetch (Slots.Fetch, whose head the checkout then checks
-// out with Slots.CheckoutFetched), the PR's stored file list, and git's
-// list of the files the fetched head changes.
+// out with Slots.CheckoutFetched), the PR's stored file list, git's list
+// of the files the fetched head changes, and the links on the slot's disk.
 type headProbe struct {
 	e   *Engine
 	job *roundJob
@@ -89,22 +89,35 @@ type headProbe struct {
 	namesOnce   bool
 	names       []string // every file the fetched head changes since its merge base (git)
 	namesErr    error
+	disk        map[string]diskLinks // kind -> the links on the slot's disk (agents.ProjectLinks)
+}
+
+// diskLinks is what agents.ProjectLinks found on the slot's disk.
+type diskLinks struct {
+	targets []string
+	partial bool
 }
 
 // leavesProjectAlone reports whether the head the checkout brings leaves
-// the project config s's agent reloads as the merge base has it: then the
-// session has nothing new to reload and need not be quit. The checkout's
-// fetch runs first, so the head decided on is the one checked out, even
-// when GitHub's moved since the radar read it. The PR's file list the
-// poller stored decides when it is complete and lists that head
-// (store.PRFiles); otherwise (a PR of more files than the list holds, a
-// list of another head, none) git does: every file the head changes since
-// its merge base with the PR's base branch (gitx.Client.ChangedNames, read
-// once for every session), matched here like the list (agents.ProjectTouched)
-// rather than by git's pathspec, whose icase folds ASCII only (a head's
+// the project config s's agent reloads as the base the session compared it
+// with has it: then the session has nothing new to reload and need not be
+// quit. The checkout's fetch runs first, so the head decided on is the one
+// checked out, even when GitHub's moved since the radar read it. That base
+// is the session's (agents.ProjectBase): the PR's base branch, or, for a
+// PR based on another branch than the repository's default (stacked, or
+// retargeted since), origin/<default branch>, since what the head brings
+// from that branch's own .claude/ is not the team's. The PR's file list
+// the poller stored decides when it is complete, lists that head and was
+// read against the PR's base branch, the session's own; otherwise (a PR
+// of more files than the list holds, a list of another head or base, none,
+// a stacked PR) git does: every file the head changes since its merge base
+// with that base (gitx.Client.ChangedNames, read once for every session),
+// matched here like the list (agents.ProjectTouched) rather than by git's
+// pathspec, whose icase folds ASCII only (a head's
 // .agents/ſkills/pwn/SKILL.md, which macOS writes into .agents/skills/pwn/).
-// Either way a file at or under a link's target counts (linkTargets:
-// .claude/skills -> ../.agents/skills loads what the head changes there,
+// Either way a file at or under a link's target counts, and so does a path
+// on the way to one (linkTargets: .claude/skills -> ../.agents/skills
+// loads what the head changes there, and .agentſ may become a link,
 // agents.UnderTarget). A fetch that fails (or none, for a checkout not in
 // place) leaves no head to decide on, while the checkout's own fetch may
 // then bring a newer one than the radar's list is of; that, a session of
@@ -126,26 +139,27 @@ func (p *headProbe) leavesProjectAlone(ctx context.Context, s store.Session) boo
 	}
 	touches := func(files []string) bool {
 		return agents.ProjectTouched(kind, files) || slices.ContainsFunc(files, func(f string) bool {
-			return slices.ContainsFunc(targets, func(t string) bool { return agents.UnderTarget(f, t) })
+			return slices.ContainsFunc(targets, func(t string) bool { return agents.UnderTarget(f, t) || agents.UnderTarget(t, f) })
 		})
 	}
-	if f, ok := p.list(ctx); ok && !f.Truncated && f.HeadSHA == head {
+	pr, own := p.job.pr, "origin/"+strings.TrimPrefix(prBase(p.job.repo, p.job.pr), "origin/")
+	base := agents.ProjectBase(pr, p.job.repo, own)
+	if f, ok := p.list(ctx); ok && !f.Truncated && f.HeadSHA == head && base == own && (f.BaseRef == "" || f.BaseRef == deref(pr.BaseRef)) {
 		return !touches(f.Paths)
 	}
 	if p.e.d.Git == nil {
 		return false
 	}
-	changed, err := p.changedNames(ctx, head)
+	changed, err := p.changedNames(ctx, base, head)
 	return err == nil && !touches(changed)
 }
 
-// changedNames are the files head changes since its merge base with the
-// PR's base branch, read once (ChangedNames): a git that fails is logged
-// once and quits every session that reloads its config.
-func (p *headProbe) changedNames(ctx context.Context, head string) ([]string, error) {
+// changedNames are the files head changes since its merge base with base,
+// read once (ChangedNames): a git that fails is logged once and quits
+// every session that reloads its config.
+func (p *headProbe) changedNames(ctx context.Context, base, head string) ([]string, error) {
 	if !p.namesOnce {
 		p.namesOnce = true
-		base := "origin/" + strings.TrimPrefix(prBase(p.job.repo, p.job.pr), "origin/")
 		p.names, p.namesErr = p.e.d.Git.ChangedNames(ctx, p.job.slot.Path, base, head)
 		if p.namesErr != nil {
 			p.e.log.Warn("project config: cannot compare the head with its merge base, so a session that reloads it is quit",
@@ -156,17 +170,27 @@ func (p *headProbe) changedNames(ctx context.Context, head string) ([]string, er
 }
 
 // linkTargets are where the links of kind's config lead: on the slot's
-// disk (agents.ProjectLinks, the links the session loaded through), and in
-// the tree of head, the fetched one (configLinks, which also has the links
-// below the root and those the base added since), each target once,
-// sorted. false when they cannot all be read: the disk's walk stopped
-// short, or the head's tree cannot be read.
+// disk (agents.ProjectLinks, the links the session loaded through, walked
+// once per kind), and in the tree of head, the fetched one (configLinks,
+// which also has the links below the root and those the base added
+// since), each target once, sorted. false when they cannot all be read:
+// the disk's walk stopped short, or the head's tree cannot be read.
 func (p *headProbe) linkTargets(ctx context.Context, kind, head string) ([]string, bool) {
-	targets, partial := agents.ProjectLinks(kind, p.job.slot.Path)
-	if partial {
-		p.e.log.Warn("project config: too many entries to look through for links, so a session that reloads it is quit", "pr", p.job.pr.ID)
+	d, ok := p.disk[kind]
+	if !ok {
+		d.targets, d.partial = agents.ProjectLinks(kind, p.job.slot.Path)
+		if p.disk == nil {
+			p.disk = map[string]diskLinks{}
+		}
+		p.disk[kind] = d
+		if d.partial {
+			p.e.log.Warn("project config: too many entries to look through for links, so a session that reloads it is quit", "pr", p.job.pr.ID)
+		}
+	}
+	if d.partial {
 		return nil, false
 	}
+	targets := slices.Clone(d.targets)
 	if head != "" {
 		pr := p.job.pr
 		pr.HeadSHA = head
@@ -200,6 +224,7 @@ func (p *headProbe) fetch(ctx context.Context) string {
 		p.e.log.Warn("project config: fetch before the checkout failed, so a session that reloads the config is quit", "pr", p.job.pr.ID, "err", err)
 		return ""
 	}
+	p.e.headFetched(sha)
 	p.fetched = sha
 	return sha
 }

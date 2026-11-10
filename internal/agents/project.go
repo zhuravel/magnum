@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
@@ -252,7 +253,7 @@ type projectScope struct {
 // the paths in any case, onDisk, and what a link at the root, under a
 // project directory or of the kind's paths below the root leads to,
 // trackedLinks; base is the default branch's for a stacked PR,
-// projectBase), or git cannot tell (a git that fails is a warning; a launch
+// ProjectBase), or git cannot tell (a git that fails is a warning; a launch
 // without a base and a dir that is no git checkout, as the retro's and the
 // curation's are, never reach git and log at debug: errNoBase,
 // errNoCheckout), the session gets the kind's
@@ -349,7 +350,7 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 	return s
 }
 
-// projectBase is what a session of pr compares the checkout's project
+// ProjectBase is what a session of pr compares the checkout's project
 // config with (checkoutProject): base, the PR's base ref or its merge base
 // with the head, when the PR is based on the repository's default branch
 // (or names no base), else origin/<default branch>. The team's config is
@@ -358,8 +359,10 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 // origin/<that branch> once it is fresh (the operator's fetch, a fix's: a
 // pool slot fetches only the pool's base) they would load as the team's,
 // hooks and all, outside the sandbox. Against the default branch they
-// count as the PR's, and the session leaves them out.
-func projectBase(pr store.PR, repo store.Repo, base string) string {
+// count as the PR's, and the session leaves them out. The engine's reload
+// check compares a new head with the same base, so what that head brings
+// from the PR's base branch counts there too.
+func ProjectBase(pr store.PR, repo store.Repo, base string) string {
 	def := cmp.Or(strings.TrimPrefix(repo.DefaultBranch, "origin/"), "master")
 	if b := strings.TrimPrefix(store.Deref(pr.BaseRef), "origin/"); b == "" || b == def {
 		return base
@@ -535,7 +538,7 @@ func (pc projectConfig) addLinks(dir string, d *diskPaths, links []string) {
 	}
 	w := linkWalk{pc: pc, d: d, root: root, seen: map[string]bool{}, budget: maxLinkWalk}
 	for _, l := range links {
-		p, _, ok := pc.pathOf(l)
+		p, rest, ok := pc.pathOf(l)
 		if !ok {
 			continue
 		}
@@ -547,8 +550,14 @@ func (pc projectConfig) addLinks(dir string, d *diskPaths, links []string) {
 		if w.add(t, p) {
 			d.git = append(d.git, t)
 		}
-		if fi, err := os.Stat(full); err == nil && fi.IsDir() {
+		switch fi, err := os.Stat(full); {
+		case err != nil:
+		case fi.IsDir():
 			d.git = append(d.git, w.walk([]string{t}, p)...)
+		case pc.imports && (p.docs || p.dir && rest != "" && strings.EqualFold(path.Ext(l), ".md")):
+			// Claude reads it by the link's path (app/CLAUDE.md -> ../.cursorrules),
+			// whatever the name of the file it leads to.
+			d.sources = append(d.sources, importFile{l, p})
 		}
 	}
 }
@@ -668,8 +677,12 @@ const maxImportBytes = 4 << 20
 // into the checkout, as linkTarget finds it (a file that is not there
 // loads nothing; one of pc's own paths is compared as itself, its imports
 // followed all the same); a directory it names is walked for links (walk).
-// Each file read counts against maxLinkWalk; past it the walk is partial.
-// A file that cannot be read, or is over maxImportBytes, imports nothing.
+// A file it names is read by the path the import names (CLAUDE.md's
+// @lib/guide.md, through lib -> a/b/shared, imports @../x.md from lib/ as
+// Claude resolves it, and from a/b/shared/ as the disk has it). Each file
+// read and each import counts against maxLinkWalk; past it the walk is
+// partial. A file that cannot be read, or is over maxImportBytes, imports
+// nothing.
 func (pc projectConfig) addImports(dir string, d *diskPaths) {
 	if !pc.imports || len(d.sources) == 0 {
 		return
@@ -701,7 +714,16 @@ func (pc projectConfig) addImports(dir string, d *diskPaths) {
 			if resolved, err := filepath.EvalSymlinks(full); err == nil && filepath.Dir(resolved) != bases[0] {
 				bases = append(bases, filepath.Dir(resolved))
 			}
-			for _, imp := range ImportPaths(text) {
+			imps, more := ImportPaths(text, max(w.budget, 0))
+			if more {
+				d.partial = true
+				return
+			}
+			for _, imp := range imps {
+				if w.budget--; w.budget < 0 {
+					d.partial = true
+					return
+				}
 				for _, base := range bases {
 					target := filepath.Join(base, filepath.FromSlash(imp))
 					t, ok := linkTarget(root, target)
@@ -714,13 +736,25 @@ func (pc projectConfig) addImports(dir string, d *diskPaths) {
 					if fi, err := os.Stat(target); err == nil && fi.IsDir() {
 						d.git = append(d.git, w.walk([]string{t}, src.p)...)
 					} else if err == nil && t != "" {
-						next = append(next, importFile{t, src.p})
+						next = append(next, importFile{namedPath(root, target, t), src.p})
 					}
 				}
 			}
 		}
 		srcs = next
 	}
+}
+
+// namedPath is target, a path an import named (joined to its importing
+// file's directory, not resolved), relative to root, with forward slashes:
+// the path Claude reads the file by, whose own imports resolve from its
+// directory; t, where the disk has it, when target lies outside root.
+func namedPath(root, target, t string) string {
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return t
+	}
+	return filepath.ToSlash(rel)
 }
 
 // readImportFile reads the file at full (through links), false when it
@@ -864,51 +898,90 @@ func MatchTarget(f, t string) TargetMatch {
 
 // MayFold reports whether a case-insensitive filesystem may open a for b,
 // two names of one path element of which at least one has a byte outside
-// ASCII: magnum does not model the filesystem's fold of such a name (APFS
-// folds ß to ss and ﬁ to fi and decomposes é, HFS+ ignores some code
-// points), but every rune outside ASCII folds to zero or more runes and an
-// ASCII one to its lower case, so the ASCII letters of one name, in order,
-// are always among those of the other's fold. False for two ASCII names
-// (asciiEqualFold decides those), and for two names a fold cannot match:
-// José is never app.
+// ASCII. magnum does not model the filesystem's fold of two such names
+// (APFS decomposes é, folds Ж to ж, ß to ss; HFS+ ignores some code
+// points), so two names outside ASCII always may. One outside ASCII and
+// one in it may only when each rune of the first outside ASCII folds into
+// ASCII or is ignored (LooseFold: ſ, the Kelvin sign, ı, İ, ß, ẞ, the
+// Latin ligatures, the two Greek marks that decompose to ASCII; every
+// other rune folds to one outside ASCII, or decomposes to a letter and a
+// mark outside it, under every such filesystem) and the folds are equal:
+// José is never Jose, 日本.md never abc.md. False for two ASCII names
+// (asciiEqualFold decides those).
 func MayFold(a, b string) bool {
 	switch {
 	case isASCII(a) && isASCII(b):
 		return false
-	case !isASCII(a) && !isASCII(b):
-		return true
-	case isASCII(a):
-		a, b = b, a
+	case isASCII(a) || isASCII(b):
+		return LooseFold(a) == LooseFold(b)
 	}
-	return asciiSubsequence(asciiLower(a), asciiLower(b))
+	return true
 }
 
-// asciiLower is the ASCII bytes of s in lower case, every other byte left
-// out.
-func asciiLower(s string) string {
+// LooseFold is s as a key two names share that a case-insensitive
+// filesystem may open as one: its ASCII letters in lower case; a rune
+// outside ASCII whose case partner is ASCII (ſ, the Kelvin sign, ı, İ) as
+// that letter, ß, ẞ and the Latin ligatures (ﬁ) as the letters they fold
+// to, the Greek question mark and varia as the ASCII marks they decompose
+// to; the code points HFS+ ignores left out; any other rune as its simple
+// case fold (the smallest of its orbit: Ж and ж alike). Names with other
+// keys may still be one where both are outside ASCII (a decomposed é and a
+// composed one: Go's standard library has no Unicode normalization), never
+// where one is ASCII (MayFold).
+func LooseFold(s string) string {
 	b := make([]byte, 0, len(s))
-	for i := range len(s) {
-		c := s[i]
+	for _, r := range s {
 		switch {
-		case c >= 0x80:
-			continue
-		case 'A' <= c && c <= 'Z':
-			c += 'a' - 'A'
+		case r < utf8.RuneSelf:
+			c := byte(r)
+			if 'A' <= c && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			b = append(b, c)
+		case foldIgnored(r):
+		default:
+			if f, ok := fullFolds[r]; ok {
+				b = append(b, f...)
+			} else {
+				b = utf8.AppendRune(b, foldRune(r))
+			}
 		}
-		b = append(b, c)
 	}
 	return string(b)
 }
 
-// asciiSubsequence reports whether sub's bytes appear in s in order.
-func asciiSubsequence(sub, s string) bool {
-	i := 0
-	for j := 0; i < len(sub) && j < len(s); j++ {
-		if sub[i] == s[j] {
-			i++
+// fullFolds are the runes outside ASCII whose fold, or canonical
+// decomposition, is more than one ASCII letter or an ASCII mark (Unicode's
+// CaseFolding.txt, status F, and the singletons of UnicodeData.txt).
+var fullFolds = map[rune]string{
+	'\u00df': "ss", '\u1e9e': "ss", // ß, ẞ
+	'\ufb00': "ff", '\ufb01': "fi", '\ufb02': "fl", '\ufb03': "ffi", '\ufb04': "ffl", '\ufb05': "st", '\ufb06': "st",
+	'\u037e': ";", '\u1fef': "`", // the Greek question mark, varia
+}
+
+// foldIgnored reports whether HFS+ leaves r out of a name it compares
+// (Apple's TN1150: the zero-width joiners and the directional marks).
+func foldIgnored(r rune) bool {
+	return 0x200c <= r && r <= 0x200f || 0x202a <= r && r <= 0x202e || 0x206a <= r && r <= 0x206f || r == 0xfeff
+}
+
+// foldRune is r, a rune outside ASCII, as LooseFold keys it: the ASCII
+// letter, in lower case, of its case mappings or case orbit when one is
+// ASCII, else the smallest rune of its orbit.
+func foldRune(r rune) rune {
+	for _, c := range []rune{unicode.ToLower(r), unicode.ToUpper(r)} {
+		if c < utf8.RuneSelf {
+			return unicode.ToLower(c)
 		}
 	}
-	return i == len(sub)
+	m := r
+	for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+		if f < utf8.RuneSelf {
+			return unicode.ToLower(f)
+		}
+		m = min(m, f)
+	}
+	return m
 }
 
 // UnderTarget reports whether f may be the link target t or lie under it

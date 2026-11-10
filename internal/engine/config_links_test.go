@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -242,5 +243,166 @@ func TestALargeTreesFilesDoNotSpendTheLinksBudget(t *testing.T) {
 	got, err := resolveConfigTargets(context.Background(), gitx.Tree{Files: files}, isConfig, read)
 	if err != nil || got["docs/guide.md"] != "CLAUDE.md" {
 		t.Fatalf("resolveConfigTargets = %d targets (guide %q), %v", len(got), got["docs/guide.md"], err)
+	}
+}
+
+// treeOf is a tree of the given files (with their contents) and links,
+// and a read of those files as Blobs gives them.
+func treeOf(files, links map[string]string) (gitx.Tree, func([]string) (map[string]string, error)) {
+	read := func(paths []string) (map[string]string, error) {
+		out := map[string]string{}
+		for _, p := range paths {
+			if c, ok := files[p]; ok {
+				out[p] = c
+			}
+		}
+		return out, nil
+	}
+	return gitx.Tree{Links: links, Files: slices.Sorted(maps.Keys(files))}, read
+}
+
+// APFS checks a link docſ -> evil out in place of a directory docs/ (it
+// opens docs/ for docſ), so the team's @docs/guide.md loads the PR's
+// evil/guide.md though no link steers the agents: a link whose path or
+// text is outside ASCII, in a tree whose instructions import anything,
+// cannot be followed (errLinksFoldUnknown). One beside instructions that
+// import nothing leads nowhere the agents load.
+func TestALinkOutsideASCIIBesideAnImportCannotBeFollowed(t *testing.T) {
+	kinds := defaultKinds()
+	isConfig := func(p string) (string, bool) { return agentConfigPath(kinds, p) }
+	links := map[string]string{"docſ": "evil"}
+	tree, read := treeOf(map[string]string{"AGENTS.md": "Read @docs/guide.md first.\n", "docs/guide.md": "x\n"}, links)
+	if got, err := resolveConfigTargets(context.Background(), tree, isConfig, read); !errors.Is(err, errLinksFoldUnknown) {
+		t.Fatalf("resolveConfigTargets = %q, %v; want errLinksFoldUnknown", got, err)
+	}
+	tree, read = treeOf(map[string]string{"AGENTS.md": "No imports here.\n"}, links)
+	if got, err := resolveConfigTargets(context.Background(), tree, isConfig, read); err != nil || len(got) != 0 {
+		t.Fatalf("instructions that import nothing: %q, %v", got, err)
+	}
+}
+
+// A listed path on the way to a target changes what the agents load as
+// much as the target does: a push can turn it into a link that leads
+// anywhere (docs, or docſ, which APFS opens for docs, before
+// docs/guide.md). changedLinks names it, or cannot tell for a name
+// outside ASCII; a path beside the way changes nothing.
+func TestChangedLinksCountsAPathOnTheWayToATarget(t *testing.T) {
+	targets := map[string]string{"docs/guide.md": "AGENTS.md"}
+	for _, c := range []struct {
+		path  string
+		names []string
+		maybe bool
+	}{
+		{"Docs", []string{"AGENTS.md"}, false},
+		{"docſ", nil, true},
+		{"doc", nil, false},
+		{"docs/other.md", nil, false},
+	} {
+		names, maybe := changedLinks(targets, []string{c.path})
+		if !slices.Equal(names, c.names) || maybe != c.maybe {
+			t.Errorf("changedLinks(%q) = %q, %v; want %q, %v", c.path, names, maybe, c.names, c.maybe)
+		}
+	}
+}
+
+// A case-insensitive filesystem opens docſ/guide.md for @docs/guide.md
+// (agents.LooseFold): the walk reads such a file's own imports too, and
+// those of a file of another case.
+func TestAnImportReadsTheFilesTheFilesystemOpensForItsName(t *testing.T) {
+	kinds := defaultKinds()
+	isConfig := func(p string) (string, bool) { return agentConfigPath(kinds, p) }
+	tree, read := treeOf(map[string]string{"AGENTS.md": "Read @docs/guide.md and @Notes/Index.md.\n", "docſ/guide.md": "@../shared/x.md\n",
+		"notes/index.md": "@y.md\n"}, nil)
+	got, err := resolveConfigTargets(context.Background(), tree, isConfig, read)
+	if err != nil || got["shared/x.md"] != "AGENTS.md" || got["notes/y.md"] != "AGENTS.md" {
+		t.Fatalf("resolveConfigTargets = %q, %v; want shared/x.md and notes/y.md of AGENTS.md", got, err)
+	}
+}
+
+// A file the PR controls may hold any number of @ tokens: each import is a
+// step of the walk, which gives up past its budget at once (a 1 MiB
+// AGENTS.md of distinct tokens took minutes when each path was compared
+// with all before it), and stops when its context ends.
+func TestTheImportsOfAFileStayWithinTheWalksBudget(t *testing.T) {
+	kinds := defaultKinds()
+	isConfig := func(p string) (string, bool) { return agentConfigPath(kinds, p) }
+	var b strings.Builder
+	for i := 0; b.Len() < 1<<20; i++ {
+		fmt.Fprintf(&b, "@%x\n", i)
+	}
+	tree, read := treeOf(map[string]string{"AGENTS.md": b.String()}, nil)
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		_, err := resolveConfigTargets(context.Background(), tree, isConfig, read)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, errLinksTooMany) {
+			t.Fatalf("a 1 MiB AGENTS.md of imports: %v, want errLinksTooMany", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatalf("resolveConfigTargets of a 1 MiB AGENTS.md of imports still runs after %s", time.Since(start))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := resolveConfigTargets(ctx, tree, isConfig, read); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a walk whose context ended: %v, want context.Canceled", err)
+	}
+}
+
+// One imported file may be named many ways (16,384 case spellings of one
+// name): the walk reads its imports once, not once per spelling, so a
+// large file there costs one scan.
+func TestAnImportedFileIsReadOncePerWalk(t *testing.T) {
+	kinds := defaultKinds()
+	isConfig := func(p string) (string, bool) { return agentConfigPath(kinds, p) }
+	const name = "bbbbbbbbbbbbbb"
+	var b strings.Builder
+	for i := range 1 << len(name) {
+		s := []byte(name)
+		for j := range s {
+			if i&(1<<j) != 0 {
+				s[j] -= 'a' - 'A'
+			}
+		}
+		fmt.Fprintf(&b, "@%s.md\n", s)
+	}
+	big := strings.Repeat("no imports in this line\n", (8<<20)/24)
+	tree, read := treeOf(map[string]string{"AGENTS.md": "@.docs/guide.md\n", ".docs/guide.md": b.String(), ".docs/" + name + ".md": big}, nil)
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		got, err := resolveConfigTargets(context.Background(), tree, isConfig, read)
+		if err == nil && got[".docs/"+name+".md"] != "AGENTS.md" {
+			err = fmt.Errorf("targets %d, without .docs/%s.md", len(got), name)
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatalf("resolveConfigTargets still runs after %s", time.Since(start))
+	}
+}
+
+// An import's name outside ASCII may fold to a link beside it
+// (foldSiblings): finding those, the walk counts each link it looks at, so
+// a directory of more links than the budget fails at once, though none of
+// them folds to the name.
+func TestTheLinksAnImportMayFoldToCountAgainstTheBudget(t *testing.T) {
+	kinds := defaultKinds()
+	isConfig := func(p string) (string, bool) { return agentConfigPath(kinds, p) }
+	links := map[string]string{}
+	for i := range maxLinkSteps + 1 {
+		links[fmt.Sprintf("d/l%d", i)] = "x"
+	}
+	tree, read := treeOf(map[string]string{"AGENTS.md": "@d/zé.md\n"}, links)
+	if _, err := resolveConfigTargets(context.Background(), tree, isConfig, read); !errors.Is(err, errLinksTooMany) {
+		t.Fatalf("an import beside %d links: %v, want errLinksTooMany", len(links), err)
 	}
 }
