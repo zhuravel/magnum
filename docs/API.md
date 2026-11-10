@@ -18539,6 +18539,17 @@ func (c *Client) Radar(ctx context.Context, org string) ([]RepoRadar, RateLimit,
     the lowest live one). When a later page fails it still carries what the
     earlier pages reported, so the caller can pause on a low budget.
 
+func (c *Client) RecentReviews(ctx context.Context, owner, repo string, number int, stop func(Review) bool) (reviews []Review, complete bool, err error)
+    RecentReviews lists the reviews of a pull request, oldest first,
+    the way IssueComments lists the conversation: reviewsPageSize (100) at a
+    time from the newest back, until a page holds a review that stop (nil:
+    none) reports true for, or it reached the first review, and then it returns
+    every review it read. A reader of what came after a time stops at the first
+    review submitted before it, so how many reviews the pull request has does
+    not matter. complete is false when it stopped at reviewsMaxPages pages with
+    older reviews, none of which stop was asked about, left unread. A missing
+    repository or pull request is an error matching ErrNotFound.
+
 func (c *Client) RecentRuns(ctx context.Context, owner, repo, workflow string) ([]WorkflowRun, error)
     RecentRuns lists the newest runs of the workflow file workflow ("ci.yml")
     of owner/repo, of any event and branch, newest first, each with its commit,
@@ -20880,6 +20891,12 @@ func (a *App) Login() string
 
 func (a *App) Name() string
     Name implements Source.
+
+func (a *App) PostsAs(ctx context.Context) (string, error)
+    PostsAs is the login GitHub shows as the author of what the App posts:
+    the slug GET /app names, authenticated with a fresh JWT, and "[bot]",
+    the login Check wants the identity's config to say. It mints no token and
+    writes nothing.
 
 func (a *App) Reauth(ctx context.Context) error
     Reauth discards the cached installation token (GitHub answered 401:
@@ -25417,7 +25434,7 @@ type BadAnchor struct {
 
 type CommentGitHub interface {
 	FixReplyGitHub
-	AllReviews(ctx context.Context, owner, repo string, number int) ([]github.Review, bool, error)
+	RecentReviews(ctx context.Context, owner, repo string, number int, stop func(github.Review) bool) ([]github.Review, bool, error)
 	Pull(ctx context.Context, owner, repo string, number int) (github.Pull, error)
 	RequestReviewers(ctx context.Context, owner, repo string, number int, logins []string) error
 	UpdatePullTitle(ctx context.Context, owner, repo string, number int, title string) (github.Pull, error)
@@ -25492,8 +25509,10 @@ func RunComment(ctx context.Context, gh CommentGitHub, o CommentOptions, text []
     and a login asked already is skipped, so after an unclear failure the same
     line runs again safely. GitHub must show the App as each comment's author:
     another account there is StatusInvalid (otherAuthor) and nothing more goes
-    out. onPosted (nil: none) hears of each post, with the author GitHub showed
-    when it is not the App, and of a comment found already there.
+    out, and the newest copy of the same comment found by another account is
+    StatusInvalid before the first write (alreadyByOther). onPosted (nil: none)
+    hears of each post, with the author GitHub showed when it is not the App,
+    and of a comment found already there.
 
 func (o CommentOutcome) ExitCode() int
     ExitCode is 0 when everything is on GitHub (posted, already there) or a dry
