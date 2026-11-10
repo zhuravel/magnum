@@ -1776,16 +1776,23 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   the same head is dropped and the PR waits without a class), nothing a link of those paths leads to
   (`CLAUDE.md` -> `docs/guide.md`, `app/CLAUDE.md` -> `../docs/app.md`, `.claude/skills` ->
   `../.agents/skills` and a link under the directory it leads to; a link to the root, `.claude/skills` ->
-  `..`, makes every file one), and nothing those files import (`@path`, Claude Code's imports: a team
-  `AGENTS.md` that imports `@.docs/guide.md` loads the PR's guide; from the importing file's directory,
-  and from the link's for a file reached through one, through the tree's links, five hops deep, one more
-  than Claude's four; a home or an absolute import is never the tree's). Paths match in ASCII case, which
-  every case-insensitive filesystem folds alike; a listed path whose name outside ASCII may fold to a
-  target's (APFS opens `claß.md` for `class.md`, `ﬁrst.md` for `first.md`), and a tree with a link whose
-  path or text is outside ASCII, wait without a class: Magnum does not model a filesystem's fold of such a
-  name. Magnum reads the links and the imports from the head's own tree in the PR's clone, whatever head
+  `..`, makes every file one), nothing on the way to such a target (a push may turn it into a link), and
+  nothing those files import (`@path`, Claude Code's imports: a team `AGENTS.md` that imports
+  `@.docs/guide.md` loads the PR's guide; the file a link of an instruction file or a rules file leads to
+  imports whatever its name, `CLAUDE.md` -> `.cursorrules`; an import resolves from the directory of each
+  path Claude may read its file by, the file's own, a link's that leads to it, the one an import named it
+  by, through the tree's links, five hops deep, one more than Claude's four; a path is read as written and
+  as Claude ends it, at a `#fragment` or a backslash no space follows; a home or an absolute import is
+  never the tree's). Paths match in ASCII case, which every case-insensitive filesystem folds alike; a
+  name outside ASCII equals an ASCII one only through the few characters that fold into ASCII (`ſ`, the
+  Kelvin sign, `ı`, `İ`, `ß`, the Latin ligatures) or that HFS+ ignores, and a listed path whose name may so
+  fold to a target's (APFS opens `claß.md` for `class.md`, `ﬁrst.md` for `first.md`; two names outside ASCII
+  always may), and a tree with a link whose path or text is outside ASCII where links or imports lead
+  anywhere (APFS checks `docſ` -> `evil` out in place of `docs/`), wait without a class: Magnum does not
+  model a filesystem's fold of such a name. Magnum reads the links and the imports from the head's own tree in the PR's clone, whatever head
   its sessions launched on, and a head whose links it cannot read waits without a class (a failure the
-  tree always gives is kept for that head, any other for 2 minutes). They steer the review agents, and their hooks run on every
+  tree always gives is kept for that head, any other for 2 minutes or until a round fetches the head;
+  every import and every 4 KiB of an imported file count against the walk's budget). They steer the review agents, and their hooks run on every
   teammate's machine once merged. That a session of the head left the config out does not count by itself:
   git compared the slot's files with a merge base, so an ignored `__pycache__/*.pyc` an earlier PR's round
   left there, an uncommitted edit, a stacked PR's base branch, or a compare git could not make would hold
@@ -2666,8 +2673,9 @@ the root links to as well, what a link under `.claude/` or `.codex/` leads to in
 (`.claude/skills` -> `../.agents/skills`), what a tracked instruction file or `.claude/` link below the root
 leads to (`app/CLAUDE.md` -> `../docs/app.md`, read from the checkout's index), a link under a directory
 such a link leads to, and, for Claude, the files the instruction files and the pages under `.claude/`
-import (`@path`, five hops deep, from the importing file's directory as its path reads it and as the disk
-has it), matching git's paths in ASCII case; a name outside ASCII that may fold to a target's counts, and
+import, a link's of any name included (`@path`, five hops deep, from the importing file's directory as its
+path reads it, as an import named it and as the disk has it; at most 10,000 imports), matching git's paths
+in ASCII case; a name outside ASCII that may fold to a target's counts, and
 with links the session reads every changed file itself, since git's case-insensitive pathspec folds ASCII
 only (a nested checkout, Claude Code's `.claude/worktrees/<name>`, is not looked into; past 10,000 entries
 the session leaves the config out, and so does a link to the checkout's root). A PR based on another branch than the repository's
@@ -2690,12 +2698,13 @@ Magnum moves the checkout to a new head that changes it, at a round's start and 
 and resumed once the new head is checked out; one that works or is blocked holds the round instead. The quit
 works as the early park's does. It sends one ctrl+c and a second later the kind's `exit_keys` (Claude:
 `/exit`), each after the same look at a bare prompt. Claude ignores two ctrl+c at its idle prompt. The
-checkout's fetch runs first, and the head it fetched decides: by the PR's file list when the list is
-complete and of that head, else (a PR of more files than the list holds) by git, every file that head
-changes since its merge base with the base branch, matched by Magnum rather than by git's pathspec; a file
-a link of the config leads to, or the instruction files import, counts (the links and imports on the slot's
-disk and in the fetched head's tree), and a fetch that fails, a git or links that cannot tell quit the
-session. Not covered: a team hook that runs a script outside `.claude/` the PR changes, an import by an
+checkout's fetch runs first, and the head it fetched decides, against the base the session compared its
+config with: by the PR's file list when the list is complete, of that head and of the PR's own base branch,
+else (a PR of more files than the list holds, a stacked or retargeted PR, whose session compared with
+`origin/<default branch>`) by git, every file that head changes since its merge base with that base,
+matched by Magnum rather than by git's pathspec; a file a link of the config leads to, a path on the way to
+one, or a file the instruction files import, counts (the links and imports on the slot's disk and in the
+fetched head's tree), and a fetch that fails, a git or links that cannot tell quit the session. Not covered: a team hook that runs a script outside `.claude/` the PR changes, an import by an
 absolute path into the checkout, and an agent that checks another commit out in the checkout.
 
 Magnum's Claude sessions (claude-review, claude-simplify, and the retro's classifier and the notes curator

@@ -17915,6 +17915,87 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `AGENTS.md` push now use a change only the new head's own links refuse, and
   TestAStandingApprovalStandsUntilMagnumReviewsTheNewHead pins the old rule for failing checks only.
 
+- **The agents' config gate reads imports as Claude opens them, within its budget, refuses a link outside
+  ASCII wherever links or imports lead, and the reload check compares a stacked PR's head with the default
+  branch** (2026-11-10, supersedes in parts "The agents' config gate follows imports and the reviewed head's
+  links, cannot tell a name outside ASCII, ...", the same day: its rule that a link outside ASCII fails the
+  walk only beside a link that steers the agents, its `MayFold` of ASCII letters in order, its "Implemented
+  wider" for imports, which ended a path later than Claude, and its reload check that decided a stacked
+  PR's head on the PR's own base). Two reviews of that build found these; each was checked against the code
+  and fixed test first.
+  - A link outside ASCII beside an import (P1). With no link that steered the agents, a link's name outside
+    ASCII was never checked: a PR that added `docſ -> evil` and `evil/guide.md`, under a team `AGENTS.md`
+    that imports `@docs/guide.md`, was approved as the operator, while APFS checks the link out in place of
+    `docs/` and Claude loads `evil/guide.md` (checked on this Mac). `resolveConfigTargets` now fails
+    (`errLinksFoldUnknown`) for such a link in any tree whose links or imports give a target; the cost is
+    that every PR of such a tree waits for the operator, as with a steering link. `changedLinks` and the
+    reload check also count a listed path on the way to a target (`docs`, or `docſ`, may become a link),
+    as the trivial-delta check already did.
+  - Names that fold into ASCII. A file the filesystem opens for an import (`docſ/guide.md` for
+    `@docs/guide.md`, `Notes/Index.md` for `@notes/index.md`) is now found by `agents.LooseFold`, a key that
+    lower-cases ASCII, maps the runes that fold into ASCII to it, drops HFS+'s ignored code points and
+    simple-folds any other script, and its own imports are read. `MayFold` is exact where one name is ASCII:
+    under APFS, HFS+, exFAT or NTFS a rune equals ASCII text only if it is one of `ſ`, the Kelvin sign, `ı`,
+    `İ` (their case partners are ASCII; the standard library's tables say so), `ß`, `ẞ`, the Latin ligatures
+    `ﬀ`-`ﬆ` (full folds), the Greek question mark and varia (canonical singletons) or an ignored code point,
+    so `日本.md` is never `abc.md` and José never `jobs.json`, where the old rule said maybe. Two names outside
+    ASCII still always may (a decomposed and a composed é: the standard library has no normalization, and
+    `golang.org/x/text` stays out for the earlier entry's reasons).
+  - A stacked or retargeted PR's reload check (P1, older than the earlier entry). The session compares the
+    config with `origin/<default branch>` for a PR on another base (`agents.ProjectBase`, now exported);
+    the reload check decided on the PR's list against its own base, so a head that merged the base
+    branch's own `.claude/` changes listed nothing there, and a live Claude reloaded them. The check now
+    compares with the session's base: by git for such a PR, and by the stored list only when it is of the
+    PR's own base (`store.PRFiles.BaseRef`, or none from an earlier build).
+  - A file of any name read through a link (P2). `CLAUDE.md -> .cursorrules`, or
+    `.claude/rules/api.md -> ../../shared/api-rules.txt`, is read by Claude by the link's path, imports
+    expanded; magnum read Markdown sources only. The engine now takes a file a link of the walk leads to as
+    a source when the link's path is one (an instruction file, a page of a project directory), and the
+    session does so for a tracked link below the root (the root's already read through the link).
+  - Where an import resolves (P3). Claude resolves a nested import from the path it read the file by: an
+    import's `@lib/guide.md` through `lib -> a/b/shared` imports `@../x.md` from `lib/`, so `x.md`. Both
+    sides now keep the path an import named for the next hop's directory; the engine opens `dir/imp` as the
+    filesystem resolves it and with its `..` taken first (Node's `path.resolve`), and follows a link's own
+    links back to the path Claude reads a file by (`.claude/rules -> ../shared/rules`,
+    `shared/rules/api.md -> ../../x.txt`: `x.txt` is read as `.claude/rules/api.md`).
+  - Claude's own parser (P2). Claude Code 2.1.322 matches `(?:^|\s)@((?:[^\s\\]|\\ )+)` and drops a
+    `#fragment` (read from its binary's strings and a reviewer's notes): `@docs/guide.md#setup` loads
+    `docs/guide.md`, which magnum's target `docs/guide.md#setup` missed. `ImportPaths` now also gives the
+    path ended at a backslash no space follows and without its fragment, each with and without trailing
+    punctuation; wider than Claude still: an @ after any non-letter, in code too, five hops.
+  - Cost (P2). `ImportPaths` removed duplicates with `slices.Contains` (1 MiB of distinct tokens: 23 s;
+    8 MiB about 25 minutes), and no caller counted its imports or asked the context; the import walk read a
+    file again for each spelling that named it. Now: a map, a limit (the budget left; past it
+    `errLinksTooMany`, or partial in the session), a step per import, per source and per 4 KiB scanned, the
+    context asked before each file's scan, each source once per walk with its directories merged, and the
+    reload check walks the slot's disk once per kind. `gitx.TrackedFiles` compared each path with all kept
+    (100,000 files: 7 s per launch) and ignored a cut listing: it compares with the entry before (git lists
+    a path's stages together) and fails a cut listing (`ErrTreeTooLarge`).
+  - A kept failure after a fetch (P3). A head the clone lacked when a tick asked stayed unreadable for two
+    minutes after the reload check's fetch or the round's checkout brought it, quitting reloading sessions
+    and holding the judge's approval back. `headFetched` drops such a failure (not one the tree always
+    gives) at the probe's fetch and after the checkout.
+  - Code no test pinned (P3): a new approval on a list of another base, a nested tracked `CLAUDE.md` that
+    imports, a rules file link, a root link's guide that imports from its own directory, and a budget spent
+    in the links an import's name may fold to now each fail a test when removed. The step of `realpath`'s
+    loop over the links a name folds to stays without its own test: the recursive call it guards takes a
+    step first.
+  Not covered: an ASCII file that a non-ASCII import (`@docſ/guide.md`) may open has no imports read (a change
+  to it still waits as cannot-tell), nor have two names outside ASCII that differ only in normalization;
+  both need base content the operator approved by hand, since the gate refused the PR that brought it. Tests,
+  failing first: TestAutoApprovalCannotTellANameOutsideASCIIThroughALink (a link on the way to an import),
+  TestALinkOutsideASCIIBesideAnImportCannotBeFollowed, TestChangedLinksCountsAPathOnTheWayToATarget,
+  TestALiveClaudeSessionIsParkedWhenTheNewHeadChangesALinksTarget (a path on the way),
+  TestAnImportReadsTheFilesTheFilesystemOpensForItsName, TestMatchTargetCannotTellANameOutsideASCII,
+  TestLooseFoldKeysNamesAFilesystemMayOpenAsOne, TestAReloadCheckOfAStackedPRComparesWithTheDefaultBranch,
+  TestAutoApprovalRefusesAChangeToAFileTheInstructionsImport (four cases),
+  TestASessionReadsTheImportsOfEveryInstructionFileItLoads, TestImportPathsEndsAPathWhereClaudeCodeDoes,
+  TestImportPathsStopsAtItsLimit, TestTheImportsOfAFileStayWithinTheWalksBudget,
+  TestAnImportedFileIsReadOncePerWalk, TestASessionsImportsStayWithinTheWalksBudget,
+  TestTrackedFilesListsALargeIndexOnceAndFailsWhenCut, TestAReloadCheckReadsAHeadAgainOnceItsFetchBringsIt;
+  checked against their mutations: TestAnApprovalIsNotDecidedOnAFileListOfAnotherBase,
+  TestTheLinksAnImportMayFoldToCountAgainstTheBudget and TestTheDispatchGatesReadTheHeadAgainOnceTheCheckoutBringsIt.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is

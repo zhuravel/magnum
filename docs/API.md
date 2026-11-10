@@ -946,17 +946,22 @@ func HooksReviewShown(text string) bool
     shows Codex's startup hooks review live at its bottom (detectHooksDialog):
     a session that shows it eats its next prompt until someone answers it.
 
-func ImportPaths(text string) []string
+func ImportPaths(text string, limit int) (paths []string, more bool)
     ImportPaths are the paths text imports (@path), each once, in order,
-    read wider than Claude Code reads them so that magnum errs toward a target:
-    an @ at the start of the text or after any character but a letter or a digit
-    (an e-mail address imports nothing), up to the first blank a backslash
-    does not escape ("\ " is a space of the path), given with and without the
-    punctuation that may end a sentence after it, in a code span or a fenced
-    block too, which Claude skips. A home (~) or an absolute path is left out:
-    no commit's tree holds it, and Claude loads a file outside its working
-    directory only once the user approves the project's external imports,
-    which magnum never does.
+    at most limit of them (more reports that text has more), read wider than
+    Claude Code reads them so that magnum errs toward a target: an @ at the
+    start of the text or after any character but a letter or a digit (an e-mail
+    address imports nothing; Claude wants a blank before it), up to the first
+    blank a backslash does not escape ("\ " is a space of the path), in a code
+    span or a fenced block too, which Claude skips. Each such token is given as
+    it is and as Claude Code's parser ends it (at a backslash no space follows:
+    `(?:^|\s)@((?:[^\s\\]|\\ )+)`), each of those without its #fragment too
+    (Claude drops it), and each with and without the punctuation that may end a
+    sentence after it. A home (~) or an absolute path is left out: no commit's
+    tree holds it, and Claude loads a file outside its working directory only
+    once the user approves the project's external imports, which magnum never
+    does. Its time is linear in text: a file the PR controls may hold any number
+    of tokens.
 
 func JoinCodexHookProblems(problems []CodexHookProblem) string
     JoinCodexHookProblems says problems in one sentence without its final
@@ -1009,6 +1014,17 @@ func LaunchModel(ctx context.Context, st *store.Store, cfg *config.Config, role 
     then role.Model. A pane job asks it before it starts again on a fallback.
     Limits that cannot be read give role.Model, neither a fallback nor none.
 
+func LooseFold(s string) string
+    LooseFold is s as a key two names share that a case-insensitive filesystem
+    may open as one: its ASCII letters in lower case; a rune outside ASCII whose
+    case partner is ASCII (ſ, the Kelvin sign, ı, İ) as that letter, ß, ẞ and
+    the Latin ligatures (ﬁ) as the letters they fold to, the Greek question mark
+    and varia as the ASCII marks they decompose to; the code points HFS+ ignores
+    left out; any other rune as its simple case fold (the smallest of its orbit:
+    Ж and ж alike). Names with other keys may still be one where both are
+    outside ASCII (a decomposed é and a composed one: Go's standard library has
+    no Unicode normalization), never where one is ASCII (MayFold).
+
 func MagnumCommand(text string, cmds map[string]bool) bool
     MagnumCommand reports whether text, a user turn, is Claude Code's record of
     one of cmds (MagnumCommands).
@@ -1023,14 +1039,17 @@ func MagnumCommands(cfg *config.Config) map[string]bool
     command of one of these names is dropped on both sides alike.
 
 func MayFold(a, b string) bool
-    MayFold reports whether a case-insensitive filesystem may open a for b, two
-    names of one path element of which at least one has a byte outside ASCII:
-    magnum does not model the filesystem's fold of such a name (APFS folds ß to
-    ss and ﬁ to fi and decomposes é, HFS+ ignores some code points), but every
-    rune outside ASCII folds to zero or more runes and an ASCII one to its lower
-    case, so the ASCII letters of one name, in order, are always among those of
-    the other's fold. False for two ASCII names (asciiEqualFold decides those),
-    and for two names a fold cannot match: José is never app.
+    MayFold reports whether a case-insensitive filesystem may open a for b,
+    two names of one path element of which at least one has a byte outside
+    ASCII. magnum does not model the filesystem's fold of two such names (APFS
+    decomposes é, folds Ж to ж, ß to ss; HFS+ ignores some code points), so two
+    names outside ASCII always may. One outside ASCII and one in it may only
+    when each rune of the first outside ASCII folds into ASCII or is ignored
+    (LooseFold: ſ, the Kelvin sign, ı, İ, ß, ẞ, the Latin ligatures, the two
+    Greek marks that decompose to ASCII; every other rune folds to one outside
+    ASCII, or decomposes to a letter and a mark outside it, under every such
+    filesystem) and the folds are equal: José is never Jose, 日本.md never abc.md.
+    False for two ASCII names (asciiEqualFold decides those).
 
 func NewRunID(now time.Time) string
     NewRunID is a run id: "r-<UTC yyyymmddThhmmss>-<6 random hex digits>",
@@ -1104,6 +1123,20 @@ func PostReviewLine(d JudgeData) string
     never disagree and post-review refuses an APPROVE the round cannot post;
     --local-base (the base the blind replay's diff starts at) in a blind one,
     so the tool reads nothing from GitHub.
+
+func ProjectBase(pr store.PR, repo store.Repo, base string) string
+    ProjectBase is what a session of pr compares the checkout's project config
+    with (checkoutProject): base, the PR's base ref or its merge base with the
+    head, when the PR is based on the repository's default branch (or names
+    no base), else origin/<default branch>. The team's config is the default
+    branch's: a stacked PR's base branch is another PR's head, whose own
+    .claude/ or .codex/ changes nobody reviewed, and compared with origin/<that
+    branch> once it is fresh (the operator's fetch, a fix's: a pool slot
+    fetches only the pool's base) they would load as the team's, hooks and all,
+    outside the sandbox. Against the default branch they count as the PR's,
+    and the session leaves them out. The engine's reload check compares a new
+    head with the same base, so what that head brings from the PR's base branch
+    counts there too.
 
 func ProjectLinks(kind, dir string) (targets []string, partial bool)
     ProjectLinks are the targets, relative to the checkout dir's root, of the
@@ -20312,10 +20345,13 @@ func (c *Client) Symlinks(ctx context.Context, dir, rev string) (map[string]stri
     object store (never the work tree): an empty map when it has none.
 
 func (c *Client) TrackedFiles(ctx context.Context, dir string, paths ...string) (links, files []string, err error)
-    TrackedFiles is TrackedSymlinks that also gives the regular files of dir's
-    index that paths name (a blob of mode 100644 or 100755), each once, in git's
-    order: the instruction files and project files a session reads for the files
-    they import.
+    TrackedFiles is TrackedSymlinks that also gives the regular files of
+    dir's index that paths name (a blob of mode 100644 or 100755), each once,
+    in git's order: the instruction files and project files a session reads for
+    the files they import. git lists a path once per stage, each next to the
+    other (a merge conflict's 1, 2 and 3), so a path the entry before named is
+    left out, in time linear in the listing. A listing past execx.MaxOutput is
+    ErrTreeTooLarge: a link or a file it cut may be one that matters.
 
 func (c *Client) TrackedSymlinks(ctx context.Context, dir string, paths ...string) ([]string, error)
     TrackedSymlinks are the symbolic links of dir's index that paths name
