@@ -118,7 +118,10 @@ func (w *WaitError) Error() string { return w.Who + ": " + w.What }
 // Deps are the runtime's collaborators. Config, Herdr, Store, Registry and
 // Runner are required. Store is the factory's agents store
 // (Layout.FactoryAgentsDB). Memory nil reads no memory (taken as normal);
-// Clock nil is time.Now; Log nil discards.
+// MayStart is the engine's holds of a launch (a disk or memory hold, a drain
+// for an install: who and what, as a task's wait says them), which a start
+// outside a launch passes too (mayStart), called on the engine's loop; nil
+// holds nothing. Clock nil is time.Now; Log nil discards.
 type Deps struct {
 	Config   *config.Config
 	Layout   paths.Layout
@@ -127,6 +130,7 @@ type Deps struct {
 	Registry *registry.Registry
 	Runner   execx.Runner
 	Memory   func(ctx context.Context) engine.MemorySample
+	MayStart func() (who, what string, ok bool)
 	Clock    func() time.Time
 	Log      *slog.Logger
 }
@@ -134,7 +138,7 @@ type Deps struct {
 // seams are what New takes from the machine and a test replaces: the sleep
 // (stagger, quits, switches), the reading of Codex's budget and login, the
 // signal StopShell may send, the read of a transcript's user turns, the
-// daemon's read of a copy's directory (readableDir), and the CLIs' homes
+// daemon's read of a copy's directory (a dirProber's), and the CLIs' homes
 // the agents manager reads transcripts from ("" = the CLI's own default).
 type seams struct {
 	sleep                func(ctx context.Context, d time.Duration) error
@@ -195,6 +199,8 @@ type Runtime struct {
 	commands   map[string]bool       // the slash commands magnum types (agents.MagnumCommands)
 	focus      PaneFocus             // you in the factory's panes, as the observe passes saw you (noteFocus)
 	heals      map[int64]*heal       // task -> its heal of the factory's herdr server that cannot read its copy's volume (volume.go)
+	lastStop   time.Time             // the factory's herdr server's last stop by a heal (recentStop)
+	marks      map[string]string     // pane -> what it showed before its last launch (paneMark)
 }
 
 // roleKey names a role of an attempt, as it runs (after a Codex fallback).
@@ -302,7 +308,7 @@ func newWith(d Deps, s seams) (*Runtime, error) {
 		s.userTurns = readUserTurns
 	}
 	if s.readable == nil {
-		s.readable = readableDir
+		s.readable = newDirProber(openDir, readableWait).readable
 	}
 	if s.codexHome == "" {
 		s.codexHome = d.Config.Usage.CodexHome
@@ -312,6 +318,7 @@ func newWith(d Deps, s seams) (*Runtime, error) {
 		pauses: map[string]*pause{}, misses: map[int64]time.Time{}, shifts: map[string]time.Duration{},
 		once: map[string]bool{}, checked: map[int64]time.Time{}, refused: map[int64]bool{}, versions: map[string]cliVersion{},
 		seen: map[string]fileMark{}, youAt: map[int64][]time.Time{}, idleSeen: map[int64]time.Time{}, heals: map[int64]*heal{},
+		marks:    map[string]string{},
 		commands: agents.MagnumCommands(&cfg), drained: make(chan struct{}), soon: make(chan struct{}, 1)}
 	r.mgr = agents.New(agents.Deps{Herdr: d.Herdr, Store: d.Store, Runner: d.Runner, Config: &cfg, Layout: d.Layout,
 		Clock: d.Clock, Sleep: s.sleep, ClaudeDir: s.claudeDir, CodexHome: s.codexHome, Log: slogLogger{log},
@@ -923,6 +930,7 @@ func (r *Runtime) start(ctx context.Context, pr store.PR, a registry.Attempt, ro
 		}
 	}
 	launched := r.now()
+	r.markPane(ctx, pane)
 	if err := r.mgr.StartAgent(ctx, pr, role, pane, resume); err != nil {
 		return err
 	}

@@ -1666,14 +1666,18 @@ func cmpErr(first, second error) error {
 
 // sendRefused maps a refused prompt to role r: a wait (the CLI's pause, you
 // in its pane, a delivery of unknown fate, an agent that cannot take a
-// prompt yet, a heal of the factory's herdr server), a held error it
-// records on the task, or a loop without progress or a copy's volume macOS
-// still denies the factory's herdr server, a needsYou; nil for any other
-// error.
+// prompt yet, a heal of the factory's herdr server, a hold that keeps the
+// runtime from starting the role again), a held error it records on the
+// task (a drain's it does not record, as a launch's), or a loop without
+// progress or a copy's volume macOS still denies the factory's herdr
+// server, a needsYou; nil for any other error.
 func (e *Engine) sendRefused(ctx context.Context, t registry.Task, r *stageRole, err error) error {
 	var who, what string
 	if d, ok := errors.AsType[*runtime.DeniedError](err); ok {
 		return needsYou{d.Error()}
+	}
+	if w, ok := errors.AsType[*runtime.WaitError](err); errors.Is(err, runtime.ErrDraining) || (ok && w.Who == holdRestart) {
+		return heldError{who: holdRestart, what: drainWhat} // a start the drain holds, as a launch's: no wait recorded
 	}
 	switch {
 	case errors.Is(err, runtime.ErrNoProgress):

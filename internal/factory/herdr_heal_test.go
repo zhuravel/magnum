@@ -15,8 +15,9 @@ import (
 
 // deniedLine is the line a task waits on you for once macOS still blocks
 // the factory's herdr server from reading the copies' volume after its heal.
-const deniedLine = "macOS blocks the factory's herdr server from reading /Volumes/Work: allow herdr (and magnum) for removable " +
-	"volumes in System Settings > Privacy & Security > Files and Folders, then retry"
+const deniedLine = "macOS blocks the factory's herdr server from reading /Volumes/Work: allow herdr and magnum (and iTerm2, which " +
+	"starts the server) in System Settings > Privacy & Security > Files and Folders > Removable Volumes (or Full Disk Access, if " +
+	"that toggle is absent), then retry"
 
 // A prompt the runtime answers with the denial's line (the heal did not
 // help) sends the task to you with that line, never a silent wait, and your
@@ -24,7 +25,7 @@ const deniedLine = "macOS blocks the factory's herdr server from reading /Volume
 func TestADeniedVolumeSendsTheTaskToYouAndYourRetryGoesOn(t *testing.T) {
 	h := newHarness(t)
 	task := h.kindTask("PR-12530", "bug", "investigate")
-	h.rt.setSendErr(fmt.Errorf("send to fx-repro: %w", &runtime.DeniedError{Volume: "/Volumes/Work"}))
+	h.rt.setSendErr(fmt.Errorf("send to fx-repro: %w", &runtime.DeniedError{Volume: "/Volumes/Work", App: "iTerm2"}))
 	h.startStage(task)
 	if got := h.reload(task.ID); got.State != registry.TaskNeedsYou || got.WaitsWho != "you" || got.WaitsWhat != deniedLine {
 		t.Fatalf("task %s waits %q: %q, want needs_you, you: %s", got.State, got.WaitsWho, got.WaitsWhat, deniedLine)
@@ -126,5 +127,35 @@ func TestAHealsServerStopOpensTheSessionAtOnce(t *testing.T) {
 	h.tick()
 	if n := reveals.Load(); n != 2 {
 		t.Fatalf("%d reveals after the heal's stop, want one more at once", n)
+	}
+}
+
+// A prompt the daemon's drain held (the runtime would start a role again
+// first, and no launch starts while the daemon drains) costs the task
+// nothing: no failure, and no wait of the drain's on the task.
+func TestAPromptTheDrainHoldsCostsTheTaskNothing(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12534", "bug", "investigate")
+	h.rt.setSendErr(fmt.Errorf("send to fx-repro: %w", runtime.ErrDraining))
+	h.startStage(task)
+	h.tick()
+	if got := h.reload(task.ID); got.State != registry.TaskActive || got.WaitsWho == holdRestart {
+		t.Fatalf("task %s waits %q: %q, want active with no wait of the drain's", got.State, got.WaitsWho, got.WaitsWhat)
+	}
+	if evs := h.events(task.ID, "advance"); len(evs) != 0 {
+		t.Fatalf("advance failures %+v, want none", evs)
+	}
+}
+
+// The runtime asks the engine's holds before it starts a role outside a
+// launch (Deps.MayStart): MayLaunch says the hold, in its words.
+func TestMayLaunchSaysTheHoldThatStopsAStart(t *testing.T) {
+	h := newHarness(t)
+	if who, _, ok := h.e.MayLaunch(); !ok || who != "" {
+		t.Fatalf("MayLaunch with no hold = %q, %v; want ok", who, ok)
+	}
+	h.e.holds[HoldMemory] = &Hold{Kind: HoldMemory, Reason: "the Mac's memory pressure is critical"}
+	if who, what, ok := h.e.MayLaunch(); ok || who != HoldMemory || what != "the Mac's memory pressure is critical" {
+		t.Fatalf("MayLaunch under the memory hold = %q, %q, %v", who, what, ok)
 	}
 }

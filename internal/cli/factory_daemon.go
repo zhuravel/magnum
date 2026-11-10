@@ -275,8 +275,16 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	git.HTTPSFetch = true
 	memory := func(ctx context.Context) engine.MemorySample { return engine.ReadMemory(ctx, quiet, time.Now()) }
 	h := &herdr.Client{Socket: cfg.FactoryHerdr().Socket, Logger: app.Printf{Logger: d.Log, Level: slog.LevelDebug, Src: "herdr"}}
+	// A role the runtime starts again outside a launch passes the engine's
+	// holds too: the engine is built below, on this runtime.
+	mayStart := func() (who, what string, ok bool) {
+		if d.Engine == nil {
+			return "", "", true
+		}
+		return d.Engine.MayLaunch()
+	}
 	if d.Runtime, err = runtime.New(runtime.Deps{Config: cfg, Layout: l, Herdr: h, Store: d.Agents, Registry: d.Registry,
-		Runner: run, Memory: memory, Log: d.Log}); err != nil {
+		Runner: run, Memory: memory, MayStart: mayStart, Log: d.Log}); err != nil {
 		return nil, fmt.Errorf("factory: runtime: %w", err)
 	}
 	deps := factory.Deps{

@@ -474,6 +474,11 @@ func (e *Engine) memoryPressure(ctx context.Context, now time.Time) string {
 	return reason + e.memoryCulprits(ctx, now)
 }
 
+// MayLaunch is mayLaunch for the runtime, which passes the same holds when
+// it starts a role outside a launch (runtime.Deps.MayStart). It reads the
+// engine's holds, so it is called on the engine's loop.
+func (e *Engine) MayLaunch() (who, what string, ok bool) { return e.mayLaunch() }
+
 // mayLaunch reports whether a launch may start now; who and what are the
 // hold that stops it, as the task's wait says it.
 func (e *Engine) mayLaunch() (who, what string, ok bool) {

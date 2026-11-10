@@ -14478,6 +14478,11 @@ func (e *Engine) Kick()
     Kick asks the loop for a tick now (SIGUSR1, `magnum factory start` and the
     screen's requests); a kick already pending absorbs it.
 
+func (e *Engine) MayLaunch() (who, what string, ok bool)
+    MayLaunch is mayLaunch for the runtime, which passes the same holds when
+    it starts a role outside a launch (runtime.Deps.MayStart). It reads the
+    engine's holds, so it is called on the engine's loop.
+
 func (e *Engine) Overlap(ctx context.Context, t registry.Task, files []string) (string, error)
     Overlap is the advisory line of what else touches task t's work ("" for
     nothing): the commits that name its key, the PRs that name it, and the
@@ -16970,10 +16975,13 @@ var ErrOperatorInPane = errors.New("you're in that pane")
 
 FUNCTIONS
 
-func DeniedLine(volume string) string
+func DeniedLine(volume, app string) string
     DeniedLine is what a task waits on you for once macOS still blocks the
-    factory's herdr server from reading volume after its one heal: what to
-    allow, then your retry.
+    factory's herdr server from reading volume after its one heal: whom to
+    allow (herdr, magnum and app, the [terminal] app the engine's reveal starts
+    the server from, when it is one) and where, as macOS names the setting:
+    Removable Volumes under Files and Folders for a mounted volume, Full Disk
+    Access where that toggle is absent; then your retry.
 
 func IsUnknownReason(what string) bool
     IsUnknownReason reports whether a task's wait is UnknownReason's, as this
@@ -17036,14 +17044,15 @@ type Copy struct {
     and its environment, the repository's env rendered for the copy (its name,
     its number, its Redis offset). Its panes run in Path with Env.
 
-type DeniedError struct{ Volume string }
+type DeniedError struct{ Volume, App string }
     DeniedError is Send's answer while macOS blocks the factory's herdr server
     from reading Volume after the heal, or while the factory may not heal it
-    (its herdr session is yours, or its client cannot stop a server): the task
-    needs you, with DeniedLine, until your retry.
+    (its herdr session is yours, its herdr has no server.stop, this task's
+    liaison held the stop for liaisonHold): the task needs you, with DeniedLine
+    (App is the [terminal] app), until your retry.
 
 func (e *DeniedError) Error() string
-    Error is DeniedLine of the volume.
+    Error is DeniedLine of the volume and the app.
 
 type Deps struct {
 	Config   *config.Config
@@ -17053,13 +17062,17 @@ type Deps struct {
 	Registry *registry.Registry
 	Runner   execx.Runner
 	Memory   func(ctx context.Context) engine.MemorySample
+	MayStart func() (who, what string, ok bool)
 	Clock    func() time.Time
 	Log      *slog.Logger
 }
     Deps are the runtime's collaborators. Config, Herdr, Store,
     Registry and Runner are required. Store is the factory's agents store
     (Layout.FactoryAgentsDB). Memory nil reads no memory (taken as normal);
-    Clock nil is time.Now; Log nil discards.
+    MayStart is the engine's holds of a launch (a disk or memory hold,
+    a drain for an install: who and what, as a task's wait says them), which a
+    start outside a launch passes too (mayStart), called on the engine's loop;
+    nil holds nothing. Clock nil is time.Now; Log nil discards.
 
 type Event struct {
 	TaskID  int64
@@ -20512,6 +20525,7 @@ const (
 	CodePaneNotFound       = "pane_not_found"
 	CodeTabNotFound        = "tab_not_found"
 	CodeWorkspaceNotFound  = "workspace_not_found"
+	CodeUnknownMethod      = "unknown_method" // a method this server does not have (server.stop before 0.9.5)
 )
     Herdr error codes magnum reacts to.
 
@@ -20611,6 +20625,10 @@ func NoServer(err error) bool
     a stopped process): once its queue is full it refuses them as a stale socket
     does, so a Client's dial asks which it is (socketBound), and its error for
     such a server keeps no ECONNREFUSED.
+
+func OptionalMethods() []string
+    OptionalMethods returns the socket methods only one feature needs (`magnum
+    doctor` warns when one is missing, naming what it costs).
 
 func RequiredMethods() []string
     RequiredMethods returns the socket methods magnum needs the herdr server to
@@ -20765,10 +20783,11 @@ func (c *Client) Saved() (Snapshot, error)
     does not know, is an error: it may hold an agent in any checkout.
 
 func (c *Client) ServerStop(ctx context.Context) error
-    ServerStop stops the session's server (server.stop, `herdr server stop`):
-    every pane and agent of the session ends with it, and the next client of the
-    session starts a fresh server. A server that closes the connection on its
-    way out, before its answer, stopped; so did one that does not run.
+    ServerStop stops the session's server (server.stop, `herdr server stop`,
+    herdr 0.9.5 and later: an older one answers CodeUnknownMethod): every pane
+    and agent of the session ends with it, and the next client of the session
+    starts a fresh server. A server that closes the connection on its way out,
+    before its answer, stopped; so did one that does not run.
 
 func (c *Client) Snapshot(ctx context.Context) (Snapshot, error)
     Snapshot returns the whole live session (session.snapshot).

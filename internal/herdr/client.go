@@ -41,7 +41,7 @@ const Protocol = 22
 // calls, plugin.list (sent through Call by doctor) and, through the herdr
 // CLI reveal runs (`herdr terminal title set|clear`), client.window_title.*.
 var requiredMethods = []string{
-	"ping", "server.stop", "session.snapshot", "workspace.create", "workspace.close", "workspace.report_metadata",
+	"ping", "session.snapshot", "workspace.create", "workspace.close", "workspace.report_metadata",
 	"pane.split", "pane.send_input", "pane.send_keys", "pane.read", "pane.wait_for_output", "pane.rename",
 	"pane.process_info", "pane.get", "pane.close", "agent.start", "agent.prompt", "agent.read",
 	"agent.focus", "agent.rename", "agent.send_keys", "notification.show", "plugin.pane.open", "plugin.list",
@@ -56,6 +56,15 @@ var notTyped = []string{"plugin.list", "client.window_title.set", "client.window
 // RequiredMethods returns the socket methods magnum needs the herdr server
 // to offer (`magnum doctor` checks them against `herdr api schema`).
 func RequiredMethods() []string { return slices.Clone(requiredMethods) }
+
+// optionalMethods are the socket methods one feature alone sends, which a
+// herdr without them leaves off: server.stop (herdr 0.9.5), the factory's
+// heal of a server macOS denies its copies' volume.
+var optionalMethods = []string{"server.stop"}
+
+// OptionalMethods returns the socket methods only one feature needs
+// (`magnum doctor` warns when one is missing, naming what it costs).
+func OptionalMethods() []string { return slices.Clone(optionalMethods) }
 
 // DefaultTimeout bounds a call that has no server-side wait when
 // Client.Timeout is zero.
@@ -78,6 +87,7 @@ const (
 	CodePaneNotFound       = "pane_not_found"
 	CodeTabNotFound        = "tab_not_found"
 	CodeWorkspaceNotFound  = "workspace_not_found"
+	CodeUnknownMethod      = "unknown_method" // a method this server does not have (server.stop before 0.9.5)
 )
 
 var (

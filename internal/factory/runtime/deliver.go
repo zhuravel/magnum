@@ -123,14 +123,19 @@ func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt,
 // no session at all (none starting or live: parked, or lost) while nothing
 // else brings one: a recovery under way (the watchdog's), or recoveries
 // that ran out with no retry of yours since (EventLost or EventStuck has
-// the task go to you; your retry after it starts them over). Its steps are
-// the recoveries' own, on the same count: its conversation resumed (at most
+// the task go to you; your retry after it starts them over). It starts
+// only as a launch would (mayStart: the daemon's drain, the engine's holds,
+// the kind's pause, the memory, Codex's budget, the CLI's login; Stagger
+// apart at memory warn); you in the pane wait too. A role the factory
+// parked (its newest session parked, its conversation resumable) is
+// resumed, which no park charges to the lost-pane ladder; a lost one takes
+// the recoveries' steps, on their count: its conversation resumed (at most
 // MaxResumes in the attempt), else a fresh session, which for a role that
 // took no prompt yet is a relaunch; then the recoveries ran out
 // (EventLost). After a resume or a relaunch the caller's prompt goes as it
 // would after a launch (done false); a fresh session of a role that had
 // prompts takes the attempt's first prompt with text after it (fromFiles),
-// whose run comes back (done true). A pause, or you in the pane, waits.
+// whose run comes back (done true).
 func (r *Runtime) bringBack(ctx context.Context, t registry.Task, a registry.Attempt, st *roleState, pr store.PR,
 	text string) (id string, done bool, err error) {
 	if _, err := r.st.LiveSessionByPRRole(ctx, pr.ID, st.role.Name); !errors.Is(err, store.ErrNotFound) {
@@ -154,9 +159,17 @@ func (r *Runtime) bringBack(ctx context.Context, t registry.Task, a registry.Att
 	if err := r.mayRestart(ctx, t, st); err != nil {
 		return "", true, err
 	}
+	stagger, err := r.mayStart(ctx, st.role)
+	if err != nil {
+		return "", true, err
+	}
 	resume, err := r.mgr.ResumeID(ctx, pr.ID, agents.Role(st.role.Name))
 	if err != nil {
 		return "", true, err
+	}
+	if s, ok := r.newestSession(ctx, pr.ID, st.role.Name); ok && s.State == store.SessionParked && resume != "" {
+		r.log.Info("a parked role is resumed before its prompt", "task", t.ID, "role", st.role.Name)
+		return "", false, r.startIn(ctx, t, a, st, pr, resume, stagger)
 	}
 	unprompted := !r.hadPrompt(ctx, t.ID, a.ID, st.role.Name)
 	r.mu.Lock()
@@ -180,9 +193,9 @@ func (r *Runtime) bringBack(ctx context.Context, t registry.Task, a registry.Att
 	r.log.Warn("a role with no session is started again before its prompt", "task", t.ID, "role", st.role.Name, "step", step)
 	switch step {
 	case "resume":
-		return "", false, r.startIn(ctx, t, a, st, pr, resume)
+		return "", false, r.startIn(ctx, t, a, st, pr, resume, stagger)
 	case "relaunch":
-		return "", false, r.startIn(ctx, t, a, st, pr, "")
+		return "", false, r.startIn(ctx, t, a, st, pr, "", stagger)
 	}
 	id, err = r.fromFiles(ctx, t, a, st, "it had no session when its prompt was due", text)
 	return id, true, err

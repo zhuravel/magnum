@@ -526,7 +526,7 @@ func (r *Runtime) lostPane(ctx context.Context, o agents.Observation) []Event {
 			return nil
 		}
 	}
-	if r.healing(t.ID, a.ID, role.Name) != nil {
+	if r.healing(ctx, t.ID, a.ID, role.Name) != nil {
 		return nil // the heal relaunches it on the fresh server, or told you
 	}
 	err = r.recoverRole(ctx, t, a, role, "its pane was lost")

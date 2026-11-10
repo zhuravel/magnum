@@ -24175,8 +24175,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   relaunch there: its next prompt waits for the server, reconciles the task's rows with it (`agents.Manager.Recover`)
   and relaunches it (an event); the observe pass and the watchdog leave a due role to the heal. (4) The same refusal
   from a relaunched agent (or from a session started after the stop) goes to you: `macOS blocks the factory's herdr
-  server from reading <volume>: allow herdr (and magnum) for removable volumes in System Settings > Privacy & Security
-  > Files and Folders, then retry` (`runtime.DeniedError` from Send, `EventVolumeDenied` from the observe pass, a
+  server from reading <volume>: allow herdr and magnum (and <terminal app>, which starts the server) in System Settings >
+  Privacy & Security > Files and Folders > Removable Volumes (or Full Disk Access, if that toggle is absent), then retry`
+  (the brief's words, with the setting named as macOS shows it; `runtime.DeniedError` from Send, `EventVolumeDenied` from the observe pass, a
   needsYou either way); your retry relaunches the role and starts the heal over. A refusal the daemon shares is the
   copy's or its volume's: nothing is stopped, an event says so once, and the lost pane takes the steps of (1), then
   EventLost; the copies' own handling covers the volume (a copy whose setup fails twice is broken and repaired on a
@@ -24189,7 +24190,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   retry inputs say it, and survive a restart); `herdr server stop` or a kill from the daemon (the API's own method);
   waiting for herdr to restart itself (it never does; the engine's reveal is what starts a server). The engine of the
   review side is unchanged. Concerns kept: `server.stop`'s request (params `{}`) is from herdr 0.9.5's embedded API
-  schema, not probed against a live server; a fresh server inherits the TCC rights of the terminal the reveal opens,
+  schema (a live probe on a throwaway session returned nil and the server exited); a fresh server inherits the TCC rights of the terminal the reveal opens,
   so that app needs the removable-volume access the line names.
   Tests (failing first): `TestALaunchMacOSDeniesTheCopyGetsOneFreshHerdrServer`,
   `TestAPaneLostBeforeItsFirstPromptToTheDenialIsHealed`, `TestTheDenialAfterTheHealNeedsYouUntilYourRetry`,
@@ -24203,6 +24204,44 @@ skill versions); people add theirs to the sections before it, at the end of the 
   and `TestAnEndedRolesEventKicksTheLoop` (internal/factory); `TestServerStopThatEndsTheServerFirstIsNoError` and the
   `server stop` typed case (internal/herdr); `server.stop` joins `TestDoctorHerdrMethodsAreTheOnesMagnumSends`. No new
   dependencies.
+  After review (same change): a park is no loss: a role whose newest session the factory parked is resumed off the
+  lost-pane ladder, so three parks under memory pressure in one attempt end in three resumes, never "pane was lost".
+  Every start outside a launch, and the heal's stop, passes a launch's holds (`mayStart`): the SIGTERM drain
+  (`ErrDraining`, which the stage takes as a launch's, recording no wait), the engine's holds through
+  `runtime.Deps.MayStart` (`Engine.MayLaunch`: a disk or memory hold, an install's drain, in its words), the kind's
+  pause, critical memory, Codex's budget, the CLI's login, and the stagger at memory warn. The three refusals match
+  from column 0 (`^shell-init: .*getcwd: .*Operation not permitted`, `^Can't read the current directory \(EPERM\)`,
+  `^Error: Operation not permitted \(os error 1\)$`), and only in what the pane printed since its launch: each start
+  reads the pane first (`markPane`), and the screen's first lines that end that text are cut (`sinceLaunch`, by
+  line overlap, so a relaunch that prints the same refusal again still counts); a pane this runtime did not launch in
+  says nothing. Besides agents, a pane no row of the task records that runs anything (herdr's `process_info`: not an
+  idle shell) holds the stop, named ("a pane of yours, w3:p2, runs ruby bin/rails c"); this task's own liaison holds
+  it in its own words for 30 minutes at most, then the line goes to you; a talk in flight (`talkMu`) holds it. One
+  stop serves every task for an hour (`recentStop`): another task's role launched before it is relaunched on the
+  fresh server, and one launched after it and denied is told, unless you retried that task since. A refused pane gone
+  from the session means somebody restarted the server: no stop, the relaunch goes on. `server.stop` is optional
+  (`herdr.OptionalMethods`): doctor warns, naming 0.9.5, and a herdr that answers `unknown_method` sends the line at
+  once. The line names the setting as macOS shows it (`Files and Folders > Removable Volumes`, or `Full Disk Access`
+  where that toggle is absent; Removable Volumes only for a /Volumes path) and the `[terminal] app` the reveal starts
+  the server from (`DeniedLine(volume, app)`). The daemon's read of a copy keeps one read per directory in flight
+  (`dirProber`): a read macOS holds is waited for once, and a check meanwhile answers no at once. A heal told to you
+  holds no role once you retried (`healing` drops it).
+  Known gaps: a daemon restart between the stop and the line forgets the stop, so one more stop can follow (the
+  heal and `lastStop` are in memory; rebuilding them from the task's `herdr` events is left); the heal's relaunch
+  starts a fresh conversation where Launch would resume an earlier attempt's (`relaunchRole` with no resume id); a
+  pane's mark is in memory, so a launch from before a daemon restart is never read for the refusal (the recoveries'
+  relaunch marks it).
+  Tests (failing first): `TestAParkedRoleIsResumedOnEachAnswerOffTheLostPaneLadder`,
+  `TestAHoldKeepsBringBackFromStartingARole`, `TestBringBacksAtMemoryWarnAreStaggered`, `TestOldScrollbackIsNoDenial`,
+  `TestSinceLaunchCutsWhatThePaneShowedBefore`, `TestAPaneOfYoursInTheSessionHoldsTheServerStop`,
+  `TestTwoTasksDeniedTogetherStopTheServerOnce`, `TestADenialOnTheFreshServerOfAnotherTasksStopGoesToYou`,
+  `TestAServerRestartedMeanwhileIsNotStoppedAgain`, `TestThisTasksOwnLiaisonHoldsTheStopThenGoesToYou`,
+  `TestATalkInFlightHoldsTheServerStop`, `TestAHerdrWithoutServerStopSendsTheLineAtOnce`,
+  `TestARetryAfterTheLineLetsTheRecoveriesTakeALostPane`, `TestABlockedReadOfTheCopyHoldsOneProbe`,
+  `TestTheDenialNamesTheSettingAsMacOSShowsIt` and new cases in `TestTheDenialIsReadOnItsStableWords`
+  (internal/factory/runtime); `TestAPromptTheDrainHoldsCostsTheTaskNothing`, `TestMayLaunchSaysTheHoldThatStopsAStart`
+  (internal/factory); the optional method in `TestRequiredMethodsCoverEveryCall` (internal/herdr) and doctor's warn in
+  `TestDoctorHerdrMethodsAreTheOnesMagnumSends` (internal/cli).
 
 ## Learned rules
 

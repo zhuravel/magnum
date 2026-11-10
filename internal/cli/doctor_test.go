@@ -110,7 +110,7 @@ func doctorFixture(t *testing.T) (*inspFixture, doctorDeps, *fakeDoctorHerdr, *f
 	}
 	f.Runner.Rules = []execx.Rule{
 		{Prefix: []string{"herdr", "--version"}, Result: execx.Result{Stdout: []byte("herdr 0.9.3\n")}},
-		{Prefix: []string{"herdr", "api", "schema"}, Result: execx.Result{Stdout: []byte(doctorSchema(herdr.RequiredMethods()))}},
+		{Prefix: []string{"herdr", "api", "schema"}, Result: execx.Result{Stdout: []byte(doctorSchema(append(herdr.RequiredMethods(), herdr.OptionalMethods()...)))}},
 		{Prefix: []string{"codex", "--version"}, Result: execx.Result{Stdout: []byte("codex-cli 0.160.0\n")}},
 		{Prefix: []string{"claude", "--version"}, Result: execx.Result{Stdout: []byte("2.1.287 (Claude Code)\n")}},
 		{Prefix: []string{"zsh", "-ic", "whence -w codex"}, Result: execx.Result{Stdout: []byte("codex: function\n")}},

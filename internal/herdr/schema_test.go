@@ -127,10 +127,11 @@ func TestTypedCasesMirrorCapturedCLI(t *testing.T) {
 
 // TestRequiredMethodsCoverEveryCall keeps RequiredMethods (read by `magnum
 // doctor`) in step with the methods magnum sends: every method this package
-// sends is required, and every required one is sent by this package or is
-// one of notTyped (plugin.list through Call, client.window_title.* through
-// the herdr CLI), so doctor never fails a herdr for a method nobody calls.
-// The typed ones must also be in the schema excerpt.
+// sends is required or optional (OptionalMethods: one feature's alone, which
+// doctor only warns about), and every required one is sent by this package
+// or is one of notTyped (plugin.list through Call, client.window_title.*
+// through the herdr CLI), so doctor never fails a herdr for a method nobody
+// calls. The typed ones must also be in the schema excerpt.
 func TestRequiredMethodsCoverEveryCall(t *testing.T) {
 	required := RequiredMethods()
 	files, err := filepath.Glob("*.go")
@@ -154,10 +155,22 @@ func TestRequiredMethodsCoverEveryCall(t *testing.T) {
 	if len(sent) < 20 {
 		t.Fatalf("found only %d method literals; the pattern no longer matches the sources", len(sent))
 	}
+	optional := OptionalMethods()
 	for m := range sent {
-		if !slices.Contains(required, m) {
-			t.Errorf("method %s is sent but missing from RequiredMethods", m)
+		if !slices.Contains(required, m) && !slices.Contains(optional, m) {
+			t.Errorf("method %s is sent but missing from RequiredMethods and OptionalMethods", m)
 		}
+	}
+	for _, m := range optional {
+		if slices.Contains(required, m) {
+			t.Errorf("method %s is both required and optional", m)
+		}
+		if !sent[m] {
+			t.Errorf("method %s is optional but nothing sends it", m)
+		}
+	}
+	if !slices.Contains(optional, "server.stop") {
+		t.Error("server.stop must be optional: only the factory's heal sends it, and herdr has it since 0.9.5")
 	}
 	for _, m := range required {
 		if !sent[m] && !slices.Contains(notTyped, m) {
@@ -173,5 +186,9 @@ func TestRequiredMethodsCoverEveryCall(t *testing.T) {
 	required[0] = "changed"
 	if RequiredMethods()[0] == "changed" {
 		t.Error("RequiredMethods must return a copy")
+	}
+	optional[0] = "changed"
+	if OptionalMethods()[0] == "changed" {
+		t.Error("OptionalMethods must return a copy")
 	}
 }

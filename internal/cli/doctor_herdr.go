@@ -82,11 +82,22 @@ func doctorHerdrChecks(ctx context.Context, d doctorDeps) []doctorCheck {
 			missing = append(missing, m)
 		}
 	}
-	if len(missing) > 0 {
+	var lacks []string
+	for _, m := range herdr.OptionalMethods() {
+		if !methods[m] {
+			lacks = append(lacks, m)
+		}
+	}
+	switch {
+	case len(missing) > 0:
 		out = append(out, doctorFailed("herdr methods", "herdr's API lacks methods magnum uses: "+strings.Join(missing, ", "),
 			"upgrade herdr (`herdr update`) to 0.9.3 or later"))
-	} else {
-		out = append(out, doctorOK("herdr methods", fmt.Sprintf("all %d socket methods magnum uses exist (schema protocol %d)", len(required), proto)))
+	case len(lacks) > 0:
+		out = append(out, doctorWarned("herdr methods", "herdr's API lacks "+strings.Join(lacks, ", ")+": the factory cannot restart "+
+			"its herdr server when macOS denies it the copies' volume, and tells you instead", "upgrade herdr (`herdr update`) to 0.9.5 or later"))
+	default:
+		out = append(out, doctorOK("herdr methods", fmt.Sprintf("all %d socket methods magnum uses exist (schema protocol %d)",
+			len(required)+len(herdr.OptionalMethods()), proto)))
 	}
 	return out
 }

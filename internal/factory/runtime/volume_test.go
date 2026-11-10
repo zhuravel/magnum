@@ -2,12 +2,15 @@ package runtime
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/herdr"
 )
@@ -141,8 +144,7 @@ func TestTheDenialAfterTheHealNeedsYouUntilYourRetry(t *testing.T) {
 
 	_, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug")
 	d, ok := errors.AsType[*DeniedError](err)
-	want := "macOS blocks the factory's herdr server from reading " + volumeOf(g.copy) + ": allow herdr (and magnum) for removable volumes in " +
-		"System Settings > Privacy & Security > Files and Folders, then retry"
+	want := DeniedLine(volumeOf(g.copy), "Terminal") // [terminal] app's default
 	if !ok || d.Error() != want {
 		t.Fatalf("Send = %v, want %q", err, want)
 	}
@@ -273,12 +275,36 @@ func TestTheDenialIsReadOnItsStableWords(t *testing.T) {
 		deniedScreen: true,
 		"shell-init: error retrieving current directory: getcwd: cannot access parent directories: Operation not permitted\n$ ": true,
 		"Error: Operation not permitted (os error 1)\n$ ":                                                                       true,
+		"Error: Operation not permitted (os error 1)  \r\n$ ":                                                                   true,
 		"Can't read the current directory (EPERM). Start Claude Code from a different directory.":                               true,
 		"rm: /etc/hosts: Operation not permitted\n$ ":                                                                           false,
 		"error: unexpected argument '--search' found\n":                                                                         false,
+		"  └ rg: ./x: Operation not permitted (os error 1)\n":                                                                   false,
+		"Error: Operation not permitted (os error 1) while reading ./x\n":                                                       false,
+		"  Can't read the current directory (EPERM).\n":                                                                         false,
+		"  ⎿  shell-init: error retrieving current directory: getcwd: Operation not permitted\n":                                false,
 	} {
 		if got := deniedLine(screen) != ""; got != want {
 			t.Errorf("deniedLine(%q) found one: %v, want %v", screen, got, want)
+		}
+	}
+}
+
+// The line names the setting as macOS shows it: Removable Volumes under
+// Files and Folders for a copy on a mounted volume (Full Disk Access where
+// that toggle is absent), and the terminal app the reveal starts the
+// server from, when it is one; for a copy elsewhere, Files and Folders.
+func TestTheDenialNamesTheSettingAsMacOSShowsIt(t *testing.T) {
+	for _, c := range []struct{ volume, app, want string }{
+		{"/Volumes/Work", "iTerm2", "macOS blocks the factory's herdr server from reading /Volumes/Work: allow herdr and magnum (and " +
+			"iTerm2, which starts the server) in System Settings > Privacy & Security > Files and Folders > Removable Volumes " +
+			"(or Full Disk Access, if that toggle is absent), then retry"},
+		{"/Users/zhuravel/Projects/talkable.factory2", "custom", "macOS blocks the factory's herdr server from reading " +
+			"/Users/zhuravel/Projects/talkable.factory2: allow herdr and magnum in System Settings > Privacy & Security > Files and " +
+			"Folders (or Full Disk Access, if that toggle is absent), then retry"},
+	} {
+		if got := DeniedLine(c.volume, c.app); got != c.want {
+			t.Errorf("DeniedLine(%q, %q) =\n%s\nwant\n%s", c.volume, c.app, got, c.want)
 		}
 	}
 }
@@ -364,5 +390,366 @@ func TestAParkedRolesNextPromptResumesItsConversation(t *testing.T) {
 	}
 	if p := g.h.promptTexts()[prompts:]; !slices.Equal(p, []string{"the operator answered"}) {
 		t.Fatalf("prompts %q after the park, want the stage's alone", p)
+	}
+}
+
+// parkedAfterATurn launches the role named name with conversation sid,
+// sends it a prompt, ends its turn and parks the task, as the memory hold
+// parks a task that waits on you.
+func (g *rig) parkedAfterATurn(name, sid string) {
+	g.t.Helper()
+	g.launch(name)
+	g.h.setSession(g.agent(name), sid)
+	g.send(name, "reproduce the bug")
+	g.endTurnAndPark(name)
+}
+
+// endTurnAndPark ends the turn of the role named name and parks the task.
+func (g *rig) endTurnAndPark(name string) {
+	g.t.Helper()
+	g.observe()
+	g.h.setStatus(g.agent(name), herdr.StatusIdle)
+	if lost := only(g.observeN(2), EventLost); len(lost) != 0 {
+		g.t.Fatalf("a turn's end gave %+v", lost)
+	}
+	if err := g.r.Park(g.ctx, g.task); err != nil {
+		g.t.Fatal(err)
+	}
+}
+
+// A role parked three times in one attempt (the Mac short on memory while
+// its task waits on you) is resumed from the same conversation after each
+// of your answers, and none of it counts against the lost-pane ladder: no
+// fresh session, no EventLost, and a real loss after it still resumes.
+func TestAParkedRoleIsResumedOnEachAnswerOffTheLostPaneLadder(t *testing.T) {
+	g := newRig(t)
+	g.parkedAfterATurn("fx-repro", "sid-1")
+	for i := range 3 {
+		starts := len(g.h.startCalls())
+		g.send("fx-repro", fmt.Sprintf("the operator answered %d", i+1))
+		s := g.h.startCalls()
+		if len(s) != starts+1 || !strings.Contains(strings.Join(s[len(s)-1].Args, " "), "--resume sid-1") {
+			t.Fatalf("answer %d: starts %+v, want sid-1 resumed", i+1, s[starts:])
+		}
+		g.endTurnAndPark("fx-repro")
+	}
+	g.send("fx-repro", "the operator answered 4")
+	g.observe()
+	g.h.losePane(g.agent("fx-repro"))
+	starts := len(g.h.startCalls())
+	if evs := g.observe(); len(only(evs, EventLost)) != 0 {
+		t.Fatalf("a real loss after the parks gave %+v", evs)
+	}
+	if s := g.h.startCalls(); len(s) != starts+1 || !strings.Contains(strings.Join(s[len(s)-1].Args, " "), "--resume sid-1") {
+		t.Fatalf("starts %+v after a real loss, want its first resume", s[starts:])
+	}
+}
+
+// A role started again before its prompt passes every hold a launch
+// passes: the engine's (a disk or memory hold, a drain for an install),
+// with its words, and the daemon's own drain on SIGTERM; nothing starts
+// meanwhile.
+func TestAHoldKeepsBringBackFromStartingARole(t *testing.T) {
+	g := newRig(t)
+	g.parkedAfterATurn("fx-repro", "sid-1")
+	starts := len(g.h.startCalls())
+
+	g.hold("memory", "the Mac's memory pressure is critical")
+	_, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "the operator answered")
+	if w, ok := errors.AsType[*WaitError](err); !ok || w.Who != "memory" || w.What != "the Mac's memory pressure is critical" {
+		t.Fatalf("Send under the engine's hold = %v, want its wait", err)
+	}
+	g.hold("", "")
+	g.r.BeginDrain()
+	if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "the operator answered"); !errors.Is(err, ErrDraining) {
+		t.Fatalf("Send while the daemon drains = %v, want ErrDraining", err)
+	}
+	if n := len(g.h.startCalls()); n != starts {
+		t.Fatalf("%d starts under the holds", n-starts)
+	}
+}
+
+// Roles started again before their prompts take turns Stagger apart
+// while the Mac's memory pressure is at warn, as launches do.
+func TestBringBacksAtMemoryWarnAreStaggered(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro", "fx-history")
+	g.h.setSession(g.agent("fx-repro"), "sid-1")
+	g.h.setSession(g.agent("fx-history"), "sid-2")
+	g.send("fx-repro", "reproduce the bug")
+	g.send("fx-history", "read the history")
+	g.observe()
+	g.h.setStatus(g.agent("fx-repro"), herdr.StatusIdle)
+	g.h.setStatus(g.agent("fx-history"), herdr.StatusIdle)
+	g.observeN(2)
+	if err := g.r.Park(g.ctx, g.task); err != nil {
+		t.Fatal(err)
+	}
+	g.setMemory(engine.MemoryWarn)
+	slept := len(g.sleeps())
+	g.send("fx-repro", "the operator answered")
+	g.send("fx-history", "the operator answered")
+	if got := g.sleeps()[slept:]; !slices.Contains(got, Stagger) {
+		t.Fatalf("sleeps %v, want the second start Stagger after the first", got)
+	}
+}
+
+// What the pane showed before this launch (a shell's earlier output, the
+// scrollback herdr restores) is no denial: an agent that exits for another
+// reason stops no server.
+func TestOldScrollbackIsNoDenial(t *testing.T) {
+	g := newRig(t)
+	g.h.paneScreen = "Error: Operation not permitted (os error 1)\nzhuravel@mac talkable.factory2 % "
+	g.h.exitAtStart = "codex --search\nerror: the argument '--search' cannot be used multiple times\n"
+	g.launch("fx-repro")
+
+	if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug"); err == nil {
+		t.Fatal("Send went through to an agent that exited")
+	}
+	g.observeN(3)
+	if n := g.h.stopCount(); n != 0 {
+		t.Fatalf("%d stops for a refusal from before the launch", n)
+	}
+}
+
+// A pane of yours in the factory's session that runs something (no agent
+// of the factory's: a console, a server, an editor) holds the stop, and the
+// task's wait names it; once it is an idle shell, the next prompt heals.
+func TestAPaneOfYoursInTheSessionHoldsTheServerStop(t *testing.T) {
+	g := newRig(t)
+	pane := g.h.yourPane("ruby bin/rails c")
+	g.h.exitAtStart = deniedScreen
+	g.launch("fx-repro")
+
+	_, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug")
+	if w, ok := errors.AsType[*WaitError](err); !ok || !strings.Contains(w.What, "a pane of yours, "+pane+", runs ruby bin/rails c") {
+		t.Fatalf("Send = %v, want a wait that names your pane", err)
+	}
+	if n := g.h.stopCount(); n != 0 {
+		t.Fatalf("%d stops while your pane runs a console", n)
+	}
+	g.h.idlePane(pane)
+	if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug"); !errors.As(err, new(*WaitError)) {
+		t.Fatalf("Send = %v once your pane is idle, want the restart's wait", err)
+	}
+	if n := g.h.stopCount(); n != 1 {
+		t.Fatalf("%d stops once your pane is idle, want 1", n)
+	}
+}
+
+// Two tasks denied by one server get one stop: the second task's role,
+// launched before the stop, is relaunched on the fresh server, and a
+// fresh server that is denied too goes to you without a second stop.
+func TestTwoTasksDeniedTogetherStopTheServerOnce(t *testing.T) {
+	g := newRig(t)
+	g.h.exitAtStart = deniedScreen
+	g.launch("fx-repro")
+	other := g.newTask("PR-12346")
+	oa := g.begin(other, "investigate")
+	if err := g.r.Launch(g.ctx, other, oa, Copy{Name: "factory2", Path: g.copy, Number: 2}, g.roles("fx-repro")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug"); !errors.As(err, new(*WaitError)) {
+		t.Fatalf("Send = %v, want the restart's wait", err)
+	}
+	g.h.serverBack()
+
+	var err error
+	for range 3 {
+		if _, err = g.r.Send(g.ctx, other, oa, g.role("fx-repro"), "reproduce the bug"); errors.As(err, new(*DeniedError)) {
+			break
+		}
+	}
+	if !errors.As(err, new(*DeniedError)) {
+		t.Fatalf("the other task's Send = %v, want the line once its relaunch is denied too", err)
+	}
+	if n := g.h.stopCount(); n != 1 {
+		t.Fatalf("%d stops for two tasks on one server, want 1", n)
+	}
+}
+
+// A task launched on the fresh server after another task's stop, and
+// denied too, goes to you at once: one stop serves every task for
+// stopWindow.
+func TestADenialOnTheFreshServerOfAnotherTasksStopGoesToYou(t *testing.T) {
+	g := newRig(t)
+	g.h.exitAtStart = deniedScreen
+	g.launch("fx-repro")
+	if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug"); !errors.As(err, new(*WaitError)) {
+		t.Fatalf("Send = %v, want the restart's wait", err)
+	}
+	g.h.serverBack()
+	g.clock.Add(time.Minute)
+
+	other := g.newTask("PR-12346")
+	oa := g.begin(other, "investigate")
+	if err := g.r.Launch(g.ctx, other, oa, Copy{Name: "factory2", Path: g.copy, Number: 2}, g.roles("fx-repro")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.r.Send(g.ctx, other, oa, g.role("fx-repro"), "reproduce the bug"); !errors.As(err, new(*DeniedError)) {
+		t.Fatalf("the other task's Send = %v, want the line at once", err)
+	}
+	if n := g.h.stopCount(); n != 1 {
+		t.Fatalf("%d stops for two tasks within the window, want 1", n)
+	}
+}
+
+// A server restarted by somebody else while the heal waited (you, from
+// your terminal) is not stopped again: the role is relaunched on it.
+func TestAServerRestartedMeanwhileIsNotStoppedAgain(t *testing.T) {
+	g := newRig(t)
+	other := g.newTask("PR-12346")
+	oa := g.begin(other, "investigate")
+	if err := g.r.Launch(g.ctx, other, oa, Copy{Name: "factory2", Path: t.TempDir(), Number: 2}, g.roles("fx-repro")); err != nil {
+		t.Fatal(err)
+	}
+	g.h.exitAtStart = deniedScreen
+	g.launch("fx-repro")
+	if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug"); !errors.As(err, new(*WaitError)) {
+		t.Fatalf("Send = %v, want the wait on the other task's agent", err)
+	}
+
+	g.h.exitAtStart = ""
+	g.h.restartedElsewhere()
+	starts := len(g.h.startCalls())
+	for range 2 {
+		_, _ = g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug")
+	}
+	if n := g.h.stopCount(); n != 0 {
+		t.Fatalf("%d stops of a server restarted meanwhile", n)
+	}
+	if n := len(g.h.startCalls()); n != starts+1 {
+		t.Fatalf("%d starts after the restart, want the role relaunched", n-starts)
+	}
+}
+
+// This task's own liaison holds the stop with words of its own (you are
+// talking with it), and never for good: after liaisonHold the line goes
+// to you.
+func TestThisTasksOwnLiaisonHoldsTheStopThenGoesToYou(t *testing.T) {
+	g := newRig(t)
+	if _, err := g.r.Talk(g.ctx, g.task, talkPrompt); err != nil {
+		t.Fatal(err)
+	}
+	g.h.exitAtStart = deniedScreen
+	g.launch("fx-repro")
+
+	_, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug")
+	if w, ok := errors.AsType[*WaitError](err); !ok || !strings.Contains(w.What, "this task's liaison") || strings.Contains(w.What, "another task") {
+		t.Fatalf("Send = %v, want a wait on this task's liaison in its own words", err)
+	}
+	g.clock.Add(liaisonHold + time.Minute)
+	if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug"); !errors.As(err, new(*DeniedError)) {
+		t.Fatalf("Send after %v = %v, want the line for you", liaisonHold, err)
+	}
+	if n := g.h.stopCount(); n != 0 {
+		t.Fatalf("%d stops under your talk", n)
+	}
+}
+
+// A talk that starts a liaison while the heal would stop the server holds
+// the stop: the new liaison would die in it.
+func TestATalkInFlightHoldsTheServerStop(t *testing.T) {
+	g := newRig(t)
+	g.h.exitAtStart = deniedScreen
+	g.launch("fx-repro")
+	g.r.talkMu.Lock()
+	_, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug")
+	g.r.talkMu.Unlock()
+	if w, ok := errors.AsType[*WaitError](err); !ok || !strings.Contains(w.What, "talk") {
+		t.Fatalf("Send = %v, want a wait on the talk", err)
+	}
+	if n := g.h.stopCount(); n != 0 {
+		t.Fatalf("%d stops during a talk", n)
+	}
+}
+
+// A herdr without server.stop (before 0.9.5) cannot be healed: the line
+// goes to you at once.
+func TestAHerdrWithoutServerStopSendsTheLineAtOnce(t *testing.T) {
+	g := newRig(t)
+	g.h.stopErr = &herdr.Error{Method: "server.stop", Code: herdr.CodeUnknownMethod, Message: "server.stop"}
+	g.h.exitAtStart = deniedScreen
+	g.launch("fx-repro")
+	if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug"); !errors.As(err, new(*DeniedError)) {
+		t.Fatalf("Send = %v, want the line for you", err)
+	}
+}
+
+// Once you retried after the line, the heal you were told of holds the
+// role no longer: a lost pane takes the recoveries' steps again before any
+// prompt.
+func TestARetryAfterTheLineLetsTheRecoveriesTakeALostPane(t *testing.T) {
+	g := newRig(t)
+	g.h.exitAtStart = deniedScreen
+	g.launch("fx-repro")
+	_, _ = g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug")
+	g.h.serverBack()
+	if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug"); !errors.As(err, new(*DeniedError)) {
+		t.Fatalf("Send = %v, want the line", err)
+	}
+	if g.r.healing(g.ctx, g.task.ID, g.attempt.ID, "fx-repro") == nil {
+		t.Fatal("the heal told to you holds the role no longer before your retry")
+	}
+	g.retried()
+	if g.r.healing(g.ctx, g.task.ID, g.attempt.ID, "fx-repro") != nil {
+		t.Fatal("the heal told to you still holds the role after your retry")
+	}
+}
+
+// One read of a copy that macOS holds is in flight at a time: a second
+// check while it blocks answers at once, starting no second read, and the
+// read that comes back is taken.
+func TestABlockedReadOfTheCopyHoldsOneProbe(t *testing.T) {
+	release := make(chan struct{})
+	var mu sync.Mutex
+	reads := 0
+	p := newDirProber(func(string) error {
+		mu.Lock()
+		reads++
+		mu.Unlock()
+		<-release
+		return nil
+	}, 20*time.Millisecond)
+	for range 2 {
+		if p.readable("/Volumes/Work/x") {
+			t.Fatal("a check while the read blocks counted as readable")
+		}
+	}
+	mu.Lock()
+	n := reads
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("%d reads while the first blocks, want 1", n)
+	}
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for !p.readable("/Volumes/Work/x") {
+		if time.Now().After(deadline) {
+			t.Fatal("the read that came back is never taken")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// What a launch printed is told from what the pane showed before it by
+// their overlap: the pane's earlier lines are cut, even when the launch
+// prints the very same lines again, and a screen whose old lines scrolled
+// off is the launch's whole.
+func TestSinceLaunchCutsWhatThePaneShowedBefore(t *testing.T) {
+	before := "Error: Operation not permitted (os error 1)\nzhuravel@mac talkable.factory2 % "
+	for _, c := range []struct{ name, before, screen, want string }{
+		{"a fresh pane", "", "Can't read the current directory (EPERM).\n", "Can't read the current directory (EPERM).\n"},
+		{"earlier output", before, before + "codex --search\nerror: bad flag\n", "zhuravel@mac talkable.factory2 % codex --search\nerror: bad flag\n"},
+		{"the same lines again", deniedScreen, deniedScreen + deniedScreen,
+			"zhuravel@mac talkable.factory2 % " + deniedScreen},
+		{"scrolled off", before, "Can't read the current directory (EPERM).\n$ ", "Can't read the current directory (EPERM).\n$ "},
+	} {
+		if got := sinceLaunch(c.screen, paneMark(c.before)); got != c.want {
+			t.Errorf("%s: sinceLaunch = %q, want %q", c.name, got, c.want)
+		}
+	}
+	if deniedLine(sinceLaunch(deniedScreen+deniedScreen, paneMark(deniedScreen))) == "" {
+		t.Error("a launch that printed the refusal again is no denial")
 	}
 }

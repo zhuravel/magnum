@@ -5411,22 +5411,30 @@ agent is stuck: <its last line>`). A lost pane is resumed from its conversation 
 fresh from the task's files; a role whose pane is lost before its first prompt (its CLI exited at its start) is
 relaunched once, and its stage sends that prompt; a recovery with no progress within 10 minutes takes the next step,
 and when they run out the task needs you (`the <role> agent's pane was lost: no progress after <n> recoveries`).
-Your retry starts those steps over: the stage's next prompt to a role of the attempt with no session (lost, or
-parked while the task waited on you) starts it again first, resumed from its conversation when it has one, and the
-prompt goes as after a launch. One failure the factory knows on sight: an agent that exits at its start because its
-pane cannot read the copy (`getcwd: … Operation not permitted`, `Can't read the current directory (EPERM)`,
-`Operation not permitted (os error 1)` on its screen) while the daemon reads the copy fine. That is macOS denying
-the factory's herdr server the copies' volume (a removable one: a server that has run for days can lose that access,
-while a process started from your terminal reads it). The factory then stops its own herdr session's server once
-(`herdr server stop`; never your session's nor the review panes'), opens the session again at once, so a fresh
-server starts from your terminal, and relaunches there the task's roles that took no prompt yet; each step is a
-`herdr` event of the task. While an agent of another task, a liaison or one of yours lives in that session, the stop
-waits, and the task's wait names whose agent it waits for. If a relaunched agent exits the same way, the task needs
-you: `macOS blocks the factory's herdr server from reading /Volumes/Work: allow herdr (and magnum) for removable
-volumes in System Settings > Privacy & Security > Files and Folders, then retry`; your retry relaunches the role and
-starts the heal over. When the daemon cannot read the copy either, the copy or its volume is at fault, not herdr:
-nothing is stopped, the lost pane takes the steps above, and the copies' own handling applies (a copy whose setup
-fails twice is broken and repaired on a backoff; a repository whose every copy broke the same way holds).
+Your retry starts those steps over. The stage's next prompt to a role of the attempt with no session starts it again
+first, as a launch would (it waits for the same holds: the daemon's drain, a disk or memory hold, a CLI's pause or
+login, Codex's budget, the stagger at memory warn), and the prompt goes as after a launch: a role the factory parked
+while the task waited on you is resumed from its conversation, which counts against nothing, and a lost one takes
+the next of the steps above. One failure the factory knows on sight: an agent that exits at its start because its
+pane cannot read the copy, its pane printing, since that launch and from the line's start, `shell-init: … getcwd: …
+Operation not permitted`, `Can't read the current directory (EPERM)` or `Error: Operation not permitted (os error
+1)`, while the daemon reads the copy fine. That is macOS denying the factory's herdr server the copies' volume (a
+removable one: a server that has run for days can lose that access, while a process started from your terminal
+reads it). The factory then stops its own herdr session's server (`herdr server stop`, herdr 0.9.5; never your
+session's nor the review panes'), opens the session again at once, so a fresh server starts from your terminal, and
+relaunches there the task's roles that took no prompt yet; each step is a `herdr` event of the task. One stop serves
+every task for an hour. The stop waits, and the task's wait says why, while anything else lives in that session (an
+agent of another task, a liaison, a pane of yours that runs something: `a pane of yours, w3:p2, runs ruby bin/rails
+c`), while a talk starts a liaison, and under the holds a launch waits for; this task's own liaison holds it for 30
+minutes at most (`exit the liaison, and the factory restarts the server`). A server somebody restarted meanwhile is
+not stopped again. If a relaunched agent exits the same way, or a herdr without `server.stop` cannot be restarted,
+the task needs you: `macOS blocks the factory's herdr server from reading /Volumes/Work: allow herdr and magnum (and
+iTerm2, which starts the server) in System Settings > Privacy & Security > Files and Folders > Removable Volumes (or
+Full Disk Access, if that toggle is absent), then retry` (the app is your `[terminal] app`); your retry relaunches
+the role and starts the heal over. When the daemon cannot read the copy either, the copy or its volume is at fault,
+not herdr: nothing is stopped, the lost pane takes the steps above, and the copies' own handling applies (a copy
+whose setup fails twice is broken and repaired on a backoff; a repository whose every copy broke the same way
+holds).
 
 A restart, a drain or a crash loses nothing. Before its first tick the daemon restores a copy a base run left
 detached, ends the servers the last daemon left (a recorded one only while its pid and its start match the

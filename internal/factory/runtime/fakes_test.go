@@ -75,6 +75,11 @@ type fakeHerdr struct {
 	exitAtStart string
 	stops       int
 	stopErr     error
+	// paneScreen is what a new pane shows before anything starts in it
+	// (a shell's earlier output, herdr's restored scrollback); procs, when
+	// set for a pane, is its process info (an idle shell otherwise).
+	paneScreen string
+	procs      map[string]herdr.ProcessInfo
 
 	creates []herdr.WorkspaceCreateOptions
 	splits  []herdr.SplitOptions
@@ -102,6 +107,9 @@ func (f *fakeHerdr) newPaneLocked(ws, cwd string) herdr.Pane {
 	f.nextPane[ws]++
 	p := herdr.Pane{ID: fmt.Sprintf("%s:p%d", ws, f.nextPane[ws]), WorkspaceID: ws, TabID: ws + ":t1", Cwd: cwd}
 	f.panes = append(f.panes, p)
+	if f.paneScreen != "" {
+		f.screens[p.ID] = f.paneScreen
+	}
 	return p
 }
 
@@ -306,7 +314,49 @@ func (f *fakeHerdr) closePaneLocked(paneID string) {
 }
 
 func (f *fakeHerdr) PaneProcessInfo(_ context.Context, paneID string) (herdr.ProcessInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if pi, ok := f.procs[paneID]; ok {
+		return pi, nil
+	}
 	return herdr.ProcessInfo{PaneID: paneID, ShellPID: 10, ForegroundPGID: 10}, nil
+}
+
+// yourPane opens a pane of yours in a workspace of its own, with no agent,
+// running cmd in its foreground ("" for an idle shell), and returns its id.
+func (f *fakeHerdr) yourPane(cmd string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextWS++
+	id := fmt.Sprintf("w%d", f.nextWS)
+	f.workspaces = append(f.workspaces, herdr.Workspace{ID: id, Label: "yours"})
+	p := f.newPaneLocked(id, "/tmp")
+	if f.procs == nil {
+		f.procs = map[string]herdr.ProcessInfo{}
+	}
+	pi := herdr.ProcessInfo{PaneID: p.ID, ShellPID: 10, ForegroundPGID: 10}
+	if cmd != "" {
+		pi.ForegroundPGID = 20
+		pi.Foreground = []herdr.Process{{PID: 20, Name: strings.Fields(cmd)[0], Argv: strings.Fields(cmd), Cmdline: cmd}}
+	}
+	f.procs[p.ID] = pi
+	return p.ID
+}
+
+// idlePane makes pane id an idle shell.
+func (f *fakeHerdr) idlePane(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.procs[id] = herdr.ProcessInfo{PaneID: id, ShellPID: 10, ForegroundPGID: 10}
+}
+
+// restartedElsewhere is the session's server stopped and started again by
+// somebody else (you, from your terminal): every pane ends, no stop is
+// counted, and the session answers.
+func (f *fakeHerdr) restartedElsewhere() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.workspaces, f.panes, f.agents = nil, nil, nil
 }
 
 func (f *fakeHerdr) WaitIdleShell(_ context.Context, paneID string, _ time.Duration) (herdr.ProcessInfo, error) {
@@ -337,7 +387,7 @@ func (f *fakeHerdr) AgentStart(_ context.Context, o herdr.AgentStartOptions) (he
 	}
 	f.agents = slices.DeleteFunc(f.agents, func(x herdr.AgentInfo) bool { return x.PaneID == o.PaneID })
 	if f.exitAtStart != "" { // the CLI printed why and exited: the pane is a shell again
-		f.screens[o.PaneID] = f.exitAtStart
+		f.screens[o.PaneID] += f.exitAtStart
 		return herdr.AgentStarted{Agent: a, Argv: append([]string{o.Kind}, o.Args...)}, nil
 	}
 	f.agents = append(f.agents, a)
@@ -509,8 +559,10 @@ type rig struct {
 	turnReads  int   // the reads of a transcript's user turns
 	turnErr    error // what the next read of a transcript's user turns fails with (nil: none)
 	// unreadable: the daemon cannot read the copies' directories either
-	// (the readable seam).
+	// (the readable seam). held, when set, is the engine's hold of every
+	// launch (Deps.MayStart): who and what.
 	unreadable bool
+	held       [2]string
 	logs       logBuffer
 
 	layout               paths.Layout
@@ -574,7 +626,7 @@ func (g *rig) restart() {
 	t := g.t
 	t.Helper()
 	r, err := newWith(Deps{Config: g.cfg, Layout: g.layout, Herdr: g.h, Store: g.st, Registry: g.reg, Runner: g.run,
-		Memory: g.memory, Clock: g.clock.Now, Log: slog.New(slog.NewTextHandler(&g.logs, nil))}, seams{
+		Memory: g.memory, Clock: g.clock.Now, Log: slog.New(slog.NewTextHandler(&g.logs, nil)), MayStart: g.mayStart}, seams{
 		sleep: func(ctx context.Context, d time.Duration) error {
 			g.mu.Lock()
 			g.slept = append(g.slept, d)
@@ -621,6 +673,21 @@ func (g *rig) restart() {
 		t.Fatalf("newWith: %v", err)
 	}
 	g.r = r
+}
+
+// mayStart is the engine's hold of every launch, as the rig sets it
+// (held).
+func (g *rig) mayStart() (who, what string, ok bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.held[0], g.held[1], g.held[0] == ""
+}
+
+// hold sets the engine's hold of every launch ("" lifts it).
+func (g *rig) hold(who, what string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.held = [2]string{who, what}
 }
 
 func (g *rig) isLoggedOut(kind string) bool {

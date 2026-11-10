@@ -42,6 +42,11 @@ func TestDoctorHerdrMethodsAreTheOnesMagnumSends(t *testing.T) {
 	if c := check(without); c.Status != doctorFail || !strings.Contains(c.Detail, "client.window_title.set") {
 		t.Fatalf("herdr without client.window_title.set: %s %q", c.Status, c.Detail)
 	}
+	// server.stop is the factory's heal's alone: a herdr before 0.9.5 only warns.
+	noStop := slices.DeleteFunc(slices.Clone(sent), func(m string) bool { return m == "server.stop" })
+	if c := check(noStop); c.Status != doctorWarn || !strings.Contains(c.Detail, "server.stop") || !strings.Contains(c.Fix, "0.9.5") {
+		t.Fatalf("herdr without server.stop: %s %q %q", c.Status, c.Detail, c.Fix)
+	}
 }
 
 // doctorNoServer is a herdr call to a socket no server runs on.

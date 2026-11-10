@@ -98,7 +98,7 @@ func (r *Runtime) Watchdog(ctx context.Context, now time.Time) (evs []Event, err
 // (a fresh start of a Codex session that took no prompt, a loop's fresh
 // session) takes the recoveries' steps.
 func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now time.Time) (Event, bool) {
-	if r.healing(st.taskID, st.key.attempt, st.role.Name) != nil {
+	if r.healing(ctx, st.taskID, st.key.attempt, st.role.Name) != nil {
 		return Event{}, false // the heal relaunches it, or told you
 	}
 	r.mu.Lock()
@@ -410,7 +410,7 @@ func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.A
 	case "resume":
 		err = r.restart(ctx, t, a, st, true, why)
 	case "relaunch":
-		err = r.relaunchRole(ctx, t, a, st)
+		err = r.relaunchRole(ctx, t, a, st, false)
 	default:
 		_, err = r.fromFiles(ctx, t, a, st, why, "")
 	}
@@ -418,11 +418,12 @@ func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.A
 	return err
 }
 
-// relaunchRole starts role st afresh in attempt a of task t with no prompt:
-// a role that took none yet, whose stage sends its first prompt next. A
-// starting or live session of it is quit hard first and its conversation,
-// which took no prompt of the task, closed.
-func (r *Runtime) relaunchRole(ctx context.Context, t registry.Task, a registry.Attempt, st *roleState) error {
+// relaunchRole starts role st afresh in attempt a of task t with no prompt
+// (Stagger after the last start when stagger): a role that took none yet,
+// whose stage sends its first prompt next. A starting or live session of it
+// is quit hard first and its conversation, which took no prompt of the
+// task, closed.
+func (r *Runtime) relaunchRole(ctx context.Context, t registry.Task, a registry.Attempt, st *roleState, stagger bool) error {
 	pr, err := r.owner(ctx, t, a.ID)
 	if err != nil {
 		return err
@@ -433,7 +434,7 @@ func (r *Runtime) relaunchRole(ctx context.Context, t registry.Task, a registry.
 		}
 		r.closeConversation(ctx, s)
 	}
-	return r.startIn(ctx, t, a, st, pr, "")
+	return r.startIn(ctx, t, a, st, pr, "", stagger)
 }
 
 // restart starts role st again in attempt a, resumed from its stored
@@ -472,7 +473,7 @@ func (r *Runtime) restart(ctx context.Context, t registry.Task, a registry.Attem
 		_, err := r.fromFiles(ctx, t, a, st, why, "")
 		return err
 	}
-	if err := r.startIn(ctx, t, a, st, pr, id); err != nil {
+	if err := r.startIn(ctx, t, a, st, pr, id, false); err != nil {
 		return err
 	}
 	_, err = r.send(ctx, t, a, st.role, pr, resumeText, store.RunRecovery)
@@ -514,7 +515,7 @@ func (r *Runtime) fromFiles(ctx context.Context, t registry.Task, a registry.Att
 	}); err != nil {
 		r.log.Warn("let go of the prompts a fresh session replaces", "role", st.role.Name, "err", err)
 	}
-	if err := r.startIn(ctx, t, a, st, pr, ""); err != nil {
+	if err := r.startIn(ctx, t, a, st, pr, "", false); err != nil {
 		return "", err
 	}
 	return r.send(ctx, t, a, st.role, pr, freshText(first, then), store.RunRecovery)
@@ -609,8 +610,10 @@ func (r *Runtime) closeConversation(ctx context.Context, s store.Session) {
 
 // startIn starts role st's agent (resumed from resume when it is set) in a
 // pane of the task's workspace: the pane its quit session left as a shell,
-// else one EnsureWorkspace lays out.
-func (r *Runtime) startIn(ctx context.Context, t registry.Task, a registry.Attempt, st *roleState, pr store.PR, resume string) error {
+// else one EnsureWorkspace lays out; Stagger after the last start when
+// stagger (the memory at warn, as a launch's).
+func (r *Runtime) startIn(ctx context.Context, t registry.Task, a registry.Attempt, st *roleState, pr store.PR, resume string,
+	stagger bool) error {
 	pane := ""
 	if s, ok := r.newestSession(ctx, pr.ID, st.role.Name); ok && (s.State == store.SessionParked || s.State == store.SessionClosed) {
 		if snap, err := r.d.Herdr.Snapshot(ctx); err == nil {
@@ -633,7 +636,7 @@ func (r *Runtime) startIn(ctx context.Context, t registry.Task, a registry.Attem
 		}
 		pane = ws.Panes[agents.Role(st.role.Name)]
 	}
-	return r.start(ctx, pr, a, st.role, pane, resume, false, false)
+	return r.start(ctx, pr, a, st.role, pane, resume, stagger, false)
 }
 
 // relaunch quits idle session s and resumes its conversation in a new
@@ -657,7 +660,7 @@ func (r *Runtime) relaunch(ctx context.Context, s store.Session) error {
 	if err := r.mgr.Quit(ctx, s); err != nil {
 		return err
 	}
-	return r.startIn(ctx, t, a, st, pr, store.Deref(s.SessionID))
+	return r.startIn(ctx, t, a, st, pr, store.Deref(s.SessionID), false)
 }
 
 // liveSession is role st's starting or live session.
