@@ -268,8 +268,9 @@ type importSource struct{ path, label string }
 // path Claude reads it by: an import in docs/guide.md read as CLAUDE.md
 // is from the root), following the tree's links on the way (realpath);
 // the links under a directory it names are followed too. A file it names
-// becomes a source of the next hop, in any ASCII case. Every import counts
-// against the walk's steps.
+// becomes a source of the next hop, in any ASCII case. Every source and
+// every import counts against the walk's steps (a tree of more files than
+// maxLinkSteps is no error by itself).
 func (r *linkResolver) imports(files []string, isConfig func(string) (string, bool), read func(paths []string) (map[string]string, error)) {
 	byFold := map[string][]string{} // foldKey of a file's path -> the tree's files that fold to it
 	for _, f := range files {
@@ -281,16 +282,18 @@ func (r *linkResolver) imports(files []string, isConfig func(string) (string, bo
 		covers[foldKey(t)] = label
 	}
 	var srcs []importSource
-	for _, f := range files {
-		if !r.step() {
-			return
-		}
+	for _, f := range files { // the tree's every file, which the listing's cap bounds: only a source is a step
 		if !strings.EqualFold(path.Ext(f), ".md") {
 			continue
 		}
-		if label, ok := isConfig(f); ok {
-			srcs = append(srcs, importSource{f, label})
-		} else if label, ok := coveredBy(covers, f); ok {
+		label, ok := isConfig(f)
+		if !ok {
+			label, ok = coveredBy(covers, f)
+		}
+		if ok {
+			if !r.step() {
+				return
+			}
 			srcs = append(srcs, importSource{f, label})
 		}
 	}

@@ -223,3 +223,24 @@ func TestResolveConfigTargetsFollowsTheInstructionsImports(t *testing.T) {
 		t.Errorf("a6.md is a target: past %d hops", agents.MaxImportHops)
 	}
 }
+
+// A tree's files are many more than its links (a monorepo's hundred
+// thousand): only the files whose imports are read count against the
+// walk's budget, so such a tree with a CLAUDE.md that imports a guide
+// resolves, the guide a target.
+func TestALargeTreesFilesDoNotSpendTheLinksBudget(t *testing.T) {
+	kinds := defaultKinds()
+	isConfig := func(p string) (string, bool) { return agentConfigPath(kinds, p) }
+	files := make([]string, 0, maxLinkSteps+2)
+	for i := range maxLinkSteps + 1 {
+		files = append(files, fmt.Sprintf("app/f%d.rb", i))
+	}
+	files = append(files, "CLAUDE.md")
+	read := func([]string) (map[string]string, error) {
+		return map[string]string{"CLAUDE.md": "@docs/guide.md\n"}, nil
+	}
+	got, err := resolveConfigTargets(context.Background(), gitx.Tree{Files: files}, isConfig, read)
+	if err != nil || got["docs/guide.md"] != "CLAUDE.md" {
+		t.Fatalf("resolveConfigTargets = %d targets (guide %q), %v", len(got), got["docs/guide.md"], err)
+	}
+}

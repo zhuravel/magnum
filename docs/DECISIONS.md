@@ -17909,7 +17909,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAutoApprovalRefusesAnyFileUnderALinkToTheRoot, TestALiveClaudeSessionStaysWhenTheNewHeadLeavesItsConfigAlone
   ("the fetch fails" now quits), TestARESTListCutShortCutsTheFileList, TestImportPathsReadsClaudeCodesImports,
   TestASessionComparesWhatTheInstructionsImport, TestAutoApprovalRefusesAChangeToAFileTheInstructionsImport,
-  TestResolveConfigTargetsFollowsTheInstructionsImports, TestTreeAndBlobsReadACommitsFiles and
+  TestResolveConfigTargetsFollowsTheInstructionsImports, TestALargeTreesFilesDoNotSpendTheLinksBudget (a tree's
+  files are free to scan; only each source and import is a step), TestTreeAndBlobsReadACommitsFiles and
   TestTrackedFilesListsTheIndexsFilesAndLinks. The tests that pinned a round's withdrawal for an
   `AGENTS.md` push now use a change only the new head's own links refuse, and
   TestAStandingApprovalStandsUntilMagnumReviewsTheNewHead pins the old rule for failing checks only.
