@@ -4654,9 +4654,19 @@ const (
 	DefaultFactoryBase   = "master"
 	DefaultFactoryCopies = "factory{n}"
 	MaxFactoryCycles     = 10
+	// DefaultFactoryTitleFormat is the PR title of a repository that sets no
+	// title_format (FactoryRepo.TitleFormat): the issue key, a space, then
+	// the task's title.
+	DefaultFactoryTitleFormat = "{key} {title}"
 )
     Factory defaults that a repository without the key takes (expand), and the
     most rounds of the local review.
+
+const (
+	TitleKey   = "{key}"
+	TitleTitle = "{title}"
+)
+    The placeholders of a repository's title_format.
 
 const (
 	DefaultQABoot     = 5 * time.Minute
@@ -6353,6 +6363,12 @@ type FactoryRepo struct {
 	// with, the team's own layout ("" = none: the factory's outline). It is
 	// a skill's name, trimmed, one word; no default.
 	PRBodySkill string `toml:"pr_body_skill"`
+	// TitleFormat is the template of a PR's title, with {key} (the task's
+	// issue key) and {title} (its title; the format must hold it once). A
+	// task with no key gets its title alone. "" = DefaultFactoryTitleFormat
+	// ("{key} {title}"); "[{key}] {title}" is what a repository that
+	// requires "[ABC-123] Title" sets.
+	TitleFormat string `toml:"title_format"`
 	// Staging are the staging environments, in the order they are listed.
 	Staging []FactoryStaging `toml:"staging"`
 	// QA is [factory.repo.qa], how a qa stage looks at the change's pages in

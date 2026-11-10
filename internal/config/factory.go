@@ -182,6 +182,12 @@ type FactoryRepo struct {
 	// with, the team's own layout ("" = none: the factory's outline). It is
 	// a skill's name, trimmed, one word; no default.
 	PRBodySkill string `toml:"pr_body_skill"`
+	// TitleFormat is the template of a PR's title, with {key} (the task's
+	// issue key) and {title} (its title; the format must hold it once). A
+	// task with no key gets its title alone. "" = DefaultFactoryTitleFormat
+	// ("{key} {title}"); "[{key}] {title}" is what a repository that
+	// requires "[ABC-123] Title" sets.
+	TitleFormat string `toml:"title_format"`
 	// Staging are the staging environments, in the order they are listed.
 	Staging []FactoryStaging `toml:"staging"`
 	// QA is [factory.repo.qa], how a qa stage looks at the change's pages in
@@ -478,6 +484,16 @@ const (
 	DefaultFactoryBase   = "master"
 	DefaultFactoryCopies = "factory{n}"
 	MaxFactoryCycles     = 10
+	// DefaultFactoryTitleFormat is the PR title of a repository that sets no
+	// title_format (FactoryRepo.TitleFormat): the issue key, a space, then
+	// the task's title.
+	DefaultFactoryTitleFormat = "{key} {title}"
+)
+
+// The placeholders of a repository's title_format.
+const (
+	TitleKey   = "{key}"
+	TitleTitle = "{title}"
 )
 
 // The defaults and the limits of a repository's [factory.repo.qa]
@@ -1240,6 +1256,16 @@ func (c *Config) validateFactoryRepos() []error {
 		}
 		if skill := strings.TrimSpace(r.PRBodySkill); strings.ContainsFunc(skill, unicode.IsSpace) {
 			bad("pr_body_skill %q must be the skill's name, one word", skill)
+		}
+		if f := r.TitleFormat; f != "" {
+			switch {
+			case !strings.Contains(f, TitleTitle):
+				bad("title_format %q must contain %s, where the task's title goes", f, TitleTitle)
+			case strings.Count(f, TitleTitle) > 1:
+				bad("title_format %q must contain %s once", f, TitleTitle)
+			case strings.ContainsFunc(f, unicode.IsControl):
+				bad("title_format %q must be one line", f)
+			}
 		}
 		if r.LargeTableRows < 0 {
 			bad("large_table_rows must not be negative, got %d", r.LargeTableRows)

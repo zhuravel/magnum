@@ -36,6 +36,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/evalrun"
@@ -356,15 +358,45 @@ func prTemplate(copyPath string) string {
 	return ""
 }
 
-// prTitle is the PR's title: the Jira key and the task's title, the title
-// alone for a task of a prompt (a title that starts with its key keeps it
-// once).
-func prTitle(t registry.Task) string {
+// prTitle is the PR's title: the task's title laid out by format (the
+// repository's title_format, "" = config.DefaultFactoryTitleFormat), {key}
+// the task's issue key (the Jira key, or a Linear one: Task.JiraKey holds
+// either) and {title} its title with the white space of its lines folded.
+// A task with no key gets its title alone, with no empty brackets. A title
+// that starts (or, for a format that ends with the key, ends) with the
+// formatted key keeps it once; one that starts with the bare key as a word
+// is laid out from what follows it ("ABC-12: Title" is "[ABC-12] Title" in
+// brackets).
+func prTitle(t registry.Task, format string) string {
 	title := strings.Join(strings.Fields(t.Title), " ")
-	if t.JiraKey != "" && !strings.HasPrefix(title, t.JiraKey) {
-		title = strings.TrimSpace(t.JiraKey + " " + title)
+	key := t.JiraKey
+	if key == "" {
+		return title
 	}
-	return title
+	format = cmp.Or(format, config.DefaultFactoryTitleFormat)
+	pre, post, _ := strings.Cut(format, config.TitleTitle)
+	pre, post = strings.ReplaceAll(pre, config.TitleKey, key), strings.ReplaceAll(post, config.TitleKey, key)
+	if p, q := strings.TrimSpace(pre), strings.TrimSpace(post); (p != "" || q != "") && strings.HasPrefix(title, p) && strings.HasSuffix(title, q) {
+		return title
+	}
+	if rest, ok := strings.CutPrefix(title, key); ok && !startsWord(rest) && strings.Contains(format, config.TitleKey) {
+		title = strings.TrimLeft(rest, " :,;-\u2013\u2014")
+	}
+	return strings.TrimSpace(strings.NewReplacer(config.TitleKey, key, config.TitleTitle, title).Replace(format))
+}
+
+// startsWord reports whether s starts with a letter, a digit or an
+// underscore: after a key, that makes it part of another key or word.
+func startsWord(s string) bool {
+	r, _ := utf8.DecodeRuneInString(s)
+	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
+// titleFormat is the title_format of the factory repository repo ("" = the
+// default).
+func (e *Engine) titleFormat(repo string) string {
+	r, _ := e.cfg.FactoryRepo(repo)
+	return r.TitleFormat
 }
 
 // ConfirmSentence is the y/N question of the ready card's push: the branch
@@ -655,7 +687,7 @@ func (e *Engine) drawCard(ctx context.Context, t registry.Task, c Copy, now card
 		return ReadyCardFile{}, err
 	}
 	card := ReadyCardFile{Head: now.head, Base: now.base, Commits: now.commits, ReportHash: now.reportHash, DiffHash: now.diffHash, Branch: t.Branch,
-		Remote: cmp.Or(t.RemoteBranch, t.Branch), Title: prTitle(t), Copy: filepath.Base(c.Path), CopyPath: c.Path, Flags: f.Lines(), Review: sum,
+		Remote: cmp.Or(t.RemoteBranch, t.Branch), Title: prTitle(t, e.titleFormat(t.Repo)), Copy: filepath.Base(c.Path), CopyPath: c.Path, Flags: f.Lines(), Review: sum,
 		Files: files}
 	if res, ok := readQASummary(dir); ok && res.Head == now.head {
 		card.QA = qaForCard(res)

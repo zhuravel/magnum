@@ -118,7 +118,7 @@ func (e *Engine) runPublish(ctx context.Context, t registry.Task) (bool, error) 
 		return false, e.stageFailed(ctx, t, needsYou{"the ready card is not the one you pushed: nothing is pushed"})
 	}
 	pub := publishing{base: baseOf(repo), sha: sha, login: login, branch: cmp.Or(card.Remote, t.RemoteBranch, t.Branch),
-		title: cmp.Or(card.Title, prTitle(t))}
+		title: cmp.Or(card.Title, prTitle(t, e.titleFormat(t.Repo)))}
 	git, err := e.operatorGit(ctx, t.Repo)
 	if err != nil {
 		return false, err

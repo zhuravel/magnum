@@ -667,8 +667,7 @@ func (e *Engine) amendDue(ctx context.Context, t registry.Task) (bool, error) {
 		return false, err
 	}
 	return slices.ContainsFunc(qs, func(q registry.Question) bool {
-		intake := q.RaisedBy == intakeRole && q.Text == whichIssue
-		return q.State == registry.QuestionAnswered && !q.TookRecommendation && !intake && q.Answered.After(at)
+		return q.State == registry.QuestionAnswered && !q.TookRecommendation && !isWhichIssue(q) && q.Answered.After(at)
 	}), nil
 }
 

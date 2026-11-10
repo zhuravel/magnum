@@ -142,7 +142,7 @@ func (e *Engine) answer(ctx context.Context, p AnswerPayload) error {
 	}
 	take := map[int]string{}
 	var asks []pendingAsk
-	link := "" // the Jira key your answer to which issue the task is names
+	link, linkQ := "", "" // the key your answer to which issue the task is names, and that question's text
 	reporter := readReporter(e.d.Layout.FactoryTaskDir(t.ID))
 	for _, idx := range slices.Sorted(maps.Keys(p.Answers)) {
 		q, err := question(idx)
@@ -174,11 +174,15 @@ func (e *Engine) answer(ctx context.Context, p AnswerPayload) error {
 		default:
 			return fmt.Errorf("question %d is %s already: %q", idx+1, q.State, q.Answer)
 		}
-		if key := e.namedIssue(t, q, a); key != "" {
+		key, err := e.namedIssue(t, q, a)
+		if err != nil {
+			return fmt.Errorf("question %d: %w; your answer is not taken, and the question stays open", idx+1, err)
+		}
+		if key != "" {
 			if err := e.mayLink(ctx, t, key, idx); err != nil {
 				return err
 			}
-			link = key
+			link, linkQ = key, q.Text
 		}
 	}
 	for _, idx := range slices.Sorted(maps.Keys(p.Needless)) {
@@ -200,8 +204,11 @@ func (e *Engine) answer(ctx context.Context, p AnswerPayload) error {
 			}
 			return err
 		}
-		e.event(ctx, t.ID, "intake", registry.PhaseOK, "linked to "+link+" by your answer to "+strconv.Quote(whichIssue)+
-			"; its ticket is read next")
+		next := "; its ticket is read next"
+		if trackerOf(link, e.otherTrackers(t.Repo)) {
+			next = "; the factory reads no ticket of its tracker"
+		}
+		e.event(ctx, t.ID, "intake", registry.PhaseOK, "linked to "+link+" by your answer to "+strconv.Quote(linkQ)+next)
 	}
 	if len(take) > 0 {
 		if err := e.reg.AnswerBatch(ctx, t.ID, t.QuestionRev, take); errors.Is(err, registry.ErrStaleRevision) {
@@ -276,15 +283,36 @@ func parseAsk(answer string) (login, comment string, ok bool) {
 	return rest, "", true
 }
 
-// namedIssue is the Jira key answer names when it answers intake's question
-// q, which Jira issue task t is: a key or a Jira link at its start (an
-// option's label starts with its key), as a start reads one; "" for any
-// other answer ("no issue", your own words) and any other question.
-func (e *Engine) namedIssue(t registry.Task, q registry.Question, answer string) string {
-	if q.RaisedBy != intakeRole || q.Text != whichIssue {
-		return ""
+// namedIssue is the key answer names when it answers intake's question q,
+// which issue task t is: for the Jira question, a key or a Jira link at its
+// start (an option's label starts with its key), as a start reads one; for
+// the Linear one, a key of a tracker the factory does not read from Jira, or
+// that tracker's link, at its start (readStart; nothing is read from
+// Linear). "" for any other answer ("no issue", your own words) and any
+// other question. A key-shaped first word of an answer to the Linear
+// question that no tracker of the repository owns is an error: the prefix
+// is mistyped, and the PR would go out with no key.
+func (e *Engine) namedIssue(t registry.Task, q registry.Question, answer string) (string, error) {
+	switch {
+	case !isWhichIssue(q):
+		return "", nil
+	case q.Text == whichIssue:
+		return ParseStart(answer, e.trackers(t.Repo)).Key, nil
 	}
-	return ParseStart(answer, e.trackers(t.Repo)).Key
+	if in, _, other := e.readStart(answer, t.Repo); other {
+		return in.Key, nil
+	}
+	if word, _ := splitStart(strings.TrimSpace(answer)); startKey.MatchString(word) {
+		var prefixes []string
+		for _, tr := range e.cfg.TrackersFor(t.Repo) {
+			if isLinear(tr) {
+				prefixes = append(prefixes, tr.Prefix+"\u2026")
+			}
+		}
+		return "", fmt.Errorf("%s is not a key of this repository's Linear tracker (%s): type the key again or answer %s", word,
+			strings.Join(prefixes, ", "), noIssue)
+	}
+	return "", nil
 }
 
 // mayLink checks that task t may take key, which your answer to question
@@ -410,7 +438,7 @@ func (e *Engine) linkedAt(ctx context.Context, t registry.Task) (time.Time, erro
 		return time.Time{}, err
 	}
 	for _, q := range slices.Backward(qs) {
-		if q.RaisedBy == intakeRole && q.Text == whichIssue && q.State == registry.QuestionAnswered {
+		if isWhichIssue(q) && q.State == registry.QuestionAnswered {
 			return q.Answered, nil
 		}
 	}
@@ -439,7 +467,7 @@ func (e *Engine) askIssueAgain(ctx context.Context, t registry.Task, cause error
 	}
 	var last registry.Question
 	for _, q := range slices.Backward(qs) {
-		if q.RaisedBy == intakeRole && q.Text == whichIssue {
+		if isWhichIssue(q) {
 			last = q
 			break
 		}
@@ -449,7 +477,7 @@ func (e *Engine) askIssueAgain(ctx context.Context, t registry.Task, cause error
 		return nil
 	}
 	if last.State != registry.QuestionOpen || last.Revision != t.QuestionRev {
-		q := registry.Question{Text: whichIssue, Context: cause.Error() + ": type the key again or answer " + noIssue,
+		q := registry.Question{Text: last.Text, Context: cause.Error() + ": type the key again or answer " + noIssue,
 			Example: last.Example, Options: last.Options, Recommended: last.Recommended, Why: last.Why, RaisedBy: intakeRole,
 			Evidence: last.Evidence}
 		if q.Recommended >= 0 && q.Recommended < len(q.Options) && ParseStart(q.Options[q.Recommended].Label, e.trackers(t.Repo)).Key == t.JiraKey {

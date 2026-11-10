@@ -982,9 +982,49 @@ func TestThePRTitleIsTheKeyAndTheTitle(t *testing.T) {
 		{registry.Task{JiraKey: "PR-12360", Title: "PR-12360 Custom activities"}, "PR-12360 Custom activities"},
 		{registry.Task{Title: " Count the archived activities "}, "Count the archived activities"},
 	} {
-		if got := prTitle(tc.task); got != tc.want {
-			t.Errorf("prTitle(%+v) = %q, want %q", tc.task, got, tc.want)
+		// The default format ("{key} {title}") is what an unset title_format stands for.
+		for _, format := range []string{"", config.DefaultFactoryTitleFormat} {
+			if got := prTitle(tc.task, format); got != tc.want {
+				t.Errorf("prTitle(%+v, %q) = %q, want %q", tc.task, format, got, tc.want)
+			}
 		}
+	}
+}
+
+// A repository's title_format lays out the PR's title: {key} is the task's
+// issue key and {title} its title. With no key the title stands alone (no
+// empty brackets); a title that already starts with the formatted key
+// keeps it once, whether it holds the formatted prefix or the bare key; a
+// format that puts the key after the title is read the same way.
+func TestThePRTitleFollowsTheReposTitleFormat(t *testing.T) {
+	const brackets = "[{key}] {title}"
+	for name, tc := range map[string]struct {
+		task   registry.Task
+		format string
+		want   string
+	}{
+		"key and title":         {registry.Task{JiraKey: "ABC-12", Title: "Title"}, brackets, "[ABC-12] Title"},
+		"no key":                {registry.Task{Title: " Title "}, brackets, "Title"},
+		"white space":           {registry.Task{JiraKey: "ABC-12", Title: "Fix  the\texport"}, brackets, "[ABC-12] Fix the export"},
+		"formatted prefix":      {registry.Task{JiraKey: "ABC-12", Title: "[ABC-12] Title"}, brackets, "[ABC-12] Title"},
+		"bare key starts it":    {registry.Task{JiraKey: "ABC-12", Title: "ABC-12 Title"}, brackets, "[ABC-12] Title"},
+		"bare key then colon":   {registry.Task{JiraKey: "ABC-12", Title: "ABC-12: Title"}, brackets, "[ABC-12] Title"},
+		"a longer key":          {registry.Task{JiraKey: "ABC-1", Title: "ABC-12 Title"}, brackets, "[ABC-1] ABC-12 Title"},
+		"key alone":             {registry.Task{JiraKey: "ABC-12"}, brackets, "[ABC-12]"},
+		"key after the title":   {registry.Task{JiraKey: "ABC-12", Title: "Title"}, "{title} ({key})", "Title (ABC-12)"},
+		"key after, kept once":  {registry.Task{JiraKey: "ABC-12", Title: "Title (ABC-12)"}, "{title} ({key})", "Title (ABC-12)"},
+		"no key after":          {registry.Task{Title: "Title"}, "{title} ({key})", "Title"},
+		"colon format":          {registry.Task{JiraKey: "ABC-12", Title: "Title"}, "{key}: {title}", "ABC-12: Title"},
+		"title only":            {registry.Task{JiraKey: "ABC-12", Title: "Title"}, "{title}", "Title"},
+		"default, bare key":     {registry.Task{JiraKey: "ABC-12", Title: "ABC-12: Title"}, "", "ABC-12: Title"},
+		"default, other repos":  {registry.Task{JiraKey: "ABC-12", Title: "Title"}, config.DefaultFactoryTitleFormat, "ABC-12 Title"},
+		"brackets, unset title": {registry.Task{JiraKey: "ABC-12", Title: "ABC-12"}, brackets, "[ABC-12]"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := prTitle(tc.task, tc.format); got != tc.want {
+				t.Errorf("prTitle(%+v, %q) = %q, want %q", tc.task, tc.format, got, tc.want)
+			}
+		})
 	}
 }
 

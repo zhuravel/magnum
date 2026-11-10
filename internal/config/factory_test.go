@@ -1018,6 +1018,32 @@ func TestAShellRoleTakesNoOnPermissionPrompt(t *testing.T) {
 	wantError(t, c.Validate(), "role "+c.Roles[i].Name, "on_permission_prompt is for session roles only")
 }
 
+// title_format is the template of a PR's title, with {key} and {title}: a
+// key of a [[factory.repo]] with no default in the file (the zero value
+// stands for DefaultFactoryTitleFormat, "{key} {title}"), and a value
+// without {title} is refused, naming the key and the placeholder.
+func TestFactoryRepoTitleFormat(t *testing.T) {
+	load := func(format string) (*Config, error) {
+		return loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml+"title_format = "+format+"\n")
+	}
+	cfg, err := load(`"[{key}] {title}"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := cfg.FactoryRepo("talkable/talkable"); !ok || r.TitleFormat != "[{key}] {title}" {
+		t.Errorf("title_format = %q, %v, want [{key}] {title}", r.TitleFormat, ok)
+	}
+	cfg, err = loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := cfg.FactoryRepo("talkable/talkable"); r.TitleFormat != "" || DefaultFactoryTitleFormat != "{key} {title}" {
+		t.Errorf("title_format = %q without the key (default %q), want none and {key} {title}", r.TitleFormat, DefaultFactoryTitleFormat)
+	}
+	_, err = load(`"[{key}]"`)
+	wantError(t, err, "title_format", `"[{key}]"`, "{title}")
+}
+
 // The repository's checks: the owner/name form once, the copy paths and
 // names with {n}, positive limits, databases the way a pool names them, and
 // the commands that are lists of words.
@@ -1040,6 +1066,9 @@ func TestFactoryChecksTheRepositoryBlock(t *testing.T) {
 		"blank console":    {func(r *FactoryRepo) { r.Consoles = []string{""} }, []string{"consoles"}},
 		"error skill":      {func(r *FactoryRepo) { r.ErrorSkill = "two words" }, []string{"error_skill"}},
 		"pr body skill":    {func(r *FactoryRepo) { r.PRBodySkill = "two words" }, []string{"pr_body_skill", "two words"}},
+		"title format":     {func(r *FactoryRepo) { r.TitleFormat = "[{key}]" }, []string{"title_format", "{title}"}},
+		"title format x2":  {func(r *FactoryRepo) { r.TitleFormat = "{title} {title}" }, []string{"title_format", "{title}", "once"}},
+		"title format nl":  {func(r *FactoryRepo) { r.TitleFormat = "{key}\n{title}" }, []string{"title_format", "one line"}},
 		"copy file escape": {func(r *FactoryRepo) { r.CopyFiles = []string{"../secret"} }, []string{"copy_files"}},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -155,17 +155,20 @@ func TestAPrefixOfTwoTrackersTellsNoRepository(t *testing.T) {
 	}
 }
 
-// A free prompt in a repository whose trackers are all not Jira starts from
-// your words: no question asks which Jira issue it is, and no Jira search is
-// made. A repository with a Jira tracker, or with no tracker at all, keeps
-// the question.
+// A free prompt in a repository whose trackers are all not Jira's asks no
+// question which Jira issue it is, and no Jira search is made: in a
+// Linear-tracked repository it asks which Linear issue it is instead
+// (TestAPromptOfALinearTrackedRepositoryAsksWhichLinearIssueOnce). A
+// repository with a Jira tracker, or with no tracker at all, keeps the
+// Jira question.
 func TestAPromptInARepositoryWithoutAJiraTrackerAsksNoJiraIssue(t *testing.T) {
 	r := newIntakeRig(t)
 	r.twoRepos()
 	r.cfg.Board.Trackers = nil // example/site's only tracker is Linear's
 	site := r.mustStart("the export fails on Safari, see https://github.com/example/site/issues/88")
-	if qs, _ := r.reg.Questions(r.ctx, site.ID); site.Repo != "example/site" || len(qs) != 0 {
-		t.Errorf("a prompt in example/site (%s) asks %+v", site.Repo, qs)
+	if qs, _ := r.reg.Questions(r.ctx, site.ID); site.Repo != "example/site" || len(qs) != 1 || qs[0].Text == whichIssue ||
+		qs[0].Text != "Which Linear issue is this (EX-…)?" {
+		t.Errorf("a prompt in example/site (%s) asks %+v, want the Linear question and not the Jira one", site.Repo, qs)
 	}
 	r.site.mu.Lock()
 	searched := len(r.site.searched)

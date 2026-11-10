@@ -23515,6 +23515,47 @@ skill versions); people add theirs to the sections before it, at the end of the 
   header of a scheme the Redact pattern does not name (`Authorization: Digest x`) masks the scheme word only.
   Tests: TestScrubMasksAQuotedAuthorizationHeader (failing first) and two fuzz seeds. No new dependencies.
 
+- **A Linear-tracked repository's prompt task asks which Linear issue it is, and `title_format` lays out the PR's
+  title** (2026-11-10, R35). The factory's prompt tasks in the operator's Linear-tracked repository got no key: the
+  question "Which Jira issue is this?" is asked only where a Jira tracker is, so the branch and the PR title had none,
+  and the repository's rule for titles (`[ABC-123] Title`) was broken, and Linear's GitHub integration had nothing
+  to link the PR by.
+  - **The question.** A repository is Linear-tracked when its trackers (`config.TrackersFor`: its `[[repo]]`, its
+    `[[watch]]`, `[board]`) hold a link on `linear.app` and none is Jira's (`isLinear`, `linearTracker`; a repository
+    with a Jira tracker keeps the Jira question, one with neither Jira's nor Linear's trackers still asks nothing).
+    Its prompt task asks, as revision 1, `Which Linear issue is this (ABC-…)?` with the first Linear tracker's key
+    prefix, one option (`no issue`, recommended). It is stored at once, without Jira or a search (`askWhichLinear`),
+    and nothing asks it again. Answering types the key, with words after it or not, or the issue's link
+    (`namedIssue` reads it as a start does, `readStart`). `isWhichIssue` is the one test of "intake's question" for
+    both texts, where the code compared the Jira text (the link, the amend's exception, the wait's clock, the ask
+    again).
+  - **The stored key.** The answer's key goes where a Jira key is kept, `registry.Task.JiraKey` (the `jira_key`
+    column), as a start of a key of another tracker already does (`startOther`). The name says Jira, but nothing
+    reads it as Jira's: `linkedTicket`, the tracking read and the agents' prompts already ask `otherTracker` first, so
+    a Linear key is never read from Jira. The branch already carries the key (`nameRemoteBranch` names the PR's
+    branch from it when it is linked after the local branch was made), so the branch rule is unchanged. A key-shaped
+    first word that no tracker of the repository owns (`EXP-12` for `EX-`) is refused with the prefix to type and the
+    question stays open: taken as words, it would send the PR out with no key, the fault this closes.
+  - **`title_format`.** `[[factory.repo]] title_format` is a template with `{key}` and `{title}`, default
+    `{key} {title}` (`config.DefaultFactoryTitleFormat`; the zero value stands for it). `prTitle(task, format)` lays
+    the title out by it; with no key the title is the title alone (no empty brackets); a title that already starts
+    with the formatted prefix (and ends with the formatted suffix, for `{title} ({key})`) keeps it once, and one that
+    starts with the bare key as a word is laid out from what follows it (`ABC-12: Title` gives `[ABC-12] Title`).
+    Under the default format that is the old rule, byte for byte (`HasPrefix(title, key)`, so a longer key's title
+    is kept as before). The config check refuses a format without `{title}`, with `{title}` more than once, or on
+    more than one line.
+  - Rejected: a Linear API or search (the factory reads no Linear: the question is plain, and a Linear read is a later
+    item); a second column or a rename of `jira_key` (a migration and every reader for a name; the generic
+    key is documented here and in `FactoryRepo.TitleFormat`); asking the Linear question where the repository mixes
+    Jira and Linear trackers (the Jira question stays, and a Linear key typed to it is linked as before); options from
+    keys found in the prompt's words (those are words in a Linear-tracked repository, as in `readStart`).
+  Tests: `TestAPromptOfALinearTrackedRepositoryAsksWhichLinearIssueOnce`, `TestTheLinearQuestionNeedsNoJira`,
+  `TestAJiraTrackedRepositoryKeepsTheJiraQuestion`, `TestAnAnswerNamingALinearKeyGivesItsPRTitleAndBranchTheKey`,
+  `TestNoIssueGivesALinearTrackedTasksPRTheTitleAlone` and `TestAWrongLinearKeyIsRefusedAndTheQuestionStaysOpen`
+  (`internal/factory`), `TestThePRTitleIsTheKeyAndTheTitle` (the old cases under both spellings of the default) and
+  `TestThePRTitleFollowsTheReposTitleFormat` (`internal/factory`), `TestFactoryRepoTitleFormat` and the title_format
+  cases of `TestFactoryChecksTheRepositoryBlock` (`internal/config`). No new dependencies.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

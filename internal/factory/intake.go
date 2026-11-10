@@ -125,7 +125,26 @@ const (
 	noIssue    = "no issue"
 	// whichIssue is that question's text.
 	whichIssue = "Which Jira issue is this?"
+	// The question of a Linear-tracked repository's prompt, whichLinear: its
+	// text is whichLinearHead, the tracker's key prefix ("ABC-") and
+	// whichLinearTail.
+	whichLinearHead = "Which Linear issue is this ("
+	whichLinearTail = "\u2026)?"
 )
+
+// whichLinear is the text of intake's question which Linear issue a prompt
+// of a Linear-tracked repository is, for the tracker whose keys start with
+// prefix: "Which Linear issue is this (ABC-…)?".
+func whichLinear(prefix string) string { return whichLinearHead + prefix + whichLinearTail }
+
+// isWhichIssue reports whether q is intake's question which issue a prompt
+// is: the Jira question, or the Linear one of any prefix. Your answer to it
+// that names a key links the task to it (namedIssue), and the gate's amend
+// leaves it out.
+func isWhichIssue(q registry.Question) bool {
+	return q.RaisedBy == intakeRole && (q.Text == whichIssue ||
+		(strings.HasPrefix(q.Text, whichLinearHead) && strings.HasSuffix(q.Text, whichLinearTail)))
+}
 
 // The tries of a key while Jira does not answer: after 1, 2, 4, 8 and 16
 // minutes, then every 30, and after 6 hours the task needs you.
@@ -869,17 +888,23 @@ func (e *Engine) noteOverlap(_ context.Context, t registry.Task) {
 }
 
 // askWhichIssue asks, as the first question of a free prompt's task, which
-// Jira issue it is: the issueOptions best title matches of a search on the
-// prompt's first words, and "no issue". The best match (the most of the
-// prompt's search words, in their own forms, in its title) is recommended;
-// with no match, or a search that failed, "no issue" is. The question is
-// revision 1 of the task's questions; the gate's first batch keeps it.
-// The search runs off the loop, within searchBound: the start answers
-// first, and the question is stored whatever a drain does once the search
-// returned (it is the prompt's first question: nothing asks it again).
-// Without Jira, or in a repository whose trackers are all not Jira's
-// (jiraRepo), nothing is asked: the task starts from your words.
-func (e *Engine) askWhichIssue(_ context.Context, t registry.Task, prompt string) {
+// issue it is. In a Linear-tracked repository (linearTracker) that is the
+// plain question askWhichLinear asks. Otherwise it is which Jira issue it
+// is: the issueOptions best title matches of a search on the prompt's first
+// words, and "no issue". The best match (the most of the prompt's search
+// words, in their own forms, in its title) is recommended; with no match,
+// or a search that failed, "no issue" is. The question is revision 1 of the
+// task's questions; the gate's first batch keeps it. The search runs off
+// the loop, within searchBound: the start answers first, and the question
+// is stored whatever a drain does once the search returned (it is the
+// prompt's first question: nothing asks it again). Without Jira, or in a
+// repository whose trackers are all not Jira's (jiraRepo) and not Linear's,
+// nothing is asked: the task starts from your words.
+func (e *Engine) askWhichIssue(ctx context.Context, t registry.Task, prompt string) {
+	if tracker, ok := e.linearTracker(t.Repo); ok {
+		e.askWhichLinear(ctx, t, prompt, tracker)
+		return
+	}
 	if e.d.Jira == nil || !e.jiraRepo(t.Repo) {
 		return
 	}
@@ -889,6 +914,24 @@ func (e *Engine) askWhichIssue(_ context.Context, t registry.Task, prompt string
 		hits, err := e.d.Jira.Search(sctx, prompt, issueSearch)
 		e.storeWhichIssue(context.WithoutCancel(ctx), t, prompt, hits, err)
 	})
+}
+
+// askWhichLinear asks which Linear issue task t's prompt is, as its first
+// question (whichLinear, with the key prefix of tracker): a plain question,
+// since the factory reads no Linear and searches none, so "no issue" is its
+// only option, recommended, and a key or an issue's link is typed. It needs
+// no Jira and no search, so it is stored at once, whatever a drain does
+// (nothing asks it again). The key you name becomes the task's key (the
+// registry's Jira key column holds any tracker's key), which the PR's title
+// and branch carry.
+func (e *Engine) askWhichLinear(ctx context.Context, t registry.Task, prompt string, tracker config.Tracker) {
+	q := whichIssueQuestion(prompt,
+		"You started this task from your words. A Linear issue gives its PR the key; type its key or link, or answer "+noIssue+".",
+		"the repository's tracker is "+trackerName(tracker)+" (keys "+tracker.Prefix+"\u2026); the factory reads no Linear and searches none")
+	q.Text = whichLinear(tracker.Prefix)
+	q.Options = []registry.Option{{Label: noIssue, Means: "the PR's title carries no issue key"}}
+	q.Recommended, q.Why = 0, "the factory cannot look a Linear issue up: name it yourself if there is one"
+	e.putWhichIssue(context.WithoutCancel(ctx), t, q)
 }
 
 // storeWhichIssue stores the question which Jira issue task t's prompt is,
@@ -971,10 +1014,10 @@ func issueOption(tk jira.Ticket) registry.Option {
 func (e *Engine) putWhichIssue(ctx context.Context, t registry.Task, q registry.Question) {
 	cur, err := e.reg.TaskByID(ctx, t.ID)
 	if err != nil {
-		e.log.Warn("ask which Jira issue a prompt is", "task", t.ID, "err", err)
+		e.log.Warn("ask which issue a prompt is", "task", t.ID, "err", err)
 		return
 	}
 	if err := e.reg.ReplaceQuestions(ctx, t.ID, cur.QuestionRev+1, []registry.Question{q}); err != nil {
-		e.log.Warn("ask which Jira issue a prompt is", "task", t.ID, "err", err)
+		e.log.Warn("ask which issue a prompt is", "task", t.ID, "err", err)
 	}
 }

@@ -243,8 +243,8 @@ func TestSeveralKeysFoundInTheTextAskWhichIssue(t *testing.T) {
 	if q.Recommended != 0 || q.Why == "" {
 		t.Fatalf("recommended %d (%q), want the first key, 0", q.Recommended, q.Why)
 	}
-	if got := r.e.namedIssue(task, q, q.Options[1].Label); got != "PR-12346" {
-		t.Fatalf("an answer taking the second option names %q, want PR-12346: Task 13's link reads it", got)
+	if got, err := r.e.namedIssue(task, q, q.Options[1].Label); err != nil || got != "PR-12346" {
+		t.Fatalf("an answer taking the second option names %q (%v), want PR-12346: Task 13's link reads it", got, err)
 	}
 	if len(r.site.searched) != 0 {
 		t.Fatalf("a title search was made: %q", r.site.searched)
@@ -837,7 +837,7 @@ func TestThePRTitleUsesAKeyFoundInTheText(t *testing.T) {
 		{now, "PR-12345 Credit expiry reminder email", "zhuravel-PR-12345-credit-expiry-reminder-email"},
 		{waited, "PR-12346 Points vanish after a refund", "zhuravel-PR-12346-points-vanish-after-refund"},
 	} {
-		if got := prTitle(c.task); got != c.title {
+		if got := prTitle(c.task, ""); got != c.title {
 			t.Errorf("the PR title of %s = %q, want %q", c.task.JiraKey, got, c.title)
 		}
 		if err := r.e.nameRemoteBranch(r.ctx, &c.task); err != nil || c.task.RemoteBranch != c.branch {

@@ -253,10 +253,37 @@ func trackerName(t config.Tracker) string {
 // jiraRepo reports whether repo's tasks may be Jira's: it has a Jira tracker,
 // or no tracker at all (the [jira] site alone tells its links). A free prompt
 // of a repository whose trackers are all not Jira's asks no question which
-// Jira issue it is.
+// Jira issue it is; one of a Linear-tracked repository asks which Linear
+// issue it is (linearTracker, askWhichIssue).
 func (e *Engine) jiraRepo(repo string) bool {
 	ts := e.cfg.TrackersFor(repo)
 	return len(ts) == 0 || slices.ContainsFunc(ts, func(t config.Tracker) bool { return isJira(e.cfg.Jira, t) })
+}
+
+// isLinear reports whether tracker t is Linear's: its link is on linear.app.
+func isLinear(t config.Tracker) bool {
+	u, err := url.Parse(t.URL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "linear.app" || strings.HasSuffix(host, ".linear.app")
+}
+
+// linearTracker is the Linear tracker of repo's tasks (the first, in the
+// order of config.TrackersFor), when repo is Linear-tracked: it has one and
+// none of its trackers is Jira's (a repository with a Jira tracker keeps
+// the Jira question, jiraRepo). Its prefix is the one the question asks
+// for.
+func (e *Engine) linearTracker(repo string) (config.Tracker, bool) {
+	ts := e.cfg.TrackersFor(repo)
+	if slices.ContainsFunc(ts, func(t config.Tracker) bool { return isJira(e.cfg.Jira, t) }) {
+		return config.Tracker{}, false
+	}
+	if i := slices.IndexFunc(ts, isLinear); i >= 0 {
+		return ts[i], true
+	}
+	return config.Tracker{}, false
 }
 
 // readStart reads a start's text in repo (ParseStart). A text that starts
