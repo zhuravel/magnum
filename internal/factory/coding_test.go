@@ -61,12 +61,16 @@ type codingRig struct {
 	startErr func(run scriptRun) error
 	// blocks hold a script whose first word they name until the channel
 	// closes or its run's context ends; entered gets that word as one
-	// starts to wait. printed is what a script whose first word it names
-	// printed before its context stopped it (a hang or a block), as execx
-	// returns what a stopped command wrote.
-	blocks  map[string]chan struct{}
-	entered chan string
-	printed map[string]string
+	// starts to wait. printed and printedErr are what a script whose first
+	// word they name printed on stdout and on stderr before its context
+	// stopped it (a hang or a block), as execx returns what a stopped command
+	// wrote.
+	blocks              map[string]chan struct{}
+	entered             chan string
+	printed, printedErr map[string]string
+	// onRun sees every command (git and the copy's scripts) with its context
+	// before it runs.
+	onRun func(ctx context.Context, c execx.Cmd)
 	// userFacing answers bin/user-facing (a repository's qa.when): what it
 	// prints of the changed files it reads on stdin, and its exit; a failing
 	// exit prints its output on stderr. nil: the copy has no such script.
@@ -99,6 +103,7 @@ func newCodingRig(t *testing.T) *codingRig {
 		t.Fatal(err)
 	}
 	r := &codingRig{root: root, blocks: map[string]chan struct{}{}, entered: make(chan string, 8), printed: map[string]string{},
+		printedErr: map[string]string{},
 		real: &execx.Real{BaseEnv: []string{
 			"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(),
 			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
@@ -147,6 +152,12 @@ func newCodingRig(t *testing.T) *codingRig {
 type rigRunner struct{ r *codingRig }
 
 func (x rigRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) {
+	x.r.mu.Lock()
+	onRun := x.r.onRun
+	x.r.mu.Unlock()
+	if onRun != nil {
+		onRun(ctx, c)
+	}
 	switch c.Name {
 	case "git":
 		x.r.mu.Lock()
@@ -190,7 +201,8 @@ func (r *codingRig) script(ctx context.Context, c execx.Cmd) (execx.Result, erro
 	run.Branch = r.gitOut(c.Dir, "symbolic-ref", "--quiet", "--short", "HEAD")
 	run.Head = r.gitOut(c.Dir, "rev-parse", "HEAD")
 	r.mu.Lock()
-	block, hang, during, startErr, printed := r.blocks[words[0]], r.hang, r.during, r.startErr, r.printed[words[0]]
+	block, hang, during, startErr := r.blocks[words[0]], r.hang, r.during, r.startErr
+	stopped := execx.Result{Code: -1, Stdout: []byte(r.printed[words[0]]), Stderr: []byte(r.printedErr[words[0]])}
 	r.mu.Unlock()
 	if startErr != nil {
 		if err := startErr(run); err != nil {
@@ -203,7 +215,7 @@ func (r *codingRig) script(ctx context.Context, c execx.Cmd) (execx.Result, erro
 	if hang != nil && hang(run) {
 		<-ctx.Done()
 		r.record(run)
-		return execx.Result{Code: -1, Stdout: []byte(printed)}, &execx.RunError{Cmd: c, Err: ctx.Err()}
+		return stopped, &execx.RunError{Cmd: c, Err: ctx.Err()}
 	}
 	if block != nil {
 		r.entered <- words[0]
@@ -211,7 +223,7 @@ func (r *codingRig) script(ctx context.Context, c execx.Cmd) (execx.Result, erro
 		case <-block:
 		case <-ctx.Done():
 			r.record(run)
-			return execx.Result{Code: -1, Stdout: []byte(printed)}, &execx.RunError{Cmd: c, Err: ctx.Err()}
+			return stopped, &execx.RunError{Cmd: c, Err: ctx.Err()}
 		}
 	}
 	switch words[0] {

@@ -368,10 +368,12 @@ type FactoryPrecheck struct {
 	Migrations []string `toml:"migrations"`
 	// Cap stops a precheck that runs this long (default DefaultPrecheckCap),
 	// CapPerFile longer for each file of the change it checks (default
-	// DefaultPrecheckCapPerFile), CapMax at most (default
-	// DefaultPrecheckCapMax, or Cap when that is longer; never below Cap).
-	// A precheck its cap stops goes on with a note when nothing else
-	// failed. The proof's spec runs keep Cap alone.
+	// DefaultPrecheckCapPerFile; never above CapMax), CapMax at most
+	// (default DefaultPrecheckCapMax, or Cap when that is longer; never
+	// below Cap). A precheck its cap stops in the specs or jest goes on with
+	// a note when nothing else failed; one it stops in the lint needs you.
+	// The proof's spec runs, the base run of the precheck's red specs and
+	// its migrations keep Cap alone.
 	Cap        Duration `toml:"cap"`
 	CapPerFile Duration `toml:"cap_per_file"`
 	CapMax     Duration `toml:"cap_max"`
@@ -1467,7 +1469,8 @@ func validateCopyPorts(r FactoryRepo) error {
 }
 
 // validatePrecheckCaps checks a repository's precheck caps (where names
-// it): cap, cap_per_file and cap_max positive, and cap_max at least cap.
+// it): cap, cap_per_file and cap_max positive, cap_max at least cap, and
+// cap_per_file at most cap_max.
 func validatePrecheckCaps(where string, pc FactoryPrecheck) []error {
 	var errs []error
 	bad := func(format string, a ...any) { errs = append(errs, fmt.Errorf(where+": "+format, a...)) }
@@ -1482,6 +1485,8 @@ func validatePrecheckCaps(where string, pc FactoryPrecheck) []error {
 		bad("precheck.cap_max must be positive, got %s", pc.CapMax.Duration)
 	case pc.CapMax.Duration < pc.Cap.Duration:
 		bad("precheck.cap_max (%s) must be at least precheck.cap (%s)", pc.CapMax.Duration, pc.Cap.Duration)
+	case pc.CapPerFile.Duration > pc.CapMax.Duration:
+		bad("precheck.cap_per_file (%s) must not be above precheck.cap_max (%s)", pc.CapPerFile.Duration, pc.CapMax.Duration)
 	}
 	return errs
 }

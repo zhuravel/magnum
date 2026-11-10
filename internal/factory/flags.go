@@ -32,13 +32,16 @@ import (
 // Flags are what the ready card's FLAGS line names: the migrations the
 // branch adds (with their flags), the sensitive files it changes, the files
 // it changes that the plan did not name, the old guards it touches, the CI
-// jobs whose commands did not run locally ("<workflow>: <job>") and the
-// paths merging origin/<base> into it would conflict in.
+// jobs whose commands did not run locally ("<workflow>: <job>"), the
+// paths merging origin/<base> into it would conflict in, and what the
+// precheck that passed at the head did not finish (its cap's note, from
+// precheck.json; "" for nothing).
 type Flags struct {
 	Migrations                         []MigrationFlag
 	Sensitive, NotInPlan, CIJobsNotRun []string
 	OldGuards                          []OldGuard
 	Conflicts                          []string
+	PrecheckUnfinished                 string
 }
 
 // OldGuard is a guard the change touches (a condition, a rescue, a validation,
@@ -94,6 +97,7 @@ func (e *Engine) flags(ctx context.Context, t registry.Task, c Copy) (Flags, err
 	if f.CIJobsNotRun, err = ciJobsNotRun(c.Path, repo.Precheck); err != nil {
 		return f, err
 	}
+	f.PrecheckUnfinished = precheckUnfinishedAt(dir, bh.Head)
 	base := baseOf(repo)
 	if err := git.FetchBranch(ctx, cmp.Or(repo.MainClone, c.Path), base); err != nil {
 		return f, err
@@ -122,6 +126,9 @@ func (f Flags) Lines() []string {
 	}
 	if len(f.CIJobsNotRun) > 0 {
 		out = append(out, "CI jobs not run here: "+strings.Join(f.CIJobsNotRun, ", "))
+	}
+	if f.PrecheckUnfinished != "" {
+		out = append(out, "precheck unfinished: "+f.PrecheckUnfinished)
 	}
 	if len(f.Conflicts) > 0 {
 		out = append(out, conflictsFlag+strings.Join(f.Conflicts, ", "))

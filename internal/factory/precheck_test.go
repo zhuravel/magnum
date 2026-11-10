@@ -174,8 +174,11 @@ func TestPrecheckTakesTheMachineWideSpecLock(t *testing.T) {
 	}
 }
 
-// The cap stops a precheck that runs too long: with no other failure it
-// passes, naming the step the cap stopped and those that did not run.
+// The cap stops a precheck that runs too long. In the lint, the first
+// step, a stop at the cap is no note and no fix turn: a lint that takes the
+// whole cap waits on something (a lock, a server), so the precheck fails
+// for you, naming the command and that it hangs, and the steps it kept from
+// starting did not run.
 func TestPrecheckStopsAtItsCap(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.codingTask("PR-12365", "bug")
@@ -199,8 +202,16 @@ func TestPrecheckStopsAtItsCap(t *testing.T) {
 	<-r.entered
 	close(fire)
 	res := <-done
-	if !res.Passed || res.Why != "" || res.Unfinished != "the lint did not finish within 10m30s, and the specs and the jest tests did not run" {
-		t.Fatalf("precheck %+v, want it passed with the lint unfinished and the specs and jest not run", res)
+	if res.Passed || !res.ForYou ||
+		res.Why != "precheck: precheck.lint `bin/lint app/credit.rb spec/models/credit_points_spec.rb` did not end within 10m30s: it hangs; "+
+			"fix: find what it waits for in the copy (a lock, a server, a prompt)" {
+		t.Fatalf("precheck %+v; want a failure for you: the lint hangs", res)
+	}
+	if res.Unfinished != "the specs and the jest tests did not run: the cap of 10m30s ran out before them" {
+		t.Fatalf("unfinished %q, want the specs and jest, which did not run", res.Unfinished)
+	}
+	if got := r.checksOf(task.ID, "lint"); !slices.Equal(got, []string{registry.CheckSkipped}) {
+		t.Fatalf("lint checks %q, want the stopped run skipped", got)
 	}
 }
 

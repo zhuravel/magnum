@@ -727,8 +727,8 @@ func TestFactoryPrecheckCapGrowthTakesItsDefaults(t *testing.T) {
 	}
 }
 
-// cap_max below cap, and a cap_per_file or a cap_max that is not positive,
-// are refused, naming the key.
+// cap_max below cap, a cap_per_file above cap_max, and a cap_per_file or a
+// cap_max that is not positive are refused, naming the key.
 func TestFactoryPrecheckCapMaxBelowCapIsRefused(t *testing.T) {
 	cfg := validFactoryConfig()
 	if err := cfg.Validate(); err != nil {
@@ -744,6 +744,12 @@ func TestFactoryPrecheckCapMaxBelowCapIsRefused(t *testing.T) {
 	}
 	cfg.Factory.Repos[0].Precheck.CapPerFile = Duration{}
 	wantError(t, cfg.Validate(), "precheck.cap_per_file must be positive")
+	cfg.Factory.Repos[0].Precheck.CapPerFile = Duration{11 * time.Minute}
+	wantError(t, cfg.Validate(), "precheck.cap_per_file (11m0s) must not be above precheck.cap_max (10m0s)")
+	cfg.Factory.Repos[0].Precheck.CapPerFile = Duration{10 * time.Minute}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("cap_per_file equal to cap_max: %v", err)
+	}
 }
 
 func TestFactoryPrecheckSkipsSpecsOnlyForKnownKinds(t *testing.T) {

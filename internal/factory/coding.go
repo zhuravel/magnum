@@ -384,7 +384,7 @@ func (e *Engine) endCheckEvent(t registry.Task, x *headCheck) {
 		e.event(ctx, t.ID, "check", registry.PhaseFail, short(x.head)+": did not run to its end: "+textx.Clip(textx.FirstLine(r.Err.Error()), 300))
 	case r.passed() && r.Precheck.Unfinished != "": // the cap's note: no failure, so no fix turn
 		e.event(ctx, t.ID, "check", registry.PhaseOK, short(x.head)+": passed, but "+r.Precheck.Unfinished+
-			" (the precheck's cap): the task goes on to the local review as after a pass, and CI is their only run")
+			" (the precheck's cap): the task goes on as after a pass, and CI is their only run")
 	case r.passed():
 		e.event(ctx, t.ID, "check", registry.PhaseOK, short(x.head)+": passed")
 	default:

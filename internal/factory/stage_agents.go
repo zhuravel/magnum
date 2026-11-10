@@ -80,9 +80,11 @@ import (
 // (qa/<k>-<sha7>/defects-<k>.json) and the reply to them (reply-<k>.json
 // beside it), both "" outside a fix turn. FactoryProof is
 // the factory's proof (factory-proof.json), ReviewSummary the local
-// review's end (review-summary.json), PRBody the PR body the pr_body stage
-// writes (pr-body.md) and PRTemplate the repository's PR template in the
-// copy ("" when it has none). A coding turn back from the ready card
+// review's end (review-summary.json), Precheck the end of the precheck
+// (precheck.json: unfinished names what its cap kept it from), PRBody the
+// PR body the pr_body stage writes (pr-body.md) and PRTemplate the
+// repository's PR template in the copy ("" when it has none). A coding
+// turn back from the ready card
 // carries what it is back for (rework.json): SendBack your note's file and
 // SendBackReason the key of your reason (a send back), MergeBase the base
 // to merge (origin/<base>) and Conflicts the paths merging it conflicts in
@@ -100,7 +102,7 @@ type PromptData struct {
 	Key, Kind, Repo, Branch, Base, Copy, TaskDir           string
 	Ticket, Guidance, Prompt, Answers, Rules               string
 	Findings, Report, Questions, Acceptance, Proof, Review string
-	ReviewReply, FactoryProof, ReviewSummary               string
+	ReviewReply, FactoryProof, ReviewSummary, Precheck     string
 	PRBody, PRTemplate                                     string
 	SendBack, SendBackReason, MergeBase                    string
 	Conflicts                                              []string
@@ -1890,7 +1892,7 @@ func (e *Engine) promptData(ctx context.Context, t registry.Task, st config.Fact
 		Ticket: present(ticketFile), Guidance: present("guidance.md"), Prompt: present("prompt.md"), Answers: present(answersFile),
 		Rules: present("rules.md"), Findings: in("findings-*.md"), Report: in(reportFile),
 		Acceptance: in(acceptanceFile), Proof: in("proof.json"), FactoryProof: in(factoryProofFile), ReviewSummary: in(reviewSummaryFile),
-		PRBody: in(prBodyFile), PRTemplate: prTemplate(c.Path),
+		Precheck: in(precheckRecordFile), PRBody: in(prBodyFile), PRTemplate: prTemplate(c.Path),
 		DBLockCommand: agents.DBLockLine(e.d.Layout.Binary(), c.Path, runAs.Name), Port: c.Port,
 		Magnum: execx.ShellQuote(cmp.Or(e.d.Layout.Binary(), "magnum"))}
 	if name := questionsFileOf(e.cfg, st, role.Name); name != "" {
@@ -2156,8 +2158,8 @@ func checkData(role config.Role) PromptData {
 		Answers: dir + "/" + answersFile, Rules: dir + "/rules.md", Findings: dir + "/" + findingsFile(role.Name),
 		Report: dir + "/" + reportFile, Questions: dir + "/" + questionsFile, Acceptance: dir + "/" + acceptanceFile,
 		Proof: dir + "/proof.json", Review: dir + "/review-1.json", ReviewReply: dir + "/review-reply-1.json",
-		FactoryProof: dir + "/" + factoryProofFile, ReviewSummary: dir + "/" + reviewSummaryFile, PRBody: dir + "/" + prBodyFile,
-		PRTemplate: copyPath + "/.github/pull_request_template.md", SendBack: dir + "/" + sendBackFile(1), SendBackReason: "scope",
+		FactoryProof: dir + "/" + factoryProofFile, ReviewSummary: dir + "/" + reviewSummaryFile, Precheck: dir + "/" + precheckRecordFile,
+		PRBody: dir + "/" + prBodyFile, PRTemplate: copyPath + "/.github/pull_request_template.md", SendBack: dir + "/" + sendBackFile(1), SendBackReason: "scope",
 		MergeBase: "origin/master", Conflicts: []string{"app/models/credit.rb"}, HeadMoved: "def5678abcde", HeadWas: "abc1234abcde", ErrorSkill: "error-tracker",
 		PRBodySkill: "example:create-pr", DBLockCommand: agents.DBLockLine("magnum", copyPath, role.Name), Port: 3000, Magnum: "magnum",
 		MergeMethods: "squash", SatOut: dir + "/findings-fx-points-codex.md", QARun: qaRun, QAURL: "http://app.example.localhost:3000", QACDP: "http://127.0.0.1:9222",

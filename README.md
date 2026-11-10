@@ -4275,8 +4275,9 @@ reviewer = "rev-ann"                 # requested as the PR's reviewer once CI is
 lint = ["bundle exec rubocop {files}"]
 specs = "bin/impact-specs {files}"
 cap = "10m"                          # a precheck's cap: 10m, then cap_per_file more per file of the change,
-cap_per_file = "15s"                 # at most cap_max (default 30m, or cap when longer; never below cap)
-cap_max = "30m"
+cap_per_file = "15s"                 # at most cap_max (default 30m, or cap when longer; never below cap,
+cap_max = "30m"                      # never below cap_per_file). The proof, the red specs' base run and the
+                                     # migrations keep cap alone
 skip_specs_for_kinds = ["chore"]
 
 [[factory.repo.staging]]
@@ -4546,17 +4547,28 @@ stages = [
   as rspec lists them (`rspec ./spec/x_spec.rb:12 # what it says`): a red one is run again on the base, and
   one red there too is recorded as not the change's (`not_ours`) and passes. The proof runs its spec files
   with `specs` (with `jest` when every one is JavaScript). A precheck stops at its cap, which grows with the
-  change: `cap` (default `10m`), then `cap_per_file` (default `15s`) more for each file it checks, at most
-  `cap_max` (default `30m`, or `cap` when that is longer; a `cap_max` below `cap` is refused). `precheck.md`
-  says how it was found (`Cap: 30m (10m + 15s × 129 files is 42m15s, at most 30m).`). A precheck its cap stops
-  with no other failure passes with a note: `precheck.md` keeps the last 40 lines the stopped command printed
-  (scrubbed), names what did not finish and what did not run, the stopped command's check is recorded as
-  `skipped`, and a `check` event says the task goes on (`passed, but the specs did not finish within 30m …`):
-  the writer gets no fix turn (it cannot fix a time limit), the task goes on to the local review, and CI is
-  their only run. A failure before the cap (a lint offense, a red spec, a migration) still gets its fix turn,
-  with the note. A spec red at the head whose run on the base the cap stopped is not judged: named in the
-  note, it fails nothing. The proof's spec runs keep `cap` alone. `skip_specs_for_kinds` names the kinds of
-  task that run no specs (a gem upgrade).
+  change: `cap` (default `10m`), then `cap_per_file` (default `15s`) more for each file it checks (a deleted
+  file is none), at most `cap_max` (default `30m`, or `cap` when that is longer; a `cap_max` below `cap`, or a
+  `cap_per_file` above `cap_max`, is refused). `precheck.md` says how it was found (`Cap: 30m (10m + 15s × 129
+  files is 42m15s, at most 30m).`). What the cap stopped decides what happens:
+  - **The specs or jest.** No failure, a note: the writer gets no fix turn (it cannot fix a time limit), the
+    task goes on as after a pass, and CI is their only run. `precheck.md` keeps the last 40 lines the stopped
+    command printed on stdout (scrubbed, without terminal escapes, in a fence its lines cannot close) and names
+    what did not finish and what did not run; `precheck.json` records it (`unfinished`), the stopped command's
+    check is `skipped`, a `check` event says `passed, but the specs did not finish within 30m, and the jest
+    tests did not run (the precheck's cap): the task goes on as after a pass …`, the ready card's FLAGS line
+    says `precheck unfinished: …`, and the factory adds to the PR body `The factory's precheck stopped at its
+    cap: …, so CI is their only run.` (the PR body's own precheck sentence never says it passed). A failure
+    before the cap (a lint offense, a red spec, a migration) still gets its fix turn, with the note.
+  - **The lint.** It hangs (the lint is the first step, so it took the whole cap): the task needs you,
+    `precheck.lint `<command>` did not end within 10m30s: it hangs`, with no fix turn.
+  - **Never the red examples or the migrations.** A spec red at the head is judged on the base whatever the
+    cap: the lookup of its file there and the base run of only the red files are bounded by `cap` alone, and
+    a base run that does not end within it hangs (the task needs you). The branch's migrations run up and down
+    even after the cap, each command bounded by `cap` (CI never runs a migration down and up); one that does
+    not end within it hangs too.
+  The proof's spec runs keep `cap` alone. `skip_specs_for_kinds` names the kinds of task that run no specs (a
+  gem upgrade).
   `ghost_marker`, `table_stats` (a JSON object of table to rows, or to an object with `rows`) and
   `large_table_rows` drive the migration-safety lint. No factory command runs `kubectl exec` (or attach,
   debug, run, cp, port-forward), gh-ost, or one of the repository's `consoles`, however a command wraps it:
@@ -4933,7 +4945,7 @@ The proof's and the precheck's spec runs take one lock on the machine (`factory-
 directory): a second one waits, `precheck: another precheck runs specs; this one waits for the machine's spec
 lock`. The precheck writes `precheck.md` (the offenses, the red specs and the migrations with their gh-ost
 environments and flags). A change the checks refuse gets the writer fix turns, each naming what failed and
-that file (a precheck its cap stopped with no other failure refuses nothing: it goes on with a note), up to 6 prompts in the stage's attempt (your retry's new attempt gets its own); then the task needs
+that file (a precheck its cap stopped in the specs or jest with no other failure refuses nothing: it goes on with a note), up to 6 prompts in the stage's attempt (your retry's new attempt gets its own); then the task needs
 you with the last failure. Checks that do not
 run to their end (git fails in them) run again a minute later, 3 times at most, then the task needs you.
 The proof's and the precheck's spec and migration commands also take the copy's database lock, the one

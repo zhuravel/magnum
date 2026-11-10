@@ -10,10 +10,13 @@ package factory
 // machine's spec lock when it runs specs (one precheck at a time on the
 // machine runs them; another waits, saying so) and stops at its cap, which
 // grows with the change (precheckCap: cap, cap_per_file per file, at most
-// cap_max). A precheck its cap stopped with no other failure passes with
-// what it did not finish named (Unfinished): the writer cannot fix a time
-// limit, so the task goes on, and CI runs the full suite. Every command goes
-// through the deny list.
+// cap_max). A cap that stops the specs or jest is a note (Unfinished), no
+// failure: the writer cannot fix a time limit, the task goes on, and CI runs
+// them. A lint the cap stops hangs, a failure for you. The red examples are
+// judged on the base, and the migrations run, whatever the cap: on the
+// caller's context, each command bounded by the repository's cap (capOf),
+// since CI never runs a migration down and up. Every command goes through
+// the deny list.
 
 import (
 	"context"
@@ -23,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -60,9 +64,10 @@ const specsLockPoll = 2 * time.Second
 // does not start, a lint whose output names no offense by path:line, a
 // table_stats it cannot read (the configuration's or the machine's, named by
 // its key); such a failure is the one Why says. Unfinished is what its cap
-// kept it from ("the specs did not finish within 30m"; "" when it ran to its
-// end): no failure of its own, so a precheck its cap stopped passes unless
-// something failed before.
+// kept it from, the specs or jest ("the specs did not finish within 30m, and
+// the jest tests did not run"; "" when it ran to its end): no failure of its
+// own, so a precheck its cap stopped there passes unless something failed
+// before (precheck.json keeps it, and the ready card and the PR body name it).
 type PrecheckResult struct {
 	Passed     bool
 	Checks     []registry.Check
@@ -75,29 +80,38 @@ type PrecheckResult struct {
 // errOverCap is the cause of a precheck's context its cap ended.
 var errOverCap = errors.New("the precheck's cap")
 
-// precheckCapTail is how many lines of what a command printed before the
-// cap stopped it precheck.md keeps.
-const precheckCapTail = 40
+// precheckCapTail is how many lines of what a command printed on stdout
+// before the cap stopped it precheck.md keeps, read from its last
+// precheckTailWindow bytes.
+const (
+	precheckCapTail    = 40
+	precheckTailWindow = 64 << 10
+)
 
 // precheckCap is the cap of a precheck of a change of n files: the
 // repository's cap (capOf), cap_per_file more for each file, cap_max at most
 // and never below the cap (a repository built without the keys takes their
 // defaults, as Load fills them); how says how it was found, as precheck.md
-// says it ("30m (10m + 15s × 129 files is 42m15s, at most 30m)").
+// says it ("30m (10m + 15s × 129 files is 42m15s, at most 30m)"). The
+// product is never taken past cap_max, so no cap_per_file wraps it.
 func precheckCap(repo config.FactoryRepo, n int) (limit time.Duration, how string) {
 	base, per, most := capOf(repo), repo.Precheck.CapPerFile.Duration, repo.Precheck.CapMax.Duration
 	if per <= 0 {
 		per = config.DefaultPrecheckCapPerFile
 	}
 	if most <= 0 {
-		most = max(config.DefaultPrecheckCapMax, base)
+		most = config.DefaultPrecheckCapMax
 	}
-	grown := base + per*time.Duration(n)
-	limit = min(grown, max(most, base))
+	most = max(most, base)
 	how = capText(base) + " + " + capText(per) + " × " + plural(n, "file")
-	if grown > limit {
-		how += " is " + capText(grown) + ", at most " + capText(limit)
+	if n > 0 && per > (most-base)/time.Duration(n) {
+		grown := "more than " + capText(most)
+		if per <= (math.MaxInt64-base)/time.Duration(n) {
+			grown = capText(base + per*time.Duration(n))
+		}
+		return most, capText(most) + " (" + how + " is " + grown + ", at most " + capText(most) + ")"
 	}
+	limit = base + per*time.Duration(n)
 	return limit, capText(limit) + " (" + how + ")"
 }
 
@@ -177,18 +191,12 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 		}
 	}()
 
-	p := &precheckRun{e: e, t: t, c: c, repo: repo, head: bh.Head, base: bh.Base, ctx: cctx, limit: limit, started: started,
+	p := &precheckRun{e: e, t: t, c: c, repo: repo, head: bh.Head, base: bh.Base, ctx: cctx, parent: ctx, limit: limit, started: started,
 		res: PrecheckResult{Passed: true}}
 	p.say("# Precheck of %s at %s\n\nThe change from %s: %d files.\n\nCap: %s.\n", t.Branch, short(bh.Head), short(bh.Base), len(files), how)
-	// Each step, named as a precheck its cap stopped says it, and whether it
-	// runs a command.
-	steps := []struct {
-		name string
-		runs bool
-		run  func()
-	}{
-		{"the lint", len(pc.Lint) > 0 && len(files) > 0, func() { p.lint(pc.Lint, files, diff) }},
-		{"the specs", specs && len(files) > 0, func() {
+	steps := []precheckStep{
+		{"the lint", len(pc.Lint) > 0 && len(files) > 0, false, func() { p.lint(pc.Lint, files, diff) }},
+		{"the specs", specs && len(files) > 0, false, func() {
 			switch {
 			case specs:
 				p.specs(pc.Specs, files)
@@ -197,23 +205,10 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 				p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckSkipped, Command: pc.Specs})
 			}
 		}},
-		{"the jest tests", pc.Jest != "" && len(files) > 0, func() { p.jest(pc.Jest, files) }},
-		{"the migrations", len(added) > 0, func() { p.migrations(repo, pc.Migrations, added) }},
+		{"the jest tests", pc.Jest != "" && len(files) > 0, false, func() { p.jest(pc.Jest, files) }},
+		{"the migrations", len(added) > 0, true, func() { p.migrations(repo, pc.Migrations, added) }},
 	}
-	// unfinished are the steps with a command that did not run to their end:
-	// the one the precheck stopped in, then those after it, which did not run.
-	var unfinished []string
-	for _, step := range steps {
-		if !p.stopped() {
-			step.run()
-			if !p.stopped() {
-				continue
-			}
-		}
-		if step.runs {
-			unfinished = append(unfinished, step.name)
-		}
-	}
+	notRun := p.runSteps(steps)
 	// What its commands changed goes back, guarded, however it ended. A copy
 	// a base run left detached (its record is there) is resumeDetached's: the
 	// precheck is a wait then, whatever else failed, so the task is never at
@@ -223,10 +218,10 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 	if !leftDetached && !p.kept {
 		p.restoreOwn()
 	}
-	// The cap stopped it in a step: what it did not finish is a note, and
-	// no failure of its own (CI runs the full suite).
-	if (errors.Is(context.Cause(cctx), errOverCap) || p.overCap) && len(unfinished) > 0 {
-		p.res.Unfinished = unfinishedWords(unfinished, capText(limit), p.unjudged)
+	// The cap stopped it: what it did not finish or start is a note, and no
+	// failure of its own (CI runs the specs and jest).
+	if (errors.Is(context.Cause(cctx), errOverCap) || p.overCap) && (p.cut != "" || len(notRun) > 0) {
+		p.res.Unfinished = unfinishedWords(p.cut, notRun, capText(limit))
 		p.say("\n**Stopped: over its cap of %s.**\n", capText(limit))
 	}
 	var crashed error // a crash of the environment: its report is written, and it is the precheck's error
@@ -262,7 +257,7 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 	if err := writeFile(filepath.Join(dir, precheckFile), p.report.String()); err != nil {
 		return p.res, err
 	}
-	rec := precheckRecord{Head: p.head, Passed: p.res.Passed, Why: p.res.Why}
+	rec := precheckRecord{Head: p.head, Passed: p.res.Passed, Why: p.res.Why, Unfinished: p.res.Unfinished}
 	if p.res.ForYou {
 		rec.ForYou, rec.Line = true, p.line
 		rec.Commands, rec.Env = e.checksPrint(repo)
@@ -273,18 +268,64 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 	return p.res, crashed
 }
 
+// precheckStep is a step of the precheck: its name, as a precheck its cap
+// stopped says it; whether it runs a command; own: it runs on a bound of
+// its own (ownBound), so the cap neither cuts it nor keeps it from running.
+type precheckStep struct {
+	name      string
+	runs, own bool
+	run       func()
+}
+
+// runSteps runs the precheck's steps in order, until it stops (a step on a
+// bound of its own still runs after the cap): notRun are the steps with a
+// command that its end kept from starting (the one whose command its cap
+// stopped is p.cut).
+func (p *precheckRun) runSteps(steps []precheckStep) (notRun []string) {
+	for _, step := range steps {
+		switch {
+		case step.own && !p.halted():
+			if p.stopped() && step.runs {
+				p.say("\nThe precheck's cap ran out before %s; they run anyway, each command bounded by %s (CI never runs a migration down and up).\n",
+					step.name, capText(capOf(p.repo)))
+			}
+			p.step = step.name
+			p.ownBound(step.run)
+		case p.stopped():
+			if step.runs {
+				notRun = append(notRun, step.name)
+			}
+		default:
+			p.step = step.name
+			step.run()
+		}
+	}
+	return notRun
+}
+
 // unfinishedWords say what a precheck its cap stopped did not finish: the
-// first of steps, which it stopped in, with the examples red at the head it
-// could not run on the base (unjudged), then the others, which did not run.
-func unfinishedWords(steps []string, limit string, unjudged int) string {
-	words := steps[0] + " did not finish within " + limit
-	if unjudged > 0 {
-		words += " (" + plural(unjudged, "example") + " red at the head did not run on the base)"
+// step whose command it stopped (cut, "" for none), then the steps it kept
+// from starting (notRun), which did not run.
+func unfinishedWords(cut string, notRun []string, limit string) string {
+	switch {
+	case cut != "" && len(notRun) > 0:
+		return cut + " did not finish within " + limit + ", and " + andList(notRun) + " did not run"
+	case cut != "":
+		return cut + " did not finish within " + limit
 	}
-	if len(steps) > 1 {
-		words += ", and " + andList(steps[1:]) + " did not run"
+	return andList(notRun) + " did not run: the cap of " + limit + " ran out before them"
+}
+
+// precheckUnfinishedAt is what the last precheck in task directory dir did
+// not finish, when it passed at head ("" for anything else): the ready
+// card's FLAGS line and the PR body name it.
+func precheckUnfinishedAt(dir, head string) string {
+	var r precheckRecord
+	b, err := os.ReadFile(filepath.Join(dir, precheckRecordFile))
+	if err != nil || json.Unmarshal(b, &r) != nil || !r.Passed || head == "" || r.Head != head {
+		return ""
 	}
-	return words
+	return r.Unfinished
 }
 
 // precheckRecordFile is precheck.json: the end of the task's last precheck
@@ -305,6 +346,9 @@ type precheckRecord struct {
 	Line     string `json:"line,omitempty"`
 	Commands string `json:"commands,omitempty"`
 	Env      string `json:"env,omitempty"`
+	// Unfinished is the passed precheck's note of what its cap kept it
+	// from (PrecheckResult.Unfinished).
+	Unfinished string `json:"unfinished,omitempty"`
 }
 
 // checksPrint is what the precheck commands of repo run with, as two
@@ -348,20 +392,23 @@ type precheckRun struct {
 	t          registry.Task
 	c          Copy
 	head, base string
-	ctx        context.Context
-	limit      time.Duration
-	res        PrecheckResult
-	report     strings.Builder
+	// ctx is the precheck's context, which its cap ends (a step on a bound
+	// of its own swaps it: ownBound), and parent the caller's, which the cap
+	// never ends; limit bounds each command.
+	ctx, parent context.Context
+	limit       time.Duration
+	res         PrecheckResult
+	report      strings.Builder
 	// err is a failure to run that ends the precheck (git, a start failure
-	// of the moment); overCap a command the cap stopped (its timer, or its
-	// own bound: capStopped); unjudged the examples red at the head whose
-	// run on the base the cap stopped; started when it began on a clean
-	// tree, before its waits, or when it looked at the tree again after them
-	// (afterWait); restoreErr a failed put-back of its own changes
+	// of the moment); overCap a command the cap or its bound stopped
+	// (capStopped); step the step under way and cut the one whose command
+	// the cap stopped, a note's (the specs, jest); started when it began on
+	// a clean tree, before its waits, or when it looked at the tree again
+	// after them (afterWait); restoreErr a failed put-back of its own changes
 	// (restoreOwn), after which it runs nothing more.
 	err        error
 	overCap    bool
-	unjudged   int
+	step, cut  string
 	started    time.Time
 	restoreErr error
 	// kept: it left changes for you (keep); it runs nothing more and puts
@@ -413,6 +460,25 @@ func (p *precheckRun) say(format string, a ...any) { fmt.Fprintf(&p.report, form
 // own that failed (no command runs on a tree it could not put back).
 func (p *precheckRun) stopped() bool {
 	return p.ctx.Err() != nil || p.err != nil || p.overCap || p.kept || p.restoreErr != nil
+}
+
+// halted reports whether the precheck ends here for anything but its cap:
+// a step on a bound of its own still runs after the cap.
+func (p *precheckRun) halted() bool {
+	return p.parent.Err() != nil || p.err != nil || p.kept || p.restoreErr != nil
+}
+
+// ownBound runs step on a context of its own, from the caller's (never the
+// precheck's, which its cap ends), bounded by the repository's cap (capOf),
+// as each of its commands is: the precheck's cap neither cuts it nor keeps
+// it from running.
+func (p *precheckRun) ownBound(step func()) {
+	ctx, cancel := context.WithTimeout(p.parent, capOf(p.repo))
+	defer cancel()
+	saved, limit, over := p.ctx, p.limit, p.overCap
+	p.ctx, p.limit, p.overCap = ctx, capOf(p.repo), false
+	defer func() { p.ctx, p.limit, p.overCap = saved, limit, over || p.overCap }()
+	step()
 }
 
 // keep fails the precheck for you with why, changes it left for you, and
@@ -473,20 +539,17 @@ func (p *precheckRun) run(key, what, cmd string) (ProofRun, bool) {
 	}
 	run.Took = time.Since(start).Round(time.Millisecond)
 	code, denied, err := ranTo(res, err)
-	run.Exit, run.Output = code, outputOf(res) // a command the cap stopped keeps what it printed before (execx)
+	run.Exit, run.Output = code, outputOf(res)
 	p.stderr, p.exit = string(res.Stderr), code
 	switch {
-	case p.ctx.Err() != nil:
-		if errors.Is(context.Cause(p.ctx), errOverCap) {
-			p.capStopped(key, what, run)
-		}
+	case err != nil && p.parent.Err() != nil: // the caller's context: the daemon stops, or the head moved
+		return run, false
+	case err != nil && (p.ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded)): // the cap, or a bound
+		p.capStopped(key, what, cmd, run, res.Stdout) // it keeps what it printed before (execx)
 		return run, false
 	case denied != "":
 		p.say("\n- `%s`: denied: %s\n", cmd, denied)
 		p.failForYou(key + " `" + cmd + "` is denied: " + denied + deniedFix(key))
-		return run, false
-	case errors.Is(err, context.DeadlineExceeded): // its own bound is the cap
-		p.capStopped(key, what, run)
 		return run, false
 	case err != nil:
 		why, transient := startFailure(err)
@@ -510,27 +573,73 @@ func (p *precheckRun) run(key, what, cmd string) (ProofRun, bool) {
 var capKinds = map[string]string{"precheck.lint": registry.CheckLint, "precheck.specs": registry.CheckSpec,
 	"precheck.jest": registry.CheckSpec, "precheck.migrations": registry.CheckMigration}
 
-// capStopped notes that the cap stopped run, the command what of
-// configuration key key: the precheck is over its cap, the command's check
+// capStopped notes that the precheck's cap or a step's own bound (p.limit)
+// stopped run, the command what (cmd) of configuration key key: its check
 // is recorded as skipped (the registry keeps a cause for a failure only),
-// and precheck.md keeps the last precheckCapTail lines of what it printed,
-// scrubbed (precheck.md is kept).
-func (p *precheckRun) capStopped(key, what string, run ProofRun) {
+// and precheck.md keeps the end of what it printed on stdout (stdoutTail).
+// A stop in the specs or jest is the precheck's note (cut): CI runs them. A
+// stop in the lint or the migrations hangs, a failure for you, never the
+// writer's: a lint that takes the whole cap, the first step, waits on
+// something (a lock, a server), and CI never runs a migration down and up.
+func (p *precheckRun) capStopped(key, what, cmd string, run ProofRun, stdout []byte) {
 	p.overCap = true
 	p.record(registry.Check{Kind: capKinds[key], Result: registry.CheckSkipped, Command: run.Command, Exit: run.Exit, Took: run.Took})
-	tail := lastLines(scrub.Text(run.Output), precheckCapTail)
-	if tail == "" {
-		p.say("\nThe cap of %s stopped its run of %s, which printed nothing.\n", capText(p.limit), what)
-		return
+	if tail := stdoutTail(stdout); tail == "" {
+		p.say("\nIts run of %s did not end within %s, and the factory stopped it; it printed nothing on stdout.\n", what, capText(p.limit))
+	} else {
+		fence := fenceFor(tail)
+		p.say("\nIts run of %s did not end within %s, and the factory stopped it. The last lines it printed on stdout (at most %d):\n\n%s\n%s\n%s\n",
+			what, capText(p.limit), precheckCapTail, fence, tail, fence)
 	}
-	p.say("\nThe cap of %s stopped its run of %s. The last lines it printed (at most %d):\n\n```\n%s\n```\n",
-		capText(p.limit), what, precheckCapTail, tail)
+	switch key {
+	case "precheck.specs", "precheck.jest":
+		if p.cut == "" {
+			p.cut = p.step
+		}
+	default:
+		p.failForYou(key + " `" + textx.Clip(cmd, 120) + "` did not end within " + capText(p.limit) + ": it hangs; " +
+			"fix: find what it waits for in the copy (a lock, a server, a prompt)")
+	}
 }
 
-// lastLines are the last n lines of s.
+// stdoutTail is the last precheckCapTail lines of stdout, where a stopped
+// command stopped, read from its last precheckTailWindow bytes, without
+// what a terminal acts on (StripTerminal, first, so no escape splits a
+// secret the scrub must see) and scrubbed (precheck.md is kept).
+func stdoutTail(stdout []byte) string {
+	s := string(stdout)
+	if len(s) > precheckTailWindow {
+		s = s[len(s)-precheckTailWindow:]
+		if i := strings.IndexByte(s, '\n'); i >= 0 {
+			s = s[i+1:]
+		}
+	}
+	return lastLines(scrub.Text(textx.StripTerminal(s)), precheckCapTail)
+}
+
+// lastLines are the last n lines of s, without its trailing blank lines.
 func lastLines(s string, n int) string {
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	s = strings.TrimRight(s, "\n\t ")
+	if s == "" {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
 	return strings.Join(lines[max(0, len(lines)-n):], "\n")
+}
+
+// fenceFor is a Markdown code fence no line of s closes: one backtick more
+// than the longest run of them in s, three at least.
+func fenceFor(s string) string {
+	longest, run := 0, 0
+	for i := range len(s) {
+		if s[i] != '`' {
+			run = 0
+			continue
+		}
+		run++
+		longest = max(longest, run)
+	}
+	return strings.Repeat("`", max(3, longest+1))
 }
 
 // runnableFix is the fix of a command of key that is missing or not
@@ -789,10 +898,13 @@ func failures(out string) []specFailure {
 // checkout of it (the same guarded step as the proof's base run), with the
 // base's own spec files: an example red there too is recorded as a failure
 // that is not ours (not_ours) and does not fail the precheck; one green
-// there, or of a spec file the base lacks, is the change's (code). One whose
-// run on the base the cap stopped is not judged (unjudged): named, it fails
-// nothing. A red run that names no failure it can be read by fails the
-// precheck.
+// there, or of a spec file the base lacks, is the change's (code). They
+// are judged whatever the cap: the lookup of their files on the base and
+// the base run of only those files run on the caller's context, which the
+// cap never ends, the base run bounded by the repository's cap (capOf); one
+// that does not end within it hangs, a failure for you. A red run that
+// names no failure it can be read by fails the precheck. Every red run at
+// the head leaves its row.
 func (p *precheckRun) specs(cmd string, files []string) {
 	p.say("\n## Specs\n")
 	if len(files) == 0 {
@@ -818,17 +930,23 @@ func (p *precheckRun) specs(cmd string, files []string) {
 		p.fail(fmt.Sprintf("specs: %s exited %d and names no failing spec", firstWord(cmd), run.Exit))
 		return
 	}
+	// On the caller's context from here: the cap neither cuts the lookup
+	// (a red example of a file it did not find would be the change's) nor
+	// the base run.
 	var atBase []string
 	for _, f := range red {
 		if slices.Contains(atBase, f.file) {
 			continue
 		}
-		if _, err := p.e.d.Git.FileAt(p.ctx, p.c.Path, p.base, f.file); err == nil {
+		if _, err := p.e.d.Git.FileAt(p.parent, p.c.Path, p.base, f.file); err == nil {
 			atBase = append(atBase, f.file)
 		}
 	}
+	if p.parent.Err() != nil { // the daemon stops, or the head moved: no lookup that did not run judges an example
+		return
+	}
+	headRed := registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "unknown", Command: script, Exit: run.Exit, Took: run.Took}
 	baseRed := map[string]bool{}
-	baseCut := false // the cap stopped the base run
 	if len(atBase) > 0 {
 		// The detach discards what differs from the branch: the precheck's
 		// own changes go back first, guarded; what it cannot vouch for stays.
@@ -836,39 +954,40 @@ func (p *precheckRun) specs(cmd string, files []string) {
 			return
 		}
 		baseScript := renderCommand(cmd, atBase, p.base)
+		bound := capOf(p.repo)
 		p.e.noteCheck(p.t.ID, "precheck: specs on the base ("+plural(len(atBase), "spec file")+" red at the head)")
-		base, problem, err := p.e.baseRun(p.ctx, p.t, p.c, p.started, p.base, p.head, nil, baseScript, p.limit)
+		base, problem, err := p.e.baseRun(p.parent, p.t, p.c, p.started, p.base, p.head, nil, baseScript, bound)
 		if k, ok := errors.AsType[keptChanges](err); ok {
 			p.say("\n**Not run on the base: %s.**\n", k.why)
 			p.keep(k.why)
 			return
 		}
-		capped := base.Hung || errors.Is(context.Cause(p.ctx), errOverCap)
 		switch {
-		case p.ctx.Err() != nil && !capped:
+		case p.parent.Err() != nil:
 			return
-		case err != nil && (!capped || p.e.hasDetachedRecord(p.t)): // a copy left detached is a wait, cap or not
+		case err != nil:
 			p.err = err
 			return
 		case problem != "":
+			p.record(headRed)
 			p.failForYou("precheck.specs `" + baseScript + "` " + problem + problemFix("precheck.specs", baseScript, problem))
 			return
-		case capped:
-			p.capStopped("precheck.specs", "specs on the base", base)
-			baseCut = true
+		case base.Hung:
+			p.record(headRed)
+			p.say("\n`%s` did not end on the base within %s, and the factory stopped it.\n", baseScript, capText(bound))
+			p.failForYou("precheck.specs `" + textx.Clip(baseScript, 120) + "` did not end on the base within " + capText(bound) +
+				": it hangs; fix: find what it waits for in the copy (a lock, a server, a prompt)")
+			return
 		}
 		for _, f := range failures(base.Output) {
 			baseRed[f.key] = true
 		}
 	}
-	var ours, theirs, unjudged []specFailure
+	var ours, theirs []specFailure
 	for _, f := range red {
-		switch {
-		case baseRed[f.key]:
+		if baseRed[f.key] {
 			theirs = append(theirs, f)
-		case baseCut && slices.Contains(atBase, f.file):
-			unjudged = append(unjudged, f)
-		default:
+		} else {
 			ours = append(ours, f)
 		}
 	}
@@ -878,11 +997,6 @@ func (p *precheckRun) specs(cmd string, files []string) {
 			out = append(out, f.line)
 		}
 		return strings.Join(out, "\n")
-	}
-	if len(unjudged) > 0 {
-		p.unjudged = len(unjudged)
-		p.say("\nRed at the head, and the cap stopped their run on the base, so not judged (CI runs them):\n\n```\n%s\n```\n",
-			lines(unjudged))
 	}
 	if len(theirs) > 0 {
 		p.say("\nRed on the base too, so not the change's (red on the base too):\n\n```\n%s\n```\n", lines(theirs))

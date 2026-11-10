@@ -1152,10 +1152,12 @@ func (e *Engine) redraw(ctx context.Context, t registry.Task, why string) {
 const knownMarker = "<!-- magnum factory: the Known list -->"
 
 // appendKnown appends to task t's pr-body.md the "Known" list of what the
-// local review left open (knownList, from review-summary.json), then the
-// Visual QA section of the QA run that passed at the task's head (qaMarker,
-// qaSection; none without QA), in place of those an earlier append wrote,
-// and records the body as the pr_body artifact.
+// local review left open (knownList, from review-summary.json), the
+// sentence of a precheck that passed unfinished at the task's head
+// (precheckSentence, from precheck.json), then the Visual QA section of the
+// QA run that passed at the task's head (qaMarker, qaSection; none without
+// QA), in place of those an earlier append wrote, and records the body as
+// the pr_body artifact.
 func (e *Engine) appendKnown(ctx context.Context, t registry.Task) error {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	b, err := os.ReadFile(filepath.Join(dir, prBodyFile))
@@ -1168,12 +1170,21 @@ func (e *Engine) appendKnown(ctx context.Context, t registry.Task) error {
 		_ = json.Unmarshal(b, &sum) // none: the list says the review left nothing open
 	}
 	text := strings.TrimRight(body, "\n") + "\n\n" + knownMarker + "\n" + knownList(sum)
+	if u := precheckUnfinishedAt(dir, t.HeadSHA); u != "" {
+		text += "\n" + precheckSentence(u) + "\n"
+	}
 	if res, ok := readQASummary(dir); ok && res.Head == t.HeadSHA {
 		if qa := qaSection(res); qa != "" {
 			text += "\n" + qaMarker + "\n" + qa
 		}
 	}
 	return e.saveArtifact(ctx, t, "pr_body", prBodyFile, []byte(text))
+}
+
+// precheckSentence is the PR body's sentence of a precheck that passed
+// unfinished (its cap's note, unfinished), in the factory's own words.
+func precheckSentence(unfinished string) string {
+	return "The factory's precheck stopped at its cap: " + unfinished + ", so CI is their only run."
 }
 
 // knownList is the PR body's "Known" section: what magnum's review of the

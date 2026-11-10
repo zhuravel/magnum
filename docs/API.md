@@ -6299,10 +6299,12 @@ type FactoryPrecheck struct {
 	Migrations []string `toml:"migrations"`
 	// Cap stops a precheck that runs this long (default DefaultPrecheckCap),
 	// CapPerFile longer for each file of the change it checks (default
-	// DefaultPrecheckCapPerFile), CapMax at most (default
-	// DefaultPrecheckCapMax, or Cap when that is longer; never below Cap).
-	// A precheck its cap stops goes on with a note when nothing else
-	// failed. The proof's spec runs keep Cap alone.
+	// DefaultPrecheckCapPerFile; never above CapMax), CapMax at most
+	// (default DefaultPrecheckCapMax, or Cap when that is longer; never
+	// below Cap). A precheck its cap stops in the specs or jest goes on with
+	// a note when nothing else failed; one it stops in the lint needs you.
+	// The proof's spec runs, the base run of the precheck's red specs and
+	// its migrations keep Cap alone.
 	Cap        Duration `toml:"cap"`
 	CapPerFile Duration `toml:"cap_per_file"`
 	CapMax     Duration `toml:"cap_max"`
@@ -14577,12 +14579,15 @@ type Flags struct {
 	Sensitive, NotInPlan, CIJobsNotRun []string
 	OldGuards                          []OldGuard
 	Conflicts                          []string
+	PrecheckUnfinished                 string
 }
-    Flags are what the ready card's FLAGS line names: the migrations the branch
-    adds (with their flags), the sensitive files it changes, the files it
-    changes that the plan did not name, the old guards it touches, the CI jobs
-    whose commands did not run locally ("<workflow>: <job>") and the paths
-    merging origin/<base> into it would conflict in.
+    Flags are what the ready card's FLAGS line names: the migrations
+    the branch adds (with their flags), the sensitive files it changes,
+    the files it changes that the plan did not name, the old guards it touches,
+    the CI jobs whose commands did not run locally ("<workflow>: <job>"), the
+    paths merging origin/<base> into it would conflict in, and what the precheck
+    that passed at the head did not finish (its cap's note, from precheck.json;
+    "" for nothing).
 
 func (f Flags) Lines() []string
     Lines are the flags as the card's FLAGS line says them, one each; none when
@@ -14952,10 +14957,11 @@ type PrecheckResult struct {
     the writer cannot fix why: a command the deny list refuses or that does not
     start, a lint whose output names no offense by path:line, a table_stats
     it cannot read (the configuration's or the machine's, named by its key);
-    such a failure is the one Why says. Unfinished is what its cap kept it
-    from ("the specs did not finish within 30m"; "" when it ran to its end):
-    no failure of its own, so a precheck its cap stopped passes unless something
-    failed before.
+    such a failure is the one Why says. Unfinished is what its cap kept it from,
+    the specs or jest ("the specs did not finish within 30m, and the jest
+    tests did not run"; "" when it ran to its end): no failure of its own,
+    so a precheck its cap stopped there passes unless something failed before
+    (precheck.json keeps it, and the ready card and the PR body name it).
 
 type PreviewPayload struct {
 	Text, Repo string
@@ -14969,7 +14975,7 @@ type PromptData struct {
 	Key, Kind, Repo, Branch, Base, Copy, TaskDir           string
 	Ticket, Guidance, Prompt, Answers, Rules               string
 	Findings, Report, Questions, Acceptance, Proof, Review string
-	ReviewReply, FactoryProof, ReviewSummary               string
+	ReviewReply, FactoryProof, ReviewSummary, Precheck     string
 	PRBody, PRTemplate                                     string
 	SendBack, SendBackReason, MergeBase                    string
 	Conflicts                                              []string
@@ -15034,23 +15040,24 @@ type PromptData struct {
     (review-<n>.json, the newest round's) and ReviewReply the writer's reply
     to them (review-reply-<n>.json), or in QA's fix turn (QAFixPrompt) the
     newest run's defects (qa/<k>-<sha7>/defects-<k>.json) and the reply to them
-    (reply-<k>.json beside it), both "" outside a fix turn. FactoryProof is
-    the factory's proof (factory-proof.json), ReviewSummary the local review's
-    end (review-summary.json), PRBody the PR body the pr_body stage writes
-    (pr-body.md) and PRTemplate the repository's PR template in the copy (""
-    when it has none). A coding turn back from the ready card carries what it is
-    back for (rework.json): SendBack your note's file and SendBackReason the key
-    of your reason (a send back), MergeBase the base to merge (origin/<base>)
-    and Conflicts the paths merging it conflicts in (a conflict at the card),
-    or HeadMoved the commit the branch moved to after the checks passed
-    at HeadWas (a commit the factory did not make); each "" (nil) in any
-    other turn. RedRun is the kind's proof: its specs must fail on the base
-    (config.FactoryKind.RedRun; a kind whose proof is "green" keeps them green).
-    ErrorSkill is the repository's error_skill ("" = none: no prompt names one)
-    and PRBodySkill its pr_body_skill ("" = none: the PR body prompt writes the
-    factory's own outline), DBLockCommand the `magnum db-lock` line of the copy
-    for the role as it runs, and Port the copy's server's (0 when its env names
-    none).
+    (reply-<k>.json beside it), both "" outside a fix turn. FactoryProof is the
+    factory's proof (factory-proof.json), ReviewSummary the local review's end
+    (review-summary.json), Precheck the end of the precheck (precheck.json:
+    unfinished names what its cap kept it from), PRBody the PR body the pr_body
+    stage writes (pr-body.md) and PRTemplate the repository's PR template in
+    the copy ("" when it has none). A coding turn back from the ready card
+    carries what it is back for (rework.json): SendBack your note's file and
+    SendBackReason the key of your reason (a send back), MergeBase the base
+    to merge (origin/<base>) and Conflicts the paths merging it conflicts
+    in (a conflict at the card), or HeadMoved the commit the branch moved to
+    after the checks passed at HeadWas (a commit the factory did not make);
+    each "" (nil) in any other turn. RedRun is the kind's proof: its specs must
+    fail on the base (config.FactoryKind.RedRun; a kind whose proof is "green"
+    keeps them green). ErrorSkill is the repository's error_skill ("" = none:
+    no prompt names one) and PRBodySkill its pr_body_skill ("" = none: the PR
+    body prompt writes the factory's own outline), DBLockCommand the `magnum
+    db-lock` line of the copy for the role as it runs, and Port the copy's
+    server's (0 when its env names none).
 
 type Proof struct {
 	Specs   []string `json:"specs"`
