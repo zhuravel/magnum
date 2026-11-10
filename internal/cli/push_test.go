@@ -629,3 +629,40 @@ func TestPushRunsWithoutConfigOrRegistry(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, out)
 	}
 }
+
+// A CI fix (the engine's CI fix mode) changes the PR's code, never its CI
+// config: its push line carries --ci, and magnum push refuses a change to
+// a local action, a script of .github/bin or an action.yml (exit 2), with
+// the words that send it under Needs you as config. The same push without
+// --ci goes: an action is no workflow.
+func TestPushOfACIFixRefusesACIConfigChange(t *testing.T) {
+	for _, file := range []string{".github/actions/setup/action.yml", ".github/bin/ci-services", "tools/action.yaml", ".github/workflows/ci.yml"} {
+		t.Run(file, func(t *testing.T) {
+			p := newPushRepo(t)
+			delete(p.env, "MAGNUM_PUSH_NO_WORKFLOWS") // the CI guard alone
+			p.commit(p.slot, file, "runs: echo green\n", "Make CI green")
+			code, o, errb := push(t, "--checkout", p.slot, "--ci")
+			if code != pushRefused || !strings.Contains(o.Message, file) || !strings.Contains(o.Message, "Needs you as config") {
+				t.Fatalf("exit %d, %+v (%s)", code, o, errb)
+			}
+			if got := p.feature(); got != p.start {
+				t.Errorf("origin's feature moved to %s", got)
+			}
+			if file == ".github/workflows/ci.yml" {
+				return
+			}
+			if code, o, errb := push(t, "--checkout", p.slot); code != 0 || o.Status != pushStatusPushed {
+				t.Errorf("without --ci: exit %d, %+v (%s)", code, o, errb)
+			}
+		})
+	}
+}
+
+// A CI fix's own code goes out with --ci as any push does.
+func TestPushOfACIFixPushesThePRsCode(t *testing.T) {
+	p := newPushRepo(t)
+	head := p.fix()
+	if code, o, errb := push(t, "--checkout", p.slot, "--ci"); code != 0 || o.Status != pushStatusPushed || o.SHA != head {
+		t.Fatalf("exit %d, %+v (%s)", code, o, errb)
+	}
+}

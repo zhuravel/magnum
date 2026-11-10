@@ -214,6 +214,9 @@ type fakeGH struct {
 	logsErr         error
 	firstParents    map[string][]github.CommitWithChecks
 	firstParentsErr error
+	// firstParentsAll answers FirstParentChecks of a sha firstParents does
+	// not name, the first commit's SHA the one asked for.
+	firstParentsAll []github.CommitWithChecks
 }
 
 func (g *fakeGH) JobLogTail(ctx context.Context, owner, repo string, jobID int64, keep int) (string, bool, error) {
@@ -244,6 +247,11 @@ func (g *fakeGH) FirstParentChecks(ctx context.Context, owner, repo, sha string)
 	}
 	if cs, ok := g.firstParents[sha]; ok {
 		return slices.Clone(cs), nil
+	}
+	if g.firstParentsAll != nil { // whatever tip the look asks for
+		cs := slices.Clone(g.firstParentsAll)
+		cs[0].SHA = sha
+		return cs, nil
 	}
 	return []github.CommitWithChecks{{SHA: sha, Checks: []github.Check{}}}, nil
 }

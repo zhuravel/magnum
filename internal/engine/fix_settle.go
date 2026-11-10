@@ -11,6 +11,7 @@ package engine
 // (`magnum abort`) ends the loop quietly.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -136,6 +137,10 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	var answered map[string]bool
 	var built map[int64]bool
 	var optional map[int64]string
+	ciClass, ciCannot := "", false
+	if job.mode == FixModeCI && !pushed { // ci_fix.go: the jobs it could not fix end the loop quietly, with their class
+		ciClass, ciCannot, rep.NeedsYou = ciCannotOf(rep.NeedsYou)
+	}
 	rep.NeedsYou, optional = e.settleOptional(ctx, job, rep.Optional, rep.NeedsYou, read) // fix_optional.go: a P3 author's call is yours, and holds nothing
 	rep.NeedsYou, built = e.decisionsLeft(ctx, job, rep.NeedsYou, read)                   // fix_decide.go: a decision it did not build goes back to you
 	if pushed {
@@ -160,7 +165,23 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	if len(carried) > 0 {
 		data["carried"] = len(carried)
 	}
+	if job.mode == FixModeCI { // ci_fix.go: what the CI fix ended with, before its row may go
+		switch {
+		case pushed:
+			job.ciOutcome, job.ciPushed = ciOutcomePushed, target
+		case job.merged.sha != "":
+			job.ciOutcome, job.ciPushed = ciOutcomeMerged, job.head
+		default:
+			job.ciOutcome, job.ciWhy = ciOutcomeCannot, cmp.Or(ciClass, "unfixed")
+		}
+		if pushed {
+			e.noteCIFixEnd(ctx, job) // the row stays for the re-review
+		}
+	}
 	switch {
+	case job.mode == FixModeCI && !pushed && n == 0 && len(carried) == 0: // ci_fix.go: rule 11 says it needs you, kind ci
+		e.endCIFix(ctx, job, ciCannot, data)
+		return
 	case pushed && job.mode == FixModeMerge: // fix_parent.go: the poller's rules judge the merge, as any push of a merge
 		e.finishFixRun(ctx, job.run, store.RunVerified, "pushed", "")
 		e.parentPushed(ctx, job, target, needs, n > 0)
@@ -210,6 +231,31 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		}
 		e.info(notify.Item{Key: "fix-replied:" + job.run.ID, Title: "magnum: " + what, Body: body, Line: line + " " + job.pr.URL, Kind: kindFixEnded})
 	}
+}
+
+// endCIFix ends a CI fix whose fixer pushed nothing and left nothing else
+// to the author, quietly: its run is verified, its row goes (its outcome
+// first: merged, where the daemon's merge of the parent moved the head, or
+// cannot with the class word of the fixer's ci entry, cannot, or unfixed),
+// a fix.ended event gives the class and no name, and an info toast says
+// what the look's verdict then says (needs you, kind ci). Nothing is raised
+// to needs_attention: the verdict holds the PR.
+func (e *Engine) endCIFix(ctx context.Context, job *fixJob, cannot bool, data map[string]any) {
+	outcome := "replied"
+	if cannot {
+		outcome = "needs_you"
+	}
+	e.finishFixRun(ctx, job.run, store.RunVerified, outcome, "")
+	e.endFixState(ctx, job)
+	why := "the CI fix found " + ciCannotClasses[cmp.Or(job.ciWhy, "unfixed")]
+	if job.ciOutcome == ciOutcomeMerged {
+		why = "magnum merged the parent, and CI runs on the merge " + textx.ShortSHA(job.head)
+	}
+	data["ci_outcome"], data["ci_class"] = job.ciOutcome, job.ciWhy
+	e.event(ctx, "info", job.subject(), "fix.ended", "the CI fix ends: "+why, data)
+	what := fmt.Sprintf("PR #%d: %s", job.pr.Number, why)
+	e.info(notify.Item{Key: "fix-ci:" + job.run.ID, Title: "magnum: " + what, Body: job.pr.URL + "\nthe report: " + deref(job.run.ReportPath),
+		Line: what + " " + job.pr.URL, Kind: kindFixEnded})
 }
 
 // typedSentence ends what the settle says of a run the operator typed into
@@ -565,6 +611,7 @@ func (e *Engine) failFixTyped(ctx context.Context, job *fixJob, msg, report stri
 	if job.run.ID != "" {
 		e.finishFixRun(ctx, job.run, store.RunFailed, "failed", msg)
 	}
+	job.ciOutcome = cmp.Or(job.ciOutcome, ciOutcomeFailed)
 	e.endFixState(ctx, job)
 	data := job.eventData()
 	if report != "" {
@@ -580,8 +627,10 @@ func (e *Engine) failFixTyped(ctx context.Context, job *fixJob, msg, report stri
 	e.fixAttention(ctx, job, withParentRefused(msg, job)) // fix_parent.go
 }
 
-// endFixState ends the job's loop: its row goes.
+// endFixState ends the job's loop: its row goes, once a CI fix's end is
+// recorded (noteCIFixEnd, ci_fix.go).
 func (e *Engine) endFixState(ctx context.Context, job *fixJob) {
+	e.noteCIFixEnd(ctx, job)
 	if err := e.clearFixState(ctx, job.pr.ID); err != nil {
 		e.log.Warn("fix: clear the loop's row", "subject", job.subject(), "err", err)
 	}
@@ -704,6 +753,7 @@ func (e *Engine) stopFix(ctx context.Context, job *fixJob, orders []stopOrder) {
 			done = append(done, "run "+job.run.ID+" abandoned")
 		}
 	}
+	job.ciOutcome = ciOutcomeStopped // ci_fix.go
 	if job.touched {
 		if err := e.resyncFixSlot(ctx, job, job.head); err != nil {
 			problems = append(problems, fmt.Errorf("slot %s not put back: %w", job.slot.Name, err))

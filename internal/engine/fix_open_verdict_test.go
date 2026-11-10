@@ -246,8 +246,10 @@ func TestIdleOnABaseThatRequiresNoReviewLeavesTheMergeToYou(t *testing.T) {
 	}
 }
 
-// Red required CI needs you, until a later milestone lets the fixer at it.
-func TestRedRequiredCINeedsYou(t *testing.T) {
+// Red required CI the look gathered no CI fix facts for needs you, as does
+// the rollup's failure (a repository without a required list), which no CI
+// fix covers: ci_fix_test.go has the CI fix's own verdicts.
+func TestRedRequiredCIWithoutACIFixNeedsYou(t *testing.T) {
 	pr := idleFacts().pr
 	pr.CI = &store.CIStatus{SHA: fixHead, Complete: true, ByWorkflowFile: true, Checks: []store.CheckResult{{Name: "rspec", State: store.CheckFailed}}}
 	ci := openCIOf(pr, store.RequiredChecks{Checks: []string{"rspec"}, Source: store.RequiredFromGitHub}, false, nil)

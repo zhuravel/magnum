@@ -4427,6 +4427,89 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheAppsRESTCallsRunOverAGhConfigDirOfEachCallsOwn, TestAppIdentityMintsThroughGhByDefault and
   TestGitHubHTTPClient.
 
+- **Red required CI on an own PR starts a CI fix, where the check passes on the base** (2026-11-10, the
+  operator's standing wish "fix CI for any PR" and their answer of 2026-11-08, Q3 "Yes, on own PRs": autofix
+  fixes red required CI on the operator's own PRs when that CI is not red on master, with at most 3 pushes).
+  Rule 11 of the look said "required check X failed at <sha>" and needed you, and on talkable, the main
+  repository, it never even said that: Completion `needs` the test jobs without always(), so GitHub skips it
+  when one fails and the required list read a skipped Completion as green; and in a run ci_dispatch starts,
+  Completion is a check its last step posts on success alone, outside the PR's rollup, so a red run read as
+  "did not run". openCIOf now counts three shapes as a failed required entry: a run that failed, a run
+  skipped beside a failed job of its workflow file, and (ciShape3) a missing entry whose workflow the look
+  started at the head, or re-ran, and whose run ended failure or timed out (that state moves from kind
+  ci_missing to kind ci; a run that ended success or cancelled, or never came, stays ci_missing with its "did
+  not run at" words). A required check GitHub enforces with no run at the head goes before the rollup's
+  failure, which may be a check nobody requires (talkable#12016: Dependency Audit). The words name the
+  required entry (the [[repo]] list's or GitHub's rulesets', never a job's name) and always say " failed at
+  ", never " did not run at ", which the factory screen's move reads (kind "ci" and "ci_missing" kept). A CI
+  fix starts (ci_fix.go, rule 9's terms: the settle, hands_off_after_push, `magnum pause`, quiet hours and
+  autofix_max_loops, whose words add ", c a CI fix" after the factory's "f starts another") once nothing
+  else is open, no required check still runs, the PR's own files at the head are listed whole and change no
+  CI config (changesActions), every failed check is a GitHub Actions job, the base ran it green, the PR had
+  fewer than 3 CI fixes and none ran at this head. Findings first, not one loop for both: a findings push
+  moves the head and runs CI again, which would waste one of the 3 on the old head, and the fixer does one
+  job at a time; the cost is one more CI run on a PR that has both. The base is read, not guessed:
+  `github.FirstParentChecks`, one GraphQL query of the base tip the look's conflict check fetched (pr.BaseSHA,
+  the last Details read, trails by days) and four first parents with their rollups, as the poll identity,
+  once per head, failed set and tip (a moved tip reads again, so a flake on master is not final), recorded in
+  `pr.<id>.ci_fix`. Each failed check is compared by its job's name (a skipped Completion by the jobs that
+  failed beside it, so a master flake in Capybara does not hide a real RSpec failure; a reusable workflow on
+  main, `ci / test` from a deploy workflow's push run, names its jobs as the PR's does); the newest
+  commit that finished it decides: passed, failed (a skip beside a failed job of its workflow counts),
+  running (waits, read again settle_max later), or none in five (needs you: "main's last 5 commits never ran
+  it"). Red or never on the base needs you, kind ci, worded without blame ("…, and on main at c0c0c0c too:
+  magnum fixes only a check that passes on the base"). Before the start the CI reader reads why, once
+  (ci_failures.go, as the look's Actions batch: the head's runs, the newest run of the check's workflow file,
+  its jobs with their steps, and at most 4 failed jobs' last MiB of log through `gh api .../logs
+  --allow-escape-sequences`, which gh 2.103 needs for a coloured log, and execx's new Cmd.KeepTail, which
+  keeps the end of stdout; terminal escapes stripped, scrubbed whole by the new execx.Scrub, the factory's
+  token and pair rules and emails, hosts kept, and a key block the tail cut open dropped; the failed steps'
+  lines by their times, of those the last 200 within 64 KB; into ci-failures.json and ci-failures.md beside
+  the fixer's report, the registry and fix.ci_read getting the digest and counts, no name), and a re-run of
+  that run still running waits for it; the
+  start is recorded before startFix (`noteCIFixStart`), a synchronous refusal marks it unstarted, which does
+  not count, and every other start counts, a crash between the record and the start included, so a restart
+  never starts a fourth. The cap counts starts, not pushes (a start may push the daemon's parent merge and
+  the fixer's commit): the stricter reading of "at most 3 pushes", which also spends one on a start that
+  pushed nothing. The loop's first cycle (FixState.Mode "ci", CIChecks the entries) merges the parent first
+  as any loop's (a daemon merge pushed and its head now counted as the fixer's for hands-off, read from
+  fix.parent_merged and fix.parent_pushed); the fixer gets ci-failures.json beside its report (copied when
+  the merge moved the head) as data, no external file, no reply to post, and the push line with `--ci`
+  (magnum push refuses a change to .github/workflows, .github/actions, .github/bin or an action.yml that
+  differs from the base's); fix.start carries mode ci and the failed-job count, no review_run (the look
+  hands nothing). A push goes to the forced re-review, whose findings the next cycles fix in findings mode;
+  a fixer that pushed nothing ends the loop quietly (no needs_attention: the verdict holds the PR) with the
+  class word of its `<job id> ci: not fixed. <class>: <reason>` entry (flaky, infra, secret, config, base,
+  unfixed; needsYouEntryRe's group 8, the reason never read), and the head needs you: "required check
+  Completion failed at a1a1a1a: the CI fix found a flaky test, not the PR's code". Every end path records the
+  outcome before the row goes (endFixState; first write wins, under ciFixMu). The skill's new section 8 says
+  never to skip, delete, mark pending or loosen a failing test, raise a timeout or add a retry. Kept as they
+  were: coworkers' PRs (the look covers own PRs alone, prepareFix refuses another's: the operator's
+  credentials must leave the fixer pane first), the auto-approval's CI gate (on talkable its rollup decides
+  and refuses a red head already; requiredCIOf is unchanged). A dry-run daemon reads neither the base nor
+  the logs. Tests, failing first: TestAFailedRequiredCheckGreenOnTheBaseStartsACIFix,
+  TestCIFixWaitsForFindingsFirst, TestARequiredCheckRedOnTheBaseNeedsYou,
+  TestARequiredCheckTheBaseNeverRanNeedsYou, TestCIFixWaitsWhileARequiredCheckStillRuns,
+  TestThreeCIFixesNeedYou, TestCIFixKeepsHandsOffSettlePauseQuietHoursAndTheDailyCap,
+  TestTheFixerSaidCannotNeedsYouAndStartsNothingAgainAtTheHead, TestAPRThatChangesItsCIConfigGetsNoCIFix,
+  TestTheCIReaderStripsEscapesScrubsTokensAndKeepsTheFailedStepsLast200Lines, TestTheCIReaderSaysWhatItCouldNotRead,
+  TestRunJobsReadsTheStepsAndTimes, TestJobLogTailAsksForEscapesAndKeepsTheEnd,
+  TestFirstParentChecksReadsFiveCommitsInOneQuery, TestKeepTailKeepsTheLastBytesAndSaysTruncated,
+  TestTheTailCaptureKeepsTheLastBytesOfManyWrites, TestScrubMasksWhatRuntimeScrubMasked, TestStripTerminal,
+  TestAFailureOfNoActionsJobNeedsYou, TestACompletionSkippedBesideAFailedJobOfItsWorkflowIsAFailedRequiredCheck,
+  TestARunMagnumStartedThatEndedFailureIsAFailedCheckNotCIMissing,
+  TestTheEnforcedMissingCheckGoesBeforeTheRollupsFailureOfAnother, TestAReRunThatPassedIsNoFailure,
+  TestTheVerdictWhileTheCIFixRunsWhileItsPushIsReReviewedWhileCIRerunsAndAfterSuccess,
+  TestTheLookReadsTheBaseOncePerHeadAndFailedSet,
+  TestTheLookReadsTheFailedJobsOnceAndStartsACIFixThatEndsQuietly, TestTheCIFixRecordIsWrittenBeforeTheStart,
+  TestACIFixPushGoesToItsForcedReReviewAndTheNextCycleFixesFindings, TestNeedsYouEntryReadsACIEntryAndItsClass,
+  TestADaemonsMergeOfTheParentIsNoPushOfYours, TestPushOfACIFixRefusesACIConfigChange,
+  TestTheFixPromptOfACIFixNamesTheFileAsDataAndNoReview and TestTheFixSkillsCIFixKeepsTheTestsAndNamesWhyItCouldNot;
+  TestRedRequiredCINeedsYou became TestRedRequiredCIWithoutACIFixNeedsYou. Not done: a re-run of the failed
+  jobs before a CI fix (a flake spends a count and a fixer run today), and talkable's `Completion` reading
+  for the auto-approval gate (the operator decides); runtime.Scrub calling execx.Scrub (internal/factory is
+  another session's: the two keep the same token and pair rules for now).
+
 ## Screens and commands
 
 - **Action keys ask y/N and only `y` confirms**; Enter cancels like any other key (a stray `R` followed

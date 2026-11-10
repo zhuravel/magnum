@@ -1123,6 +1123,10 @@ func PushLine(magnum, checkout, base string) string
     the PR's branch and repository from the pane's env and pushes HEAD there
     alone, with a lease, as the App.
 
+func PushLineCI(magnum, checkout, base string) string
+    PushLineCI is PushLine for a CI fix's push (the engine's CI fix mode):
+    with --ci, which refuses a change to CI config.
+
 func RecentSessionIDs(ctx context.Context, st *store.Store, kind string, now time.Time, wait time.Duration) ([]store.Session, error)
     RecentSessionIDs are the sessions of agent kind kind started within
     SessionIDWindow before now whose session id tells whether herdr's hook
@@ -1562,6 +1566,12 @@ type FixPromptInput struct {
 	// run ("" = none): the head the fixer starts from is that merge.
 	MergeOnly             bool
 	MergedBase, MergedSHA string
+	// CIOnly: the run fixes the PR's failed required CI from CIFile,
+	// ci-failures.json beside the report, which the fix job wrote (the CI
+	// reader's: data, the output of the PR's code and its tests), and
+	// replies in no thread.
+	CIOnly bool
+	CIFile string
 }
     FixPromptInput is what the fix job knows beyond the PR, the role and the
     run that FixPrompt reads: the PR's branch (HeadRef), the review it fixes
@@ -3290,6 +3300,14 @@ type RoleData struct {
 	// false and "" otherwise.
 	MergeOnly             bool
 	MergedBase, MergedSHA string
+	// CIOnly and CIFile are the fix prompt's too: the run fixes the PR's
+	// failed required CI (the engine's CI fix mode) from CIFile, the CI
+	// reader's ci-failures.json beside the report (the failed jobs, their
+	// failed steps and the end of their logs: the output of the PR's code
+	// and its tests, data), with no finding or other reviewer's item to
+	// answer; false and "" otherwise.
+	CIOnly bool
+	CIFile string
 	// WhiteboardSession is the whiteboard prompt's (Manager.WhiteboardPrompt;
 	// empty for every other role, ReviewURL and ReviewFile its review as
 	// for the fix prompt): the Whiteboard session of an earlier head of the
@@ -9016,6 +9034,10 @@ const EventSharedFailure = "agents.shared_failure"
     within sharedFailureQuiet: the PRs, the roles and the line (data last_line,
     prs, roles); its subject is tool:<kind> when the roles share one agent kind.
 
+const FixModeCI = "ci"
+    FixModeCI is the mode of a fix loop's first cycle that fixes the PR's failed
+    required CI (FixState.Mode, FixPayload.Mode).
+
 const FixModeMerge = "merge"
     FixModeMerge is the mode of a fix request and loop that merges the PR's
     parent alone (FixPayload.Mode, FixState.Mode).
@@ -10871,6 +10893,7 @@ type FixState struct {
 	Carried       []FixCarry `json:"carried,omitempty"`
 	Waits         []string   `json:"waits,omitempty"`
 	Mode          string     `json:"mode,omitempty"`
+	CIChecks      []string   `json:"ci_checks,omitempty"`
 	ParentRefused string     `json:"parent_refused,omitempty"`
 }
     FixState is where a PR's fix loop is: cycle Cycle of at most Cap, in Phase.
@@ -10911,12 +10934,16 @@ type FixState struct {
     author, a person's, beside which autofix = "open" started this loop on work
     never handed (rule 9): every cycle's external file marks them waiting, and
     the fixer leaves them alone (writeExternal). Mode is what the loop does: ""
-    fixes findings, FixModeMerge merges the PR's parent alone (fix_parent.go).
-    ParentRefused is why the daemon did not push its merge of the parent on the
-    loop's first cycle (mergeParent's refusal: "needs Workflows on the App",
-    a branch it never pushes to), which the cycle's fixer goes on without and
-    the loop's end puts under Needs you (parentRefusedNote); "" when it merged
-    or had nothing to merge.
+    fixes findings, FixModeMerge merges the PR's parent alone (fix_parent.go),
+    FixModeCI fixes its failed required CI on the loop's first cycle (ci_fix.go;
+    the next cycles fix the re-review's findings, with Mode ""), the required
+    entries that failed in CIChecks (the [[repo]] list's or GitHub's rulesets',
+    never a job's name; the registry's alone). ParentRefused is why the
+    daemon did not push its merge of the parent on the loop's first cycle
+    (mergeParent's refusal: "needs Workflows on the App", a branch it never
+    pushes to), which the cycle's fixer goes on without and the loop's end puts
+    under Needs you (parentRefusedNote); "" when it merged or had nothing to
+    merge.
 
 func ParseFixState(s string) (FixState, bool)
     ParseFixState reads a KVPRFix value; ok is false for one that is not a fix

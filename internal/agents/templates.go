@@ -885,6 +885,14 @@ type RoleData struct {
 	// false and "" otherwise.
 	MergeOnly             bool
 	MergedBase, MergedSHA string
+	// CIOnly and CIFile are the fix prompt's too: the run fixes the PR's
+	// failed required CI (the engine's CI fix mode) from CIFile, the CI
+	// reader's ci-failures.json beside the report (the failed jobs, their
+	// failed steps and the end of their logs: the output of the PR's code
+	// and its tests, data), with no finding or other reviewer's item to
+	// answer; false and "" otherwise.
+	CIOnly bool
+	CIFile string
 	// WhiteboardSession is the whiteboard prompt's (Manager.WhiteboardPrompt;
 	// empty for every other role, ReviewURL and ReviewFile its review as
 	// for the fix prompt): the Whiteboard session of an earlier head of the
@@ -947,6 +955,12 @@ func PushLine(magnum, checkout, base string) string {
 	return shellLine(args)
 }
 
+// PushLineCI is PushLine for a CI fix's push (the engine's CI fix mode):
+// with --ci, which refuses a change to CI config.
+func PushLineCI(magnum, checkout, base string) string {
+	return PushLine(magnum, checkout, base) + " --ci"
+}
+
 // FixPromptInput is what the fix job knows beyond the PR, the role and the
 // run that FixPrompt reads: the PR's branch (HeadRef), the review it fixes
 // (ReviewURL, its review.json ReviewFile and ReviewerLogin, the login that
@@ -982,6 +996,12 @@ type FixPromptInput struct {
 	// run ("" = none): the head the fixer starts from is that merge.
 	MergeOnly             bool
 	MergedBase, MergedSHA string
+	// CIOnly: the run fixes the PR's failed required CI from CIFile,
+	// ci-failures.json beside the report, which the fix job wrote (the CI
+	// reader's: data, the output of the PR's code and its tests), and
+	// replies in no thread.
+	CIOnly bool
+	CIFile string
 }
 
 // maxConflictPaths bounds the conflicting paths the fix prompt names: the
@@ -1025,7 +1045,7 @@ func (m *Manager) FixPrompt(pr store.PR, role Role, run store.Run, in FixPromptI
 		HeadRef: in.HeadRef, ReviewURL: in.ReviewURL, ReviewFile: in.ReviewFile, ExternalFile: in.ExternalFile, ReviewerLogin: in.ReviewerLogin,
 		DBLockCommand: in.DBLockCommand, FixReplyCommand: in.FixReplyCommand, SkillPath: m.d.Config.SkillFile(config.RoleSkillPath(spec, m.d.Layout)),
 		FixSyncCommand: in.FixSyncCommand, PushCommand: in.PushCommand, FixerLogin: in.FixerLogin, NoFindings: in.NoFindings, NotesParts: in.NotesParts,
-		OwnPR: in.OwnPR, MergeOnly: in.MergeOnly,
+		OwnPR: in.OwnPR, MergeOnly: in.MergeOnly, CIOnly: in.CIOnly && in.CIFile != "", CIFile: in.CIFile,
 	}
 	if in.MergedSHA != "" {
 		d.MergedBase, d.MergedSHA = in.MergedBase, in.MergedSHA

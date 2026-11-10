@@ -164,7 +164,7 @@ func TestTheCIReaderStripsEscapesScrubsTokensAndKeepsTheFailedStepsLast200Lines(
 	if jest := c.Jobs[2]; len(jest.Log) != 0 || jest.Conclusion != "cancelled" {
 		t.Errorf("jest = %+v: a cancelled job is listed with no log", jest)
 	}
-	if read.Jobs != 3 || read.Steps != 2 || read.Lines != 200+len(c.Jobs[1].Log) {
+	if read.Jobs != 2 || read.Steps != 2 || read.Lines != 200+len(c.Jobs[1].Log) {
 		t.Errorf("counts = %d jobs, %d steps, %d lines", read.Jobs, read.Steps, read.Lines)
 	}
 	md, err := os.ReadFile(filepath.Join(dir, ciFailuresMD))
@@ -178,7 +178,7 @@ func TestTheCIReaderStripsEscapesScrubsTokensAndKeepsTheFailedStepsLast200Lines(
 		}
 	}
 	ev, ok := h.fixEvent("fix.ci_read")
-	if !ok || ev.Message != "the failed CI at a1a1a1a: 3 jobs, 2 failed steps, "+fmt.Sprint(read.Lines)+" lines" {
+	if !ok || ev.Message != "the failed CI at a1a1a1a: 2 jobs, 2 failed steps, "+fmt.Sprint(read.Lines)+" lines" {
 		t.Fatalf("fix.ci_read = %q, %v", ev.Message, ok)
 	}
 	for _, name := range []string{"Completion", "rspec", "capybara", "Run tests"} {

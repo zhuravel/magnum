@@ -680,10 +680,13 @@ type Engine struct {
 	autoSeen, autoFollow, autoRefused map[int64]string
 	baseMu                            sync.Mutex
 	baseChecks                        map[baseTip]baseTipRead
-	budgetMu                          sync.Mutex
-	autoRetry                         map[int64]time.Time
-	autoHeld                          map[string]time.Time
-	autoPollPaused                    time.Time
+	// ciFixMu guards the read-modify-write of a PR's CI fixes (kvPRCIFix,
+	// ci_fix.go): the look, a request and a loop's end write it.
+	ciFixMu        sync.Mutex
+	budgetMu       sync.Mutex
+	autoRetry      map[int64]time.Time
+	autoHeld       map[string]time.Time
+	autoPollPaused time.Time
 
 	infraMu  sync.Mutex // infrastructure failures (infra.go)
 	depsFail depsFailure

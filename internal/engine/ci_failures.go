@@ -17,7 +17,8 @@ package engine
 // fixer's. The log is the output of the PR's code and its tests: data for
 // the fixer, never instructions, and none of it, nor a check's or a job's
 // name, reaches an event, a verdict or the registry: they get the file's
-// digest and counts (ciFailRead, fix.ci_read).
+// digest and counts (ciFailRead, fix.ci_read: the failed jobs, not a
+// cancelled one).
 
 import (
 	"context"
@@ -73,18 +74,23 @@ type ciBaseCheck struct {
 	State string `json:"state"`
 }
 
-// ciFailedCheck is one failed required check at a head that the reader
-// reads: the required entry ("Completion", "workflow:CI"; "CI" for the
-// rollup's), the check run's name, its workflow's file, the run that
-// failed where the look knows it (Run: magnum's start of the workflow, 0:
-// the newest of WorkflowFile at the head), and the base's word on it
-// (zero: not read).
+// ciFailedCheck is one failed required check at a head (openCIOf,
+// ciShape3) that the reader reads: the required entry ("Completion",
+// "workflow:CI"), the check run's name ("" for a workflow entry's missing
+// check), its workflow's file, the run that failed where the look knows it
+// (Run: magnum's start of the workflow or its re-run; 0: the newest of
+// WorkflowFile at the head), when the rollup says it finished (At: a re-run
+// that fails again is a new failure), the check names the base read
+// compares (Compare: its own, or the failed jobs beside a skipped one;
+// none: the entry's runs), and the base's word on it (zero: not read).
 type ciFailedCheck struct {
-	Entry        string      `json:"entry"`
-	Name         string      `json:"name"`
-	WorkflowFile string      `json:"workflow_file"`
-	Run          int64       `json:"run,omitempty"`
-	Base         ciBaseCheck `json:"base,omitzero"`
+	Entry        string
+	Name         string
+	WorkflowFile string
+	Run          int64
+	At           time.Time
+	Compare      []string
+	Base         ciBaseCheck
 }
 
 // ciFailRead is the reader's record of a read at Head (kvPRCIFix's Read):
@@ -92,7 +98,8 @@ type ciFailedCheck struct {
 // JSON's path), the JSON's digest and its counts (jobs listed, failed
 // steps, log lines and bytes kept), and a read that failed (Unread, with
 // actionsNotGranted's words in UnreadWhy when GitHub would not mint the
-// batch's token), which the look tries again settle_max after At.
+// batch's token) or a run still running (Running), which the look tries
+// again settle_max after At.
 type ciFailRead struct {
 	Head      string    `json:"head"`
 	Key       string    `json:"key"`
@@ -105,6 +112,10 @@ type ciFailRead struct {
 	Bytes     int       `json:"bytes,omitempty"`
 	Unread    bool      `json:"unread,omitempty"`
 	UnreadWhy string    `json:"unread_why,omitempty"`
+	// Running: the newest attempt of a failed check's run has not ended (a
+	// re-run someone started by hand): nothing was read, and the look reads
+	// again settle_max after At.
+	Running bool `json:"running,omitempty"`
 }
 
 // ciFailuresJSON is ci-failures.json.
@@ -187,7 +198,8 @@ func ciReadKey(checks []ciFailedCheck, at func(ciFailedCheck) string) string {
 // ci-failures.json and ci-failures.md into the head's report folder and
 // says it (fix.ci_read), and returns the record. A read that failed (no
 // client, a refused token, the runs or the jobs unread) is Unread with no
-// file: a log alone that could not be read is that job's Unread.
+// file: a log alone that could not be read is that job's Unread; a run whose
+// newest attempt has not ended is Running, with no file either.
 func (e *Engine) readCIFailures(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR, checks []ciFailedCheck) ciFailRead {
 	now := e.now()
 	read := ciFailRead{Head: pr.HeadSHA, At: now}
@@ -227,6 +239,10 @@ func (e *Engine) readCIFailures(ctx context.Context, acts *ciActions, repo store
 			out.Unread = "no run of " + c.WorkflowFile + " at the head"
 			file.Checks = append(file.Checks, out)
 			continue
+		}
+		if !run.Done() { // a re-run runs: what failed is not known yet
+			read.Running = true
+			return read
 		}
 		out.RunID, out.RunURL, out.Attempt = run.ID, run.URL, run.Attempt
 		js, seen := byRun[run.ID]
@@ -277,7 +293,9 @@ func (e *Engine) readCIFailures(ctx context.Context, acts *ciActions, repo store
 	read.File, read.Digest = path, hex.EncodeToString(sum[:])
 	for _, c := range file.Checks {
 		for _, j := range c.Jobs {
-			read.Jobs++
+			if j.Conclusion != "cancelled" {
+				read.Jobs++
+			}
 			read.Steps += len(j.FailedSteps)
 			read.Lines += len(j.Log)
 			for _, l := range j.Log {

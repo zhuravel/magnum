@@ -268,7 +268,8 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	f.ci = e.openCI(ctx, repo.FullName(), pr)
 	f.ciWorkflow, f.ciStart = e.openCIStartOf(ctx, repo.FullName(), pr, f.ci) // fix_open_ci.go
 	if len(f.ci.missing) > 0 {
-		f.ciRerun = e.ciRerunAt(ctx, pr) // ci_rerun.go
+		f.ciRerun = e.ciRerunAt(ctx, pr)            // ci_rerun.go
+		f.ci = ciShape3(f.ci, f.ciStart, f.ciRerun) // ci_fix.go: magnum's run of the head that ended failure
 	}
 	_, f.ciLow = e.githubLow(e.cfg.CIDispatchAs(repo.FullName()))
 	f.approved, f.afterCount = e.openApproval(ctx, *c.w, pr, &l)
@@ -283,11 +284,21 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	gap := max(f.settle.quiet, openStalePolls*e.cfg.Daemon.PollInterval.Duration) // longer than the looks' own spacing
 	l.Spell = l.Spell.next(pr, f.settle.quiet, gap, now, f.fix != nil || f.fixBad || f.held != "")
 	f.ledger = l
+	f.ciFix = e.ciFixFactsOf(ctx, repo, pr, f, l) // ci_fix.go
 	v, work, needs := decideOpen(f)
+	if !e.d.DryRun && v.readCIBase { // ci_fix.go: rule 11 reads the base's CI of the failed required check, once per head, failed set and tip
+		f.ciFix = e.readCIBase(ctx, repo, *c.w, pr, f, l)
+		v, work, needs = decideOpen(f)
+	}
 	acts := e.ciActions(e.ciDispatchIdentity(repo.FullName(), *c.w)) // ci_actions.go: one token for the look's Actions calls
 	defer acts.end()
 	if !e.d.DryRun && (v.readRuns || v.rerun) { // ci_rerun.go: rule 11 reads the head's runs, re-runs the one that started no job
 		v, work = e.openCIRerun(ctx, acts, repo, pr, &f, v, work)
+	}
+	ci := v.Verdict == OpenFixing && len(work) == 1 && work[0].Kind == itemCI
+	if !e.d.DryRun && ci && e.ensureCIRead(ctx, acts, repo, pr, &f) { // ci_failures.go: why it failed, once, before the start
+		v, work, needs = decideOpen(f)
+		ci = v.Verdict == OpenFixing && len(work) == 1 && work[0].Kind == itemCI
 	}
 	switch {
 	case e.d.DryRun:
@@ -304,8 +315,11 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 		}
 	}
 	acts.end() // before the fixer starts: the deferred end does nothing more
-	if v.Verdict == OpenFixing && len(work) > 0 {
-		v = e.openStart(ctx, repo, pr, &l, v, work, waitsOf(needs), fp)
+	switch {
+	case ci: // ci_fix.go: the record first, so a restart never starts a fourth
+		v = e.openStart(ctx, repo, pr, &l, v, work, FixState{Mode: FixModeCI, CIChecks: ciEntries(f.ci.failedRuns)}, fp)
+	case v.Verdict == OpenFixing && len(work) > 0:
+		v = e.openStart(ctx, repo, pr, &l, v, work, FixState{Waits: waitsOf(needs)}, fp) // a person's handed items wait: its fixer leaves them alone
 	}
 	e.openWrite(ctx, pr, c.raw, l, v)
 }
@@ -632,7 +646,9 @@ func (e *Engine) openApproval(ctx context.Context, w config.Watch, pr store.PR, 
 // since the look's last one from the PR's events (the ledger's Cursor):
 // each fix.start names the review its cycle fixed (review_run) and its
 // report, beside which its fixer's external file lists the other
-// reviewers' items it got; each fix.pushed the head the fixer pushed. The
+// reviewers' items it got; each fix.pushed the head the fixer pushed, and
+// each fix.parent_merged and fix.parent_pushed the merge of the parent the
+// daemon pushed (hands_off_after_push never holds a head magnum made). The
 // keys of the items in those files that were unanswered, the review, and
 // magnum's threads and the conflict of the look's last read are handed;
 // the review is one a loop worked on; the pushed heads are the fixer's.
@@ -666,6 +682,7 @@ func (e *Engine) openLoopsEnded(ctx context.Context, repo store.Repo, pr store.P
 			Report    string    `json:"report"`
 			ReviewRun string    `json:"review_run"`
 			Head      string    `json:"head"`
+			Merge     string    `json:"merge"`
 			NoSlot    bool      `json:"no_slot"`
 			StartedAt time.Time `json:"started_at"`
 		}
@@ -704,6 +721,10 @@ func (e *Engine) openLoopsEnded(ctx context.Context, repo store.Repo, pr store.P
 		case "fix.pushed":
 			if d.Head != "" {
 				l.FixerHeads = addFixerHead(l.FixerHeads, d.Head)
+			}
+		case "fix.parent_merged", "fix.parent_pushed": // the daemon's push of a merge of the parent is no push of yours
+			if d.Merge != "" {
+				l.FixerHeads = addFixerHead(l.FixerHeads, d.Merge)
 			}
 		case "fix.ended": // a loop that found no slot started no fixer: its start is not one of the day's
 			if d.NoSlot && !d.StartedAt.IsZero() {
@@ -778,13 +799,16 @@ func addFixerHead(heads []string, head string) []string {
 // goroutines, and two loops would race for one slot, the loser ending
 // unclaimed. The ledger counts a start at the loop's own start time, which
 // a loop that ended for want of a slot names (openLoopsEnded takes it
-// back). The PR's row is read again right before the start:
+// back). A start in CI mode (prev.Mode FixModeCI, ci_fix.go) records its
+// CI fix before startFix (noteCIFixStart; one that cannot be recorded does
+// not start) and a refusal marks it unstarted, which does not count. The
+// PR's row is read again right before the start:
 // the look decided on the rows it listed at the start of its step, and a
 // loop's end on another goroutine may have moved the PR since (to needs
 // attention); a PR whose state, mute, reviewed head or fingerprint changed
 // waits for the next look, which decides on the new row. A dry run starts
 // nothing.
-func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l *openLedger, v OpenVerdict, work []openItem, waits []string, fp string) OpenVerdict {
+func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l *openLedger, v OpenVerdict, work []openItem, prev FixState, fp string) OpenVerdict {
 	subject := prSubject(repo, pr.Number)
 	if l.Refused != "" && l.Refused == fp {
 		v.Verdict, v.Why = OpenNeedsYou, l.RefusedWhy
@@ -822,7 +846,15 @@ func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l 
 	if r, ok := e.openReads[pr.ID]; ok {
 		carried = &r
 	}
-	job, err := e.startFix(ctx, pr, autofixBy, FixState{Waits: waits}, carried) // a person's handed items wait: its fixer leaves them alone
+	ci := prev.Mode == FixModeCI
+	if ci && !e.noteCIFixStart(ctx, pr, prev.CIChecks, autofixBy) {
+		v.Verdict, v.Why = OpenWaits, "the CI fix could not be recorded before its start; the next look tries again"
+		return v
+	}
+	job, err := e.startFix(ctx, pr, autofixBy, prev, carried)
+	if err != nil && ci { // no fixer ran: the start does not count
+		e.noteCIFixOutcome(ctx, pr.ID, pr.HeadSHA, ciOutcomeUnstarted, "", "")
+	}
 	var budget *githubBudgetError
 	var unchecked *mergeUncheckedError
 	var noSlot noFreeFixSlot
@@ -837,8 +869,11 @@ func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l 
 		for _, it := range work {
 			counts[it.Class+":"+it.Kind]++
 		}
-		e.event(ctx, "info", subject, "autofix.open", "autofix starts a fix loop on "+workWords(work),
-			map[string]any{"work": counts, "head": pr.HeadSHA})
+		msg := "autofix starts a fix loop on " + workWords(work)
+		if ci {
+			msg = "autofix " + v.Why
+		}
+		e.event(ctx, "info", subject, "autofix.open", msg, map[string]any{"work": counts, "head": pr.HeadSHA})
 		return v
 	case errors.As(err, &budget):
 		v.Verdict, v.Why = OpenWaits, "GitHub budget: the loop waits for it"

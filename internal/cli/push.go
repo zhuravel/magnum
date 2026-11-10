@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -27,7 +28,7 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-const pushUsage = "push [--checkout DIR] [--base BRANCH]"
+const pushUsage = "push [--checkout DIR] [--base BRANCH] [--ci]"
 
 // Exit statuses of push. 0: pushed, or the branch is at HEAD already.
 const (
@@ -86,6 +87,7 @@ type pushOutcome struct {
 
 func newPushCmd(c *Context) *cobra.Command {
 	var checkout, base string
+	var ci bool
 	cmd := newCommand(groupAct, pushUsage, "push the fixer App's commits to its PR's branch, with a lease (for the fixer)",
 		"For a fixer App's pane, whose env refuses a plain `git push` to github.com: the fix prompt names the line. It "+
 			"pushes HEAD of the checkout (--checkout, default: the git work tree here) to the PR's branch alone "+
@@ -100,7 +102,8 @@ func newPushCmd(c *Context) *cobra.Command {
 			"GIT_AUTHOR_EMAIL and GIT_COMMITTER_EMAIL, and an origin of another repository; then (exit 2) a commit on "+
 			"the first-parent chain it would add that is not the bot's, a merge of anything but the base, and, with "+
 			"MAGNUM_PUSH_NO_WORKFLOWS=1, a change under .github/workflows that differs from the base's on origin (list "+
-			"it under Needs you). A base merge alone that carries the base's own workflow files, as the base has them, "+
+			"it under Needs you), and with --ci (a CI fix's push line) a change to CI config (.github/workflows, "+
+			".github/actions, .github/bin, an action.yml) that differs from the base's. A base merge alone that carries the base's own workflow files, as the base has them, "+
 			"is exit 4 (daemon): the pane's token may not push them, and magnum's daemon pushes the merge once the run "+
 			"ends. HEAD that does not "+
 			"descend from the branch's head on GitHub, or a lease GitHub refuses, is exit 3 (\"fetch first\": run the "+
@@ -110,7 +113,7 @@ func newPushCmd(c *Context) *cobra.Command {
 			"run the same line again; 3: fetch first; 4: magnum pushes the merge, push nothing more and end the run; "+
 			"1: anything else, run it again. It runs no git hook, reads no config "+
 			"and no registry, never talks to the daemon and writes no git config.",
-		func(pos []string) int { return runPush(c, checkout, base, pos) })
+		func(pos []string) int { return runPush(c, checkout, base, ci, pos) })
 	// The command needs no magnum layout: it runs wherever the fixer's pane is.
 	cmd.PersistentPreRunE = func(*cobra.Command, []string) error { return nil }
 	cmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
@@ -119,7 +122,19 @@ func newPushCmd(c *Context) *cobra.Command {
 	cmd.Flags().StringVar(&checkout, "checkout", "", "the fixer's checkout (default: the git work tree here)")
 	_ = cmd.MarkFlagDirname("checkout")
 	cmd.Flags().StringVar(&base, "base", "", "the PR's base (default: the pane's MAGNUM_BASE_BRANCH)")
+	cmd.Flags().BoolVar(&ci, "ci", false, "a CI fix's push: refuse a change to CI config (.github/workflows, .github/actions, .github/bin, action.yml) "+
+		"that differs from the base's")
 	return cmd
+}
+
+// ciConfigPath reports whether p, a path a push changes, is CI config a CI
+// fix never changes (magnum push --ci): a workflow, a local action, an
+// action's metadata anywhere, or a script of .github/bin that a workflow
+// runs.
+func ciConfigPath(p string) bool {
+	base := strings.ToLower(path.Base(p))
+	return strings.HasPrefix(p, ".github/workflows/") || strings.HasPrefix(p, ".github/actions/") || strings.HasPrefix(p, ".github/bin/") ||
+		base == "action.yml" || base == "action.yaml"
 }
 
 // pushPrint prints out as JSON on stdout and one line on stderr, both
@@ -135,8 +150,8 @@ func pushPrint(c *Context, out pushOutcome, code int) int {
 	return code
 }
 
-func runPush(c *Context, checkout, base string, pos []string) int {
-	o, code := pushRun(checkout, base, pos)
+func runPush(c *Context, checkout, base string, ci bool, pos []string) int {
+	o, code := pushRun(checkout, base, ci, pos)
 	return pushPrint(c, o, code)
 }
 
@@ -144,7 +159,7 @@ func runPush(c *Context, checkout, base string, pos []string) int {
 // design lays it out; its outcome and exit code. base is --base, the PR's
 // base as the push line names it each cycle ("" = the pane's
 // MAGNUM_BASE_BRANCH, which the pane got when it was made).
-func pushRun(checkout, base string, pos []string) (pushOutcome, int) {
+func pushRun(checkout, base string, ci bool, pos []string) (pushOutcome, int) {
 	get := pushGetenv
 	branch := get("MAGNUM_PUSH_BRANCH")
 	refused := func(format string, a ...any) (pushOutcome, int) {
@@ -230,6 +245,19 @@ func pushRun(checkout, base string, pos []string) (pushOutcome, int) {
 	}
 	if why := pushOwnCommits(ctx, g, dir, commits, email, login, base); why != "" {
 		return refuse("%s", why)
+	}
+	if ci { // a CI fix changes the PR's code, never its CI config
+		paths, err := g.ChangedBetween(ctx, dir, expect, sha)
+		if err != nil {
+			return failed("could not read the files the push changes: %v", err)
+		}
+		own, err := pushOwnWorkflows(ctx, g, dir, sha, base, slices.DeleteFunc(paths, func(p string) bool { return !ciConfigPath(p) }))
+		switch {
+		case err != nil:
+			return failed("could not compare the CI files with %s's: %v", base, err)
+		case len(own) > 0:
+			return refuse("the push changes %s, and a CI fix never changes CI config: push nothing, list the job under Needs you as config", own[0])
+		}
 	}
 	if get("MAGNUM_PUSH_NO_WORKFLOWS") == "1" {
 		paths, err := g.ChangedBetween(ctx, dir, expect, sha)

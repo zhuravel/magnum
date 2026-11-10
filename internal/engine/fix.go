@@ -185,6 +185,13 @@ type fixJob struct {
 	mode           string
 	behind, merged fixConflict
 	asked          *MergeAsked
+	// ciFile is the CI reader's ci-failures.json of a CI mode job
+	// (FixModeCI), ciJobs the jobs it lists; ciOutcome, ciWhy and ciPushed
+	// are what its end path says of it (noteCIFixEnd: the outcome, the
+	// fixer's class word, the head it pushed).
+	ciFile                     string
+	ciJobs                     int
+	ciOutcome, ciWhy, ciPushed string
 }
 
 // fixRequestFetch bounds the fetch of the base a `magnum fix` request makes
@@ -260,6 +267,8 @@ func (j *fixJob) work() string {
 	n := j.review.Findings() + open
 	optional := j.review.Simplifications + openP3(j.review)
 	switch {
+	case j.mode == FixModeCI: // ci_fix.go
+		return fmt.Sprintf("fixes the failed CI at %s (%s) in %s", textx.ShortSHA(j.head), textx.Count(j.ciJobs, "failed job", "failed jobs"), where)
 	case j.mode == FixModeMerge && j.conflict.sha != "":
 		return fmt.Sprintf("%s in %s, the merge of the PR's parent alone", j.conflict.words(), where)
 	case j.mode == FixModeMerge:
@@ -688,13 +697,25 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	// request may keep earlier findings open with neither, fixRemains). A
 	// read GitHub refuses for the rate limit holds the job as the floor does.
 	described := e.reviewDescribed(repo, pr.Number, sum.SHA)
-	alone := prev.Cycle == 0 && !reviewWork(sum, p3Calls{}, described)
+	ciMode := prev.Cycle == 0 && prev.Mode == FixModeCI // ci_fix.go: no other reviewer's item, no external file
+	alone := prev.Cycle == 0 && !reviewWork(sum, p3Calls{}, described) && !ciMode
+	var ciRead ciFailRead
+	if ciMode {
+		rec, err := e.ciFixRecordOf(ctx, pr.ID)
+		switch {
+		case err != nil:
+			return nil, err
+		case rec.Read.Head != pr.HeadSHA || rec.Read.File == "" || rec.Read.Unread:
+			return nil, fmt.Errorf("%s: why the CI at %s failed has not been read yet; the look reads it before a CI fix", label, head)
+		}
+		ciRead = rec.Read
+	}
 	var others *externalRead
 	// A conflict with the base is work too (spec 5.6): othersWaiting asks
 	// for it only when nothing else would start the job.
 	var conflict fixConflict
 	merges := e.requestBaseCheck(ctx, repo, pr, slot, has, fetch, &conflict)
-	if !isLow {
+	if !isLow && !ciMode {
 		var held *githubLowBudget
 		probe := &fixJob{repo: repo, watch: *w, pr: pr, login: src.Login()}
 		if others, held, err = e.othersBeforeStart(ctx, probe, on, alone, carried, merges); err != nil { // fix_external.go
@@ -730,9 +751,12 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	// The conflict is asked for only when nothing else waits: the merge is then the job's whole work.
 	job := &fixJob{repo: repo, watch: *w, pool: e.cfg.PoolFor(full), pr: pr, slot: slot, role: role, review: sum, head: pr.HeadSHA,
 		round: reviewRun.Round, login: src.Login(), notes: notes, state: prev, others: others, alone: alone, described: described,
-		conflict: conflict, forMerge: conflict.sha != ""}
+		conflict: conflict, forMerge: conflict.sha != "" && !ciMode}
+	if ciMode {
+		job.mode, job.ciFile, job.ciJobs = FixModeCI, ciRead.File, ciRead.Jobs
+	}
 	if isLow { // the other reviewers' items are read when the held fix starts
-		job.budget, job.othersDeferred = &low, true
+		job.budget, job.othersDeferred = &low, !ciMode
 	}
 	if job.state.Cap == 0 {
 		job.state.Cap = e.cfg.FixCyclesFor(w)
@@ -893,8 +917,14 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 	st := job.state
 	if prev.Cycle == 0 {
 		st = FixState{Cycle: 1, Cap: job.state.Cap, Since: job.head, By: by, StartedAt: e.now().UTC(), Waits: prev.Waits}
+		if job.mode == FixModeCI { // ci_fix.go: the first cycle fixes the failed CI
+			st.Mode, st.CIChecks = FixModeCI, prev.CIChecks
+		}
 	} else {
 		st.Cycle++
+		if st.Mode == FixModeCI { // the next cycles fix the re-review's findings
+			st.Mode, st.CIChecks = "", nil
+		}
 	}
 	st.Phase, st.Head, st.Report, st.Role, st.NeedsYou, st.ForcedAt, st.Held = FixPhaseFixing, job.head, "", job.role.Name, nil, time.Time{}, false
 	st.Answered, st.Context, st.OthersUnread = nil, "", "" // the last cycle's calls go with its NeedsYou
@@ -1048,6 +1078,9 @@ func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 // it (openLoopsEnded), since no fixer ran. A later cycle's does not: its
 // loop ran a fixer in cycle 1.
 func (e *Engine) endFixUnclaimed(ctx context.Context, job *fixJob, why string, noSlot bool) {
+	if job.state.Cycle == 1 { // ci_fix.go: no fixer ran
+		job.ciOutcome = ciOutcomeUnstarted
+	}
 	e.endFixState(ctx, job)
 	data := job.eventData()
 	if noSlot && job.state.Cycle == 1 {
@@ -1479,8 +1512,16 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		return err
 	}
 	external, unread := "", ""
-	if job.state.Report != "" && job.mode != FixModeMerge { // the merge of the parent answers nobody
+	if job.state.Report != "" && job.mode != FixModeMerge && job.mode != FixModeCI { // the merge of the parent and a CI fix answer nobody
 		external, unread = e.writeExternal(ctx, job, filepath.Dir(job.state.Report)) // fix_external.go
+	}
+	ciFile := ""
+	if job.mode == FixModeCI { // ci_failures.go: beside the report, also when the parent's merge moved the head
+		if ciFile = copyCIFiles(job.ciFile, filepath.Dir(job.state.Report)); ciFile == "" {
+			err := errors.New("the file of the failed CI, all the fixer would fix, could not be written beside the report")
+			e.abandonFixRun(ctx, run, err.Error())
+			return err
+		}
 	}
 	if unread != "" { // the loop's end says so (othersUnread)
 		job.state.OthersUnread = unread
@@ -1514,6 +1555,9 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 			base = ""
 		}
 		push, login = agents.PushLine(e.d.Layout.Binary(), job.slot.Path, base), logins[0]
+		if job.mode == FixModeCI { // ci_fix.go: its push refuses a change to CI config
+			push = agents.PushLineCI(e.d.Layout.Binary(), job.slot.Path, base)
+		}
 	}
 	reviewFile := ""
 	if job.review.SHA != "" { // the merge of the parent has no review
@@ -1539,6 +1583,8 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		MergeOnly:       job.mode == FixModeMerge,
 		MergedBase:      job.merged.base,
 		MergedSHA:       job.merged.sha,
+		CIOnly:          job.mode == FixModeCI,
+		CIFile:          ciFile,
 	})
 	if err != nil {
 		e.abandonFixRun(ctx, run, err.Error())
@@ -1574,6 +1620,10 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 	if m := job.merged; m.sha != "" { // mergeParent: the fixer starts from magnum's merge of the parent
 		msg += fmt.Sprintf("; on magnum's merge of %s at %s", m.base, textx.ShortSHA(m.sha))
 		data["merged_base"], data["merged_sha"] = m.base, m.sha
+	}
+	if job.mode == FixModeCI { // ci_fix.go: no review worked on (the look hands nothing), no check's or job's name
+		delete(data, "review_run")
+		data["mode"], data["ci_jobs"] = FixModeCI, job.ciJobs
 	}
 	e.event(ctx, "info", job.subject(), "fix.start", msg, data)
 	return nil
@@ -1810,6 +1860,7 @@ func (e *Engine) recoverFixes(ctx context.Context) {
 		if job.role.Name == "" {
 			job.role.Name = st.Role // the role the loop ran, though the config no longer names it
 		}
+		job.ciOutcome = ciOutcomeLost // ci_fix.go: a CI fix the restart ended
 		msg := why + e.stopFixerAt(ctx, job, cmp.Or(st.Head, deref(pr.ReviewedSHA)))
 		if runs, err := e.st.RunsByPR(ctx, pr.ID); err == nil {
 			for _, r := range runs {

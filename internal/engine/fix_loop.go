@@ -58,11 +58,19 @@ const autofixBy = AutofixBy
 // <the decision it needs>" (group 4: the paths, plain path characters
 // joined by ", ", up to the colon). After "not fixed." the skill's fixed
 // words "The author's call" (group 7) mark a finding whose Fix left the
-// choice to the author. The reason is the fixer's own words about the PR,
-// so it is never read.
-var needsYouEntryRe = regexp.MustCompile(`^(?:(\d{1,20}) +(?:(P[0-3]) +)?([A-Za-z0-9._/@+-]+:\d{1,9}|description|review|comment)(?::|\s|$)` +
+// choice to the author. A CI fix's job it could not fix has the job's id
+// and the place `ci` ("129341926468 ci: not fixed. flaky: <reason>"), and
+// after "not fixed." its class word (group 8: flaky, infra, secret, config,
+// base or unfixed; skills/magnum-fix/SKILL.md, section 8). The reason is
+// the fixer's own words about the PR, so it is never read.
+var needsYouEntryRe = regexp.MustCompile(`^(?:(\d{1,20}) +(?:(P[0-3]) +)?([A-Za-z0-9._/@+-]+:\d{1,9}|description|review|comment|` + ciPlace + `)(?::|\s|$)` +
 	`|` + conflictPlace + `: +([A-Za-z0-9._/@+-]+(?:, *[A-Za-z0-9._/@+-]+)*)(?::|$))` +
-	`(?:\s*(?i:fixed in ([0-9a-f]{7,40})|(not fixed))(?:[.,;:]|\s|$)(?:\s*(?i:(the author's call))(?:[.,;:]|\s|$))?)?`)
+	`(?:\s*(?i:fixed in ([0-9a-f]{7,40})|(not fixed))(?:[.,;:]|\s|$)` +
+	`(?:\s*(?:(?i:(the author's call))|(flaky|infra|secret|config|base|unfixed))(?:[.,;:]|\s|$))?)?`)
+
+// ciPlace is the place of a "## Needs you" entry for a CI fix's job
+// (needsYouEntryRe).
+const ciPlace = "ci"
 
 // conflictPlace is the place of a "## Needs you" entry for a conflict of the
 // base merge (needsYouEntryRe), which has no comment id.

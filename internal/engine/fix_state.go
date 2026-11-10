@@ -72,7 +72,11 @@ func KVPRFixOff(prID int64) string { return fmt.Sprintf("pr.%d.fix_off", prID) }
 // loop on work never handed (rule 9): every cycle's external file marks
 // them waiting, and the fixer leaves them alone (writeExternal). Mode is
 // what the loop does: "" fixes findings, FixModeMerge merges the PR's
-// parent alone (fix_parent.go). ParentRefused is why the daemon did not
+// parent alone (fix_parent.go), FixModeCI fixes its failed required CI on
+// the loop's first cycle (ci_fix.go; the next cycles fix the re-review's
+// findings, with Mode ""), the required entries that failed in CIChecks
+// (the [[repo]] list's or GitHub's rulesets', never a job's name; the
+// registry's alone). ParentRefused is why the daemon did not
 // push its merge of the parent on the loop's first cycle (mergeParent's
 // refusal: "needs Workflows on the App", a branch it never pushes to),
 // which the cycle's fixer goes on without and the loop's end puts under
@@ -96,6 +100,7 @@ type FixState struct {
 	Carried       []FixCarry `json:"carried,omitempty"`
 	Waits         []string   `json:"waits,omitempty"`
 	Mode          string     `json:"mode,omitempty"`
+	CIChecks      []string   `json:"ci_checks,omitempty"`
 	ParentRefused string     `json:"parent_refused,omitempty"`
 }
 

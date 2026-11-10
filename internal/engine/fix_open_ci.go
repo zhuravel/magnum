@@ -61,9 +61,11 @@ type ciStart struct {
 }
 
 // ciRun is the newest run of a start's workflow that a dispatch started at
-// the head since the start (dispatchedRun): GitHub's status of it (queued,
-// in_progress, completed, ...) and, once it ended, its conclusion.
+// the head since the start (dispatchedRun): its id (0 in a record of an
+// earlier build), GitHub's status of it (queued, in_progress, completed,
+// ...) and, once it ended, its conclusion.
 type ciRun struct {
+	ID         int64  `json:"id,omitempty"`
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion,omitempty"`
 }
@@ -222,7 +224,7 @@ func (e *Engine) dispatchedRun(ctx context.Context, acts *ciActions, owner, name
 	e.changed("ci_runs:"+full, "")
 	for _, r := range runs { // newest first
 		if !r.CreatedAt.Before(s.At.Add(-ciRunSkew)) {
-			return ciRun{Status: r.Status, Conclusion: r.Conclusion}, true
+			return ciRun{ID: r.ID, Status: r.Status, Conclusion: r.Conclusion}, true
 		}
 	}
 	return ciRun{}, false
@@ -252,7 +254,7 @@ func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
 		if !until.After(f.now) {
 			until = time.Time{} // unknown: until the head's checks end
 		}
-		v.Verdict, v.Why, v.Until = OpenWaits, "CI at "+short+": "+why, until
+		v.Verdict, v.Why, v.Until = OpenWaits, "CI at "+short+": "+why+ciAfter(f), until
 		return v
 	}
 	needsYou := func(how string) OpenVerdict {

@@ -41,7 +41,11 @@ package engine
 //     [daemon] quiet_hours (the work waits for their end, spending no
 //     start), never within hands_off_after_push of the operator's own push;
 //  10. a head the reviewers have not settled on waits;
-//  11. red required CI needs you, pending required CI waits; a required
+//  11. red required CI starts a CI fix on rule 9's terms where the failed
+//     check passes on the base (ci_fix.go: findings first, at most 3 a PR,
+//     none at a head a CI fix tried already, never one that changes its CI
+//     config, once a required check no longer runs) and needs you
+//     otherwise, with why; pending required CI waits; a required
 //     check with no run at a head whose checks magnum read whole, where
 //     GitHub requires it on the PR's base or the repository sets
 //     ci_dispatch, waits while a check of the head runs and until
@@ -136,8 +140,9 @@ type OpenVerdict struct {
 	leftovers, late, dispatch bool
 	// readRuns: rule 11 reads the runs at the head (openReadRuns,
 	// ci_rerun.go); rerun: it re-runs the head's run that started no job
-	// (openRerunCI). Neither is stored.
-	readRuns, rerun bool
+	// (openRerunCI); readCIBase: it reads the base's CI of a failed
+	// required check (readCIBase, ci_fix.go). None is stored.
+	readRuns, rerun, readCIBase bool
 }
 
 // OpenNeed is one thing that needs the operator: its kind (thread, review,
@@ -319,17 +324,22 @@ type openSettle struct {
 }
 
 // openCI is what the head's required checks say (openCIOf): what failed
-// ("required check rspec", "CI" for the rollup; "" for nothing), whether
-// one still runs or the rollup has not started, the required entries that
-// name no run on the head (missing: whose checks magnum read whole,
-// openMissingCI), and, beside those, whether a check of the head has not
-// finished (running: a job GitHub creates only once the jobs it needs end
-// has no run until then).
+// ("required check rspec", "required workflow CI", "CI" for the rollup;
+// "" for nothing), whether one still runs or the rollup has not started
+// (beside a failure too), the required entries that name no run on the
+// head (missing: whose checks magnum read whole, openMissingCI), and,
+// beside those, whether a check of the head has not finished (running: a
+// job GitHub creates only once the jobs it needs end has no run until
+// then); the failed required checks a CI fix may fix (failedRuns, ci_fix.go;
+// none for the rollup's failure) and how a run of magnum's ended where it
+// decided the failure (how, ciShape3).
 type openCI struct {
-	failed  string
-	pending bool
-	missing []string
-	running bool
+	failed     string
+	pending    bool
+	missing    []string
+	running    bool
+	failedRuns []ciFailedCheck
+	how        string
 }
 
 // openCIOf is rule 11's CI of pr's head by required, its repository's
@@ -338,23 +348,28 @@ type openCI struct {
 // requires on the PR's base with no run at the head (enforcedMissing): a
 // known empty list leaves CI out; the head's stored checks decide where
 // they can (requiredCIOf, where strict, the [[repo]] list of a repository
-// that sets ci_dispatch, makes an entry with no run missing, never green),
-// and GitHub's rollup otherwise, a required list with no rollup at all (no
-// check has run) waiting for it. An enforced check is missing either way.
+// that sets ci_dispatch, makes an entry with no run missing, never green;
+// a required run that failed, or one skipped beside a failed job of its
+// workflow file, failedRequired, fails it), and GitHub's rollup otherwise,
+// a required list with no rollup at all (no check has run) waiting for it.
+// An enforced check is missing either way, and goes before the rollup's
+// failure, which may be a check nobody requires.
 func openCIOf(pr store.PR, required store.RequiredChecks, strict bool, enforced []string) openCI {
 	if required.Source != "" && len(required.Checks) == 0 {
 		return openCI{}
 	}
 	ci := openCI{missing: enforced}
 	if r, ok := requiredCIOf(pr, required.Checks, strict); ok {
-		if len(r.failed) > 0 {
-			return openCI{failed: "required check " + r.failed[0].Name}
+		if failed := failedRequired(pr, required.Checks, r); len(failed) > 0 {
+			return openCI{failed: missingWhat(ciEntries(failed)), failedRuns: failed, pending: r.running}
 		}
 		ci.pending, ci.missing = r.running, withMissing(r.missing, enforced)
 	} else {
 		switch deref(pr.CIState) {
 		case "FAILURE", "ERROR":
-			return openCI{failed: "CI"}
+			if len(enforced) == 0 {
+				return openCI{failed: "CI"}
+			}
 		case "PENDING", "EXPECTED":
 			ci.pending = true
 		case "":
@@ -434,6 +449,9 @@ type openFacts struct {
 	// described: magnum's review that stands at the head has a
 	// `Description: ✗` line (reviewDescribes), which is review work.
 	described bool
+	// ciFix is what the look knows of a CI fix of the head's failed
+	// required checks (ci_fix.go; zero: nothing).
+	ciFix ciFixFacts
 }
 
 // sortOpen splits items by the ledger: work, never handed (and magnum's
@@ -487,6 +505,8 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 	work, needs := sortOpen(f.items, f.ledger)
 	if !f.whole || f.failed || len(f.cut) > 0 { // the items are not known: none counts
 		work, needs = nil, nil
+	} else if it, ok := ciWorkOf(f, work, needs); ok { // ci_fix.go: red required CI is work once nothing else is open
+		work = append(work, it)
 	}
 	v.Open = len(work) + len(needs)
 	v.Needs = openNeeds(needs)
@@ -495,8 +515,12 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 		return say(OpenNeedsYou, "needs your attention ("+f.attention+")"), nil, needs
 	case f.fixBad:
 		return say(OpenNeedsYou, fmt.Sprintf("the fix row of #%d cannot be read: `magnum abort` clears it", f.pr.Number)), nil, needs
+	case f.fix != nil && f.fix.Phase == FixPhaseReviewing && f.fix.Mode == FixModeCI:
+		return say(OpenFixing, "fixing, re-review of "+textx.ShortSHA(f.fix.Head)+" (the CI fix's push)"), nil, needs
 	case f.fix != nil && f.fix.Phase == FixPhaseReviewing:
 		return say(OpenFixing, "fixing, re-review of "+textx.ShortSHA(f.fix.Head)), nil, needs
+	case f.fix != nil && f.fix.Mode == FixModeCI:
+		return say(OpenFixing, ciRunning(f)), nil, needs
 	case f.fix != nil:
 		return say(OpenFixing, fmt.Sprintf("fixing, cycle %d of %d", f.fix.Cycle, f.fix.Cap)), nil, needs
 	case f.held == heldBudget:
@@ -546,6 +570,10 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 	}
 	settled, until := settleDone(f)
 	if len(work) > 0 {
+		ww, ci := workWords(work), len(work) == 1 && work[0].Kind == itemCI
+		if ci {
+			ww = ciWorkWords(f)
+		}
 		handsOff := f.pr.HeadChangedAt.Add(f.settle.handsOff)
 		quietEnd, quiet := quietHoursNow(f.settle.quietHours, f.now)
 		// waiting names a person's handed items beside the work, which wait
@@ -568,15 +596,19 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 				return say(OpenNeedsYou, needsWords(needs)), nil, needs
 			}
 			v.Needs = append(v.Needs, OpenNeed{Kind: "loop", URL: f.pr.URL})
-			return say(OpenNeedsYou, fmt.Sprintf("%s today: f starts another", textx.Count(f.settle.maxLoops, "loop", "loops"))), nil, needs
+			capped := fmt.Sprintf("%s today: f starts another", textx.Count(f.settle.maxLoops, "loop", "loops"))
+			if ci { // the factory reads "f starts another"; c starts a CI fix by hand
+				capped += ", c a CI fix"
+			}
+			return say(OpenNeedsYou, capped), nil, needs
 		case f.pause != "" && f.pauseUntil.After(f.now):
 			v.Until = f.pauseUntil
-			return say(OpenWaits, waiting(f.pause+": "+workWords(work)+" waits until "+waitClock(f.pauseUntil, f.now))), nil, needs
+			return say(OpenWaits, waiting(f.pause+": "+ww+" waits until "+waitClock(f.pauseUntil, f.now))), nil, needs
 		case f.pause != "":
-			return say(OpenWaits, waiting(f.pause+": "+workWords(work)+" waits for `magnum resume`")), nil, needs
+			return say(OpenWaits, waiting(f.pause+": "+ww+" waits for `magnum resume`")), nil, needs
 		case quiet:
 			v.Until = quietEnd
-			return say(OpenWaits, waiting(fmt.Sprintf("quiet hours (%s): %s waits until %s", f.settle.quietHours, workWords(work),
+			return say(OpenWaits, waiting(fmt.Sprintf("quiet hours (%s): %s waits until %s", f.settle.quietHours, ww,
 				waitClock(quietEnd, f.now)))), nil, needs
 		case !slices.Contains(f.ledger.FixerHeads, head) && f.now.Before(handsOff):
 			v.Until = handsOff
@@ -584,7 +616,9 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 				waitClock(handsOff, f.now)))), nil, needs
 		case !settled:
 			v.Until = until
-			return say(OpenWaits, waiting("settling: "+workWords(work)+" waits until "+waitClock(until, f.now))), nil, needs
+			return say(OpenWaits, waiting("settling: "+ww+" waits until "+waitClock(until, f.now))), nil, needs
+		case ci:
+			return say(OpenFixing, fmt.Sprintf("starts a CI fix of %s at %s (CI fix %d of %d)", f.ci.failed, short, f.ciFix.starts+1, ciFixMax)), work, needs
 		}
 		return say(OpenFixing, waiting("starts a fix loop on "+workWords(work))), work, needs // the loop leaves the person's items alone
 	}
@@ -593,13 +627,17 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 		return say(OpenWaits, "settling until "+waitClock(until, f.now)+": a reviewer can still be at work"), nil, needs
 	}
 	switch {
-	case f.ci.failed != "":
-		v.Needs = append(v.Needs, OpenNeed{Kind: "ci", URL: f.pr.URL})
-		return say(OpenNeedsYou, fmt.Sprintf("%s failed at %s", f.ci.failed, short)), nil, needs
+	case f.ci.failed != "": // ci_fix.go: no CI fix starts now
+		verdict, why, until, readBase := ciFixWords(f, short)
+		if verdict == OpenNeedsYou {
+			v.Needs = append(v.Needs, OpenNeed{Kind: "ci", URL: f.pr.URL})
+		}
+		v.Until, v.readCIBase = until, readBase
+		return say(verdict, why), nil, needs
 	case len(f.ci.missing) > 0:
 		return openMissingCI(f, v), nil, needs
 	case f.ci.pending:
-		return say(OpenWaits, "CI at "+short), nil, needs
+		return say(OpenWaits, "CI at "+short+ciAfter(f)), nil, needs
 	case f.mergeUnchecked != "":
 		return say(OpenUnknown, "the merge with "+f.mergeUnchecked+" could not be checked; trying again shortly"), nil, needs
 	}
@@ -619,7 +657,22 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 		v.Optional = optionalLinks(f.optional)
 		why += " · " + OptionalCallsWords(v.Optional)
 	}
+	if c := f.ciFix; ciAfter(f) != "" && len(c.last.Entries) > 0 { // ci_fix.go: the CI fix's push passed
+		why += fmt.Sprintf(" · CI fix %d of %d made %s pass", c.lastN, ciFixMax, missingWhat(c.last.Entries))
+	}
 	return say(OpenIdle, why), nil, nil
+}
+
+// ciFailedAt is rule 11's failure in words: "required check Completion
+// failed at a1a1a1a", with how a run of magnum's ended where it decided
+// (ciShape3, ci_fix.go). The factory screen's move reads these words (kind
+// ci), and its test reads this format here.
+func ciFailedAt(f openFacts, short string) string {
+	s := fmt.Sprintf("%s failed at %s", f.ci.failed, short)
+	if f.ci.how != "" {
+		s += " (" + f.ci.how + ")"
+	}
+	return s
 }
 
 // OpenMergeIsYours reports whether GitHub's review gate g leaves the
@@ -848,6 +901,7 @@ var itemNouns = map[string][2]string{
 	itemFinding:  {"skipped finding", "skipped findings"},
 	itemFindings: {"review of magnum's", "reviews of magnum's"},
 	itemConflict: {"conflict with the base", "conflicts with the base"},
+	itemCI:       {"CI fix", "CI fixes"},
 }
 
 // workWords counts items by kind and class: "1 review of magnum's and 1
