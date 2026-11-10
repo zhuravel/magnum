@@ -171,6 +171,70 @@ func TestAnActionsTokenIsRevokedWhenItsGhConfigDirCannotBeMade(t *testing.T) {
 	}
 }
 
+// A daemon killed mid-batch or mid-call (SIGKILL, a crash, a power loss)
+// leaves its gh config dirs in the gh root: the App's first refresh, and
+// every one after, removes its own once they are older than
+// daemonPushHold, a batch's (.actions-<name>-<n>) that no token it holds
+// names and a REST call's (.call-<name>-<n>). A younger one, which another
+// process of the layout (the factory daemon, a CLI command) may be using,
+// the dir of a batch the App holds, another App's (one whose name starts
+// with this one's too), the App's ConfigDir and anything else stay.
+func TestLeftoverGhConfigDirsGoAtTheAppsRefresh(t *testing.T) {
+	app, _, clock := pushApp(t)
+	root := app.layout.GhRoot()
+	old, young := daemonPushHold+time.Minute, time.Minute
+	age := func(dir string, d time.Duration) {
+		t.Helper()
+		at := clock.Now().Add(-d)
+		if err := os.Chtimes(dir, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk := func(name string, d time.Duration) string {
+		t.Helper()
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "config.yml"), renderConfigYML("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		age(dir, d)
+		return dir
+	}
+	gone := []string{mk(".actions-talkable-app-111", old), mk(".call-talkable-app-222", old)}
+	kept := []string{
+		mk(".actions-talkable-app-333", young), mk(".call-talkable-app-444", young),
+		mk(".actions-other-app-555", old), mk(".call-other-app-666", old),
+		mk(".call-talkable-app-x-777", old), mk(".actions-talkable-app-x-888", old),
+		mk("other-app", old),
+	}
+	env, release, err := app.ActionsEnv(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	age(env["GH_CONFIG_DIR"], old) // held: its release, or its hold, removes it
+	kept = append(kept, env["GH_CONFIG_DIR"])
+	if _, err := app.EnsureConfigDir(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	kept = append(kept, app.ConfigDir())
+	for _, dir := range gone {
+		wantGone(t, dir)
+	}
+	for _, dir := range kept {
+		if _, err := os.Stat(dir); err != nil {
+			t.Errorf("%s went: %v", filepath.Base(dir), err)
+		}
+	}
+	mk(".call-talkable-app-999", old) // a later leftover goes at a later refresh
+	if _, err := app.EnsureConfigDir(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	wantGone(t, filepath.Join(root, ".call-talkable-app-999"))
+}
+
 // The App's refresh after an Actions token rewrites the pane's hosts.yml
 // with its own token, never the batch's: the panes never gain Actions.
 func TestThePanesHostsNeverGainAnActionsToken(t *testing.T) {

@@ -272,9 +272,11 @@ func (a *App) refresh(ctx context.Context, fl *flight) {
 // rewrites the files whenever the token changed or a file is missing; call it
 // on every daemon tick so long-lived panes never see an expired token. It
 // also drops the daemon's own tokens past their hold (DaemonPushEnv,
-// ActionsEnv).
+// ActionsEnv), and the gh config dirs of a batch's or a REST call's own
+// that a process which died left behind (sweepDirs).
 func (a *App) EnsureConfigDir(ctx context.Context) (string, error) {
 	a.sweepPushes(ctx) // push_token.go: a push or Actions token nobody released goes after its hold
+	a.sweepDirs()
 	if _, err := a.Token(ctx); err != nil {
 		return "", err
 	}

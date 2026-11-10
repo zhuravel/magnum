@@ -4400,20 +4400,28 @@ skill versions); people add theirs to the sections before it, at the end of the 
 - **An App's own REST calls through gh read a gh config dir of each call's own** (2026-11-10, after review).
   With `[github] transport = "gh"`, the default, `identity.GhTransport` ran `gh api` with the daemon's
   environment, so gh read the operator's `~/.config/gh`. An App's pane runs as the same user and can write it
-  (and the App's own ConfigDir, which its env names): `gh config set http_unix_socket <its socket>` there sends
-  the pane the JWT of the next mint (the hourly refresh's, DaemonPushEnv's, ActionsEnv's) and the token of
-  each revoke, an Actions token's too, and lets it answer them (a forged 204 for the revoke). Each call now
+  (and the App's own ConfigDir, which its env names): `gh config set http_unix_socket <its socket>` there
+  sends the pane the JWT of the next mint (the hourly refresh's, DaemonPushEnv's, ActionsEnv's) and the token
+  of each revoke, an Actions token's too, and lets it answer them (a forged 204 for the revoke). Each call now
   makes a gh config dir in the gh root (`freshConfigDir`, which `batchConfigDir` shares: 0700, a fresh name
   `.call-<identity>-<n>`, magnum's config.yml alone, no token), names it as `GH_CONFIG_DIR` with `GH_HOST`
   pinned and `GITHUB_TOKEN` blanked, over the transport's Env, and removes it when the call ends. That dir has
-  no login and gh refuses to start without one, so a JWT call's `GH_TOKEN` is a placeholder
-  (`noLoginToken`): an explicit `-H Authorization` wins over `GH_TOKEN` (docs/spikes.md, 2026-11-10), so the
-  placeholder never reaches GitHub, and the operator's gh login is no longer needed nor read. A transport
-  without a gh root runs no gh. The client is built per App (`githubHTTPClient` in app.go, for New and
-  NewIdentity alike), so the dirs carry its name; `transport = "direct"` (net/http) is unchanged. Rejected:
-  the App's ConfigDir (the pane writes it), and a dir made once at the start (a pane could plant its
-  config.yml between calls). A same-user agent that races a call could still write the fresh dir, as for a
-  batch's. Tests, failing first by assertion with the fields in place:
+  no login and gh refuses to start without one, so a JWT call's `GH_TOKEN` is a placeholder (`noLoginToken`):
+  an explicit `-H Authorization` wins over `GH_TOKEN` (docs/spikes.md, 2026-11-10), so the placeholder never
+  reaches GitHub, and the operator's gh login is no longer needed nor read. A transport without a gh root runs
+  no gh. The client is built per App (`githubHTTPClient` in app.go, for New and NewIdentity alike), so the
+  dirs carry its name; `transport = "direct"` (net/http) is unchanged. Rejected: the App's ConfigDir (the pane
+  writes it), and a dir made once at the start (a pane could plant its config.yml between calls). A same-user
+  agent that races a call could still write the fresh dir, as for a batch's. A process that dies before it
+  removes a dir (SIGKILL, a crash, a power loss) leaves it in the gh root, so the App's refresh
+  (`EnsureConfigDir`, the first at its start, then every tick; `sweepDirs`) removes its own leftovers: a
+  batch's `.actions-<identity>-<n>` that no token it holds names, and a call's `.call-<identity>-<n>`, once
+  older than `daemonPushHold`. A younger one may be another process's at work (the factory daemon and the CLI
+  share the gh root), and one removed under a gh about to read it would let a pane make it again with a
+  config.yml of its own; the name must be the prefix and MkdirTemp's digits, so another App's whose name
+  starts with this one's stays. Rejected: removing every dir that the App holds no token for at its start (the
+  other processes' at work). TestLeftoverGhConfigDirsGoAtTheAppsRefresh failed first by assertion, and fails
+  without either guard. Tests of the call dirs, failing first by assertion with the fields in place:
   TestGhTransportRunsEachCallOverAGhConfigDirOfItsOwn, TestGhTransportWithoutAConfigRootRunsNoGh,
   TestGhTransportJWTCallStartsWithoutAnyLogin (in place of TestGhTransportJWTStaysInArgvNotEnv),
   TestTheAppsRESTCallsRunOverAGhConfigDirOfEachCallsOwn, TestAppIdentityMintsThroughGhByDefault and

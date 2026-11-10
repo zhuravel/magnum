@@ -23,7 +23,9 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -177,6 +179,51 @@ func (a *App) sweepPushes(ctx context.Context) {
 	for _, p := range old {
 		a.dropPush(context.WithoutCancel(ctx), p)
 	}
+}
+
+// sweepDirs removes the gh config dirs of the App's own that a process of
+// the layout left in the gh root when it died before removing them
+// (SIGKILL, a crash, a power loss): a batch's (batchConfigDir) that no
+// token of a.pushes names, and a REST call's (GhTransport). Only a dir
+// older than daemonPushHold goes: a younger one may be another process's
+// at work (the factory daemon, a CLI command), and one removed under a gh
+// about to read it would let a pane make it again with a config.yml of its
+// own. A symlink is never a dir here, and another App's dirs (a name that
+// starts with this one's, too) are not matched.
+func (a *App) sweepDirs() {
+	root := a.layout.GhRoot()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	held := map[string]bool{}
+	a.pmu.Lock()
+	for _, p := range a.pushes {
+		held[p.dir] = true
+	}
+	a.pmu.Unlock()
+	now := a.now()
+	for _, e := range entries {
+		if !e.IsDir() || !madeDir(e.Name(), actionsDirPrefix(a.cfg.Name), callDirPrefix(a.cfg.Name)) {
+			continue
+		}
+		dir := filepath.Join(root, e.Name())
+		if info, err := e.Info(); err != nil || held[dir] || now.Sub(info.ModTime()) < daemonPushHold {
+			continue
+		}
+		_ = os.RemoveAll(dir)
+	}
+}
+
+// madeDir reports whether name is one that freshConfigDir made with one
+// of prefixes: the prefix and os.MkdirTemp's random digits.
+func madeDir(name string, prefixes ...string) bool {
+	for _, prefix := range prefixes {
+		if rest, ok := strings.CutPrefix(name, prefix); ok && rest != "" && strings.Trim(rest, "0123456789") == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // revoke revokes an installation token (DELETE /installation/token as it),

@@ -3831,8 +3831,8 @@ PR, per poll of a repository and per tick while a push of Magnum's waits (a run 
 progress makes it mint one every tick until that run ends), hands it to those gh calls in their environment
 alone and revokes it when they end, as it does for the push of a merge that carries workflow files. It is
 never written to a file, so no pane of the App gains it, and the App's own tokens stay as narrow as they were;
-those gh calls read a gh config directory made for them alone (removed with the token), not the App's, whose
-`config.yml` the panes can change. Such an App
+those gh calls read a gh config directory made for them alone (removed with the token, or a few minutes after
+a crash), not the App's, whose `config.yml` the panes can change. Such an App
 needs Actions: write on its settings, accepted on its installation; until then GitHub refuses the mint, and
 the PR needs you with what to grant ("required check Completion did not run at a1b2c3d: magnum cannot read the
 head's runs (fixer-app may not use Actions: grant Actions: write on the App and accept it on the
