@@ -9299,6 +9299,14 @@ func BudgetKinds(cfg *config.Config) []string
     shell roles with tool = "codex" included), and a resume of one overrules
     Codex's reading at a cap (liftToolPause, the CLI's offline resume).
 
+func CIConfigPath(p string) bool
+    CIConfigPath reports whether p, a path a PR or a push changes, is CI config
+    a CI fix never changes, in any case: a file GitHub Actions runs as the head
+    has it (changesActions) or a script of .github/bin that a workflow runs.
+    The look gives no CI fix to a PR that changes one (ciFixRefusal: its fixer
+    could only answer config, and spend one of 3), and `magnum push --ci`
+    refuses a push that changes one from the base's.
+
 func CheckPrompts(cfg *config.Config) (int, error)
     CheckPrompts renders, with representative data and this binary's renderer,
     every prompt file the configured roles name (judges with agents.JudgeData,
