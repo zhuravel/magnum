@@ -16,8 +16,8 @@
 # With a factory registry, evidence.md ends with the factory's tasks, the PRs they published, their local reviews,
 # their waits and failures, its holds and alerts, the time per stage, the waits on you by cause, the take rate of the
 # recommended answers by role, what they asked of the operator, and the liaison's notes (each task folder's notes.md,
-# scrubbed by scrub.py in a process of its own, a note whose scrub takes over MAGNUM_SCRUB_TIMEOUT seconds, default
-# 30, left out).
+# scrubbed by scrub.py in a process of its own, a note whose scrub takes over MAGNUM_SCRUB_TIMEOUT seconds left out:
+# a finite number above 0, else 30).
 # It reads the registries with sqlite3 -readonly and never writes to them.
 set -euo pipefail
 
@@ -785,7 +785,7 @@ if [[ -f $fdb ]]; then
 	# task's last change when it is done or stopped (magnum factory stats measures its waits so), and every span is
 	# clipped to the window.
 	python3 - "$fdb" "$fsince" "$ftasks" "$(dirname "$0")/scrub.py" >>"$out" <<'PY' ||
-import errno, json, os, re, runpy, stat, subprocess, sys
+import errno, json, math, os, re, runpy, stat, subprocess, sys
 from datetime import datetime, timezone
 
 fdb, fsince, ftasks, scrub_py = sys.argv[1:5]
@@ -804,7 +804,6 @@ def sql(q):
 # scrub.py --serve, the fuzz's own entry, in a process of its own with a time limit. Every text is scrubbed whole
 # before anything strips or cuts it.
 scrub = runpy.run_path(scrub_py, run_name="scrub")["scrub"]
-SCRUB_TIMEOUT = float(os.environ.get("MAGNUM_SCRUB_TIMEOUT") or 30)
 
 
 def clip(s, n):
@@ -974,15 +973,29 @@ NOT_PLAIN, UNREADABLE, OVER = ("(notes.md is not a plain file: left out)", "(not
 SLOW, UNSCRUBBED = "(notes.md took too long to scrub: left out)", "(notes.md could not be scrubbed: left out)"
 
 
+def scrub_timeout(value):
+    """MAGNUM_SCRUB_TIMEOUT in seconds: a finite number above 0, else 30."""
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return 30.0
+    return seconds if math.isfinite(seconds) and seconds > 0 else 30.0
+
+
+SCRUB_TIMEOUT = scrub_timeout(os.environ.get("MAGNUM_SCRUB_TIMEOUT"))
+
+
 def scrubbed(text):
     """(text, note) of a note through scrub.py --serve, in a process of its own: the text scrubbed, or why it is left
-    out, when the scrub takes over SCRUB_TIMEOUT seconds or fails."""
+    out, when the scrub takes over SCRUB_TIMEOUT seconds, fails or cannot start."""
     data = text.encode("utf-8", "surrogateescape")
     try:
         res = subprocess.run([sys.executable, "-I", scrub_py, "--serve"], input=len(data).to_bytes(4, "big") + data,
                              capture_output=True, timeout=SCRUB_TIMEOUT)
     except subprocess.TimeoutExpired:
         return None, SLOW
+    except OSError:
+        return None, UNSCRUBBED
     out = res.stdout
     if res.returncode or len(out) < 4 or int.from_bytes(out[:4], "big") != len(out) - 4:
         return None, UNSCRUBBED

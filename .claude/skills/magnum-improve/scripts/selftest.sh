@@ -955,5 +955,31 @@ t_md=$ev/tout/evidence.md
     fail "a note past the time limit is left out (rc $rc): $(fsect 'Factory liaison notes' "$t_md" | cut -c1-300)"
 ok "evidence.sh leaves out a note whose scrub takes too long, and says so"
 
+# 28. The time limit is a finite number of seconds above 0, else 30 (a typo, nan, inf, 0 or a negative number never
+#     loses the notes), and a scrub whose process cannot start leaves its note out with a line that says so. The first
+#     half runs evidence.sh's own scrubbed() and scrub_timeout(), cut out of it.
+awk '/^SLOW, UNSCRUBBED = /{p=1} /^def notes\(/{p=0} p' "$scripts/evidence.sh" >"$tmp/scrubbed.py"
+run python3 - "$tmp/scrubbed.py" "$scripts/scrub.py" <<'PY'
+import math, os, subprocess, sys
+
+code, scrub_py = sys.argv[1:3]
+ns = {"math": math, "os": os, "subprocess": subprocess, "sys": sys, "scrub_py": scrub_py}
+exec(open(code).read(), ns)
+bad = [v for v in ("30s", "nan", "inf", "-inf", "1e400", "0", "-1", "", None) if ns["scrub_timeout"](v) != 30]
+kept = ns["scrub_timeout"]("2.5")
+scrubbed = ns["scrubbed"]("password=hunter4")
+sys.executable = "/nonexistent/python3"
+unstarted = ns["scrubbed"]("password=hunter4")
+print("not 30:", bad, "2.5:", kept, "scrubbed:", scrubbed, "no interpreter:", unstarted)
+sys.exit(bad or kept != 2.5 or scrubbed != ("password=<redacted>", None) or unstarted != (None, ns["UNSCRUBBED"]))
+PY
+[[ $rc == 0 ]] || fail "evidence.sh's time limit and a scrub that cannot start: $(tr '\n' ';' <"$tmp/out" | cut -c1-400)"
+MAGNUM_SCRUB_TIMEOUT=nan MAGNUM_DB=$ev/magnum.db MAGNUM_REVIEWS=$ev/reviews MAGNUM_FACTORY_DB=$fdb \
+    MAGNUM_FACTORY_TASKS=$ev/factory-tasks run "$scripts/evidence.sh" 2026-10-01T00:00:00Z "$ev/nanout"
+[[ $rc == 0 ]] && grep -Fxq '> - 2026-10-11 10:12 mail <email> about it' "$ev/nanout/evidence.md" &&
+    ! grep -Fq "(the factory's stage times" "$ev/nanout/evidence.md" ||
+    fail "MAGNUM_SCRUB_TIMEOUT=nan scrubs the notes with the default limit (rc $rc): $(fsect 'Factory liaison notes' "$ev/nanout/evidence.md" | cut -c1-300)"
+ok "evidence.sh takes a time limit only as a finite number above 0, and leaves out a note whose scrub cannot start"
+
 
 echo "selftest: $checks checks passed"

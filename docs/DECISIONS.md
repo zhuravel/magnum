@@ -23020,40 +23020,54 @@ skill versions); people add theirs to the sections before it, at the end of the 
     its matches: the JWT search goes on from the end of a run of token characters when it fails at an `eyJ` (every
     later `eyJ` of the run fails as it did), the email search tries only a run's start after the place it starts,
     and the host pattern runs on each run of host characters, a run over 253 masked whole, in the last pass. Redact's
-    four patterns run as merged searches: the JWT one apart, and the private key's header apart from its body, which
-    is searched only for a header that wins. A JWT or a body found before is reused, so that no text is searched
-    again to its end when another search's match takes in what one found (a GitHub token around each `eyJ` of a
-    megabyte of them took 48 s, a JWT that takes in each `-----BEGIN` of keys with no END 74 s; now 0.11 s and
-    0.06 s). After every mask, a run of non-space characters still over 2,000 shows as `[...]`, so a long minified
-    JSON shows no quoted secret (the Go key-value pattern misses JSON-quoted keys). The slowest text measured at the
-    1 MiB cap is one line of 253-character dotted words, 4.8 s; 1 MiB of `eyJ` takes 0.04 s.
+    patterns run as merged searches: the JWT one apart, the private key's header apart from its body, which is
+    searched only for a header that wins, and every other pattern of the list in one search, in Go's order, so that
+    one added to the list runs. The JWT search's skips hold for its pattern only and the body's for a header, a lazy
+    body and an END or `$`, so scrub.py does not start unless the list holds each once. A JWT or a body found before
+    is reused, so that no text is searched again to its end when another search's match takes in what one found (a
+    GitHub token around each `eyJ` of a megabyte of them took 48 s, a JWT that takes in each `-----BEGIN` of keys
+    with no END 74 s; now 0.11 s and 0.06 s). After every mask, a run of non-space characters still over 2,000 shows
+    as `[...]`, so a long minified JSON shows no quoted secret (the Go key-value pattern misses JSON-quoted keys). The
+    slowest text measured at the 1 MiB cap is one line of 253-character dotted words, 4.8 s; 1 MiB of `eyJ` takes
+    0.04 s.
   - evidence.sh scrubs each note through `scrub.py --serve` in a process of its own, with a time limit
-    (`MAGNUM_SCRUB_TIMEOUT`, 30 s): a note past it is left out, "(notes.md took too long to scrub: left out)", and a
-    slow path nobody found yet costs one note at most. It scrubs before it strips a note or cuts a wait's words, and
+    (`MAGNUM_SCRUB_TIMEOUT`: a finite number of seconds above 0, else 30, since `nan` and `inf` made the process
+    call fail and 0 left every note out): a note past it is left out, "(notes.md took too long to scrub: left out)",
+    and one whose process fails or cannot start, "(notes.md could not be scrubbed: left out)". A slow path nobody
+    found yet costs one note at most. It scrubs before it strips a note or cuts a wait's words, and
     then cuts the note to its last 80 lines and each line to 400 characters. The factory's own words (holds, waits)
     are scrubbed in its process.
   - `TestEvidenceScrubHoldsTheGoScrubsPatterns` (`internal/factory/runtime`, beside the scrub it holds the port to:
-    Go builds no package under `.claude`) checks scrub.py's lists (`scrub.py --patterns`) against execx's
-    `secretPattern`, read from its source, and the Go scrub's own patterns.
-    `FuzzEvidenceScrubMasksEveryByteScrubMasks` feeds a text to `Scrub` and to `scrub.py --serve`. A replay of Scrub's passes, its Redact pattern compiled from
-    execx's source and its output checked equal to Scrub's, says which bytes Scrub kept. On a text with no long run
-    the fuzz wants the port's output to be Scrub's; on the others it fails when a piece of the port's output between
-    its masks stands on no kept byte. Its 23 seeds (R54's shapes, the engine's differences, a sample of each pattern,
-    the texts Python backtracks on) run in `make test` in under a second; both skip without python3, and landing.md
-    says to fuzz it for a few minutes after a change to either scrub.
+    Go builds no package under `.claude`) reads every pattern of every `regexp.MustCompile` in execx.go and scrub.go
+    with `go/parser` and wants the same set in scrub.py's lists (`scrub.py --patterns`), and each list in its Go
+    order. It counts Scrub's passes (its `ReplaceAll` calls, and Redact's for its call of `execx.Redact`) against its
+    replay in the test. `FuzzEvidenceScrubMasksEveryByteScrubMasks` feeds a text to `Scrub` and to
+    `scrub.py --serve`. Its replay of Scrub's passes compiles Redact's pattern from execx's source and must equal
+    Scrub's output. The fuzz wants the port's output to be that replay's text before its host pass with the port's
+    host pass (Scrub's per run of host characters, which must equal Scrub's own, and a run over 253 that holds a dot
+    as `<host>`) and its cap: Scrub with two masks more, on every text. Its 23 seeds (R54's shapes, the engine's
+    differences, a sample of each pattern, the texts Python backtracks on) run in `make test` in under a second; both
+    skip without python3, and landing.md says to fuzz it for a few minutes after a change to either scrub.
   Rejected: keeping the quote and `-----BEGIN` characters of a dropped word and a wider kept key (the fix R54
   suggested). A dropped word changes what every pass after it sees, kept parts or not: kept at the end of a long
   `ghp_` word, `authorization:` masks the next word as its token, where Go's Redact takes `authorization` into the
   GitHub token and its key-value pass then masks the value after `password=`, which the port would show. Also
   rejected: a copy of execx's pattern in the test (a new pattern there left the seeds green), a check that each Go
-  pattern stands somewhere in scrub.py (a comment passed it), and a time limit inside the scrub's process (a long
+  pattern stands somewhere in scrub.py (a comment passed it), a check of five named Go variables (a new one in
+  scrub.go with its own pass passed it), a REDACT of three fixed places of the list (a fifth pattern added to the
+  list as the test asked was never applied), an oracle that placed the port's pieces at their first fit on the bytes
+  Scrub kept (a leaked piece equal to a kept one passed it), and a time limit inside the scrub's process (a long
   match runs in the regex engine's C code). Tests, each failing first on the old scrub: 13 of the fuzz's seeds (the
   R54 shapes, the vertical tab, the long s and the Kelvin sign); selftest.sh's three R54 checks on task 19's notes,
   each marker on the line after its long word so that the 400-character cut cannot hide it, with task 19's masked
   first line and no fallback line; the speed case with both megabyte notes (118 s before, 1 s after), task 13's eyJ
   and task 20's tokens as `[...]`; a note's trailing vertical tab after `Authorization: Bearer` and a wait's quoted
-  value cut at its `(` masked; a note left out past the time limit. A made-up `npm_` pattern added to execx's
-  `secretPattern` fails `make test` in the pattern test. Seven mutations of scrub.py (the JWT search on from the
+  value cut at its `(` masked; a note left out past the time limit; the time limit's odd values and a scrub whose
+  interpreter cannot start (evidence.sh's own `scrub_timeout()` and `scrubbed()`, cut out of it), and a `nan` limit
+  end to end. A made-up `npm_` pattern added to execx's `secretPattern` fails `make test` in the pattern test, and
+  added to scrub.py's list too it is masked; a pattern and pass added to scrub.go fail it twice (the set and the
+  pass count); a JWT pattern changed in the list stops scrub.py at its start. The exact oracle fails 15 of the 23
+  seeds on the scrub before R54. Seven mutations of scrub.py (the JWT search on from the
   word's end, the email search without its first try, host runs without the folded runes, Python's `$`, Python's
   `\s`, no folds, a word dropped) each fail a seed. The fuzz ran 446,870 texts and a grammar of keys, separators,
   quotes, markers and long words 138,000 more: none showed a byte Scrub masked, and the port's output equaled Scrub's

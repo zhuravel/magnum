@@ -3,9 +3,10 @@ package runtime
 // The improvement loop's evidence.sh shows the factory's texts (the liaison's
 // notes, the holds' words) through a Python port of Scrub,
 // .claude/skills/magnum-improve/scripts/scrub.py. The port may mask more than
-// Scrub, never less: TestEvidenceScrubHoldsTheGoScrubsPatterns checks its
-// pattern lists against the Go source, and the fuzz below feeds both the same
-// text and fails when the port shows a byte Scrub masked. Run it with
+// Scrub, never less. TestEvidenceScrubHoldsTheGoScrubsPatterns checks its
+// patterns against the Go source, and the fuzz below feeds both the same text
+// and wants the port's output to be Scrub's with the port's two extra masks.
+// Run it with
 //
 //	go test -run '^$' -fuzz FuzzEvidenceScrubMasksEveryByteScrubMasks ./internal/factory/runtime
 //
@@ -21,6 +22,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"maps"
 	"os/exec"
 	"regexp"
 	"slices"
@@ -28,33 +30,45 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 )
 
-// scrubPortPath is the port, from this package's folder.
-const scrubPortPath = "../../../.claude/skills/magnum-improve/scripts/scrub.py"
+// The port, and the Go files of the scrub, from this package's folder.
+const (
+	scrubPortPath = "../../../.claude/skills/magnum-improve/scripts/scrub.py"
+	execxGoPath   = "../../execx/execx.go"
+	scrubGoPath   = "scrub.go"
+)
 
-// execxSecretPatterns reads the patterns of execx's secretPattern, which execx
-// does not export, from its source: the string literals of
-// regexp.MustCompile(strings.Join([]string{...}, "|")). It fails when it finds
-// none, or when the declaration takes another shape.
-func execxSecretPatterns(tb testing.TB) []string {
+// parseGo parses a Go file of the scrub.
+func parseGo(tb testing.TB, path string) *ast.File {
 	tb.Helper()
-	file, err := parser.ParseFile(token.NewFileSet(), "../../execx/execx.go", nil, 0)
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 	if err != nil {
 		tb.Fatal(err)
 	}
-	unquote := func(e ast.Expr) string {
-		lit, ok := e.(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			tb.Fatalf("execx's secretPattern holds a pattern that is no string literal: %#v", e)
-		}
-		s, err := strconv.Unquote(lit.Value)
-		if err != nil {
-			tb.Fatal(err)
-		}
-		return s
+	return file
+}
+
+// isCall says whether call calls x.fn, a package's function or a variable's
+// method.
+func isCall(call *ast.CallExpr, x, fn string) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != fn {
+		return false
 	}
-	var pats []string
+	id, ok := sel.X.(*ast.Ident)
+	return ok && (x == "" || id.Name == x)
+}
+
+// goPatterns reads the patterns of every regexp.MustCompile call in a Go file,
+// by the package variable it is assigned to ("" for any other). A call's
+// argument must be a string literal or strings.Join of a list of them with
+// "|": anything else fails, so that no pattern escapes the reading.
+func goPatterns(tb testing.TB, path string) map[string][]string {
+	tb.Helper()
+	file := parseGo(tb, path)
+	names := map[*ast.CallExpr]string{}
 	for _, decl := range file.Decls {
 		gen, ok := decl.(*ast.GenDecl)
 		if !ok || gen.Tok != token.VAR {
@@ -62,172 +76,176 @@ func execxSecretPatterns(tb testing.TB) []string {
 		}
 		for _, spec := range gen.Specs {
 			vs, ok := spec.(*ast.ValueSpec)
-			if !ok || len(vs.Names) != 1 || vs.Names[0].Name != "secretPattern" || len(vs.Values) != 1 {
+			if !ok {
 				continue
 			}
-			compile, ok := vs.Values[0].(*ast.CallExpr)
-			if !ok || len(compile.Args) != 1 {
-				tb.Fatal("execx's secretPattern is no longer regexp.MustCompile(...)")
-			}
-			switch arg := compile.Args[0].(type) {
-			case *ast.BasicLit:
-				pats = append(pats, unquote(arg))
-			case *ast.CallExpr:
-				var list *ast.CompositeLit
-				if len(arg.Args) == 2 {
-					list, _ = arg.Args[0].(*ast.CompositeLit)
+			for i, v := range vs.Values {
+				if call, ok := v.(*ast.CallExpr); ok && i < len(vs.Names) {
+					names[call] = vs.Names[i].Name
 				}
-				if list == nil || unquote(arg.Args[1]) != "|" {
-					tb.Fatal(`execx's secretPattern is no longer regexp.MustCompile(strings.Join([]string{...}, "|"))`)
-				}
-				for _, e := range list.Elts {
-					pats = append(pats, unquote(e))
-				}
-			default:
-				tb.Fatalf("execx's secretPattern compiles what this test cannot read: %#v", arg)
 			}
 		}
 	}
+	unquote := func(e ast.Expr) string {
+		lit, ok := e.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			tb.Fatalf("%s compiles a pattern that is no string literal: %#v", path, e)
+		}
+		s, err := strconv.Unquote(lit.Value)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		return s
+	}
+	pats := map[string][]string{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || !isCall(call, "regexp", "MustCompile") {
+			return true
+		}
+		if len(call.Args) != 1 {
+			tb.Fatalf("%s calls regexp.MustCompile with %d arguments", path, len(call.Args))
+		}
+		name := names[call]
+		switch arg := call.Args[0].(type) {
+		case *ast.BasicLit:
+			pats[name] = append(pats[name], unquote(arg))
+		case *ast.CallExpr:
+			var list *ast.CompositeLit
+			if isCall(arg, "strings", "Join") && len(arg.Args) == 2 {
+				list, _ = arg.Args[0].(*ast.CompositeLit)
+			}
+			if list == nil || unquote(arg.Args[1]) != "|" {
+				tb.Fatalf(`%s's %s is no regexp.MustCompile(strings.Join([]string{...}, "|"))`, path, name)
+			}
+			for _, e := range list.Elts {
+				pats[name] = append(pats[name], unquote(e))
+			}
+		default:
+			tb.Fatalf("%s compiles what this test cannot read: %#v", path, arg)
+		}
+		return true
+	})
+	return pats
+}
+
+// execxSecretPatterns are execx's secretPattern, which execx does not export,
+// read from its source.
+func execxSecretPatterns(tb testing.TB) []string {
+	tb.Helper()
+	pats := goPatterns(tb, execxGoPath)["secretPattern"]
 	if len(pats) == 0 {
-		tb.Fatal("no pattern of execx's secretPattern found in internal/execx/execx.go")
+		tb.Fatalf("no pattern of execx's secretPattern found in %s", execxGoPath)
 	}
 	return pats
 }
 
-// keptPiece is a piece of a replacement: a span of the text being replaced
-// (kept) or a string put in.
-type keptPiece struct {
-	from, to int
-	put      string
+// goPasses counts the passes a function of a Go file runs over its text: its
+// calls of a ReplaceAll method, and for each call of another function in
+// passesOf, that one's passes.
+func goPasses(tb testing.TB, path, fn string, passesOf map[string]int) int {
+	tb.Helper()
+	var body *ast.BlockStmt
+	for _, decl := range parseGo(tb, path).Decls {
+		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == fn {
+			body = fd.Body
+		}
+	}
+	if body == nil {
+		tb.Fatalf("no func %s in %s", fn, path)
+	}
+	n := 0
+	ast.Inspect(body, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+			if strings.HasPrefix(sel.Sel.Name, "ReplaceAll") {
+				n++
+			}
+			if x, ok := sel.X.(*ast.Ident); ok {
+				n += passesOf[x.Name+"."+sel.Sel.Name]
+			}
+		}
+		return true
+	})
+	return n
 }
 
-// scrubKept replays Scrub's passes over text with the origin of each byte, and
-// returns Scrub's output and which bytes of text it kept. redact is execx's
+// scrubPass is a pass of Scrub's replay: a pattern and ReplaceAllString's
+// template, or with "" Redact's own function.
+type scrubPass struct {
+	re   *regexp.Regexp
+	with string
+}
+
+// scrubPasses are Scrub's passes in its order; redact is execx's
 // secretPattern, compiled from its source.
-func scrubKept(redact *regexp.Regexp, text string) (string, []bool) {
-	put := func(s string) func(string, []int) []keptPiece {
-		return func(string, []int) []keptPiece { return []keptPiece{{put: s}} }
+func scrubPasses(redact *regexp.Regexp) []scrubPass {
+	return []scrubPass{
+		{redact, ""},
+		{scrubTokens, "<redacted>"},
+		{scrubPairs, "$1$2<redacted>"},
+		{scrubEmail, "<email>"},
+		{scrubHost, "<host>"},
 	}
-	passes := []struct {
-		re   *regexp.Regexp
-		with func(cur string, m []int) []keptPiece
-	}{
-		{redact, func(cur string, m []int) []keptPiece {
-			s := cur[m[0]:m[1]]
-			if i := strings.IndexByte(s, ':'); i >= 0 && strings.HasPrefix(strings.ToLower(s), "authorization") {
-				return []keptPiece{{from: m[0], to: m[0] + i + 1}, {put: " <redacted>"}}
-			}
-			return []keptPiece{{put: "<redacted>"}}
-		}},
-		{scrubTokens, put("<redacted>")},
-		{scrubPairs, func(_ string, m []int) []keptPiece {
-			return []keptPiece{{from: m[2], to: m[3]}, {from: m[4], to: m[5]}, {put: "<redacted>"}}
-		}},
-		{scrubEmail, put("<email>")},
-		{scrubHost, put("<host>")},
-	}
-	cur, origin := text, make([]int, len(text))
-	for i := range origin {
-		origin[i] = i
-	}
-	for _, p := range passes {
-		var b strings.Builder
-		var next []int
-		keep := func(from, to int) {
-			b.WriteString(cur[from:to])
-			next = append(next, origin[from:to]...)
-		}
-		last := 0
-		for _, m := range p.re.FindAllStringSubmatchIndex(cur, -1) {
-			keep(last, m[0])
-			for _, piece := range p.with(cur, m) {
-				if piece.put == "" {
-					keep(piece.from, piece.to)
-					continue
-				}
-				b.WriteString(piece.put)
-				next = append(next, slices.Repeat([]int{-1}, len(piece.put))...)
-			}
-			last = m[1]
-		}
-		keep(last, len(cur))
-		cur, origin = b.String(), next
-	}
-	kept := make([]bool, len(text))
-	for _, o := range origin {
-		if o >= 0 {
-			kept[o] = true
-		}
-	}
-	return cur, kept
 }
 
-// portMasks are what the port puts where it masked: Scrub's three, and the
-// [...] its last step puts for a run of non-space characters still over 2,000
-// after the masks (a minified JSON whose quoted secret Scrub does not see).
-var portMasks = []string{"<redacted>", "<email>", "<host>", "[...]"}
+// scrubReplay replays Scrub's passes over text, and returns its text before
+// the host pass, its last, and its output.
+func scrubReplay(redact *regexp.Regexp, text string) (beforeHost, clean string) {
+	clean = text
+	for _, p := range scrubPasses(redact) {
+		if p.re == scrubHost {
+			beforeHost = clean
+		}
+		if p.with != "" {
+			clean = p.re.ReplaceAllString(clean, p.with)
+			continue
+		}
+		clean = p.re.ReplaceAllStringFunc(clean, func(m string) string {
+			if i := strings.IndexByte(m, ':'); i >= 0 && strings.HasPrefix(strings.ToLower(m), "authorization") {
+				return m[:i+1] + " <redacted>"
+			}
+			return "<redacted>"
+		})
+	}
+	return beforeHost, clean
+}
 
-// portShown returns the first piece of the port's output that stands on no
-// bytes Scrub kept, where the port masked less than Scrub, or "" and true. The
-// output is the text with spans put out of sight behind the masks: its pieces
-// between the masks must stand on kept bytes of the text, in order, the first at
-// the text's start, the last at its end, and a mask between two over at least
-// one byte. A piece is placed at its first fit, which leaves the most room to
-// the rest. A space right before <redacted> goes with the mask: Redact puts one
-// after "Authorization:", which a key's value can mask in turn.
-func portShown(text string, kept []bool, out string) (string, bool) {
-	var pieces []string
-	for {
-		at, n := -1, 0
-		for _, mask := range portMasks {
-			if i := strings.Index(out, mask); i >= 0 && (at < 0 || i < at) {
-				at, n = i, len(mask)
-			}
+var (
+	// hostRun is a run of the port's host characters (HOST_RUN): the word
+	// characters, dot, hyphen, and the long s and the Kelvin sign Go's (?i)
+	// folds to.
+	hostRun = regexp.MustCompile(`[A-Za-z0-9_.\x{17f}\x{212a}-]+`)
+	// spaceRun is a run of non-space characters, as Go's \S and the port's
+	// WORD count them.
+	spaceRun = regexp.MustCompile(`\S+`)
+)
+
+// hostRuns runs Scrub's host pass on each run of host characters of text, as
+// the port does, with long, a run of more than 253 characters that holds a dot
+// as <host> (the port's first extra mask).
+func hostRuns(text string, long bool) string {
+	return hostRun.ReplaceAllStringFunc(text, func(run string) string {
+		if long && strings.Contains(run, ".") && utf8.RuneCountInString(run) > 253 {
+			return "<host>"
 		}
-		if at < 0 {
-			pieces = append(pieces, out)
-			break
+		return scrubHost.ReplaceAllString(run, "<host>")
+	})
+}
+
+// capRuns puts [...] for each run of non-space characters of text over 2,000
+// characters (the port's second extra mask). An invalid byte counts as one,
+// as the port's surrogateescape decoding counts it.
+func capRuns(text string) string {
+	return spaceRun.ReplaceAllStringFunc(text, func(run string) string {
+		if utf8.RuneCountInString(run) > 2000 {
+			return "[...]"
 		}
-		piece := out[:at]
-		if out[at:at+n] == "<redacted>" && strings.HasSuffix(piece, " ") {
-			piece = piece[:len(piece)-1]
-		}
-		pieces = append(pieces, piece)
-		out = out[at+n:]
-	}
-	fits := func(at int, piece string) bool {
-		return at >= 0 && at+len(piece) <= len(text) && text[at:at+len(piece)] == piece &&
-			!slices.Contains(kept[at:at+len(piece)], false)
-	}
-	first, last := pieces[0], pieces[len(pieces)-1]
-	if len(pieces) == 1 {
-		if len(first) != len(text) || !fits(0, first) {
-			return first, false
-		}
-		return "", true
-	}
-	if !fits(0, first) {
-		return first, false
-	}
-	end := len(first)
-	for _, piece := range pieces[1 : len(pieces)-1] {
-		at := end + 1
-		for at+len(piece) <= len(text) && !fits(at, piece) {
-			i := strings.Index(text[at+1:], piece)
-			if i < 0 {
-				return piece, false
-			}
-			at += 1 + i
-		}
-		if at+len(piece) > len(text) {
-			return piece, false
-		}
-		end = at + len(piece)
-	}
-	if at := len(text) - len(last); at <= end || !fits(at, last) {
-		return last, false
-	}
-	return "", true
+		return run
+	})
 }
 
 // scrubPort is the port's process, which scrubs one text at a time: a 4-byte
@@ -305,35 +323,10 @@ func brief(s string) string {
 // 2,000-character words, and small enough for many texts a second.
 const maxFill = 6000
 
-var (
-	hostRun  = regexp.MustCompile(`[A-Za-z0-9_.\x{17f}\x{212a}-]+`)
-	spaceRun = regexp.MustCompile(`\S+`)
-)
-
-// portLongRun says whether the port may mask more of text than Scrub, whose
-// output is clean: text has a run of host characters over 253, which the port
-// masks whole when it holds a dot, or clean has a run of non-space characters
-// over 2,000 (masks can make a run longer), which the port's last step drops.
-// Else the port's output is Scrub's.
-func portLongRun(text, clean string) bool {
-	for _, run := range []struct {
-		re   *regexp.Regexp
-		in   string
-		over int
-	}{{hostRun, text, 253}, {spaceRun, clean, 2000}} {
-		for _, at := range run.re.FindAllStringIndex(run.in, -1) {
-			if at[1]-at[0] > run.over {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func TestEvidenceScrubHoldsTheGoScrubsPatterns(t *testing.T) {
 	python, err := exec.LookPath("python3")
 	if err != nil {
-		t.Skip("no python3 to run evidence.sh's scrub")
+		t.Skip("no python3: the drift of evidence.sh's scrub from the Go scrub is not checked")
 	}
 	out, err := exec.CommandContext(t.Context(), python, "-I", scrubPortPath, "--patterns").Output()
 	if err != nil {
@@ -343,27 +336,66 @@ func TestEvidenceScrubHoldsTheGoScrubsPatterns(t *testing.T) {
 	if err := json.Unmarshal(out, &port); err != nil {
 		t.Fatalf("scrub.py --patterns printed no JSON: %v\n%s", err, out)
 	}
-	for _, want := range []struct {
-		list string
-		inGo []string
-	}{
-		{"redact", execxSecretPatterns(t)},
-		{"tokens", []string{scrubTokens.String()}},
-		{"pairs", []string{scrubPairs.String()}},
-		{"email", []string{scrubEmail.String()}},
-		{"host", []string{scrubHost.String()}},
+	execxPats, scrubPats := goPatterns(t, execxGoPath), goPatterns(t, scrubGoPath)
+
+	// Every pattern of every regexp.MustCompile in the two Go files is in
+	// scrub.py's lists, and each of theirs is one of these.
+	set := func(lists ...map[string][]string) map[string]bool {
+		s := map[string]bool{}
+		for _, l := range lists {
+			for _, pats := range l {
+				for _, p := range pats {
+					s[p] = true
+				}
+			}
+		}
+		return s
+	}
+	inGo, inPort := set(execxPats, scrubPats), set(port)
+	if len(inGo) == 0 || !maps.Equal(inGo, inPort) {
+		var onlyGo, onlyPort []string
+		for p := range inGo {
+			if !inPort[p] {
+				onlyGo = append(onlyGo, p)
+			}
+		}
+		for p := range inPort {
+			if !inGo[p] {
+				onlyPort = append(onlyPort, p)
+			}
+		}
+		t.Errorf("scrub.py's patterns are not the Go scrub's (%d in Go):\nonly in Go:       %q\nonly in scrub.py: %q",
+			len(inGo), onlyGo, onlyPort)
+	}
+
+	// In their lists, in their order.
+	for list, inGo := range map[string][]string{
+		"redact": execxSecretPatterns(t),
+		"tokens": scrubPats["scrubTokens"],
+		"pairs":  scrubPats["scrubPairs"],
+		"email":  scrubPats["scrubEmail"],
+		"host":   scrubPats["scrubHost"],
 	} {
-		got := port[want.list]
-		if want.list == "tokens" {
-			got = []string{strings.Join(got, "|")}
-		}
-		if !slices.Equal(got, want.inGo) {
+		if !slices.Equal(port[list], inGo) {
 			t.Errorf("scrub.py's %s patterns are not the Go scrub's, word for word:\nscrub.py: %q\nGo:       %q",
-				want.list, got, want.inGo)
+				list, port[list], inGo)
 		}
+	}
+
+	// Scrub runs as many passes as its replay here, which the fuzz compares
+	// the port with.
+	redact := map[string]int{"execx.Redact": goPasses(t, execxGoPath, "Redact", nil)}
+	if got, want := goPasses(t, scrubGoPath, "Scrub", redact), len(scrubPasses(nil)); got != want {
+		t.Errorf("Scrub runs %d passes and its replay here %d: add the new pass to scrubPasses and to scrub.py", got, want)
 	}
 }
 
+// FuzzEvidenceScrubMasksEveryByteScrubMasks wants the port's output of a text
+// to be Scrub's with the port's two extra masks: a run of host characters over
+// 253 that holds a dot as <host>, then a run of non-space characters still
+// over 2,000 as [...]. Both only mask more, so the port shows no byte Scrub
+// masks. The port runs the host pattern on each run of host characters; that
+// this is Scrub's host pass on the whole text is checked on each text too.
 func FuzzEvidenceScrubMasksEveryByteScrubMasks(f *testing.F) {
 	port := startScrubPort(f)
 	redact := regexp.MustCompile(strings.Join(execxSecretPatterns(f), "|"))
@@ -425,21 +457,18 @@ func FuzzEvidenceScrubMasksEveryByteScrubMasks(f *testing.F) {
 		if fill != "" {
 			text = head + strings.Repeat(fill, min(int(n), maxFill/len(fill))) + tail
 		}
-		clean, kept := scrubKept(redact, text)
+		beforeHost, clean := scrubReplay(redact, text)
 		if want, _ := Scrub(text); clean != want {
 			t.Fatalf("the replay of Scrub parted from Scrub:\nreplay: %q\nScrub:  %q", brief(clean), brief(want))
 		}
-		out := port.scrub(t, text)
-		if !portLongRun(text, clean) {
-			if out != clean {
-				t.Fatalf("evidence.sh's scrub is not Scrub on a text with no long run\ntext:  %q\nScrub: %q\nport:  %q",
-					brief(text), brief(clean), brief(out))
-			}
-			return
+		if runs := hostRuns(beforeHost, false); runs != clean {
+			t.Fatalf("Scrub's host pass on each run of host characters is not its pass on the whole text:\nruns:  %q\nScrub: %q",
+				brief(runs), brief(clean))
 		}
-		if piece, ok := portShown(text, kept, out); !ok {
-			t.Fatalf("evidence.sh's scrub shows %q where Scrub masks it\ntext:  %q\nScrub: %q\nport:  %q",
-				brief(piece), brief(text), brief(clean), brief(out))
+		want := capRuns(hostRuns(beforeHost, true))
+		if out := port.scrub(t, text); out != want {
+			t.Fatalf("evidence.sh's scrub is not Scrub with its two extra masks\ntext:  %q\nScrub: %q\nwant:  %q\nport:  %q",
+				brief(text), brief(clean), brief(want), brief(out))
 		}
 	})
 }

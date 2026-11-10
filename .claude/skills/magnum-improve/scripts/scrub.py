@@ -5,9 +5,9 @@ AWS, Slack, OpenAI, Anthropic, GitLab, Stripe and Google keys; the values of pas
 stays); emails; host names and IPv4 addresses. Each pattern is the Go one word for word, in the lists below, and go()
 compiles it with Go's meaning. It masks every byte the Go scrub masks; it masks more only where a run of host
 characters is longer than a host name may be, and where a run of non-space characters is still over 2,000 after the
-masks. In internal/factory/runtime, TestEvidenceScrubHoldsTheGoScrubsPatterns checks the lists against the Go source,
-and FuzzEvidenceScrubMasksEveryByteScrubMasks feeds both scrubs the same texts: it fails on a byte this one shows that
-the Go scrub masked, and on any other output than the Go scrub's where no such long run is.
+masks. In internal/factory/runtime, TestEvidenceScrubHoldsTheGoScrubsPatterns checks the lists against every pattern
+the Go source compiles, and Scrub's passes against its replay there; FuzzEvidenceScrubMasksEveryByteScrubMasks feeds
+both scrubs the same texts and wants this one's output to be the Go scrub's with these two extra masks.
 
 Python's engine, unlike Go's, backtracks: the JWT pattern on an eyJ repeated, the email pattern on a long run of the
 characters an address is made of and the host pattern on a dotted run take minutes on a long word. So the JWT and the
@@ -37,7 +37,12 @@ GO_FOLDS = {"s": "\u017f", "k": "\u212a"}
 
 
 def go(pattern):
-    """A Go pattern (RE2 syntax) in Python's, compiled with re.ASCII, to match what Go's regexp matches: \\s and \\S
+    """A Go pattern compiled with re.ASCII, in go_syntax's Python form."""
+    return re.compile(go_syntax(pattern), re.ASCII)
+
+
+def go_syntax(pattern):
+    """A Go pattern (RE2 syntax) in Python's, for re.ASCII, to match what Go's regexp matches: \\s and \\S
     are Go's (no vertical tab), $ is the end of the text, and (?i) folds s and k as Go does. It knows the constructs
     the scrub's patterns use, and fails on another flag, a named group, a letter's escape in a class but \\s (and
     [\\s\\S]), or a negated class under (?i) that holds s or k."""
@@ -81,7 +86,7 @@ def go(pattern):
         else:
             out.append(c)
             i += 1
-    return re.compile("".join(out), re.ASCII)
+    return "".join(out)
 
 
 def go_class(cls, fold):
@@ -134,18 +139,35 @@ PAIRS_GO = r'''(?i)\b((?:aws_)?(?:secret(?:_access)?_key|password|passwd|pwd|sec
 EMAIL_GO = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
 HOST_GO = r"(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|dev|app|ai|cloud|internal|local|lan|corp|intra|info|biz|tech|xyz|site|us|uk|de|ua|eu|me|cc|tv|gg)\b|\b(?:\d{1,3}\.){3}\d{1,3}\b"
 
-# Redact runs as three searches, merged: the JWT one apart (jwt_from), so that it skips the starts that fail; the
-# private key's header, whose body (body_end) is searched only for a header that wins; and the GitHub token, the
-# Authorization value and that header as one pattern, each in a group of its own for Go's order. A search whose
-# match another one's took in is searched again from that match's end, and a JWT or a body found before is reused,
-# so that no part of the text is searched again to its end.
-BEGIN_HEAD, BEGIN_BODY, BEGIN_TAIL = REDACT_GO[3].partition(r"[\s\S]*?(?:")
-if not (BEGIN_BODY and BEGIN_TAIL.endswith("|$)")):
-    raise ValueError("scrub: execx's private key pattern is no longer a header, a lazy body and an END or $")
-REDACT = go("|".join("(%s)" % p for p in (REDACT_GO[0], REDACT_GO[2], BEGIN_HEAD)))
-REDACT_ORDER = {1: 0, 2: 2, 3: 3}  # REDACT's group: its pattern's place in Go's order (the JWT one is 1)
-BEGIN_END = go(BEGIN_TAIL[: -len("|$)")])
-JWT = go(REDACT_GO[1])
+# Redact runs as merged searches: the JWT pattern apart (jwt_from), so that it skips the starts that fail; a private
+# key's header, whose body (body_end) is searched only for a header that wins; and every other pattern of REDACT_GO
+# with that header in one search, each in a group named by its place in the list, so that a pattern added to the
+# list runs, in Go's order. A search whose match another one's took in is searched again from that match's end, and
+# a JWT or a body found before is reused, so that no part of the text is searched again to its end. jwt_from's skips
+# hold for JWT_GO only, and body_end for a pattern of a header, a lazy body and an END or $: the import fails unless
+# the list holds each once.
+JWT_GO = r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"
+KEY_SHAPE = re.compile(r"(.+)\[\\s\\S\]\*\?\(\?:(.+)\|\$\)", re.DOTALL)
+KEY_AT = [i for i, p in enumerate(REDACT_GO) if KEY_SHAPE.fullmatch(p)]
+if REDACT_GO.count(JWT_GO) != 1 or len(KEY_AT) != 1:
+    raise ValueError("scrub: redact() is built for Redact's JWT pattern %s and one private key pattern of a header, "
+                     "a lazy body and an END or $; execx's patterns no longer hold each once" % JWT_GO)
+JWT_AT, KEY_AT = REDACT_GO.index(JWT_GO), KEY_AT[0]
+KEY_HEAD, KEY_END = KEY_SHAPE.fullmatch(REDACT_GO[KEY_AT]).groups()
+
+
+def in_group(i, pattern):
+    """Pattern i of Redact's, a group named p<i> of the one search: a leading (?i) becomes the group's own."""
+    syntax = go_syntax(pattern)
+    if syntax.startswith("(?i)"):
+        syntax = "(?i:" + syntax[4:] + ")"
+    return "(?P<p%d>%s)" % (i, syntax)
+
+
+REDACT_IN = [i for i in range(len(REDACT_GO)) if i != JWT_AT]
+REDACT = re.compile("|".join(in_group(i, KEY_HEAD if i == KEY_AT else REDACT_GO[i]) for i in REDACT_IN), re.ASCII)
+KEY_BODY_END = go(KEY_END)
+JWT = go(JWT_GO)
 JWT_RUN = re.compile(r"[A-Za-z0-9_-]*", re.ASCII)
 TOKENS = go("|".join(TOKENS_GO))
 PAIRS = go(PAIRS_GO)
@@ -188,14 +210,19 @@ def body_end(text, at, last):
     and one that found an END at or after at finds that one."""
     frm, m = last
     if frm is None or frm > at or m is not None and m.start() < at:
-        m = BEGIN_END.search(text, at)
+        m = KEY_BODY_END.search(text, at)
         last[:] = at, m
     return m.end() if m else len(text)
 
 
+def redact_at(m):
+    """The place in REDACT_GO of the pattern a match of REDACT is of."""
+    return next(i for i in REDACT_IN if m.group("p%d" % i) is not None)
+
+
 def redact(text):
-    """execx.Redact: the leftmost match of its four patterns, the first of them in Go's order where two start at one
-    place, and on from its end. An Authorization value keeps its name."""
+    """execx.Redact: the leftmost match of its patterns, the first of them in Go's order where two start at one place,
+    and on from its end. An Authorization value keeps its name."""
     out, pos, other, jwt, jwt_runs, ends = [], 0, None, None, [0, 0, None], [None, None]
     while True:
         # each search's next match at pos or after: None to search, False when there is none
@@ -206,11 +233,12 @@ def redact(text):
         if not other and not jwt:
             out.append(text[pos:])
             return "".join(out)
-        if jwt and (not other or (jwt[0], 1) < (other.start(), REDACT_ORDER[other.lastindex])):
+        at = redact_at(other) if other else None
+        if jwt and (not other or (jwt[0], JWT_AT) < (other.start(), at)):
             start, end = jwt
         else:
             start = other.start()
-            end = body_end(text, other.end(), ends) if other.lastindex == 3 else other.end()
+            end = body_end(text, other.end(), ends) if at == KEY_AT else other.end()
         out.append(text[pos:start])
         colon = text.find(":", start, end)
         if colon >= 0 and text[start : start + 13].lower() == "authorization":
