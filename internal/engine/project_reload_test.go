@@ -551,3 +551,36 @@ func TestAReloadCheckReadsAHeadAgainOnceItsFetchBringsIt(t *testing.T) {
 		t.Fatalf("quits = %v: the fetch brought b2, whose list leaves the config alone", *at)
 	}
 }
+
+// The reload check takes the PR's stored file list only when it was read
+// against the base branch the PR names now: a head whose list was read
+// while the PR targeted release, and which the PR has targeted the default
+// branch with since, without a push, may bring release's own .claude/
+// changes, which a list against release does not name. git then decides,
+// against the session's base, and the session is quit.
+func TestAReloadCheckDoesNotDecideOnAFileListOfAnotherBase(t *testing.T) {
+	g := &projectGit{changed: map[string][]string{"b2": {"app/models/order.rb", ".claude/settings.json"}}}
+	h := newHarness(t, func(h *harness) { h.d.Git = g })
+	h.reviewedPR(2, "b1")
+	at := reloadingClaude(h)
+	h.advance(30 * time.Minute)
+	untouched := []string{"app/models/order.rb"}
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", base: "release", files: untouched})
+	h.tick()
+	h.gh.fail(errors.New("GitHub is down"), nil)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", files: untouched})
+	h.advance(5 * time.Minute)
+	h.tick()
+	if f, ok, err := h.st.PRFilesOf(h.ctx, h.pr(2).ID); err != nil || !ok || f.BaseRef != "release" || f.HeadSHA != "b2" {
+		t.Fatalf("file list = %+v, %v, %v; want b2's against release", f, ok, err)
+	}
+	if n := len(h.rd.all()); n != 2 {
+		t.Fatalf("rounds = %d, want the re-review", n)
+	}
+	if len(*at) == 0 {
+		t.Fatal("no quit: the list of another base decided")
+	}
+	if calls := g.all(); !slices.Equal(calls, []string{"origin/master...b2"}) {
+		t.Fatalf("git comparisons = %q, want the default branch's", calls)
+	}
+}
