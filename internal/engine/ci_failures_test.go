@@ -45,8 +45,8 @@ func ciTime(mmss string) time.Time {
 // (22:10:05 to 22:15:30), capybara failed in a step GitHub gave no times,
 // jest was cancelled and lint passed; and their logs: rspec's 300 lines of
 // the failed step, coloured, a token in one, between a setup line and a
-// cleanup line, and capybara's log, whose tail begins inside a private
-// key's block.
+// cleanup line, and an env line of secrets, and capybara's log, whose tail
+// begins inside a private key's block.
 func (h *harness) setFailedJobs() {
 	h.gh.mu.Lock()
 	defer h.gh.mu.Unlock()
@@ -69,8 +69,11 @@ func (h *harness) setFailedJobs() {
 	rspec.WriteString(logAt("10:01", "##[group]Run actions/checkout with secret-setup-line"))
 	for i := range 300 {
 		text := fmt.Sprintf("\x1b[31mFailure line %03d\x1b[0m", i)
-		if i == 250 {
+		switch i {
+		case 250:
 			text = "export GH_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+		case 251:
+			text = "env DB_PASSWORD=hunter2 RAILS_MASTER_KEY=0f1e2d3c4b5a69788796a5b4c3d2e1f0"
 		}
 		rspec.WriteString(logAt(fmt.Sprintf("%02d:%02d", 10+(i+6)/60, (i+6)%60), text))
 	}
@@ -149,7 +152,7 @@ func TestTheCIReaderStripsEscapesScrubsTokensAndKeepsTheFailedStepsLast200Lines(
 		t.Errorf("rspec's log runs from %q to %q, want the failed step's last 200 lines", rspec.Log[0], rspec.Log[199])
 	}
 	all := strings.Join(rspec.Log, "\n")
-	for _, gone := range []string{"\x1b", "ghp_", "setup-line", "cleanup-line", "2026-11-08T"} {
+	for _, gone := range []string{"\x1b", "ghp_", "hunter2", "0f1e2d3c", "setup-line", "cleanup-line", "2026-11-08T"} {
 		if strings.Contains(all, gone) {
 			t.Errorf("rspec's log holds %q", gone)
 		}
@@ -230,5 +233,149 @@ func TestTheCIReaderSaysWhatItCouldNotRead(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(h.d.Layout.ReviewDir("talkable", "talkable", 2, other.HeadSHA), ciFailuresFile)); err == nil {
 		t.Error("a read that failed wrote ci-failures.json")
+	}
+}
+
+// Two failed required checks of one run (a required list that names two
+// of its jobs) list each failed job once, under the check of its own name
+// (a job of no check's name under the run's first check), and read each
+// log once: the counts are of distinct jobs.
+func TestTwoFailedChecksOfOneRunListEachJobAndReadItsLogOnce(t *testing.T) {
+	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"), requiredCompletion)
+	h.openOwn(prSpec{head: fixHead})
+	h.tick()
+	h.setHeadRuns(fixHead, failedCIRun(fixHead, 1))
+	h.setFailedJobs()
+	pr, repo := h.pr(2), store.Repo{Owner: "talkable", Name: "talkable", DefaultBranch: "main"}
+	acts := h.e.ciActions("zhuravel")
+	read := h.e.readCIFailures(h.ctx, acts, repo, pr, []ciFailedCheck{
+		{Entry: "rspec (3)", Name: "rspec (3)", WorkflowFile: "ci.yml"},
+		{Entry: "capybara", Name: "capybara", WorkflowFile: "ci.yml"},
+	})
+	acts.end()
+	if read.Unread || read.File == "" {
+		t.Fatalf("read = %+v", read)
+	}
+	if calls := h.ghCalls("job_log:"); !slices.Equal(calls, []string{"job_log:talkable/talkable#101", "job_log:talkable/talkable#103"}) {
+		t.Errorf("log reads = %q, want each failed job's once", calls)
+	}
+	if n := len(h.ghCalls("run_jobs:")); n != 1 {
+		t.Errorf("jobs reads = %d, want one for the run", n)
+	}
+	raw, err := os.ReadFile(read.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f ciFailuresJSON
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string][]string{}
+	lines := 0
+	for _, c := range f.Checks {
+		for _, j := range c.Jobs {
+			listed[c.Entry] = append(listed[c.Entry], j.Name)
+			lines += len(j.Log)
+		}
+	}
+	slices.Sort(listed["rspec (3)"])
+	if !slices.Equal(listed["rspec (3)"], []string{"jest", "rspec (3)"}) || !slices.Equal(listed["capybara"], []string{"capybara"}) {
+		t.Errorf("jobs by check = %q, want each job once, under the check of its name", listed)
+	}
+	if read.Jobs != 2 || read.Steps != 2 || read.Lines != lines {
+		t.Errorf("counts = %d jobs, %d steps, %d lines (the file keeps %d); want the distinct jobs'", read.Jobs, read.Steps, read.Lines, lines)
+	}
+}
+
+// talkable's Completion skipped beside two failed jobs is compared on the
+// base by both: each job whose check passed there is marked so in the
+// file, and the summary names each, at the commit that decided it.
+func TestEveryFailedJobThatPassedOnTheBaseIsMarkedSo(t *testing.T) {
+	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"), requiredCompletion)
+	h.openOwn(prSpec{head: fixHead})
+	h.tick()
+	h.setHeadRuns(fixHead, failedCIRun(fixHead, 1))
+	h.setFailedJobs()
+	tip, parent := strings.Repeat("c", 40), strings.Repeat("d", 40)
+	check := ciFailedCheck{Entry: "Completion", Name: "Completion", WorkflowFile: "ci.yml", Compare: []string{"rspec (3)", "capybara"}}
+	check.Base = ciBaseOf([]github.CommitWithChecks{
+		{SHA: tip, Checks: []github.Check{{Name: "rspec (3)", State: github.CheckPassed, WorkflowFile: "ci.yml"}}},
+		{SHA: parent, Checks: []github.Check{{Name: "capybara", State: github.CheckPassed, WorkflowFile: "ci.yml"}}},
+	}, check)
+	if check.Base.State != ciBasePassed {
+		t.Fatalf("base = %+v, want passed", check.Base)
+	}
+	pr, repo := h.pr(2), store.Repo{Owner: "talkable", Name: "talkable", DefaultBranch: "main"}
+	acts := h.e.ciActions("zhuravel")
+	read := h.e.readCIFailures(h.ctx, acts, repo, pr, []ciFailedCheck{check})
+	acts.end()
+	raw, err := os.ReadFile(read.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f ciFailuresJSON
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range f.Checks[0].Jobs {
+		if want := j.Name != "jest"; j.PassedOnBase != want {
+			t.Errorf("%s: passed_on_base %v, want %v", j.Name, j.PassedOnBase, want)
+		}
+	}
+	md, err := os.ReadFile(filepath.Join(filepath.Dir(read.File), ciFailuresMD))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"rspec (3) passed on the base at ccccccc.", "capybara passed on the base at ddddddd."} {
+		if !strings.Contains(string(md), want) {
+			t.Errorf("ci-failures.md lacks %q:\n%s", want, md)
+		}
+	}
+}
+
+// ci-failures.md heads each failed check by its required entry, in the
+// verdict's words: a workflow entry as the required workflow (with no
+// check of its own, as magnum's run of it gives), the check's name beside
+// an entry that is not it.
+func TestTheCIFailuresSummaryHeadsEachCheckByItsRequiredEntry(t *testing.T) {
+	repo, pr := store.Repo{Owner: "talkable", Name: "talkable"}, store.PR{Number: 2}
+	md := ciFailuresText(repo, pr, ciFailuresJSON{Head: fixHead, Checks: []ciFailureJSON{
+		{Entry: "workflow:Other", WorkflowFile: "ci.yml", RunID: ciRunID, Attempt: 1},
+		{Entry: "workflow:CI", Name: "rspec (3)", WorkflowFile: "ci.yml", RunID: ciRunID, Attempt: 1},
+		{Entry: "Completion", Name: "Completion", WorkflowFile: "ci.yml", RunID: ciRunID, Attempt: 1},
+	}})
+	for _, want := range []string{"\n## required workflow Other, ci.yml, run 500 attempt 1\n", "\n## required workflow CI (rspec (3)), ci.yml, run 500 attempt 1\n",
+		"\n## required check Completion, ci.yml, run 500 attempt 1\n"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("ci-failures.md lacks %q:\n%s", want, md)
+		}
+	}
+	if strings.Contains(md, "required check  ") || strings.Contains(md, "required check rspec") {
+		t.Errorf("ci-failures.md names a job as the required check:\n%s", md)
+	}
+}
+
+// A run whose newest attempt has not ended (someone re-ran it) is read
+// as running: nothing else is read, and no file is written.
+func TestTheCIReaderWaitsForARunsNewestAttempt(t *testing.T) {
+	h, _ := openHarness(t, findings(map[string]int{}, "COMMENTED"), requiredCompletion)
+	h.openOwn(prSpec{head: fixHead})
+	h.tick()
+	rerun := failedCIRun(fixHead, 2)
+	rerun.Status, rerun.Conclusion = "in_progress", ""
+	h.setHeadRuns(fixHead, rerun)
+	h.setFailedJobs()
+	pr, repo := h.pr(2), store.Repo{Owner: "talkable", Name: "talkable", DefaultBranch: "main"}
+	acts := h.e.ciActions("zhuravel")
+	read := h.e.readCIFailures(h.ctx, acts, repo, pr, []ciFailedCheck{{Entry: "Completion", Name: "Completion", WorkflowFile: "ci.yml", Run: ciRunID}})
+	acts.end()
+	if !read.Running || read.Unread || read.File != "" {
+		t.Errorf("read = %+v, want running with no file", read)
+	}
+	if n := len(h.ghCalls("run_jobs:")) + len(h.ghCalls("job_log:")); n != 0 {
+		t.Errorf("%d jobs or log reads of a run that runs", n)
+	}
+	if _, err := os.Stat(filepath.Join(h.d.Layout.ReviewDir("talkable", "talkable", 2, fixHead), ciFailuresFile)); err == nil {
+		t.Error("a running run's read wrote ci-failures.json")
 	}
 }

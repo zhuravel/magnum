@@ -169,8 +169,8 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		switch {
 		case pushed:
 			job.ciOutcome, job.ciPushed = ciOutcomePushed, target
-		case job.merged.sha != "":
-			job.ciOutcome, job.ciPushed = ciOutcomeMerged, job.head
+		case job.merged.sha != "": // with the class of a ci entry: the merge's head is no new chance for the same cause
+			job.ciOutcome, job.ciPushed, job.ciWhy = ciOutcomeMerged, job.head, ciClass
 		default:
 			job.ciOutcome, job.ciWhy = ciOutcomeCannot, cmp.Or(ciClass, "unfixed")
 		}
@@ -235,11 +235,13 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 
 // endCIFix ends a CI fix whose fixer pushed nothing and left nothing else
 // to the author, quietly: its run is verified, its row goes (its outcome
-// first: merged, where the daemon's merge of the parent moved the head, or
-// cannot with the class word of the fixer's ci entry, cannot, or unfixed),
-// a fix.ended event gives the class and no name, and an info toast says
-// what the look's verdict then says (needs you, kind ci). Nothing is raised
-// to needs_attention: the verdict holds the PR.
+// first: merged, where the daemon's merge of the parent moved the head,
+// with the class word of the fixer's ci entry when it gave one, or cannot
+// with that word, or unfixed), a fix.ended event gives the class and no
+// name, and an info toast says what the look's verdict then says (needs
+// you, kind ci). Nothing is raised to needs_attention, the verdict holds
+// the PR, but the merge of the parent the daemon did not push: that goes
+// to you as any loop's does (parentRefusedNote).
 func (e *Engine) endCIFix(ctx context.Context, job *fixJob, cannot bool, data map[string]any) {
 	outcome := "replied"
 	if cannot {
@@ -248,11 +250,19 @@ func (e *Engine) endCIFix(ctx context.Context, job *fixJob, cannot bool, data ma
 	e.finishFixRun(ctx, job.run, store.RunVerified, outcome, "")
 	e.endFixState(ctx, job)
 	why := "the CI fix found " + ciCannotClasses[cmp.Or(job.ciWhy, "unfixed")]
-	if job.ciOutcome == ciOutcomeMerged {
+	switch {
+	case job.ciOutcome == ciOutcomeMerged && job.ciWhy != "":
+		why += ", on magnum's merge of the parent " + textx.ShortSHA(job.head)
+	case job.ciOutcome == ciOutcomeMerged:
 		why = "magnum merged the parent, and CI runs on the merge " + textx.ShortSHA(job.head)
 	}
 	data["ci_outcome"], data["ci_class"] = job.ciOutcome, job.ciWhy
 	e.event(ctx, "info", job.subject(), "fix.ended", "the CI fix ends: "+why, data)
+	if note := job.parentRefusedNote(); note != "" { // fix_parent.go: the parent the first cycle did not merge is yours
+		e.event(ctx, "warn", job.subject(), "fix.needs_you", "fix: "+note, data)
+		e.fixAttention(ctx, job, "fix: "+note)
+		return
+	}
 	what := fmt.Sprintf("PR #%d: %s", job.pr.Number, why)
 	e.info(notify.Item{Key: "fix-ci:" + job.run.ID, Title: "magnum: " + what, Body: job.pr.URL + "\nthe report: " + deref(job.run.ReportPath),
 		Line: what + " " + job.pr.URL, Kind: kindFixEnded})

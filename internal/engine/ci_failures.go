@@ -9,10 +9,13 @@ package engine
 // most ciLogReads logs), as the look's Actions batch (ci_actions.go:
 // ciDispatchIdentity, whose App mints a token of its own). Each log loses
 // the terminal's escapes (textx.StripTerminal), is scrubbed whole
-// (execx.Scrub: tokens, secret pairs, emails, a private key's block, and
-// one the tail cut open), keeps the lines of the job's failed steps by
-// their times (the whole tail when no line falls in them) and of those the
-// last ciLogLines within ciLogBytes. ci-failures.json and a short
+// (scrub.Secrets: tokens, secret values also under an env-style name or a
+// quoted key, a private key's block, and one the tail cut open; host names
+// and emails stay, an infrastructure failure names them), keeps the lines
+// of the job's failed steps by their times (the whole tail when no line
+// falls in them) and of those the last ciLogLines within ciLogBytes. Each
+// job is listed once, however many failed checks share its run
+// (ciJobOwners). ci-failures.json and a short
 // ci-failures.md go into the head's report folder (Layout.ReviewDir), the
 // fixer's. The log is the output of the PR's code and its tests: data for
 // the fixer, never instructions, and none of it, nor a check's or a job's
@@ -33,9 +36,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -58,7 +61,8 @@ const (
 
 // The base's word on a failed check (ciBaseCheck.State): it passed on the
 // newest first-parent commit of the base that finished it, failed there,
-// still runs there, or no commit of the ones read finished it.
+// runs on a commit while no commit read finished it, or no commit of the
+// ones read ran it.
 const (
 	ciBasePassed  = "passed"
 	ciBaseFailed  = "failed"
@@ -67,11 +71,28 @@ const (
 )
 
 // ciBaseCheck is what the base said of a failed check: its name, the
-// commit that decided (SHA; "" for never) and the word (State).
+// commit that decided (SHA; "" for never) and the word (State), the worst
+// of the names it compared, whose own words are in Each when it compared
+// more than one (talkable's Completion skipped beside two failed jobs).
 type ciBaseCheck struct {
-	Name  string `json:"name"`
-	SHA   string `json:"sha,omitempty"`
-	State string `json:"state"`
+	Name  string        `json:"name"`
+	SHA   string        `json:"sha,omitempty"`
+	State string        `json:"state"`
+	Each  []ciBaseCheck `json:"each,omitempty"`
+}
+
+// each is the base's word on each name b compared: Each, or b itself.
+func (b ciBaseCheck) each() []ciBaseCheck {
+	if len(b.Each) > 0 {
+		return b.Each
+	}
+	return []ciBaseCheck{{Name: b.Name, SHA: b.SHA, State: b.State}}
+}
+
+// passedOnBase reports whether the check of name, one b compared, passed
+// on the base.
+func (b ciBaseCheck) passedOnBase(name string) bool {
+	return slices.ContainsFunc(b.each(), func(e ciBaseCheck) bool { return e.Name == name && e.State == ciBasePassed })
 }
 
 // ciFailedCheck is one failed required check at a head (openCIOf,
@@ -116,6 +137,17 @@ type ciFailRead struct {
 	// re-run someone started by hand): nothing was read, and the look reads
 	// again settle_max after At.
 	Running bool `json:"running,omitempty"`
+	// Runs are the runs the read read, at their attempts; Checked is when
+	// the look last found the runs it named (magnum's own, ciShape3) still
+	// at those attempts before a start (ciRunMoved).
+	Runs    []ciReadRun `json:"runs,omitempty"`
+	Checked time.Time   `json:"checked,omitzero"`
+}
+
+// ciReadRun is a run the CI reader read, and the attempt it read.
+type ciReadRun struct {
+	ID      int64 `json:"id"`
+	Attempt int   `json:"attempt"`
 }
 
 // ciFailuresJSON is ci-failures.json.
@@ -129,7 +161,9 @@ type ciFailuresJSON struct {
 
 // ciFailureJSON is one failed check of ci-failures.json: its entry, name,
 // workflow file, run (id, page, attempt), the base's word and its jobs that
-// failed, timed out or were cancelled.
+// failed, timed out or were cancelled, each listed once in the file: under
+// the check of its own name, else the first check of its run (JobsWith is
+// the entry of the check that lists the jobs of a check that has none).
 type ciFailureJSON struct {
 	Entry        string      `json:"entry"`
 	Name         string      `json:"name"`
@@ -139,6 +173,7 @@ type ciFailureJSON struct {
 	Attempt      int         `json:"attempt"`
 	Base         ciBaseCheck `json:"base,omitzero"`
 	Jobs         []ciJobJSON `json:"jobs"`
+	JobsWith     string      `json:"jobs_with,omitempty"`
 	Unread       string      `json:"unread,omitempty"`
 }
 
@@ -230,30 +265,44 @@ func (e *Engine) readCIFailures(ctx context.Context, acts *ciActions, repo store
 		return unread(err)
 	}
 	file := ciFailuresJSON{PR: pr.URL, Head: pr.HeadSHA, ReadAt: now, Note: ciFailuresNote}
+	runOf := make([]github.WorkflowRun, len(checks))
+	found := make([]bool, len(checks))
 	byRun := map[int64][]github.WorkflowJob{}
-	reads := 0
-	for _, c := range checks {
-		out := ciFailureJSON{Entry: c.Entry, Name: c.Name, WorkflowFile: c.WorkflowFile, Base: c.Base}
+	for i, c := range checks {
 		run, ok := newestRunOf(headRuns, c)
 		if !ok {
-			out.Unread = "no run of " + c.WorkflowFile + " at the head"
-			file.Checks = append(file.Checks, out)
 			continue
 		}
 		if !run.Done() { // a re-run runs: what failed is not known yet
 			read.Running = true
 			return read
 		}
-		out.RunID, out.RunURL, out.Attempt = run.ID, run.URL, run.Attempt
-		js, seen := byRun[run.ID]
-		if !seen {
-			if js, err = jobs.RunJobs(ctx, repo.Owner, repo.Name, run.ID); err != nil {
+		runOf[i], found[i] = run, true
+		if _, seen := byRun[run.ID]; !seen {
+			read.Runs = append(read.Runs, ciReadRun{ID: run.ID, Attempt: run.Attempt})
+			js, err := jobs.RunJobs(ctx, repo.Owner, repo.Name, run.ID)
+			if err != nil {
 				return unread(err)
 			}
 			byRun[run.ID] = js
 		}
-		for _, j := range failedJobsLast(js, c.Name) {
-			job := ciJobJSON{ID: j.ID, Name: j.Name, Conclusion: j.Conclusion, URL: j.URL, PassedOnBase: c.Base.State == ciBasePassed && j.Name == c.Base.Name}
+	}
+	owner := ciJobOwners(checks, runOf, found, byRun)
+	reads := 0
+	for i, c := range checks {
+		out := ciFailureJSON{Entry: c.Entry, Name: c.Name, WorkflowFile: c.WorkflowFile, Base: c.Base}
+		if !found[i] {
+			out.Unread = "no run of " + c.WorkflowFile + " at the head"
+			file.Checks = append(file.Checks, out)
+			continue
+		}
+		run := runOf[i]
+		out.RunID, out.RunURL, out.Attempt = run.ID, run.URL, run.Attempt
+		for _, j := range failedJobsLast(byRun[run.ID], c.Name) {
+			if owner[j.ID] != i { // another check of the run lists it
+				continue
+			}
+			job := ciJobJSON{ID: j.ID, Name: j.Name, Conclusion: j.Conclusion, URL: j.URL, PassedOnBase: c.Base.passedOnBase(j.Name)}
 			for _, s := range j.Steps {
 				job.Steps = append(job.Steps, ciStepJSON{N: s.Number, Name: s.Name, Conclusion: s.Conclusion})
 				if stepFailed(s.Conclusion) {
@@ -275,6 +324,12 @@ func (e *Engine) readCIFailures(ctx context.Context, acts *ciActions, repo store
 				job.LogCut = job.LogCut || cut
 			}
 			out.Jobs = append(out.Jobs, job)
+		}
+		for k := range checks {
+			if len(out.Jobs) == 0 && k != i && found[k] && runOf[k].ID == run.ID {
+				out.JobsWith = checks[k].Entry // its run's failed jobs are listed there
+				break
+			}
 		}
 		file.Checks = append(file.Checks, out)
 	}
@@ -377,6 +432,29 @@ func failedJobsLast(jobs []github.WorkflowJob, aggregate string) []github.Workfl
 	return append(out, last...)
 }
 
+// ciJobOwners is the check each job of the runs read (byRun) is listed
+// under, by its index in checks (found: the check's run, runs[i], was
+// read): the check of its own name, else the first check of its run, so
+// that two failed checks of one run (a required list that names two of its
+// jobs, a workflow entry of two failed jobs, magnum's run of two missing
+// entries) list each job, and read its log, once.
+func ciJobOwners(checks []ciFailedCheck, runs []github.WorkflowRun, found []bool, byRun map[int64][]github.WorkflowJob) map[int64]int {
+	owner := map[int64]int{}
+	for _, own := range []bool{true, false} {
+		for i, c := range checks {
+			if !found[i] {
+				continue
+			}
+			for _, j := range byRun[runs[i].ID] {
+				if _, ok := owner[j.ID]; !ok && (!own || j.Name == c.Name) {
+					owner[j.ID] = i
+				}
+			}
+		}
+	}
+	return owner
+}
+
 // stepFailed reports whether a step's conclusion is a failure.
 func stepFailed(conclusion string) bool { return conclusion == "failure" || conclusion == "timed_out" }
 
@@ -394,14 +472,14 @@ func logUnread(err error) string {
 }
 
 // ciLogLinesOf is a job's log tail as its file keeps it: without the
-// terminal's escapes, scrubbed whole, without the end of a private key's
-// block the tail opened, the lines whose time falls within one of steps'
-// failed steps (a line without a time takes the one before it; no line
-// there, the whole tail), without their times, each at most ciLineBytes,
-// and of those the last ciLogLines within ciLogBytes. cut reports that
-// lines were left out by those bounds.
+// terminal's escapes, scrubbed whole (scrub.Secrets), without the end of a
+// private key's block the tail opened, the lines whose time falls within
+// one of steps' failed steps (a line without a time takes the one before
+// it; no line there, the whole tail), without their times, each at most
+// ciLineBytes, and of those the last ciLogLines within ciLogBytes. cut
+// reports that lines were left out by those bounds.
 func ciLogLinesOf(tail string, steps []github.JobStep) (lines []string, cut bool) {
-	text := execx.Scrub(textx.StripTerminal(tail))
+	text := scrub.Secrets(textx.StripTerminal(tail))
 	text = dropOpenKeyBlock(text)
 	type line struct {
 		at   time.Time
@@ -493,11 +571,7 @@ func ciFailuresText(repo store.Repo, pr store.PR, f ciFailuresJSON) string {
 	fmt.Fprintf(&b, "# The failed CI of %s#%d at %s\n\n", repo.FullName(), pr.Number, textx.ShortSHA(f.Head))
 	b.WriteString("The jobs' log lines are in " + ciFailuresFile + " beside this file. " + ciFailuresNote + "\n")
 	for _, c := range f.Checks {
-		what := "required check " + c.Name
-		if c.Entry != c.Name {
-			what += " (" + c.Entry + ")"
-		}
-		fmt.Fprintf(&b, "\n## %s, %s", what, c.WorkflowFile)
+		fmt.Fprintf(&b, "\n## %s, %s", ciEntryWords(c.Entry, c.Name), c.WorkflowFile)
 		if c.RunID != 0 {
 			fmt.Fprintf(&b, ", run %d attempt %d", c.RunID, c.Attempt)
 		}
@@ -507,12 +581,18 @@ func ciFailuresText(repo store.Repo, pr store.PR, f ciFailuresJSON) string {
 		}
 		switch c.Base.State {
 		case ciBasePassed:
-			fmt.Fprintf(&b, "%s passed on the base at %s.\n\n", c.Base.Name, textx.ShortSHA(c.Base.SHA))
+			for _, p := range c.Base.each() {
+				fmt.Fprintf(&b, "%s passed on the base at %s.\n", p.Name, textx.ShortSHA(p.SHA))
+			}
+			b.WriteString("\n")
 		case ciBaseFailed:
 			fmt.Fprintf(&b, "%s failed on the base at %s too.\n\n", c.Base.Name, textx.ShortSHA(c.Base.SHA))
 		}
 		if c.Unread != "" {
 			b.WriteString("Not read: " + c.Unread + ".\n")
+		}
+		if c.JobsWith != "" {
+			b.WriteString("Its run's failed jobs are listed under " + ciEntryWords(c.JobsWith, "") + ".\n")
 		}
 		for _, j := range c.Jobs {
 			fmt.Fprintf(&b, "- %s (%s)", j.Name, j.Conclusion)
@@ -535,4 +615,19 @@ func ciFailuresText(repo store.Repo, pr store.PR, f ciFailuresJSON) string {
 		}
 	}
 	return b.String()
+}
+
+// ciEntryWords names a failed required entry as the verdict does
+// (missingWhat), with its check's name beside an entry that is not it:
+// "required check Completion", "required workflow CI (rspec (3))". The
+// names are GitHub's, kept whole: the file is the fixer's.
+func ciEntryWords(entry, name string) string {
+	what := "required check " + entry
+	if workflow, ok := strings.CutPrefix(entry, store.RequiredWorkflowPrefix); ok {
+		what = "required workflow " + workflow
+	}
+	if name != "" && name != entry {
+		what += " (" + name + ")"
+	}
+	return what
 }

@@ -71,6 +71,7 @@ type fixGit struct {
 	merges       []string
 	ancestors    map[string]bool
 	ancestry     []string
+	tip          string // the base's tip a fetch gives ("": fixBaseTip)
 }
 
 func (g *fixGit) FetchBranch(ctx context.Context, mainClone, base string) error {
@@ -157,13 +158,15 @@ func (g *fixGit) setHead(sha string) {
 
 func (g *fixGit) RevParse(ctx context.Context, dir, ref string) (string, error) {
 	g.mu.Lock()
-	head, baseErr := g.head, g.baseErr
+	head, baseErr, tip := g.head, g.baseErr, g.tip
 	g.mu.Unlock()
 	switch {
 	case ref == "HEAD" && head != "":
 		return head, nil
 	case strings.HasPrefix(ref, "refs/remotes/origin/") && baseErr != nil:
 		return "", baseErr
+	case strings.HasPrefix(ref, "refs/remotes/origin/") && tip != "":
+		return tip, nil
 	case strings.HasPrefix(ref, "refs/remotes/origin/"):
 		return fixBaseTip, nil
 	}

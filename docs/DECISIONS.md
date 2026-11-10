@@ -4455,16 +4455,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `pr.<id>.ci_fix`. Each failed check is compared by its job's name (a skipped Completion by the jobs that
   failed beside it, so a master flake in Capybara does not hide a real RSpec failure; a reusable workflow on
   main, `ci / test` from a deploy workflow's push run, names its jobs as the PR's does); the newest
-  commit that finished it decides: passed, failed (a skip beside a failed job of its workflow counts),
-  running (waits, read again settle_max later), or none in five (needs you: "main's last 5 commits never ran
-  it"). Red or never on the base needs you, kind ci, worded without blame ("…, and on main at c0c0c0c too:
+  commit that finished it decides: passed, or failed (a skip beside a failed job of its workflow counts),
+  past a commit where it still runs; running when none finished it but one runs it (waits, read again
+  settle_max later), or none in five (needs you: "main's last 5 commits never ran it"). Red or never on the base needs you, kind ci, worded without blame ("…, and on main at c0c0c0c too:
   magnum fixes only a check that passes on the base"). Before the start the CI reader reads why, once
   (ci_failures.go, as the look's Actions batch: the head's runs, the newest run of the check's workflow file,
   its jobs with their steps, and at most 4 failed jobs' last MiB of log through `gh api .../logs
   --allow-escape-sequences`, which gh 2.103 needs for a coloured log, and execx's new Cmd.KeepTail, which
-  keeps the end of stdout; terminal escapes stripped, scrubbed whole by the new execx.Scrub, the factory's
-  token and pair rules and emails, hosts kept, and a key block the tail cut open dropped; the failed steps'
-  lines by their times, of those the last 200 within 64 KB; into ci-failures.json and ci-failures.md beside
+  keeps the end of stdout; terminal escapes stripped, scrubbed whole by internal/scrub's Secrets, the
+  factory's token and pair rules, hosts and emails kept, and a key block the tail cut open dropped; the failed
+  steps' lines by their times, of those the last 200 within 64 KB; into ci-failures.json and ci-failures.md beside
   the fixer's report, the registry and fix.ci_read getting the digest and counts, no name), and a re-run of
   that run still running waits for it; the
   start is recorded before startFix (`noteCIFixStart`), a synchronous refusal marks it unstarted, which does
@@ -4495,7 +4495,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheCIReaderStripsEscapesScrubsTokensAndKeepsTheFailedStepsLast200Lines, TestTheCIReaderSaysWhatItCouldNotRead,
   TestRunJobsReadsTheStepsAndTimes, TestJobLogTailAsksForEscapesAndKeepsTheEnd,
   TestFirstParentChecksReadsFiveCommitsInOneQuery, TestKeepTailKeepsTheLastBytesAndSaysTruncated,
-  TestTheTailCaptureKeepsTheLastBytesOfManyWrites, TestScrubMasksWhatRuntimeScrubMasked, TestStripTerminal,
+  TestTheTailCaptureKeepsTheLastBytesOfManyWrites, TestStripTerminal,
   TestAFailureOfNoActionsJobNeedsYou, TestACompletionSkippedBesideAFailedJobOfItsWorkflowIsAFailedRequiredCheck,
   TestARunMagnumStartedThatEndedFailureIsAFailedCheckNotCIMissing,
   TestTheEnforcedMissingCheckGoesBeforeTheRollupsFailureOfAnother, TestAReRunThatPassedIsNoFailure,
@@ -4507,8 +4507,44 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheFixPromptOfACIFixNamesTheFileAsDataAndNoReview and TestTheFixSkillsCIFixKeepsTheTestsAndNamesWhyItCouldNot;
   TestRedRequiredCINeedsYou became TestRedRequiredCIWithoutACIFixNeedsYou. Not done: a re-run of the failed
   jobs before a CI fix (a flake spends a count and a fixer run today), and talkable's `Completion` reading
-  for the auto-approval gate (the operator decides); runtime.Scrub calling execx.Scrub (internal/factory is
-  another session's: the two keep the same token and pair rules for now).
+  for the auto-approval gate (the operator decides).
+
+- **The CI fix after its review: each job once, the base past a running tip, a re-run by hand read again, a
+  cannot kept across the parent's merge** (2026-11-10, two reviewers of CI fix mode, before it landed). The
+  CI reader listed every failed job of a run once for each failed check of that run, so a required list that
+  names two jobs of one workflow (or `workflow:CI` with two failed jobs, or magnum's run of two missing
+  entries) downloaded each log twice, spent the 4-log cap on copies and doubled the counts the record, the
+  event, the prompt's plan and `c`'s question show; now each job is listed once, under the check of its own
+  name, else the first check of its run (ciJobOwners; `jobs_with` names where a check's jobs are). Every job
+  the base read compared and found green is marked `passed_on_base` (ciBaseCheck.Each keeps each name's
+  word), and ci-failures.md heads a check by its required entry in the verdict's words ("required workflow
+  CI (rspec (3))"), never a blank or a job's name. The base read passes over a commit where the check still
+  runs: on a busy base (merges minutes apart) the tip runs it while its parent finished it, and the older
+  commit decides; running is the word only when none of the five finished it. The base tip is the look's
+  fetched one for a clean merge too: the conflict check recorded the tip only on a conflict, so the base's
+  CI was read at pr.BaseSHA, the stale Details tip, almost always (found writing the look's test of it).
+  No rollup shows magnum's dispatched run or its re-run (ciShape3), and the read key of such a run never
+  changes, so a read that stood from an earlier look (a start that waited for a slot) fed a start while a
+  re-run by hand ran, or with the old attempt's logs; now, before such a start, the look reads the head's runs
+  at most once a settle_quiet (ciRunMoved, the read's Runs and Checked), and a newer attempt is read again
+  (waits while it runs). A fixer that said it cannot on the daemon's merge of the parent kept no class (the
+  outcome was "merged"), so the merge's head started CI fix 2 for the same missing secret; the class is
+  kept beside merged, the merge's head needs you with it, and endCIFix raises a merge of the parent the
+  daemon could not push, as the default end does. The CI reader scrubs with master's new scrub.Secrets
+  (R58/R59's env-style names, `DB_PASSWORD=x`, `RAILS_MASTER_KEY=x`, and quoted keys, which the branch's own
+  execx.Scrub missed; that copy is gone), keeping emails as Secrets does. The plan of `c` and `magnum fix
+  --ci --dry-run` is no read-only question: it reads why the check failed, once for the head, and keeps it
+  for the start (the plan needs the file, and the start then reads nothing again); its words say so instead
+  of "nothing is changed". Tests, failing first: TestTwoFailedChecksOfOneRunListEachJobAndReadItsLogOnce,
+  TestEveryFailedJobThatPassedOnTheBaseIsMarkedSo, TestTheCIFailuresSummaryHeadsEachCheckByItsRequiredEntry,
+  TestTheNewestBaseCommitThatFinishedTheCheckDecides, TestTheBasesCIIsReadAtTheFetchedTipAndAgainWhenItMoves,
+  TestAReRunByHandOfMagnumsRunIsReadAgainBeforeTheStart, TestACIFixThatCannotOnTheParentsMergeKeepsItsClass,
+  TestFixCIDryRunSaysThePlanReadsTheFailedCI and the reader test's env line; and, for paths no test held:
+  TestTheLookFixesTheCIOfARunMagnumStartedThatEndedFailure, TestMagnumFixCIFixesARunMagnumStartedThatEndedFailure,
+  TestTheCIReaderWaitsForARunsNewestAttempt, TestACIFixWhoseClaimLostItsSlotDoesNotCount,
+  TestAnAbortedCIFixIsStopped, TestACIFixWhoseRunFailedIsFailed, TestACIFixLostInARestartIsLost,
+  TestTheFixPromptOfACIFixGetsItsFile, and the read-once and no-other-reviewers checks added to
+  TestTheCIFixRecordIsWrittenBeforeTheStart and TestMagnumFixCIDryRunAnswersThePlan.
 
 ## Screens and commands
 

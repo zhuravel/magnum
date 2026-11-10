@@ -15,10 +15,13 @@ package engine
 // not reviewed or whose review leaves work (f fixes it first), a drain for
 // a restart and a GitHub budget below the floor (ask again after: a CI fix
 // is never held), and every refusal of prepareFix. It reads the base and
-// the failed jobs itself when the PR's record lacks them for the head. Its
-// dry run is the plan its y/N asks (CIFixPlan), whose CIFixAsked binds the
-// start: a head, failed set or count of CI fixes that moved since, or a
-// question as old as mergeAskedWait, starts nothing.
+// the failed jobs itself when the PR's record lacks them for the head, its
+// dry run too: the plan its y/N asks (CIFixPlan) starts nothing and writes
+// nothing to GitHub, but reads why the check failed as a start would, once
+// for the head, and keeps it (the CI fixes' record, ci-failures.json, the
+// fix.ci_read event) for the start. Its CIFixAsked binds the start: a
+// head, failed set or count of CI fixes that moved since, or a question as
+// old as mergeAskedWait, starts nothing.
 
 import (
 	"cmp"

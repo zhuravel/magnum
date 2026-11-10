@@ -92,3 +92,25 @@ func TestFixCIFlagSendsModeCIAndGoesAlone(t *testing.T) {
 		t.Errorf("requests = %d, want one more dry run", n)
 	}
 }
+
+// A CI fix's plan is no read-only question: the daemon reads why the check
+// failed for it (the base's CI, the failed jobs and the end of their logs,
+// once per head) and keeps that for the start. --dry-run says so, and
+// says nothing starts, instead of "nothing is changed".
+func TestFixCIDryRunSaysThePlanReadsTheFailedCI(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 4242
+	h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.ciFixDaemon()
+	if code := h.cmd("fix", "5", "--ci", "--dry-run"); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, h.out.String(), h.errb.String())
+	}
+	out := h.out.String() + h.errb.String()
+	if !strings.Contains(out, "; nothing starts: the daemon reads why the CI failed, once for the head, and keeps it for the start") || strings.Contains(out, "nothing is changed") {
+		t.Errorf("--ci --dry-run says:\n%s", out)
+	}
+	h.out.Reset()
+	if code := h.cmd("fix", "--help"); code != 0 || !strings.Contains(h.out.String(), "its plan reads why the check failed") {
+		t.Errorf("help: exit %d:\n%s", code, h.out.String())
+	}
+}

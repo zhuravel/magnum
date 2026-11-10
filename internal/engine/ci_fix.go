@@ -61,9 +61,10 @@ const (
 
 // The outcomes of a CI fix (ciFixStart.Outcome): it never ran a fixer (the
 // fix job refused it at once: it does not count), it pushed, the daemon
-// merged the parent and the fixer pushed nothing (CI runs on the merge),
-// the fixer said it cannot (Why: its class word), the run failed, was
-// stopped or lost in a restart.
+// merged the parent and the fixer pushed nothing (CI runs on the merge;
+// Why: the class word of a fixer that said it cannot there), the fixer
+// said it cannot (Why: its class word), the run failed, was stopped or
+// lost in a restart.
 const (
 	ciOutcomeUnstarted = "unstarted"
 	ciOutcomePushed    = "pushed"
@@ -126,10 +127,15 @@ func (r ciFixRecord) count() int {
 	return n
 }
 
-// atHead is the newest CI fix at head that counts (zero: none).
+// atHead is the newest CI fix at head that counts (zero: none), or the one
+// whose fixer said it cannot on the daemon's merge of the parent that head
+// is (merged with a class word): the merge is no new chance for the same
+// cause.
 func (r ciFixRecord) atHead(head string) ciFixStart {
 	for _, s := range slices.Backward(r.Starts) {
-		if s.Head == head && s.Outcome != ciOutcomeUnstarted {
+		switch {
+		case s.Outcome == ciOutcomeUnstarted:
+		case s.Head == head, s.Outcome == ciOutcomeMerged && s.Why != "" && s.Pushed == head:
 			return s
 		}
 	}
@@ -259,12 +265,12 @@ func ciFixWords(f openFacts, short string) (verdict, why string, until time.Time
 		return OpenNeedsYou, failed, time.Time{}, false
 	}
 	if at := c.atHead; at.Head != "" {
-		switch at.Outcome {
-		case ciOutcomeCannot:
+		switch {
+		case at.Outcome == ciOutcomeCannot, at.Outcome == ciOutcomeMerged && at.Why != "": // a cannot, or one on the parent's merge
 			return OpenNeedsYou, failed + ": the CI fix found " + cmp.Or(ciCannotClasses[at.Why], ciCannotClasses["unfixed"]), time.Time{}, false
-		case ciOutcomeStopped:
+		case at.Outcome == ciOutcomeStopped:
 			return OpenNeedsYou, failed + ": the CI fix at " + short + " was stopped; it is yours", time.Time{}, false
-		case ciOutcomePushed, ciOutcomeMerged:
+		case at.Outcome == ciOutcomePushed, at.Outcome == ciOutcomeMerged:
 			return OpenNeedsYou, failed + ": the CI fix at " + short + " ended; it is yours", time.Time{}, false
 		}
 		return OpenNeedsYou, failed + ": the CI fix at " + short + " failed; it is yours", time.Time{}, false
@@ -567,29 +573,45 @@ func (e *Engine) readCIBase(ctx context.Context, repo store.Repo, w config.Watch
 // (its own name, or the failed jobs a skipped one's workflow had; c's entry
 // where it names none: a missing check of magnum's run), the newest commit
 // whose check runs of that name (any workflow: a reusable workflow on the
-// base names its jobs as the PR's) finished it decides: passed, failed (a
-// run skipped beside a failed job of its workflow file counts as failed),
-// and a run that has not ended is running; a skip with no failure beside it
-// (a path filter) is no run. No commit that finished it is never. The
-// worst of its names is c's word (failed, running, never, passed).
+// base names its jobs as the PR's) finished it decides: passed, or failed
+// (a run skipped beside a failed job of its workflow file counts as
+// failed). A commit where it has not ended is passed over (a busy base's
+// tip runs it while its parent finished it), and it is running when no
+// commit read finished it but one runs it; a skip with no failure beside it
+// (a path filter) is no run. No commit that ran it is never. The worst of
+// its names is c's word (failed, running, never, passed), each name's word
+// in Each when it compared more than one.
 func ciBaseOf(commits []github.CommitWithChecks, c ciFailedCheck) ciBaseCheck {
 	names := c.Compare
 	if len(names) == 0 {
 		names = []string{cmp.Or(c.Name, c.Entry)}
 	}
 	worst := ciBaseCheck{}
+	var each []ciBaseCheck
 	rank := map[string]int{ciBaseFailed: 4, ciBaseRunning: 3, ciBaseNever: 2, ciBasePassed: 1}
 	for _, name := range names {
 		got := ciBaseCheck{Name: name, State: ciBaseNever}
 		for _, cm := range commits {
-			if state, ok := baseStateOf(cm.Checks, name, c.Name == "" && len(c.Compare) == 0); ok {
-				got = ciBaseCheck{Name: name, SHA: cm.SHA, State: state}
-				break
+			state, ok := baseStateOf(cm.Checks, name, c.Name == "" && len(c.Compare) == 0)
+			switch {
+			case !ok:
+				continue
+			case state == ciBaseRunning: // an older commit that finished it decides; running when none did
+				if got.State == ciBaseNever {
+					got = ciBaseCheck{Name: name, SHA: cm.SHA, State: state}
+				}
+				continue
 			}
+			got = ciBaseCheck{Name: name, SHA: cm.SHA, State: state}
+			break
 		}
+		each = append(each, got)
 		if rank[got.State] > rank[worst.State] {
 			worst = got
 		}
+	}
+	if len(each) > 1 {
+		worst.Each = each
 	}
 	return worst
 }
@@ -641,10 +663,11 @@ func ciChecksFor(runs []ciFailedCheck, b ciBaseRead) []ciFailedCheck {
 
 // ensureCIRead is the CI reader's read before a CI fix starts on pr (the
 // look decided on the CI item), in the look's batch acts, unless a read of
-// the failed set stands at the head; it records the read (kvPRCIFix's
-// Read) and reports whether it read, so the look decides again.
+// the failed set stands at the head and the runs it named did not move
+// since (ciRunMoved); it records the read (kvPRCIFix's Read) and reports
+// whether it read, so the look decides again.
 func (e *Engine) ensureCIRead(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR, f *openFacts) bool {
-	if f.ciFix.read.Head != "" {
+	if f.ciFix.read.Head != "" && !e.ciRunMoved(ctx, acts, repo, pr, f) {
 		return false
 	}
 	rec, err := e.ciFixRecordOf(ctx, pr.ID)
@@ -659,6 +682,56 @@ func (e *Engine) ensureCIRead(ctx context.Context, acts *ciActions, repo store.R
 	}
 	f.ciFix.read = read
 	return true
+}
+
+// ciRunMoved reports whether the standing read of f's failed checks is of
+// a run the look named (ciShape3: magnum's run or re-run of the head, which
+// no rollup shows, so a re-run of it by hand shows nowhere else) whose
+// newest attempt is no longer the one read, or has not ended. It reads the
+// head's runs, as the batch acts, at most once per settle_quiet (the
+// standing read's Checked, recorded), before the start the read would
+// feed: a start that waits for a free slot costs no read a look. A read of
+// no named run, or one that fails, leaves the read standing.
+func (e *Engine) ciRunMoved(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR, f *openFacts) bool {
+	r := f.ciFix.read
+	named := slices.ContainsFunc(f.ci.failedRuns, func(c ciFailedCheck) bool { return c.Run != 0 })
+	if !named || f.now.Before(later(r.At, r.Checked).Add(f.settle.quiet)) {
+		return false
+	}
+	gh, err := acts.client(ctx)
+	if err != nil {
+		return false
+	}
+	lister, ok := gh.(headRunLister)
+	if !ok {
+		return false
+	}
+	runs, err := lister.HeadRuns(ctx, repo.Owner, repo.Name, pr.HeadSHA)
+	if err != nil {
+		e.log.Info("autofix open: the head's runs before a CI fix", "subject", prSubject(repo, pr.Number), "err", err)
+		return false
+	}
+	for _, c := range f.ci.failedRuns {
+		run, ok := newestRunOf(runs, c)
+		if c.Run == 0 || !ok {
+			continue
+		}
+		if i := slices.IndexFunc(r.Runs, func(x ciReadRun) bool { return x.ID == run.ID }); !run.Done() || i < 0 || r.Runs[i].Attempt != run.Attempt {
+			return true
+		}
+	}
+	now := e.now()
+	if err := e.updateCIFix(ctx, pr.ID, func(rec *ciFixRecord) bool {
+		if rec.Read.Head != r.Head || rec.Read.Key != r.Key {
+			return false
+		}
+		rec.Read.Checked = now
+		return true
+	}); err != nil {
+		e.warnUnlessStopped(ctx, err, "autofix open: record the check of the failed CI's runs", "pr", pr.ID)
+	}
+	f.ciFix.read.Checked = now
+	return false
 }
 
 // noteCIFixStart records a CI fix of entries at pr's head by by before its

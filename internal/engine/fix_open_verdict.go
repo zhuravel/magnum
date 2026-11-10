@@ -289,8 +289,9 @@ type openRead struct {
 }
 
 // openConflict is the look's last check of the head against its base: the
-// head and the base, the base's tip it fetched, when, and the conflict (no
-// paths: a clean merge; Unchecked: the check failed).
+// head and the base, the base's tip it fetched (also of a clean merge: the
+// base's CI is read there, ci_fix.go), when, and the conflict (no paths: a
+// clean merge; Unchecked: the check failed).
 type openConflict struct {
 	Head      string    `json:"head,omitempty"`
 	Base      string    `json:"base,omitempty"`

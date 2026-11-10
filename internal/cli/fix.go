@@ -119,7 +119,8 @@ func newFixCmd(c *Context) *cobra.Command {
 			"with the daemon's plan (--yes does not; with no terminal it needs --yes), and the daemon refuses another's PR, a "+
 			"head where no required check failed, a check red or never run on the base, a PR that changes its own CI config, "+
 			"the cap, a head magnum has not reviewed or whose review leaves work (fix that first), a drain and a low GitHub "+
-			"budget (a CI fix is never held). "+
+			"budget (a CI fix is never held); its plan reads why the check failed (the base's CI, the failed jobs and the end of "+
+			"their logs, once for the head) and keeps it for the start. "+
 			"--dry-run only asks the daemon what would happen.",
 		func(pos []string) int { return runFix(c, o, pos) })
 	fs := cmd.Flags()
@@ -292,7 +293,11 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 	if o.dryRun {
 		out.Payload = &payload
 		b, _ := json.Marshal(payload)
-		fmt.Fprintf(fixProgress(c, o), "dry run: the daemon is asked what would happen (request %s %s); nothing is changed\n", engine.ReqFix, b)
+		changed := "nothing is changed"
+		if o.ci { // the plan reads the failed CI and keeps it for the start (the engine's fix_ci.go)
+			changed = "nothing starts: the daemon reads why the CI failed, once for the head, and keeps it for the start"
+		}
+		fmt.Fprintf(fixProgress(c, o), "dry run: the daemon is asked what would happen (request %s %s); %s\n", engine.ReqFix, b, changed)
 	}
 	if t.PR.Pinned && !o.off && !o.on && !o.done && !o.merge && !o.ci {
 		fmt.Fprintf(fixProgress(c, o), "%s is pinned: this fix unpins it (a person's changes in its slot still hold the fix)\n", label)

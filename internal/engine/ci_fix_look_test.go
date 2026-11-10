@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
@@ -29,12 +30,13 @@ func ciFixHarness(t *testing.T, base string) (*harness, *fixGit) {
 	return ciFixHarnessWith(t, base, findings(map[string]int{}, "COMMENTED"))
 }
 
-// ciFixHarnessWith is ciFixHarness whose reviews give what next gives.
-func ciFixHarnessWith(t *testing.T, base string, next func(in pipeline.RoundInput) (map[string]int, string)) (*harness, *fixGit) {
+// ciFixHarnessWith is ciFixHarness whose reviews give what next gives,
+// with mods applied before the engine is built.
+func ciFixHarnessWith(t *testing.T, base string, next func(in pipeline.RoundInput) (map[string]int, string), mods ...func(*harness)) (*harness, *fixGit) {
 	t.Helper()
-	h, git := openHarness(t, next, requiredCompletion, func(h *harness) {
+	h, git := openHarness(t, next, append([]func(*harness){requiredCompletion, func(h *harness) {
 		h.gh.defaultFiles = []string{"app/models/offer.rb"}
-	})
+	}}, mods...)...)
 	h.openOwn(prSpec{head: fixHead, ci: "FAILURE", checks: []github.Check{ciCompletion(github.CheckFailed)}})
 	h.tick() // reviewed clean
 	h.setHeadRuns(fixHead, failedCIRun(fixHead, 1))
@@ -94,6 +96,149 @@ func TestTheLookReadsTheBaseOncePerHeadAndFailedSet(t *testing.T) {
 	h.tick()
 	if calls := h.ghCalls("first_parents:"); len(calls) != 2 {
 		t.Fatalf("base reads = %q, want one more for the new head", calls)
+	}
+}
+
+// The base's CI is read at the tip the look's conflict check fetched, not
+// at the PR's stored base_sha (Details' last read, which can trail by
+// days), and a tip that moved is read again.
+func TestTheBasesCIIsReadAtTheFetchedTipAndAgainWhenItMoves(t *testing.T) {
+	h, git := ciFixHarness(t, github.CheckFailed)
+	if base := deref(h.pr(2).BaseSHA); base == "" || base == fixBaseTip {
+		t.Fatalf("base_sha = %q, want one the fetch does not give", base)
+	}
+	h.pastSettle()
+	h.tick()
+	h.tick()
+	want := []string{"first_parents:talkable/talkable@" + fixBaseTip}
+	if calls := h.ghCalls("first_parents:"); !slices.Equal(calls, want) {
+		t.Fatalf("base reads = %q, want %q", calls, want)
+	}
+	moved := strings.Repeat("d0", 20)
+	git.mu.Lock()
+	git.tip = moved
+	git.mu.Unlock()
+	h.advance(31 * time.Minute) // the conflict check fetches the base again
+	h.tick()
+	if calls := h.ghCalls("first_parents:"); !slices.Equal(calls, append(want, "first_parents:talkable/talkable@"+moved)) {
+		t.Fatalf("base reads = %q, want the moved tip read again", calls)
+	}
+	h.wantOpen(OpenNeedsYou, "required check Completion failed at a1a1a1a, and on main at d0d0d0d too")
+}
+
+// ciShape3Harness is talkable's live shape: Completion required, [[repo]]
+// ci_dispatch = "ci.yml", and the operator's PR #2 reviewed clean at
+// fixHead, whose rollup lists the other apps' checks alone (Completion is
+// posted on success alone), with magnum's start of ci.yml at the head an
+// hour ago whose run ciRunID ended failure (setFailedJobs' jobs and logs);
+// the base ran Completion green, and the PR's files are app code.
+func ciShape3Harness(t *testing.T) (*harness, *fixGit) {
+	t.Helper()
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"), requiredCompletion, func(h *harness) {
+		h.cfg.Repos = append(h.cfg.Repos, config.Repo{Repo: "talkable/talkable", CIDispatch: "ci.yml"})
+		h.gh.defaultFiles = []string{"app/models/offer.rb"}
+	})
+	h.othersPassed(fixHead)
+	h.tick() // reviewed clean
+	run := failedCIRun(fixHead, 1)
+	run.Event = "workflow_dispatch"
+	h.setHeadRuns(fixHead, run)
+	h.setFailedJobs()
+	h.setBaseCI(github.CheckPassed)
+	if !h.e.writeCIStart(h.ctx, h.pr(2), ciStart{Head: fixHead, Workflow: "ci.yml", At: h.clock.Now().Add(-time.Hour),
+		Run: &ciRun{ID: ciRunID, Status: "completed", Conclusion: "failure"}}) {
+		t.Fatal("the start of ci.yml was not recorded")
+	}
+	return h, git
+}
+
+// talkable's main path: magnum's run of ci.yml at the head ended failure,
+// and Completion, posted on success alone, is missing. The look reads that
+// run's jobs, starts a CI fix, and the head then needs you for a failed
+// check, kind ci, never for one that did not run.
+func TestTheLookFixesTheCIOfARunMagnumStartedThatEndedFailure(t *testing.T) {
+	h, git := ciShape3Harness(t)
+	cannotFixer(h, git, "flaky")
+	h.pastSettle()
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 1 {
+		t.Fatalf("fix runs = %d, want the CI fix's", n)
+	}
+	if calls := h.ghCalls("run_jobs:"); !slices.Equal(calls, []string{"run_jobs:talkable/talkable#500"}) {
+		t.Errorf("jobs reads = %q, want magnum's run's", calls)
+	}
+	h.tick()
+	v := h.wantOpen(OpenNeedsYou, "required check Completion failed at a1a1a1a (magnum's run of ci.yml ended failure): the CI fix found a flaky test, not the PR's code")
+	if len(v.Needs) != 1 || v.Needs[0].Kind != "ci" || strings.Contains(v.Why, " did not run at ") {
+		t.Errorf("verdict = %+v, want kind ci", v)
+	}
+}
+
+// `magnum fix --ci` reads magnum's run that ended failure as the look does:
+// a failed check it fixes, not one that did not run.
+func TestMagnumFixCIFixesARunMagnumStartedThatEndedFailure(t *testing.T) {
+	h, git := ciShape3Harness(t)
+	cannotFixer(h, git, "flaky")
+	id := h.fix(FixPayload{Mode: FixModeCI})
+	h.handle()
+	if res := h.wantDone(id); !strings.HasPrefix(res, "fixing the failed CI of talkable/talkable#2: ") {
+		t.Errorf("answer = %q", res)
+	}
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 1 {
+		t.Errorf("fix runs = %d, want the CI fix's", n)
+	}
+}
+
+// No rollup shows magnum's run of the head, so a re-run of it by hand shows
+// only in the head's runs: a read of its failed jobs that stands from an
+// earlier look is checked against them before the start it feeds (once a
+// settle_quiet at most, not every look), and a newer attempt is read
+// again: one that still runs waits, and one that failed again gives the
+// fixer its own logs.
+func TestAReRunByHandOfMagnumsRunIsReadAgainBeforeTheStart(t *testing.T) {
+	h, git := ciShape3Harness(t)
+	cannotFixer(h, git, "flaky")
+	h.pastSettle()
+	pr := h.pr(2)
+	if err := h.st.TransitionPR(h.ctx, pr.ID, []string{pr.State}, pr.State, func(u *store.PRUpdate) { u.Set("human_active_at", h.clock.Now()) }); err != nil {
+		t.Fatal(err)
+	}
+	h.tick() // the read, and a start refused: someone typed into the panes
+	if rec := h.ciRecordOf(); rec.Read.Jobs != 2 || len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeUnstarted {
+		t.Fatalf("record = %+v", rec)
+	}
+	runReads := len(h.ghCalls("head_runs:"))
+	h.advance(time.Minute)
+	h.tick()
+	if n := len(h.ghCalls("head_runs:")); n != runReads {
+		t.Errorf("the head's runs read %d times more within settle_quiet", n-runReads)
+	}
+	attempt := failedCIRun(fixHead, 2)
+	attempt.Event, attempt.Status, attempt.Conclusion = "workflow_dispatch", "in_progress", ""
+	h.setHeadRuns(fixHead, attempt)
+	h.advance(2 * time.Hour) // past the cooldown
+	h.tick()
+	h.wantOpen(OpenWaits, "required check Completion failed at a1a1a1a (magnum's run of ci.yml ended failure); a re-run of its run has not ended")
+	if n := len(h.fixRuns(pr.ID)); n != 0 {
+		t.Fatalf("a CI fix started on attempt 1 while attempt 2 runs (%d fix runs)", n)
+	}
+	attempt.Status, attempt.Conclusion = "completed", "failure"
+	h.setHeadRuns(fixHead, attempt)
+	h.advance(21 * time.Minute) // a running read is read again settle_max later
+	h.tick()
+	if n := len(h.fixRuns(pr.ID)); n != 1 {
+		t.Fatalf("fix runs = %d, want the CI fix on attempt 2", n)
+	}
+	raw, err := os.ReadFile(filepath.Join(h.d.Layout.ReviewDir("talkable", "talkable", 2, fixHead), ciFailuresFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f ciFailuresJSON
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Checks) != 1 || f.Checks[0].Attempt != 2 {
+		t.Errorf("the fixer's file = %+v, want attempt 2's", f.Checks)
 	}
 }
 
@@ -196,6 +341,9 @@ func TestTheCIFixRecordIsWrittenBeforeTheStart(t *testing.T) {
 	h.tick()
 	if rec := h.ciRecordOf(); len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeUnstarted || !rec.Starts[0].At.After(typed) {
 		t.Fatalf("record = %+v, want the one unstarted start: a refused start takes its place", rec.Starts)
+	}
+	if runs, logs := len(h.ghCalls("run_jobs:")), len(h.ghCalls("job_log:")); runs != 1 || logs != 2 {
+		t.Errorf("a start that waits read the jobs %d times and %d logs; want the first look's one read", runs, logs)
 	}
 	lost := ciFixRecord{Read: rec.Read, Base: rec.Base}
 	for _, head := range []string{"1111111111111111111111111111111111111111", "2222222222222222222222222222222222222222", "3333333333333333333333333333333333333333"} {
@@ -303,5 +451,91 @@ func TestADaemonsMergeOfTheParentIsNoPushOfYours(t *testing.T) {
 	h.e.openLoopsEnded(h.ctx, repo, h.pr(2), &l, false)
 	if !slices.Contains(l.FixerHeads, fixPushed) || !slices.Contains(l.FixerHeads, strings.Repeat("d", 40)) {
 		t.Errorf("fixer heads = %q, want the daemon's merges", l.FixerHeads)
+	}
+}
+
+// A CI fix whose claim lost its free slot to another PR ran no fixer: its
+// start is unstarted, it does not count, and the next look starts the CI
+// fix again in its place.
+func TestACIFixWhoseClaimLostItsSlotDoesNotCount(t *testing.T) {
+	h, git := ciFixHarness(t, github.CheckPassed)
+	cannotFixer(h, git, "flaky")
+	pr := h.pr(2)
+	repo, err := h.st.RepoByID(h.ctx, pr.RepoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !h.e.noteCIFixStart(h.ctx, pr, []string{"Completion"}, autofixBy) {
+		t.Fatal("the start was not recorded")
+	}
+	job := &fixJob{repo: repo, watch: h.cfg.Watches[0], pr: pr, mode: FixModeCI,
+		state: FixState{Cycle: 1, Cap: 3, By: autofixBy, Since: fixHead, Mode: FixModeCI, CIChecks: []string{"Completion"}, StartedAt: h.clock.Now()}}
+	h.e.endFixUnclaimed(h.ctx, job, noFreeFixSlot{repo: "talkable/talkable", label: "talkable/talkable#2"}.Error(), true)
+	if rec := h.ciRecordOf(); len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeUnstarted || rec.count() != 0 {
+		t.Fatalf("record = %+v, want the start unstarted", rec.Starts)
+	}
+	h.pastSettle()
+	h.tick()
+	if rec := h.ciRecordOf(); len(h.fixRuns(pr.ID)) != 1 || len(rec.Starts) != 1 || rec.count() != 1 {
+		t.Errorf("record = %+v, %d fix runs; want the CI fix started in the unstarted one's place", rec.Starts, len(h.fixRuns(pr.ID)))
+	}
+}
+
+// `magnum abort` of a CI fix's fixer records it stopped, and the head's
+// verdict says so; nothing starts again at the head.
+func TestAnAbortedCIFixIsStopped(t *testing.T) {
+	var kh *keyHerdr
+	h, _ := ciFixHarnessWith(t, github.CheckPassed, findings(map[string]int{}, "COMMENTED"), realSleep, withKeys(&kh))
+	h.fix(FixPayload{Mode: FixModeCI})
+	h.e.handleRequests(h.ctx)
+	h.awaitSubmit()
+	id := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.e.handleRequests(h.ctx)
+	h.settle()
+	h.wantDone(id)
+	if rec := h.ciRecordOf(); len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeStopped || rec.count() != 1 {
+		t.Fatalf("record = %+v, want the CI fix stopped", rec.Starts)
+	}
+	h.pastSettle()
+	h.tick()
+	h.tick()
+	h.wantOpen(OpenNeedsYou, "required check Completion failed at a1a1a1a: the CI fix at a1a1a1a was stopped; it is yours")
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 1 {
+		t.Errorf("fix runs = %d, want the stopped one alone", n)
+	}
+}
+
+// A CI fix whose run failed (here its fixer wrote no report) is recorded
+// failed, and counts.
+func TestACIFixWhoseRunFailedIsFailed(t *testing.T) {
+	h, git := ciFixHarness(t, github.CheckPassed)
+	fixer(h, git, "", func(store.Run) string { return "" })
+	id := h.fix(FixPayload{Mode: FixModeCI})
+	h.handle()
+	h.wantDone(id)
+	if rec := h.ciRecordOf(); len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeFailed || rec.count() != 1 {
+		t.Fatalf("record = %+v, want the CI fix failed", rec.Starts)
+	}
+	h.wantState(2, store.PRNeedsAttention)
+}
+
+// A CI fix whose fixer was at work when the daemon stopped is recorded lost
+// by the restart, and counts: its end is not known.
+func TestACIFixLostInARestartIsLost(t *testing.T) {
+	h, _ := ciFixHarness(t, github.CheckPassed)
+	pr := h.pr(2)
+	if !h.e.noteCIFixStart(h.ctx, pr, []string{"Completion"}, autofixBy) {
+		t.Fatal("the start was not recorded")
+	}
+	if err := h.e.setFixState(h.ctx, pr.ID, FixState{Cycle: 1, Cap: 3, Phase: FixPhaseFixing, Head: fixHead, Since: fixHead, By: autofixBy,
+		Mode: FixModeCI, CIChecks: []string{"Completion"}}); err != nil {
+		t.Fatal(err)
+	}
+	h.startup()
+	if rec := h.ciRecordOf(); len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeLost || rec.count() != 1 {
+		t.Fatalf("record = %+v, want the CI fix lost", rec.Starts)
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the lost loop goes on")
 	}
 }

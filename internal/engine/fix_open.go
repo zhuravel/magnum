@@ -557,6 +557,9 @@ func (e *Engine) openConflictCheck(ctx context.Context, repo store.Repo, pr stor
 		next.Unchecked = true
 	} else {
 		next.Tip, next.Paths = fc.sha, fc.paths
+		if next.Tip == "" { // a clean merge names no tip: the base's CI is read at the one fetched (ci_fix.go)
+			next.Tip, _ = e.d.Git.RevParse(ctx, dir, "refs/remotes/origin/"+base)
+		}
 	}
 	l.Conflict = next
 }

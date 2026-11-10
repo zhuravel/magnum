@@ -74,8 +74,15 @@ func TestMagnumFixCIRefusesOthersPRsNothingFailedRedBaseAndTheCap(t *testing.T) 
 func TestMagnumFixCIDryRunAnswersThePlan(t *testing.T) {
 	h, git := ciFixHarness(t, github.CheckPassed)
 	cannotFixer(h, git, "flaky")
+	others := func() int {
+		return len(h.ghCalls("threads:")) + len(h.ghCalls("issue_comments:")) + len(h.ghCalls("all_reviews:"))
+	}
+	before := others()
 	dry := h.fix(FixPayload{Mode: FixModeCI, DryRun: true})
 	h.handle()
+	if n := others() - before; n != 0 {
+		t.Errorf("the plan read %d lists of the other reviewers' items: a CI fix answers nobody", n)
+	}
 	plan, ok := ParseCIFixPlan(h.wantDone(dry))
 	if !ok {
 		t.Fatalf("answer %q is no plan", h.wantDone(dry))
@@ -125,19 +132,7 @@ func TestMagnumFixCIDryRunAnswersThePlan(t *testing.T) {
 // report there, the merge named in its prompt, and a push line that
 // refuses a CI config change.
 func TestACIFixMergesTheParentFirstThenNamesCIFailuresInThePrompt(t *testing.T) {
-	h, mg := mergeHarness(t, withFixerApp, requiredCompletion, func(h *harness) { h.gh.defaultFiles = []string{"app/models/offer.rb"} })
-	h.open(prSpec{n: 1, head: "base1"})
-	h.startup()
-	h.tick() // first sync: #1 baseline
-	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: fixHead, author: "zhuravel", ci: "FAILURE", checks: []github.Check{ciCompletion(github.CheckFailed)}})
-	h.tick()
-	h.advance(5 * time.Minute)
-	h.tick() // reviewed
-	recordReviewResult(h, h.wantState(2, store.PRReviewed), map[string]any{"event": "COMMENTED", "findings": map[string]int{}})
-	h.setHeadRuns(fixHead, failedCIRun(fixHead, 1))
-	h.setFailedJobs()
-	h.setBaseCI(github.CheckPassed)
-	mg.behind = true
+	h, mg := ciMergeHarness(t)
 	fixer(h, mg.fixGit, "", func(run store.Run) string {
 		return fixReport(run.ID, "nothing", "0 threads", "- 101 ci: not fixed. infra: the runner lost its disk")
 	})
@@ -153,4 +148,76 @@ func TestACIFixMergesTheParentFirstThenNamesCIFailuresInThePrompt(t *testing.T) 
 	if rec := h.ciRecordOf(); len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeMerged || rec.Starts[0].Pushed != fixParentMerge {
 		t.Errorf("record = %+v, want the merge recorded as the CI fix's", rec.Starts)
 	}
+}
+
+// ciMergeHarness is the operator's PR #2 of talkable/talkable on a fixer
+// App, behind its base, whose required Completion failed at fixHead in run
+// ciRunID (setFailedJobs) and passed on the base, reviewed clean; mods go
+// to the harness before the engine is built.
+func ciMergeHarness(t *testing.T, mods ...func(*harness)) (*harness, *mergeGit) {
+	t.Helper()
+	h, mg := mergeHarness(t, append([]func(*harness){withFixerApp, requiredCompletion, func(h *harness) { h.gh.defaultFiles = []string{"app/models/offer.rb"} }},
+		mods...)...)
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick() // first sync: #1 baseline
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: fixHead, author: "zhuravel", ci: "FAILURE", checks: []github.Check{ciCompletion(github.CheckFailed)}})
+	h.tick()
+	h.advance(5 * time.Minute)
+	h.tick() // reviewed
+	recordReviewResult(h, h.wantState(2, store.PRReviewed), map[string]any{"event": "COMMENTED", "findings": map[string]int{}})
+	h.setHeadRuns(fixHead, failedCIRun(fixHead, 1))
+	h.setFailedJobs()
+	h.setBaseCI(github.CheckPassed)
+	mg.behind = true
+	return h, mg
+}
+
+// A CI fix whose fixer said it cannot, on the daemon's merge of the parent,
+// keeps its class word beside the merge: its end names it, and the merge's
+// head needs you with it rather than starting a CI fix for the same cause.
+// A merge of the parent the daemon could not push goes to you as any
+// loop's does, though the CI fix ends quietly.
+func TestACIFixThatCannotOnTheParentsMergeKeepsItsClass(t *testing.T) {
+	t.Run("merged", func(t *testing.T) {
+		h, mg := ciMergeHarness(t)
+		fixer(h, mg.fixGit, "", func(run store.Run) string {
+			return fixReport(run.ID, "nothing", "0 threads", "- 101 ci: not fixed. secret: the job needs a key the fork lacks")
+		})
+		id := h.fix(FixPayload{Mode: FixModeCI})
+		h.handle()
+		h.wantDone(id)
+		rec := h.ciRecordOf()
+		if len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeMerged || rec.Starts[0].Why != "secret" {
+			t.Fatalf("record = %+v, want the merge with the class", rec.Starts)
+		}
+		if ev, ok := h.fixEvent("fix.ended"); !ok || !strings.Contains(ev.Message, "a missing secret") || !strings.Contains(ev.Message, fixParentMerge[:7]) {
+			t.Errorf("fix.ended = %q, %v; want the class and the merge", ev.Message, ok)
+		}
+		if at := rec.atHead(fixParentMerge); at.Why != "secret" {
+			t.Errorf("the merge's head reads %+v, want the CI fix that said cannot", at)
+		}
+		f := ciFailedFacts()
+		f.ciFix.starts, f.ciFix.atHead = 1, ciFixStart{Head: "e0e0", Outcome: ciOutcomeMerged, Why: "secret", Pushed: fixHead}
+		v, work, _ := decideOpen(f)
+		wantNeedsCI(t, v, work, "required check Completion failed at a1a1a1a: the CI fix found a missing secret")
+	})
+	t.Run("the merge refused", func(t *testing.T) {
+		h, mg := ciMergeHarness(t, withoutWorkflows)
+		mg.workflows = []string{".github/workflows/ci.yml"}
+		cannot := func(run store.Run) string {
+			return fixReport(run.ID, "nothing", "0 threads", "- 101 ci: not fixed. infra: the runner lost its disk")
+		}
+		fixer(h, mg.fixGit, "", cannot)
+		id := h.fix(FixPayload{Mode: FixModeCI})
+		h.handle()
+		h.wantDone(id)
+		pr := h.wantState(2, store.PRNeedsAttention)
+		if got := deref(pr.LastError); !strings.Contains(got, noWorkflowsRefusal) {
+			t.Errorf("attention = %q, want it to say %q", got, noWorkflowsRefusal)
+		}
+		if rec := h.ciRecordOf(); len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeCannot || rec.Starts[0].Why != "infra" {
+			t.Errorf("record = %+v", rec.Starts)
+		}
+	})
 }

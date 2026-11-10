@@ -1,11 +1,12 @@
 package tui
 
 // c, a CI fix of the row's PR on the board and the dashboard (the engine's
-// fix_ci.go, `magnum fix --ci`): the daemon's plan first (a dry run changes
-// nothing), whose question goes up as the y/N, and y sends the CI fix
-// bound to what the plan asked about (CIFixAsked), which the daemon checks
-// again before it starts: a head, failed checks or count of CI fixes that
-// moved since, or a question 10 minutes old, starts nothing.
+// fix_ci.go, `magnum fix --ci`): the daemon's plan first (a dry run, which
+// starts nothing but reads why the check failed, once for the head, and
+// keeps it for the start), whose question goes up as the y/N, and y sends
+// the CI fix bound to what the plan asked about (CIFixAsked), which the
+// daemon checks again before it starts: a head, failed checks or count of
+// CI fixes that moved since, or a question 10 minutes old, starts nothing.
 
 import (
 	"context"

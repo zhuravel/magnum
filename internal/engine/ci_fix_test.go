@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -335,4 +336,29 @@ func TestTheVerdictWhileTheCIFixRunsWhileItsPushIsReReviewedWhileCIRerunsAndAfte
 	after.ci = openCIOf(after.pr, completionRequired, false, nil)
 	v, _, _ = decideOpen(after)
 	wantVerdict(t, v, OpenIdle, "nothing open at b2b2b2b · approved, merge is yours · CI fix 1 of 3 made required check Completion pass")
+}
+
+// The newest commit of the base that finished the check decides: a run
+// that has not ended on the tip (a busy base merges every few minutes) is
+// passed over for the first parent that finished it, and the base still
+// runs the check only when no commit read finished it.
+func TestTheNewestBaseCommitThatFinishedTheCheckDecides(t *testing.T) {
+	tip, parent := strings.Repeat("c", 40), strings.Repeat("d", 40)
+	check := ciFailedCheck{Entry: "Completion", Name: "Completion", WorkflowFile: "ci.yml", Compare: []string{"Completion"}}
+	completion := func(state string) []github.Check {
+		if state == "" {
+			return nil
+		}
+		return []github.Check{{Name: "Completion", State: state, Workflow: "CI", WorkflowFile: "ci.yml"}}
+	}
+	for parentState, want := range map[string]ciBaseCheck{
+		github.CheckPassed: {Name: "Completion", SHA: parent, State: ciBasePassed},
+		github.CheckFailed: {Name: "Completion", SHA: parent, State: ciBaseFailed},
+		"":                 {Name: "Completion", SHA: tip, State: ciBaseRunning},
+	} {
+		got := ciBaseOf([]github.CommitWithChecks{{SHA: tip, Checks: completion(github.CheckPending)}, {SHA: parent, Checks: completion(parentState)}}, check)
+		if got.Name != want.Name || got.SHA != want.SHA || got.State != want.State {
+			t.Errorf("the tip runs, its parent %q: %+v, want %+v", parentState, got, want)
+		}
+	}
 }
