@@ -3216,8 +3216,11 @@ comment on stdin on the PR's conversation, `--reply-to ID` posts it in the revie
 `--request-review LOGIN` (repeatable) asks someone for a review; with only `--title` or `--request-review` the
 comment may be left out. It posts only as the watch's `fix_identity`, which must be a dedicated App whose
 `token_repositories` reach the repository, minting its token as for the fixer's panes: the token goes only into
-the App's own gh config dir (`gh/<identity>` under the state dir, mode 0600, the one the fixer's panes read),
-on a dry run too, and never into the command line, the output, the events or the registry. A repository Magnum
+the App's own gh config (`hosts.yml`, mode 0600, in `gh/<identity>` under the state dir, a directory of mode
+0700, the one the fixer's panes read), on a dry run too, and never into the command line, the output, the
+events or the registry. Before the first write it reads the App (`GET /app`): a `login` in its `[[identity]]`
+that is not the App's `<slug>[bot]`, the login GitHub shows its posts by (a typo, a block copied from another
+App), is refused with exit 2 and the login to set, and nothing is posted. A repository Magnum
 does not watch, a watch without `fix_identity`, a `fix_identity` of kind `gh` (your own login) or the App Magnum
 reviews as are refused, each naming the key to set, and nothing ever falls back to your gh login. It refuses
 what `fix-reply` refuses, a comment id that is not the PR's, a reply in a thread Magnum's review started (by a
@@ -3232,10 +3235,12 @@ the fixer's form: a quote of the remark's first line, then the remark's own link
 inside a sentence or a Markdown link answers nothing. It is never your word, never a rebuttal, a decision or a
 reply that starts a round or a loop, and a reviewer's answer after it counts as usual. A retry with the same
 text posts nothing twice: the same marked comment of the App, with nobody else's comment after it (and, on the
-conversation, nobody else's review either), is taken for the earlier run's; after someone else's word the same
-text goes out again. When GitHub shows the comment by another account than the App's login (a wrong `login`
-in its `[[identity]]`), the run stops there with exit 2 and says what to set, and the post is still recorded,
-as a warning. Each post is a `comment.posted` event of the PR in the registry (the App, the kind of post,
+conversation, nobody else's review either, the reviews read from the newest back to the first one before it),
+is taken for the earlier run's; after someone else's word the same text goes out again. When GitHub still shows
+the comment by another account than the App (a person's login), the run stops there with exit 2 and says to
+delete it, and the post is recorded, as a warning; the same marked comment found there by another account is
+refused the same way before anything is posted, so running the line again never posts a second copy. Each post
+is a `comment.posted` event of the PR in the registry (the App, the kind of post,
 its link, never the text), and `--dry-run` checks everything as the App and posts nothing. The rule that chat
 sessions use it, not `gh pr comment`, is yours to put in your agents' instructions: nothing stops a session
 that still has your gh login.

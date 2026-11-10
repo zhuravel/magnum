@@ -635,7 +635,10 @@ func TestCommentHelpSaysWhatAsWhomAndWhatItRefuses(t *testing.T) {
 		// Where the token goes: the App's own gh config, on a dry run too.
 		"writes it only to the App's own gh config", "even on --dry-run",
 		// The exact form that answers a review body or a comment.
-		"the remark's own link alone on the next line", "#pullrequestreview-N", "#issuecomment-N"} {
+		"the remark's own link alone on the next line", "#pullrequestreview-N", "#issuecomment-N",
+		// The App's login checked before the first write, and a copy by
+		// another account never posted again.
+		"GET /app", "by another account than the App is refused", "a directory of mode 0700"} {
 		if !strings.Contains(help, want) {
 			t.Errorf("help lacks %q:\n%s", want, out)
 		}

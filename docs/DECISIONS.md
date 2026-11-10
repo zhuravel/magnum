@@ -17206,17 +17206,25 @@ skill versions); people add theirs to the sections before it, at the end of the 
     and `token_permissions`, written to the App's own gh config dir), every gh call carries that env
     (`GH_CONFIG_DIR`, `GH_TOKEN` and `GITHUB_TOKEN` blanked, `GH_HOST` pinned), and the client keeps `Reauth`.
     A failed mint is exit 1 with nothing posted; nothing falls back to the operator's login or the keyring.
-    The token is written only to the App's own gh config dir (`hosts.yml`, 0600, the one the fixer's panes
-    read), on a dry run too, and never reaches argv, stdout, stderr, events or the registry; the help says so
-    in those words. GitHub's answer must show the App as each comment's author (`SameAccount`). Since the
-    token is the App's, another App there means the identity's `login` is wrong: the run stops (invalid, exit
-    2, never exit 1, whose "run it again" would post the comment again each time, since only the configured
-    login's comments count as already there) and the problem names `login of [[identity]] X` and the login to
-    set; once it is set, the same line finds the comment. A person there means the comment went out under
-    someone's login: delete it, do not run it again. Either way the post is reported and recorded, a
-    `comment.posted` at level warn with `author`. A short reference (`#N`, `repo#N`) and a review or factory
-    agent's pane (`agentPaneEnv` plus `MAGNUM_FACTORY_TASK`) are refused too: those agents read untrusted PR
-    or ticket text, and the fixer and the judge have their own tools. Contents and pull_requests write cover
+    The token is written only to the App's own gh config dir (`hosts.yml` and `config.yml` 0600, the dir
+    0700, the one the fixer's panes read), on a dry run too, and never reaches argv, stdout, stderr, events or
+    the registry; the help says so in those words. Before the first write, on a dry run too, the CLI reads the
+    App (`identity.App.PostsAs`: GET /app with a fresh JWT, its slug and `[bot]`, the comparison `magnum
+    identities check` makes) and refuses a `login` that is not that login (invalid, exit 2, the login to set,
+    nothing posted; a failed read is exit 1). Before, a wrong login (a typo, a block copied from another App)
+    let the first run post, GitHub show another author and the run stop with exit 2, and each run of the same
+    line posted another copy, since only the configured login's comments count as already there. GitHub's
+    answer must still show the App as each comment's author (`SameAccount`): another account there stops the
+    run (invalid, exit 2, never exit 1, whose "run it again" would post the comment again). A person there
+    means the comment went out under someone's login: delete it, do not run it again; another App means the
+    `login` is wrong. Either way the post is reported and recorded, a `comment.posted` at level warn with
+    `author`. The newest copy of the same signed comment found by another account than the App (in the thread,
+    or on the conversation, read back to the newest copy of any author) is refused before the first write
+    (`signedTarget.Other`, `alreadyByOther`: exit 2, delete it), so a repeated run never adds a copy; an older
+    copy under the App's own newer one changes nothing. A short reference (`#N`, `repo#N`) and a review or
+    factory agent's pane (`agentPaneEnv` plus `MAGNUM_FACTORY_TASK`) are refused too: those agents read
+    untrusted PR or ticket text, and the fixer and the judge have their own tools. Contents and pull_requests
+    write cover
     every call.
   - Checks and retries come from fix-reply, shared rather than copied (`checkSigned`, `signedBody`,
     `findSigned`, `postSigned`; fix-reply's words and behaviour are unchanged): an empty comment, any `<!--
@@ -17224,13 +17232,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
     PR's is refused; the same comment of the App already there with nobody else's after it (`postedLast`,
     counting only the App's own comments as the same) posts nothing, a title already so sends no PATCH and a
     login already requested no POST, so after an unclear failure the same line runs again safely. On the
-    conversation nobody else's review may follow it either (`reviewedSince`, one `AllReviews` read, only when
-    a match was found; a list cut short counts as a review): a colleague's review with only inline threads, or
-    a thread reply (GitHub makes every review comment part of a review), writes nothing on the conversation,
-    so without it "please take another look" said again in the next round was taken for a retry and dropped
-    with exit 0. fix-reply keeps its rule: its conversation answers quote and link one remark, so the same
-    body is the same answer. A bad title (empty, more than one line, over 256 characters, a marker, a local
-    path), a login that fails `ValidLogin` (an App, a team, an `@`), the PR's author and a GitHub 422 on the
+    conversation nobody else's review may follow it either (`reviewedSince`, only when a match was found): a
+    colleague's review with only inline threads, or a thread reply (GitHub makes every review comment part of
+    a review), writes nothing on the conversation, so without it "please take another look" said again in the
+    next round was taken for a retry and dropped with exit 0. It reads the reviews from the newest back to the
+    first one submitted before the comment (`github.RecentReviews`); before, one `AllReviews` read went oldest
+    first and stopped at 500, and the cut list counted as a new review, so on a PR with more than 500 reviews
+    every retry posted again. A list cut short before it reaches such a review still counts as one, a failed
+    read is exit 1 with nothing posted, and a reply in a thread goes by the thread alone (a colleague's review
+    after it keeps it a retry). fix-reply keeps its rule: its conversation answers quote and link one remark,
+    so the same body is the same answer. A bad title (empty, more than one line, over 256 characters, a marker,
+    a local path), a login that fails `ValidLogin` (an App, a team, an `@`), the PR's author and a GitHub 422 on the
     title or the request are invalid (exit 2: the line must change). Exit 1 lists the parts that went out.
     `--dry-run` mints, reads and checks everything as the App, says what it would do and as whom, and posts
     nothing.
@@ -17280,12 +17292,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
     TestCommentEndsTheBodyWithTheCommentMarker, TestCommentRefusesWhatFixReplyRefuses,
     TestCommentRefusesAReplyInMagnumsOwnThread, TestCommentChangesTheTitleAndRequestsReviewsInOrder,
     TestCommentDryRunPostsNothingAndSaysAsWhom, TestCommentReadsBackTheApp,
-    TestCommentPostsTheSameAgainAfterSomeoneElsesReview and the rest of postreview's;
+    TestCommentPostsTheSameAgainAfterSomeoneElsesReview,
+    TestCommentPostsNothingWhereTheSameCommentIsByAnotherAccount and the rest of postreview's;
+    TestRecentReviewsReadBackToTheCallersStop, TestPostsAsIsTheAppsSlugAndBot;
     TestCommentIdentityRefusesWithTheKeyToSet, TestPRThreadLoginsAddThePRsOwnAndFormerIdentities;
     TestCommentPostsAsTheWatchsFixerApp, TestCommentNeverFallsBackToYourLogin,
     TestCommentRecordsEachPostInTheRegistry, TestCommentRefusesAThreadOfThePRsOwnOrFormerIdentity,
-    TestCommentRecordsAPostGitHubShowsByAnotherApp, TestCommentHelpSaysWhatAsWhomAndWhatItRefuses and the
-    CLI's others; TestAChatCommentOfTheAppAnswersAnotherReviewersThread,
+    TestCommentRefusesALoginTheAppDoesNotPostAs, TestCommentRecordsAPostGitHubShowsByAPerson,
+    TestCommentHelpSaysWhatAsWhomAndWhatItRefuses and the CLI's others;
+    TestAChatCommentOfTheAppAnswersAnotherReviewersThread,
     TestAChatCommentAnswersARemarkItLinks, TestAChatCommentInMagnumsThreadIsNoRebuttal and
     TestAResolvedThreadTheAppAnsweredIsNoItem; pins TestAChatCommentIsNoAuthorsWordAndNoRemark,
     TestAChatCommentIsNeverTheAuthorsDecision, TestAChatCommentStartsNoReplyRound,

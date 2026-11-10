@@ -68,9 +68,11 @@ const commentLong = "Post on a pull request of a watched repository as the watch
 	"reviewed already. With only --title or --request-review the comment may be left out. The pull request is " +
 	"owner/repo#N or its URL.\n\n" +
 	"magnum mints the App's installation token as it does for the fixer's panes, narrowed to the identity's " +
-	"token_repositories, and writes it only to the App's own gh config (hosts.yml in gh/<identity> under magnum's " +
-	"state dir, mode 0600, the one the fixer's panes read), even on --dry-run: it never reaches the command line, " +
-	"stdout, stderr, the events or the registry. It refuses a repository magnum does not watch, a " +
+	"token_repositories, and writes it only to the App's own gh config (hosts.yml, mode 0600, in gh/<identity>, a " +
+	"directory of mode 0700 under magnum's state dir, the one the fixer's panes read), even on --dry-run: it never " +
+	"reaches the command line, stdout, stderr, the events or the registry. Before the first write it reads the App " +
+	"(GET /app) and refuses a login of the identity that is not the App's <slug>[bot], the login GitHub shows its " +
+	"posts by, naming the login to set. It refuses a repository magnum does not watch, a " +
 	"watch without fix_identity, a fix_identity that is your gh identity or the App magnum reviews as, and a " +
 	"repository outside the App's token_repositories, each naming the key to set; a comment that is empty, carries " +
 	"a <!-- magnum: marker, names a local path or is longer than GitHub takes; a reply to a comment that is not this " +
@@ -84,7 +86,8 @@ const commentLong = "Post on a pull request of a watched repository as the watch
 	"nothing else on that line), then a blank line and the answer: magnum then counts it answered. The same comment " +
 	"already there with the marker and nobody else's comment after it (on the conversation, nobody else's review " +
 	"either) gets nothing more, a title already so is not sent again and a login already asked is skipped, so after " +
-	"an unclear failure run the same line with the same text again. Each post is recorded in magnum's registry " +
+	"an unclear failure run the same line with the same text again; the same comment there by another account than " +
+	"the App is refused (delete it), so no run posts a second copy. Each post is recorded in magnum's registry " +
 	"(comment.posted: the pull request, the App, the kind of post and its link, never the text). --dry-run checks " +
 	"everything as the App, prints what it would post and as whom, and posts nothing.\n\n" +
 	"It prints one JSON object on stdout (status: posted, already_posted, dry_run, invalid or error, with each part " +
