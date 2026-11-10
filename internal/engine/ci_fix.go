@@ -28,7 +28,9 @@ package engine
 // cycle merges the parent first as any loop's (the daemon's clean merge, or
 // the fixer's conflict), its fixer reproduces and fixes the failure, runs
 // the failing tests and pushes; its push gets the forced re-review, whose
-// findings the next cycles fix as any loop's. A fixer that says it cannot
+// findings the next cycles fix as any loop's, and they leave alone what a
+// loop the look starts would (FixState.Waits: an item its reviewer
+// accepted, a reviewer's pushback). A fixer that says it cannot
 // (a flaky test, an infrastructure failure, a missing secret, ...) ends the
 // loop quietly with that class word, and the head needs you, kind ci. A
 // coworker's PR is never fixed: the look covers own PRs alone, and

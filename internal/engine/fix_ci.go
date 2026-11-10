@@ -1,27 +1,28 @@
 package engine
 
 // A CI fix by hand: `magnum fix --ci <ref>` and the screens' c
-// (FixPayload.Mode FixModeCI). It runs the look's CI fix (ci_fix.go) on
-// the operator's own PR whose required check failed at its head, with the
-// same loop, the same record before the start and the same cap of 3, and
-// skips what a start by hand skips, as `magnum fix` does: the look's
-// settle, the hands off after a push, quiet hours, the daily cap of loops,
-// and the look's once per head (you may try again at a head whose CI fix
-// said it cannot, and that try counts). It refuses, with rule 11's words
-// where they say why, a coworker's PR, a head where nothing failed (a
-// check that did not run is ci_dispatch's or yours, one that still runs
-// waits), a failure red or never run on the base, a PR that changes its
-// own CI config, a check that is no Actions job, the cap, a head magnum has
-// not reviewed or whose review leaves work (f fixes it first), a drain for
-// a restart and a GitHub budget below the floor (ask again after: a CI fix
-// is never held), and every refusal of prepareFix. It reads the base and
-// the failed jobs itself when the PR's record lacks them for the head, its
-// dry run too: the plan its y/N asks (CIFixPlan) starts nothing and writes
-// nothing to GitHub, but reads why the check failed as a start would, once
-// for the head, and keeps it (the CI fixes' record, ci-failures.json, the
-// fix.ci_read event) for the start. Its CIFixAsked binds the start: a
-// head, failed set or count of CI fixes that moved since, or a question as
-// old as mergeAskedWait, starts nothing.
+// (FixPayload.Mode FixModeCI). It runs the look's CI fix (ci_fix.go) on the
+// operator's own PR whose required check failed at its head, with the same
+// loop (its next cycles leave alone what waits for you, as the look's last
+// read sorts it: lastReadWaits), the same record before the start and the
+// same cap of 3, and skips what a start by hand skips, as `magnum fix`
+// does: the look's settle, the hands off after a push, quiet hours, the
+// daily cap of loops, and the look's once per head (you may try again at a
+// head whose CI fix said it cannot, and that try counts). It refuses, with
+// rule 11's words where they say why, a coworker's PR, a head where nothing
+// failed (a check that did not run is ci_dispatch's or yours, one that
+// still runs waits), a failure red or never run on the base, a PR that
+// changes its own CI config, a check that is no Actions job, the cap, a
+// head magnum has not reviewed or whose review leaves work (f fixes it
+// first), a drain for a restart and a GitHub budget below the floor (ask
+// again after: a CI fix is never held), and every refusal of prepareFix. It
+// reads the base and the failed jobs itself when the PR's record lacks them
+// for the head, its dry run too: the plan its y/N asks (CIFixPlan) starts
+// nothing and writes nothing to GitHub, but reads why the check failed as a
+// start would, once for the head, and keeps it (the CI fixes' record,
+// ci-failures.json, the fix.ci_read event) for the start. Its CIFixAsked
+// binds the start: a head, failed set or count of CI fixes that moved
+// since, or a question as old as mergeAskedWait, starts nothing.
 
 import (
 	"cmp"
@@ -200,7 +201,8 @@ func (e *Engine) requestCIFix(ctx context.Context, pr store.PR, dry bool, asked 
 		}
 	}
 	entries, count := ciEntries(f.ci.failedRuns), f.ciFix.starts
-	prev := FixState{Mode: FixModeCI, CIChecks: entries}
+	// fix_open_needs.go: its next cycles, on findings, leave alone what waits for you, as the look's CI fix does
+	prev := FixState{Mode: FixModeCI, CIChecks: entries, Waits: l.lastReadWaits()}
 	if dry {
 		job, err := e.prepareFix(ctx, pr, prev, fixPinWouldUnpin, nil, false)
 		switch {

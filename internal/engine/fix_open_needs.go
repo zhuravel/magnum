@@ -171,6 +171,17 @@ func (l openLedger) loopWaits(items, needs []openItem) []string {
 	return append(keys, pushbacks...)
 }
 
+// lastReadWaits are the FixState.Waits of a loop that starts outside the
+// look (a CI fix by hand, fix_ci.go): loopWaits over the other reviewers'
+// items of the look's last read (Read.Others), sorted as the look sorts
+// them (sortOpen), so its next cycles leave alone what a loop the look
+// starts would. The key of an item that moved since that read marks
+// nothing.
+func (l openLedger) lastReadWaits() []string {
+	_, needs := sortOpen(l.Read.Others, l)
+	return l.loopWaits(l.Read.Others, needs)
+}
+
 // noteWaited records in l.Waited, at now the first time, the reviewers
 // of the person's items of needs, which wait for the author. A reviewer
 // stays there for the PR's life: an approval of theirs and a new change

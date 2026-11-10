@@ -324,12 +324,13 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	acts.end() // before the fixer starts: the deferred end does nothing more
 	// fix_open_needs.go: a change request their reviewers make from now on waits for you, in the loop below too
 	l.noteWaited(needs, now)
+	// a person's handed items wait, those their reviewer accepted, and their reviewers' pushback: a loop's fixer leaves them alone
+	waits := l.loopWaits(f.items, needs)
 	switch {
-	case ci: // ci_fix.go: the record first, so a restart never starts a fourth
-		v = e.openStart(ctx, repo, pr, &l, v, work, FixState{Mode: FixModeCI, CIChecks: ciEntries(f.ci.failedRuns)}, fp)
+	case ci: // ci_fix.go: the record first, so a restart never starts a fourth; its next cycles, on findings, read the other reviewers too
+		v = e.openStart(ctx, repo, pr, &l, v, work, FixState{Mode: FixModeCI, CIChecks: ciEntries(f.ci.failedRuns), Waits: waits}, fp)
 	case v.Verdict == OpenFixing && len(work) > 0:
-		// a person's handed items wait, those their reviewer accepted, and their reviewers' pushback: its fixer leaves them alone
-		v = e.openStart(ctx, repo, pr, &l, v, work, FixState{Waits: l.loopWaits(f.items, needs)}, fp)
+		v = e.openStart(ctx, repo, pr, &l, v, work, FixState{Waits: waits}, fp)
 	}
 	e.openWrite(ctx, pr, c.raw, l, v)
 }

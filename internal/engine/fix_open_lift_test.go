@@ -264,6 +264,98 @@ func TestALaterLoopLeavesAnAcceptedItemAlone(t *testing.T) {
 	}
 }
 
+// leavesThenFixesCI is ciFixHarnessWith's PR #2, whose re-review of the
+// CI fix's push finds a P2, with rev-ann's thread: the look's first loop
+// leaves it to you, the CI fix (the fixer's second run) pushes while she
+// asks for changes, and each later cycle answers the findings.
+func leavesThenFixesCI(t *testing.T) *harness {
+	t.Helper()
+	h, git := ciFixHarnessWith(t, github.CheckPassed, func(in pipeline.RoundInput) (map[string]int, string) {
+		if in.TargetSHA == fixPushed {
+			return map[string]int{"P2": 1}, "COMMENTED"
+		}
+		return map[string]int{}, "COMMENTED"
+	})
+	h.setThreads(extThread(4322458360, "lib/sandbox.rb", 185, h.clock.Now().Add(-time.Hour), "Why does it run twice?", "rev-ann"))
+	cycleFixer(h, git,
+		func(id string) (string, string) { // loop 1 leaves her question to you
+			return "", fixReport(id, "nothing", "1 threads (0 fixed, 0 already fixed, 1 not a bug, 0 won't fix)", "none")
+		},
+		func(id string) (string, string) { // the CI fix, while she asks for changes
+			h.reviewerAsks("rev-ann", 9003, "No, drop it")
+			return fixPushed, fixReport(id, fixPushed[:7]+" Keep the total in cents", "0 threads", "none")
+		},
+		func(id string) (string, string) {
+			return "", fixReport(id, "nothing", fixReplied, "none")
+		})
+	h.pastSettle()
+	h.tick() // loop 1, on her thread: findings first, the CI after
+	h.advance(time.Minute)
+	h.tick() // the look raises her thread
+	h.wantState(2, store.PRNeedsAttention)
+	return h
+}
+
+// redCompletion polls PR #2 at fixHead with its required check Completion
+// failed, as ciFixHarnessWith opened it (touch leaves its checks out).
+func (h *harness) redCompletion() {
+	h.t.Helper()
+	h.openOwn(prSpec{head: fixHead, ci: "FAILURE", checks: []github.Check{ciCompletion(github.CheckFailed)}})
+	h.tick()
+}
+
+// wantCIFixLeavesHerAlone runs the CI fix's push to its re-review and the
+// loop's next cycle, and fails unless that cycle's file marks rev-ann's
+// thread and her change request made during the CI fix waiting.
+func wantCIFixLeavesHerAlone(t *testing.T, h *harness) {
+	t.Helper()
+	for range 4 {
+		h.advance(time.Minute)
+		h.tick()
+	}
+	runs := h.fixRuns(h.pr(2).ID)
+	if len(runs) != 3 {
+		t.Fatalf("fix runs = %d (state %s), want loop 1, the CI fix and its next cycle", len(runs), h.pr(2).State)
+	}
+	x := readExternalOf(t, runs[2])
+	threads := map[int64]bool{}
+	for _, th := range x.Threads {
+		threads[th.CommentID] = th.Waits
+	}
+	if !threads[4322458360] {
+		t.Errorf("waits in the CI fix's next cycle = %v, want her thread left alone", threads)
+	}
+	if waits := remarkWaits(t, runs[2]); !waits[9003] {
+		t.Errorf("remarks in the CI fix's next cycle = %v, want her change request during the CI fix waiting", waits)
+	}
+}
+
+// A CI fix the look starts once the reviewer approved what the fixer left
+// carries the waits a later loop does: its next cycles, on the re-review's
+// findings, get a file that lists her accepted thread, which they leave
+// alone, and her change request made while the CI fix ran, her pushback.
+func TestALaterCIFixLeavesAnAcceptedItemAndThePushbackAlone(t *testing.T) {
+	h := leavesThenFixesCI(t)
+	h.advance(time.Minute)
+	h.revAnnReviews(9002, "APPROVED", "")
+	h.wantState(2, store.PRReviewed)
+	h.redCompletion()
+	h.pastSettle()
+	h.tick() // the CI fix, its push's re-review and its next cycle
+	wantCIFixLeavesHerAlone(t, h)
+}
+
+// A CI fix by hand (`magnum fix --ci`, the screens' c) carries the look's
+// waits too: over the look's raise of her thread, its next cycles leave
+// that thread to you, and her change request made while the CI fix ran.
+func TestACIFixByHandLeavesWhatWaitsForYouAlone(t *testing.T) {
+	h := leavesThenFixesCI(t)
+	id := h.fix(FixPayload{Mode: FixModeCI})
+	h.handle()
+	h.wantDone(id)
+	wantCIFixLeavesHerAlone(t, h)
+}
+
 // An approval accepts its reviewer's items made before it: a thread, a
 // review body, a thread a fixer resolved. Never one whose comment the
 // approval itself holds (approve with comments: a new ask), nor another
