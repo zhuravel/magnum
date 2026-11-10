@@ -539,36 +539,71 @@ func coveredBy(covers map[string]string, f string) (string, bool) {
 // a case-insensitive filesystem may open for one: agents.LooseFold), the
 // link's path with the rest of f's, and so on for that path's own links
 // (.claude/rules -> ../shared/rules, shared/rules/api.md -> ../../x.txt:
-// x.txt is read as .claude/rules/api.md). Each path counts a step.
+// x.txt is read as .claude/rules/api.md). A link that lies at or under
+// where it leads (.claude/rules/back -> .., a loop; a link to the root)
+// gives no path, nor does a link a path was already built with, or a
+// path longer than maxPathBytes: Claude Code's rules walk enters each
+// directory once, and opens nothing that long, so the paths end. Each
+// path and each of its directories looked up counts a step.
 func (r *linkResolver) dirsOf(f string) []string {
+	if len(r.via) == 0 {
+		return []string{linkDir(f)}
+	}
+	type named struct {
+		path string
+		from int    // the index of the path it was built from, -1 for f
+		link string // the link it was built with
+	}
+	paths := []named{{path: f, from: -1}}
+	built := func(i int, l string) bool { // whether l built paths[i] or a path it was built from
+		for ; i >= 0; i = paths[i].from {
+			if paths[i].link == l {
+				return true
+			}
+		}
+		return false
+	}
 	seen := map[string]bool{foldKey(f): true}
-	paths := []string{f}
 	for i := 0; i < len(paths); i++ {
-		q := paths[i]
-		for t := q; ; {
+		q := paths[i].path
+		t, k := q, agents.LooseFold(q) // a directory of q, with its key (LooseFold keeps each /)
+		for {
+			if !r.step() {
+				return nil
+			}
 			rest := strings.TrimPrefix(q[len(t):], "/")
-			for _, l := range r.via[agents.LooseFold(t)] {
+			for _, l := range r.via[k] {
+				if lk := agents.LooseFold(l); k == "" || lk == k || strings.HasPrefix(lk, k+"/") || built(i, l) {
+					continue
+				}
 				a := l
 				if rest != "" {
 					a += "/" + rest
 				}
-				if k := foldKey(a); !seen[k] {
+				if fk := foldKey(a); len(a) <= maxPathBytes && !seen[fk] {
 					if !r.step() {
 						return nil
 					}
-					seen[k] = true
-					paths = append(paths, a)
+					seen[fk] = true
+					paths = append(paths, named{path: a, from: i, link: l})
 				}
 			}
 			if t == "" {
 				break
 			}
 			t = linkDir(t)
+			if j := strings.LastIndexByte(k, '/'); j >= 0 {
+				k = k[:j]
+			} else {
+				k = ""
+			}
 		}
 	}
 	var out []string
+	dirs := map[string]bool{}
 	for _, p := range paths {
-		if d := linkDir(p); !slices.Contains(out, d) {
+		if d := linkDir(p.path); !dirs[d] {
+			dirs[d] = true
 			out = append(out, d)
 		}
 	}

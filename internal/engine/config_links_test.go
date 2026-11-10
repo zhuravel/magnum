@@ -588,3 +588,57 @@ func TestALinkOutsideASCIIAwayFromWhatTheAgentsLoadIsFollowed(t *testing.T) {
 		})
 	}
 }
+
+// A link back up under .claude/ (.claude/rules/back -> .., a loop; twenty
+// of them, in any order), a link to the root (.claude/skills/root -> ../..)
+// or two links that lead into
+// each other (.claude/rules/up -> ../../docs, docs/rules ->
+// ../.claude/rules) give a rules file endless paths to be read by, each
+// longer than the last. Claude Code's rules walk enters each directory once
+// (its visitedDirs), so the walk reads a file through each link at most
+// once on the way and through none that leads back above itself: it ends
+// at once, its targets told, and asks its context while it builds them.
+func TestALinkLoopUnderTheClaudeDirectoryEndsTheEnginesWalk(t *testing.T) {
+	kinds := defaultKinds()
+	isConfig := func(p string) (string, bool) { return agentConfigPath(kinds, p) }
+	backs := map[string]string{}
+	for i := range 20 {
+		backs[fmt.Sprintf(".claude/rules/back%d", i)] = ".."
+	}
+	for _, c := range []struct {
+		name  string
+		links map[string]string
+		api   string // .claude/rules/api.md
+		want  string
+	}{
+		{"a link back up", map[string]string{".claude/rules/back": ".."}, "@x.md\n", ".claude/rules/x.md"},
+		{"twenty links back up", backs, "@x.md\n", ".claude/rules/x.md"},
+		{"a link to the root", map[string]string{".claude/skills/root": "../.."}, "@x.md\n", ".claude/rules/x.md"},
+		// The file is read as docs/rules/api.md too, whose @../y.md is docs/y.md.
+		{"two links into each other", map[string]string{".claude/rules/up": "../../docs", "docs/rules": "../.claude/rules"}, "@../y.md\n",
+			"docs/y.md"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tree, read := treeOf(map[string]string{".claude/rules/api.md": c.api}, c.links)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			start := time.Now()
+			got, err := resolveConfigTargets(ctx, tree, isConfig, read)
+			if err != nil || got[c.want] == "" {
+				t.Fatalf("resolveConfigTargets = %d targets (%s: %q), %v after %s; want it, at once", len(got), c.want, got[c.want], err, time.Since(start))
+			}
+		})
+	}
+}
+
+// Building the paths a file is read by, the walk hashes each directory of
+// each path it looks up, so a deep file read through many links (a
+// thousand links to d/, a source 1,900 directories below it) cost seconds
+// between two looks at the context: each directory looked up is a step,
+// which bounds the work and asks the context in time.
+func TestEachDirectoryTheWalkLooksUpIsAStep(t *testing.T) {
+	r := linkResolver{ctx: context.Background(), via: map[string][]string{"x": {"y"}}}
+	if dirs := r.dirsOf("a/b/c/d.md"); !slices.Equal(dirs, []string{"a/b/c"}) || r.steps < 5 {
+		t.Fatalf("dirsOf = %q after %d steps; want a/b/c, after a step for each of its 5 lookups", dirs, r.steps)
+	}
+}
