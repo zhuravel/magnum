@@ -33,19 +33,30 @@ func DeployBeforeMerge(paths []string, envs []EnvStatus) (migrations []string, n
 
 // DeployBeforeMergeWords is the needs-you line of a PR that DeployBeforeMerge
 // says needs a staging deploy before its merge: the first of its migrations
-// (byte order) by name, and how many more there are. The first clause,
-// "deploy to a staging before the merge", is the same for any count: the
-// board stores the words as they are, and the factory's short form is
-// that clause (it cuts at the first " ("). No migration is that clause
-// alone.
+// (byte order) by name, and how many more there are (MigrationWords). The
+// first clause, "deploy to a staging before the merge", is the same for any
+// count: the board stores the words as they are, and the factory's short
+// form is that clause (it cuts at the first " ("). No migration is no line:
+// "".
 func DeployBeforeMergeWords(migrations []string) string {
-	const first = "deploy to a staging before the merge"
 	if len(migrations) == 0 {
-		return first
+		return ""
 	}
-	words := first + " (it changes " + migrations[0]
+	return "deploy to a staging before the merge (" + MigrationWords(migrations) + ")"
+}
+
+// MigrationWords say which migrations a PR changes: the first of migrations
+// (byte order) by name, and how many more there are ("it changes
+// db/migrate/a.rb", "it changes db/migrate/a.rb and 2 more migrations"); ""
+// for none. DeployBeforeMergeWords and any line that names the migrations of
+// a PR share them.
+func MigrationWords(migrations []string) string {
+	if len(migrations) == 0 {
+		return ""
+	}
+	words := "it changes " + migrations[0]
 	if more := len(migrations) - 1; more > 0 {
 		words += " and " + textx.Count(more, "more migration", "more migrations")
 	}
-	return words + ")"
+	return words
 }

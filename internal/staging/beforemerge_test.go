@@ -37,7 +37,9 @@ func TestAPRThatChangesAMigrationNeedsAStagingDeployBeforeItsMerge(t *testing.T)
 
 // The words name the first migration, in byte order, and count the rest:
 // the first clause stays the same however many there are (the board stores
-// the words, and the factory's short form cuts at the first " (").
+// the words, and the factory's short form cuts at the first " ("). No
+// migration is no line: "" is what the board and the factory use for it, so
+// a caller that forgets its own test of the list shows no nudge.
 func TestTheDeployBeforeMergeWordsNameTheFirstMigrationAndCountTheRest(t *testing.T) {
 	const a, b, c = "db/migrate/20261109_a.rb", "db/migrate/20261109_b.rb", "engines/billing/db/sharded_migrate/20261101_c.rb"
 	for _, tc := range []struct {
@@ -47,7 +49,8 @@ func TestTheDeployBeforeMergeWordsNameTheFirstMigrationAndCountTheRest(t *testin
 		{[]string{a}, "deploy to a staging before the merge (it changes db/migrate/20261109_a.rb)"},
 		{[]string{a, b}, "deploy to a staging before the merge (it changes db/migrate/20261109_a.rb and 1 more migration)"},
 		{[]string{a, b, c}, "deploy to a staging before the merge (it changes db/migrate/20261109_a.rb and 2 more migrations)"},
-		{nil, "deploy to a staging before the merge"},
+		{nil, ""},
+		{[]string{}, ""},
 	} {
 		if got := DeployBeforeMergeWords(tc.migrations); got != tc.want {
 			t.Errorf("DeployBeforeMergeWords(%q) = %q, want %q", tc.migrations, got, tc.want)
@@ -68,5 +71,23 @@ func TestDeployBeforeMergeListsEveryMigrationInByteOrder(t *testing.T) {
 	}
 	if got, needed := DeployBeforeMerge([]string{"db/migrate/1_a.rb", "db/migrate/1_a.rb"}, none); !slices.Equal(got, []string{"db/migrate/1_a.rb"}) || !needed {
 		t.Errorf("DeployBeforeMerge with a path twice = %q, %v; want it once", got, needed)
+	}
+}
+
+// The count words are the rule's own, for any line that names the
+// migrations a PR changes: the first in byte order, then how many more.
+func TestMigrationWordsNameTheFirstMigrationAndCountTheRest(t *testing.T) {
+	for _, tc := range []struct {
+		migrations []string
+		want       string
+	}{
+		{[]string{"db/migrate/a.rb"}, "it changes db/migrate/a.rb"},
+		{[]string{"db/migrate/a.rb", "db/migrate/b.rb"}, "it changes db/migrate/a.rb and 1 more migration"},
+		{[]string{"db/migrate/a.rb", "db/migrate/b.rb", "db/migrate/c.rb"}, "it changes db/migrate/a.rb and 2 more migrations"},
+		{nil, ""},
+	} {
+		if got := MigrationWords(tc.migrations); got != tc.want {
+			t.Errorf("MigrationWords(%q) = %q, want %q", tc.migrations, got, tc.want)
+		}
 	}
 }

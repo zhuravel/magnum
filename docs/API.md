@@ -14535,9 +14535,11 @@ type PRState struct {
 	// (pr_files; nil without a list of that head, or when it cannot be
 	// read); DeployingHead says a staging deploy of the PR's head is live,
 	// queued or running (the review daemon's staging.deploy.* records, as
-	// the board reads them; one that stopped for you, ended or is of an
-	// older head is not): the deploy before the merge is on its way, and
-	// E is refused until the push lands; Stagings,
+	// the board reads them, while its daemon runs; one that stopped for you,
+	// ended or is of an older head is not): the deploy before the merge is
+	// on its way, and E is refused until the push lands. It is read only
+	// for the screen (ScreenData asks, deployRecords), never for the tick.
+	// Stagings,
 	// for your own PRs alone (OwnPRs: a task's are the factory daemon's
 	// own), where the PR stands on each env as the review daemon last told
 	// it (its record, engine.KVPRStaging, as engine.StagingShown shows it:
@@ -27481,10 +27483,17 @@ func DeployBeforeMerge(paths []string, envs []EnvStatus) (migrations []string, n
 func DeployBeforeMergeWords(migrations []string) string
     DeployBeforeMergeWords is the needs-you line of a PR that DeployBeforeMerge
     says needs a staging deploy before its merge: the first of its migrations
-    (byte order) by name, and how many more there are. The first clause, "deploy
-    to a staging before the merge", is the same for any count: the board stores
-    the words as they are, and the factory's short form is that clause (it cuts
-    at the first " ("). No migration is that clause alone.
+    (byte order) by name, and how many more there are (MigrationWords). The
+    first clause, "deploy to a staging before the merge", is the same for any
+    count: the board stores the words as they are, and the factory's short form
+    is that clause (it cuts at the first " ("). No migration is no line: "".
+
+func MigrationWords(migrations []string) string
+    MigrationWords say which migrations a PR changes: the first of
+    migrations (byte order) by name, and how many more there are ("it changes
+    db/migrate/a.rb", "it changes db/migrate/a.rb and 2 more migrations");
+    "" for none. DeployBeforeMergeWords and any line that names the migrations
+    of a PR share them.
 
 func MirrorDir(root string) func(repo string) (dir string, ok bool)
     MirrorDir is Deps.Mirror over staging mirror_dir root: owner/name's mirror

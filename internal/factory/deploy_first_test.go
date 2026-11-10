@@ -2,6 +2,7 @@ package factory
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -516,26 +517,121 @@ func TestAPRThatNeverDeploysToAStagingGetsNoDeployFirstLine(t *testing.T) {
 	}
 }
 
-// A PR whose staging deploy of its head is live (queued or running) gets no
-// deploy-first line while it runs: E would be refused ("already
-// deploying") and the push lands by itself, as the board says it. The row
-// says the merge meanwhile; the line is back once the deploy is not live.
-func TestADeployOfThePRsHeadThatRunsTakesTheDeployFirstAway(t *testing.T) {
+// While a staging deploy of a merge wait's head is live (queued or running),
+// the row is a wait on others, not on you: "deploying to a staging (it
+// changes <the migrations>)", with the rule's count words, no move and no E
+// first, in WAITS ON OTHERS as the board's PR leaves its needs-you list. It
+// never says "merge is yours" before a staging ran the migration. A task's
+// row and your PR's say the same. A live deploy of a PR that changes no
+// migration, or of one an env already holds (latest), leaves the merge words.
+func TestADeployOfThePRsHeadThatRunsIsAWaitOnOthers(t *testing.T) {
+	const second = "db/migrate/20261109010204_backfill_metric_rows.rb"
+	waiting := func(t *testing.T, row tui.FactoryRow, words string) {
+		t.Helper()
+		want := tui.WaitsOn{Who: "magnum", What: words, Short: "deploying to a staging"}
+		if row.Group != tui.GroupWaits || row.Mark != tui.MarkWaits || len(row.WaitsOn) != 1 || row.WaitsOn[0] != want {
+			t.Errorf("the row: %+v, want WAITS ON OTHERS with %+v", row, want)
+		}
+		if row.Move != "" || row.MoveShort != "" || row.DeployFirst || strings.Contains(row.Help, "merge") {
+			t.Errorf("its move %q / %q, deploy first %v, help %q: want no move, no E first and no merge words", row.Move, row.MoveShort, row.DeployFirst, row.Help)
+		}
+	}
+	none := []engine.StagingEnv{{Env: "void", State: "none"}, {Env: "bart", State: "none"}, {Env: "bastion", State: "none"}}
+	for name, c := range map[string]struct {
+		paths []string
+		words string
+	}{
+		"one migration":  {[]string{"app/models/metric.rb", theMigration}, "deploying to a staging (it changes " + theMigration + ")"},
+		"two migrations": {[]string{second, theMigration}, "deploying to a staging (it changes " + theMigration + " and 1 more migration)"},
+	} {
+		t.Run("a task, "+name, func(t *testing.T) {
+			r := stagedRig(t)
+			task := r.publishedTask("PR-12324", 4534)
+			r.changes(task.ID, c.paths...)
+			r.stagingFile(task.ID, 4534, "none", "none", "none")
+			r.pr(4534, func(v *PRState) { approvedIdle(v); v.DeployingHead = true })
+			d := r.data(time.Time{})
+			row := rowOf(t, d, "PR-12324")
+			waiting(t, row, c.words)
+			if got := d.Cards[task.ID].Task.WaitingFor; got != "magnum: "+c.words {
+				t.Errorf("its card waits for %q, want %q", got, "magnum: "+c.words)
+			}
+		})
+		t.Run("your PR, "+name, func(t *testing.T) {
+			r := stagedRig(t)
+			r.own(91, 4601, func(v *PRState) {
+				approvedIdle(v)
+				v.Files, v.Stagings, v.DeployingHead = c.paths, none, true
+			})
+			d := r.data(time.Time{})
+			row := rowOf(t, d, "#4601")
+			waiting(t, row, c.words)
+			if got := d.Cards[-91].Task.WaitingFor; got != "magnum: "+c.words {
+				t.Errorf("its card waits for %q, want %q", got, "magnum: "+c.words)
+			}
+		})
+	}
+	// The deploy's push has landed (the env reads pushed, CI runs) while its
+	// effect still runs: the migration has not run yet, so it is still a wait
+	// on others, not the merge.
 	r := stagedRig(t)
 	task := r.publishedTask("PR-12324", 4534)
 	r.changes(task.ID, theMigration)
-	r.stagingFile(task.ID, 4534, "none", "none", "none")
+	r.stagingFile(task.ID, 4534, "ci", "none", "none")
 	r.pr(4534, func(v *PRState) { approvedIdle(v); v.DeployingHead = true })
-	wantMerge(t, rowOf(t, r.data(time.Time{}), "PR-12324"))
+	waiting(t, rowOf(t, r.data(time.Time{}), "PR-12324"), "deploying to a staging (it changes "+theMigration+")")
 
-	r = stagedRig(t)
-	none := []engine.StagingEnv{{Env: "void", State: "none"}, {Env: "bart", State: "none"}, {Env: "bastion", State: "none"}}
-	r.own(91, 4601, func(v *PRState) {
-		approvedIdle(v)
-		v.Files, v.Stagings, v.DeployingHead = []string{theMigration}, none, true
+	t.Run("no migration, or an env that holds the head: the merge", func(t *testing.T) {
+		r := stagedRig(t)
+		task := r.publishedTask("PR-12324", 4534)
+		r.changes(task.ID, "app/models/metric.rb")
+		r.stagingFile(task.ID, 4534, "none", "none", "none")
+		r.pr(4534, func(v *PRState) { approvedIdle(v); v.DeployingHead = true })
+		wantMerge(t, rowOf(t, r.data(time.Time{}), "PR-12324"))
+
+		r = stagedRig(t)
+		task = r.publishedTask("PR-12324", 4534)
+		r.changes(task.ID, theMigration)
+		r.stagingFile(task.ID, 4534, "latest", "none", "none")
+		r.pr(4534, func(v *PRState) { approvedIdle(v); v.DeployingHead = true })
+		wantMerge(t, rowOf(t, r.data(time.Time{}), "PR-12324"))
 	})
-	if row := rowOf(t, r.data(time.Time{}), "#4601"); row.DeployFirst || row.Move != "merge #4601 on GitHub" || row.WaitsOn[0].What != approvedWhy {
-		t.Errorf("your PR deploying its head: %+v, want the merge and no deploy first", row)
+}
+
+// The three states of a staging deploy of the head on a merge wait: live
+// (queued or running) it is a wait on others; ended done, the staging holds
+// the head, so the rule decides again and the merge words come back; one
+// that stopped for you is not live, and the line comes back with E first.
+// (A task's row; the flag is what PRStates reads from the deploy's record.)
+func TestTheMergeWordsAndTheNudgeComeBackWhenTheDeployIsNotLive(t *testing.T) {
+	words := staging.DeployBeforeMergeWords([]string{theMigration})
+	for name, c := range map[string]struct {
+		live  bool
+		cells []string
+		check func(*testing.T, tui.FactoryRow)
+	}{
+		"live": {true, []string{"none", "none", "none"}, func(t *testing.T, row tui.FactoryRow) {
+			t.Helper()
+			if row.Group != tui.GroupWaits || row.DeployFirst || row.Move != "" {
+				t.Errorf("a live deploy: %+v, want a wait on others", row)
+			}
+		}},
+		"ended done": {false, []string{"latest", "none", "none"}, func(t *testing.T, row tui.FactoryRow) { t.Helper(); wantMerge(t, row) }},
+		"needs you": {false, []string{"none", "none", "none"}, func(t *testing.T, row tui.FactoryRow) {
+			t.Helper()
+			if row.Group != tui.GroupNeedsYou || !row.DeployFirst || row.Move != "E deploys to a staging" || !strings.HasPrefix(row.WaitsOn[0].What, words) {
+				t.Errorf("a deploy that needs you: %+v, want the line with E first", row)
+			}
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := stagedRig(t)
+			task := r.publishedTask("PR-12324", 4534)
+			r.changes(task.ID, theMigration)
+			r.stagingFile(task.ID, 4534, c.cells...)
+			r.pr(4534, func(v *PRState) { approvedIdle(v); v.DeployingHead = c.live })
+			c.check(t, rowOf(t, r.data(time.Time{}), "PR-12324"))
+		})
 	}
 }
 
@@ -580,12 +676,14 @@ func TestPRStatesSayWhichPRsNeverDeployToAStaging(t *testing.T) {
 
 // PRStates and OwnPRs say whether a staging deploy of a PR's head is live
 // (PRState.DeployingHead), from the records the board reads (the review
-// daemon's staging.deploy.* rows), in a repository with staging envs: a
-// deploy queued or running for the head is; one that stopped for you (needs
-// you), one that ended, one of an older head and another PR's are not, and
-// the line they leave stays. A repository without staging envs reads none.
+// daemon's staging.deploy.* rows), in a repository with staging envs, when
+// the screen asks for them (deployRecords on the context): a deploy queued
+// or running for the head is; one that stopped for you (needs you), one that
+// ended, one of an older head and another PR's are not, and the line they
+// leave stays. A repository without staging envs reads none.
 func TestPRStatesSayWhetherADeployOfThePRsHeadRuns(t *testing.T) {
 	l, st := magnumLayout(t)
+	ctx := withDeployRecords(t.Context())
 	head, older := strings.Repeat("ab", 20), strings.Repeat("cd", 20)
 	cfg := selfConfig()
 	cfg.Factory.Repos = []config.FactoryRepo{{Repo: "example/shop", Base: "master", Staging: theStagings}}
@@ -603,7 +701,7 @@ func TestPRStatesSayWhetherADeployOfThePRsHeadRuns(t *testing.T) {
 	deploy("void-10-a", 10, head, "done")
 	deploy("void-11-a", 11, older, "running")
 	deploy("void-99-a", 99, head, "running") // another PR's: #12 has none
-	prs, err := NewMagnum(l, cfg).OwnPRs(t.Context())
+	prs, err := NewMagnum(l, cfg).OwnPRs(ctx)
 	if err != nil || len(prs) != len(want) {
 		t.Fatalf("OwnPRs = %+v, %v; want %d PRs", prs, err, len(want))
 	}
@@ -614,7 +712,7 @@ func TestPRStatesSayWhetherADeployOfThePRsHeadRuns(t *testing.T) {
 			t.Errorf("OwnPRs #%d: deploying its head %v, want %v", v.Ref.Number, v.DeployingHead, want[v.Ref.Number])
 		}
 	}
-	got, err := NewMagnum(l, cfg).PRStates(t.Context(), refs)
+	got, err := NewMagnum(l, cfg).PRStates(withDeployRecords(t.Context()), refs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -623,8 +721,121 @@ func TestPRStatesSayWhetherADeployOfThePRsHeadRuns(t *testing.T) {
 			t.Errorf("PRStates #%d: deploying its head %v, want %v", ref.Number, v.DeployingHead, want[ref.Number])
 		}
 	}
-	if got, err = NewMagnum(l, selfConfig()).PRStates(t.Context(), refs); err != nil || got[refs[0]].DeployingHead {
+	if got, err = NewMagnum(l, selfConfig()).PRStates(withDeployRecords(t.Context()), refs); err != nil || got[refs[0]].DeployingHead {
 		t.Errorf("a repository without staging envs: %+v, %v; want no deploy read", got[refs[0]], err)
+	}
+}
+
+// Only the screen reads the deploy records: a read of the registry without
+// deployRecords on its context, as the daemon's tick makes (followPRs and
+// the status files), reads none, so the tick pays nothing for the line.
+func TestTheDaemonsTickReadsNoDeployRecords(t *testing.T) {
+	l, st := magnumLayout(t)
+	head := strings.Repeat("ab", 20)
+	cfg := selfConfig()
+	cfg.Factory.Repos = []config.FactoryRepo{{Repo: "example/shop", Base: "master", Staging: theStagings}}
+	magnumPR(t, st, 7, head, nil)
+	setKV(t, st, engine.KVStagingDeploy("void-7-a"), engine.StagingDeployRecord{Effect: "void-7-a", Repo: "example/shop", Number: 7, Head: head,
+		Env: "void", Step: "merge", Phase: "begin", State: "running", Seq: 2, At: time.Now()})
+	ref := PRRef{Repo: "example/shop", Number: 7}
+	if got, err := NewMagnum(l, cfg).PRStates(t.Context(), []PRRef{ref}); err != nil || !got[ref].Found || got[ref].DeployingHead {
+		t.Errorf("PRStates without the screen's request = %+v, %v; want #7 found and no deploy read", got[ref], err)
+	}
+	if prs, err := NewMagnum(l, cfg).OwnPRs(t.Context()); err != nil || len(prs) != 1 || prs[0].DeployingHead {
+		t.Errorf("OwnPRs without the screen's request = %+v, %v; want #7 and no deploy read", prs, err)
+	}
+	if got, err := NewMagnum(l, cfg).PRStates(withDeployRecords(t.Context()), []PRRef{ref}); err != nil || !got[ref].DeployingHead {
+		t.Errorf("PRStates asked for the records = %+v, %v; want #7 deploying", got[ref], err)
+	}
+}
+
+// ScreenData asks for the deploy records on the context of both its reads
+// of magnum's registry, the tasks' PRs (PRStates) and yours (OwnPRs).
+func TestScreenDataAsksForTheDeployRecordsInBothReads(t *testing.T) {
+	r := stagedRig(t)
+	task := r.publishedTask("PR-12324", 4534)
+	r.stagingFile(task.ID, 4534, "none", "none", "none")
+	r.pr(4534, approvedIdle)
+	r.own(91, 4601, approvedIdle)
+	m := &askingMagnum{Magnum: r.magnum, asked: map[string]bool{}}
+	if _, err := ScreenData(r.ctx, r.reg, r.agents, screenNow, time.Time{}, ScreenOptions{Config: r.cfg, Layout: r.layout, Magnum: m}); err != nil {
+		t.Fatal(err)
+	}
+	for _, read := range []string{"PRStates", "OwnPRs"} {
+		if !m.asked[read] {
+			t.Errorf("ScreenData's %s did not ask for the deploy records", read)
+		}
+	}
+}
+
+// askingMagnum is a Magnum that notes whether each of its reads was asked
+// for the deploy records (deployRecords on its context).
+type askingMagnum struct {
+	Magnum
+	asked map[string]bool
+}
+
+func (m *askingMagnum) PRStates(ctx context.Context, refs []PRRef) (map[PRRef]PRState, error) {
+	m.asked["PRStates"] = ctx.Value(deployRecordsKey{}) != nil
+	return m.Magnum.PRStates(ctx, refs)
+}
+
+func (m *askingMagnum) OwnPRs(ctx context.Context) ([]PRState, error) {
+	m.asked["OwnPRs"] = ctx.Value(deployRecordsKey{}) != nil
+	return m.Magnum.OwnPRs(ctx)
+}
+
+// One read of the deploy records serves both passes of one frame (the
+// tasks' PRs and yours): a record that changes between them is seen as the
+// first pass read it, and the next frame (a new request) reads it again.
+func TestOneReadOfTheDeployRecordsServesBothPassesOfAFrame(t *testing.T) {
+	l, st := magnumLayout(t)
+	head := strings.Repeat("ab", 20)
+	cfg := selfConfig()
+	cfg.Factory.Repos = []config.FactoryRepo{{Repo: "example/shop", Base: "master", Staging: theStagings}}
+	magnumPR(t, st, 7, head, nil)
+	record := func(state string) {
+		setKV(t, st, engine.KVStagingDeploy("void-7-a"), engine.StagingDeployRecord{Effect: "void-7-a", Repo: "example/shop", Number: 7, Head: head,
+			Env: "void", Step: "merge", Phase: "begin", State: state, Seq: 2, At: time.Now()})
+	}
+	ref := PRRef{Repo: "example/shop", Number: 7}
+	record("running")
+	frame := withDeployRecords(t.Context())
+	if prs, err := NewMagnum(l, cfg).OwnPRs(frame); err != nil || len(prs) != 1 || !prs[0].DeployingHead {
+		t.Fatalf("OwnPRs = %+v, %v; want #7 deploying", prs, err)
+	}
+	record("done")
+	if got, err := NewMagnum(l, cfg).PRStates(frame, []PRRef{ref}); err != nil || !got[ref].DeployingHead {
+		t.Errorf("the frame's second pass = %+v, %v; want the first pass's read (deploying)", got[ref], err)
+	}
+	if got, err := NewMagnum(l, cfg).PRStates(withDeployRecords(t.Context()), []PRRef{ref}); err != nil || got[ref].DeployingHead {
+		t.Errorf("the next frame = %+v, %v; want a new read (not deploying)", got[ref], err)
+	}
+}
+
+// With magnum's daemon down no live record is believed: a deploy it was
+// running when it died stays "running" for a day, and the line must not
+// hide for that long. The line stays, and E says the daemon is down.
+func TestALiveDeployRecordIsNotBelievedWhileMagnumsDaemonIsDown(t *testing.T) {
+	l, st := magnumLayout(t)
+	head := strings.Repeat("ab", 20)
+	cfg := selfConfig()
+	cfg.Factory.Repos = []config.FactoryRepo{{Repo: "example/shop", Base: "master", Staging: theStagings}}
+	magnumPR(t, st, 7, head, nil)
+	setKV(t, st, engine.KVStagingDeploy("void-7-a"), engine.StagingDeployRecord{Effect: "void-7-a", Repo: "example/shop", Number: 7, Head: head,
+		Env: "void", Step: "merge", Phase: "begin", State: "running", Seq: 2, At: time.Now()})
+	ref := PRRef{Repo: "example/shop", Number: 7}
+	if got, err := NewMagnum(l, cfg).PRStates(withDeployRecords(t.Context()), []PRRef{ref}); err != nil || !got[ref].DaemonUp || !got[ref].DeployingHead {
+		t.Fatalf("PRStates with the daemon up = %+v, %v; want deploying", got[ref], err)
+	}
+	if err := os.Remove(l.Pid()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := NewMagnum(l, cfg).PRStates(withDeployRecords(t.Context()), []PRRef{ref}); err != nil || got[ref].DaemonUp || got[ref].DeployingHead {
+		t.Errorf("PRStates with the daemon down = %+v, %v; want not deploying", got[ref], err)
+	}
+	if prs, err := NewMagnum(l, cfg).OwnPRs(withDeployRecords(t.Context())); err != nil || len(prs) != 1 || prs[0].DeployingHead {
+		t.Errorf("OwnPRs with the daemon down = %+v, %v; want not deploying", prs, err)
 	}
 }
 

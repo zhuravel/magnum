@@ -285,9 +285,11 @@ type PRState struct {
 	// (pr_files; nil without a list of that head, or when it cannot be
 	// read); DeployingHead says a staging deploy of the PR's head is live,
 	// queued or running (the review daemon's staging.deploy.* records, as
-	// the board reads them; one that stopped for you, ended or is of an
-	// older head is not): the deploy before the merge is on its way, and
-	// E is refused until the push lands; Stagings,
+	// the board reads them, while its daemon runs; one that stopped for you,
+	// ended or is of an older head is not): the deploy before the merge is
+	// on its way, and E is refused until the push lands. It is read only
+	// for the screen (ScreenData asks, deployRecords), never for the tick.
+	// Stagings,
 	// for your own PRs alone (OwnPRs: a task's are the factory daemon's
 	// own), where the PR stands on each env as the review daemon last told
 	// it (its record, engine.KVPRStaging, as engine.StagingShown shows it:
@@ -459,16 +461,12 @@ func (m *magnumRegistry) stateOf(r PRRef, pid int) PRState {
 // last tick, zero with its daemon down, as no daemon decides anything now;
 // its poll interval; and now), the build magnum's daemon runs when its
 // binary on disk is newer (PRState.OldBuild), and each repository's
-// required checks as the PRs' CI reads them (requiredOf), by repository,
-// and, once a PR in a repository with staging envs asks, every staging
-// deploy's record (deploys, read by deployingHead).
+// required checks as the PRs' CI reads them (requiredOf), by repository.
 type magnumPass struct {
-	last, now   time.Time
-	poll        time.Duration
-	required    map[string]store.RequiredChecks
-	oldBuild    *engine.Build
-	deploys     map[string]string
-	deploysRead bool
+	last, now time.Time
+	poll      time.Duration
+	required  map[string]store.RequiredChecks
+	oldBuild  *engine.Build
 }
 
 // passOf reads magnum's last tick and its daemon's build from st, for its
@@ -509,22 +507,52 @@ func (m *magnumRegistry) requiredOf(ctx context.Context, st *store.Store, pass *
 	return req, nil
 }
 
+// deployRecordsKey is the context key of deployRecords.
+type deployRecordsKey struct{}
+
+// deployRecords are magnum's staging deploy records (engine.KVStagingDeploys)
+// as one frame of the screen reads them, once: the screen asks for them on
+// the context of its reads of magnum's registry (withDeployRecords), and
+// the tasks' PRs (PRStates) and yours (OwnPRs) share the one read. A read
+// of the registry without them on its context, as the daemon's tick makes
+// (followPRs, the status files), reads none and says no deploy runs.
+type deployRecords struct {
+	mu     sync.Mutex
+	read   bool
+	values map[string]string
+}
+
+// withDeployRecords is ctx with the request for the deploy records, for one
+// frame's reads.
+func withDeployRecords(ctx context.Context) context.Context {
+	return context.WithValue(ctx, deployRecordsKey{}, &deployRecords{})
+}
+
+// of is every staging deploy's record, read from st on the first call. A
+// read that fails is no record, for the rest of the frame too.
+func (d *deployRecords) of(ctx context.Context, st *store.Store) map[string]string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.read {
+		d.values, _ = st.KVValues(ctx, engine.KVStagingDeploys)
+		d.read = true
+	}
+	return d.values
+}
+
 // deployingHead reports whether a staging deploy of PR pr (of repository
 // full) at its head is live, queued or running, as the board reads it
-// (deployingHead in the CLI's board): from every deploy's record
-// (engine.KVStagingDeploys), read once per pass. A deploy that stopped for
-// you is not live (E resumes it), nor is one that ended or one of an older
-// head. A read that fails is no record: the line stays, E refuses a
-// deploy that runs.
-func (m *magnumRegistry) deployingHead(ctx context.Context, st *store.Store, pass *magnumPass, full string, pr store.PR) bool {
-	if pr.HeadSHA == "" {
+// (deployingHead in the CLI's board): from every deploy's record, read
+// once per frame, and only when the screen asked for them (deployRecords).
+// A deploy that stopped for you is not live (E resumes it), nor is one that
+// ended or one of an older head. A read that fails is no record: the line
+// stays, E refuses a deploy that runs.
+func (m *magnumRegistry) deployingHead(ctx context.Context, st *store.Store, full string, pr store.PR) bool {
+	d, _ := ctx.Value(deployRecordsKey{}).(*deployRecords)
+	if d == nil || pr.HeadSHA == "" {
 		return false
 	}
-	if !pass.deploysRead {
-		pass.deploys, _ = st.KVValues(ctx, engine.KVStagingDeploys)
-		pass.deploysRead = true
-	}
-	return slices.ContainsFunc(engine.StagingDeploysOf(pass.deploys, full, pr.Number), func(r engine.StagingDeployRecord) bool {
+	return slices.ContainsFunc(engine.StagingDeploysOf(d.of(ctx, st), full, pr.Number), func(r engine.StagingDeployRecord) bool {
 		return r.Live() && r.Head == pr.HeadSHA
 	})
 }
@@ -607,7 +635,9 @@ func (m *magnumRegistry) fillPR(ctx context.Context, st *store.Store, v *PRState
 	v.NeverDeploys = engine.StagingNeverDeploys(pr)
 	if len(engine.StagingEnvs(m.cfg, v.Ref.Repo)) > 0 { // the deploy before the merge reads them (PRState.Files, DeployingHead)
 		v.Files = headPaths(ctx, st, pr)
-		v.DeployingHead = m.deployingHead(ctx, st, pass, v.Ref.Repo, pr)
+		// no live record is believed while magnum's daemon is down: the one that
+		// was running when it died stays so for a day, and E would only say it is down
+		v.DeployingHead = v.DaemonUp && m.deployingHead(ctx, st, v.Ref.Repo, pr)
 	}
 	if s, err = kv(engine.KVPRStalemate(pr.ID)); err != nil {
 		return err

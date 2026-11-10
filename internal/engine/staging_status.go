@@ -468,7 +468,10 @@ func StagingFirst(files store.PRFiles, listed bool, head string, shown []Staging
 	if !needed {
 		return nil
 	}
-	for i, m := range ms { // ms is the rule's own list
+	// ms is the rule's own list, in byte order of the raw paths. Cleaning can
+	// make two hostile paths one name or reorder them: only the look of the
+	// words changes, never whether a deploy is asked.
+	for i, m := range ms {
 		ms[i] = stagingClean(m)
 	}
 	return ms

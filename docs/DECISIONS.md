@@ -22670,20 +22670,45 @@ skill versions); people add theirs to the sections before it, at the end of the 
     that the factory already loads a task's deploy records; it does not: the factory registry has no staging effect
     (E goes through magnum's daemon, whose records live in magnum's registry), and the screen reads those records
     only in the CLI's `prFacts`, after `ScreenData` has built the rows. So `magnumRegistry.fillPR` reads them, in a
-    repository with staging envs only, once per opening of the registry (`magnumPass`, one `KVValues` of the
-    `staging.deploy.*` rows, the same call as the board's), for tasks' PRs and yours alike; a read that fails is no
-    record (the line stays; E refuses a deploy that runs). Rejected: stepping aside in the CLI's `prFacts`, which
-    already holds the records but runs after the row's words, move and hints are made (it would rewrite them in
-    another package); a new field on `ScreenOptions` fed by the CLI (a new reader there for the same rows).
+    repository with staging envs only, for tasks' PRs and yours alike, and only for the screen: `ScreenData` puts a
+    request on the context of its two reads of magnum's registry (`withDeployRecords`, the tasks' `PRStates` and
+    your `OwnPRs`), and the one `KVValues` of the `staging.deploy.*` rows (the board's call) serves both passes of
+    one frame. The daemon's tick (`followPRs`, the status files) has no request on its context and reads none. The
+    CLI's `prFacts` reads the rows again for the card, so a frame makes two reads. A read that fails is no record
+    (the line stays; E refuses a deploy that runs). With magnum's daemon down (`!PRState.DaemonUp`) no live record
+    is believed: a deploy it was running when it died stays `running` for a day, and the line would hide that long
+    while E could only say the daemon is down. Rejected: stepping aside in the CLI's `prFacts`, which already holds
+    the records but runs after the row's words, move and hints are made (it would rewrite them in another package);
+    a new field on `ScreenOptions` fed by the CLI (a new reader there for the same rows); a read on every
+    `PRStates`, which the daemon's tick would pay for and not use.
+  - While a deploy of the head is live, a wait on your merge is a wait on others (`deploying`): "deploying to a
+    staging (it changes <the migrations>)", in the rule's count words (`staging.MigrationWords`, which
+    `DeployBeforeMergeWords` uses too), Who "magnum", no move, in WAITS ON OTHERS, for a task's row and your PR's.
+    The first build dropped the line and left the merge wait ("merge #4534 on GitHub", "approved, merge is yours")
+    for the minutes a deploy runs, in NEEDS YOU, where a user who follows the move column merges before any staging
+    ran the migration: the very mistake the nudge exists to stop, and a disagreement with the board, whose PR leaves
+    its needs-you list then. It stays a wait on others after the push has landed and the env reads `CI` (the migration
+    has not run), until the deploy is not live: ended done, the staging holds the head and the nudge rule decides
+    again (the merge words come back); stopped for you, the line comes back with E. A PR that changes no migration, or
+    that an env already holds (`latest`), keeps the merge wait. A task whose staging cells are not written yet still
+    shows the deploying wait, since magnum's own record backs it. Rejected: keeping the old words and dropping
+    only `DeployFirst` (the row still says "approved, merge is yours" in NEEDS YOU).
+  - `DeployBeforeMergeWords` of no migration is "" (it printed the first clause, as the old rule printed "(it changes
+    )"): "" is what the board and the factory use for no line, so a caller that forgets its test of the list shows
+    nothing.
   - Tests, each failing first: staging's TestTheDeployBeforeMergeWordsNameTheFirstMigrationAndCountTheRest and
-    TestDeployBeforeMergeListsEveryMigrationInByteOrder; engine's
-    TestStagingFirstIsTheMigrationsOfTheHeadsFilesThatNoStagingHolds (a control character in the second path);
-    cli's TestTheBoardCountsTheMigrationsInTheDeployBeforeMergeWords (the board's words and JSON for two and three
-    migrations; the other board tests and every golden are unchanged, since each has one migration); the factory's
-    TestSeveralMigrationsAreNamedByTheFirstAndCounted, TestAPRThatNeverDeploysToAStagingGetsNoDeployFirstLine,
-    TestADeployOfThePRsHeadThatRunsTakesTheDeployFirstAway, TestPRStatesSayWhichPRsNeverDeployToAStaging (a fork,
-    staging-void, master, main) and TestPRStatesSayWhetherADeployOfThePRsHeadRuns (queued, running, needs you,
-    ended, an older head, another PR's, a repository without staging envs). No new dependencies.
+    TestDeployBeforeMergeListsEveryMigrationInByteOrder, TestMigrationWordsNameTheFirstMigrationAndCountTheRest;
+    engine's TestStagingFirstIsTheMigrationsOfTheHeadsFilesThatNoStagingHolds (a control character in the second
+    path); cli's TestTheBoardCountsTheMigrationsInTheDeployBeforeMergeWords (the board's words and JSON for two and
+    three migrations; the other board tests and every golden are unchanged, since each has one migration); the
+    factory's TestSeveralMigrationsAreNamedByTheFirstAndCounted, TestAPRThatNeverDeploysToAStagingGetsNoDeployFirstLine,
+    TestADeployOfThePRsHeadThatRunsIsAWaitOnOthers (a task and your PR, one and two migrations, the push landed, no
+    migration, an env that holds the head), TestTheMergeWordsAndTheNudgeComeBackWhenTheDeployIsNotLive (live, ended
+    done, needs you), TestPRStatesSayWhichPRsNeverDeployToAStaging (a fork, staging-void, master, main),
+    TestPRStatesSayWhetherADeployOfThePRsHeadRuns (queued, running, needs you, ended, an older head, another PR's, a
+    repository without staging envs), TestTheDaemonsTickReadsNoDeployRecords,
+    TestScreenDataAsksForTheDeployRecordsInBothReads, TestOneReadOfTheDeployRecordsServesBothPassesOfAFrame and
+    TestALiveDeployRecordIsNotBelievedWhileMagnumsDaemonIsDown. No new dependencies.
 
 ## Learned rules
 

@@ -109,6 +109,7 @@ var flashKinds = []string{ReqStart, ReqAnswer, ReqDecide, ReqStop, ReqRetry, Req
 // (the factory has no registry yet: no task was ever started): home then
 // has no task, news or alert, and lists your PRs alone.
 func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store, now, lastSeen time.Time, o ScreenOptions) (tui.FactoryData, error) {
+	ctx = withDeployRecords(ctx) // magnum's staging deploy records, read once for this frame's two reads of its registry
 	d := tui.FactoryData{Cards: map[int64]tui.FactoryCards{}}
 	var tasks []registry.Task
 	var err error
