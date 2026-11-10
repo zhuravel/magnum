@@ -66,6 +66,15 @@ type fakeHerdr struct {
 	// answers, starting nothing.
 	keysErr  func(target string) error
 	startErr func(o herdr.AgentStartOptions) error
+	// exitAtStart, when set, is what the pane of every agent started shows
+	// once its CLI exited at its start: AgentStart answers, but no agent
+	// stays in the pane. stops counts the server's stops (ServerStop),
+	// which end every pane and leave the server down (snapErr) until
+	// serverBack; stopErr, when set, is what a stop answers, stopping
+	// nothing.
+	exitAtStart string
+	stops       int
+	stopErr     error
 
 	creates []herdr.WorkspaceCreateOptions
 	splits  []herdr.SplitOptions
@@ -193,6 +202,12 @@ func (f *fakeHerdr) PaneRead(_ context.Context, paneID string, o herdr.ReadOptio
 }
 
 func (f *fakeHerdr) AgentRead(_ context.Context, target string, o herdr.ReadOptions) (herdr.ReadResult, error) {
+	f.mu.Lock()
+	_, ok := f.agentLocked(target)
+	f.mu.Unlock()
+	if !ok { // herdr reads no agent it does not list: the caller reads the pane
+		return herdr.ReadResult{}, &herdr.Error{Method: "agent.read", Code: herdr.CodeAgentNotFound, Message: target}
+	}
 	return herdr.ReadResult{Source: o.Source, Text: f.read(target)}, nil
 }
 
@@ -321,6 +336,10 @@ func (f *fakeHerdr) AgentStart(_ context.Context, o herdr.AgentStartOptions) (he
 		a.AgentSession = &herdr.AgentSession{Kind: "id", Value: o.Args[i+1]}
 	}
 	f.agents = slices.DeleteFunc(f.agents, func(x herdr.AgentInfo) bool { return x.PaneID == o.PaneID })
+	if f.exitAtStart != "" { // the CLI printed why and exited: the pane is a shell again
+		f.screens[o.PaneID] = f.exitAtStart
+		return herdr.AgentStarted{Agent: a, Argv: append([]string{o.Kind}, o.Args...)}, nil
+	}
 	f.agents = append(f.agents, a)
 	if o.Kind == agents.KindCodex {
 		f.screens[o.PaneID] = "OpenAI Codex\n\n› \n" // its composer, free: a first prompt goes out at once
@@ -354,6 +373,36 @@ func (f *fakeHerdr) AgentRename(_ context.Context, target, name string) error {
 		f.agents[i].Name = name
 	}
 	return nil
+}
+
+// ServerStop stops the session's server, as herdr's server.stop does:
+// every workspace, pane and agent ends, and the session answers nothing
+// until serverBack.
+func (f *fakeHerdr) ServerStop(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.stopErr != nil {
+		return f.stopErr
+	}
+	f.stops++
+	f.workspaces, f.panes, f.agents = nil, nil, nil
+	f.snapErr = fmt.Errorf("herdr session.snapshot: %w: %w", herdr.ErrUnavailable, syscall.ENOENT)
+	return nil
+}
+
+// serverBack is the session's server started again (the factory's reveal
+// opened it): it answers, with none of the panes the stop ended.
+func (f *fakeHerdr) serverBack() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.snapErr = nil
+}
+
+// stopCount is how many times the server was stopped.
+func (f *fakeHerdr) stopCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stops
 }
 
 // setStatus sets the status of the agent named name.
@@ -459,6 +508,9 @@ type rig struct {
 	signals    []int
 	turnReads  int   // the reads of a transcript's user turns
 	turnErr    error // what the next read of a transcript's user turns fails with (nil: none)
+	// unreadable: the daemon cannot read the copies' directories either
+	// (the readable seam).
+	unreadable bool
 	logs       logBuffer
 
 	layout               paths.Layout
@@ -557,6 +609,11 @@ func (g *rig) restart() {
 				return nil, err
 			}
 			return readUserTurns(kind, path)
+		},
+		readable: func(string) bool {
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			return !g.unreadable
 		},
 		claudeDir: g.claudeDir, codexHome: g.codexHome,
 	})

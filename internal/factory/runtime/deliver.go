@@ -45,6 +45,12 @@ const deliverySlack = 5 * time.Second
 // session, the next time starts a fresh session with the attempt's first
 // prompt and text after it (returning that run), then refuses; a step that
 // would compact or quit a pane the operator is in waits, ErrOperatorInPane.
+// A role with no session at all, which no recovery brings back, is
+// started again first (bringBack). A role a heal of the factory's
+// herdr server holds (volume.go) waits for its relaunch on the fresh server,
+// a *WaitError, or needs you, a *DeniedError; a first prompt herdr refuses
+// because the agent is gone (agent_not_ready, agent_not_found) has the
+// role's pane read for macOS's refusal of its copy (launchDenied).
 func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (string, error) {
 	if strings.TrimSpace(text) == "" {
 		return "", fmt.Errorf("send to %s: an empty prompt", role.Name)
@@ -74,6 +80,16 @@ func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt,
 	if err != nil {
 		return "", fmt.Errorf("send to %s: %w", role.Name, err)
 	}
+	if err := r.healStep(ctx, t, a, st, pr); err != nil {
+		return "", fmt.Errorf("send to %s: %w", role.Name, err)
+	}
+	back, done, err := r.bringBack(ctx, t, a, st, pr, text)
+	if err != nil {
+		return back, fmt.Errorf("send to %s: %w", role.Name, err)
+	}
+	if done {
+		return back, nil
+	}
 	switch step, err := r.loopStep(ctx, t, a, role, pr, entries); {
 	case err != nil:
 		return "", err
@@ -91,7 +107,85 @@ func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt,
 		r.mu.Unlock()
 		r.notePrompt(ctx, a, role, id)
 	}
+	if id == "" && kind == store.RunInitial && (herdr.IsCode(err, herdr.CodeAgentNotReady) || herdr.IsCode(err, herdr.CodeAgentNotFound)) {
+		if s, ok := r.newestSession(ctx, pr.ID, role.Name); ok {
+			if handled, herr := r.launchDenied(ctx, t, a, st, s); handled {
+				return "", fmt.Errorf("send to %s: %w", role.Name, herr)
+			}
+		}
+	}
 	return id, err
+}
+
+// bringBack starts role st of task t again, in attempt a, before the
+// caller's prompt text when the attempt launched it (launchedIn: a role it
+// did not, a refused role's fallback, is its stage's to launch) and it has
+// no session at all (none starting or live: parked, or lost) while nothing
+// else brings one: a recovery under way (the watchdog's), or recoveries
+// that ran out with no retry of yours since (EventLost or EventStuck has
+// the task go to you; your retry after it starts them over). Its steps are
+// the recoveries' own, on the same count: its conversation resumed (at most
+// MaxResumes in the attempt), else a fresh session, which for a role that
+// took no prompt yet is a relaunch; then the recoveries ran out
+// (EventLost). After a resume or a relaunch the caller's prompt goes as it
+// would after a launch (done false); a fresh session of a role that had
+// prompts takes the attempt's first prompt with text after it (fromFiles),
+// whose run comes back (done true). A pause, or you in the pane, waits.
+func (r *Runtime) bringBack(ctx context.Context, t registry.Task, a registry.Attempt, st *roleState, pr store.PR,
+	text string) (id string, done bool, err error) {
+	if _, err := r.st.LiveSessionByPRRole(ctx, pr.ID, st.role.Name); !errors.Is(err, store.ErrNotFound) {
+		return "", false, nil // a session, or a store that cannot tell: Submit says
+	}
+	if !r.launchedIn(ctx, a.ID, st.role.Name) {
+		return "", false, nil
+	}
+	r.mu.Lock()
+	ranOut, owned, at := st.lost || st.stuck, st.recovering || st.pending, st.ranOut
+	r.mu.Unlock()
+	switch {
+	case owned, ranOut && !r.retriedSince(ctx, t.ID, at):
+		return "", false, nil
+	case ranOut: // your retry: the ladders start over
+		r.mu.Lock()
+		st.stuck, st.lost = false, false
+		st.step, st.resumes, st.fresh = 0, 0, false
+		r.mu.Unlock()
+	}
+	if err := r.mayRestart(ctx, t, st); err != nil {
+		return "", true, err
+	}
+	resume, err := r.mgr.ResumeID(ctx, pr.ID, agents.Role(st.role.Name))
+	if err != nil {
+		return "", true, err
+	}
+	unprompted := !r.hadPrompt(ctx, t.ID, a.ID, st.role.Name)
+	r.mu.Lock()
+	step := "fresh"
+	switch {
+	case st.resumes < MaxResumes && resume != "":
+		st.resumes++
+		step = "resume"
+	case !st.fresh && unprompted:
+		st.fresh = true
+		step = "relaunch"
+	case !st.fresh:
+		st.fresh = true
+	default:
+		n := st.resumes + 1
+		r.mu.Unlock()
+		r.emit("", r.lostEvent(t, a, st.role, errRecoveriesSpent{n: n}))
+		return "", false, nil // Submit refuses: no session
+	}
+	r.mu.Unlock()
+	r.log.Warn("a role with no session is started again before its prompt", "task", t.ID, "role", st.role.Name, "step", step)
+	switch step {
+	case "resume":
+		return "", false, r.startIn(ctx, t, a, st, pr, resume)
+	case "relaunch":
+		return "", false, r.startIn(ctx, t, a, st, pr, "")
+	}
+	id, err = r.fromFiles(ctx, t, a, st, "it had no session when its prompt was due", text)
+	return id, true, err
 }
 
 // notePrompt records on role's RoleRun of attempt a the hash of the prompt

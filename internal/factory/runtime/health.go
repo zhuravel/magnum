@@ -501,7 +501,10 @@ func lastLine(text string) string {
 }
 
 // lostPane recovers the role of a session whose pane is gone, while its
-// attempt runs (RecoverLost); EventLost once the recoveries ran out.
+// attempt runs (RecoverLost); EventLost once the recoveries ran out. A pane
+// lost before the role's first prompt that shows macOS refusing its copy
+// is the heal's (launchDenied: EventVolumeDenied once it is yours), and so
+// is a role the heal is to relaunch.
 func (r *Runtime) lostPane(ctx context.Context, o agents.Observation) []Event {
 	t, pr, err := r.ownerOf(ctx, o.PRID)
 	if err != nil || (t.State != registry.TaskActive && t.State != registry.TaskWaiting) {
@@ -514,6 +517,17 @@ func (r *Runtime) lostPane(ctx context.Context, o agents.Observation) []Event {
 	role, ok := r.d.Config.FactoryRole(o.Session.Role)
 	if !ok {
 		return nil
+	}
+	if st, err := r.stateFor(ctx, a.ID, role.Name); err == nil && !r.hadPrompt(ctx, t.ID, a.ID, role.Name) {
+		if handled, err := r.launchDenied(ctx, t, a, st, o.Session); handled {
+			if d, ok := errors.AsType[*DeniedError](err); ok {
+				r.emit(deniedKey(t.ID, r.toldAt(t.ID)), Event{TaskID: t.ID, Role: role.Name, Kind: EventVolumeDenied, Reason: d.Error()})
+			}
+			return nil
+		}
+	}
+	if r.healing(t.ID, a.ID, role.Name) != nil {
+		return nil // the heal relaunches it on the fresh server, or told you
 	}
 	err = r.recoverRole(ctx, t, a, role, "its pane was lost")
 	if spent, ok := errors.AsType[errRecoveriesSpent](err); ok {

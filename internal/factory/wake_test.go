@@ -29,12 +29,12 @@ func (h *harness) kicked() bool {
 
 // An observe pass that keeps an event an agents stage acts on when it takes
 // it (onAgentEvent: a run's end, a pause, a Codex refusal, a dialog, the
-// hooks review, a lost pane, a stuck turn, a loop without progress) asks
-// for a tick at once, so the stage takes it now rather than at the next
+// hooks review, a lost pane, a stuck turn, a loop without progress, a
+// copy's volume denied the factory's herdr server) asks for a tick at once, so the stage takes it now rather than at the next
 // poll, up to 45 s later.
 func TestAnEndedRolesEventKicksTheLoop(t *testing.T) {
 	for _, kind := range []runtime.EventKind{runtime.EventEnded, runtime.EventPaused, runtime.EventRefused, runtime.EventBlocked,
-		runtime.EventHooksTrust, runtime.EventLost, runtime.EventStuck, runtime.EventNoProgress} {
+		runtime.EventHooksTrust, runtime.EventLost, runtime.EventStuck, runtime.EventNoProgress, runtime.EventVolumeDenied} {
 		t.Run(string(kind), func(t *testing.T) {
 			h := newHarness(t)
 			task := h.task("PR-12500", registry.TaskActive, "investigate")

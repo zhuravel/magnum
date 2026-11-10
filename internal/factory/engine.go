@@ -1246,11 +1246,14 @@ func (e *Engine) stageRan(t registry.Task) string {
 // observe is the pass between ticks: it reads the agents' panes and the
 // watchdog (Runtime.Observe and Watchdog) and keeps their events for each
 // task's next advance (takeEvents), except the turns typed into the panes,
-// which it records (typed). An event a stage acts on when it takes it
-// (stageEvents: a run's end, a pause, a dialog, a lost pane) kicks the loop,
-// so the tick takes it now rather than at its poll. A failed read is a
-// failure the next tick weighs (an infrastructure hold), unless the Mac
-// just woke.
+// which it records (typed), and a heal's stop of the factory's herdr server
+// (runtime.EventHerdrStopped), after which the next tick opens the session
+// again at once, whenever it opened it last (checkHerdr's reveal), so the
+// fresh server the heal relaunches the roles in comes up. An event a stage
+// acts on when it takes it (stageEvents: a run's end, a pause, a dialog, a
+// lost pane) kicks the loop, so the tick takes it now rather than at its
+// poll. A failed read is a failure the next tick weighs (an infrastructure
+// hold), unless the Mac just woke.
 func (e *Engine) observe(ctx context.Context) {
 	now := e.now()
 	e.wake(now)
@@ -1271,6 +1274,11 @@ func (e *Engine) observe(ctx context.Context) {
 	for _, ev := range append(evs, wd...) {
 		if ev.Kind == runtime.EventTyped {
 			e.typed(ctx, ev) // a record of what you typed: no stage waits for it
+			continue
+		}
+		if ev.Kind == runtime.EventHerdrStopped {
+			e.lastReveal = time.Time{} // the heal's stop: the session opens again on the next tick
+			e.Kick()
 			continue
 		}
 		e.inbox[ev.TaskID] = append(e.inbox[ev.TaskID], ev)

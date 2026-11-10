@@ -56,6 +56,16 @@ const (
 	// transcript holds, recorded or not; the engine records each once. It is
 	// a record, nothing a stage waits for.
 	EventTyped EventKind = "typed"
+	// EventVolumeDenied: macOS still blocks the factory's herdr server from
+	// reading the volume of the task's copy after the one heal, or the
+	// factory may not heal it (volume.go): Reason is the line the task
+	// waits on you for (DeniedLine), until your retry.
+	EventVolumeDenied EventKind = "volume_denied"
+	// EventHerdrStopped: a heal stopped the factory's herdr server (Reason
+	// names the volume it could not read): the engine opens the session
+	// again at once, whenever it opened it last, so the fresh server the
+	// task's roles are relaunched in comes up. It is no task's to wait for.
+	EventHerdrStopped EventKind = "herdr_stopped"
 )
 
 // PausedPrefix leads the error of a run its CLI's pause ended (a usage

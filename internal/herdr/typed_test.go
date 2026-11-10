@@ -268,6 +268,11 @@ func typedCases() []typedCase {
 			method: "ping", params: `{}`, cli: "herdr status server",
 			result: map[string]any{"type": "pong", "version": "0.9.1", "protocol": 22},
 		},
+		{
+			name:   "server stop",
+			call:   func(ctx context.Context, c *Client) error { return c.ServerStop(ctx) },
+			method: "server.stop", params: `{}`, cli: "herdr server stop", result: ok,
+		},
 	}
 }
 

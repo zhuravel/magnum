@@ -2,7 +2,9 @@ package herdr
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"slices"
 	"strconv"
@@ -73,6 +75,19 @@ func (c *Client) Ping(ctx context.Context) (ServerInfo, error) {
 	var out ServerInfo
 	err := c.do(ctx, callSpec{method: "ping", out: &out, cli: cliLine("status", "server")})
 	return out, err
+}
+
+// ServerStop stops the session's server (server.stop, `herdr server
+// stop`): every pane and agent of the session ends with it, and the next
+// client of the session starts a fresh server. A server that closes the
+// connection on its way out, before its answer, stopped; so did one that
+// does not run.
+func (c *Client) ServerStop(ctx context.Context) error {
+	err := c.do(ctx, callSpec{method: "server.stop", cli: cliLine("server", "stop")})
+	if NoServer(err) || errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
 }
 
 // Snapshot returns the whole live session (session.snapshot).

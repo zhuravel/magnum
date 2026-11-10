@@ -1137,6 +1137,7 @@ func TestTheRuntimesEventsMoveTheTaskWithPlainReasons(t *testing.T) {
 		{runtime.EventHooksTrust, "fx-cause", "codex: hooks need review (Trust all, in the pane or by running codex once)",
 			"the fx-cause agent: hooks need review (Trust all, in the pane or by running codex once)"},
 		{runtime.EventRefused, "fx-repro", "claude: a usage policy warning", "the fx-repro agent was refused: claude: a usage policy warning"},
+		{runtime.EventVolumeDenied, "fx-repro", deniedLine, deniedLine},
 	} {
 		t.Run(string(tc.kind), func(t *testing.T) {
 			h := newHarness(t)

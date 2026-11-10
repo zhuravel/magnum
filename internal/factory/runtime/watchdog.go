@@ -7,9 +7,13 @@ package runtime
 // hard and resumed, a fresh session from the attempt's first prompt; then
 // EventStuck with the pane's last line. A lost pane is resumed from its
 // conversation, at most MaxResumes times an attempt, then starts fresh from
-// the files; a recovery that shows no progress within NoProgressAfter takes
-// the next step, and EventLost ends them. A loop without progress (Send) is
-// compacted, then started fresh once, then left to the operator.
+// the files; a role whose pane is lost before its first prompt (its CLI
+// exited at its start) is relaunched once, its stage sending that prompt
+// next; a recovery that shows no progress within NoProgressAfter takes the
+// next step, and EventLost ends them. A loop without progress (Send) is
+// compacted, then started fresh once, then left to the operator. A role a
+// heal of the factory's herdr server holds (volume.go) takes none of these
+// steps.
 
 import (
 	"context"
@@ -94,6 +98,9 @@ func (r *Runtime) Watchdog(ctx context.Context, now time.Time) (evs []Event, err
 // (a fresh start of a Codex session that took no prompt, a loop's fresh
 // session) takes the recoveries' steps.
 func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now time.Time) (Event, bool) {
+	if r.healing(st.taskID, st.key.attempt, st.role.Name) != nil {
+		return Event{}, false // the heal relaunches it, or told you
+	}
 	r.mu.Lock()
 	climbing, recovering, done := st.step > 0, st.recovering, st.stuck || st.lost
 	shift := r.shifts[run.ID]
@@ -234,7 +241,7 @@ func (r *Runtime) climb(ctx context.Context, t registry.Task, a registry.Attempt
 		}
 	default:
 		r.mu.Lock()
-		st.stuck = true
+		st.stuck, st.ranOut = true, r.now()
 		r.mu.Unlock()
 		line := ""
 		if s, ok := r.liveSession(ctx, st); ok {
@@ -283,11 +290,15 @@ func (r *Runtime) nudge(ctx context.Context, t registry.Task, a registry.Attempt
 // live pane (its end, or you in the pane, moves it); with nothing at work,
 // its ladders start over: the stage asks only once your retry rebuilt it.
 // One whose recovery cannot run now (a pause, you in its pane, a failure)
-// is due it, and the watchdog takes it once it may.
+// is due it, and the watchdog takes it once it may. One a heal of the
+// factory's herdr server is to relaunch is left to the heal.
 func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role) error {
 	role, err := r.RunsAs(t, role)
 	if err != nil {
 		return err
+	}
+	if r.healDue(t.ID, a.ID, role.Name) {
+		return nil
 	}
 	st, err := r.stateFor(ctx, a.ID, role.Name)
 	if err != nil {
@@ -343,13 +354,16 @@ func (r *Runtime) turnAtWork(ctx context.Context, t registry.Task, role string) 
 func (r *Runtime) lostEvent(t registry.Task, a registry.Attempt, role config.Role, spent errRecoveriesSpent) Event {
 	r.mu.Lock()
 	if st := r.roles[roleKey{a.ID, role.Name}]; st != nil {
-		st.lost, st.recovering, st.pending = true, false, false
+		st.lost, st.recovering, st.pending, st.ranOut = true, false, false, r.now()
 	}
 	r.mu.Unlock()
 	return Event{TaskID: t.ID, Role: role.Name, Kind: EventLost, Reason: spent.Error()}
 }
 
-// recoverRole is RecoverLost's next step.
+// recoverRole is RecoverLost's next step. A role that took no prompt yet in
+// the attempt has no first prompt to start afresh from: its fresh step is a
+// relaunch (relaunchRole), its stage sending that prompt next; one with a
+// conversation (you typed in it) is resumed first, as any role.
 func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, why string) error {
 	st, err := r.stateFor(ctx, a.ID, role.Name)
 	if err != nil {
@@ -366,6 +380,7 @@ func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.A
 	if err != nil {
 		return err
 	}
+	unprompted := !r.hadPrompt(ctx, t.ID, a.ID, role.Name)
 	r.mu.Lock()
 	if st.lost {
 		n := st.resumes + 1
@@ -377,6 +392,9 @@ func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.A
 	case st.resumes < MaxResumes && resume != "":
 		st.resumes++
 		step = "resume"
+	case !st.fresh && unprompted:
+		st.fresh = true
+		step = "relaunch"
 	case !st.fresh:
 		st.fresh = true
 	default:
@@ -388,13 +406,34 @@ func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.A
 	st.recovering = true
 	r.mu.Unlock()
 	r.log.Warn("a role is recovered", "task", t.ID, "role", role.Name, "why", why, "step", step)
-	if step == "resume" {
+	switch step {
+	case "resume":
 		err = r.restart(ctx, t, a, st, true, why)
-	} else {
+	case "relaunch":
+		err = r.relaunchRole(ctx, t, a, st)
+	default:
 		_, err = r.fromFiles(ctx, t, a, st, why, "")
 	}
 	r.baseline(ctx, st)
 	return err
+}
+
+// relaunchRole starts role st afresh in attempt a of task t with no prompt:
+// a role that took none yet, whose stage sends its first prompt next. A
+// starting or live session of it is quit hard first and its conversation,
+// which took no prompt of the task, closed.
+func (r *Runtime) relaunchRole(ctx context.Context, t registry.Task, a registry.Attempt, st *roleState) error {
+	pr, err := r.owner(ctx, t, a.ID)
+	if err != nil {
+		return err
+	}
+	if s, ok := r.liveSession(ctx, st); ok {
+		if err := r.mgr.QuitHard(ctx, s); err != nil {
+			return fmt.Errorf("quit %s: %w", st.role.Name, err)
+		}
+		r.closeConversation(ctx, s)
+	}
+	return r.startIn(ctx, t, a, st, pr, "")
 }
 
 // restart starts role st again in attempt a, resumed from its stored

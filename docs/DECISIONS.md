@@ -24149,6 +24149,61 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `TestTheScreensKnownReasonIsTheKeyTheFactoryTakes` (internal/cli). No new dependencies.
 
 
+- **The factory heals a herdr server macOS denies the copies' volume, and a lost role never stays silent**
+  (2026-11-10). A task's agents all exited at their start: the factory's herdr server, up for days, had lost its
+  access to the external volume the copies are on (its panes said `getcwd: … Operation not permitted`, `Can't read
+  the current directory (EPERM)`, `Operation not permitted (os error 1)`), while the daemon and anything started from
+  your terminal read it. The record shows two faults behind the silence. The lost pane's one fresh step failed
+  (`fromFiles`: "has had no prompt yet", the role never took one) and was spent; ten minutes later EventLost did move
+  the task to NEEDS YOU (its span and alert say so). But after your retry the role had no session and nothing
+  started it: the stage sent its first prompt to no session every 45 seconds ("cannot take its prompt yet", 94 ledger
+  entries settled no), the task stayed active, and a second retry was refused ("not waiting on you").
+  Now: (1) a role that took no prompt yet in its attempt has its fresh step as a relaunch (`relaunchRole`: the agent
+  started again, no prompt; the stage sends the first one), after any resume of a conversation you typed in. (2) A
+  prompt to a role the attempt launched that has no session at all (lost, or parked while its task waited on you)
+  starts it again first (`bringBack`), on the recoveries' own count (resume, then fresh or relaunch, then EventLost),
+  and the stage's prompt goes as after a launch; not while a recovery owns the role, and not for a role whose
+  recoveries ran out (lost, stuck) unless you retried since, read from the registry's retry inputs, so it holds across
+  a restart. (3) A launch that fails before the first prompt (herdr refuses that prompt with `agent_not_ready` or
+  `agent_not_found`, or the pane is lost before it) whose screen shows one of the three refusals, while the daemon
+  reads the copy (one listing of the directory, 5 s at most), is the factory's herdr server's: the runtime stops its
+  own session's server once per attempt (`herdr.Client.ServerStop`, herdr's `server.stop`), never a session that is
+  yours or the review panes', and only while no agent of another task, no liaison and no agent of yours lives in it
+  (else the task waits, saying whose agent, and the next prompt tries again); begin, end and failure are `herdr`
+  events. `EventHerdrStopped` has the engine forget its last reveal, so the next tick's herdr hold opens the session
+  at once and a fresh server starts from your terminal. Each role of the attempt that took no prompt yet is due its
+  relaunch there: its next prompt waits for the server, reconciles the task's rows with it (`agents.Manager.Recover`)
+  and relaunches it (an event); the observe pass and the watchdog leave a due role to the heal. (4) The same refusal
+  from a relaunched agent (or from a session started after the stop) goes to you: `macOS blocks the factory's herdr
+  server from reading <volume>: allow herdr (and magnum) for removable volumes in System Settings > Privacy & Security
+  > Files and Folders, then retry` (`runtime.DeniedError` from Send, `EventVolumeDenied` from the observe pass, a
+  needsYou either way); your retry relaunches the role and starts the heal over. A refusal the daemon shares is the
+  copy's or its volume's: nothing is stopped, an event says so once, and the lost pane takes the steps of (1), then
+  EventLost; the copies' own handling covers the volume (a copy whose setup fails twice is broken and repaired on a
+  backoff; a repository whose every copy broke the same way holds).
+  Rejected: stopping on any "Operation not permitted" (any refused call prints it; the three stable lines only, and the
+  daemon's own read decides whose fault it is); a stop with another task's agent live (it would die mid-turn); more
+  than one stop before you are told (a fresh server still denied means a permission only you can grant); the
+  recoveries' resume prompt for a role brought back after a park or your retry (an extra turn telling it the session
+  was restarted, before the stage's own prompt); a Runtime method the engine calls on your retry (the registry's
+  retry inputs say it, and survive a restart); `herdr server stop` or a kill from the daemon (the API's own method);
+  waiting for herdr to restart itself (it never does; the engine's reveal is what starts a server). The engine of the
+  review side is unchanged. Concerns kept: `server.stop`'s request (params `{}`) is from herdr 0.9.5's embedded API
+  schema, not probed against a live server; a fresh server inherits the TCC rights of the terminal the reveal opens,
+  so that app needs the removable-volume access the line names.
+  Tests (failing first): `TestALaunchMacOSDeniesTheCopyGetsOneFreshHerdrServer`,
+  `TestAPaneLostBeforeItsFirstPromptToTheDenialIsHealed`, `TestTheDenialAfterTheHealNeedsYouUntilYourRetry`,
+  `TestYourRetryStartsTheHealOver`, `TestAnotherTasksLiveAgentHoldsTheServerStop`,
+  `TestADenialTheDaemonSharesStopsNoServer`, `TestAFactorySessionThatIsYoursIsNeverStopped`,
+  `TestALostRoleIsRelaunchedOnceThenOnYourRetry`, `TestAParkedRolesNextPromptResumesItsConversation`,
+  `TestTheDenialNamesTheCopysVolume`, `TestTheDenialIsReadOnItsStableWords` (internal/factory/runtime);
+  `TestADeniedVolumeSendsTheTaskToYouAndYourRetryGoesOn`, `TestADeniedVolumeEventSendsTheTaskToYou`,
+  `TestALostRoleGoesToYouAndYourRetryPromptsItAgain` (the engine's half, green before: the runtime's was the gap),
+  `TestAHealsServerStopOpensTheSessionAtOnce`, and the new kind in `TestTheRuntimesEventsMoveTheTaskWithPlainReasons`
+  and `TestAnEndedRolesEventKicksTheLoop` (internal/factory); `TestServerStopThatEndsTheServerFirstIsNoError` and the
+  `server stop` typed case (internal/herdr); `server.stop` joins `TestDoctorHerdrMethodsAreTheOnesMagnumSends`. No new
+  dependencies.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

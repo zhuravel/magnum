@@ -894,13 +894,14 @@ func (run *agentsRun) byName(name string) *stageRole {
 // stageEvents are the kinds of the runtime's events onAgentEvent acts on
 // when its stage takes them: the observe pass that keeps one kicks the loop
 // (Engine.observe), so a turn's end is checked, a pause waited on, a Codex
-// refusal's fallback launched and a dialog, a lost pane, a stuck turn or a
-// loop without progress sent to you on the tick right after it, not at the
-// next poll. The turns typed into a pane are a record (typed), and the
-// delivery events the observe pass settles itself (deliveryUnknown,
-// delivered, undelivered): none kicks.
+// refusal's fallback launched and a dialog, a lost pane, a stuck turn, a
+// loop without progress or a copy's volume macOS denies the factory's herdr
+// server sent to you on the tick right after it, not at the next poll. The
+// turns typed into a pane are a record (typed), and the delivery events the
+// observe pass settles itself (deliveryUnknown, delivered, undelivered):
+// none kicks.
 var stageEvents = []runtime.EventKind{runtime.EventEnded, runtime.EventPaused, runtime.EventRefused, runtime.EventBlocked,
-	runtime.EventHooksTrust, runtime.EventLost, runtime.EventStuck, runtime.EventNoProgress}
+	runtime.EventHooksTrust, runtime.EventLost, runtime.EventStuck, runtime.EventNoProgress, runtime.EventVolumeDenied}
 
 // onAgentEvent takes one of the runtime's events about task t: an ended
 // run's end fact is checked and the run verified (a failed one gets its
@@ -960,6 +961,8 @@ func (e *Engine) onAgentEvent(ctx context.Context, t *registry.Task, st config.F
 		return withReason("the "+name+" agent is stuck", ev.Reason)
 	case runtime.EventNoProgress:
 		return withReason("the "+name+" agent makes no progress", strings.TrimPrefix(ev.Reason, "no progress: "))
+	case runtime.EventVolumeDenied:
+		return ev.Reason // runtime.DeniedLine: what to allow, then your retry
 	}
 	return "" // a delivery of unknown fate: the observe pass sent the task to you
 }
@@ -1663,10 +1666,15 @@ func cmpErr(first, second error) error {
 
 // sendRefused maps a refused prompt to role r: a wait (the CLI's pause, you
 // in its pane, a delivery of unknown fate, an agent that cannot take a
-// prompt yet), a held error it records on the task, or a loop without
-// progress, a needsYou; nil for any other error.
+// prompt yet, a heal of the factory's herdr server), a held error it
+// records on the task, or a loop without progress or a copy's volume macOS
+// still denies the factory's herdr server, a needsYou; nil for any other
+// error.
 func (e *Engine) sendRefused(ctx context.Context, t registry.Task, r *stageRole, err error) error {
 	var who, what string
+	if d, ok := errors.AsType[*runtime.DeniedError](err); ok {
+		return needsYou{d.Error()}
+	}
 	switch {
 	case errors.Is(err, runtime.ErrNoProgress):
 		return needsYou{"the " + r.runAs.Name + " agent makes no progress"}

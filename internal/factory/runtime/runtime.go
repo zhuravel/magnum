@@ -5,8 +5,9 @@ package runtime
 // per task (owner.go), the launch of a stage's roles, recorded on the attempt
 // before any workspace exists, the prompts it sends through its ledger
 // (deliver.go), the observe pass that turns the panes into events and heals
-// what it can (health.go), and the watchdog with its recovery steps
-// (watchdog.go). The real state of a task is the factory registry's; the
+// what it can (health.go), the watchdog with its recovery steps
+// (watchdog.go), and the heal of a herdr server macOS denies the copies'
+// volume (volume.go). The real state of a task is the factory registry's; the
 // runtime keeps in memory only what a restart may forget (a watchdog's steps,
 // a pause's end), at worst starting a ladder over.
 
@@ -132,15 +133,16 @@ type Deps struct {
 
 // seams are what New takes from the machine and a test replaces: the sleep
 // (stagger, quits, switches), the reading of Codex's budget and login, the
-// signal StopShell may send, the read of a transcript's user turns, and the
-// CLIs' homes the agents manager reads transcripts from ("" = the CLI's own
-// default).
+// signal StopShell may send, the read of a transcript's user turns, the
+// daemon's read of a copy's directory (readableDir), and the CLIs' homes
+// the agents manager reads transcripts from ("" = the CLI's own default).
 type seams struct {
 	sleep                func(ctx context.Context, d time.Duration) error
 	usage                func(ctx context.Context, now time.Time) (usage.Snapshot, error)
 	login                func() (usage.Login, error)
 	signal               func(pid int, sig syscall.Signal) error
 	userTurns            func(kind, path string) ([]agents.UserTurn, error)
+	readable             func(dir string) bool
 	claudeDir, codexHome string
 }
 
@@ -192,6 +194,7 @@ type Runtime struct {
 	youAt      map[int64][]time.Time // session -> when herdr showed you in its pane (sawYou)
 	commands   map[string]bool       // the slash commands magnum types (agents.MagnumCommands)
 	focus      PaneFocus             // you in the factory's panes, as the observe passes saw you (noteFocus)
+	heals      map[int64]*heal       // task -> its heal of the factory's herdr server that cannot read its copy's volume (volume.go)
 }
 
 // roleKey names a role of an attempt, as it runs (after a Codex fallback).
@@ -218,13 +221,16 @@ type roleState struct {
 	step  int
 	stuck bool
 	// Recovery of a lost pane: resumes used, whether the fresh session
-	// started, whether a recovery waits for progress, and whether the
-	// recoveries ran out; noPrompt counts the fresh starts of a Codex
-	// session that never took its first prompt.
+	// started (or, for a role that took no prompt yet, its relaunch),
+	// whether a recovery waits for progress, and whether the recoveries ran
+	// out; ranOut is when the steps ran out (lost, stuck, or a heal told to
+	// you), which your retry after it starts over; noPrompt counts the
+	// fresh starts of a Codex session that never took its first prompt.
 	resumes    int
 	fresh      bool
 	recovering bool
 	lost       bool
+	ranOut     time.Time
 	// pending: a recovery quit the role's session (or found it gone) and
 	// abandoned its runs, and no new run of it was sent yet (handOver): the
 	// watchdog keeps the role due its next step.
@@ -295,6 +301,9 @@ func newWith(d Deps, s seams) (*Runtime, error) {
 	if s.userTurns == nil {
 		s.userTurns = readUserTurns
 	}
+	if s.readable == nil {
+		s.readable = readableDir
+	}
 	if s.codexHome == "" {
 		s.codexHome = d.Config.Usage.CodexHome
 	}
@@ -302,7 +311,7 @@ func newWith(d Deps, s seams) (*Runtime, error) {
 		keys: map[int64]string{}, roles: map[roleKey]*roleState{}, loops: map[loopKey]*loopState{},
 		pauses: map[string]*pause{}, misses: map[int64]time.Time{}, shifts: map[string]time.Duration{},
 		once: map[string]bool{}, checked: map[int64]time.Time{}, refused: map[int64]bool{}, versions: map[string]cliVersion{},
-		seen: map[string]fileMark{}, youAt: map[int64][]time.Time{}, idleSeen: map[int64]time.Time{},
+		seen: map[string]fileMark{}, youAt: map[int64][]time.Time{}, idleSeen: map[int64]time.Time{}, heals: map[int64]*heal{},
 		commands: agents.MagnumCommands(&cfg), drained: make(chan struct{}), soon: make(chan struct{}, 1)}
 	r.mgr = agents.New(agents.Deps{Herdr: d.Herdr, Store: d.Store, Runner: d.Runner, Config: &cfg, Layout: d.Layout,
 		Clock: d.Clock, Sleep: s.sleep, ClaudeDir: s.claudeDir, CodexHome: s.codexHome, Log: slogLogger{log},

@@ -41,7 +41,7 @@ const Protocol = 22
 // calls, plugin.list (sent through Call by doctor) and, through the herdr
 // CLI reveal runs (`herdr terminal title set|clear`), client.window_title.*.
 var requiredMethods = []string{
-	"ping", "session.snapshot", "workspace.create", "workspace.close", "workspace.report_metadata",
+	"ping", "server.stop", "session.snapshot", "workspace.create", "workspace.close", "workspace.report_metadata",
 	"pane.split", "pane.send_input", "pane.send_keys", "pane.read", "pane.wait_for_output", "pane.rename",
 	"pane.process_info", "pane.get", "pane.close", "agent.start", "agent.prompt", "agent.read",
 	"agent.focus", "agent.rename", "agent.send_keys", "notification.show", "plugin.pane.open", "plugin.list",

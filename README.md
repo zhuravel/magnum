@@ -5404,6 +5404,30 @@ minutes while it lasts, and stops no process. At most `heavy_stages` heavy stage
 review rounds, local QA, servers) run at once, and a task that waits for one says whose runs. A request
 that waited 30 minutes expires.
 
+An agent that fails is recovered before the task is yours. A turn past its role's timeout whose transcript and
+screen stay still for 10 minutes climbs three steps, 10 still minutes apart (the shell stopped and a nudge, the
+session quit and resumed, a fresh session from the attempt's first prompt), then the task needs you (`the <role>
+agent is stuck: <its last line>`). A lost pane is resumed from its conversation twice in an attempt, then started
+fresh from the task's files; a role whose pane is lost before its first prompt (its CLI exited at its start) is
+relaunched once, and its stage sends that prompt; a recovery with no progress within 10 minutes takes the next step,
+and when they run out the task needs you (`the <role> agent's pane was lost: no progress after <n> recoveries`).
+Your retry starts those steps over: the stage's next prompt to a role of the attempt with no session (lost, or
+parked while the task waited on you) starts it again first, resumed from its conversation when it has one, and the
+prompt goes as after a launch. One failure the factory knows on sight: an agent that exits at its start because its
+pane cannot read the copy (`getcwd: … Operation not permitted`, `Can't read the current directory (EPERM)`,
+`Operation not permitted (os error 1)` on its screen) while the daemon reads the copy fine. That is macOS denying
+the factory's herdr server the copies' volume (a removable one: a server that has run for days can lose that access,
+while a process started from your terminal reads it). The factory then stops its own herdr session's server once
+(`herdr server stop`; never your session's nor the review panes'), opens the session again at once, so a fresh
+server starts from your terminal, and relaunches there the task's roles that took no prompt yet; each step is a
+`herdr` event of the task. While an agent of another task, a liaison or one of yours lives in that session, the stop
+waits, and the task's wait names whose agent it waits for. If a relaunched agent exits the same way, the task needs
+you: `macOS blocks the factory's herdr server from reading /Volumes/Work: allow herdr (and magnum) for removable
+volumes in System Settings > Privacy & Security > Files and Folders, then retry`; your retry relaunches the role and
+starts the heal over. When the daemon cannot read the copy either, the copy or its volume is at fault, not herdr:
+nothing is stopped, the lost pane takes the steps above, and the copies' own handling applies (a copy whose setup
+fails twice is broken and repaired on a backoff; a repository whose every copy broke the same way holds).
+
 A restart, a drain or a crash loses nothing. Before its first tick the daemon restores a copy a base run left
 detached, ends the servers the last daemon left (a recorded one only while its pid and its start match the
 record, one spawned just before a crash by the pid it wrote to `factory-server-<copy>.pid` and a start that file's

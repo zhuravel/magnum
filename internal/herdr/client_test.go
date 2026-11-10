@@ -157,6 +157,21 @@ func TestCallConnectionClosedWithoutReply(t *testing.T) {
 	}
 }
 
+// A server that stops before it answers its stop (it closes the socket
+// on its way out), or that does not run at all, stopped: ServerStop
+// says so with no error.
+func TestServerStopThatEndsTheServerFirstIsNoError(t *testing.T) {
+	s := newFakeServer(t)
+	s.handle("server.stop", func(json.RawMessage) (any, *Error) { return noReply{}, nil })
+	if err := s.client().ServerStop(context.Background()); err != nil {
+		t.Fatalf("ServerStop = %v, want a stop that closed the connection taken as done", err)
+	}
+	c := &Client{Socket: filepath.Join(shortTempDir(t), "missing.sock")}
+	if err := c.ServerStop(context.Background()); err != nil {
+		t.Fatalf("ServerStop with no server = %v, want nil", err)
+	}
+}
+
 func TestCallLogsRedactedLine(t *testing.T) {
 	s := newFakeServer(t)
 	s.reply("notification.show", map[string]any{"type": "notification_show", "shown": true, "reason": "shown"})

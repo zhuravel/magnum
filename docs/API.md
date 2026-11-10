@@ -16970,6 +16970,11 @@ var ErrOperatorInPane = errors.New("you're in that pane")
 
 FUNCTIONS
 
+func DeniedLine(volume string) string
+    DeniedLine is what a task waits on you for once macOS still blocks the
+    factory's herdr server from reading volume after its one heal: what to
+    allow, then your retry.
+
 func IsUnknownReason(what string) bool
     IsUnknownReason reports whether a task's wait is UnknownReason's, as this
     build or an older one (whose wait named no command) wrote it.
@@ -17030,6 +17035,15 @@ type Copy struct {
     (copy {n}), the port of its local server (0 when the copy's env names none)
     and its environment, the repository's env rendered for the copy (its name,
     its number, its Redis offset). Its panes run in Path with Env.
+
+type DeniedError struct{ Volume string }
+    DeniedError is Send's answer while macOS blocks the factory's herdr server
+    from reading Volume after the heal, or while the factory may not heal it
+    (its herdr session is yours, or its client cannot stop a server): the task
+    needs you, with DeniedLine, until your retry.
+
+func (e *DeniedError) Error() string
+    Error is DeniedLine of the volume.
 
 type Deps struct {
 	Config   *config.Config
@@ -17105,6 +17119,16 @@ const (
 	// transcript holds, recorded or not; the engine records each once. It is
 	// a record, nothing a stage waits for.
 	EventTyped EventKind = "typed"
+	// EventVolumeDenied: macOS still blocks the factory's herdr server from
+	// reading the volume of the task's copy after the one heal, or the
+	// factory may not heal it (volume.go): Reason is the line the task
+	// waits on you for (DeniedLine), until your retry.
+	EventVolumeDenied EventKind = "volume_denied"
+	// EventHerdrStopped: a heal stopped the factory's herdr server (Reason
+	// names the volume it could not read): the engine opens the session
+	// again at once, whenever it opened it last, so the fresh server the
+	// task's roles are relaunched in comes up. It is no task's to wait for.
+	EventHerdrStopped EventKind = "herdr_stopped"
 )
     The kinds of Event.
 
@@ -17302,7 +17326,8 @@ func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.A
     or you in the pane, moves it); with nothing at work, its ladders start over:
     the stage asks only once your retry rebuilt it. One whose recovery cannot
     run now (a pause, you in its pane, a failure) is due it, and the watchdog
-    takes it once it may.
+    takes it once it may. One a heal of the factory's herdr server is to
+    relaunch is left to the heal.
 
 func (r *Runtime) RunState(ctx context.Context, id string) (state, why string, err error)
     RunState is run id as the agents store keeps it: its state (store.Run*:
@@ -17330,7 +17355,13 @@ func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt,
     same failure SameFailures times, it first compacts the session, the next
     time starts a fresh session with the attempt's first prompt and text after
     it (returning that run), then refuses; a step that would compact or quit a
-    pane the operator is in waits, ErrOperatorInPane.
+    pane the operator is in waits, ErrOperatorInPane. A role with no session
+    at all, which no recovery brings back, is started again first (bringBack).
+    A role a heal of the factory's herdr server holds (volume.go) waits for its
+    relaunch on the fresh server, a *WaitError, or needs you, a *DeniedError;
+    a first prompt herdr refuses because the agent is gone (agent_not_ready,
+    agent_not_found) has the role's pane read for macOS's refusal of its copy
+    (launchDenied).
 
 func (r *Runtime) SettleWorkspaces(ctx context.Context) ([]Orphan, error)
     SettleWorkspaces settles, after a restart, the factory's workspaces (a label
@@ -20732,6 +20763,12 @@ func (c *Client) Saved() (Snapshot, error)
     which holds nothing, so it is left out. A session that saved nothing (no
     file) has no panes; a file that cannot be read, or of a version this build
     does not know, is an error: it may hold an agent in any checkout.
+
+func (c *Client) ServerStop(ctx context.Context) error
+    ServerStop stops the session's server (server.stop, `herdr server stop`):
+    every pane and agent of the session ends with it, and the next client of the
+    session starts a fresh server. A server that closes the connection on its
+    way out, before its answer, stopped; so did one that does not run.
 
 func (c *Client) Snapshot(ctx context.Context) (Snapshot, error)
     Snapshot returns the whole live session (session.snapshot).
