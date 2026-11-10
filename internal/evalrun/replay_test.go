@@ -253,6 +253,47 @@ func TestRunCaseReportsALocalCaseItCannotScore(t *testing.T) {
 	})
 }
 
+// A local round that a usage limit or a logout stopped ends usage_limit or login_required, never
+// missing_role, also when a reviewer's report is missing: the round's own outcome when its judge
+// stopped so, else the status of a missing reviewer's report that says so (the first by name). A
+// pause outcome is what stops `eval run` and the skill gate; missing_role would skip a gate's row,
+// and the gate could pass without the guard.
+func TestALocalReplayAUsageLimitOrALogoutStoppedEndsSoNotMissingRole(t *testing.T) {
+	o := func(f *replayFixture) Options {
+		return Options{RunDir: filepath.Join(RunsRoot(f.d.Layout), "20261109-120000"), AgentTag: "eval-test"}
+	}
+	for _, tc := range []struct {
+		name, outcome string
+		reports       map[agents.Role]pipeline.RoleReport
+		want, role    string
+	}{
+		{"the judge's usage limit, a reviewer's report missing", pipeline.OutcomeUsageLimit,
+			map[agents.Role]pipeline.RoleReport{"codex-review": {Status: pipeline.ReportMissing}, "claude-review": {Status: pipeline.ReportOK}},
+			pipeline.OutcomeUsageLimit, ""},
+		{"the judge's logout, a reviewer's report missing", pipeline.OutcomeLoginRequired,
+			map[agents.Role]pipeline.RoleReport{"codex-review": {Status: pipeline.ReportLost}, "claude-review": {Status: pipeline.ReportOK}},
+			pipeline.OutcomeLoginRequired, ""},
+		{"a reviewer's usage limit", pipeline.OutcomeDryRun,
+			map[agents.Role]pipeline.RoleReport{"codex-review": {Status: pipeline.OutcomeUsageLimit}, "claude-review": {Status: pipeline.ReportOK}},
+			pipeline.OutcomeUsageLimit, "codex-review"},
+		{"a reviewer's logout after another's lost pane", pipeline.OutcomeDryRun,
+			map[agents.Role]pipeline.RoleReport{"codex-review": {Status: pipeline.OutcomeLoginRequired}, "claude-review": {Status: pipeline.ReportLost}},
+			pipeline.OutcomeLoginRequired, "codex-review"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newReplayFixture(t, questionResult)
+			f.answer.Outcome, f.answer.Reports = tc.outcome, tc.reports
+			cr := RunCase(context.Background(), f.d, localEvalCase(t), o(f))
+			if cr.Outcome != tc.want || cr.Score != nil || cr.Error == "" {
+				t.Fatalf("case run %+v, want %s", cr, tc.want)
+			}
+			if tc.role != "" && !strings.Contains(cr.Error, tc.role) {
+				t.Fatalf("error %q, want it to name %s", cr.Error, tc.role)
+			}
+		})
+	}
+}
+
 // A local round that went without a reviewer's report keeps the pane line its agent died on at the
 // end of its error, as a posted replay's error carries it (agents.PaneErrorOf): the round's own error,
 // a judge's that died with it, else the line of a missing reviewer's report. A CLI's outage that kills

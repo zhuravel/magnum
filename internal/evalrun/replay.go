@@ -166,7 +166,10 @@ func prCase(pr string) (eval.Case, bool) {
 //     (eval.CaseRun.Findings).
 //
 // A refused round is flagged as a posted one is (eval.MarkFlagged); one
-// that went without a reviewer's report is eval.OutcomeMissingRole, its
+// that a usage limit or a logout stopped ends so (usage_limit,
+// login_required: localPause), the judge's or a missing reviewer's, which
+// stops `eval run` and the skill gate; another that went without a
+// reviewer's report is eval.OutcomeMissingRole, its
 // error ending with the pane line an agent died on (the round's own error,
 // else a missing reviewer's report detail: LocalResult.MissingDetail), as a
 // posted replay's error carries it (agents.PaneErrorOf: the skill gate
@@ -230,6 +233,7 @@ func (d Deps) replayLocal(ctx context.Context, cfg *config.Config, w *config.Wat
 		return fail(cmp.Or(res.Outcome, OutcomeError), err)
 	}
 	cr.Outcome, cr.Error = cmp.Or(res.Outcome, OutcomeError), res.Error
+	pause, role := localPause(res)
 	switch {
 	case cr.Outcome == pipeline.OutcomeRefused || res.Refused != "":
 		cr.Outcome = pipeline.OutcomeRefused
@@ -237,6 +241,18 @@ func (d Deps) replayLocal(ctx context.Context, cfg *config.Config, w *config.Wat
 			Reason: cmp.Or(cr.Error, "refused by "+cmp.Or(res.Refused, "its agent's provider")), At: d.now()}); err != nil {
 			d.warn("%v", err)
 		}
+		return cr
+	case pause != "":
+		// Before the missing reports: a pause is what stops `eval run` and
+		// the skill gate, while missing_role would skip a gate's row.
+		cr.Outcome = pause
+		if role != "" {
+			cr.Error = fmt.Sprintf("the round went without the report of %s, which stopped on %s: it is not scored", role, pause)
+			if res.Error != "" {
+				cr.Error += ": " + res.Error
+			}
+		}
+		cr.Error = cmp.Or(cr.Error, "the round's judge stopped on "+pause)
 		return cr
 	case len(res.Missing) > 0:
 		msg := fmt.Sprintf("the round went without the report of %s: what it would have found is unknown, so it is not scored",
@@ -257,6 +273,23 @@ func (d Deps) replayLocal(ctx context.Context, cfg *config.Config, w *config.Wat
 	score := eval.ScoreCase(ec, result)
 	cr.Score, cr.Findings = &score, result.Findings
 	return cr
+}
+
+// localPause is the pause a local round ended on, usage_limit or
+// login_required, and the role whose pause it is: the round's own outcome
+// when its judge stopped so (role ""), else the status of the first
+// missing reviewer's report, in name order, that is one; "" for none.
+func localPause(res LocalResult) (pause, role string) {
+	paused := func(s string) bool { return s == pipeline.OutcomeUsageLimit || s == pipeline.OutcomeLoginRequired }
+	if paused(res.Outcome) {
+		return res.Outcome, ""
+	}
+	for _, r := range res.Missing { // sorted by name (RunLocal)
+		if s := res.MissingStatus[r]; paused(s) {
+			return s, r
+		}
+	}
+	return "", ""
 }
 
 // localScoreResult is what a local round's findings are scored on: its

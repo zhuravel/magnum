@@ -379,6 +379,31 @@ func TestALocalReplayThatCannotScoreIsNeverALossNorAStop(t *testing.T) {
 	}
 }
 
+// A local candidate's first replay that a usage limit or a logout stopped (evalrun ends it so, also
+// when a reviewer's report is missing) stops the gate as a posted case's does: the proposal stays
+// gating, one learn.gate_waiting event names the outcome, and the stop counts as an attempt
+// (gateAttemptLimit), never as a replay without a score (gateStopLimit); the row is not left out, as
+// a missing_role one would be.
+func TestALocalReplayAUsageLimitOrALogoutStoppedStopsTheGate(t *testing.T) {
+	for _, outcome := range []string{"usage_limit", "login_required"} {
+		t.Run(outcome, func(t *testing.T) {
+			f, _, lc := localGateFixture(t, gateFullFiles, found(nil, "q"))
+			f.ev.fail(f.wt, lc.Name, outcome)
+			f.h.tick()
+			evs := f.h.events("learn.gate_waiting")
+			if p := f.proposal(); p.State != store.LearnGating || len(evs) != 1 || !strings.Contains(evs[0].Message, outcome) {
+				t.Fatalf("proposal %s %q, waiting events %+v; want gating on the %s", p.State, p.Reason, evs, outcome)
+			}
+			if s, ok := f.h.e.gateStopsOf(f.h.ctx, f.p.ID); !ok || s.Stops != 0 || s.Attempts != 1 {
+				t.Fatalf("stops %+v, %v; want one attempt and no stop without a score", s, ok)
+			}
+			if n := countCalls(f.ev.callsFor(f.wt), lc.Name); n != 1 {
+				t.Fatalf("local replays %d, want the first alone", n)
+			}
+		})
+	}
+}
+
 // A local replay that lost a reviewer's report (a lost pane, a timeout) or whose worktree could not
 // be prepared (another case's preparation held the lock, a setup that failed) after the candidate's
 // first replay scored and lost a defect is no evidence the loss is not the candidate's: on the

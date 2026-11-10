@@ -80,7 +80,9 @@ func (e *ConfigError) Error() string { return e.Key + ": " + e.Why }
 // Scratch are the round's synthetic PR number, its agents' tag and its
 // scratch directory; Refused the agent kind whose provider refused the
 // round (OutcomeRefused: "codex" for a Codex warning); Missing the reviewer
-// roles whose report the judge went without (a lost pane, a timeout), and
+// roles whose report the judge went without (a lost pane, a timeout),
+// MissingStatus each one's report status (a pipeline report status, or the
+// health kind its pane showed: usage_limit, login_required, ...), and
 // MissingDetail the report detail of the first of them, in name order,
 // that carries its pane's error line (an agent that died at its launch:
 // agents.PaneErrorOf reads it), "" when none does; Error why a round that
@@ -96,6 +98,7 @@ type LocalResult struct {
 	Tag, Scratch                string
 	Refused                     string
 	Missing                     []string
+	MissingStatus               map[string]string
 	MissingDetail               string
 	Error                       string
 	// ConfigKey names what to configure when the round could not run for
@@ -392,6 +395,10 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error) {
 	for role, rep := range res.Reports {
 		if rep.Status != pipeline.ReportOK {
 			out.Missing = append(out.Missing, string(role))
+			if out.MissingStatus == nil {
+				out.MissingStatus = map[string]string{}
+			}
+			out.MissingStatus[string(role)] = rep.Status
 		}
 	}
 	slices.Sort(out.Missing)

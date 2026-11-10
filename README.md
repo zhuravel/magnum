@@ -6405,7 +6405,9 @@ which waits for you whatever it finds. A local replay that cannot score the roun
 (`config_error`: a frozen role the config no longer declares, no gh identity), a refusal or a flag is never
 a loss and never a stop; another without a score (a lost reviewer's report, a worktree whose setup failed or
 another case's preparation held up, an error) skips the row on the candidate's first replay and stops the
-gate on its second or the base's, as for a posted case. A
+gate on its second or the base's, as for a posted case. One that a usage limit or a logout stopped (its judge's,
+or a reviewer's whose report is missing) ends `usage_limit` or `login_required`, not `missing_role`, and stops
+the gate on any replay, as a posted case's does. A
 refused one is flagged and never replayed again, and a `learn.local_refused` warning and a toast tell you
 (the factory never reads that flag). Each local replay takes 30 to 45 minutes, so a local guard can cost
 four, about 3 hours; `daemon-restart --drain` waits for the one in flight, and only `--now` or a stop
@@ -7258,7 +7260,9 @@ starts when Codex never works on its task again (the factory's mark, frozen with
 factory's registry, read only; a registry that cannot say refuses it too) or when the PR the task published is
 flagged (an earlier replay of it was refused, or magnum's registry holds a Codex flag for it): the factory's rule
 that keeps the account from a second warning holds for replays too. A round that ran without Codex replays. A
-round that went without a reviewer's report ends `missing_role` (its error ends with the pane line an agent died
+round that a usage limit or a logout stopped ends `usage_limit` or `login_required`, also when a reviewer's report
+is missing (its judge's pause, else the first missing reviewer's by name), and stops `eval run` as a posted case's
+does; another that went without a reviewer's report ends `missing_role` (its error ends with the pane line an agent died
 on, when one did, as a posted replay's does); one whose frozen roles the config no longer declares, or with no gh
 identity to run as, `config_error`; one whose setup failed `environment`; a refused
 one is flagged, as a posted case is: none is scored as a miss.
