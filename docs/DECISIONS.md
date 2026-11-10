@@ -23211,7 +23211,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   run of the screen opened the task's diff, the surface) to the factory daemon, which records it and, as it does for an
   answer or a retry, your input (kind `rating`, text `+1: tests`, no class): the daemon refuses a task that is not
   published or done, a value other than 1 and -1 and a reason that is no key, and answers what it stored (`PR-12330:
-  rated + (tests), the diff opened first`, or `..., the diff not opened first: noise`), which the footer shows.
+  rated + (tests), the diff opened first`, or `..., the diff not opened first: noise`), which the footer shows. A
+  factory daemon of an older build answers `unknown request kind "rate"`: `magnum factory install --drain` starts it
+  on this build.
   `diff_opened_first` is true when the screen opened the diff (`d` on the task card or on the ready card, its pager
   ended without an error; a pager of a report does not count) or when the registry already records it: the task's
   newest push decision was taken with `diff_opened_at` set. The screen's reading is kept for the run of the screen

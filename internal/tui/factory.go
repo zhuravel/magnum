@@ -171,9 +171,9 @@ func (e *QuestionsChangedError) Is(target error) bool { return target == ErrQues
 //     task that waits on the operator go on at its stage.
 //   - Rate rates a published or a done task + (value 1) or − (-1), with the
 //     key of a reason ("" for none); diffOpened says the screen showed the
-//     operator the task's diff first (the factory adds the diff its decision
-//     on the ready card recorded as opened). It asks no y/N: a rating is
-//     undoable, rating again stores a new one.
+//     operator the task's diff first (the factory adds the diff its newest
+//     push on the ready card recorded as opened). It asks no y/N: a rating
+//     is undoable, rating again stores a new one.
 //   - Open steps into the task's pane (asks nothing).
 //   - OpenBrowser opens url in the browser: b a task's PR, t its Jira issue
 //     (asks nothing, as the board's b and t).

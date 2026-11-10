@@ -9,6 +9,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/zhuravel/magnum/internal/factory/registry"
 )
@@ -86,9 +87,9 @@ func (e *Engine) rateTask(ctx context.Context, p RatePayload) (string, error) {
 // read. A diff read for a card you sent back is another one; a task with no
 // push decision (a PR the factory adopted) has none.
 func pushedWithDiffOpened(ds []registry.Decision) bool {
-	for i := len(ds) - 1; i >= 0; i-- {
-		if ds[i].Choice == ChoicePush {
-			return !ds[i].DiffOpened.IsZero()
+	for _, d := range slices.Backward(ds) {
+		if d.Choice == ChoicePush {
+			return !d.DiffOpened.IsZero()
 		}
 	}
 	return false
