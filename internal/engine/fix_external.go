@@ -115,6 +115,9 @@ type externalThread struct {
 	Comments    []externalComment `json:"comments"`
 	Omitted     int               `json:"omitted,omitempty"`
 	called      bool
+	// accepted (not in the file): its reviewer approved the PR after its
+	// latest word (acceptedBy), which the look reads.
+	accepted bool
 }
 
 // externalComment is one comment of an externalThread: its REST id and
@@ -151,6 +154,9 @@ type externalRemark struct {
 	Truncated bool   `json:"truncated,omitempty"`
 	Answered  bool   `json:"answered"`
 	Waits     bool   `json:"waits,omitempty"`
+	// accepted (not in the file): its reviewer approved the PR after its
+	// last edit (acceptedBy), which the look reads.
+	accepted bool
 }
 
 // Remark kinds (externalRemark.Kind), also the place a "## Needs you" entry
@@ -306,6 +312,9 @@ func ownWord(body string) bool { return !strings.Contains(body, magnumMarker) }
 // the author's word. A remark edited in place counts from its last edit, for
 // both (its text is new: an answer to the old text answers nothing), and
 // the file gives that time (edited_at). The conversation is oldest first.
+// Each thread and remark says, for the look and not in the file, whether
+// its reviewer (a thread's first comment's author) approved the PR after
+// its latest word (accepted, acceptedBy).
 func externalOf(in externalInput) (externalItems, int) {
 	isOwn := func(login, typ string) bool {
 		a := github.Account(login, typ)
@@ -323,6 +332,7 @@ func externalOf(in externalInput) (externalItems, int) {
 
 	x := externalItems{Author: in.Author, FixerLogins: append([]string{}, in.Own...), Threads: []externalThread{}, Conversation: []externalRemark{}}
 	outside := 0
+	decisions := reviewerDecisions(in.Reviews)
 	for _, t := range in.Threads {
 		all := t.AllComments()
 		if t.Resolved || len(all) == 0 || byAuthor(all[0].AuthorLogin, all[0].AuthorType) {
@@ -354,6 +364,7 @@ func externalOf(in externalInput) (externalItems, int) {
 		last := cs[len(cs)-1]
 		et := threadOf(t, all, cs, name)
 		et.Answered = byAuthor(last.AuthorLogin, last.AuthorType) || (postreview.IsOwnAnswer(last.Body) && isOwn(last.AuthorLogin, last.AuthorType))
+		et.accepted = acceptedBy(decisions, github.Account(cs[0].AuthorLogin, cs[0].AuthorType), last.CreatedAt, cs)
 		if at, ok := in.Calls[et.CommentID]; ok {
 			var d *github.ThreadComment
 			if et.called, d = decisionIn(cs, at, byAuthor, isOwn, busy); d != nil {
@@ -417,6 +428,7 @@ func externalOf(in externalInput) (externalItems, int) {
 	}
 	slices.SortStableFunc(items, func(a, b dated) int { return a.at.Compare(b.at) })
 	for _, it := range items {
+		it.r.accepted = acceptedBy(decisions, it.r.Author, it.text, nil)
 		it.r.Answered = it.r.URL != "" && slices.ContainsFunc(in.Comments, func(c github.PRComment) bool {
 			own := isOwn(c.AuthorLogin, c.AuthorType)
 			return c.CreatedAt.After(it.text) && ((postreview.IsFixReply(c.Body) && (byAuthor(c.AuthorLogin, c.AuthorType) || own)) || (postreview.IsComment(c.Body) && own)) &&
@@ -425,6 +437,37 @@ func externalOf(in externalInput) (externalItems, int) {
 		x.Conversation = append(x.Conversation, it.r)
 	}
 	return x, outside
+}
+
+// reviewerDecisions are each reviewer's decision on the PR, by account
+// (Account form, lower case), from reviews, every review GitHub listed
+// (never the latest-reviews list, where a later reply in a thread shows an
+// approval as a comment): their latest review that approves or requests
+// changes. A review that only comments, a dismissed one and a pending one
+// leave it as it was, as GitHub's review decision does.
+func reviewerDecisions(reviews []github.Review) map[string]github.Review {
+	out := map[string]github.Review{}
+	for _, r := range reviews {
+		a := strings.ToLower(github.Account(r.AuthorLogin, r.AuthorType))
+		if a == "" || r.State != "APPROVED" && r.State != "CHANGES_REQUESTED" {
+			continue
+		}
+		if cur, ok := out[a]; !ok || !r.SubmittedAt.Before(cur.SubmittedAt) {
+			out[a] = r
+		}
+	}
+	return out
+}
+
+// acceptedBy reports whether the decision of by (reviewerDecisions)
+// accepts an item of theirs whose latest word came at at, with the thread
+// comments cs (none for a review body or comment): an approval submitted
+// after it that holds none of cs (an approval's own inline comments are
+// new asks). A change request after the approval takes it back.
+func acceptedBy(decisions map[string]github.Review, by string, at time.Time, cs []github.ThreadComment) bool {
+	d, ok := decisions[strings.ToLower(by)]
+	return ok && d.State == "APPROVED" && d.SubmittedAt.After(at) &&
+		!slices.ContainsFunc(cs, func(c github.ThreadComment) bool { return c.ReviewID != 0 && c.ReviewID == d.DatabaseID })
 }
 
 // threadOf is the file's thread t, all its comments GitHub listed and cs

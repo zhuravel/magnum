@@ -474,6 +474,7 @@ func sortOpen(items []openItem, l openLedger) (work, needs []openItem) {
 			if !l.handedReview(strings.TrimPrefix(it.Key, "review:")) {
 				work = append(work, it)
 			}
+		case l.acceptedLeftover(it): // fix_open_needs.go: its reviewer approved since, so it waits for no one
 		case it.Kind == itemFinding, it.Resolved:
 			needs = append(needs, it)
 		case it.Kind == itemThread && it.FixerReplies >= 2:

@@ -1,6 +1,9 @@
 package engine
 
 import (
+	"maps"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -172,5 +175,138 @@ func TestOnlyTheLooksOwnRaiseIsReadDespiteAReply(t *testing.T) {
 		if c.l.raisedHere(c.pr, c.kind) {
 			t.Errorf("%s: the look takes the attention for its own", name)
 		}
+	}
+}
+
+// revAnnReviews adds rev-ann's review in state with body on PR #2 now, and
+// polls the PR (GitHub moved its updatedAt).
+func (h *harness) revAnnReviews(id int64, state, body string) {
+	h.t.Helper()
+	r := changeRequest(id, h.clock.Now())
+	r.State, r.Body = state, body
+	h.gh.mu.Lock()
+	if h.gh.allReviews == nil {
+		h.gh.allReviews = map[int][]github.Review{}
+	}
+	h.gh.allReviews[2] = append(h.gh.allReviews[2], r)
+	h.gh.mu.Unlock()
+	h.touch(fixHead)
+}
+
+// The reviewer whose change request waited for you approves the PR later,
+// and you never answered it: the approval accepts it, and the look lifts
+// the attention it raised, with no step of yours. A change request of
+// theirs after the approval takes it back: the item waits for you again,
+// never for a fixer.
+func TestTheReviewersLaterApprovalLiftsWhatTheyAsked(t *testing.T) {
+	h := raisedChangeRequest(t)
+	h.advance(10 * time.Minute)
+	h.revAnnReviews(9002, "APPROVED", "")
+	if _, ok := h.fixEvent("fix.open_answered"); !ok {
+		t.Fatalf("no lift after the approval: state %s, last_error %q", h.pr(2).State, deref(h.pr(2).LastError))
+	}
+	h.wantState(2, store.PRReviewed)
+	h.wantOpen(OpenIdle, "nothing open")
+	h.advance(10 * time.Minute)
+	h.revAnnReviews(9003, "CHANGES_REQUESTED", "")
+	pr := h.wantState(2, store.PRNeedsAttention)
+	if !strings.Contains(deref(pr.LastError), prPage+"#pullrequestreview-9001") {
+		t.Errorf("last_error = %q, want the change request that waits for you again", deref(pr.LastError))
+	}
+	if n := len(h.fixRuns(pr.ID)); n != 1 {
+		t.Errorf("fix runs = %d: the item that waits for you went to a fixer", n)
+	}
+}
+
+// An item its reviewer accepted waits for no one, but a loop that starts
+// on other work later still leaves it alone: an earlier fixer left it to
+// you, and the next one, which lists it unanswered in its file, must not
+// answer it, nor name it under Needs you again.
+func TestALaterLoopLeavesAnAcceptedItemAlone(t *testing.T) {
+	person := extThread(4322458360, "lib/sandbox.rb", 185, time.Date(2026, 10, 5, 9, 0, 0, 0, time.Local), "Why does it run twice?", "rev-ann")
+	h := loopLeaves(t, person)
+	pr := h.wantState(2, store.PRNeedsAttention)
+	h.advance(time.Minute)
+	h.revAnnReviews(9002, "APPROVED", "")
+	h.wantState(2, store.PRReviewed)
+	lint := extThread(4322458500, "spec/a_spec.rb", 12, h.clock.Now(), "Repeated describe block", "lint-bot")
+	h.setThreads(person, lint)
+	h.advance(time.Minute)
+	h.touch(fixHead)
+	h.pastSettle()
+	h.tick()
+	runs := h.fixRuns(pr.ID)
+	if len(runs) != 2 {
+		t.Fatalf("fix runs = %d, want a second loop on the lint thread", len(runs))
+	}
+	waits := map[int64]bool{}
+	for _, th := range readExternalOf(t, runs[1]).Threads {
+		waits[th.CommentID] = th.Waits
+	}
+	if !waits[4322458360] || waits[4322458500] {
+		t.Errorf("waits in the second loop's file = %v, want the accepted thread alone", waits)
+	}
+}
+
+// An approval accepts its reviewer's items made before it: a thread, a
+// review body, a thread a fixer resolved. Never one whose comment the
+// approval itself holds (approve with comments: a new ask), nor another
+// reviewer's. A change request after it takes it back; a review that only
+// comments leaves it standing.
+func TestAnApprovalAcceptsTheReviewersEarlierItemsOnly(t *testing.T) {
+	at := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	old := extThread(100, "a.rb", 1, at, "Why?", "rev-ann")
+	old.Comments[0].ReviewID = 1
+	inApproval := extThread(200, "b.rb", 2, at.Add(50*time.Minute), "Nit", "rev-ann") // written while the review was pending
+	inApproval.Comments[0].ReviewID = 2
+	alices := extThread(300, "c.rb", 3, at, "And this?", "alice")
+	resolved := extThread(400, "d.rb", 4, at, "Rename it", "rev-ann")
+	resolved.Resolved, resolved.ResolvedBy = true, "talkable[bot]"
+	body := changeRequest(1, at)
+	approve := github.Review{DatabaseID: 2, State: "APPROVED", SubmittedAt: at.Add(time.Hour), AuthorLogin: "rev-ann", AuthorType: "User", AuthorAssociation: "MEMBER"}
+	in := externalInput{Threads: []github.Thread{old, inApproval, alices, resolved}, Reviews: []github.Review{body, approve}, CommentsComplete: true,
+		Author: "zhuravel", Own: []string{"talkable[bot]"}, Resolvers: []string{"talkable[bot]"}}
+	accepted := func() map[string]bool {
+		out := map[string]bool{}
+		for _, it := range othersItemsOf(externalReadOf(in, fixHead), quietRules{}) {
+			out[it.Key] = it.Accepted
+		}
+		return out
+	}
+	want := map[string]bool{threadKey(100, 100): true, threadKey(200, 200): false, threadKey(300, 300): false, threadKey(400, 400): true, "remark:1": true}
+	if got := accepted(); !maps.Equal(got, want) {
+		t.Errorf("accepted = %v, want %v", got, want)
+	}
+	in.Reviews = append(in.Reviews, github.Review{DatabaseID: 3, State: "COMMENTED", Body: "One more thing", SubmittedAt: at.Add(2 * time.Hour),
+		AuthorLogin: "rev-ann", AuthorType: "User", AuthorAssociation: "MEMBER"})
+	if got := accepted(); !got[threadKey(100, 100)] || !got["remark:1"] || got["remark:3"] {
+		t.Errorf("after a comment review: accepted = %v, want the approval standing, and the new remark open", got)
+	}
+	in.Reviews[2].State = "CHANGES_REQUESTED"
+	for key, ok := range accepted() {
+		if ok {
+			t.Errorf("%s accepted after a later change request", key)
+		}
+	}
+}
+
+// An accepted item waits for no one where it would wait for you (handed to
+// a loop, a thread a fixer resolved): no work and no need. One never handed
+// is work as before: a reviewer's comment and a separate approval still ask
+// for the fix.
+func TestAnAcceptedItemWaitsForNoOneButWorkStaysWork(t *testing.T) {
+	handed, fresh, resolved := personThread(4100), personThread(4200), personThread(4300)
+	handed.Accepted, fresh.Accepted = true, true
+	resolved.Resolved, resolved.Accepted = true, true
+	f := idleFacts()
+	f.items = []openItem{handed, fresh, resolved}
+	f.ledger.Handed = map[string]time.Time{handed.Key: openNow}
+	v, work, needs := decideOpen(f)
+	wantVerdict(t, v, OpenFixing, "starts a fix loop on 1 thread of a person")
+	if len(work) != 1 || work[0].Key != fresh.Key || len(needs) != 0 {
+		t.Errorf("work %v, needs %v; want the never-handed thread as work alone", work, needs)
+	}
+	if got := waitsOf(acceptedWaits(f.items, f.ledger)); !slices.Equal(got, []string{handed.Key}) {
+		t.Errorf("waits = %v, want the handed accepted thread", got)
 	}
 }

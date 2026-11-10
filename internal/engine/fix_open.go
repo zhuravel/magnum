@@ -326,7 +326,8 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	case ci: // ci_fix.go: the record first, so a restart never starts a fourth
 		v = e.openStart(ctx, repo, pr, &l, v, work, FixState{Mode: FixModeCI, CIChecks: ciEntries(f.ci.failedRuns)}, fp)
 	case v.Verdict == OpenFixing && len(work) > 0:
-		v = e.openStart(ctx, repo, pr, &l, v, work, FixState{Waits: waitsOf(needs)}, fp) // a person's handed items wait: its fixer leaves them alone
+		// a person's handed items wait, and those their reviewer accepted: its fixer leaves them alone
+		v = e.openStart(ctx, repo, pr, &l, v, work, FixState{Waits: waitsOf(append(slices.Clone(needs), acceptedWaits(f.items, l)...))}, fp)
 	}
 	e.openWrite(ctx, pr, c.raw, l, v)
 }

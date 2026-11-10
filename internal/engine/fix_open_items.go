@@ -83,6 +83,10 @@ type openItem struct {
 	FixerReplies int    `json:"fixer_replies,omitempty"`
 	Resolved     bool   `json:"resolved,omitempty"`
 	Decision     bool   `json:"decision,omitempty"`
+	// Accepted says that the reviewer of another reviewer's item approved
+	// the PR after its latest word (acceptedBy): one that would wait for
+	// you waits for no one (sortOpen).
+	Accepted bool `json:"accepted,omitempty"`
 }
 
 // quietRules are [pipeline] quiet_logins and quiet_markers: a review body
@@ -128,13 +132,15 @@ func (mt magnumThread) answeredSince(at time.Time) bool {
 }
 
 // resolvedThread is another reviewer's thread that a fixer login resolved:
-// still open (a person's item never closes on the fixer's word alone).
+// still open (a person's item never closes on the fixer's word alone),
+// unless its reviewer approved the PR since (Accepted, acceptedBy).
 type resolvedThread struct {
 	RootID       int64  `json:"root_id"`
 	LatestID     int64  `json:"latest_id"`
 	URL          string `json:"url,omitempty"`
 	Bot          bool   `json:"bot,omitempty"`
 	FixerReplies int    `json:"fixer_replies,omitempty"`
+	Accepted     bool   `json:"accepted,omitempty"`
 }
 
 // magnumThreadsOf are the unresolved threads of threads that one of own
@@ -190,6 +196,7 @@ func resolvedByFixerOf(in externalInput) []resolvedThread {
 			inList(in.Own, c.AuthorLogin, c.AuthorType)
 	}
 	var out []resolvedThread
+	decisions := reviewerDecisions(in.Reviews)
 	for _, t := range in.Threads {
 		all := t.AllComments()
 		if !t.Resolved || len(all) == 0 {
@@ -211,7 +218,8 @@ func resolvedByFixerOf(in externalInput) []resolvedThread {
 			postreview.IsOwnAnswer(latest.Body) && inList(in.Own, latest.AuthorLogin, latest.AuthorType)) {
 			continue // answered, as externalOf answers an unresolved one
 		}
-		rt := resolvedThread{RootID: root.ID, LatestID: latest.ID, URL: root.URL, Bot: bot}
+		rt := resolvedThread{RootID: root.ID, LatestID: latest.ID, URL: root.URL, Bot: bot,
+			Accepted: acceptedBy(decisions, github.Account(root.AuthorLogin, root.AuthorType), latest.CreatedAt, cs)}
 		for _, c := range cs[1:] {
 			if postreview.IsFixReply(c.Body) {
 				rt.FixerReplies++
@@ -284,7 +292,7 @@ func othersItemsOf(read externalRead, quiet quietRules) []openItem {
 			continue
 		}
 		it := openItem{Key: threadKey(t.CommentID, t.Comments[len(t.Comments)-1].ID), Class: classOf(t.Comments[0].Author), Kind: itemThread, URL: t.URL,
-			Decision: t.Decision}
+			Decision: t.Decision, Accepted: t.accepted}
 		for _, c := range t.Comments {
 			if c.Fix {
 				it.FixerReplies++
@@ -296,7 +304,7 @@ func othersItemsOf(read externalRead, quiet quietRules) []openItem {
 		if r.Answered || quiet.login(r.Author) || read.quiet[r.ID] {
 			continue
 		}
-		out = append(out, openItem{Key: remarkKey(r), Class: classOf(r.Author), Kind: r.Kind, URL: r.URL})
+		out = append(out, openItem{Key: remarkKey(r), Class: classOf(r.Author), Kind: r.Kind, URL: r.URL, Accepted: r.accepted})
 	}
 	for _, rt := range read.resolved {
 		class := classPerson
@@ -304,7 +312,7 @@ func othersItemsOf(read externalRead, quiet quietRules) []openItem {
 			class = classBot
 		}
 		out = append(out, openItem{Key: threadKey(rt.RootID, rt.LatestID), Class: class, Kind: itemThread, URL: rt.URL, FixerReplies: rt.FixerReplies,
-			Resolved: true})
+			Resolved: true, Accepted: rt.Accepted})
 	}
 	return out
 }

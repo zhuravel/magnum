@@ -88,6 +88,25 @@ func (l openLedger) raisedHere(pr store.PR, kind string) bool {
 		len(l.Raised) > 0
 }
 
+// acceptedLeftover reports whether it would wait for you (handed to a loop
+// and still open, a thread a fixer resolved, one the fixer answered twice)
+// but its reviewer approved the PR since (openItem.Accepted): it waits for
+// no one (sortOpen). An item never handed is work, accepted or not.
+func (l openLedger) acceptedLeftover(it openItem) bool {
+	_, handed := l.Handed[it.Key]
+	return it.Accepted && (handed || it.Resolved || it.Kind == itemThread && it.FixerReplies >= 2)
+}
+
+// acceptedWaits are the items of items that would wait for you and whose
+// reviewer approved the PR since (acceptedLeftover): no longer work or
+// needs, they are still left alone by a loop's fixer, as the ones that wait
+// are (waitsOf), since an earlier fixer left them to you. Its file lists
+// them unanswered, and a fixer that answered one would answer for you, or
+// name it under Needs you, a loop's own attention the look never lifts.
+func acceptedWaits(items []openItem, l openLedger) []openItem {
+	return slices.DeleteFunc(slices.Clone(items), func(it openItem) bool { return !l.acceptedLeftover(it) })
+}
+
 // openLift puts pr back to reviewed when it needs attention for what the
 // look raised (raisedHere), no loop runs, and the look's whole, fresh read
 // shows none of the raised items open any more: you answered them. A
@@ -100,7 +119,7 @@ func (e *Engine) openLift(ctx context.Context, repo store.Repo, pr store.PR, l *
 	}
 	open := map[string]bool{}
 	for _, it := range f.items {
-		open[it.Key] = true
+		open[it.Key] = !it.Accepted // its reviewer approved since: it waits for no one (sortOpen)
 	}
 	if slices.ContainsFunc(l.Raised, func(k string) bool { return open[k] }) {
 		return false
