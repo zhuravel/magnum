@@ -70,9 +70,14 @@ test-race:
 ## (a grep -E pattern set in the gitignored mise.local.toml, never in a tracked file), or a person's GitHub
 ## login from the local registry (scripts/check-logins.sh; MAGNUM_OWN_LOGINS and MAGNUM_LOGIN_ALLOW exempt)
 check-private:
-	@if [ -n "$$MAGNUM_PRIVATE_PATTERNS" ] && git grep -qiIE -e "$$MAGNUM_PRIVATE_PATTERNS" -- . ':!config.local.toml'; then \
-	  echo "tracked files mention a private name:"; git grep -niIE -e "$$MAGNUM_PRIVATE_PATTERNS" -- . ':!config.local.toml'; exit 1; fi
-	@scripts/check-logins.sh
+	@main="$$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/.."; \
+	if [ -z "$$MAGNUM_PRIVATE_PATTERNS" ] && [ ! -f mise.local.toml ] && [ -f "$$main/mise.local.toml" ]; then \
+	  eval "$$(mise -C "$$main" env -s bash 2>/dev/null | grep -E '^export MAGNUM_(PRIVATE_PATTERNS|OWN_LOGINS|LOGIN_ALLOW)=')"; \
+	  [ -n "$$MAGNUM_PRIVATE_PATTERNS" ] || { echo "check-private: $$main/mise.local.toml sets no MAGNUM_PRIVATE_PATTERNS for this worktree"; exit 1; }; \
+	fi; \
+	if [ -n "$$MAGNUM_PRIVATE_PATTERNS" ] && git grep -qiIE -e "$$MAGNUM_PRIVATE_PATTERNS" -- . ':!config.local.toml'; then \
+	  echo "tracked files mention a private name:"; git grep -niIE -e "$$MAGNUM_PRIVATE_PATTERNS" -- . ':!config.local.toml'; exit 1; fi; \
+	scripts/check-logins.sh
 
 ## lint: golangci-lint with .golangci.yml (the version mise.toml pins); not part of `test` until the backlog is cleared
 lint:

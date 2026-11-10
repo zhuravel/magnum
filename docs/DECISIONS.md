@@ -17427,6 +17427,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
     TestAChatCommentIsNeverTheAuthorsDecision, TestAChatCommentStartsNoReplyRound,
     TestTheRetroTakesTheAppsChatCommentAsMagnums and TestFixRecordsIgnoreCommentPosted.
 
+- **`make check-private` in a linked worktree reads the main checkout's private patterns** (2026-11-10). The
+  patterns (`MAGNUM_PRIVATE_PATTERNS`, with `MAGNUM_OWN_LOGINS` and `MAGNUM_LOGIN_ALLOW`) live in the main checkout's
+  gitignored `mise.local.toml`, and a worktree under `.claude/worktrees/` has none, so mise set nothing there and the
+  check passed in silence: a builder's green `make test` in a worktree never checked the names, and a review found a
+  private repository's name in a branch whose gate was green. When the variable is empty, the worktree has no
+  `mise.local.toml` of its own and the main checkout (`git rev-parse --git-common-dir`/..) has one, the check takes
+  the three from `mise -C <main> env`; a main file that sets no patterns fails the check, with words that say so.
+  CI, with no `mise.local.toml` anywhere, skips as before. The improvement loop's landing already ran the check as
+  `mise -C <checkout> exec` (above); this covers every other gate in a worktree.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is
