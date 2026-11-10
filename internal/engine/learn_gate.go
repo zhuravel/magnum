@@ -529,9 +529,9 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 	var held []heldGuard // the local guards, replayed last (localGuards)
 	var others []int     // the other rows
 	for i, gc := range cases {
-		if gc.Guard && gc.Case.Local() && gc.Skip == "" { // its place in the rows is kept
+		if gc.Guard && gc.Case.Local() && gc.Skip == "" { // its place in the rows is kept, saying why it has no score yet
 			held = append(held, heldGuard{row: len(g.res.Cases), gc: gc})
-			g.res.Cases = append(g.res.Cases, GateCase{GateRow: learn.GateRow{Case: gc.Case.Name, Guard: true, Local: true}})
+			g.res.Cases = append(g.res.Cases, GateCase{GateRow: learn.GateRow{Case: gc.Case.Name, Guard: true, Local: true, Skip: skipStoppedBefore}})
 			continue
 		}
 		row, stop, err := g.caseRow(gc)
@@ -569,6 +569,13 @@ type heldGuard struct {
 // skipFailsWithout is why a local guard of a gate its other cases fail is
 // not replayed (localGuards).
 const skipFailsWithout = "not replayed: the gate fails on its other cases, and a guard can only add a loss"
+
+// skipStoppedBefore is why a local guard's row has no score when the gate
+// stopped before the local guards were done (before localGuards, or at an
+// earlier guard's or this one's replay), as a stop that holds the proposal
+// stores the rows; the guard's own row (caseRow) or skipFailsWithout
+// replaces it when the gate gets there.
+const skipStoppedBefore = "not scored: the gate stopped before its local guards were done"
 
 // localGuards replays the local guards held, last: each one's row
 // (caseRow), the candidate's second replay of one it lost (retryLost) and

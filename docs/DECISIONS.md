@@ -22836,7 +22836,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     add a loss, so in a failing gate (most are: no target improved, a win not found again, a regression) its up to
     four replays with every role would cost 2 to 3 hours and change nothing. Its row keeps its place and says
     `not replayed: the gate fails on its other cases`. A revert replays them anyway: it is held for the operator
-    whatever the gate finds, and the operator reads its guards.
+    whatever the gate finds, and the operator reads its guards. Until its replays are done the row says `not scored:
+    the gate stopped before its local guards were done` (`skipStoppedBefore`), which is what a stop that holds the
+    proposal stores (the stop limits); before, that row had no score and no reason.
   - Outcomes. In `replay`'s order: a cancel, the budget, a usage limit or a login stop the gate as before (a local
     replay ends `usage_limit` or `login_required`, never `missing_role`, when its judge stopped so or a missing
     reviewer's report says so: evalrun's `localPause`, from `LocalResult.MissingStatus`; before, Codex's limit hit
@@ -22897,7 +22899,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestALocalGuardsDefectsFoundByOneBaseReplayEachAreLostAtTheBase, TestAGateThatFailsOnItsOtherCasesReplaysNoLocalGuard
   (and a revert's that does), TestALocalReplayOnASharedLaunchFailureIsADelay,
   TestALocalReplayAUsageLimitOrALogoutStoppedStopsTheGate (the proposal gating, one `learn.gate_waiting`, an attempt
-  counted and no stop without a score), TestTheLocalCasesCorpusLeavesOutWhatTheGateCannotTake and
+  counted and no stop without a score), TestAHeldGateThatStoppedBeforeItsLocalGuardsSaysWhyTheirRowsHaveNoScore,
+  TestTheLocalCasesCorpusLeavesOutWhatTheGateCannotTake and
   TestAGateTakesNoLocalCaseItCannotTellApart, each checked against a mutation of its rule (the stored base replays'
   inputs, their cap of two, their order by replay time, `BothFound`, the failing gate's skip and its revert exception
   among them); evalrun's TestALocalReplayWithoutAReviewersReportKeepsThePaneLineItDiedOn, the `config_error` of a role

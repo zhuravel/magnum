@@ -6401,7 +6401,8 @@ flip, and that one found the defect by being chosen): a stored one at the base's
 replay now, the second only when the first found it, and the loss counts only when both found it. The
 local guards replay after every other case, and not at all in a gate that fails on its other cases (a guard
 can only add a loss; the row says `not replayed: the gate fails on its other cases`), but for a revert's,
-which waits for you whatever it finds. A local replay that cannot score the round until the config changes
+which waits for you whatever it finds; a gate held on a stop before they were done says `not scored: the gate
+stopped before its local guards were done` on their rows. A local replay that cannot score the round until the config changes
 (`config_error`: a frozen role the config no longer declares, no gh identity), a refusal or a flag is never
 a loss and never a stop; another without a score (a lost reviewer's report, a worktree whose setup failed or
 another case's preparation held up, an error) skips the row on the candidate's first replay and stops the

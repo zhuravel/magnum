@@ -324,6 +324,31 @@ func TestAGateThatFailsOnItsOtherCasesReplaysNoLocalGuard(t *testing.T) {
 	})
 }
 
+// A gate that stops before its local guards, on a stop that holds the proposal (the third in a row
+// on a replay without a score, here the target's second replay that would confirm its win), stores
+// the local guard's row saying why it has no score, never a bare row: the guard was not replayed.
+func TestAHeldGateThatStoppedBeforeItsLocalGuardsSaysWhyTheirRowsHaveNoScore(t *testing.T) {
+	f, _, lc := localGateFixture(t, gateFullFiles, found([]string{"q"}))
+	f.ev.after = func(c evalCall) {
+		if c.Case == f.target.Name && c.Opts.Candidate == f.wt {
+			f.ev.fail(f.wt, f.target.Name, "needs_attention") // every replay after its first
+		}
+	}
+	for range gateStopLimit {
+		f.h.tick()
+		f.h.advance(gateRetryAfter + time.Minute)
+	}
+	if p := f.proposal(); p.State != store.LearnHeld || !strings.Contains(p.Reason, "needs_attention") {
+		t.Fatalf("proposal %s %q, want held on the stops", p.State, p.Reason)
+	}
+	if n := countCalls(f.ev.callsFor(f.wt), lc.Name); n != 0 {
+		t.Fatalf("local replays %d, want none", n)
+	}
+	if row := localRow(t, f, lc); !row.Guard || !row.Local || row.Skip != skipStoppedBefore || row.After != nil || row.Before != nil {
+		t.Fatalf("row %+v, want it skipped, saying the gate stopped before it", row)
+	}
+}
+
 // A local candidate's first replay that ends without a score (a frozen role the config no longer
 // declares or no gh identity, config_error; a lost reviewer's report; a setup that failed; a
 // refusal, a flag, an error such as frozen inputs that are gone) is never a loss and never a stop:
