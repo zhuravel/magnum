@@ -271,10 +271,11 @@ func TestAutoApprovalWaitsForTheHeadsChecks(t *testing.T) {
 }
 
 // A PR that changes what steers the review agents (an AGENTS.md or
-// CLAUDE.md at any depth and in any case, .claude/, .codex/, .mcp.json), or
-// whose head's sessions ran without its project config, is never approved
-// as the operator, and neither is one whose file list magnum cannot read
-// whole. A as the operator still approves it: they decide by hand.
+// CLAUDE.md at any depth and in any case, .claude/, .codex/, .mcp.json, or
+// the target of a root link to one that its head's session recorded) is
+// never approved as the operator, and neither is one whose file list magnum
+// cannot read whole. A as the operator still approves it: they decide by
+// hand.
 func TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -284,6 +285,7 @@ func TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions(t *testing.T) {
 		// declinedPaths are the paths of its config the record names (none:
 		// a record written before it named them)
 		declinedPaths []string
+		links         map[string]string // the root links' targets the record names, with their paths' labels
 		want          string
 	}{
 		{name: "a nested CLAUDE.md", files: []string{"app/x.rb", "devops/k8s/claude.MD"},
@@ -295,9 +297,11 @@ func TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions(t *testing.T) {
 		{name: "mcp servers", files: []string{".mcp.json"}, want: "(.mcp.json)"},
 		{name: "an unsafe path", files: []string{"docs/a`b\n/AGENTS.md"}, want: "(AGENTS.md)"},
 		{name: "an unsafe settings path", files: []string{".claude/hooks/$(x).sh"}, want: "(.claude/)"},
-		{name: "a declined project config", files: []string{"app/x.rb"}, declined: agents.KindClaude, declinedPaths: []string{".claude/"},
-			want: "(.claude/)"},
-		{name: "an older declined record", files: []string{"app/x.rb"}, declined: agents.KindCodex, want: "(.codex/"},
+		{name: "a root link's target", files: []string{"app/x.rb", "docs/guide.md"}, declined: agents.KindClaude,
+			declinedPaths: []string{".claude/", "CLAUDE.md"}, links: map[string]string{"docs/guide.md": "CLAUDE.md"},
+			want: "it changes the review agents' instructions or hooks (CLAUDE.md)"},
+		{name: "a file under a linked directory", files: []string{"shared/codex/config.toml"}, declined: agents.KindCodex,
+			links: map[string]string{"shared/codex": ".codex/"}, want: "(.codex/)"},
 		{name: "a cut file list", files: []string{"app/x.rb"}, truncated: true,
 			want: "Magnum cannot tell whether it changes the review agents' instructions or hooks"},
 	} {
@@ -309,7 +313,7 @@ func TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions(t *testing.T) {
 			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: tc.files, filesTruncated: tc.truncated})
 			h.tick()
 			if tc.declined != "" {
-				b, _ := json.Marshal(agents.ProjectNote{Head: "b1", At: h.clock.Now(), Files: 1, Compared: true, Paths: tc.declinedPaths})
+				b, _ := json.Marshal(agents.ProjectNote{Head: "b1", At: h.clock.Now(), Files: 1, Compared: true, Paths: tc.declinedPaths, Links: tc.links})
 				h.e.setKV(h.ctx, store.KVPRProject(h.pr(2).ID, tc.declined), string(b))
 			}
 			h.reviewTo(2, "b1")
@@ -329,36 +333,35 @@ func TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions(t *testing.T) {
 	}
 }
 
-// A session of the head that ran without the checkout's project config
-// only because of files the PR's commits do not change (an ignored .pyc an
-// earlier PR's round left in the slot, an uncommitted edit: the record's
-// residue) says nothing of the PR: its complete file list, which names no
-// agent config, decides, and magnum approves it as the operator. A record
-// without residue, or one written before it was recorded, still refuses
+// A session's record of the head is never the PR's change by itself: git
+// compared the slot's work tree with the merge base the slot had, so an
+// ignored .pyc an earlier PR's round left there (residue, or no residue
+// field in a record an older build wrote: talkable's live case, which held
+// the head back at every pass), the base branch's commits behind a stacked
+// PR's stale origin/<base>, a compare git could not make, and a root link
+// whose target the PR leaves alone all leave the decision to the head's
+// complete file list, GitHub's list of what the PR's commits change, which
+// names no agent config here: magnum approves it as the operator. Only the
+// record's link targets the list changes refuse
 // (TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions).
-func TestAutoApprovalIgnoresAgentConfigLeftInTheSlot(t *testing.T) {
-	for _, tc := range []struct {
-		name, note string
-		refused    bool
-	}{
-		{"files left in the slot", `{"head":"b1","files":1,"compared":true,"paths":[".claude/"],"residue":true}`, false},
-		{"the PR's commits", `{"head":"b1","files":1,"compared":true,"paths":[".claude/"],"residue":false}`, true},
-		{"a record without the field", `{"head":"b1","files":1,"compared":true,"paths":[".claude/"]}`, true},
+func TestAutoApprovalIgnoresAgentConfigTheFileListDoesNotChange(t *testing.T) {
+	for _, tc := range []struct{ name, note string }{
+		{"files left in the slot", `{"head":"b1","files":1,"compared":true,"paths":[".claude/"],"residue":true}`},
+		{"a record an older build wrote", `{"head":"b1","at":"2026-11-04T11:49:24Z","files":1,"compared":true,"paths":[".claude/"]}`},
+		{"commits since a stale merge base", `{"head":"b1","files":3,"compared":true,"paths":[".claude/","AGENTS.md","CLAUDE.md"]}`},
+		{"a compare git could not make", `{"head":"b1","files":0,"compared":false}`},
+		{"a link whose target the PR leaves alone", `{"head":"b1","files":1,"compared":true,"paths":["CLAUDE.md"],"links":{"docs/guide.md":"CLAUDE.md"}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, _ := newAutoHarness(t)
 			h.open(prSpec{n: 1, head: "base1"})
 			h.startup()
 			h.tick()
-			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: []string{"app/x.rb"}})
+			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: []string{"app/x.rb", "docs/guide.md.bak"}})
 			h.tick()
 			h.e.setKV(h.ctx, store.KVPRProject(h.pr(2).ID, agents.KindClaude), tc.note)
 			h.reviewTo(2, "b1")
 			h.flush()
-			if tc.refused {
-				h.wantRefused(2, "it changes the review agents' instructions or hooks (.claude/)")
-				return
-			}
 			if got := h.created(); len(got) != 1 || !strings.HasPrefix(got[0], "APPROVE@b1:") {
 				t.Fatalf("posted = %q, want the approval as the operator", got)
 			}

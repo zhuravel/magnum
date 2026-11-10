@@ -17710,6 +17710,49 @@ skill versions); people add theirs to the sections before it, at the end of the 
   CI, with no `mise.local.toml` anywhere, skips as before. The improvement loop's landing already ran the check as
   `mise -C <checkout> exec` (above); this covers every other gate in a worktree.
 
+- **Auto-approval's agent-config gate asks only the PR's file list, and a session's record only for its root
+  links' targets** (2026-11-10, amends "A project config declined only for files a round left in the slot does
+  not hold auto-approval", 2026-11-09, and "Auto-approval never approves a change to the review agents'
+  instructions or hooks", 2026-10-07). A talkable PR whose 14 files include no agent config was refused at every
+  pass, "it changes the review agents' instructions or hooks (.claude/)", and the automatic approval of its
+  earlier head was withdrawn. Its record was the leftover `.pyc` of the 2026-11-09 entry, written on Nov 4 by a
+  daemon started before that build, so it had no `residue` field, and that entry refused such a record on
+  purpose. A record of a head is written again only by a fresh Claude launch on that head, so the one record
+  held the head back for good, and `refusesForGood` also skipped the completion of a review that missed a
+  reviewer. Two stacked PRs showed a cause the 2026-11-09 build does not cover either: a pool slot fetches only
+  the pool's base branch, so `origin/<base_ref>` of a PR based on another branch was days old, the merge base
+  with it was older than GitHub's, and that branch's own commits (`.claude/settings.json`, `AGENTS.md`, a
+  nested `CLAUDE.md`) counted as the PR's, in the work tree's compare and in `committedChanges` alike: no
+  residue, refused. Now `agentConfigRefusal` takes what the PR changes only from the head's file list
+  (`pr_files`, GitHub's list of what the PR's commits change), and from a session's record of the head only its
+  new `Links`: the target of each root entry among the kind's paths that is a symbolic link into the checkout
+  (`CLAUDE.md` -> `docs/guide.md`), with the label of the link's path, read from the disk before git runs, so
+  also when git fails. The list names such a change by the target alone; the gate refuses when the list changes
+  a target or a file under one (`ProjectNote.ChangedLinks`), naming the link's label. Leftovers, a stale merge
+  base, a compare git could not make and a record an older build wrote no longer refuse, and since nothing keeps
+  the decision, the first pass after the daemon restarts on this build decides the PRs such records held back
+  again (and approves them as the operator when the other gates pass). What stays: the session's side (it still
+  declines on leftovers and behind a stale base, and the card and the Checks still say "the PR's … changes"
+  for a stale-base record); records of older heads are ignored; a head without a whole file list is refused;
+  `residue` still picks the card's and the Checks' words. The 2026-11-09 entry's "a record git could not
+  compare, one whose commits' diff failed, one written before the field … still refuse" is reversed: only the
+  file list is a trustworthy account of a PR's commits, and the slot's compare is not. Accepted gaps: a link's
+  target counts only when a session of the head recorded it, so a head no Claude or Codex launch saw is decided
+  by its file list alone (as before: records of older heads were never read); and Details' GraphQL file list
+  names a rename by its new path only, so a PR that moves an agent config file out of those paths (`git mv
+  .claude/settings.json docs/`) is no longer refused by the gate where a session's record of the head used to
+  catch it (its review still sees the move, and the session still declines). Not done: the previous paths of
+  renames in `pr_files` (GitHub's REST file list has them, `github.ListFiles`), fetching a stacked PR's base
+  branch into a pool slot (which would give its sessions the team's config and its rounds GitHub's diff), and
+  the slot hygiene the 2026-11-09 entry left undone. Tests, failing first:
+  TestAutoApprovalIgnoresAgentConfigTheFileListDoesNotChange (replaces TestAutoApprovalIgnoresAgentConfigLeftInTheSlot:
+  leftovers, an older build's record, a stale merge base, a failed compare, a link whose target the PR leaves
+  alone), TestARecordTheFileListDoesNotBackLeavesAMissedReviewerToItsCompletion,
+  TestAClaudeDeclineRecordsTheCheckoutsRootLinkTargets and TestChangedLinksNamesTheLinksWhoseTargetsTheFilesChange;
+  TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions refuses on a root link's target and on a file under
+  a linked directory instead of on a bare record, and TestAnUnchangedClassEditsNothing changes its reason by a
+  second link.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is

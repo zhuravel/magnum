@@ -3038,8 +3038,10 @@ type ProjectNote struct {
 	// Residue: git compared them, and none is a file the PR's commits
 	// since the merge base change: they are untracked or ignored files a
 	// round left in the slot, or uncommitted edits, so they say nothing of
-	// the PR (the auto-approval's gate reads its file list instead). False
-	// when git could not tell, and in a record written before it was kept.
+	// the PR (the card and the review's Checks say so). False when git
+	// could not tell, and in a record written before it was kept. The
+	// auto-approval's gate reads none of the compare, residue or not: the
+	// PR's file list decides there, with Links.
 	Residue bool `json:"residue,omitempty"`
 	// Links map the target of each root entry among the kind's paths that
 	// is a symbolic link into the checkout (relative to its root: CLAUDE.md

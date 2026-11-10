@@ -364,13 +364,17 @@ func (e *Engine) changedFilesRefusal(ctx context.Context, pr store.PR) (r autoRe
 // what it changes: an instruction file of the review agents at any depth
 // (agentInstructionFiles), or a project config an agent CLI loads from the
 // checkout (agents.ProjectTouched: .claude/, .codex/, .mcp.json, in any
-// case), by paths, the head's file list (none when magnum has none), or a
-// session of the head that ran without the PR's project config
-// (agents.ProjectDeclined: git found it changed), unless the record says
-// the difference was residue (files a round left in the slot or
-// uncommitted edits, none the PR's commits change: the file list speaks
-// for the PR then). Such files steer the review agents, and their hooks run
-// on every teammate's machine once merged.
+// case), by paths, the head's file list (none when magnum has none):
+// GitHub's list of what the PR's commits change is the only word on what
+// the PR changes. A session's record of the head (agents.ProjectDeclined)
+// adds only the targets of the checkout's root links it read from the disk
+// (CLAUDE.md -> docs/guide.md), which the list names by the target alone
+// (ProjectNote.ChangedLinks). What git found differing in the slot is
+// never the PR's change by itself (files a round left there, the base
+// branch's commits behind a stale origin/<base>, a compare git could not
+// make, a record an older build wrote): no refusal stands on it, and each
+// pass decides again. Such files steer the review agents, and their hooks
+// run on every teammate's machine once merged.
 func (e *Engine) agentConfigRefusal(ctx context.Context, pr store.PR, paths []string) string {
 	kinds := e.projectKinds()
 	for _, p := range paths {
@@ -379,12 +383,10 @@ func (e *Engine) agentConfigRefusal(ctx context.Context, pr store.PR, paths []st
 		}
 	}
 	for _, kind := range kinds {
-		if n, ok := agents.ProjectDeclined(ctx, e.st, pr.ID, kind); ok && n.Head == pr.HeadSHA && !n.Residue {
-			names := strings.Join(n.Paths, ", ") // the kind's labels, never a path the PR named
-			if names == "" {
-				names, _, _, _, _ = agents.ProjectRule(kind)
+		if n, ok := agents.ProjectDeclined(ctx, e.st, pr.ID, kind); ok && n.Head == pr.HeadSHA {
+			if names := n.ChangedLinks(paths); len(names) > 0 { // the kind's labels, never a path the PR named
+				return "it changes " + agentConfigWhat + " (" + strings.Join(names, ", ") + ")"
 			}
-			return "it changes " + agentConfigWhat + " (" + names + ")"
 		}
 	}
 	return ""

@@ -495,6 +495,28 @@ func TestNoCompletionForAHeadAnotherGateRefusesForGood(t *testing.T) {
 	h.wantApprovalLine(aliceWorkflows)
 }
 
+// A session's record of the head that the head's file list does not back
+// (talkable's live case: a record an older build wrote for an ignored .pyc
+// a round left in the slot) refuses nothing, so nothing refuses the head
+// for good: a review that missed a reviewer gets its completion, which a
+// refusal of the agents' configuration would skip.
+func TestARecordTheFileListDoesNotBackLeavesAMissedReviewerToItsCompletion(t *testing.T) {
+	h, plan := newAutoHarness(t, approvesAsAlice)
+	plan.set(2, missedBusy, cleanRound)
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	h.open(prSpec{n: 1, head: "base1"}, bobRevs(prSpec{head: "b1", files: []string{"app/x.rb"}}))
+	h.tick()
+	h.e.setKV(h.ctx, store.KVPRProject(h.pr(2).ID, agents.KindClaude), `{"head":"b1","files":1,"compared":true,"paths":[".claude/"]}`)
+	h.advance(5 * time.Minute)
+	h.tick()
+	h.wantRefused(2, "codex-review (busy)")
+	if q := completeQueued(t, h); len(q) != 1 {
+		t.Fatalf("pr.complete_queued events = %+v, want the completion", q)
+	}
+}
+
 // The reviewer's M2: a completion whose late reviewer misses again posted
 // a review that added nothing, twice per head. Now its round prompts no
 // judge and posts nothing (pipeline.OutcomeUnheard): the attempt counts,
