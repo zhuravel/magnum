@@ -37,8 +37,12 @@ var commentKey = sync.OnceValue(func() []byte {
 })
 
 // commentMint is the gh call that mints the fixer App's installation token
-// (installation 8) through the gh transport.
-var commentMint = []string{"gh", "api", "--method", "POST", "--include", "--hostname", "github.com", "app/installations/8/access_tokens"}
+// (installation 8) through the gh transport, and commentApp the one that
+// reads the App (GET /app) with its JWT.
+var (
+	commentMint = []string{"gh", "api", "--method", "POST", "--include", "--hostname", "github.com", "app/installations/8/access_tokens"}
+	commentApp  = []string{"gh", "api", "--method", "GET", "--include", "--hostname", "github.com", "app"}
+)
 
 // commentHarness runs `magnum comment` against a fake GitHub: pull request
 // talkable/talkable#5 by alice, with rev-ann's thread (comments 11 and
@@ -48,6 +52,9 @@ var commentMint = []string{"gh", "api", "--method", "POST", "--include", "--host
 // keep what the command writes, as GitHub would. The config has your gh
 // identity zhuravel, the App magnum reviews as and the watch's fixer App
 // (fix_identity fixer-app, login fixer-app[bot]); the registry is a file.
+// GET /app names the App's slug (slug, default fixer-app), and GitHub
+// shows each comment posted by poster (GraphQL login and typename,
+// default the fixer App's).
 type commentHarness struct {
 	t          *testing.T
 	c          *Context
@@ -56,6 +63,9 @@ type commentHarness struct {
 	layout     paths.Layout
 	st         *store.Store
 	mintFail   bool
+	appFail    bool
+	slug       string
+	poster     [2]string
 	title      string
 	requested  []string
 	comments   []map[string]any // the conversation, as GraphQL lists it
@@ -93,11 +103,13 @@ func newCommentHarness(t *testing.T, edit func(*config.Config)) *commentHarness 
 	if edit != nil {
 		edit(cfg)
 	}
-	h := &commentHarness{t: t, layout: layout, title: "Fix the total", out: &bytes.Buffer{}, errb: &bytes.Buffer{}}
+	h := &commentHarness{t: t, layout: layout, title: "Fix the total", slug: "fixer-app", poster: [2]string{"fixer-app", "Bot"},
+		out: &bytes.Buffer{}, errb: &bytes.Buffer{}}
 	h.st = storetest.OpenFile(t, layout.DB())
 	h.c = &Context{Version: "test", Layout: layout, Config: cfg, Stdout: h.out, Stderr: h.errb}
 	h.run = &execx.Fake{Rules: []execx.Rule{
 		{Prefix: commentMint, Fn: h.mint},
+		{Prefix: commentApp, Fn: h.app},
 		{Prefix: []string{"gh", "api", "graphql"}, Fn: h.graphql},
 		{Prefix: []string{"gh", "api", "-X", "POST", "repos/talkable/talkable/pulls/5/comments/11/replies"}, Fn: func(execx.Cmd) (execx.Result, error) {
 			h.replies++
@@ -140,6 +152,16 @@ func (h *commentHarness) mint(execx.Cmd) (execx.Result, error) {
 	expires := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
 	return execx.Result{Stdout: []byte("HTTP/2.0 201 Created\nContent-Type: application/json\r\n\r\n" +
 		`{"token":"ghs_commenttesttoken","expires_at":"` + expires + `"}`)}, nil
+}
+
+// app answers GET /app: the App's slug, or a failure with appFail.
+func (h *commentHarness) app(execx.Cmd) (execx.Result, error) {
+	if h.appFail {
+		return execx.Result{Stdout: []byte("HTTP/2.0 502 Bad Gateway\nContent-Type: application/json\r\n\r\n{\"message\":\"boom\"}"), Code: 1},
+			&execx.ExitError{Code: 1}
+	}
+	return execx.Result{Stdout: []byte("HTTP/2.0 200 OK\nContent-Type: application/json\r\n\r\n" +
+		`{"id":7,"slug":"` + h.slug + `","owner":{"login":"talkable","type":"Organization"}}`)}, nil
 }
 
 func (h *commentHarness) pull() map[string]any {
@@ -189,8 +211,12 @@ func (h *commentHarness) postComment(c execx.Cmd) (execx.Result, error) {
 	id := 7001 + len(h.comments)
 	url := fmt.Sprintf("https://github.com/talkable/talkable/pull/5#issuecomment-%d", id)
 	h.comments = append(h.comments, map[string]any{"databaseId": id, "url": url, "body": req.Body, "createdAt": "2026-10-06T12:30:00Z",
-		"author": map[string]any{"login": "fixer-app", "__typename": "Bot"}, "authorAssociation": "NONE"})
-	return jsonResult(map[string]any{"id": id, "html_url": url, "user": map[string]any{"login": "fixer-app[bot]", "type": "Bot"}})
+		"author": map[string]any{"login": h.poster[0], "__typename": h.poster[1]}, "authorAssociation": "NONE"})
+	login, typ := h.poster[0], "User"
+	if h.poster[1] == "Bot" {
+		login, typ = login+"[bot]", "Bot"
+	}
+	return jsonResult(map[string]any{"id": id, "html_url": url, "user": map[string]any{"login": login, "type": typ}})
 }
 
 // exec runs `magnum comment` with args and text on stdin, from fresh
@@ -208,9 +234,12 @@ func (h *commentHarness) exec(text string, args ...string) (int, map[string]any)
 	return code, got
 }
 
-// githubCalls are the gh calls other than the App's mint.
+// githubCalls are the gh calls other than the App's own with its JWT (the
+// mint, GET /app).
 func (h *commentHarness) githubCalls() []execx.Cmd {
-	return slices.DeleteFunc(slices.Clone(h.run.Calls), func(c execx.Cmd) bool { return slices.Contains(c.Args, "app/installations/8/access_tokens") })
+	return slices.DeleteFunc(slices.Clone(h.run.Calls), func(c execx.Cmd) bool {
+		return slices.Contains(c.Args, "app/installations/8/access_tokens") || slices.Contains(c.Args, "app")
+	})
 }
 
 // A chat session's comment goes out as the watch's fixer App, never as
@@ -485,31 +514,56 @@ func TestCommentRefusesAThreadOfThePRsOwnOrFormerIdentity(t *testing.T) {
 	}
 }
 
-// GitHub showing the comment by another App than the identity's login (a
-// wrong login in the config) is exit 2, never 1, which would post it again,
-// and nothing more goes out. The post is still recorded, as a warning that
-// names the author GitHub showed; once the login names that App, the same
-// line finds the comment, goes on with the title and records the comment
-// once.
-func TestCommentRecordsAPostGitHubShowsByAnotherApp(t *testing.T) {
+// A login of the identity that is not the one GitHub shows the App's posts
+// by (a typo, a block copied from another App) is refused before the first
+// write: GET /app names the App's slug, and its "[bot]" login is what the
+// config must say. Exit 2, the login to set, and nothing posted, however
+// often the same line runs. GET /app failing is exit 1, nothing posted.
+func TestCommentRefusesALoginTheAppDoesNotPostAs(t *testing.T) {
 	h := newCommentHarness(t, func(c *config.Config) { c.Identities[2].Login = "fixer-bot[bot]" })
+	args := []string{"talkable/talkable#5", "--title", "Fix the order total", "--request-review", "rev-ann"}
+	for run := range 2 {
+		code, got := h.exec("Renamed.", args...)
+		if code != 2 || got["status"] != "invalid" || !strings.Contains(h.out.String(), `set login = \"fixer-app[bot]\" for identity fixer-app`) {
+			t.Errorf("run %d: exit %d, stdout %s", run+1, code, h.out)
+		}
+		if len(h.comments) != 0 || h.titleSends != 0 || len(h.requests) != 0 {
+			t.Fatalf("run %d: %d comments, %d titles, %d requests: want nothing posted", run+1, len(h.comments), h.titleSends, len(h.requests))
+		}
+	}
+	if code, got := h.exec("Renamed.", append(args, "--dry-run")...); code != 2 || got["status"] != "invalid" {
+		t.Errorf("a dry run: exit %d, stdout %s", code, h.out)
+	}
+
+	h = newCommentHarness(t, nil)
+	h.appFail = true
+	if code, got := h.exec("Renamed.", args...); code != 1 || got["status"] != "error" || !strings.Contains(h.out.String(), "nothing posted") ||
+		len(h.comments) != 0 || h.titleSends != 0 {
+		t.Errorf("GET /app failing: exit %d, stdout %s, %d comments", code, h.out, len(h.comments))
+	}
+}
+
+// GitHub showing the comment by a person, not the App (it went out under
+// someone's login), is exit 2, never 1, which would post it again, and
+// nothing more goes out. The post is still recorded, as a warning that
+// names the author GitHub showed.
+func TestCommentRecordsAPostGitHubShowsByAPerson(t *testing.T) {
+	h := newCommentHarness(t, nil)
+	h.poster = [2]string{"zhuravel", "User"}
 	if _, err := h.st.UpsertRepo(t.Context(), store.Repo{NodeID: "R_tt", Owner: "talkable", Name: "talkable", Mode: store.RepoModePerPR}); err != nil {
 		t.Fatal(err)
 	}
 	args := []string{"talkable/talkable#5", "--title", "Fix the order total"}
 	code, got := h.exec("Renamed.", args...)
-	if code != 2 || got["status"] != "invalid" || !strings.Contains(h.out.String(), "login of [[identity]] fixer-app is wrong; set it to fixer-app[bot]") ||
+	if code != 2 || got["status"] != "invalid" || !strings.Contains(h.out.String(), "it went out under a person's login") ||
 		len(h.comments) != 1 || h.titleSends != 0 {
 		t.Fatalf("exit %d, stdout %s, %d comments, %d titles", code, h.out, len(h.comments), h.titleSends)
 	}
-	events := func() []store.Event {
-		evs, err := h.st.EventsBySubject(t.Context(), "pr:talkable/talkable#5", 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return slices.DeleteFunc(evs, func(e store.Event) bool { return e.Kind != "comment.posted" })
+	evs, err := h.st.EventsBySubject(t.Context(), "pr:talkable/talkable#5", 0)
+	if err != nil {
+		t.Fatal(err)
 	}
-	evs := events()
+	evs = slices.DeleteFunc(evs, func(e store.Event) bool { return e.Kind != "comment.posted" })
 	if len(evs) != 1 {
 		t.Fatalf("events = %+v, want the comment's", evs)
 	}
@@ -517,18 +571,9 @@ func TestCommentRecordsAPostGitHubShowsByAnotherApp(t *testing.T) {
 	if err := json.Unmarshal(evs[0].Data, &d); err != nil {
 		t.Fatal(err)
 	}
-	if evs[0].Level != "warn" || d["author"] != "fixer-app[bot]" || d["login"] != "fixer-bot[bot]" || d["comment_id"] != float64(7001) ||
-		!strings.Contains(evs[0].Message, "GitHub shows it by fixer-app[bot]") {
+	if evs[0].Level != "warn" || d["author"] != "zhuravel" || d["login"] != "fixer-app[bot]" || d["comment_id"] != float64(7001) ||
+		!strings.Contains(evs[0].Message, "GitHub shows it by zhuravel") {
 		t.Errorf("event %s %q, data %v", evs[0].Level, evs[0].Message, d)
-	}
-
-	h.c.Config.Identities[2].Login = "fixer-app[bot]"
-	code, got = h.exec("Renamed.", args...)
-	if c, _ := got["comment"].(map[string]any); code != 0 || got["status"] != "posted" || c["already"] != true || len(h.comments) != 1 || h.titleSends != 1 {
-		t.Fatalf("with the login set: exit %d, stdout %v, %d comments, %d titles", code, got, len(h.comments), h.titleSends)
-	}
-	if n := len(events()); n != 2 {
-		t.Errorf("%d events, want the comment's and the title's", n)
 	}
 }
 

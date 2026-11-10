@@ -24,6 +24,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/identity"
 	"github.com/zhuravel/magnum/internal/postreview"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -237,6 +238,22 @@ func runComment(c *Context, f commentFlags, pos []string) int {
 		return fail("mint a token of the App %s (identity %s); nothing posted: %v", login, id.Name, err)
 	}
 	gh.Env = env
+	// The login GitHub shows the App's posts by, before the first write: a
+	// wrong login (a typo, a block copied from another App) would let every
+	// run post the comment again, since only the login's comments count as
+	// already there.
+	ap, ok := src.(*identity.App)
+	if !ok {
+		return fail("identity %s is no App; nothing posted", id.Name)
+	}
+	postsAs, err := ap.PostsAs(ctx)
+	if err != nil {
+		return fail("read the App of identity %s (GET /app); nothing posted: %v", id.Name, err)
+	}
+	if !github.SameAccount(postsAs, login) {
+		return commentInvalid(c, base, fmt.Sprintf("the App's token posts as %s (GET /app), not as login %q of [[identity]] %s: "+
+			"set login = %q for identity %s in config.toml and run the same line again; nothing posted", postsAs, login, id.Name, postsAs, id.Name))
+	}
 
 	rec := commentRecorder{st: st, subject: subject, full: full, number: number, identity: id.Name, login: login}
 	out := postreview.RunComment(ctx, gh, o, text, func(p postreview.Posted) { rec.record(ctx, p) })

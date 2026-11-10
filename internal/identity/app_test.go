@@ -462,6 +462,33 @@ func TestAppEnv(t *testing.T) {
 	}
 }
 
+// PostsAs is the login GitHub shows the App's posts by: its slug from GET
+// /app, read with a fresh JWT, and "[bot]"; it mints no token and writes
+// no gh config. A JWT GitHub rejects is an error.
+func TestPostsAsIsTheAppsSlugAndBot(t *testing.T) {
+	clock := newClock()
+	f := newFakeGitHub(t, clock)
+	app, layout := newTestApp(t, f, clock)
+	got, err := app.PostsAs(context.Background())
+	if err != nil || got != "talkable[bot]" {
+		t.Fatalf("PostsAs = %q, %v; want talkable[bot]", got, err)
+	}
+	if f.attemptCount() != 0 {
+		t.Errorf("%d mints, want none", f.attemptCount())
+	}
+	if _, err := os.Stat(layout.GhConfigDir("talkable-app")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the gh config dir: %v, want none written", err)
+	}
+
+	other := f.id
+	other.ClientID = "Iv1.other"
+	keyPEM := pkcs1PEM(testKey(t))
+	wrong := NewApp(other, newLayout(t), f.server.Client(), func(string) string { return keyPEM }, clock.Now, WithBaseURL(f.server.URL))
+	if got, err := wrong.PostsAs(context.Background()); err == nil || got != "" || !strings.Contains(err.Error(), "GET /app: 401") {
+		t.Errorf("a rejected JWT: PostsAs = %q, %v", got, err)
+	}
+}
+
 func assertFile(t *testing.T, path, want string, perm os.FileMode) {
 	t.Helper()
 	b, err := os.ReadFile(path)

@@ -283,6 +283,25 @@ func (a *App) EnsureConfigDir(ctx context.Context) (string, error) {
 	return a.ConfigDir(), nil
 }
 
+// PostsAs is the login GitHub shows as the author of what the App posts:
+// the slug GET /app names, authenticated with a fresh JWT, and "[bot]",
+// the login Check wants the identity's config to say. It mints no token
+// and writes nothing.
+func (a *App) PostsAs(ctx context.Context) (string, error) {
+	jwt, err := a.privateKeyJWT()
+	if err != nil {
+		return "", fmt.Errorf("identity %s: %w", a.cfg.Name, err)
+	}
+	var info appInfo
+	if err := a.call(ctx, http.MethodGet, "/app", jwt, nil, &info); err != nil {
+		return "", fmt.Errorf("identity %s: read the App: %w", a.cfg.Name, err)
+	}
+	if info.Slug == "" {
+		return "", fmt.Errorf("identity %s: GET /app named no slug", a.cfg.Name)
+	}
+	return info.Slug + "[bot]", nil
+}
+
 func (a *App) issuer() string {
 	if a.cfg.ClientID != "" {
 		return a.cfg.ClientID
