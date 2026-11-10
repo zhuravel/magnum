@@ -3,6 +3,7 @@ package agents
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -404,6 +405,45 @@ func TestLooseFoldKeysNamesAFilesystemMayOpenAsOne(t *testing.T) {
 		if got := LooseFold(c.a) == LooseFold(c.b); got != c.same {
 			t.Errorf("LooseFold(%q) = %q, LooseFold(%q) = %q: one key %v, want %v", c.a, LooseFold(c.a), c.b, LooseFold(c.b), got, c.same)
 		}
+	}
+}
+
+// A chain of directory links (.claude/rules -> ../d0, then each dN/<a long
+// name> -> ../dN+1) grows the path Claude would read the next directory by
+// with each link while the real paths stay short: the walk copied that
+// path, and the directories on the way, at every level (4,000 levels took
+// 1.9 GB). No filesystem opens a path longer than PATH_MAX, so the walk
+// enters no directory by one; the links on the way are targets all the
+// same, and the walk is whole.
+func TestAChainOfDirectoryLinksKeepsTheWalksMemorySmall(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{".claude/settings.json": "{}"})
+	if err := os.Symlink("../d0", filepath.Join(dir, ".claude", "rules")); err != nil {
+		t.Fatal(err)
+	}
+	name := strings.Repeat("n", 200)
+	for i := range 1000 {
+		d := filepath.Join(dir, "d"+strconv.Itoa(i))
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("../d"+strconv.Itoa(i+1), filepath.Join(d, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "d1000"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	targets, partial := ProjectLinks(t.Context(), KindClaude, dir)
+	runtime.ReadMemStats(&after)
+	if !slices.Contains(targets, "d0") || !slices.Contains(targets, "d1") || partial {
+		t.Fatalf("ProjectLinks = %d targets, partial %v; want d0 and d1, whole", len(targets), partial)
+	}
+	if n := after.TotalAlloc - before.TotalAlloc; n > 64<<20 {
+		t.Fatalf("ProjectLinks of a chain of 1,000 directory links allocated %d MiB", n>>20)
 	}
 }
 

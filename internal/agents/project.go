@@ -607,13 +607,18 @@ func (w *linkWalk) add(t string, p projectPath) bool {
 
 // walkDir is a directory linkWalk reads: its path from the root as the
 // disk has it (real) and as Claude reads it (asRead, through the links the
-// walk followed to it: .claude/rules for docs/ai/rules), and the real paths
-// of the directories on the way to it (up), which the walk does not enter
-// again from it (a link back to one is a loop).
+// walk followed to it: .claude/rules for docs/ai/rules), and the directory
+// the walk entered it from (up, nil for a start), whose real paths, and
+// theirs up the chain, it does not enter again from it (a link back to one
+// is a loop).
 type walkDir struct {
 	real, asRead string
-	up           []string
+	up           *walkDir
 }
+
+// maxPathBytes is PATH_MAX (Linux's; macOS's is 1024): no filesystem opens
+// a longer path.
+const maxPathBytes = 4096
 
 // walk reads the directories start (relative to the root, with forward
 // slashes) of the directory path p, and each directory inside the checkout
@@ -622,12 +627,17 @@ type walkDir struct {
 // labelled p: a link out of the checkout or to nothing is left out
 // (linkTarget), a directory with a .git entry (a nested checkout: Claude
 // Code's .claude/worktrees/<name>) is not entered, and a directory that
-// cannot be read is skipped. A file there is a source of imports by the
-// path Claude reads it by (source). Past the budget it stops and marks the
-// paths partial.
+// cannot be read is skipped, and so is one read by a path longer than
+// maxPathBytes (a chain of directory links grows it while the real paths
+// stay short: nothing opens it, and the links that lead there are targets
+// already). A file there is a source of imports by the path Claude reads
+// it by (source). Past the budget it stops and marks the paths partial.
 func (w *linkWalk) walk(start []walkDir, p projectPath) []string {
 	var targets []string
-	queue := slices.Clone(start)
+	var queue []*walkDir
+	for _, d := range start {
+		queue = append(queue, &d)
+	}
 	for len(queue) > 0 {
 		dir := queue[0]
 		queue = queue[1:]
@@ -640,11 +650,16 @@ func (w *linkWalk) walk(start []walkDir, p projectPath) []string {
 		if err != nil || slices.ContainsFunc(entries, func(e fs.DirEntry) bool { return e.Name() == ".git" }) {
 			continue
 		}
-		up := append(slices.Clip(dir.up), dir.real)
 		enter := func(to, asRead string) {
-			if !slices.Contains(up, to) {
-				queue = append(queue, walkDir{real: to, asRead: asRead, up: up})
+			if len(asRead) > maxPathBytes {
+				return
 			}
+			for d := dir; d != nil; d = d.up {
+				if d.real == to {
+					return
+				}
+			}
+			queue = append(queue, &walkDir{real: to, asRead: asRead, up: dir})
 		}
 		for _, e := range entries {
 			if w.budget--; w.budget < 0 {
