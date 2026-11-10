@@ -24777,6 +24777,58 @@ skill versions); people add theirs to the sections before it, at the end of the 
   a foreground tool, work that finished and no transcript, and passes before and after the change, all in
   internal/factory/runtime.
 
+- **The precheck runs each migration folder's migrations on that folder's databases, and names one it does
+  not run** (2026-11-11). The precheck and the ready card's FLAGS took only the `.rb` files added under
+  `db/migrate/`. A multi-database Rails application keeps a folder per database (`db/migrate` the primary,
+  `db/reporting_migrate` the reporting database, `db/sharded_migrate` every shard), so a new migration in
+  another folder was never run and never flagged, and nothing said so. Such an application also refuses a
+  plain `db:migrate:up`: it asks for one database's task (`db:migrate:up:primary`, `db:migrate:up:shard_1`).
+  - Detection. A migration is an added `.rb` file in a migration folder, `config.MigrationFolder`: a `db`
+    directory's child whose name holds `migrate`, the root's or an engine's, at any depth below it, the rule of
+    `internal/staging`'s `isMigration` (copied, not imported) with the folder named. The precheck and FLAGS use
+    it; the gh-ost rule stays (a gh-ost migration is not run).
+  - `[factory.repo.precheck] migration_databases`, a table from a migration folder to its databases by the
+    application's names, and `{database}` in the `migrations` commands. With the key, each migration's commands
+    run on each database of its folder, in order (for each migration, for each database: up, down, up), with
+    `{database}` filled in; every command must hold `{database}`. Without it only `db/migrate`'s migrations run,
+    once, with the commands as before, and no command may hold `{database}`. Validate refuses a folder that is
+    not a migration folder as git names it (`MigrationFolder` of a file in it, `filepath.IsLocal`, clean), an
+    empty list, a name that is not a word (it goes into a shell command as it is) or comes twice, and the key
+    without `migrations` commands.
+  - Each command keeps its bound (`cap`, `capOf`), and a run on 2 shards takes 2 times as many commands. A
+    command that fails stops that database's run of the migration; its other databases still run. `precheck.md`
+    says `<path> on <database>: passed` per run and names the database in a failure, and the check records name
+    it through their command.
+  - A migration of a folder with no databases (one the key leaves out, or, without the key, any folder but
+    `db/migrate`) is not run and fails nothing, never in silence: its line in `precheck.md` and on the card's
+    FLAGS says `not run: no databases are set for <folder>` (`MigrationFlag.NoDatabases`, set by
+    `ScanMigrations`), its check is `skipped`, `precheck.json` records it (`migrations_not_run`), and
+    `appendKnown` adds one fixed sentence after the Known list for a precheck that passed at the task's head
+    (``The factory's precheck did not run 1 migration, as no databases are set for db/data_migrate: `<path>`.``).
+  - `checksPrint` counts the key, when set (a retry after you changed a folder's databases is no retry that
+    changed nothing); a repository without it keeps its print.
+  Rejected: one command per folder in the config (`migrations` per folder): it cannot run a migration on each
+  shard, since a shard's task names one database; every migration on every database: Rails refuses a version
+  that the database's folder does not hold; importing `internal/staging`'s `isMigration` (it names no folder,
+  and the configuration, whose Validate checks the key's folders by the same rule, would depend on the staging
+  reader); running every folder's migrations with the plain commands without the key (Rails refuses the plain
+  task in a multi-database application, so the precheck would fail on every such task).
+  Known gaps: the migrations step's own bound (`ownBound`, `cap`) still covers the whole step, so with several
+  databases a later command is likelier to be cut by the step's deadline and named as the one that hangs; the
+  claim's `foreignSchema` reads only `db/migrate` and the development database, so a shard or reporting
+  database another task migrated is not reset; and the PR body's turn reads `precheck.json` with the new
+  `migrations_not_run` but its prompt does not mention it yet, so its own precheck sentence may say the
+  migrations ran (the factory's sentence after the Known list says which did not).
+  Tests (failing first): `TestAShardMigrationRunsUpDownAndUpOnEachShard` (with a failed down on one shard),
+  `TestAReportingMigrationRunsOnReportingOnly`, `TestAMigrationOfAFolderWithNoDatabasesIsNotRunAndNamed`
+  (precheck.md, the skipped check, FLAGS and the PR body, another head's record naming nothing),
+  `TestWithoutMigrationDatabasesOnlyDbMigrateRuns` (an engine's and a shard's folder named, a subfolder of
+  db/migrate run as before), `TestFlagsListAMigrationOfEveryFolder` and
+  `TestTheChecksPrintCountsMigrationDatabases` (internal/factory); `TestMigrationDatabasesRefuseCommandsWithoutDatabase`,
+  `TestMigrationsCommandsWithDatabaseNeedMigrationDatabases` and `TestMigrationDatabasesRefuseAnEmptyListOfDatabases`
+  (with the folders and names it refuses), and `TestMigrationDatabasesLoadFromAnInlineTable` (a pin of the
+  key's TOML form, the brief's example) (internal/config).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

@@ -360,12 +360,24 @@ type FactoryInstall struct {
 // last commit and after each fix of the local review. A command takes
 // {files} (the changed files, shell-quoted) and {base}; a migrations
 // command also {version} (the digits a migration's file name starts with)
-// and {file}, and runs once per migration the branch adds.
+// and {file}, and runs once per migration the branch adds, or once per
+// database of its folder with MigrationDatabases ({database}).
 type FactoryPrecheck struct {
 	Lint       []string `toml:"lint"`
 	Specs      string   `toml:"specs"`
 	Jest       string   `toml:"jest"`
 	Migrations []string `toml:"migrations"`
+	// MigrationDatabases maps a migration folder (MigrationFolder:
+	// db/migrate, db/reporting_migrate, engines/<name>/db/migrate) to the
+	// databases its migrations run on, by the names the application gives
+	// them (primary, shard_1), as a multi-database Rails application needs:
+	// it refuses a plain db:migrate:up there. With it, each migration's
+	// Migrations commands run once for each database of its folder, in its
+	// order, {database} its name, and every command must hold {database};
+	// without it, only DefaultMigrationFolder's migrations run, once, and no
+	// command may. A migration of a folder with no databases is not run: the
+	// precheck, the ready card and the PR body name it.
+	MigrationDatabases map[string][]string `toml:"migration_databases"`
 	// Cap stops a precheck that runs this long (default DefaultPrecheckCap),
 	// CapPerFile longer for each file of the change it checks (default
 	// DefaultPrecheckCapPerFile; never above CapMax), CapMax at most
@@ -1308,6 +1320,7 @@ func (c *Config) validateFactoryRepos() []error {
 			bad("large_table_rows must not be negative, got %d", r.LargeTableRows)
 		}
 		errs = append(errs, validatePrecheckCaps(where, r.Precheck)...)
+		errs = append(errs, validatePrecheckMigrations(where, r.Precheck)...)
 		for _, kind := range r.Precheck.SkipSpecsForKinds {
 			if _, ok := c.Factory.Kinds[kind]; !ok {
 				bad("precheck.skip_specs_for_kinds names %q, which is not a kind of task (%s)", kind, strings.Join(slices.Sorted(maps.Keys(c.Factory.Kinds)), ", "))
@@ -1466,6 +1479,83 @@ func validateCopyPorts(r FactoryRepo) error {
 		seen[port] = n
 	}
 	return nil
+}
+
+// DefaultMigrationFolder is the only migration folder whose migrations the
+// precheck runs without FactoryPrecheck.MigrationDatabases: the primary
+// database's.
+const DefaultMigrationFolder = "db/migrate"
+
+// DatabasePlaceholder is where a migrations command takes the database it
+// runs on (FactoryPrecheck.MigrationDatabases).
+const DatabasePlaceholder = "{database}"
+
+// MigrationFolder is the migration folder of path, a file relative to the
+// checkout as git names it, and whether path is in one: a db directory's
+// child whose name holds "migrate", the root's or an engine's (db/migrate,
+// db/sharded_migrate, engines/billing/db/migrate), at any depth below it,
+// as Rails reads a folder's migrations. It is the rule of internal/staging's
+// isMigration (a staging deploy migrates every such folder), with the
+// folder named.
+func MigrationFolder(path string) (folder string, ok bool) {
+	parts := strings.Split(path, "/")
+	for i := 0; i+2 < len(parts); i++ {
+		if parts[i] == "db" && strings.Contains(parts[i+1], "migrate") {
+			return strings.Join(parts[:i+2], "/"), true
+		}
+	}
+	return "", false
+}
+
+// databaseNameRe is a database's name in migration_databases: it goes into
+// a shell command as it is ({database}).
+var databaseNameRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]*$`)
+
+// validatePrecheckMigrations checks a repository's migrations commands
+// against its migration_databases (where names the repository): with the
+// key, each folder a migration folder as git names it (MigrationFolder),
+// with one database at least, each a name, once, and every command holding
+// {database}, which it fills in; without it, no command may hold it.
+func validatePrecheckMigrations(where string, pc FactoryPrecheck) []error {
+	var errs []error
+	bad := func(format string, a ...any) { errs = append(errs, fmt.Errorf(where+": "+format, a...)) }
+	if len(pc.MigrationDatabases) == 0 {
+		for _, cmd := range pc.Migrations {
+			if strings.Contains(cmd, DatabasePlaceholder) {
+				bad("precheck.migrations %q holds %s, which only precheck.migration_databases fills in: set it, or take %s out",
+					cmd, DatabasePlaceholder, DatabasePlaceholder)
+			}
+		}
+		return errs
+	}
+	for _, folder := range slices.Sorted(maps.Keys(pc.MigrationDatabases)) {
+		if got, ok := MigrationFolder(folder + "/0_x.rb"); !ok || got != folder || !filepath.IsLocal(folder) || filepath.Clean(folder) != folder {
+			bad("precheck.migration_databases names %q, which is not a migration folder: a db directory's child whose name holds "+
+				"\"migrate\", relative to the checkout, as git names it (db/migrate, db/sharded_migrate, engines/<name>/db/migrate)", folder)
+		}
+		dbs := pc.MigrationDatabases[folder]
+		if len(dbs) == 0 {
+			bad("precheck.migration_databases %q lists no database: name one at least, or leave the folder out (its migrations are then not run)", folder)
+		}
+		for i, db := range dbs {
+			switch {
+			case !databaseNameRe.MatchString(db):
+				bad("precheck.migration_databases %q names %q, which is not a database name (letters, digits, _ and -)", folder, db)
+			case slices.Contains(dbs[:i], db):
+				bad("precheck.migration_databases %q names %q twice", folder, db)
+			}
+		}
+	}
+	if len(pc.Migrations) == 0 {
+		bad("precheck.migration_databases needs precheck.migrations, the commands it runs on each database")
+	}
+	for _, cmd := range pc.Migrations {
+		if !strings.Contains(cmd, DatabasePlaceholder) {
+			bad("precheck.migrations %q must hold %s when precheck.migration_databases is set: it runs once for each database of the migration's folder",
+				cmd, DatabasePlaceholder)
+		}
+	}
+	return errs
 }
 
 // validatePrecheckCaps checks a repository's precheck caps (where names

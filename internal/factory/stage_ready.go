@@ -1153,11 +1153,12 @@ const knownMarker = "<!-- magnum factory: the Known list -->"
 
 // appendKnown appends to task t's pr-body.md the "Known" list of what the
 // local review left open (knownList, from review-summary.json), the
-// sentence of a precheck that passed unfinished at the task's head
-// (precheckSentence, from precheck.json), then the Visual QA section of the
-// QA run that passed at the task's head (qaMarker, qaSection; none without
-// QA), in place of those an earlier append wrote, and records the body as
-// the pr_body artifact.
+// sentences of a precheck that passed at the task's head (from
+// precheck.json): unfinished (precheckSentence), and of the migrations it
+// did not run for lack of databases (notRunSentence); then the Visual QA
+// section of the QA run that passed at the task's head (qaMarker,
+// qaSection; none without QA), in place of those an earlier append wrote,
+// and records the body as the pr_body artifact.
 func (e *Engine) appendKnown(ctx context.Context, t registry.Task) error {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	b, err := os.ReadFile(filepath.Join(dir, prBodyFile))
@@ -1170,8 +1171,13 @@ func (e *Engine) appendKnown(ctx context.Context, t registry.Task) error {
 		_ = json.Unmarshal(b, &sum) // none: the list says the review left nothing open
 	}
 	text := strings.TrimRight(body, "\n") + "\n\n" + knownMarker + "\n" + knownList(sum)
-	if u := precheckUnfinishedAt(dir, t.HeadSHA); u != "" {
-		text += "\n" + precheckSentence(u) + "\n"
+	if rec, ok := precheckPassedRecord(dir, t.HeadSHA); ok {
+		if rec.Unfinished != "" {
+			text += "\n" + precheckSentence(rec.Unfinished) + "\n"
+		}
+		if len(rec.MigrationsNotRun) > 0 {
+			text += "\n" + notRunSentence(rec.MigrationsNotRun) + "\n"
+		}
 	}
 	if res, ok := readQASummary(dir); ok && res.Head == t.HeadSHA {
 		if qa := qaSection(res); qa != "" {
@@ -1185,6 +1191,21 @@ func (e *Engine) appendKnown(ctx context.Context, t registry.Task) error {
 // unfinished (its cap's note, unfinished), in the factory's own words.
 func precheckSentence(unfinished string) string {
 	return "The factory's precheck stopped at its cap: " + unfinished + ", so CI is their only run."
+}
+
+// notRunSentence is the PR body's sentence of the migrations (paths) a
+// precheck that passed did not run, since no databases are set for their
+// folders (precheck.migration_databases), in the factory's own words.
+func notRunSentence(paths []string) string {
+	var folders, files []string
+	for _, p := range paths {
+		if folder, _ := config.MigrationFolder(p); !slices.Contains(folders, folder) {
+			folders = append(folders, folder)
+		}
+		files = append(files, "`"+p+"`")
+	}
+	return "The factory's precheck did not run " + plural(len(paths), "migration") + ", as no databases are set for " +
+		andList(folders) + ": " + strings.Join(files, ", ") + "."
 }
 
 // knownList is the PR body's "Known" section: what magnum's review of the

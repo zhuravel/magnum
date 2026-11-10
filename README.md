@@ -4576,7 +4576,22 @@ stages = [
   takes `{files}` (the changed files, shell-quoted) and `{base}`, and a `migrations` command also `{version}`
   (the digits a migration's file name starts with) and `{file}`: each runs once per migration the branch
   adds, in order (`bin/rails db:migrate:up VERSION={version}`, then `…:down…`, then `…:up…` again, so the copy's
-  database keeps the change). What the precheck's commands change in tracked files (Rails dumps `db/schema.rb`)
+  database keeps the change). A migration is an added `.rb` file under a migration folder: a `db` directory's
+  child whose name holds `migrate` (`db/migrate`, `db/reporting_migrate`, `db/sharded_migrate`,
+  `engines/billing/db/migrate`), the rule a staging deploy migrates by. A multi-database application, which
+  refuses a plain `db:migrate:up`, sets `migration_databases`, each folder's databases by the application's
+  names: `migration_databases = { "db/migrate" = ["primary"], "db/reporting_migrate" = ["reporting"],
+  "db/sharded_migrate" = ["shard_1", "shard_1001"] }`. Each migration's commands then run on each database of its
+  folder, in turn (up, down and up on `shard_1`, then on `shard_1001`), every one bounded by `cap` as before, and
+  every command must hold `{database}`, the database's name (`bin/rails db:migrate:up:{database}
+  VERSION={version}`); `precheck.md` and the check records name the database of each run. Without the key only
+  `db/migrate`'s migrations run, and no command may hold `{database}`. A migration of a folder with no databases
+  (one the key leaves out, or, without it, any folder but `db/migrate`) is not run and fails nothing, never in
+  silence: `precheck.md` says `not run: no databases are set for <folder>`, the ready card's FLAGS line lists it
+  with the same words, and the PR body's Known list says `The factory's precheck did not run 1 migration, as no
+  databases are set for <folder>: <path>.`. Validate refuses a folder that is not a migration folder as git names
+  it, a folder with no database, a name that is not a word (letters, digits, `_`, `-`) or comes twice, and the
+  key without `migrations` commands. What the precheck's commands change in tracked files (Rails dumps `db/schema.rb`)
   is put back as the branch has it at its end, and `precheck.md` says so (the proof's spec run likewise: its events say so, and the run is judged on its exit), but only when nobody else could have
   changed the copy since it began (an agent of the task at work, a prompt to one, you in or typing into one of
   its panes): then it cannot tell its changes from yours, leaves them, and the task needs you, naming them. A lint offense counts only
@@ -5434,11 +5449,12 @@ the deny list refuses `kubectl exec`, gh-ost and the repository's `consoles` in 
 The factory's git runs with `LC_ALL=C`, since it reads git's refusals from their English words (magnum's own git keeps
 its environment).
 Migrations are named, never run on a shared database: the precheck and the ready card's FLAGS line list every
-migration the branch adds, whether it uses the `ghost_marker` and on which environments, its tables and their
-sizes (`table_stats`), and flag a large table (`large_table_rows`) changed without gh-ost and without an online
-algorithm, a gh-ost migration of two tables or more, and a migration with no way back. A flag informs and never
-fails the precheck; the precheck runs its `migrations` commands for the others in the copy, and none for a gh-ost
-one (a skipped check: a person runs it on its environments). You migrate every environment by hand, production
+migration the branch adds, in every migration folder, whether it uses the `ghost_marker` and on which
+environments, its tables and their sizes (`table_stats`), and flag a large table (`large_table_rows`) changed
+without gh-ost and without an online algorithm, a gh-ost migration of two tables or more, and a migration with no
+way back. A flag informs and never fails the precheck; the precheck runs its `migrations` commands for the others
+in the copy, on each database of their folder (`migration_databases`), none for a gh-ost one (a skipped check: a
+person runs it on its environments), and none for one of a folder with no databases (a skipped check, named). You migrate every environment by hand, production
 included; the runbook cards that say how come with the stagings, in a later milestone.
 
 The daemon heals the usual faults by itself. A panic stops only its task's step; a task's second panic

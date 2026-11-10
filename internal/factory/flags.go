@@ -81,7 +81,7 @@ func (e *Engine) flags(ctx context.Context, t registry.Task, c Copy) (Flags, err
 	var paths, added []string
 	for _, ch := range changes {
 		paths = append(paths, ch.Path)
-		if ch.Status == 'A' && strings.HasPrefix(ch.Path, "db/migrate/") && strings.HasSuffix(ch.Path, ".rb") {
+		if ch.Status == 'A' && isMigration(ch.Path) {
 			added = append(added, ch.Path)
 		}
 	}

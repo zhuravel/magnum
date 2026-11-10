@@ -31,12 +31,15 @@ import (
 // or :concurrently), whether it has no way back (only an up, a down that
 // raises, a change Rails cannot reverse; a gh-ost migration's down refuses
 // by the marker's design and is not counted), and whether it is a gh-ost
-// migration of more than one table.
+// migration of more than one table. NoDatabases is its folder when no
+// databases are set for it (migrationDatabases): the precheck does not run
+// it, and says so.
 type MigrationFlag struct {
 	Path                                   string
 	Ghost                                  bool
 	Envs, Tables, Large                    []string
 	Online, Irreversible, TwoTablesInGhost bool
+	NoDatabases                            string
 	// rows are the sizes of the Large tables, for Problems.
 	rows map[string]int64
 }
@@ -61,8 +64,8 @@ func (f MigrationFlag) Problems() []string {
 	return out
 }
 
-// String is f in one line: its file, its gh-ost environments, its tables
-// and its problems.
+// String is f in one line: its file, its gh-ost environments, its tables,
+// its problems and, when the precheck does not run it, why.
 func (f MigrationFlag) String() string {
 	s := f.Path
 	if f.Ghost {
@@ -74,7 +77,37 @@ func (f MigrationFlag) String() string {
 	if ps := f.Problems(); len(ps) > 0 {
 		s += "; " + strings.Join(ps, "; ")
 	}
+	if f.NoDatabases != "" {
+		s += "; " + notRunWords(f.NoDatabases)
+	}
 	return s
+}
+
+// notRunWords say why the precheck does not run a migration of folder.
+func notRunWords(folder string) string { return "not run: no databases are set for " + folder }
+
+// isMigration reports whether path, a file the change adds, is a
+// migration: a .rb file in a migration folder (config.MigrationFolder),
+// the rule a staging deploy migrates by.
+func isMigration(path string) bool {
+	_, ok := config.MigrationFolder(path)
+	return ok && strings.HasSuffix(path, ".rb")
+}
+
+// migrationDatabases are the databases the precheck runs migration path
+// on, and its folder: those precheck.migration_databases sets for the
+// folder; without the key, one run with no database ("") for a migration of
+// config.DefaultMigrationFolder, and none for another folder's. None: the
+// precheck does not run it.
+func migrationDatabases(pc config.FactoryPrecheck, path string) (folder string, dbs []string) {
+	folder, _ = config.MigrationFolder(path)
+	switch {
+	case len(pc.MigrationDatabases) > 0:
+		return folder, pc.MigrationDatabases[folder]
+	case folder == config.DefaultMigrationFolder:
+		return folder, []string{""}
+	}
+	return folder, nil
 }
 
 // cmpJoin is words joined with ", ", or none when there are none.
@@ -110,7 +143,9 @@ var (
 // marker comes from repo's ghost_marker (none: no migration is a gh-ost
 // one), the sizes from its table_stats file in the checkout and its
 // large_table_rows (none: no table is large); a table_stats file that is
-// missing or not JSON is an error, since the sizes cannot be told.
+// missing or not JSON is an error, since the sizes cannot be told. A
+// migration that is no gh-ost one and that the precheck has no databases
+// for (migrationDatabases) has its folder as NoDatabases.
 func ScanMigrations(checkout string, added []string, repo config.FactoryRepo) ([]MigrationFlag, error) {
 	if len(added) == 0 {
 		return nil, nil
@@ -128,7 +163,11 @@ func ScanMigrations(checkout string, added []string, repo config.FactoryRepo) ([
 		if err != nil {
 			return nil, fmt.Errorf("migration %s: %w", rel, err)
 		}
-		out = append(out, scanMigration(rel, string(b), repo, sizes))
+		f := scanMigration(rel, string(b), repo, sizes)
+		if folder, dbs := migrationDatabases(repo.Precheck, rel); !f.Ghost && len(dbs) == 0 {
+			f.NoDatabases = folder
+		}
+		out = append(out, f)
 	}
 	return out, nil
 }

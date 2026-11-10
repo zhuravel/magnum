@@ -764,6 +764,87 @@ func TestFactoryPrecheckSkipsSpecsOnlyForKnownKinds(t *testing.T) {
 	wantError(t, cfg.Validate(), "precheck.lint", "precheck.migrations")
 }
 
+// databaseCommands are migrations commands that run one database's task
+// each, as a multi-database application needs.
+var databaseCommands = []string{"bin/rails db:migrate:up:{database} VERSION={version}",
+	"bin/rails db:migrate:down:{database} VERSION={version}", "bin/rails db:migrate:up:{database} VERSION={version}"}
+
+// [factory.repo.precheck] migration_databases maps each migration folder to
+// its databases, as an inline table, and Validate accepts it with
+// migrations commands that each hold {database}.
+func TestMigrationDatabasesLoadFromAnInlineTable(t *testing.T) {
+	cfg, err := loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml+`
+[factory.repo.precheck]
+migrations = ["bin/rails db:migrate:up:{database} VERSION={version}", "bin/rails db:migrate:down:{database} VERSION={version}"]
+migration_databases = { "db/migrate" = ["primary"], "db/reporting_migrate" = ["reporting"], "db/sharded_migrate" = ["shard_1", "shard_1001"] }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ := cfg.FactoryRepo("talkable/talkable")
+	want := map[string][]string{"db/migrate": {"primary"}, "db/reporting_migrate": {"reporting"}, "db/sharded_migrate": {"shard_1", "shard_1001"}}
+	if !equalAny(r.Precheck.MigrationDatabases, want) {
+		t.Fatalf("migration_databases = %v, want %v", r.Precheck.MigrationDatabases, want)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a valid migration_databases is refused: %v", err)
+	}
+}
+
+// With migration_databases set, every migrations command must hold
+// {database}: each runs once for each database of the migration's folder.
+// A migration_databases with no migrations command to run is refused too.
+func TestMigrationDatabasesRefuseCommandsWithoutDatabase(t *testing.T) {
+	cfg := validFactoryConfig()
+	pc := &cfg.Factory.Repos[0].Precheck
+	pc.MigrationDatabases = map[string][]string{"db/migrate": {"primary"}, "db/sharded_migrate": {"shard_1", "shard_1001"}}
+	pc.Migrations = databaseCommands
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	pc.Migrations = []string{"bin/rails db:migrate:up:{database} VERSION={version}", "bin/rails db:migrate:down VERSION={version}"}
+	wantError(t, cfg.Validate(), "factory repo acme/app", `precheck.migrations "bin/rails db:migrate:down VERSION={version}" must hold {database}`)
+	pc.Migrations = nil
+	wantError(t, cfg.Validate(), "factory repo acme/app", "precheck.migration_databases needs precheck.migrations")
+}
+
+// Without migration_databases a migrations command must not hold
+// {database}: nothing fills it in.
+func TestMigrationsCommandsWithDatabaseNeedMigrationDatabases(t *testing.T) {
+	cfg := validFactoryConfig()
+	pc := &cfg.Factory.Repos[0].Precheck
+	pc.Migrations = []string{"bin/rails db:migrate:up VERSION={version}", "bin/rails db:migrate:down VERSION={version}"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	pc.Migrations = databaseCommands
+	wantError(t, cfg.Validate(), "factory repo acme/app", `precheck.migrations "bin/rails db:migrate:up:{database} VERSION={version}" holds {database}`,
+		"precheck.migration_databases")
+}
+
+// Each folder of migration_databases lists one database at least, each a
+// name, once; a key that is not a migration folder (a db directory's child
+// whose name holds "migrate", as git names it) is refused.
+func TestMigrationDatabasesRefuseAnEmptyListOfDatabases(t *testing.T) {
+	cfg := validFactoryConfig()
+	pc := &cfg.Factory.Repos[0].Precheck
+	pc.Migrations = databaseCommands
+	pc.MigrationDatabases = map[string][]string{"db/migrate": {"primary"}, "db/reporting_migrate": {}}
+	wantError(t, cfg.Validate(), "factory repo acme/app", `precheck.migration_databases "db/reporting_migrate" lists no database`)
+	pc.MigrationDatabases = map[string][]string{"db/migrate": {"primary", "primary"}}
+	wantError(t, cfg.Validate(), `precheck.migration_databases "db/migrate" names "primary" twice`)
+	pc.MigrationDatabases = map[string][]string{"db/migrate": {"primary; rm -rf tmp"}}
+	wantError(t, cfg.Validate(), `precheck.migration_databases "db/migrate" names "primary; rm -rf tmp", which is not a database name`)
+	for _, folder := range []string{"db/migrate/", "./db/migrate", "/db/migrate", "db", "app/migrate", "db/migrate/old", "../db/migrate"} {
+		pc.MigrationDatabases = map[string][]string{folder: {"primary"}}
+		wantError(t, cfg.Validate(), fmt.Sprintf("precheck.migration_databases names %q, which is not a migration folder", folder))
+	}
+	pc.MigrationDatabases = map[string][]string{"engines/billing/db/migrate": {"billing"}, "db/data_migrate": {"primary"}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("an engine's folder and another child of db holding migrate are migration folders: %v", err)
+	}
+}
+
 // A kind's proof says whether the factory's proof needs the spec red on the
 // base (red, the default: a bug, a feature) or green at the head only
 // (green: a chore, whose specs stay green); anything else is a mistake.

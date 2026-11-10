@@ -6,7 +6,9 @@ package factory
 // the copy's own configs are CI's), the specs the change affects with a
 // baseline at the base (a spec red on the base too is not the change's),
 // the related jest tests, and each migration the branch adds up and down,
-// with the migration-safety lint of section 8.4. It runs under the
+// on each database of its folder (migration_databases; without it, once,
+// db/migrate's only: one of a folder with no databases is named and not
+// run), with the migration-safety lint of section 8.4. It runs under the
 // machine's spec lock when it runs specs (one precheck at a time on the
 // machine runs them; another waits, saying so) and stops at its cap, which
 // grows with the change (precheckCap: cap, cap_per_file per file, at most
@@ -164,7 +166,7 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 			continue
 		}
 		files = append(files, f.Path)
-		if f.Status == 'A' && strings.HasPrefix(f.Path, "db/migrate/") && strings.HasSuffix(f.Path, ".rb") {
+		if f.Status == 'A' && isMigration(f.Path) {
 			added = append(added, f.Path)
 		}
 	}
@@ -264,7 +266,8 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 	if err := writeFile(filepath.Join(dir, precheckFile), p.report.String()); err != nil {
 		return p.res, err
 	}
-	rec := precheckRecord{Head: p.head, Passed: p.res.Passed, Why: p.res.Why, Unfinished: p.res.Unfinished}
+	rec := precheckRecord{Head: p.head, Passed: p.res.Passed, Why: p.res.Why, Unfinished: p.res.Unfinished,
+		MigrationsNotRun: migrationsNotRun(p.res.Migrations)}
 	if p.res.ForYou {
 		rec.ForYou, rec.Line = true, p.line
 		rec.Commands, rec.Env = e.checksPrint(repo)
@@ -327,12 +330,19 @@ func unfinishedWords(cut string, notRun []string, limit string) string {
 // not finish, when it passed at head ("" for anything else): the ready
 // card's FLAGS line and the PR body name it.
 func precheckUnfinishedAt(dir, head string) string {
+	r, _ := precheckPassedRecord(dir, head)
+	return r.Unfinished
+}
+
+// precheckPassedRecord is precheck.json in task directory dir when its
+// precheck passed at head.
+func precheckPassedRecord(dir, head string) (precheckRecord, bool) {
 	var r precheckRecord
 	b, err := os.ReadFile(filepath.Join(dir, precheckRecordFile))
 	if err != nil || json.Unmarshal(b, &r) != nil || !r.Passed || head == "" || r.Head != head {
-		return ""
+		return precheckRecord{}, false
 	}
-	return r.Unfinished
+	return r, true
 }
 
 // precheckRecordFile is precheck.json: the end of the task's last precheck
@@ -356,17 +366,25 @@ type precheckRecord struct {
 	// Unfinished is the passed precheck's note of what its cap kept it
 	// from (PrecheckResult.Unfinished).
 	Unfinished string `json:"unfinished,omitempty"`
+	// MigrationsNotRun are the migrations it named and did not run, since no
+	// databases are set for their folders (MigrationFlag.NoDatabases).
+	MigrationsNotRun []string `json:"migrations_not_run,omitempty"`
 }
 
 // checksPrint is what the precheck commands of repo run with, as two
-// hashes: commands, of its precheck commands as configured, and env, of
-// the environment they run in (the copies' env of the configuration, and
-// the daemon's locale and PATH, which every copy command inherits). They
-// change when you edit either and restart the daemon on it, or your shell's
-// PATH; never a value, only its hash, is kept.
+// hashes: commands, of its precheck commands as configured (with
+// migration_databases, when set), and env, of the environment they run in
+// (the copies' env of the configuration, and the daemon's locale and PATH,
+// which every copy command inherits). They change when you edit either and
+// restart the daemon on it, or your shell's PATH; never a value, only its
+// hash, is kept.
 func (e *Engine) checksPrint(repo config.FactoryRepo) (commands, env string) {
 	pc := repo.Precheck
-	commands = sha256Hex([]byte(strings.Join(slices.Concat(pc.Lint, []string{pc.Specs, pc.Jest}, pc.Migrations), "\x00")))
+	cmds := slices.Concat(pc.Lint, []string{pc.Specs, pc.Jest}, pc.Migrations)
+	for _, folder := range slices.Sorted(maps.Keys(pc.MigrationDatabases)) { // none: the print it had before the key
+		cmds = append(cmds, "migration_databases "+folder+"="+strings.Join(pc.MigrationDatabases[folder], ","))
+	}
+	commands = sha256Hex([]byte(strings.Join(cmds, "\x00")))
 	var vars []string
 	for _, k := range slices.Sorted(maps.Keys(repo.Env)) {
 		vars = append(vars, k+"="+repo.Env[k])
@@ -380,9 +398,8 @@ func (e *Engine) checksPrint(repo config.FactoryRepo) (commands, env string) {
 // precheckPassedAt reports whether the last precheck in task directory dir
 // passed at head.
 func precheckPassedAt(dir, head string) bool {
-	var r precheckRecord
-	b, err := os.ReadFile(filepath.Join(dir, precheckRecordFile))
-	return err == nil && json.Unmarshal(b, &r) == nil && r.Passed && head != "" && r.Head == head
+	_, ok := precheckPassedRecord(dir, head)
+	return ok
 }
 
 // timer is the precheck cap's timer (the after seam, else time.After).
@@ -1064,12 +1081,16 @@ func (p *precheckRun) jest(cmd string, files []string) {
 var migrationVersionRe = regexp.MustCompile(`^(\d+)_`)
 
 // migrations names each migration the branch adds with its flags
-// (ScanMigrations) and runs the repository's migrations commands for it, in
-// order ({version} its version, {file} its path): up and down. A gh-ost
+// (ScanMigrations) and runs the repository's migrations commands for it on
+// each database of its folder (migrationDatabases), in order: for each
+// migration, for each database, every command ({version} its version,
+// {file} its path, {database} the database): up, down and up. A gh-ost
 // migration is not run (its down refuses by the marker's design, and a
-// person runs it on its environments): a skipped check. A command that
-// fails fails the precheck, naming the migration, and the migration's later
-// commands do not run.
+// person runs it on its environments), nor one of a folder with no
+// databases (its line says so): a skipped check, and no failure. A command
+// that fails fails the precheck, naming the migration and the database, and
+// its later commands on that database do not run; its other databases
+// still do.
 func (p *precheckRun) migrations(repo config.FactoryRepo, cmds []string, added []string) {
 	if len(added) == 0 {
 		return
@@ -1089,8 +1110,12 @@ func (p *precheckRun) migrations(repo config.FactoryRepo, cmds []string, added [
 		if p.stopped() {
 			return
 		}
-		if f.Ghost {
+		switch {
+		case f.Ghost:
 			p.say("\n%s is a gh-ost migration: not run here (a person runs it on %s)\n", f.Path, cmpJoin(f.Envs, "its environments"))
+			p.record(registry.Check{Kind: registry.CheckMigration, Result: registry.CheckSkipped})
+			continue
+		case f.NoDatabases != "": // its line above says so
 			p.record(registry.Check{Kind: registry.CheckMigration, Result: registry.CheckSkipped})
 			continue
 		}
@@ -1098,26 +1123,60 @@ func (p *precheckRun) migrations(repo config.FactoryRepo, cmds []string, added [
 		if m := migrationVersionRe.FindStringSubmatch(filepath.Base(f.Path)); m != nil {
 			version = m[1]
 		}
-		for _, cmd := range cmds {
-			script := strings.NewReplacer("{version}", version, "{file}", f.Path).Replace(renderCommand(cmd, []string{f.Path}, p.base))
-			run, ok := p.run("precheck.migrations", "migration "+filepath.Base(f.Path), script)
-			if !ok {
-				if !p.stopped() {
-					p.record(registry.Check{Kind: registry.CheckMigration, Result: registry.CheckFail, Cause: "code", Command: script})
-				}
-				break
+		_, dbs := migrationDatabases(repo.Precheck, f.Path)
+		for _, db := range dbs {
+			if p.stopped() {
+				return
 			}
-			check := registry.Check{Kind: registry.CheckMigration, Result: registry.CheckPass, Command: script, Exit: run.Exit, Took: run.Took}
-			if run.Exit != 0 {
-				check.Result, check.Cause = registry.CheckFail, "code"
-				p.record(check)
-				p.say("\n`%s` exited %d:\n\n```\n%s\n```\n", script, run.Exit, run.Output)
-				p.fail(fmt.Sprintf("migration %s: %s exited %d", f.Path, script, run.Exit))
-				break
-			}
-			p.record(check)
+			p.migrate(f.Path, version, db, cmds)
 		}
 	}
+}
+
+// migrate runs cmds for migration path (of version) on database db ("" for
+// none: a repository without migration_databases), in order, until one
+// fails; precheck.md names the run, with its database.
+func (p *precheckRun) migrate(path, version, db string, cmds []string) {
+	if len(cmds) == 0 {
+		return
+	}
+	on := ""
+	if db != "" {
+		on = " on " + db
+	}
+	for _, cmd := range cmds {
+		script := strings.NewReplacer("{version}", version, "{file}", path, config.DatabasePlaceholder, db).
+			Replace(renderCommand(cmd, []string{path}, p.base))
+		run, ok := p.run("precheck.migrations", "migration "+filepath.Base(path)+on, script)
+		if !ok {
+			if !p.stopped() {
+				p.record(registry.Check{Kind: registry.CheckMigration, Result: registry.CheckFail, Cause: "code", Command: script})
+			}
+			return
+		}
+		check := registry.Check{Kind: registry.CheckMigration, Result: registry.CheckPass, Command: script, Exit: run.Exit, Took: run.Took}
+		if run.Exit != 0 {
+			check.Result, check.Cause = registry.CheckFail, "code"
+			p.record(check)
+			p.say("\n%s%s: `%s` exited %d:\n\n```\n%s\n```\n", path, on, script, run.Exit, run.Output)
+			p.fail(fmt.Sprintf("migration %s%s: %s exited %d", path, on, script, run.Exit))
+			return
+		}
+		p.record(check)
+	}
+	p.say("\n%s%s: passed\n", path, on)
+}
+
+// migrationsNotRun are the paths of the migrations of flags the precheck
+// did not run for lack of databases (MigrationFlag.NoDatabases).
+func migrationsNotRun(flags []MigrationFlag) []string {
+	var out []string
+	for _, f := range flags {
+		if f.NoDatabases != "" {
+			out = append(out, f.Path)
+		}
+	}
+	return out
 }
 
 // specsLock takes the machine's spec lock (Layout.FactorySpecsLock) for task

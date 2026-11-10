@@ -5050,6 +5050,10 @@ const CandidateSkill = "skills/magnum-review/SKILL.md"
 const CriticRoleName = "notes-critic"
     CriticRoleName is the name of the role the critic runs as (CriticRole).
 
+const DatabasePlaceholder = "{database}"
+    DatabasePlaceholder is where a migrations command takes the database it runs
+    on (FactoryPrecheck.MigrationDatabases).
+
 const DatabaseSuffix = "__{slug}"
     DatabaseSuffix ends every pool database template ([[pool]] databases):
     the slot's slug follows the last "__", which is how magnum lists and guards
@@ -5148,6 +5152,11 @@ const DefaultMaxSimplifications = 5
     DefaultMaxSimplifications is [pipeline] max_simplifications' default:
     the judge posts at most five simplifications, the most substantial first
     (three from 2026-10-05 until the operator asked for five on 2026-10-19).
+
+const DefaultMigrationFolder = "db/migrate"
+    DefaultMigrationFolder is the only migration folder whose migrations the
+    precheck runs without FactoryPrecheck.MigrationDatabases: the primary
+    database's.
 
 const DefaultNotesPrompt = "notes-curate.md"
     DefaultNotesPrompt is the curator's prompt file.
@@ -5394,6 +5403,15 @@ func MatchPath(glob, name string) bool
     is matched with path.Match, so "*" and "?" never cross a "/". Matching
     is case-sensitive (git paths are). A malformed glob matches nothing;
     see ValidatePathGlob.
+
+func MigrationFolder(path string) (folder string, ok bool)
+    MigrationFolder is the migration folder of path, a file relative to the
+    checkout as git names it, and whether path is in one: a db directory's
+    child whose name holds "migrate", the root's or an engine's (db/migrate,
+    db/sharded_migrate, engines/billing/db/migrate), at any depth below it,
+    as Rails reads a folder's migrations. It is the rule of internal/staging's
+    isMigration (a staging deploy migrates every such folder), with the folder
+    named.
 
 func ParseDuration(s string) (time.Duration, error)
     ParseDuration is time.ParseDuration plus a leading whole-day count: "7d",
@@ -6415,6 +6433,17 @@ type FactoryPrecheck struct {
 	Specs      string   `toml:"specs"`
 	Jest       string   `toml:"jest"`
 	Migrations []string `toml:"migrations"`
+	// MigrationDatabases maps a migration folder (MigrationFolder:
+	// db/migrate, db/reporting_migrate, engines/<name>/db/migrate) to the
+	// databases its migrations run on, by the names the application gives
+	// them (primary, shard_1), as a multi-database Rails application needs:
+	// it refuses a plain db:migrate:up there. With it, each migration's
+	// Migrations commands run once for each database of its folder, in its
+	// order, {database} its name, and every command must hold {database};
+	// without it, only DefaultMigrationFolder's migrations run, once, and no
+	// command may. A migration of a folder with no databases is not run: the
+	// precheck, the ready card and the PR body name it.
+	MigrationDatabases map[string][]string `toml:"migration_databases"`
 	// Cap stops a precheck that runs this long (default DefaultPrecheckCap),
 	// CapPerFile longer for each file of the change it checks (default
 	// DefaultPrecheckCapPerFile; never above CapMax), CapMax at most
@@ -6434,7 +6463,8 @@ type FactoryPrecheck struct {
     last commit and after each fix of the local review. A command takes {files}
     (the changed files, shell-quoted) and {base}; a migrations command also
     {version} (the digits a migration's file name starts with) and {file},
-    and runs once per migration the branch adds.
+    and runs once per migration the branch adds, or once per database of its
+    folder with MigrationDatabases ({database}).
 
 type FactoryQA struct {
 	// When reads the changed files on stdin and prints the user-facing ones,
@@ -14855,6 +14885,7 @@ type MigrationFlag struct {
 	Ghost                                  bool
 	Envs, Tables, Large                    []string
 	Online, Irreversible, TwoTablesInGhost bool
+	NoDatabases                            string
 
 	// Has unexported fields.
 }
@@ -14866,23 +14897,26 @@ type MigrationFlag struct {
     :concurrently), whether it has no way back (only an up, a down that raises,
     a change Rails cannot reverse; a gh-ost migration's down refuses by the
     marker's design and is not counted), and whether it is a gh-ost migration of
-    more than one table.
+    more than one table. NoDatabases is its folder when no databases are set for
+    it (migrationDatabases): the precheck does not run it, and says so.
 
 func ScanMigrations(checkout string, added []string, repo config.FactoryRepo) ([]MigrationFlag, error)
     ScanMigrations reads each of added (paths of migrations relative to
     checkout, the task's copy at the head) and names it with its flags,
     in order. The marker comes from repo's ghost_marker (none: no migration
-    is a gh-ost one), the sizes from its table_stats file in the checkout and
-    its large_table_rows (none: no table is large); a table_stats file that is
-    missing or not JSON is an error, since the sizes cannot be told.
+    is a gh-ost one), the sizes from its table_stats file in the checkout
+    and its large_table_rows (none: no table is large); a table_stats file
+    that is missing or not JSON is an error, since the sizes cannot be told.
+    A migration that is no gh-ost one and that the precheck has no databases for
+    (migrationDatabases) has its folder as NoDatabases.
 
 func (f MigrationFlag) Problems() []string
     Problems are what the lint flags in f, in plain words; none for a migration
     it lets go.
 
 func (f MigrationFlag) String() string
-    String is f in one line: its file, its gh-ost environments, its tables and
-    its problems.
+    String is f in one line: its file, its gh-ost environments, its tables,
+    its problems and, when the precheck does not run it, why.
 
 type OldGuard struct {
 	Path string
