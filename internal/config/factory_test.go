@@ -31,7 +31,8 @@ max_copies = 4
 func validFactoryConfig() *Config {
 	cfg := validPipelineConfig()
 	cfg.Factory.Repos = []FactoryRepo{{Repo: "acme/app", Base: "master", MainClone: "/p/app", Copies: "/p/app.factory{n}",
-		CopyName: "factory{n}", MaxCopies: 2, Precheck: FactoryPrecheck{Cap: Duration{10 * time.Minute}}}}
+		CopyName: "factory{n}", MaxCopies: 2, Precheck: FactoryPrecheck{Cap: Duration{10 * time.Minute},
+			CapPerFile: Duration{15 * time.Second}, CapMax: Duration{30 * time.Minute}}}}
 	return cfg
 }
 
@@ -688,6 +689,61 @@ func TestFactoryPrecheckCapDefaultsToTenMinutes(t *testing.T) {
 	}
 	cfg.Factory.Repos[0].Precheck.Cap = Duration{}
 	wantError(t, cfg.Validate(), "factory repo talkable/talkable", "precheck.cap must be positive")
+}
+
+// Without cap_per_file and cap_max a repository's precheck cap grows 15s
+// per file of the change, to 30m at most, or to its cap when that is
+// longer; the keys it sets are read.
+func TestFactoryPrecheckCapGrowthTakesItsDefaults(t *testing.T) {
+	cfg, err := loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ := cfg.FactoryRepo("talkable/talkable")
+	if r.Precheck.CapPerFile.Duration != 15*time.Second || r.Precheck.CapMax.Duration != 30*time.Minute {
+		t.Errorf("cap_per_file = %s, cap_max = %s; want 15s and 30m", r.Precheck.CapPerFile.Duration, r.Precheck.CapMax.Duration)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("the defaults are invalid: %v", err)
+	}
+	cfg, err = loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml+"\n[factory.repo.precheck]\ncap = \"45m\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ = cfg.FactoryRepo("talkable/talkable")
+	if r.Precheck.CapMax.Duration != 45*time.Minute {
+		t.Errorf("cap_max = %s under a cap of 45m, want the cap", r.Precheck.CapMax.Duration)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a cap above the default cap_max is refused: %v", err)
+	}
+	cfg, err = loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml+"\n[factory.repo.precheck]\ncap_per_file = \"20s\"\ncap_max = \"40m\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ = cfg.FactoryRepo("talkable/talkable")
+	if r.Precheck.CapPerFile.Duration != 20*time.Second || r.Precheck.CapMax.Duration != 40*time.Minute {
+		t.Errorf("cap_per_file = %s, cap_max = %s; want 20s and 40m", r.Precheck.CapPerFile.Duration, r.Precheck.CapMax.Duration)
+	}
+}
+
+// cap_max below cap, and a cap_per_file or a cap_max that is not positive,
+// are refused, naming the key.
+func TestFactoryPrecheckCapMaxBelowCapIsRefused(t *testing.T) {
+	cfg := validFactoryConfig()
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Factory.Repos[0].Precheck.CapMax = Duration{5 * time.Minute}
+	wantError(t, cfg.Validate(), "factory repo acme/app", "precheck.cap_max (5m0s) must be at least precheck.cap (10m0s)")
+	cfg.Factory.Repos[0].Precheck.CapMax = Duration{}
+	wantError(t, cfg.Validate(), "precheck.cap_max must be positive")
+	cfg.Factory.Repos[0].Precheck.CapMax = Duration{10 * time.Minute}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("cap_max equal to cap: %v", err)
+	}
+	cfg.Factory.Repos[0].Precheck.CapPerFile = Duration{}
+	wantError(t, cfg.Validate(), "precheck.cap_per_file must be positive")
 }
 
 func TestFactoryPrecheckSkipsSpecsOnlyForKnownKinds(t *testing.T) {

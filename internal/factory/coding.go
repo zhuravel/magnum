@@ -382,6 +382,9 @@ func (e *Engine) endCheckEvent(t registry.Task, x *headCheck) {
 			"; the infrastructure hold runs the checks again")
 	case r.Err != nil:
 		e.event(ctx, t.ID, "check", registry.PhaseFail, short(x.head)+": did not run to its end: "+textx.Clip(textx.FirstLine(r.Err.Error()), 300))
+	case r.passed() && r.Precheck.Unfinished != "": // the cap's note: no failure, so no fix turn
+		e.event(ctx, t.ID, "check", registry.PhaseOK, short(x.head)+": passed, but "+r.Precheck.Unfinished+
+			" (the precheck's cap): the task goes on to the local review as after a pass, and CI is their only run")
 	case r.passed():
 		e.event(ctx, t.ID, "check", registry.PhaseOK, short(x.head)+": passed")
 	default:
@@ -433,11 +436,14 @@ func (r checkResult) passed() bool {
 	return r.Err == nil && (r.Proof == nil || r.Proof.Passed) && r.Precheck != nil && r.Precheck.Passed
 }
 
-// why is why the checks did not pass, in plain words.
+// why is why the checks did not pass, in plain words: a precheck's
+// failure carries what its cap kept it from, which is nothing to fix.
 func (r checkResult) why() string {
 	switch {
 	case r.Proof != nil && !r.Proof.Passed:
 		return "the factory's proof: " + r.Proof.Why
+	case r.Precheck != nil && !r.Precheck.Passed && r.Precheck.Unfinished != "":
+		return r.Precheck.Why + "; " + r.Precheck.Unfinished + " (the precheck's cap: nothing to fix)"
 	case r.Precheck != nil && !r.Precheck.Passed:
 		return r.Precheck.Why
 	}

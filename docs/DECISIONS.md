@@ -24261,6 +24261,46 @@ skill versions); people add theirs to the sections before it, at the end of the 
   role whose resumed start fails before any session row exists is charged nothing, so a lasting start error repeats
   as the stage's failure on each prompt and never escalates to EventLost.
 
+- **A precheck's cap grows with the change, and a precheck its cap stops goes on with a note** (2026-11-10). On
+  a change of 129 files the precheck's specs did not finish within its fixed `cap` of 10m: the precheck failed
+  with `precheck: over 10m`, and the writer got a fix turn ("Fix it in the copy") for a time limit it cannot fix;
+  `precheck.md` held only "Stopped: over its cap of 10m.", with no output, so the writer began to time the specs
+  itself. The operator chose "scale it, then go on". `[factory.repo.precheck]` takes `cap_per_file` (default 15s)
+  and `cap_max` (default 30m, or `cap` when that is longer, so an existing larger `cap` still loads; one set below
+  `cap` is refused, as a `cap_per_file` or `cap_max` that is not positive is). A precheck's cap is
+  `min(cap + cap_per_file × N, cap_max)`, N the files it checks (`precheckCap`); it is the precheck's timer and
+  the bound of every command it runs, and `precheck.md` says how it was found (`Cap: 30m (10m + 15s × 129 files
+  is 42m15s, at most 30m).`). The proof's spec runs keep `cap` alone (`capOf`). A precheck its cap stops is no
+  failure of its own: `PrecheckResult.Unfinished` names the step it stopped in and those that did not run ("the
+  specs did not finish within 30m, and the jest tests and the migrations did not run"); with nothing else failed
+  it passes (`precheck.json` too, so the ready stage's check holds), the stage sends no fix turn and goes on to
+  the local review, and the check's ok event says so (`passed, but … (the precheck's cap): the task goes on to
+  the local review as after a pass, and CI is their only run`). A failure before the cap (a lint offense, a red
+  spec, a migration) stands and gets its fix turn, the note after it marked as nothing to fix. The stopped
+  command's check is recorded `skipped` with no cause: the registry refuses a cause on anything but a failure
+  (the `checks` table's CHECK, `RecordCheck`), and an "over cap" cause would take a migration, so the cause is
+  in `precheck.md` and the event instead. `precheck.md` keeps the last 40 lines the stopped command printed,
+  through `scrub.Text` (it is kept): execx returns what a command wrote before its context or its bound stopped
+  it, and `run` already held it in `outputOf(res)`; the precheck dropped it. A spec red at the head whose run on
+  the base the cap stopped is not judged: named in `precheck.md` and in the note, it fails nothing, while one
+  whose spec file the base lacks needs no base run and stays the change's. A cap the base run left detached is
+  still a wait (the record stands), never a pass. `capText` keeps seconds (`10m30s`).
+  Rejected: a fix turn for a precheck over its cap (the writer cannot fix a time limit, and the live turn began
+  timing the specs instead of writing code); a larger fixed cap (a small change would then wait as long as a
+  large one before its failure reached the writer); counting a spec red at the head as the change's when the
+  cap stopped its base run (a fix turn the writer may have nothing to fix in, the same fault); a new registry
+  cause (a migration for a word the event and `precheck.md` already carry).
+  Not done: the PR body's proof part. The factory writes no proof part of its own: the PR body agent writes "how
+  it was tested" from `factory-proof.json` and the review summary (`prompts/factory-pr-body.md`), and the factory
+  appends only the Known list and the QA section, so the PR text does not name an unfinished precheck yet.
+  Tests (failing first): `TestThePrecheckCapGrowsPerFileUpToCapMax`,
+  `TestAnOverCapPrecheckWithNoOtherFailureGoesOnToTheLocalReview`,
+  `TestAnOverCapPrecheckAfterALintFailureSendsTheLintFixTurn`, `TestPrecheckMdKeepsTheStoppedCommandsLast40LinesScrubbed`,
+  `TestARedSpecWhoseBaseRunTheCapStoppedIsNotJudged` and `TestPrecheckStopsAtItsCap` (now: passes, naming the
+  lint unfinished) (internal/factory); `TestFactoryPrecheckCapGrowthTakesItsDefaults`,
+  `TestFactoryPrecheckCapMaxBelowCapIsRefused` and the two keys in `TestEveryNegativeDurationIsRefused`
+  (internal/config).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

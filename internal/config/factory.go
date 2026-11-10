@@ -366,8 +366,15 @@ type FactoryPrecheck struct {
 	Specs      string   `toml:"specs"`
 	Jest       string   `toml:"jest"`
 	Migrations []string `toml:"migrations"`
-	// Cap stops a precheck that runs this long (default DefaultPrecheckCap).
-	Cap Duration `toml:"cap"`
+	// Cap stops a precheck that runs this long (default DefaultPrecheckCap),
+	// CapPerFile longer for each file of the change it checks (default
+	// DefaultPrecheckCapPerFile), CapMax at most (default
+	// DefaultPrecheckCapMax, or Cap when that is longer; never below Cap).
+	// A precheck its cap stops goes on with a note when nothing else
+	// failed. The proof's spec runs keep Cap alone.
+	Cap        Duration `toml:"cap"`
+	CapPerFile Duration `toml:"cap_per_file"`
+	CapMax     Duration `toml:"cap_max"`
 	// SkipSpecsForKinds names the kinds of task whose precheck skips the
 	// specs (a gem upgrade).
 	SkipSpecsForKinds []string `toml:"skip_specs_for_kinds"`
@@ -490,6 +497,10 @@ const (
 	DefaultFactoryBase   = "master"
 	DefaultFactoryCopies = "factory{n}"
 	MaxFactoryCycles     = 10
+	// DefaultPrecheckCapPerFile and DefaultPrecheckCapMax are how much a
+	// precheck's cap grows per file of the change, and its most.
+	DefaultPrecheckCapPerFile = 15 * time.Second
+	DefaultPrecheckCapMax     = 30 * time.Minute
 	// DefaultFactoryTitleFormat is the PR title of a repository that sets no
 	// title_format (FactoryRepo.TitleFormat): the issue key, a space, then
 	// the task's title.
@@ -793,6 +804,12 @@ func (c *Config) expandFactory() {
 		}
 		if r.Precheck.Cap.Duration == 0 {
 			r.Precheck.Cap = Duration{DefaultPrecheckCap}
+		}
+		if r.Precheck.CapPerFile.Duration == 0 {
+			r.Precheck.CapPerFile = Duration{DefaultPrecheckCapPerFile}
+		}
+		if r.Precheck.CapMax.Duration == 0 { // a cap above the default's is its own most
+			r.Precheck.CapMax = Duration{max(DefaultPrecheckCapMax, r.Precheck.Cap.Duration)}
 		}
 		if r.QA != nil {
 			q := *r.QA // the layer's block stays as it was decoded
@@ -1288,9 +1305,7 @@ func (c *Config) validateFactoryRepos() []error {
 		if r.LargeTableRows < 0 {
 			bad("large_table_rows must not be negative, got %d", r.LargeTableRows)
 		}
-		if d := r.Precheck.Cap.Duration; d <= 0 {
-			bad("precheck.cap must be positive, got %s", d)
-		}
+		errs = append(errs, validatePrecheckCaps(where, r.Precheck)...)
 		for _, kind := range r.Precheck.SkipSpecsForKinds {
 			if _, ok := c.Factory.Kinds[kind]; !ok {
 				bad("precheck.skip_specs_for_kinds names %q, which is not a kind of task (%s)", kind, strings.Join(slices.Sorted(maps.Keys(c.Factory.Kinds)), ", "))
@@ -1449,6 +1464,26 @@ func validateCopyPorts(r FactoryRepo) error {
 		seen[port] = n
 	}
 	return nil
+}
+
+// validatePrecheckCaps checks a repository's precheck caps (where names
+// it): cap, cap_per_file and cap_max positive, and cap_max at least cap.
+func validatePrecheckCaps(where string, pc FactoryPrecheck) []error {
+	var errs []error
+	bad := func(format string, a ...any) { errs = append(errs, fmt.Errorf(where+": "+format, a...)) }
+	if d := pc.Cap.Duration; d <= 0 {
+		bad("precheck.cap must be positive, got %s", d)
+	}
+	if d := pc.CapPerFile.Duration; d <= 0 {
+		bad("precheck.cap_per_file must be positive, got %s", d)
+	}
+	switch {
+	case pc.CapMax.Duration <= 0:
+		bad("precheck.cap_max must be positive, got %s", pc.CapMax.Duration)
+	case pc.CapMax.Duration < pc.Cap.Duration:
+		bad("precheck.cap_max (%s) must be at least precheck.cap (%s)", pc.CapMax.Duration, pc.Cap.Duration)
+	}
+	return errs
 }
 
 // validateFactoryStaging checks a repository's staging environments: a

@@ -303,7 +303,10 @@ databases = [
 #   migrations = ["bin/rails db:migrate:up VERSION={version}", "bin/rails db:migrate:down VERSION={version}",
 #                 "bin/rails db:migrate:up VERSION={version}"]   # each new migration, in order ({version}, {file}): up,
 #                                          # down and up again; a gh-ost one is not run; db/schema.rb is put back after
-#   cap = "10m"                            # a precheck stops after this long (default 10m)
+#   cap = "10m"                            # a precheck stops after this long (default 10m), cap_per_file longer
+#   cap_per_file = "15s"                   # for each file of the change (default 15s), cap_max at most (default
+#   cap_max = "30m"                        # 30m, or cap when longer; never below cap). A precheck its cap stops
+#                                          # with no other failure goes on with a note: no fix turn, CI runs them
 #   skip_specs_for_kinds = ["chore"]       # a gem upgrade runs no specs
 #
 #   [factory.repo.qa]                      # visual QA of the change's pages in the copy's own server, by a kind's qa

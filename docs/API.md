@@ -4692,6 +4692,10 @@ const (
 	DefaultFactoryBase   = "master"
 	DefaultFactoryCopies = "factory{n}"
 	MaxFactoryCycles     = 10
+	// DefaultPrecheckCapPerFile and DefaultPrecheckCapMax are how much a
+	// precheck's cap grows per file of the change, and its most.
+	DefaultPrecheckCapPerFile = 15 * time.Second
+	DefaultPrecheckCapMax     = 30 * time.Minute
 	// DefaultFactoryTitleFormat is the PR title of a repository that sets no
 	// title_format (FactoryRepo.TitleFormat): the issue key, a space, then
 	// the task's title.
@@ -6293,8 +6297,15 @@ type FactoryPrecheck struct {
 	Specs      string   `toml:"specs"`
 	Jest       string   `toml:"jest"`
 	Migrations []string `toml:"migrations"`
-	// Cap stops a precheck that runs this long (default DefaultPrecheckCap).
-	Cap Duration `toml:"cap"`
+	// Cap stops a precheck that runs this long (default DefaultPrecheckCap),
+	// CapPerFile longer for each file of the change it checks (default
+	// DefaultPrecheckCapPerFile), CapMax at most (default
+	// DefaultPrecheckCapMax, or Cap when that is longer; never below Cap).
+	// A precheck its cap stops goes on with a note when nothing else
+	// failed. The proof's spec runs keep Cap alone.
+	Cap        Duration `toml:"cap"`
+	CapPerFile Duration `toml:"cap_per_file"`
+	CapMax     Duration `toml:"cap_max"`
 	// SkipSpecsForKinds names the kinds of task whose precheck skips the
 	// specs (a gem upgrade).
 	SkipSpecsForKinds []string `toml:"skip_specs_for_kinds"`
@@ -14932,14 +14943,19 @@ type PrecheckResult struct {
 	Migrations []MigrationFlag
 	Why        string
 	ForYou     bool
+	Unfinished string
 }
     PrecheckResult is a precheck's end: whether it passed, the checks it
     recorded (the factory's), the migrations the branch adds with their flags,
     and why it did not pass (its first failure, in plain words, such as
-    "precheck: over 10m"). ForYou says the writer cannot fix why: a command
-    the deny list refuses or that does not start, a lint whose output names no
-    offense by path:line, a table_stats it cannot read (the configuration's or
-    the machine's, named by its key); such a failure is the one Why says.
+    "precheck: lint: 1 offense on the changed lines (bin/lint)"). ForYou says
+    the writer cannot fix why: a command the deny list refuses or that does not
+    start, a lint whose output names no offense by path:line, a table_stats
+    it cannot read (the configuration's or the machine's, named by its key);
+    such a failure is the one Why says. Unfinished is what its cap kept it
+    from ("the specs did not finish within 30m"; "" when it ran to its end):
+    no failure of its own, so a precheck its cap stopped passes unless something
+    failed before.
 
 type PreviewPayload struct {
 	Text, Repo string

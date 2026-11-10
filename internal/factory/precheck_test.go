@@ -174,15 +174,16 @@ func TestPrecheckTakesTheMachineWideSpecLock(t *testing.T) {
 	}
 }
 
-// The cap stops a precheck that runs too long, with a plain reason.
+// The cap stops a precheck that runs too long: with no other failure it
+// passes, naming the step the cap stopped and those that did not run.
 func TestPrecheckStopsAtItsCap(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.codingTask("PR-12365", "bug")
 	r.fix(task)
 	fire := make(chan time.Time)
 	r.e.after = func(d time.Duration) <-chan time.Time {
-		if d != 10*time.Minute {
-			t.Errorf("the cap's timer is %s, want 10m", d)
+		if d != 10*time.Minute+30*time.Second {
+			t.Errorf("the cap's timer is %s, want 10m30s (10m, and 15s for each of the 2 files)", d)
 		}
 		return fire
 	}
@@ -198,8 +199,8 @@ func TestPrecheckStopsAtItsCap(t *testing.T) {
 	<-r.entered
 	close(fire)
 	res := <-done
-	if res.Passed || res.Why != "precheck: over 10m" {
-		t.Fatalf("precheck %+v, want it stopped: precheck: over 10m", res)
+	if !res.Passed || res.Why != "" || res.Unfinished != "the lint did not finish within 10m30s, and the specs and the jest tests did not run" {
+		t.Fatalf("precheck %+v, want it passed with the lint unfinished and the specs and jest not run", res)
 	}
 }
 

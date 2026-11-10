@@ -374,19 +374,31 @@ func (e *Engine) runProof(ctx context.Context, t registry.Task, c Copy) (Proof, 
 	return done()
 }
 
-// capText is a cap as a wait says it ("10m", "300ms").
+// capText is a cap as a wait says it ("10m", "10m30s", "1h5m", "300ms"):
+// to the second, without the units that are zero.
 func capText(d time.Duration) string {
 	if d < time.Second {
 		return d.Round(time.Millisecond).String()
 	}
-	return shortAge(d)
+	d = d.Round(time.Second)
+	var b strings.Builder
+	for _, u := range []struct {
+		d    time.Duration
+		unit string
+	}{{time.Hour, "h"}, {time.Minute, "m"}, {time.Second, "s"}} {
+		if n := d / u.d; n > 0 {
+			fmt.Fprintf(&b, "%d%s", n, u.unit)
+		}
+		d %= u.d
+	}
+	return b.String()
 }
 
 // short is a commit's first 12 characters.
 func short(sha string) string { return sha[:min(len(sha), 12)] }
 
 // capOf is the repository's precheck cap, which bounds each spec run of a
-// proof too.
+// proof (a precheck's own grows with the change: precheckCap).
 func capOf(repo config.FactoryRepo) time.Duration {
 	if d := repo.Precheck.Cap.Duration; d > 0 {
 		return d
