@@ -104,11 +104,15 @@ func (b ciBaseCheck) passedOnBase(name string) bool {
 // that fails again is a new failure), the check names the base read
 // compares (Compare: its own, or the failed jobs beside a skipped one;
 // none: the entry's runs), and the base's word on it (zero: not read).
+// Dispatched: Run is magnum's start of ci_dispatch's workflow, which no
+// rollup shows, nor a re-run of it or a later start of the workflow at the
+// head (ciDispatchNow).
 type ciFailedCheck struct {
 	Entry        string
 	Name         string
 	WorkflowFile string
 	Run          int64
+	Dispatched   bool
 	At           time.Time
 	Compare      []string
 	Base         ciBaseCheck
@@ -142,6 +146,11 @@ type ciFailRead struct {
 	// at those attempts before a start (ciRunMoved).
 	Runs    []ciReadRun `json:"runs,omitempty"`
 	Checked time.Time   `json:"checked,omitzero"`
+	// Moved, never recorded: the run that now speaks for magnum's run of
+	// ci_dispatch's workflow that a failed check named moved past its
+	// failure (ciDispatchNow): nothing was read, and the look records the
+	// run in the start instead (noteRunMoved).
+	Moved *github.WorkflowRun `json:"-"`
 }
 
 // ciReadRun is a run the CI reader read, and the attempt it read.
@@ -234,7 +243,9 @@ func ciReadKey(checks []ciFailedCheck, at func(ciFailedCheck) string) string {
 // says it (fix.ci_read), and returns the record. A read that failed (no
 // client, a refused token, the runs or the jobs unread) is Unread with no
 // file: a log alone that could not be read is that job's Unread; a run whose
-// newest attempt has not ended is Running, with no file either.
+// newest attempt has not ended is Running, with no file either, and a check
+// of magnum's dispatched run that ran again since it failed
+// (ciDispatchNow) is Moved, with no file.
 func (e *Engine) readCIFailures(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR, checks []ciFailedCheck) ciFailRead {
 	now := e.now()
 	read := ciFailRead{Head: pr.HeadSHA, At: now}
@@ -269,6 +280,10 @@ func (e *Engine) readCIFailures(ctx context.Context, acts *ciActions, repo store
 	found := make([]bool, len(checks))
 	byRun := map[int64][]github.WorkflowJob{}
 	for i, c := range checks {
+		if run, moved := ciDispatchNow(headRuns, c); moved { // magnum's run ran again: nothing failed to read
+			read.Moved = &run
+			return read
+		}
 		run, ok := newestRunOf(headRuns, c)
 		if !ok {
 			continue

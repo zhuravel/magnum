@@ -193,8 +193,8 @@ func TestMagnumFixCIFixesARunMagnumStartedThatEndedFailure(t *testing.T) {
 // only in the head's runs: a read of its failed jobs that stands from an
 // earlier look is checked against them before the start it feeds (once a
 // settle_quiet at most, not every look), and a newer attempt is read
-// again: one that still runs waits, and one that failed again gives the
-// fixer its own logs.
+// again: one that still runs is waited for as magnum's start (the poll reads
+// it), and one that failed again gives the fixer its own logs.
 func TestAReRunByHandOfMagnumsRunIsReadAgainBeforeTheStart(t *testing.T) {
 	h, git := ciShape3Harness(t)
 	cannotFixer(h, git, "flaky")
@@ -216,16 +216,18 @@ func TestAReRunByHandOfMagnumsRunIsReadAgainBeforeTheStart(t *testing.T) {
 	attempt := failedCIRun(fixHead, 2)
 	attempt.Event, attempt.Status, attempt.Conclusion = "workflow_dispatch", "in_progress", ""
 	h.setHeadRuns(fixHead, attempt)
+	h.setRuns(fixHead, attempt)
 	h.advance(2 * time.Hour) // past the cooldown
 	h.tick()
-	h.wantOpen(OpenWaits, "required check Completion failed at a1a1a1a (magnum's run of ci.yml ended failure); a re-run of its run has not ended")
+	h.wantOpen(OpenWaits, "CI at a1a1a1a: ci.yml was run again after magnum's run of it failed")
 	if n := len(h.fixRuns(pr.ID)); n != 0 {
 		t.Fatalf("a CI fix started on attempt 1 while attempt 2 runs (%d fix runs)", n)
 	}
 	attempt.Status, attempt.Conclusion = "completed", "failure"
 	h.setHeadRuns(fixHead, attempt)
-	h.advance(21 * time.Minute) // a running read is read again settle_max later
-	h.tick()
+	h.setRuns(fixHead, attempt)
+	h.advance(time.Minute)
+	h.tick() // the poll reads the attempt's end, and the look reads its failed jobs
 	if n := len(h.fixRuns(pr.ID)); n != 1 {
 		t.Fatalf("fix runs = %d, want the CI fix on attempt 2", n)
 	}
@@ -239,6 +241,88 @@ func TestAReRunByHandOfMagnumsRunIsReadAgainBeforeTheStart(t *testing.T) {
 	}
 	if len(f.Checks) != 1 || f.Checks[0].Attempt != 2 {
 		t.Errorf("the fixer's file = %+v, want attempt 2's", f.Checks)
+	}
+}
+
+// `magnum fix --ci` finds a re-run by hand of magnum's failed run as the
+// look does: nothing failed to fix while it runs, and the start's record
+// takes the run, which the look then waits for.
+func TestMagnumFixCIRefusesARunOfMagnumsThatRanAgain(t *testing.T) {
+	h, git := ciShape3Harness(t)
+	cannotFixer(h, git, "flaky")
+	attempt := failedCIRun(fixHead, 2)
+	attempt.Event, attempt.Status, attempt.Conclusion = "workflow_dispatch", "in_progress", ""
+	h.setHeadRuns(fixHead, attempt)
+	h.setRuns(fixHead, attempt)
+	h.wantCIFixRefused("ci.yml was run again at a1a1a1a after magnum's run of it failed: nothing failed to fix")
+	if s := h.e.ciStartAt(h.ctx, h.pr(2)); s.Moved.IsZero() || !s.Run.running() {
+		t.Errorf("start = %+v, want the re-run as its run", s)
+	}
+	if n := len(h.ghCalls("run_jobs:")); n != 0 {
+		t.Errorf("%d jobs reads, want none", n)
+	}
+}
+
+// No rollup shows magnum's run of ci.yml (ciShape3), nor a re-run of it by
+// hand or someone's later start of ci.yml at the head, and the Completion
+// such a run posts when it passes may move none of the rollup's counts. The
+// look, about to start a CI fix, finds that run in the head's runs it reads
+// and takes the failure back: it waits for the run as for its own start,
+// the poll reads the run and the head's checks (while it runs, and
+// settle_max after the look found it), and once it passed the PR is idle.
+// Nothing needs you on the way, no failed job is read and no CI fix starts.
+// It said "its run lists no failed job magnum can read; it is yours", and
+// nothing read the head's checks again.
+func TestAPassedReRunByHandOfMagnumsFailedRunLeavesThePRIdle(t *testing.T) {
+	first := failedCIRun(fixHead, 1)
+	first.Event = "workflow_dispatch"
+	rerun := func(status, conclusion string) []github.WorkflowRun {
+		r := failedCIRun(fixHead, 2)
+		r.Event, r.Status, r.Conclusion = "workflow_dispatch", status, conclusion
+		return []github.WorkflowRun{r}
+	}
+	later := func(status, conclusion string) []github.WorkflowRun {
+		r := first
+		r.ID, r.Status, r.Conclusion, r.CreatedAt = ciRunID+1, status, conclusion, first.CreatedAt.Add(10*time.Minute)
+		return []github.WorkflowRun{r, first}
+	}
+	for _, tc := range []struct {
+		name               string
+		runs               func(status, conclusion string) []github.WorkflowRun
+		status, conclusion string // as the look first reads the head's runs
+	}{
+		{"a re-run that runs", rerun, "in_progress", ""},
+		{"a re-run that passed", rerun, "completed", "success"},
+		{"a later start by hand", later, "queued", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, git := ciShape3Harness(t)
+			cannotFixer(h, git, "flaky") // a CI fix that starts on the old failure ends
+			others := othersChecks()
+			h.setCounts(2, fakeCounts(others)) // the run's Completion moves none of the rollup's counts
+			ran := func(status, conclusion string) {
+				runs := tc.runs(status, conclusion)
+				h.setHeadRuns(fixHead, runs...)
+				h.setRuns(fixHead, runs...)
+				if runs[0].ID == ciRunID {
+					h.setJobs(ciRunID, 0) // a run's jobs are its newest attempt's
+				}
+				if conclusion == "success" {
+					h.setCI(2, "SUCCESS", append(others, ciCompletion(github.CheckPassed))...)
+				}
+			}
+			ran(tc.status, tc.conclusion)
+			h.pastSettle()
+			h.tick()
+			h.wantOpen(OpenWaits, "CI at a1a1a1a: ci.yml was run again after magnum's run of it failed")
+			ran("completed", "success")
+			h.advance(time.Minute)
+			h.tick()
+			h.wantOpen(OpenIdle, "nothing open at a1a1a1a")
+			if n := len(h.fixRuns(h.pr(2).ID)); n != 0 || len(h.ghCalls("run_jobs:")) != 0 {
+				t.Errorf("%d fix runs and %d jobs reads, want none", n, len(h.ghCalls("run_jobs:")))
+			}
+		})
 	}
 }
 

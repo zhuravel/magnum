@@ -4526,8 +4526,24 @@ skill versions); people add theirs to the sections before it, at the end of the 
   No rollup shows magnum's dispatched run or its re-run (ciShape3), and the read key of such a run never
   changes, so a read that stood from an earlier look (a start that waited for a slot) fed a start while a
   re-run by hand ran, or with the old attempt's logs; now, before such a start, the look reads the head's runs
-  at most once a settle_quiet (ciRunMoved, the read's Runs and Checked), and a newer attempt is read again
-  (waits while it runs). A fixer that said it cannot on the daemon's merge of the parent kept no class (the
+  at most once a settle_quiet (ciRunMoved, the read's Runs and Checked), and a newer attempt that failed
+  again is read again. A re-run by hand of magnum's dispatched run, or someone's later start of the workflow
+  at the head (a newer `workflow_dispatch` run of its file), that has not ended or ended without failing
+  takes the failure back (ciDispatchNow, in the head's runs the CI reader or ciRunMoved reads anyway, so no
+  read of its own and none a tick): the look records that run as the start's, with when it found it
+  (`pr.<id>.ci_dispatch`'s `run` and `moved`), and waits for it as for its own start ("CI at a1a1a1a: ci.yml
+  was run again after magnum's run of it failed"), and the poll reads the run and the head's checks while it
+  runs and until settle_max after the look found it (awaitCIRuns), so the Completion a passed run posts makes
+  the PR idle though it moves none of the rollup's counts. Before, the reader read the passed attempt's
+  jobs, found no failed one and said "its run lists no failed job magnum can read; it is yours" (needs you,
+  kind ci), or fed a start the earlier run's logs while a later run ran, and nothing read the head's checks
+  again once the poll's wait for the start had ended. Such a run that ends without the check after that wait
+  needs you as a start's run does ("ci.yml was run again after magnum's run of it failed; that run ended
+  (success) without it"); one that fails is the failed check again ("the newest run of ci.yml ended
+  failure"), read again before a start, and `magnum fix --ci` refuses while it runs or once it passed. Not
+  done: a re-run by hand after a needs-you that reads nothing at the head (red on the base, a CI fix that
+  said it cannot, the cap) is still seen only through the rollup's counts. A fixer that said it cannot on
+  the daemon's merge of the parent kept no class (the
   outcome was "merged"), so the merge's head started CI fix 2 for the same missing secret; the class is
   kept beside merged, the merge's head needs you with it, and endCIFix raises a merge of the parent the
   daemon could not push, as the default end does. The CI reader scrubs with master's new scrub.Secrets
@@ -4539,7 +4555,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestEveryFailedJobThatPassedOnTheBaseIsMarkedSo, TestTheCIFailuresSummaryHeadsEachCheckByItsRequiredEntry,
   TestTheNewestBaseCommitThatFinishedTheCheckDecides, TestTheBasesCIIsReadAtTheFetchedTipAndAgainWhenItMoves,
   TestAReRunByHandOfMagnumsRunIsReadAgainBeforeTheStart, TestACIFixThatCannotOnTheParentsMergeKeepsItsClass,
-  TestFixCIDryRunSaysThePlanReadsTheFailedCI and the reader test's env line; and, for paths no test held:
+  TestFixCIDryRunSaysThePlanReadsTheFailedCI, TestAPassedReRunByHandOfMagnumsFailedRunLeavesThePRIdle,
+  TestMagnumFixCIRefusesARunOfMagnumsThatRanAgain and the reader test's env line; and, for paths no test held:
   TestTheLookFixesTheCIOfARunMagnumStartedThatEndedFailure, TestMagnumFixCIFixesARunMagnumStartedThatEndedFailure,
   TestTheCIReaderWaitsForARunsNewestAttempt, TestACIFixWhoseClaimLostItsSlotDoesNotCount,
   TestAnAbortedCIFixIsStopped, TestACIFixWhoseRunFailedIsFailed, TestACIFixLostInARestartIsLost,

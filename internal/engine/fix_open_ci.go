@@ -50,7 +50,10 @@ func kvPRCIStart(prID int64) string { return fmt.Sprintf("pr.%d.ci_dispatch", pr
 // end was lost still counts), why it failed (Failed: GitHub's answer as a
 // status, "GitHub answered HTTP 422", never its message; a 403 adds
 // cannotStartWorkflows' words) or why magnum did not start it (Refused, At
-// zero), and its run as the poll last read it (Run: nil, none seen).
+// zero), and its run as the poll last read it (Run: nil, none seen). Moved
+// is when the look found that a run that failed was run again (a re-run by
+// hand, someone's later start at the head: noteRunMoved), which Run is
+// since; the poll waits for it as for the start's (awaitCIRuns).
 type ciStart struct {
 	Head     string    `json:"head"`
 	Workflow string    `json:"workflow"`
@@ -58,6 +61,7 @@ type ciStart struct {
 	Failed   string    `json:"failed,omitempty"`
 	Refused  string    `json:"refused,omitempty"`
 	Run      *ciRun    `json:"run,omitempty"`
+	Moved    time.Time `json:"moved,omitzero"`
 }
 
 // ciRun is the newest run of a start's workflow that a dispatch started at
@@ -134,8 +138,9 @@ func (e *Engine) ciStartAt(ctx context.Context, pr store.PR) ciStart {
 // radar's PRs whose checks the poll reads for them, whatever the rollup
 // says (fetchDetails). A start waits where GitHub took it at the head the
 // radar still shows, the head's stored checks miss a required check
-// (openCI), and it is less than settle_max old or its run was queued or
-// running at the last read. For such a PR the poll reads the head's checks
+// (openCI), and it is less than settle_max old (or the look found its run
+// run again less than settle_max ago: ciStart.Moved) or its run was queued
+// or running at the last read. For such a PR the poll reads the head's checks
 // and the workflow's dispatched runs at the head (dispatchedRun), and keeps
 // the newest one that GitHub created since the start in the start's record
 // (ciStart.Run). GitHub's rollup of the head leaves that run out (its
@@ -169,7 +174,7 @@ func (e *Engine) awaitCIRuns(ctx context.Context, w config.Watch, full string, p
 		if dispatch {
 			s = e.ciStartAt(ctx, pr)
 		}
-		start := !s.At.IsZero() && s.Failed == "" && (now.Before(s.At.Add(settleMax)) || s.Run.running())
+		start := !s.At.IsZero() && s.Failed == "" && (now.Before(later(s.At, s.Moved).Add(settleMax)) || s.Run.running())
 		if !rerun && !start || len(e.openCI(ctx, full, pr).missing) == 0 {
 			continue
 		}
@@ -242,9 +247,11 @@ func (e *Engine) dispatchedRun(ctx context.Context, acts *ciActions, owner, name
 // identity's, f.low, and ci_dispatch_as's, f.ciLow), and waits
 // for the run of a start it made (f.ciStart) while the head's checks run,
 // while the run is queued or runs (ciStart.Run) and until settle_max after
-// the start. A start that failed, one magnum refused, one whose run ended
-// without the checks (in words of the run's conclusion, runEnd) and one
-// whose run never came need you. Before either, where no start was made
+// the start, or after the look found that run run again (ciStart.Moved:
+// "ci.yml was run again after magnum's run of it failed"). A start that
+// failed, one magnum refused, one whose run ended without the checks (in
+// words of the run's conclusion, runEnd) and one whose run never came need
+// you. Before either, where no start was made
 // at the head, the look's read of the head's runs and its re-run of the
 // one that started no job decide (openRerunVerdict, ci_rerun.go), and the
 // re-run's attempt is waited for as a start's run is.
@@ -264,13 +271,18 @@ func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
 	}
 	wf, s := f.ciWorkflow, f.ciStart
 	started := !s.At.IsZero() && s.Failed == ""
+	again := wf + " was run again after magnum's run of it failed" // ciStart.Moved: a re-run by hand, a later start
 	startedWhy := func() string {
+		if !s.Moved.IsZero() {
+			return again
+		}
 		return fmt.Sprintf("magnum started %s at %s, as %s did not run", wf, waitClock(s.At, f.now), what)
 	}
+	startWait := later(s.At, s.Moved).Add(f.settle.max)
 	due := f.pr.HeadChangedAt.Add(f.settle.max)
 	switch {
 	case (f.ci.running || s.Run.running()) && started:
-		return waits(startedWhy(), s.At.Add(f.settle.max))
+		return waits(startedWhy(), startWait)
 	case (f.ci.running || f.ciRerun.Seen.running()) && f.ciRerun.asked(): // ci_rerun.go
 		return waits(rerunWhy(f, what), f.ciRerun.At.Add(f.settle.max))
 	case f.ci.running || f.now.Before(due):
@@ -289,8 +301,10 @@ func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
 		return needsYou(fmt.Sprintf("magnum does not start %s (%s)%s", wf, s.Refused, byHand))
 	case s.Failed != "":
 		return needsYou(fmt.Sprintf("magnum's start of %s failed (%s)%s", wf, s.Failed, byHand))
-	case started && f.now.Before(s.At.Add(f.settle.max)):
-		return waits(startedWhy(), s.At.Add(f.settle.max))
+	case started && f.now.Before(startWait):
+		return waits(startedWhy(), startWait)
+	case started && s.Run.ended() && !s.Moved.IsZero():
+		return needsYou(fmt.Sprintf("%s; that run ended%s without it%s", again, runEnd(s.Run.Conclusion), byHand))
 	case started && s.Run.ended():
 		return needsYou(fmt.Sprintf("magnum started %s at %s and its run ended%s without it%s", wf, waitClock(s.At, f.now), runEnd(s.Run.Conclusion), byHand))
 	case started:

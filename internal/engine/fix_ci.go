@@ -186,6 +186,9 @@ func (e *Engine) requestCIFix(ctx context.Context, pr store.PR, dry bool, asked 
 		acts := e.ciActions(e.ciDispatchIdentity(repo.FullName(), *w)) // ci_actions.go
 		e.ensureCIRead(ctx, acts, repo, pr, &f)
 		acts.end()
+		if f.ci.failed == "" { // noteRunMoved: magnum's run of the workflow ran again since it failed
+			return "", fmt.Errorf("%s was run again at %s after magnum's run of it failed: nothing failed to fix", f.ciStart.Workflow, short)
+		}
 		if err := refusal(); err != nil {
 			return "", err
 		}

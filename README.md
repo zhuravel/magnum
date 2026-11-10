@@ -3804,7 +3804,9 @@ PR, which leaves that run out (its `workflow_dispatch` check suite), so while th
 reads the head's checks and the workflow's runs that a dispatch started at the head (one REST call, as the
 identity that started it; `poll.ci_runs_error` says once that GitHub refused it). A run still queued or
 running past `settle_max` keeps the look waiting; the poll that sees it end reads the head's checks again,
-and so does any poll whose rollup counts a new passed check. The wait, or the need, ends with nothing for you
+and so does any poll whose rollup counts a new passed check. A re-run by hand of a run that failed, or a
+later start of the workflow at the head, that the look finds before a CI fix (CI fix, below) is waited for
+the same way. The wait, or the need, ends with nothing for you
 to do only when the run creates the required check where the rollup lists it, as a `Completion` check that
 its last job posts through the Checks API to the head: a required check that is a plain job of the started
 workflow is never in the rollup, so its start always ends in needs you ("magnum started ci.yml at 14:05 and
@@ -3904,10 +3906,13 @@ steps, and the end of at most 4 failed jobs' logs, each job once however many fa
 and writes `ci-failures.json` and `ci-failures.md` into the head's report folder: the failed jobs, their
 failed steps, which of them passed on the base, and the last 200 lines of each one's failed steps (at most
 64 KB), with terminal escapes removed and tokens and secret values masked (`scrub.Secrets`: also `DB_PASSWORD=`
-and `"token": "…"`; host names and emails stay, as an infrastructure failure names them). A read that stands from
-an earlier look (a start that waited for a slot) of the run the look started is checked against the head's
-runs at most once a `settle_quiet`, since no rollup shows that run: a re-run of it by hand is read again,
-and waits while it runs.
+and `"token": "…"`; host names and emails stay, as an infrastructure failure names them). No rollup shows
+the run the look started, nor a re-run of it by hand: a read that stands from an earlier look (a start that
+waited for a slot) of that run is checked against the head's runs at most once a `settle_quiet`, and an
+attempt that failed again is read again. A re-run of it by hand, or a later start of the workflow at the
+head, that the look finds running or passed before a CI fix starts takes the failure back: the look waits for it as for its own start ("CI at
+a1b2c3d: ci.yml was run again after magnum's run of it failed"), the poll reads that run and the head's
+checks while it runs and for `settle_max` after, and once it passed its `Completion` makes the PR idle.
 The log is the output of the PR's code: the fixer reads it as data, and none of it reaches an event, a
 verdict or the registry, which keep a digest and counts (`fix.ci_read`). The start is recorded before the
 loop starts, so a restart never starts a fourth; a start the fix job refuses at once (a busy slot, the
