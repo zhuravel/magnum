@@ -477,6 +477,11 @@ func FuzzEvidenceScrubMasksEveryByteScrubMasks(f *testing.F) {
 		{"dB_pa\u017f\u017fword=LONG-S\nGITHUB_TO\u212aEN: KELVIN\n\"x\u017f_token\": 1, \"\u212a_\u017fecret\": 2", "", 0, ""},
 		{"DB_PASSWORD=db1.internal.example.com and ", "_", 1900, "token: x, \"_"},
 		{"- ", "_", 5000, "password=NO-BOUNDARY-NEEDED \"_token\": MADEUP"},
+		// R58 round 1c: the Rails key words, each unquoted and quoted; the file and the id of a key stay.
+		{"SECRET_KEY_BASE=MADEUP\n", "", 0, "secret_key_base: MADEUP \"secret_key_base\": \"MADEUP\" SECRET_KEY_BASE_DUMMY=1\n"},
+		{"RAILS_MASTER_KEY=MADEUP\n", "", 0, "master-key: MADEUP {\"master_key\":\"MADEUP\",\"master_keys\":\"x\"}\n"},
+		{"signing_key = MADEUP\n", "", 0, "{\"signing_key\": \"MADEUP ONE\", 'Signing-Key': 'MADEUP'} DB_PASSWORD_FILE=/run/secrets/db\n"},
+		{"config.encryption_key: MADEUP\n", "", 0, "{\"encryption_key\":\"MADEUP\"} API_KEY_ID=MADEUP-ID\n"},
 		// A quoted value that holds an unquoted pair: the quoted pairs run before the unquoted ones.
 		{`{"token":"x password: y"}`, "", 0, ` {'secret': "a token=b c", "pwd" : 'it''s'}`},
 		// A key word before its separator with no closing quote is no quoted key (the unquoted pair masks one word), and a

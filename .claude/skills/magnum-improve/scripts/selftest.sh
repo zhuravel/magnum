@@ -726,6 +726,8 @@ print('- {"password_hint":"R58-HINT-KEPT","tokens_used":3}')
 print('- DB_PASSWORD=R58-ENV-PW')
 print('- export GITHUB_TOKEN: R58-ENV-TOKEN and MAX_TOKENS=4096')
 print('- {"DB_PASSWORD":"R58-ENV-JSON","DB_HOST":"db"}')
+print('- SECRET_KEY_BASE=R58-RAILS-A RAILS_MASTER_KEY: R58-RAILS-B {"signing_key":"R58-RAILS-C","encryption_key":"R58-RAILS-D"}')
+print('- DB_PASSWORD_FILE=/run/secrets/db API_KEY_ID=key-17')
 print("- " + '{"items":[' + '{"id":1,"name":"widget"},' * 100 + '{"password":"R58-LONG-PW","user":"alice"}]}')
 PYX
 # Tasks 20 and 21's notes are a megabyte each of what made the first exact scrub search again to the text's end: a
@@ -953,16 +955,18 @@ ok "evidence.sh scrubs task 19's notes whole, with no fallback line"
 
 # 29. R58: the value of a secret's key in quotes is masked as the Go scrub masks it: JSON, a single-quoted key, a TOML
 #     key with an equals sign, a header name that ends in a key word, an env-style name (DB_PASSWORD=, a key word after
-#     an underscore), and a minified JSON over 2,000 characters (shown as [...] by the cap). The key and the user stay,
+#     an underscore, SECRET_KEY_BASE), and a minified JSON over 2,000 characters (shown as [...] by the cap). The key and the user stay,
 #     and so does a key that only holds a key word.
-! grep -Eq 'R58-JSON-PW|R58-API-KEY|R58 SECRET|R58-TOML-TOKEN|R58-HEADER-KEY|R58-LONG-PW|R58-ENV-' "$f_md" ||
-    fail "the value under a quoted key or an env-style name is masked: $(grep -Eo '.{0,60}R58[- ](JSON|API|SECRET|TOML|HEADER|LONG|ENV).{0,20}' "$f_md" | tr '\n' ';')"
+! grep -Eq 'R58-JSON-PW|R58-API-KEY|R58 SECRET|R58-TOML-TOKEN|R58-HEADER-KEY|R58-LONG-PW|R58-ENV-|R58-RAILS-' "$f_md" ||
+    fail "the value under a quoted key or an env-style name is masked: $(grep -Eo '.{0,60}R58[- ](JSON|API|SECRET|TOML|HEADER|LONG|ENV|RAILS).{0,20}' "$f_md" | tr '\n' ';')"
 tsect 22 | grep -Fxq '> - {"password":<redacted>,"user":"alice"}' &&
     tsect 22 | grep -Fxq "> - \"api_key\": <redacted> and 'secret': <redacted>" &&
     tsect 22 | grep -Fxq '> - "token" = <redacted>,"n":1 and {"X-Api-Key":<redacted>}' ||
     fail "the keys under quotes stay and their values are masked: $(tsect 22 | cut -c1-120 | tr '\n' ';')"
 tsect 22 | grep -Fxq '> - DB_PASSWORD=<redacted>' && tsect 22 | grep -Fxq '> - export GITHUB_TOKEN: <redacted> and MAX_TOKENS=4096' &&
-    tsect 22 | grep -Fxq '> - {"DB_PASSWORD":<redacted>,"DB_HOST":"db"}' ||
+    tsect 22 | grep -Fxq '> - {"DB_PASSWORD":<redacted>,"DB_HOST":"db"}' &&
+    tsect 22 | grep -Fxq '> - SECRET_KEY_BASE=<redacted> RAILS_MASTER_KEY: <redacted> {"signing_key":<redacted>,"encryption_key":<redacted>}' &&
+    tsect 22 | grep -Fxq '> - DB_PASSWORD_FILE=/run/secrets/db API_KEY_ID=key-17' ||
     fail "the env-style names stay and their values are masked, and MAX_TOKENS stays: $(tsect 22 | cut -c1-120 | tr '\n' ';')"
 tsect 22 | grep -Fxq '> - {"password_hint":"R58-HINT-KEPT","tokens_used":3}' && tsect 22 | grep -Fxq '> - [...]' ||
     fail "a key that only holds a key word is kept, and a long minified JSON shows as [...]: $(tsect 22 | cut -c1-120 | tr '\n' ';')"

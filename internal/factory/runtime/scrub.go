@@ -20,7 +20,7 @@ const (
 
 // scrubKeyWords are the key names whose value is a secret, for both key-value
 // patterns.
-const scrubKeyWords = `(?:aws_)?(?:secret(?:_access)?_key|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret)`
+const scrubKeyWords = `(?:aws_)?(?:secret(?:_access)?_key(?:_base)?|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|master[_-]?key|signing[_-]?key|encryption[_-]?key|client[_-]?secret)`
 
 var (
 	// scrubTokens are token shapes execx.Redact leaves: AWS access keys,

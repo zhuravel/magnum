@@ -142,7 +142,7 @@ TOKENS_GO = [
 # Kelvin sign is one of non-word characters, as \b counts it. Scrub runs the quoted pairs before the unquoted ones:
 # a quoted value that holds an unquoted pair ("token":"x password: y") is then masked whole, where the other order
 # cut its quote off.
-KEYS_GO = r"(?:aws_)?(?:secret(?:_access)?_key|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret)"
+KEYS_GO = r"(?:aws_)?(?:secret(?:_access)?_key(?:_base)?|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|master[_-]?key|signing[_-]?key|encryption[_-]?key|client[_-]?secret)"
 PAIRS_GO = r"""(?i)((?:\b|_)""" + KEYS_GO + r""")(\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)"""
 QUOTED_GO = (r"""(["'](?:[^"'\s]*[^0-9A-Za-z"'\s])?(?i:""" + KEYS_GO + r""")["'])(\s*[=:]\s*)"""
              r"""("[^"]*"|'[^']*'|[^\s,}\]]+)""")

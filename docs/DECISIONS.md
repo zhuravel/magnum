@@ -23442,11 +23442,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
     masked names of the common kind: `DB_PASSWORD`, `REDIS_PASSWORD`, `POSTGRES_PASSWORD`, `GITHUB_TOKEN`, `GH_TOKEN`,
     `NPM_TOKEN`, `SLACK_BOT_TOKEN`, `CSRF_TOKEN`, `OPENAI_API_KEY`, `STRIPE_API_KEY`, `STRIPE_SECRET_KEY`,
     `GOOGLE_CLIENT_SECRET`, `JWT_SECRET`, `SESSION_SECRET` and `DEPLOY_AWS_SECRET_ACCESS_KEY`. A name that holds a
-    limit and ends in a key word, such as `MAX_TOKEN=4096`, is masked too, which costs nothing. Names that only hold a
-    key word are left: `password_hint`, `tokens_used`, `MAX_TOKENS`, `TOKEN_LIMIT`, `secretary`, `mypassword`,
-    `2password` and `{"user":"password"}` (a quoted word with no separator after it is a value). Only the key word is
-    under `(?i:...)` in the quoted pattern; its prefix is a class outside it, since Go's `(?i)\W` leaves out the long
-    s and the Kelvin sign that Python's `\W` takes, so a `\W` there parted the port from Go.
+    limit and ends in a key word, such as `MAX_TOKEN=4096`, is masked too, which costs nothing. Four key words for
+    Rails apps are in the list (the operator's ruling, since talkable is a Rails app):
+    `secret_key_base`, `master_key`, `signing_key` and `encryption_key`, so `SECRET_KEY_BASE=x`, `RAILS_MASTER_KEY=x`
+    and `"signing_key": "x"` are masked (the last three take a hyphen, an underscore or none between their words, as
+    `api_key` does). Names that only hold a key word are left: `password_hint`, `tokens_used`, `MAX_TOKENS`,
+    `TOKEN_LIMIT`, `secretary`, `mypassword`, `2password` and `{"user":"password"}` (a quoted word with no separator
+    after it is a value). Only the key word is under `(?i:...)` in the quoted pattern; its prefix is a class outside
+    it, since Go's `(?i)\W` leaves out the long s and the Kelvin sign that Python's `\W` takes, so a `\W` there parted
+    the port from Go.
   - It runs before `scrubPairs`: after it, `{"token":"x password: y"}` came out as `{"token":<redacted> password:
     <redacted>`, since the pair `password: y"}` took the closing quote and the quoted pass masked only the word `"x`.
     Quoted first, the value is masked whole.
@@ -23460,7 +23464,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     Redact's cut at the colon, not the same line. A GitHub token or a JWT in a value is masked by its shape.
   Known gaps, not fixed here: a key with a space in it (`"my password": "x"`), a JSON inside a JSON string
   (`{\"password\":\"x\"}`), a value that is an array or an object (`"token": ["a","b"]` masks `["a"`), and a key word
-  that the name goes on after (`SECRET_KEY_BASE`, `DB_PASSWORD_FILE`: the key word must end the key).
+  that the name goes on after (`DB_PASSWORD_FILE` is a path, `API_KEY_ID` an id, `SECRET_KEY_BASE_DUMMY` a flag: the
+  key word must end the key, and these stay by the operator's ruling).
   Rejected: one pattern for both forms (the value of a quoted key stops at a comma, a brace or a bracket, and
   `scrubPairs`' `\S+` takes them); a `\W` in the prefix (the long s); running it after `scrubPairs`; a prefix that
   takes white space (a quoted phrase that ends in a key word and a colon would mask the word after it);
@@ -23468,19 +23473,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   boundary (`mypassword` and `2password` stay). Tests, each failing first: TestScrubMasksTheValueOfAQuotedSecretKey
   (JSON, single quotes, TOML, a value over lines, a word value, a nested object, a quoted value that holds a pair, a
   minified JSON over 2,000 characters), TestScrubMasksTheValueOfAnEnvStyleName (env lines, an export, a quoted value
-  of two words, an env JSON, and the names that stay) and TestAQuotedKeyIsMaskedWhereTheUnquotedKeyIs (twenty-three
-  key names against their unquoted forms, and quoted words that are no keys) in `internal/factory/runtime`; the
-  pattern test and the fuzz's 16 new seeds (the JSON shapes, env lines and env JSON, the long s and the Kelvin sign in
-  a key and a prefix, a key with no closing quote, a space or quote in the prefix, the pass order, a minified JSON
-  over 2,000 characters, runs of 1,900 and 5,000 commas or underscores before a key, and one of 5,000 word
-  characters), 13 of which fail on the scrub.py of master; selftest.sh's case 29 on task 22's notes (three of its four
-  checks fail on the scrub.py of master). Mutations of scrub.py: no fold in the key word, the other pass order, `\S+`
-  as the value, no prefix, Python's `\W` in it, no underscore in the unquoted rule, an underscore refused in the
-  quoted prefix, a digit taken as a boundary and a pattern without `(?i)` each fail a seed; the closing quote optional
-  does not, since the next pass masks the same word (an equivalent mutant). The fuzz ran about 894,000 texts and a
-  grammar of keys, prefixes, quotes, separators and values 270,000 more (150,000 for the underscore rule, 17,046 of
-  them changed by it): the port equaled Scrub's output with its two extra masks on all. 1 MiB texts of quotes, of
-  underscores, of `"_` and of unterminated keys scrub in 0.3 s at most. No new dependencies.
+  of two words, an env JSON, and the names that stay) and TestAQuotedKeyIsMaskedWhereTheUnquotedKeyIs (thirty-one key
+  names against their unquoted forms, and quoted words that are no keys) in `internal/factory/runtime`; the pattern
+  test and the fuzz's 20 new seeds (the JSON shapes, env lines and env JSON, the long s and the Kelvin sign in a key
+  and a prefix, a key with no closing quote, a space or quote in the prefix, the pass order, a minified JSON over
+  2,000 characters, runs of 1,900 and 5,000 commas or underscores before a key, and one of 5,000 word characters, and
+  one for each Rails key word, unquoted and quoted), 17 of which fail on the scrub.py of master; selftest.sh's case 29
+  on task 22's notes (three of its four checks fail on the scrub.py of master). Mutations of scrub.py: no fold in the
+  key word, the other pass order, `\S+` as the value, no prefix, Python's `\W` in it, no underscore in the unquoted
+  rule, an underscore refused in the quoted prefix, a digit taken as a boundary and a pattern without `(?i)` each fail
+  a seed, and so does each Rails key word dropped from the list (its own seed); the closing quote optional does not,
+  since the next pass masks the same word (an equivalent mutant). The fuzz ran about 894,000 texts, and 273,000 more
+  after the Rails key words, and a grammar of keys, prefixes, quotes, separators and values 270,000 more (150,000 for
+  the underscore rule, 17,046 of them changed by it): the port equaled Scrub's output with its two extra masks on all.
+  1 MiB texts of quotes, of underscores, of `"_` and of unterminated keys scrub in 0.3 s at most. No new dependencies.
 
 ## Learned rules
 

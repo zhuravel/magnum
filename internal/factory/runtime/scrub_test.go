@@ -97,6 +97,8 @@ func TestAQuotedKeyIsMaskedWhereTheUnquotedKeyIs(t *testing.T) {
 		{"password", true}, {"api-key", true}, {"x-api-key", true}, {"X_Api_Key", true}, {"app.secret", true},
 		{"auth-token", true}, {"aws_secret_access_key", true}, {"db_password", true}, {"GITHUB_TOKEN", true},
 		{"MY_APP.SECRET", true}, {"stripe-api-key", true}, {"__token", true}, {"db2_pwd", true},
+		{"secret_key_base", true}, {"RAILS_MASTER_KEY", true}, {"signing_key", true}, {"encryption-key", true},
+		{"DB_PASSWORD_FILE", false}, {"API_KEY_ID", false}, {"master_keys", false}, {"SECRET_KEY_BASE_DUMMY", false},
 		{"password_hint", false}, {"tokens_used", false}, {"secrets", false}, {"mypassword", false}, {"secretary", false},
 		{"token_count", false}, {"passwords", false}, {"keyword", false}, {"MAX_TOKENS", false}, {"2password", false},
 	} {
@@ -134,6 +136,11 @@ func TestScrubMasksTheValueOfAnEnvStyleName(t *testing.T) {
 		{"a name with the AWS prefix after another prefix", "DEPLOY_AWS_SECRET_ACCESS_KEY=MADEUP", "DEPLOY_AWS_SECRET_ACCESS_KEY=<redacted>"},
 		{"a JSON of env names", `{"DB_PASSWORD":"MADEUP","SLACK_BOT_TOKEN":"MADEUP2","DB_HOST":"db"}`, `{"DB_PASSWORD":<redacted>,"SLACK_BOT_TOKEN":<redacted>,"DB_HOST":"db"}`},
 		{"a name that is masked and holds a limit", "MAX_TOKEN=4096", "MAX_TOKEN=<redacted>"},
+		{"Rails: secret_key_base", "SECRET_KEY_BASE=MADEUP", "SECRET_KEY_BASE=<redacted>"},
+		{"Rails: the master key, with a colon", "RAILS_MASTER_KEY: MADEUP", "RAILS_MASTER_KEY: <redacted>"},
+		{"Rails: a signing key in JSON", `{"signing_key":"MADEUP","user":"alice"}`, `{"signing_key":<redacted>,"user":"alice"}`},
+		{"Rails: an encryption key as a setting", "config.encryption_key = MADEUP", "config.encryption_key = <redacted>"},
+		{"Rails: a key name in YAML with a hyphen", `'encryption-key': MADEUP`, `'encryption-key': <redacted>`},
 	}
 	for _, c := range cases {
 		if clean, _ := Scrub(c.in); clean != c.want {
@@ -142,7 +149,8 @@ func TestScrubMasksTheValueOfAnEnvStyleName(t *testing.T) {
 	}
 	for _, name := range []string{"DB_PASSWORD", "REDIS_PASSWORD", "POSTGRES_PASSWORD", "GITHUB_TOKEN", "GH_TOKEN", "NPM_TOKEN",
 		"SLACK_BOT_TOKEN", "CSRF_TOKEN", "OPENAI_API_KEY", "STRIPE_API_KEY", "STRIPE_SECRET_KEY", "GOOGLE_CLIENT_SECRET",
-		"JWT_SECRET", "SESSION_SECRET", "DEPLOY_AWS_SECRET_ACCESS_KEY"} {
+		"JWT_SECRET", "SESSION_SECRET", "DEPLOY_AWS_SECRET_ACCESS_KEY", "SECRET_KEY_BASE", "RAILS_MASTER_KEY", "SIGNING_KEY",
+		"ENCRYPTION_KEY"} {
 		for _, form := range []string{name + "=MADEUP", name + ": MADEUP", `"` + name + `": "MADEUP"`} {
 			if clean, _ := Scrub(form); strings.Contains(clean, "MADEUP") || !strings.Contains(clean, name) {
 				t.Errorf("the common name %s is not masked with its name kept: %q -> %q", name, form, clean)
@@ -150,7 +158,8 @@ func TestScrubMasksTheValueOfAnEnvStyleName(t *testing.T) {
 		}
 	}
 	for _, in := range []string{"password_hint=MADEUP", "TOKENS_USED=3", "MAX_TOKENS=4096", "secretary: Jo", "TOKEN_LIMIT=5",
-		`{"password_hint":"x","tokens_used":3,"DB_PASSWORD_FILE_HINT":"y"}`, "mypassword=MADEUP", "2password=MADEUP"} {
+		`{"password_hint":"x","tokens_used":3,"DB_PASSWORD_FILE_HINT":"y"}`, "mypassword=MADEUP", "2password=MADEUP",
+		"DB_PASSWORD_FILE=/run/secrets/db", "API_KEY_ID=MADEUP-ID", `{"api_key_id":"MADEUP-ID","secret_key_base_dummy":1}`} {
 		if clean, _ := Scrub(in); clean != in {
 			t.Errorf("a name that only holds a key word was changed:\n in:  %q\n got: %q", in, clean)
 		}
