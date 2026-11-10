@@ -83,7 +83,7 @@ func (e *Engine) configLinks(ctx context.Context, pr store.PR) (map[string]strin
 		}
 		if e.links.warned[pr.ID] != err.Error() && ctx.Err() == nil {
 			e.links.warned[pr.ID] = err.Error()
-			e.log.Warn("auto approval: cannot read where the head's links lead, so the gate cannot tell what it changes",
+			e.log.Warn("project config: cannot read where the links of the head's tree lead, so the gates cannot tell what it changes",
 				"pr", pr.ID, "head", head, "err", err)
 		}
 		return nil, err

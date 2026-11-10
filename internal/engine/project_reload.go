@@ -14,6 +14,8 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/zhuravel/magnum/internal/agents"
@@ -98,12 +100,14 @@ type headProbe struct {
 // poller stored decides when it is complete and lists that head
 // (store.PRFiles); otherwise (a PR of more files than the list holds, a
 // list of another head, none) git does: the files the head changes at or
-// under the kind's paths since its merge base with the PR's base branch
-// (gitx.Client.ChangedUnder), read like the list (agents.ProjectTouched:
-// a glob of a path in any directory matches wider than its name). A fetch
-// that fails leaves the list of the radar's head; a session of an unknown
-// kind, a git that cannot tell and no answer at all are no proof, so the
-// session is quit.
+// under the kind's paths and the links' targets since its merge base with
+// the PR's base branch (gitx.Client.ChangedUnder), read like the list
+// (agents.ProjectTouched: a glob of a path in any directory matches wider
+// than its name). Either way a file at or under a link's target counts
+// (linkTargets: .claude/skills -> ../.agents/skills loads what the head
+// changes there). A fetch that fails leaves the list of the radar's head;
+// a session of an unknown kind, links that cannot all be read, a git that
+// cannot tell and no answer at all are no proof, so the session is quit.
 func (p *headProbe) leavesProjectAlone(ctx context.Context, s store.Session) bool {
 	kind := deref(s.AgentKind)
 	paths := agents.ProjectPaths(kind)
@@ -111,8 +115,17 @@ func (p *headProbe) leavesProjectAlone(ctx context.Context, s store.Session) boo
 		return false
 	}
 	head := p.fetch(ctx)
+	targets, ok := p.linkTargets(ctx, kind, head)
+	if !ok {
+		return false
+	}
+	touches := func(files []string) bool {
+		return agents.ProjectTouched(kind, files) || slices.ContainsFunc(files, func(f string) bool {
+			return slices.ContainsFunc(targets, func(t string) bool { return agents.UnderTarget(f, t) })
+		})
+	}
 	if f, ok := p.list(ctx); ok && !f.Truncated && f.HeadSHA == cmp.Or(head, p.target) {
-		return !agents.ProjectTouched(kind, f.Paths)
+		return !touches(f.Paths)
 	}
 	if head == "" || p.e.d.Git == nil {
 		return false
@@ -120,18 +133,43 @@ func (p *headProbe) leavesProjectAlone(ctx context.Context, s store.Session) boo
 	touched, ok := p.byKind[kind]
 	if !ok {
 		base := "origin/" + strings.TrimPrefix(prBase(p.job.repo, p.job.pr), "origin/")
-		changed, err := p.e.d.Git.ChangedUnder(ctx, p.job.slot.Path, base, head, paths...)
+		changed, err := p.e.d.Git.ChangedUnder(ctx, p.job.slot.Path, base, head, append(slices.Clone(paths), targets...)...)
 		if err != nil {
 			p.e.log.Warn("project config: cannot compare the head with its merge base, so a session that reloads it is quit",
 				"pr", p.job.pr.ID, "head", head, "err", err)
 		}
-		touched = err != nil || agents.ProjectTouched(kind, changed)
+		touched = err != nil || touches(changed)
 		if p.byKind == nil {
 			p.byKind = map[string]bool{}
 		}
 		p.byKind[kind] = touched
 	}
 	return !touched
+}
+
+// linkTargets are where the links of kind's config lead: on the slot's
+// disk (agents.ProjectLinks, the links the session loaded through), and in
+// the tree of head, the fetched one (configLinks, which also has the links
+// below the root and those the base added since), each target once,
+// sorted. false when they cannot all be read: the disk's walk stopped
+// short, or the head's tree cannot be read.
+func (p *headProbe) linkTargets(ctx context.Context, kind, head string) ([]string, bool) {
+	targets, partial := agents.ProjectLinks(kind, p.job.slot.Path)
+	if partial {
+		p.e.log.Warn("project config: too many entries to look through for links, so a session that reloads it is quit", "pr", p.job.pr.ID)
+		return nil, false
+	}
+	if head != "" {
+		pr := p.job.pr
+		pr.HeadSHA = head
+		tree, err := p.e.configLinks(ctx, pr)
+		if err != nil {
+			return nil, false
+		}
+		targets = append(targets, slices.Collect(maps.Keys(tree))...)
+	}
+	slices.Sort(targets)
+	return slices.Compact(targets), true
 }
 
 // fetch runs the checkout's fetch once, into the round's slot when the

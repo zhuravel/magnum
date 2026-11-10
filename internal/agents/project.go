@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -746,6 +747,21 @@ func ProjectTouched(kind string, paths []string) bool {
 		}
 	}
 	return false
+}
+
+// ProjectLinks are the targets, relative to the checkout dir's root, of
+// the links among kind's paths at its root and under its project
+// directories, and under a directory such a link leads to, as the disk has
+// them (onDisk: what a session in dir loaded through them), sorted; partial
+// reports that the walk stopped at maxLinkWalk entries, so one may be
+// missing. None for a kind magnum does not compare.
+func ProjectLinks(kind, dir string) (targets []string, partial bool) {
+	pc, ok := projectConfigs[kind]
+	if !ok || dir == "" {
+		return nil, false
+	}
+	d, _ := pc.onDisk(dir)
+	return slices.Sorted(maps.Keys(d.links)), d.partial
 }
 
 // ReloadsProject reports whether session s runs an agent CLI that reloads

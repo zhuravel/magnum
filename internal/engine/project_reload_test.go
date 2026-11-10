@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -271,6 +273,73 @@ func TestALiveClaudeSessionStaysWhenTheNewHeadLeavesItsConfigAlone(t *testing.T)
 			}
 			if got := rounds[1].TargetSHA; got != target {
 				t.Fatalf("the re-review's target = %s, want the fetched %s", got, target)
+			}
+		})
+	}
+}
+
+// A link of the config a session loaded leads elsewhere (the base's
+// .claude/skills -> ../.agents/skills): a new head that changes a file
+// there changes what the session reloads, though its list names nothing
+// under .claude/. The session is quit when the list, or git for a list cut
+// short, changes a link's target, as the slot's disk has the links (the
+// head the session loaded through) or the fetched head's tree has them
+// (one the base added since); a head that leaves the targets alone keeps
+// it, and a slot whose links cannot all be read is no proof.
+func TestALiveClaudeSessionIsParkedWhenTheNewHeadChangesALinksTarget(t *testing.T) {
+	skill := []string{"app/x.rb", ".agents/skills/x/SKILL.md"}
+	tree := map[string]map[string]string{"b2": {".claude/skills": "../.agents/skills"}}
+	for _, c := range []struct {
+		name      string
+		files     []string
+		truncated bool
+		tree      map[string]map[string]string
+		disk      bool // the slot has .claude/skills -> ../.agents/skills on disk
+		changed   map[string][]string
+		wantQuit  bool
+		wantGit   string
+	}{
+		{name: "a target in the fetched head's tree", files: skill, tree: tree, wantQuit: true},
+		{name: "a target on the slot's disk", files: skill, disk: true, wantQuit: true},
+		{name: "a target the head leaves alone", files: []string{"app/x.rb", ".agents/skillsx/a.md"}, tree: tree, disk: true},
+		{name: "a cut-off list, git finds a target changed", files: []string{"app/x.rb"}, truncated: true, disk: true,
+			changed: map[string][]string{"b2": {".agents/skills/x/SKILL.md"}}, wantQuit: true,
+			wantGit: "origin/master...b2:" + claudePaths + ",.agents/skills"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g := &projectGit{fakeGit: fakeGit{links: c.tree}, changed: c.changed}
+			h := newHarness(t, func(h *harness) { h.d.Git = g })
+			h.reviewedPR(2, "b1")
+			if c.disk {
+				dir := t.TempDir()
+				if err := os.MkdirAll(filepath.Join(dir, ".agents", "skills", "x"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(filepath.Join(dir, ".claude"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("../.agents/skills", filepath.Join(dir, ".claude", "skills")); err != nil {
+					t.Fatal(err)
+				}
+				sl := h.slot("review1")
+				if err := h.st.UpdateSlotFields(h.ctx, sl.ID, func(u *store.SlotUpdate) { u.Set("path", dir) }); err != nil {
+					t.Fatal(err)
+				}
+			}
+			at := reloadingClaude(h)
+			h.advance(30 * time.Minute)
+			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", files: c.files, filesTruncated: c.truncated})
+			h.tick()
+			h.advance(5 * time.Minute)
+			h.tick()
+			if n := len(h.rd.all()); n != 2 {
+				t.Fatalf("rounds = %d, want the re-review", n)
+			}
+			if quit := len(*at) > 0; quit != c.wantQuit {
+				t.Fatalf("quits = %v, want a quit: %v", *at, c.wantQuit)
+			}
+			if calls := g.all(); c.wantGit == "" && len(calls) > 0 || c.wantGit != "" && !slices.Equal(calls, []string{c.wantGit}) {
+				t.Fatalf("git comparisons = %q, want %q", calls, c.wantGit)
 			}
 		})
 	}
