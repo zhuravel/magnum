@@ -3520,16 +3520,16 @@ type TargetMatch int
     (MatchTarget).
 
 const (
-	// NotUnder: the path is neither the target nor under it.
+	// NotUnder says the path is neither the target nor under it.
 	NotUnder TargetMatch = iota
-	// MaybeUnder: it may be, and magnum cannot tell: an element of the path
+	// MaybeUnder says it may be, and magnum cannot tell: an element of the path
 	// and the target's that differ have a byte outside ASCII, which a
 	// case-insensitive filesystem folds by rules of its own (APFS opens
 	// claß.md for class.md, ﬁrst.md for first.md and a decomposed name for
 	// its composed spelling; HFS+ also ignores some code points), and the
 	// ASCII letters of the one are among the other's (MayFold).
 	MaybeUnder
-	// Under: the path is the target or lies under it.
+	// Under says the path is the target or lies under it.
 	Under
 )
 func MatchTarget(f, t string) TargetMatch
