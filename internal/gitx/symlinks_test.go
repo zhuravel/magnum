@@ -3,12 +3,14 @@ package gitx
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/execx"
 )
@@ -159,5 +161,34 @@ func TestTrackedFilesListsTheIndexsFilesAndLinks(t *testing.T) {
 	links, files, err := c.TrackedFiles(ctx, slot, AnyDir+"CLAUDE.md", AnyDir+".claude"+AnyDirTree)
 	if err != nil || !slices.Equal(links, []string{"app/CLAUDE.md"}) || !slices.Equal(files, []string{"CLAUDE.md", ".claude/rules/x.md"}) {
 		t.Fatalf("TrackedFiles = %q, %q, %v", links, files, err)
+	}
+}
+
+// An index lists a path once per stage (a merge conflict's 1, 2 and 3),
+// in git's order: TrackedFiles gives each path once, in time linear in the
+// listing (100,000 files under .claude/ list at once), and a listing cut
+// at the output's cap fails (ErrTreeTooLarge) rather than leave a link or
+// an instruction file out.
+func TestTrackedFilesListsALargeIndexOnceAndFailsWhenCut(t *testing.T) {
+	ctx := context.Background()
+	var b strings.Builder
+	for i := range 100_000 {
+		fmt.Fprintf(&b, "100644 1111111111111111111111111111111111111111 0\t.claude/f%06d.md\x00", i)
+	}
+	for stage := 1; stage <= 3; stage++ {
+		fmt.Fprintf(&b, "120000 2222222222222222222222222222222222222222 %d\tapp/CLAUDE.md\x00", stage)
+	}
+	c, _ := newFake(outRule(b.String(), "git", "-C", slot, "ls-files"))
+	start := time.Now()
+	links, files, err := c.TrackedFiles(ctx, slot, AnyDir+"CLAUDE.md", AnyDir+".claude"+AnyDirTree)
+	if err != nil || !slices.Equal(links, []string{"app/CLAUDE.md"}) || len(files) != 100_000 {
+		t.Fatalf("TrackedFiles = %q, %d files, %v", links, len(files), err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("TrackedFiles of 100,000 files took %s", d)
+	}
+	c, _ = newFake(execx.Rule{Prefix: []string{"git", "-C", slot, "ls-files"}, Result: execx.Result{Truncated: true}})
+	if _, _, err := c.TrackedFiles(ctx, slot, AnyDir+"CLAUDE.md"); !errors.Is(err, ErrTreeTooLarge) {
+		t.Fatalf("a cut listing: %v, want ErrTreeTooLarge", err)
 	}
 }

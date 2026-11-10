@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 )
@@ -184,7 +183,11 @@ func (c *Client) TrackedSymlinks(ctx context.Context, dir string, paths ...strin
 // TrackedFiles is TrackedSymlinks that also gives the regular files of
 // dir's index that paths name (a blob of mode 100644 or 100755), each once,
 // in git's order: the instruction files and project files a session reads
-// for the files they import.
+// for the files they import. git lists a path once per stage, each next to
+// the other (a merge conflict's 1, 2 and 3), so a path the entry before
+// named is left out, in time linear in the listing. A listing past
+// execx.MaxOutput is ErrTreeTooLarge: a link or a file it cut may be one
+// that matters.
 func (c *Client) TrackedFiles(ctx context.Context, dir string, paths ...string) (links, files []string, err error) {
 	specs, err := pathspecs(paths)
 	if err != nil {
@@ -194,7 +197,11 @@ func (c *Client) TrackedFiles(ctx context.Context, dir string, paths ...string) 
 	if err != nil {
 		return nil, nil, err
 	}
+	if res.Truncated {
+		return nil, nil, fmt.Errorf("gitx: ls-files -s: %w", ErrTreeTooLarge)
+	}
 	// Each entry is "<mode> SP <oid> SP <stage> TAB <path>" NUL.
+	prev := ""
 	for rec := range strings.SplitSeq(string(res.Stdout), "\x00") {
 		if rec == "" {
 			continue
@@ -204,10 +211,14 @@ func (c *Client) TrackedFiles(ctx context.Context, dir string, paths ...string) 
 		if !ok || len(f) != 3 || file == "" {
 			return nil, nil, errors.New("gitx: ls-files -s: unexpected entry")
 		}
-		switch {
-		case f[0] == symlinkMode && !slices.Contains(links, file):
+		if file == prev {
+			continue
+		}
+		prev = file
+		switch f[0] {
+		case symlinkMode:
 			links = append(links, file)
-		case (f[0] == "100644" || f[0] == "100755") && !slices.Contains(files, file):
+		case "100644", "100755":
 			files = append(files, file)
 		}
 	}
