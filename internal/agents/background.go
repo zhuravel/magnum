@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -32,7 +33,10 @@ import (
 // the session's transcript, the JSONL file Claude Code appends every entry
 // to, and holds the run open while background work started during the run
 // has neither notified nor been stopped (TaskStop), or while the agent has
-// not answered a notification yet. With no run in flight the agent still
+// not answered a notification yet. A teammate (an Agent tool use with a
+// name, which never notifies and idles until a message wakes it) holds the
+// run only while its own transcript shows a turn in progress
+// (teammateAtWork). With no run in flight the agent still
 // works on its own: on background work an earlier run left running (the
 // subagents of a turn the restart's esc cut short) or on the turn a task
 // notification began. The observer takes it for a human's only when the
@@ -49,6 +53,12 @@ const (
 	transcriptSkew = 2 * time.Second
 	// transcriptChunk is how much transcriptStart reads at a time.
 	transcriptChunk = 64 << 10
+	// teammateTail is how much of a teammate's transcript each reading
+	// reads, from its end (teammateAtWork).
+	teammateTail = 256 << 10
+	// teammateGrace is how long after its spawn a teammate whose transcript
+	// is not there yet holds the run.
+	teammateGrace = 2 * time.Minute
 )
 
 // bgWatch is what the transcript of one claude session says about the run
@@ -69,6 +79,10 @@ type bgWatch struct {
 	stops map[string]string // TaskStop/KillShell tool_use id -> the task it stops
 	note  time.Time         // the newest task notification
 	reply time.Time         // the newest assistant entry
+	// mates are the teammates spawned during the run: the spawn's tool_use
+	// id -> the teammate. Unlike tasks they never finish by themselves: each
+	// reading looks at their own transcripts (matesAtWork).
+	mates map[string]teammate
 	// cut is the newest line Claude Code wrote when its turn was cut short
 	// (esc, or a tool use it asked about and was refused): the turn ended
 	// there, whatever herdr shows while background work runs on.
@@ -90,9 +104,17 @@ type bgWatch struct {
 	failed   string // the last read error logged ("" = none)
 }
 
+// teammate is an in-process teammate the agent spawned: its agent id, which
+// names its transcript, and when the spawn's result was written.
+type teammate struct {
+	agent   string
+	spawned time.Time
+}
+
 // reset forgets what was read (a new session id, a transcript that shrank).
 func (w *bgWatch) reset() {
 	w.offset, w.tasks, w.stops, w.note, w.reply = -1, map[string]string{}, map[string]string{}, time.Time{}, time.Time{}
+	w.mates = map[string]teammate{}
 	w.cut, w.typed, w.queued = time.Time{}, time.Time{}, map[string][]time.Time{}
 }
 
@@ -129,9 +151,11 @@ func (m *Manager) turnWatch(sessionID int64) *bgWatch {
 // backgroundWait reads the transcript of session s, a claude agent seen idle
 // while run is in flight, as Claude Code session sid. tasks is the
 // background work started during run that has neither notified nor been
-// stopped; hold is true while there is any (until Tell) or while a task
-// notification is not answered yet. A transcript it cannot find or read
-// holds nothing: the run ends on herdr's status, as before.
+// stopped, with the teammates spawned during run whose own transcripts show
+// a turn in progress now (read again on every call: no notification ever
+// says a teammate is done); hold is true while there is any (until Tell) or
+// while a task notification is not answered yet. A transcript it cannot
+// find or read holds nothing: the run ends on herdr's status, as before.
 func (m *Manager) backgroundWait(ctx context.Context, s store.Session, sid string, run store.Run) (tasks int, hold bool) {
 	if m.sessionKind(s) != KindClaude || sid == "" {
 		return 0, false
@@ -142,7 +166,7 @@ func (m *Manager) backgroundWait(ctx context.Context, s store.Session, sid strin
 	if !m.readTranscript(s, sid, w) {
 		return 0, false
 	}
-	tasks = len(w.tasks)
+	tasks = len(w.tasks) + w.matesAtWork(m.now())
 	hold = (tasks > 0 && !w.released) || w.note.After(w.reply)
 	if tasks > 0 && !w.released && !w.told {
 		w.told = true
@@ -158,8 +182,9 @@ func (m *Manager) backgroundWait(ctx context.Context, s store.Session, sid strin
 }
 
 // BackgroundTasks counts the background work the claude agent of run's
-// session started during run and left running, as its transcript shows now
-// (ok false: not a claude session, or no transcript to read).
+// session started during run and left running, and the teammates it
+// spawned during run that are at work, as the transcripts show now (ok
+// false: not a claude session, or no transcript to read).
 func (m *Manager) BackgroundTasks(ctx context.Context, run store.Run) (int, bool) {
 	if run.SessionID == nil {
 		return 0, false
@@ -174,7 +199,115 @@ func (m *Manager) BackgroundTasks(ctx context.Context, run store.Run) (int, bool
 	if !m.readTranscript(s, store.Deref(s.SessionID), w) {
 		return 0, false
 	}
-	return len(w.tasks), true
+	return len(w.tasks) + w.matesAtWork(m.now()), true
+}
+
+// matesAtWork counts the teammates w recorded that are at work at now: those
+// whose transcript (see matePath) shows a turn in progress
+// (teammateAtWork), and those whose transcript is not there yet within
+// teammateGrace of their spawn (Claude Code may create it late). A
+// transcript that cannot be read holds nothing.
+func (w *bgWatch) matesAtWork(now time.Time) int {
+	n := 0
+	for _, mt := range w.mates {
+		if w.mateAtWork(mt, now) {
+			n++
+		}
+	}
+	return n
+}
+
+func (w *bgWatch) mateAtWork(mt teammate, now time.Time) bool {
+	f, err := os.Open(w.matePath(mt.agent))
+	if errors.Is(err, fs.ErrNotExist) {
+		return now.Before(mt.spawned.Add(teammateGrace))
+	}
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		return false
+	}
+	return teammateAtWork(f, st.Size())
+}
+
+// matePath is where Claude Code keeps the transcript of teammate agent of
+// w's session: <the session's transcript dir>/<sid>/subagents/agent-<agent>.jsonl.
+// agent is one path segment (oneSegment).
+func (w *bgWatch) matePath(agent string) string {
+	return filepath.Join(filepath.Dir(w.path), w.sid, "subagents", "agent-"+agent+".jsonl")
+}
+
+// teammateAtWork reports whether a teammate's transcript r (size bytes)
+// shows a turn in progress. Only its last teammateTail bytes are read (every
+// reading reads it): the last complete user or assistant entry there
+// decides, never the last line, since Claude Code appends system,
+// attachment, api-request and other entries after a turn's end. That entry
+// is the turn's end when it is an assistant entry with stop_reason
+// "end_turn"; a user entry (a tool result, a message that woke the
+// teammate) or an assistant entry with another stop_reason (tool_use, null,
+// none) is a turn in progress. A tail without such an entry, or one that
+// cannot be read, is none.
+func teammateAtWork(r io.ReaderAt, size int64) bool {
+	from := max(size-teammateTail, 0)
+	if from > 0 {
+		from-- // and the byte before: whether a line starts the tail
+	}
+	buf := make([]byte, size-from)
+	n, err := r.ReadAt(buf, from)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false
+	}
+	buf = buf[:n]
+	end := bytes.LastIndexByte(buf, '\n')
+	if end < 0 {
+		return false
+	}
+	buf = buf[:end] // not a line still being written
+	if from > 0 {
+		start := bytes.IndexByte(buf, '\n')
+		if start < 0 {
+			return false
+		}
+		buf = buf[start+1:] // not a line that began before the tail
+	}
+	for {
+		i := bytes.LastIndexByte(buf, '\n')
+		if atWork, ok := mateTurn(buf[i+1:]); ok {
+			return atWork
+		}
+		if i < 0 {
+			return false
+		}
+		buf = buf[:i]
+	}
+}
+
+// mateTurn reads one line of a teammate's transcript: ok when it is a user
+// or assistant entry, and then whether it leaves a turn in progress (see
+// teammateAtWork).
+func mateTurn(line []byte) (atWork, ok bool) {
+	if !bytes.Contains(line, []byte(`"user"`)) && !bytes.Contains(line, []byte(`"assistant"`)) {
+		return false, false // most lines after a turn's end: no JSON decoding
+	}
+	var e struct {
+		Type    string `json:"type"`
+		Message struct {
+			StopReason string `json:"stop_reason"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(line, &e) != nil {
+		return false, false
+	}
+	switch e.Type {
+	case "user":
+		return true, true
+	case "assistant":
+		return e.Message.StopReason != "end_turn", true
+	}
+	return false, false
 }
 
 // humanTurn reports whether the agent of session s (Claude Code session
@@ -728,7 +861,7 @@ func (w *bgWatch) apply(line []byte) {
 					w.cut = e.Timestamp
 				}
 			case "tool_result":
-				w.result(b, result, i == 0)
+				w.result(b, result, i == 0, e.Timestamp)
 			}
 		}
 	case "queue-operation":
@@ -756,10 +889,11 @@ func (w *bgWatch) unqueue(text string) {
 }
 
 // result reads the result of tool use b.ToolUseID (res is the entry's
-// toolUseResult, which belongs to its first block): a background launch
-// becomes a task, a failed launch is none, a TaskStop that worked ends its
-// task.
-func (w *bgWatch) result(b tBlock, res map[string]any, first bool) {
+// toolUseResult, which belongs to its first block; at is the entry's
+// stamp): a teammate's spawn becomes a teammate and no task (the Agent tool
+// use's run_in_background made it one), a background launch becomes a task,
+// a failed launch is none, a TaskStop that worked ends its task.
+func (w *bgWatch) result(b tBlock, res map[string]any, first bool, at time.Time) {
 	id := b.ToolUseID
 	if id == "" {
 		return
@@ -777,6 +911,11 @@ func (w *bgWatch) result(b tBlock, res map[string]any, first bool) {
 		return
 	}
 	switch {
+	case res["status"] == "teammate_spawned":
+		delete(w.tasks, id)
+		if agent := cmp.Or(str(res["agentId"]), str(res["agent_id"])); oneSegment(agent) {
+			w.mates[id] = teammate{agent: agent, spawned: at}
+		}
 	case str(res["backgroundTaskId"]) != "":
 		w.tasks[id] = str(res["backgroundTaskId"])
 	case res["background"] == true || res["status"] == "async_launched":
@@ -821,10 +960,12 @@ func (w *bgWatch) notified(text string, at time.Time) {
 	}
 }
 
-// finish ends the task started by tool use toolUse, or known as task.
+// finish ends the task (or the teammate) started by tool use toolUse, or
+// known as task (a teammate by its agent id).
 func (w *bgWatch) finish(toolUse, task string) {
 	if toolUse != "" {
 		delete(w.tasks, toolUse)
+		delete(w.mates, toolUse)
 	}
 	if task == "" {
 		return
@@ -834,6 +975,18 @@ func (w *bgWatch) finish(toolUse, task string) {
 			delete(w.tasks, id)
 		}
 	}
+	for id, mt := range w.mates {
+		if mt.agent == task || id == task {
+			delete(w.mates, id)
+		}
+	}
+}
+
+// oneSegment reports whether s names a file in a directory and nothing
+// else: not empty, "." or "..", and no slash, backslash or NUL. A teammate's
+// agent id that is not holds nothing.
+func oneSegment(s string) bool {
+	return s != "" && s != "." && s != ".." && !strings.ContainsAny(s, "/\\\x00")
 }
 
 // contentBlocks decodes a message's content: content blocks, or a string

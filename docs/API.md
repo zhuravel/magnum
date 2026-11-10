@@ -2126,8 +2126,9 @@ func (m *Manager) AnswerTrustDialog(ctx context.Context, s store.Session) (bool,
 
 func (m *Manager) BackgroundTasks(ctx context.Context, run store.Run) (int, bool)
     BackgroundTasks counts the background work the claude agent of run's session
-    started during run and left running, as its transcript shows now (ok false:
-    not a claude session, or no transcript to read).
+    started during run and left running, and the teammates it spawned during
+    run that are at work, as the transcripts show now (ok false: not a claude
+    session, or no transcript to read).
 
 func (m *Manager) CheckHealth(ctx context.Context, s store.Session) (Health, error)
     CheckHealth classifies the session's recent pane output with the health

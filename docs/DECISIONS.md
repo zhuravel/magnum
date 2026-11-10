@@ -4703,6 +4703,38 @@ skill versions); people add theirs to the sections before it, at the end of the 
   default").
   If magnum stops running PR code on purpose, the team hooks and the mise file are the first paths to close.
   Sandboxed review sessions are one example of that change.
+- **A teammate holds a claude agent's run only while its own transcript shows a turn in progress** (2026-11-10,
+  a factory writer held 14 minutes past its turn). Claude Code 2.1.322 starts an in-process teammate for an
+  Agent tool use with a `name` (and `run_in_background`): its result says `status: teammate_spawned` with the
+  `agentId`, it never sends a `<task-notification>`, and it idles after each turn until a message in its mailbox
+  wakes it. The tool use's `run_in_background` made the spawn a background task (its result matched none of the
+  launch shapes) that nothing ever finished, so a writer whose two teammates had ended their last turns at
+  17:23Z and 17:56Z held its run from its own turn's end at 18:17Z until the watchdog's nudge (a Tell) at
+  18:31Z. A spawn's result is now a teammate (its agent id and the result's stamp) and no task. Every reading
+  (`backgroundWait`, and `BackgroundTasks`, which the pipeline reads, so both see one number) looks again at the
+  teammate's own transcript, `<the lead's transcript dir>/<session id>/subagents/agent-<agentId>.jsonl`, outside
+  the lead's offset (the lead's transcript stays the same while a teammate works): only its last 256 KiB, whose
+  last complete user or assistant entry decides, never the last line (Claude Code appends system, attachment,
+  api-request and other entries after a turn's end). An assistant entry with stop_reason `end_turn` is the
+  turn's end; a user entry, or an assistant entry with any other stop_reason or none, is a turn in progress,
+  which counts as one background task in the count and in the `agent.background_wait` event ("waiting for 2
+  background tasks"). A missing transcript holds for 2 minutes from the spawn's result (Claude Code may create
+  it late); one that cannot be read, or whose tail holds no such entry, holds nothing; an agent id that is not
+  one path segment (empty, `.`, `..`, a slash, a backslash or a NUL) holds nothing and names no file. A
+  `<task-notification>` or a TaskStop naming the agent id or the spawn's tool use ends a teammate, and Tell
+  releases it, as for tasks. Rejected: dropping teammates from the hold entirely, since a lead that ends its
+  turn while its teammates still edit files would let the factory check a half-written change. Gaps: a teammate
+  an earlier run spawned is not read when this run's SendMessage wakes it (its spawn is before the run); a
+  teammate that stopped on an API error (Claude Code's synthetic assistant entry, stop_reason `stop_sequence`)
+  counts as at work until Tell; a last user or assistant entry longer than the tail holds nothing. Tests,
+  failing first by assertion: TestObserveIsNotHeldByATeammateWhoseTurnEnded,
+  TestObserveHoldsTheRunWhileATeammateWorks, TestBackgroundWaitCountsTeammatesAtWorkWithTheTasks,
+  TestObserveHoldsTheRunForAMissingTeammateFileOnlyWithinItsGrace,
+  TestObserveATeammateWhoseAgentIDIsNoFileNameHoldsNothing, TestObserveATeammateFileItCannotReadHoldsNothing,
+  TestBackgroundTasksCountsATeammateAtWorkAndNotAnIdleOne, TestObserveHoldsTheRunAgainWhenAnIdleTeammateWakes
+  and TestObserveStopsHoldingForATeammateItsNotificationOrStopNames (its agent-id cases);
+  TestTeammateAtWorkReadsOnlyTheTailOfItsFile (it fails on a whole-file read) and
+  TestTeammateSpawnIsNoBackgroundTask pin the tail read and the record.
 
 ## Screens and commands
 
