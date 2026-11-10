@@ -594,3 +594,31 @@ func TestANeedsYouReasonTheFilesGateNoLongerGivesGoes(t *testing.T) {
 		t.Fatalf("the words of a gate that let go name one: %q", noApprovalLifted)
 	}
 }
+
+// A head the clone lacked when a tick asked its links (a fork's, before
+// any round fetched it) fails, and configLinks keeps that failure a while;
+// the round's checkout brings the head, so the dispatch gates read its
+// links again rather than hold the judge's approval back as unreadable.
+func TestTheDispatchGatesReadTheHeadAgainOnceTheCheckoutBringsIt(t *testing.T) {
+	g := &lackingGit{}
+	h := judgeApprovesHarness(t, func(h *harness) { h.d.Git = g })
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1"})
+	h.tick()
+	h.advance(5 * time.Minute)
+	g.lacks.Store("b1", true)
+	if _, err := h.e.configLinks(h.ctx, h.pr(2)); err == nil {
+		t.Fatal("configLinks of a head the clone lacks: no error")
+	}
+	g.lacks.Delete("b1")
+	h.tick()
+	ins := h.rd.all()
+	if len(ins) != 1 {
+		t.Fatalf("rounds = %d, want one", len(ins))
+	}
+	if ins[0].NoApproval != "" {
+		t.Fatalf("round input: no approval %q, want none: the checkout brought b1", ins[0].NoApproval)
+	}
+}

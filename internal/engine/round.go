@@ -812,7 +812,6 @@ func (e *Engine) switchHead(job *roundJob, rs roundSetup, base string, ws agents
 		}
 		job.slot = sl
 		out := pipeline.Switched{TargetSHA: cmp.Or(deref(sl.CheckedOutSHA), sha)}
-		e.headFetched(out.TargetSHA)
 		reviewed := ""
 		if kind != pipeline.KindInitial {
 			reviewed = deref(pr.ReviewedSHA)
