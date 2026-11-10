@@ -23423,70 +23423,61 @@ skill versions); people add theirs to the sections before it, at the end of the 
   person's description there is the author's intent. Codex's reviewer runs `codex-review.sh` and has no prompt to
   change.
 
-- **The factory's scrub masks the value of a secret key in quotes, as JSON, YAML and TOML write it, and the value of
-  an env-style name (`DB_PASSWORD=`), and the evidence scrub holds the same patterns** (2026-11-10, R58). `scrubPairs`
+- **The factory's scrub masks the value of a secret key in quotes, as JSON, YAML and TOML write it, and of an
+  env-style name (`DB_PASSWORD=`), and the evidence scrub holds the same patterns** (2026-11-10, R58). `scrubPairs`
   needs its separator right after the key word, so `{"password":"x"}`, `"api_key": "x"`, `'secret': 'x y'` and
   `"token" = x` kept their values in the prompt ledger, the operator's inputs, the events and the improvement loop's
-  evidence (R54's review found it; its cap on a run over 2,000 characters hid only a long minified JSON). And its `\b`
-  needs a boundary before the key word, which an underscore is not, so `DB_PASSWORD=x`, `GITHUB_TOKEN: x` and
-  `"DB_PASSWORD": "x"` kept theirs too.
-  - `scrubQuotedPairs` is a new pass of `Scrub`, after the tokens and before `scrubPairs`: a key in double or single
-    quotes, optional white space, `:` or `=`, optional white space, and the value, a quoted string (also over lines)
-    or a word up to `,`, `}`, `]` or white space. The key with its quotes and the separator stay, and the value
-    becomes `<redacted>`, as `scrubPairs` does. One list of key words (`scrubKeyWords`, a constant) builds both
-    patterns.
-  - One rule for the key in both patterns: the key word ends the key, and it starts the key or follows a boundary or
-    an underscore. `scrubPairs` is `((?:\b|_)KEYS)` and the quoted pattern takes a prefix of no space or quote that
-    ends in a character that is no ASCII letter or digit (`_`, `-` or `.`). So `DB_PASSWORD=`, `GITHUB_TOKEN:`,
-    `MY_APP.SECRET =`, `"DB_PASSWORD": "x"`, `'stripe-api-key': x`, `"x-api-key"` and `"app.secret"` are masked. Newly
-    masked names of the common kind: `DB_PASSWORD`, `REDIS_PASSWORD`, `POSTGRES_PASSWORD`, `GITHUB_TOKEN`, `GH_TOKEN`,
-    `NPM_TOKEN`, `SLACK_BOT_TOKEN`, `CSRF_TOKEN`, `OPENAI_API_KEY`, `STRIPE_API_KEY`, `STRIPE_SECRET_KEY`,
-    `GOOGLE_CLIENT_SECRET`, `JWT_SECRET`, `SESSION_SECRET` and `DEPLOY_AWS_SECRET_ACCESS_KEY`. A name that holds a
-    limit and ends in a key word, such as `MAX_TOKEN=4096`, is masked too, which costs nothing. Four key words for
-    Rails apps are in the list (the operator's ruling, since talkable is a Rails app):
-    `secret_key_base`, `master_key`, `signing_key` and `encryption_key`, so `SECRET_KEY_BASE=x`, `RAILS_MASTER_KEY=x`
-    and `"signing_key": "x"` are masked (the last three take a hyphen, an underscore or none between their words, as
-    `api_key` does). Names that only hold a key word are left: `password_hint`, `tokens_used`, `MAX_TOKENS`,
-    `TOKEN_LIMIT`, `secretary`, `mypassword`, `2password` and `{"user":"password"}` (a quoted word with no separator
-    after it is a value). Only the key word is under `(?i:...)` in the quoted pattern; its prefix is a class outside
-    it, since Go's `(?i)\W` leaves out the long s and the Kelvin sign that Python's `\W` takes, so a `\W` there parted
-    the port from Go.
-  - It runs before `scrubPairs`: after it, `{"token":"x password: y"}` came out as `{"token":<redacted> password:
-    <redacted>`, since the pair `password: y"}` took the closing quote and the quoted pass masked only the word `"x`.
-    Quoted first, the value is masked whole.
-  - The evidence scrub (scrub.py) has the same patterns as `PAIRS_GO` and `QUOTED_GO`, built from the same key list,
-    in the same order, and `--patterns` prints the quoted one as `quoted`. A minified JSON over 2,000 characters still
-    shows as `[...]` there (the cap of R54, which runs after every mask); Go masks its value. `goPatterns` in the
-    pattern test now reads string constants and `+`, as the patterns are built from the key list, and any other
-    argument still fails it; `scrubPasses` holds the new pass, which the pass count wants (6).
-  - `execx.Redact` is not changed. The same gap is there for its Authorization pattern (`{"Authorization":"Bearer x"}`
-    keeps the token, since `authorization:` needs the colon right after the word), but the fix is another pattern and
+  evidence. Its `\b` needs a boundary before the key word, which an underscore is not, so `DB_PASSWORD=x`,
+  `GITHUB_TOKEN: x` and `SECRET_KEY_BASE=x` kept theirs too.
+  - Three key-value passes run after the tokens, in this order: `scrubPairs`, which is the pattern of before R58 word
+    for word, then `scrubQuotedPairs`, then `scrubEnvPairs`. So Scrub masks every byte the scrub before R58 masked. A
+    wider pass that ran first took a key with no value as the key of a pair with the next key's name (the separator
+    crosses a line break), and the value of the next key, which the old scrub masked, showed: `SESSION_SECRET:` then
+    `api_key: x` on the next line. The cost is cosmetic: `{"token":"x password: y"}` gives `{"token":<redacted>
+    password: <redacted>`.
+  - `scrubQuotedPairs`: a key in double or single quotes, optional white space, `:` or `=`, optional white space, and
+    the value, a quoted string (over lines too) or a word up to `,`, `}`, `]` or white space. `scrubEnvPairs`: the key
+    without quotes, and the value as in `scrubPairs` with the quoted string of the first. The key and the separator
+    stay, and the value becomes `<redacted>`. One list of key words (`scrubKeyWords`) builds both new patterns.
+  - One rule for the key: the key word ends the key, and it starts the key or follows a boundary or an underscore. The
+    quoted pattern takes a prefix of no space or quote that ends in a character that is no ASCII letter or digit (`_`,
+    `-`, `.`). So `DB_PASSWORD=`, `GITHUB_TOKEN:`, `MY_APP.SECRET =`, `"DB_PASSWORD": "x"`, `"x-api-key"` and
+    `'stripe-api-key': x` are masked, and so are `REDIS_PASSWORD`, `NPM_TOKEN`, `OPENAI_API_KEY`, `STRIPE_SECRET_KEY`,
+    `JWT_SECRET` and `MAX_TOKEN=4096` (masking more is safe). `password_hint`, `tokens_used`, `MAX_TOKENS`,
+    `TOKEN_LIMIT`, `secretary`, `mypassword`, `2password` and `{"user":"password"}` stay: a quoted word with no
+    separator after it is a value. Only the key word is under `(?i:...)` in the quoted pattern, since Go's `(?i)\W`
+    leaves out the long s and the Kelvin sign that Python's `\W` takes.
+  - Four key words for Rails apps are in the list, by the operator's ruling, since talkable is a Rails app:
+    `secret_key_base`, `master_key`, `signing_key` and `encryption_key` (the last three take a hyphen, an underscore
+    or nothing between their words, as `api_key` does). `DB_PASSWORD_FILE` (a path), `API_KEY_ID` (an id) and
+    `SECRET_KEY_BASE_DUMMY` stay.
+  - A quoted value reads escapes: `{"password":"a\"b"}` and `'it\'s fine'` are masked whole. The pattern is written
+    unrolled, `"[^"\\]*(?:\\[\s\S][^"\\]*)*"`, which runs in linear time in Go and in scrub.py; the form
+    `(?:[^"\\]|\\.)*` does not in Python. The first pass keeps its `"[^"]*"`, so `password="a\"b c"` (a key it knew)
+    is cut there as before.
+  - scrub.py has the same three patterns as `PAIRS_GO`, `QUOTED_GO` and `ENV_GO`, built from the same key list, and
+    `--patterns` prints them as `pairs`, `quoted` and `env`. A minified JSON over 2,000 characters still shows as
+    `[...]` there (the cap of R54); Go masks its value. `goPatterns` in the pattern test reads string constants and
+    `+`, and any other argument still fails it; `scrubPasses` holds the passes, 7 in all.
+  - `execx.Redact` is not changed. Its Authorization pattern has the same gap (`{"Authorization":"Bearer x"}` keeps
+    the token, since `authorization:` needs the colon right after the word), but the fix is another pattern and
     Redact's cut at the colon, not the same line. A GitHub token or a JWT in a value is masked by its shape.
-  Known gaps, not fixed here: a key with a space in it (`"my password": "x"`), a JSON inside a JSON string
-  (`{\"password\":\"x\"}`), a value that is an array or an object (`"token": ["a","b"]` masks `["a"`), and a key word
-  that the name goes on after (`DB_PASSWORD_FILE` is a path, `API_KEY_ID` an id, `SECRET_KEY_BASE_DUMMY` a flag: the
-  key word must end the key, and these stay by the operator's ruling).
-  Rejected: one pattern for both forms (the value of a quoted key stops at a comma, a brace or a bracket, and
-  `scrubPairs`' `\S+` takes them); a `\W` in the prefix (the long s); running it after `scrubPairs`; a prefix that
+  Known gaps, not fixed here: a key with a space in it (`"my password": "x"`); a JSON inside a JSON string
+  (`{\"password\":\"x\"}`); the bare value of a quoted key stops at `,`, `}` and `]`, so `"PASSWORD" = pa,ss` leaves
+  `,ss` and `"token": ["a","b"]` masks `["a"`; the YAML escape `'it''s'` leaks `s'`; `password="a\"b c"` as said
+  above; and a key word that the name goes on after (`DB_PASSWORD_FILE`, `API_KEY_ID`, `SECRET_KEY_BASE_DUMMY`,
+  `SECRET_KEY_BASE_FILE`), by the operator's ruling.
+  Rejected: one pattern for both forms (the value of a quoted key stops at `,`, `}` and `]`, and the value of
+  `scrubPairs` is `\S+`); the new passes before `scrubPairs` (the leak above, which the review of this change found
+  and `TestScrubMasksEveryByteTheScrubBeforeR58Masked` now guards); a `\W` in the prefix (the long s); a prefix that
   takes white space (a quoted phrase that ends in a key word and a colon would mask the word after it);
-  `authorization` as a key word (the list stays the one of `scrubPairs`); a digit or a letter before the key word as a
-  boundary (`mypassword` and `2password` stay). Tests, each failing first: TestScrubMasksTheValueOfAQuotedSecretKey
-  (JSON, single quotes, TOML, a value over lines, a word value, a nested object, a quoted value that holds a pair, a
-  minified JSON over 2,000 characters), TestScrubMasksTheValueOfAnEnvStyleName (env lines, an export, a quoted value
-  of two words, an env JSON, and the names that stay) and TestAQuotedKeyIsMaskedWhereTheUnquotedKeyIs (thirty-one key
-  names against their unquoted forms, and quoted words that are no keys) in `internal/factory/runtime`; the pattern
-  test and the fuzz's 20 new seeds (the JSON shapes, env lines and env JSON, the long s and the Kelvin sign in a key
-  and a prefix, a key with no closing quote, a space or quote in the prefix, the pass order, a minified JSON over
-  2,000 characters, runs of 1,900 and 5,000 commas or underscores before a key, and one of 5,000 word characters, and
-  one for each Rails key word, unquoted and quoted), 17 of which fail on the scrub.py of master; selftest.sh's case 29
-  on task 22's notes (three of its four checks fail on the scrub.py of master). Mutations of scrub.py: no fold in the
-  key word, the other pass order, `\S+` as the value, no prefix, Python's `\W` in it, no underscore in the unquoted
-  rule, an underscore refused in the quoted prefix, a digit taken as a boundary and a pattern without `(?i)` each fail
-  a seed, and so does each Rails key word dropped from the list (its own seed); the closing quote optional does not,
-  since the next pass masks the same word (an equivalent mutant). The fuzz ran about 894,000 texts, and 273,000 more
-  after the Rails key words, and a grammar of keys, prefixes, quotes, separators and values 270,000 more (150,000 for
-  the underscore rule, 17,046 of them changed by it): the port equaled Scrub's output with its two extra masks on all.
-  1 MiB texts of quotes, of underscores, of `"_` and of unterminated keys scrub in 0.3 s at most. No new dependencies.
+  `authorization` as a key word; a digit or a letter before the key word as a boundary. Tests, each failing first:
+  TestScrubMasksTheValueOfAQuotedSecretKey, TestScrubMasksTheValueOfAnEnvStyleName,
+  TestAQuotedKeyIsMaskedWhereTheUnquotedKeyIs, TestScrubReadsTheEscapesOfAQuotedValue,
+  TestAKeyWithNoValueLeavesTheNextKeysValueMasked and TestScrubMasksEveryByteTheScrubBeforeR58Masked (a frozen copy of
+  the old pattern as the oracle, on the fuzz's seeds and a grammar) in `internal/factory/runtime`; the pattern test
+  and the fuzz's seeds, which hold scrub.py to Scrub and Scrub to the oracle; selftest.sh's case 29 on task 22's
+  notes. No new dependencies.
 
 ## Learned rules
 

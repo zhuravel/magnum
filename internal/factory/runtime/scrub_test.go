@@ -70,7 +70,8 @@ func TestScrubMasksTheValueOfAQuotedSecretKey(t *testing.T) {
 		{"the value on the next line", "\"private_key\":\n\"MADEUP\"", "\"private_key\":\n<redacted>"},
 		{"a key of an object inside an object", `{"db":{"password":"MADEUP","host":"localhost"},"token":"MADEUP2"}`,
 			`{"db":{"password":<redacted>,"host":"localhost"},"token":<redacted>}`},
-		{"a quoted value that holds an unquoted pair is masked whole", `{"token":"x password: y"}`, `{"token":<redacted>}`},
+		{"a quoted value that holds an unquoted pair: the pair is masked first, as before", `{"token":"x password: y"}`,
+			`{"token":<redacted> password: <redacted>`},
 		{"the AWS key names", `{"aws_secret_access_key":"MADEUP","access_key":"MADEUP2"}`, `{"aws_secret_access_key":<redacted>,"access_key":<redacted>}`},
 		{"a header name that ends in a key word, after a hyphen", `{"X-Api-Key":"MADEUP","x-auth-token":"MADEUP2"}`,
 			`{"X-Api-Key":<redacted>,"x-auth-token":<redacted>}`},
@@ -162,6 +163,23 @@ func TestScrubMasksTheValueOfAnEnvStyleName(t *testing.T) {
 		"DB_PASSWORD_FILE=/run/secrets/db", "API_KEY_ID=MADEUP-ID", `{"api_key_id":"MADEUP-ID","secret_key_base_dummy":1}`} {
 		if clean, _ := Scrub(in); clean != in {
 			t.Errorf("a name that only holds a key word was changed:\n in:  %q\n got: %q", in, clean)
+		}
+	}
+}
+
+// The value of a quoted key can hold a quote that a backslash escapes, as a JSON string and a YAML or TOML one do.
+func TestScrubReadsTheEscapesOfAQuotedValue(t *testing.T) {
+	for _, c := range []struct{ name, in, want string }{
+		{"an escaped quote", `{"password":"a\"b"}`, `{"password":<redacted>}`},
+		{"two escaped quotes and the key after", `{"password":"ab\"cd\"ef","user":"alice"}`, `{"password":<redacted>,"user":"alice"}`},
+		{"a single-quoted value", `{'password': 'it\'s fine'}`, `{'password': <redacted>}`},
+		{"a value that ends in an escaped backslash", `{"password":"ab\\","user":"alice"}`, `{"password":<redacted>,"user":"alice"}`},
+		{"an escaped quote after an escaped backslash", `{"password":"a\\\"b","user":"alice"}`, `{"password":<redacted>,"user":"alice"}`},
+		{"an env-style name with an escaped quote", `DB_PASSWORD="a\"b c" next`, `DB_PASSWORD=<redacted> next`},
+		{"a string that never ends", `{"password":"ab\"cd`, `{"password":<redacted>`},
+	} {
+		if clean, _ := Scrub(c.in); clean != c.want {
+			t.Errorf("%s:\n in:   %q\n got:  %q\n want: %q", c.name, c.in, clean, c.want)
 		}
 	}
 }

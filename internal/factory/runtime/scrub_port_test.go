@@ -208,8 +208,9 @@ func scrubPasses(redact *regexp.Regexp) []scrubPass {
 	return []scrubPass{
 		{redact, ""},
 		{scrubTokens, "<redacted>"},
-		{scrubQuotedPairs, "$1$2<redacted>"},
 		{scrubPairs, "$1$2<redacted>"},
+		{scrubQuotedPairs, "$1$2<redacted>"},
+		{scrubEnvPairs, "$1$2<redacted>"},
 		{scrubEmail, "<email>"},
 		{scrubHost, "<host>"},
 	}
@@ -395,8 +396,9 @@ func TestEvidenceScrubHoldsTheGoScrubsPatterns(t *testing.T) {
 	for list, inGo := range map[string][]string{
 		"redact": execxSecretPatterns(t),
 		"tokens": scrubPats["scrubTokens"],
-		"quoted": scrubPats["scrubQuotedPairs"],
 		"pairs":  scrubPats["scrubPairs"],
+		"quoted": scrubPats["scrubQuotedPairs"],
+		"env":    scrubPats["scrubEnvPairs"],
 		"email":  scrubPats["scrubEmail"],
 		"host":   scrubPats["scrubHost"],
 	} {
@@ -414,6 +416,113 @@ func TestEvidenceScrubHoldsTheGoScrubsPatterns(t *testing.T) {
 	}
 }
 
+// scrubSeed is a fuzz text: head, then fill repeated n times (a long word, when it has no space), then tail. The
+// secrets in the seeds are made up, of the right shape.
+type scrubSeed struct {
+	head, fill string
+	n          uint16
+	tail       string
+}
+
+// text is the seed's text, as the fuzz builds it from its arguments.
+func scrubText(head, fill string, n uint16, tail string) string {
+	if fill == "" {
+		return head + tail
+	}
+	return head + strings.Repeat(fill, min(int(n), maxFill/len(fill))) + tail
+}
+
+// scrubSeeds are the fuzz's seeds, which the test of the scrub before R58 reads too.
+var scrubSeeds = []scrubSeed{
+	// R54: a quote inside a word over 2,000 characters opens a value that goes on past it.
+	{`password: "`, "x", 2100, ` QUOTE-TAIL"`},
+	{"- ", "x", 2100, `.password="QUOTED-START QUOTED-TAIL"`},
+	// R54: a word over 2,000 characters ends in -----BEGIN, the key's body follows.
+	{"- ", "x", 2100, "-----BEGIN RSA PRIVATE KEY----- KEY-BODY -----END RSA PRIVATE KEY-----"},
+	// The key's header glued to a long body that goes on past the word.
+	{"-----BEGIN PRIVATE KEY-----", "M", 2100, " BODY-SECOND -----END PRIVATE KEY-----"},
+	// R54: a long word ends in a key, its separator after a space.
+	{"- ", "x", 2100, ".password : SPACED-COLON"},
+	{"- ", "x", 2100, ".token = SPACED-EQUALS"},
+	// R54: authorization:Bearer glued, at the end of a long word.
+	{"- ", "x", 2100, "authorization:Bearer GLUED-BEARER"},
+	// Go's Authorization pattern needs no word boundary before it.
+	{"- ", "x", 2100, "authorization: Bearer NO-BOUNDARY"},
+	// A GitHub token takes in the Authorization: a long word ends with, and the key-value pass masks what follows.
+	{"ghp_", "x", 2100, "authorization: bearer password= TAKEN-IN"},
+	// Go's \s has no vertical tab, so Go's value goes on past one.
+	{"password=a", "", 0, "\vVERTICAL-TAB"},
+	{"Authorization: Bearer a", "", 0, "\vVT-BEARER"},
+	// Go's (?i) folds s to the long s and k to the Kelvin sign.
+	{"pa\u017f\u017fword=", "", 0, "LONG-S"},
+	{"to\u212aen: ", "", 0, "KELVIN"},
+	{"mail db1.internal.example.\u017fite and ", "", 0, "db2.example.u\u212a"},
+	// A sample of every pattern.
+	{"- token ghs_abcDEF123_x here, and a JWT eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0." +
+		"dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U\n", "", 0,
+		"- Authorization: Bearer opaqueTOKEN123, then Authorization: Basic dXNlcjpodW50ZXIy\n"},
+	{"- AKIAABCDEFGHIJKLMNOP and aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n", "", 0,
+		"- xoxb-123456789012-abcdefghijkl sk-abcdefghijklmnopqrstuvwxyz123456 sk-" + "ant-abcdefghijklmnopqrstuv " +
+			"glpat-abcdefghij0123456789 rk_" + "live_abcdefghij0123456789 AI" + "zaSyA-abcdefghijklmnopqrstuvwxyz01234\n"},
+	{`- password=hunter3 client_secret: "s3cr3t value" api_key:` + "\n  NEXT-LINE\n", "", 0,
+		"- mail bob@example.org about db1.internal.example.com and 10.0.4.12\n"},
+	{"-----BEGIN RSA PRIVATE KEY-----\nMIIEsecretbody\n-----END RSA PRIVATE KEY-----\n- the cut key follows\n", "", 0,
+		"-----BEGIN EC PRIVATE KEY-----\nMIIEtruncat"},
+	// R58: the value of a key in quotes, as JSON, YAML and TOML write it.
+	{`{"password":"MADEUP-PW-123","user":"alice"}`, "", 0, `, "api_key": "MADEUP", 'secret': 'x y', "token" = MADEUP-WORD,"n":1}`},
+	{`{"X-Api-Key":"MADEUP","x_auth-token": 12345, "client_secret":["MADEUP"]}`, "", 0, `["pwd": MADEUP]`},
+	{`{"password": "MADEUP-LINE-ONE`, "", 0, "\nMADEUP-LINE-TWO\", \"user\": \"alice\"}\n\"private_key\":\n\"MADEUP\""},
+	// R58 round 1b: env-style names, a key word after an underscore, unquoted and quoted; the names that only hold a key
+	// word, and a digit or a letter before the key word, stay.
+	{"DB_PASSWORD=MADEUP\nGITHUB_TOKEN: MADEUP\nMY_APP.SECRET = MADEUP\nexport OPENAI_API_KEY=\"MADEUP ONE\"\n", "", 0,
+		"DEPLOY_AWS_SECRET_ACCESS_KEY=MADEUP\nMAX_TOKENS=4096 TOKEN_LIMIT=5 mypassword=x 2password=y secretary: Jo\n__token: x"},
+	{`{"DB_PASSWORD": "MADEUP", 'stripe-api-key': x, "__token":1, "db2_pwd":2, "2password": "x", "MAX_TOKENS": 4096}`, "", 0,
+		`{"SLACK_BOT_TOKEN":"MADEUP","DB_HOST":"db1.internal.example.com","DB_PASSWORD_HINT":"x"}`},
+	{"dB_pa\u017f\u017fword=LONG-S\nGITHUB_TO\u212aEN: KELVIN\n\"x\u017f_token\": 1, \"\u212a_\u017fecret\": 2", "", 0, ""},
+	{"DB_PASSWORD=db1.internal.example.com and ", "_", 1900, "token: x, \"_"},
+	{"- ", "_", 5000, "password=NO-BOUNDARY-NEEDED \"_token\": MADEUP"},
+	// R58 round 1c: the Rails key words, each unquoted and quoted; the file and the id of a key stay.
+	{"SECRET_KEY_BASE=MADEUP\n", "", 0, "secret_key_base: MADEUP \"secret_key_base\": \"MADEUP\" SECRET_KEY_BASE_DUMMY=1\n"},
+	{"RAILS_MASTER_KEY=MADEUP\n", "", 0, "master-key: MADEUP {\"master_key\":\"MADEUP\",\"master_keys\":\"x\"}\n"},
+	{"signing_key = MADEUP\n", "", 0, "{\"signing_key\": \"MADEUP ONE\", 'Signing-Key': 'MADEUP'} DB_PASSWORD_FILE=/run/secrets/db\n"},
+	{"config.encryption_key: MADEUP\n", "", 0, "{\"encryption_key\":\"MADEUP\"} API_KEY_ID=MADEUP-ID\n"},
+	// R58 fix round 2: a key with no value, then the next key (the first key-value pass runs first, on the text the
+	// scrub before R58 saw), and a quoted value that reads escapes.
+	{"SESSION_SECRET:\napi_key: hunter2\nDB_PASSWORD=\npassword: hunter2\nsigning_key:\n  password: hunter2\n", "", 0,
+		"\"DB_PASSWORD\":\n  client_secret: hunter2\nGITHUB_TOKEN=x,password: hunter2\n\"secret\": password: hunter2"},
+	{`{"password":"a\"b"}` + "\n", "", 0, `{"password":"ab\"cd\"ef","user":"alice"} {'password': 'it\'s fine'} {"password":"ab\\","user":"alice"}`},
+	{`DB_PASSWORD="a\"b c" next password="a\"b c" more `, "", 0, `{"token":"a\\\"b","user":"alice"} {"password":"ab\"cd`},
+	{`{"password":"`, `\"`, 3000, `x", "token": "MADEUP"}`},
+	{`{"password":"`, `\\`, 3000, `", "token": "MADEUP"} DB_PASSWORD='ab\'`},
+	// A quoted value that holds an unquoted pair: the first key-value pass masks the pair, then the quoted pass the rest.
+	{`{"token":"x password: y"}`, "", 0, ` {'secret': "a token=b c", "pwd" : 'it''s'}`},
+	// A key word before its separator with no closing quote is no quoted key (the unquoted pair masks one word), and a
+	// prefix has no space or quote in it.
+	{`"pwd: 'MADEUP ONE TWO' and "token: "MADEUP THREE"`, "", 0, ` {"my password": "MADEUP-SPACE", "a'password": "MADEUP-QUOTE"}`},
+	// A key that only holds a key word, and a quoted JSON key inside a JSON string, are left as they are.
+	{`{"password_hint":"the dog","tokens_used":3,"mypassword":"MADEUP","user":"password","note":"token"}`, "", 0,
+		`{\"password\":\"ESCAPED-JSON\"} "password" is a word, and so is 'token' too`},
+	// R58: Go's (?i) folds s and k in a quoted key too, and a prefix that ends in the long s or the Kelvin sign is
+	// one of non-word characters.
+	{"{\"pa\u017f\u017fword\":\"LONG-S\",\"to\u212aen\":\"KELVIN\",\"a\u017f-api_\u212aey\":\"MADEUP\"}", "", 0,
+		"\"a\u212apassword\": \"MADEUP\", \"\u017fpwd\" = x"},
+	// R58: a minified JSON over 2,000 characters with a password in it: Scrub masks the value, and the port's cap
+	// shows the run as [...].
+	{`{"items":[`, `{"id":1,"name":"widget"},`, 400, `{"password":"MADEUP-PW-123","user":"alice"}]}`},
+	{`"`, `,`, 1900, `password": "MADEUP", "token":"MADEUP-2"`},
+	{`"`, `,`, 5000, `password": "MADEUP", "token":"MADEUP-2"`},
+	{`"`, `a`, 5000, `password": "MADEUP"`},
+	// The port's skips: a JWT after an eyJ that fails, an email that starts where the last one ended, and Go's $ (the
+	// text's end, not a line break before it).
+	{"- eyJshort.eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U", "", 0,
+		" and a@b.co%x@d.org"},
+	{"-----BEGIN EC PRIVATE KEY-----\nMIIEtruncat\n", "", 0, ""},
+	// The texts Python's engine backtracks on: an eyJ repeated, a dotted line, a long first part of an address.
+	{"- ", "eyJ", 2000, ""},
+	{"- ", "a.", 3000, " and token: DOTTED-NEXT"},
+	{"- ", "a", 5000, "@x"},
+}
+
 // FuzzEvidenceScrubMasksEveryByteScrubMasks wants the port's output of a text
 // to be Scrub's with the port's two extra masks: a run of host characters over
 // 253 that holds a dot as <host>, then a run of non-space characters still
@@ -423,100 +532,12 @@ func TestEvidenceScrubHoldsTheGoScrubsPatterns(t *testing.T) {
 func FuzzEvidenceScrubMasksEveryByteScrubMasks(f *testing.F) {
 	port := startScrubPort(f)
 	redact := regexp.MustCompile(strings.Join(execxSecretPatterns(f), "|"))
-	// A text is head, then fill repeated n times (a long word, when it has no
-	// space), then tail. The secrets are made up, of the right shape.
-	for _, seed := range []struct {
-		head, fill string
-		n          uint16
-		tail       string
-	}{
-		// R54: a quote inside a word over 2,000 characters opens a value that goes on past it.
-		{`password: "`, "x", 2100, ` QUOTE-TAIL"`},
-		{"- ", "x", 2100, `.password="QUOTED-START QUOTED-TAIL"`},
-		// R54: a word over 2,000 characters ends in -----BEGIN, the key's body follows.
-		{"- ", "x", 2100, "-----BEGIN RSA PRIVATE KEY----- KEY-BODY -----END RSA PRIVATE KEY-----"},
-		// The key's header glued to a long body that goes on past the word.
-		{"-----BEGIN PRIVATE KEY-----", "M", 2100, " BODY-SECOND -----END PRIVATE KEY-----"},
-		// R54: a long word ends in a key, its separator after a space.
-		{"- ", "x", 2100, ".password : SPACED-COLON"},
-		{"- ", "x", 2100, ".token = SPACED-EQUALS"},
-		// R54: authorization:Bearer glued, at the end of a long word.
-		{"- ", "x", 2100, "authorization:Bearer GLUED-BEARER"},
-		// Go's Authorization pattern needs no word boundary before it.
-		{"- ", "x", 2100, "authorization: Bearer NO-BOUNDARY"},
-		// A GitHub token takes in the Authorization: a long word ends with, and the key-value pass masks what follows.
-		{"ghp_", "x", 2100, "authorization: bearer password= TAKEN-IN"},
-		// Go's \s has no vertical tab, so Go's value goes on past one.
-		{"password=a", "", 0, "\vVERTICAL-TAB"},
-		{"Authorization: Bearer a", "", 0, "\vVT-BEARER"},
-		// Go's (?i) folds s to the long s and k to the Kelvin sign.
-		{"pa\u017f\u017fword=", "", 0, "LONG-S"},
-		{"to\u212aen: ", "", 0, "KELVIN"},
-		{"mail db1.internal.example.\u017fite and ", "", 0, "db2.example.u\u212a"},
-		// A sample of every pattern.
-		{"- token ghs_abcDEF123_x here, and a JWT eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0." +
-			"dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U\n", "", 0,
-			"- Authorization: Bearer opaqueTOKEN123, then Authorization: Basic dXNlcjpodW50ZXIy\n"},
-		{"- AKIAABCDEFGHIJKLMNOP and aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n", "", 0,
-			"- xoxb-123456789012-abcdefghijkl sk-abcdefghijklmnopqrstuvwxyz123456 sk-" + "ant-abcdefghijklmnopqrstuv " +
-				"glpat-abcdefghij0123456789 rk_" + "live_abcdefghij0123456789 AI" + "zaSyA-abcdefghijklmnopqrstuvwxyz01234\n"},
-		{`- password=hunter3 client_secret: "s3cr3t value" api_key:` + "\n  NEXT-LINE\n", "", 0,
-			"- mail bob@example.org about db1.internal.example.com and 10.0.4.12\n"},
-		{"-----BEGIN RSA PRIVATE KEY-----\nMIIEsecretbody\n-----END RSA PRIVATE KEY-----\n- the cut key follows\n", "", 0,
-			"-----BEGIN EC PRIVATE KEY-----\nMIIEtruncat"},
-		// R58: the value of a key in quotes, as JSON, YAML and TOML write it.
-		{`{"password":"MADEUP-PW-123","user":"alice"}`, "", 0, `, "api_key": "MADEUP", 'secret': 'x y', "token" = MADEUP-WORD,"n":1}`},
-		{`{"X-Api-Key":"MADEUP","x_auth-token": 12345, "client_secret":["MADEUP"]}`, "", 0, `["pwd": MADEUP]`},
-		{`{"password": "MADEUP-LINE-ONE`, "", 0, "\nMADEUP-LINE-TWO\", \"user\": \"alice\"}\n\"private_key\":\n\"MADEUP\""},
-		// R58 round 1b: env-style names, a key word after an underscore, unquoted and quoted; the names that only hold a key
-		// word, and a digit or a letter before the key word, stay.
-		{"DB_PASSWORD=MADEUP\nGITHUB_TOKEN: MADEUP\nMY_APP.SECRET = MADEUP\nexport OPENAI_API_KEY=\"MADEUP ONE\"\n", "", 0,
-			"DEPLOY_AWS_SECRET_ACCESS_KEY=MADEUP\nMAX_TOKENS=4096 TOKEN_LIMIT=5 mypassword=x 2password=y secretary: Jo\n__token: x"},
-		{`{"DB_PASSWORD": "MADEUP", 'stripe-api-key': x, "__token":1, "db2_pwd":2, "2password": "x", "MAX_TOKENS": 4096}`, "", 0,
-			`{"SLACK_BOT_TOKEN":"MADEUP","DB_HOST":"db1.internal.example.com","DB_PASSWORD_HINT":"x"}`},
-		{"dB_pa\u017f\u017fword=LONG-S\nGITHUB_TO\u212aEN: KELVIN\n\"x\u017f_token\": 1, \"\u212a_\u017fecret\": 2", "", 0, ""},
-		{"DB_PASSWORD=db1.internal.example.com and ", "_", 1900, "token: x, \"_"},
-		{"- ", "_", 5000, "password=NO-BOUNDARY-NEEDED \"_token\": MADEUP"},
-		// R58 round 1c: the Rails key words, each unquoted and quoted; the file and the id of a key stay.
-		{"SECRET_KEY_BASE=MADEUP\n", "", 0, "secret_key_base: MADEUP \"secret_key_base\": \"MADEUP\" SECRET_KEY_BASE_DUMMY=1\n"},
-		{"RAILS_MASTER_KEY=MADEUP\n", "", 0, "master-key: MADEUP {\"master_key\":\"MADEUP\",\"master_keys\":\"x\"}\n"},
-		{"signing_key = MADEUP\n", "", 0, "{\"signing_key\": \"MADEUP ONE\", 'Signing-Key': 'MADEUP'} DB_PASSWORD_FILE=/run/secrets/db\n"},
-		{"config.encryption_key: MADEUP\n", "", 0, "{\"encryption_key\":\"MADEUP\"} API_KEY_ID=MADEUP-ID\n"},
-		// A quoted value that holds an unquoted pair: the quoted pairs run before the unquoted ones.
-		{`{"token":"x password: y"}`, "", 0, ` {'secret': "a token=b c", "pwd" : 'it''s'}`},
-		// A key word before its separator with no closing quote is no quoted key (the unquoted pair masks one word), and a
-		// prefix has no space or quote in it.
-		{`"pwd: 'MADEUP ONE TWO' and "token: "MADEUP THREE"`, "", 0, ` {"my password": "MADEUP-SPACE", "a'password": "MADEUP-QUOTE"}`},
-		// A key that only holds a key word, and a quoted JSON key inside a JSON string, are left as they are.
-		{`{"password_hint":"the dog","tokens_used":3,"mypassword":"MADEUP","user":"password","note":"token"}`, "", 0,
-			`{\"password\":\"ESCAPED-JSON\"} "password" is a word, and so is 'token' too`},
-		// R58: Go's (?i) folds s and k in a quoted key too, and a prefix that ends in the long s or the Kelvin sign is
-		// one of non-word characters.
-		{"{\"pa\u017f\u017fword\":\"LONG-S\",\"to\u212aen\":\"KELVIN\",\"a\u017f-api_\u212aey\":\"MADEUP\"}", "", 0,
-			"\"a\u212apassword\": \"MADEUP\", \"\u017fpwd\" = x"},
-		// R58: a minified JSON over 2,000 characters with a password in it: Scrub masks the value, and the port's cap
-		// shows the run as [...].
-		{`{"items":[`, `{"id":1,"name":"widget"},`, 400, `{"password":"MADEUP-PW-123","user":"alice"}]}`},
-		{`"`, `,`, 1900, `password": "MADEUP", "token":"MADEUP-2"`},
-		{`"`, `,`, 5000, `password": "MADEUP", "token":"MADEUP-2"`},
-		{`"`, `a`, 5000, `password": "MADEUP"`},
-		// The port's skips: a JWT after an eyJ that fails, an email that starts where the last one ended, and Go's $ (the
-		// text's end, not a line break before it).
-		{"- eyJshort.eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U", "", 0,
-			" and a@b.co%x@d.org"},
-		{"-----BEGIN EC PRIVATE KEY-----\nMIIEtruncat\n", "", 0, ""},
-		// The texts Python's engine backtracks on: an eyJ repeated, a dotted line, a long first part of an address.
-		{"- ", "eyJ", 2000, ""},
-		{"- ", "a.", 3000, " and token: DOTTED-NEXT"},
-		{"- ", "a", 5000, "@x"},
-	} {
+	for _, seed := range scrubSeeds {
 		f.Add(seed.head, seed.fill, seed.n, seed.tail)
 	}
 	f.Fuzz(func(t *testing.T, head, fill string, n uint16, tail string) {
-		text := head + tail
-		if fill != "" {
-			text = head + strings.Repeat(fill, min(int(n), maxFill/len(fill))) + tail
-		}
+		text := scrubText(head, fill, n, tail)
+		notMaskedNow(t, redact, text)
 		beforeHost, clean := scrubReplay(redact, text)
 		if want, _ := Scrub(text); clean != want {
 			t.Fatalf("the replay of Scrub parted from Scrub:\nreplay: %q\nScrub:  %q", brief(clean), brief(want))
