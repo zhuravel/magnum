@@ -70,13 +70,19 @@ const (
 	ChoiceDrop     = "drop"
 )
 
+// ReasonKnown is the reason of the send back that hands the writer the
+// known defects of the card's review (knownDefects): the factory writes its
+// note from the card, so it takes no note of yours.
+const ReasonKnown = "known"
+
 // reasonKeyRe is the key of a send back's reason: a word of lowercase
 // letters, digits, - and _ (the screen's reason keys), never your words.
 var reasonKeyRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
 // DecidePayload is a ReqDecide: your decision on task TaskID's ready card.
 // Choice is push, send_back or drop; a send back takes the key of its
-// Reason and a Note to the writer. HeadSHA, ReportHash and DiffHash are
+// Reason and a Note to the writer (the reason ReasonKnown takes none: the
+// factory writes the note). HeadSHA, ReportHash and DiffHash are
 // what the card showed (ReadyCardFile), Shown when it was shown,
 // DiffOpened when you opened the diff (zero: you did not) and DiffDwell how
 // long you read it. Surface is where you decided (the screen, the CLI).
@@ -893,6 +899,9 @@ func (e *Engine) decideRequest(ctx context.Context, p DecidePayload) (string, er
 		return fmt.Sprintf("%s: pushes %s at %s and opens its PR, ready for review", TaskKey(t), cmp.Or(t.RemoteBranch, t.Branch),
 			short(p.HeadSHA)), nil
 	case ChoiceSendBack:
+		if p.Reason == ReasonKnown {
+			return fmt.Sprintf("%s: sent back to %s (%s): the writer reads the known defects of the local review", TaskKey(t), t.Stage, p.Reason), nil
+		}
 		return fmt.Sprintf("%s: sent back to %s (%s): the writer reads your note", TaskKey(t), t.Stage, p.Reason), nil
 	}
 	return fmt.Sprintf("%s: dropped, its copy freed and its branch %s kept", TaskKey(t), t.Branch), nil
@@ -919,7 +928,10 @@ func (e *Engine) decide(ctx context.Context, p DecidePayload) error {
 		if !reasonKeyRe.MatchString(p.Reason) {
 			return fmt.Errorf("a send back takes the key of its reason (lowercase letters, digits, - and _), not %q", p.Reason)
 		}
-		if strings.TrimSpace(p.Note) == "" {
+		switch note := strings.TrimSpace(p.Note); {
+		case p.Reason == ReasonKnown && note != "":
+			return errors.New("the reason " + ReasonKnown + " takes no note: the factory writes it from the card's known defects")
+		case p.Reason != ReasonKnown && note == "":
 			return errors.New("a send back takes a note to the writer")
 		}
 	default:
@@ -949,6 +961,9 @@ func (e *Engine) decide(ctx context.Context, p DecidePayload) error {
 			e.redraw(ctx, t, why)
 			return fmt.Errorf("the branch changed after you read it: %s; the card is drawn again", why)
 		}
+	}
+	if p.Choice == ChoiceSendBack && p.Reason == ReasonKnown && len(knownDefects(card.Review)) == 0 {
+		return fmt.Errorf("%s's card lists no known defect to send back", TaskKey(t))
 	}
 	if p.Choice == ChoicePush {
 		if _, why := e.readyProblem(t); why != "" {
@@ -992,18 +1007,54 @@ func (e *Engine) decide(ctx context.Context, p DecidePayload) error {
 // sendBack writes your note on card to send-back-<revision>.md (data the
 // writer reads, never a prompt's text), records it as your input
 // (scrubbed), and returns task t to its coding stage with the reason's key.
+// For the reason ReasonKnown the note is the factory's, from the card's
+// known defects (knownNote); you typed nothing, so no input of your words is
+// recorded (the decision's input says the reason), and the task's event says
+// how many items went back and in which file.
 func (e *Engine) sendBack(ctx context.Context, t registry.Task, card ReadyCardFile, p DecidePayload, surface string) error {
 	note := sendBackFile(card.Revision)
-	text := "# Sent back from the ready card " + fmt.Sprint(card.Revision) + " (" + p.Reason + ")\n\n" + strings.TrimSpace(p.Note) + "\n"
+	body, because := strings.TrimSpace(p.Note), "you sent card "+fmt.Sprint(card.Revision)+" back: "+p.Reason
+	known := p.Reason == ReasonKnown
+	if known {
+		items := knownDefects(card.Review)
+		body = knownNote(items)
+		because = fmt.Sprintf("you sent card %d back with %s (%s)", card.Revision, plural(len(items), "known defect"), note)
+	}
+	text := "# Sent back from the ready card " + fmt.Sprint(card.Revision) + " (" + p.Reason + ")\n\n" + body + "\n"
 	if err := fsx.WriteFileAtomic(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), note), []byte(text), 0o600); err != nil {
 		return err
 	}
-	in := withWords(registry.Input{TaskID: t.ID, Kind: registry.InputSendBack, Surface: surface, Stage: t.Stage}, p.Note)
-	if _, err := e.recordInput(ctx, in); err != nil {
-		e.log.Warn("record a send back", "task", t.ID, "err", err)
+	if !known {
+		in := withWords(registry.Input{TaskID: t.ID, Kind: registry.InputSendBack, Surface: surface, Stage: t.Stage}, p.Note)
+		if _, err := e.recordInput(ctx, in); err != nil {
+			e.log.Warn("record a send back", "task", t.ID, "err", err)
+		}
 	}
 	rw := reworkRecord{Kind: reworkSendBack, Reason: p.Reason, Note: note, Card: card.Revision, Head: card.Head, At: e.now()}
-	return e.backToCoding(ctx, t, rw, []string{registry.TaskNeedsYou}, "you sent card "+fmt.Sprint(card.Revision)+" back: "+p.Reason)
+	return e.backToCoding(ctx, t, rw, []string{registry.TaskNeedsYou}, because)
+}
+
+// knownDefects are the items of a review summary that the ready card's key
+// for them sends back to the writer: the leftovers that are defects, in the
+// summary's order. The simplifications are suggestions, a product question
+// you answered was decided by you, and the declined findings, the doubts
+// and the reviewers a round went without are told on the card, not defects
+// to fix before the push. A summary written before the simplifications were
+// marked lists them among the defects.
+func knownDefects(sum ReviewSummary) []ReviewItem {
+	return slices.DeleteFunc(slices.Clone(sum.Leftovers), func(i ReviewItem) bool { return i.Simplification || i.Question })
+}
+
+// knownNote is the note of a send back for the known defects: each one's
+// priority, place and title (the finding's own words, one line each), and
+// nothing of the PR, the ticket or the finding's body.
+func knownNote(items []ReviewItem) string {
+	var b strings.Builder
+	b.WriteString("The local review left these defects open; none of them blocked the card. Fix each one:\n\n")
+	for _, i := range items {
+		fmt.Fprintf(&b, "- %s\n", knownItem(i, true))
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // cardChanged is what changed since task t's card showed what p says ("" for

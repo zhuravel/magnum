@@ -133,6 +133,12 @@ const (
 	FactoryDrop     = "drop"
 )
 
+// FactoryReasonKnown is the reason of the send back that w makes on the
+// ready card: the known defects of the local review go back to the writer,
+// with a note the factory writes (factory.ReasonKnown, which a test in the
+// cli pins this to). Decide sends it with no note.
+const FactoryReasonKnown = "known"
+
 // ErrQuestionsChanged is the refusal of a batch of answers to questions that
 // newer evidence replaced: nothing of it was kept. Answer returns it (or a
 // *QuestionsChangedError, which is it) and the recap says so (spec 9.C).
@@ -166,7 +172,8 @@ func (e *QuestionsChangedError) Is(target error) bool { return target == ErrQues
 //     index from 0: an option's label, the operator's words, or
 //     "ask:<login>"; needless flags questions with the key of the reason.
 //   - Decide decides on the ready card: FactoryPush, FactorySendBack (with
-//     the reason's key and the note) or FactoryDrop.
+//     the reason's key and the note; the reason FactoryReasonKnown takes
+//     none) or FactoryDrop.
 //   - Stop drops a task (frees its copy, keeps its branch); Retry lets a
 //     task that waits on the operator go on at its stage.
 //   - Rate rates a published or a done task + (value 1) or − (-1), with the

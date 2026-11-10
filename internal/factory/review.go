@@ -125,7 +125,9 @@ const LocalRoundCap = 3 * time.Hour
 // ReviewItem is one finding of the local review as the factory hands it on:
 // its id in the round's file (F1, F2, ...), its fingerprint, severity,
 // title, path, line and body, whether the judge marked it a product
-// question, and, for one the writer declined, the risk it named.
+// question, whether it is a simplification (a suggestion, never a defect:
+// the ready card's key that sends the known defects to the writer leaves
+// it out) and, for one the writer declined, the risk it named.
 type ReviewItem struct {
 	ID          string `json:"id"`
 	Fingerprint string `json:"fingerprint"`
@@ -136,6 +138,9 @@ type ReviewItem struct {
 	Body        string `json:"body,omitempty"`
 	Question    bool   `json:"question,omitempty"`
 	Risk        string `json:"risk,omitempty"`
+	// Simplification is not in the summaries written before it was kept: it
+	// reads false on every leftover of one.
+	Simplification bool `json:"simplification,omitempty"`
 }
 
 // ReviewFile is review-<n>.json, what a blocking round hands the writer:
@@ -1111,6 +1116,9 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 	if err != nil {
 		return false, err
 	}
+	if !blocks && slices.ContainsFunc(seen, func(s seenFinding) bool { return e.blocksLoop(s.f) && !blockingSeverity(s.f.Severity) }) {
+		blocks = true // left_blocks: a P3 defect is what stops the loop's exit
+	}
 	answered, err := e.answeredQuestions(ctx, t)
 	if err != nil {
 		return false, err
@@ -1120,7 +1128,7 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 	for _, s := range seen {
 		item := s.item
 		switch {
-		case s.f.Simplification || !blockingSeverity(s.f.Severity):
+		case !e.blocksLoop(s.f):
 			leftovers = append(leftovers, item)
 		case s.reg.Outcome == registry.FindingRebutted || s.reg.Outcome == registry.FindingWaived:
 			rebutted = append(rebutted, item)
@@ -1216,6 +1224,16 @@ type seenFinding struct {
 	reg  registry.Finding
 }
 
+// blocksLoop reports whether finding f stops the loop's exit: a P0 to P2
+// one, and with [factory.local_review] left_blocks a P3 one too; never a
+// simplification, whatever its priority.
+func (e *Engine) blocksLoop(f evalrun.LocalFinding) bool {
+	if f.Simplification {
+		return false
+	}
+	return blockingSeverity(f.Severity) || (e.cfg.Factory.LocalReview.LeftBlocks && f.Severity == "P3")
+}
+
 // seeFindings records every finding of cycle cy's round in the registry
 // (SeeFinding, by its fingerprint: seen again in one cycle, nothing
 // changes), with its class (a defect, a simplification or a question) and
@@ -1232,12 +1250,12 @@ func (e *Engine) seeFindings(ctx context.Context, cy registry.Cycle, res evalrun
 			class = "question"
 		}
 		reg, err := e.reg.SeeFinding(ctx, cy.ID, registry.Finding{Fingerprint: fp, Path: f.Path, StartLine: f.Line, EndLine: f.Line,
-			TitleHash: titleHash(f.Title), Priority: f.Severity, Class: class, Verdict: "posted", Blocking: blockingSeverity(f.Severity) && !f.Simplification})
+			TitleHash: titleHash(f.Title), Priority: f.Severity, Class: class, Verdict: "posted", Blocking: e.blocksLoop(f)})
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, seenFinding{f: f, reg: reg, item: ReviewItem{ID: fmt.Sprintf("F%d", i+1), Fingerprint: fp, Severity: f.Severity,
-			Title: f.Title, Path: f.Path, Line: f.Line, Body: f.Body, Question: f.Question}})
+			Title: f.Title, Path: f.Path, Line: f.Line, Body: f.Body, Question: f.Question, Simplification: f.Simplification}})
 	}
 	return out, nil
 }

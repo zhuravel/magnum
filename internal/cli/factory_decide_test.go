@@ -111,7 +111,15 @@ func TestFactoryDecideSendsTheCardYouRead(t *testing.T) {
 		got.Choice != factory.ChoiceSendBack || got.Reason != "scope" || got.Note != "keep archived out" {
 		t.Fatalf("send back: exit %d, stderr %s, payload %+v", code, dt.stderr, got)
 	}
-	for _, bad := range [][]string{{"push"}, {"merge", "--card", "2"}, {"send_back", "--card", "2", "--note", "x"}} {
+	// The reason known takes no note: the factory writes it from the card's
+	// known defects.
+	got = factory.DecidePayload{}
+	if code := dt.run("factory", "decide", "PR-12360", "send_back", "--card", "2", "--reason", factory.ReasonKnown); code != 0 ||
+		got.Choice != factory.ChoiceSendBack || got.Reason != factory.ReasonKnown || got.Note != "" {
+		t.Fatalf("send back of the known defects: exit %d, stderr %s, payload %+v", code, dt.stderr, got)
+	}
+	for _, bad := range [][]string{{"push"}, {"merge", "--card", "2"}, {"send_back", "--card", "2", "--note", "x"},
+		{"send_back", "--card", "2", "--reason", factory.ReasonKnown, "--note", "my words"}} {
 		if code := dt.run("factory", append([]string{"decide", "PR-12360"}, bad...)...); code == 0 {
 			t.Errorf("decide %q went through", bad)
 		}

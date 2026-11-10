@@ -120,6 +120,8 @@ var factoryKeyHelp = []struct {
 	{"Ready card", []hint{{"d", "the diff in the pager"}, {"j k", "move the mark"}, {"1", "push + PR (y/N)"},
 		{"2", "send back: a reason's digit, then a note (y/N)"}, {"3", "drop: free the copy, keep the branch (y/N)"},
 		{"enter", "the marked one"},
+		{knownKey, "send the defects KNOWN lists back to the writer, in one key (y/N names how many; offered when the local review " +
+			"left some; not the simplifications, doubts or declined findings)"},
 		{reportKey, "the QA run's report (summary.md) in the pager, when QA walked the change (asks nothing)"}}},
 	{"Task card", []hint{{"j k", "move"}, {"enter", "the decision card its task waits on: its questions, its ready card"},
 		{"r", "retry: it goes on at its stage (y/N, when it can); on a card that offers no retry, the review of its PR, as on home"},

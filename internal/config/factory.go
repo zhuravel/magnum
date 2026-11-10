@@ -120,6 +120,12 @@ type FactoryLocalReview struct {
 	// one more round with the watch's judge_fallback in its place, once per
 	// task: on a wide change (FactorySecondJudgeWide), always or never.
 	SecondJudge string `toml:"second_judge"`
+	// LeftBlocks makes the P3 defects a round leaves open (never its
+	// simplifications) block the loop's exit as P0 to P2 ones do: the
+	// writer gets them like any finding, and the loop ends clean only when
+	// a round leaves none. Off by default: they are then listed under
+	// KNOWN on the ready card, which sends them to the writer in one key.
+	LeftBlocks bool `toml:"left_blocks"`
 }
 
 // FactoryRepo is a [[factory.repo]]: a repository the factory writes code

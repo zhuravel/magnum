@@ -608,3 +608,11 @@ func TestTheScreensRatingReasonsAreTheKeysTheFactoryTakes(t *testing.T) {
 		t.Errorf("the screen offers %v, the factory takes %v", got, want)
 	}
 }
+
+// The reason the screen's w sends is the key the factory writes the known
+// defects' note for: the screen's constant and the factory's are one.
+func TestTheScreensKnownReasonIsTheKeyTheFactoryTakes(t *testing.T) {
+	if tui.FactoryReasonKnown != factory.ReasonKnown {
+		t.Errorf("the screen sends %q, the factory takes %q", tui.FactoryReasonKnown, factory.ReasonKnown)
+	}
+}

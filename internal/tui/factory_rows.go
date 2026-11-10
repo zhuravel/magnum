@@ -451,6 +451,11 @@ type ReadyCard struct {
 	// findings the writer declined with their risks, the doubts, and the
 	// reviewers a round went without.
 	Leftovers []string
+	// Known is how many of the local review's leftovers are defects that w
+	// sends back to the writer, in one key (not the simplifications, the
+	// doubts or the declined findings, which the KNOWN row also lists). The
+	// key is offered only while it is above zero; the y/N names the count.
+	Known int
 	// Unread are the changed files the operator has not opened in the diff,
 	// drawn as "unread: <file>".
 	Unread []string

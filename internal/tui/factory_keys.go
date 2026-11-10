@@ -1267,12 +1267,28 @@ func (m *factoryModel) readyKey(k string) (tea.Cmd, bool) {
 		return m.doReady(c, rs.cursor), true
 	case "d":
 		return m.openDiff(m.task), true
+	case knownKey:
+		if c.Known <= 0 { // the card offers no such key
+			return nil, false
+		}
+		return m.askKnown(c), true
 	case "esc":
 		m.goHome()
 	default:
 		return nil, false
 	}
 	return nil, true
+}
+
+// knownKey sends the known defects the local review left back to the
+// writer, on a ready card that counts some.
+const knownKey = "w"
+
+// askKnown asks y/N for the send back of the card's known defects, naming
+// how many go back; y sends it with the reason FactoryReasonKnown and no
+// note (the factory writes the note from the card's review).
+func (m *factoryModel) askKnown(c ReadyCard) tea.Cmd {
+	return m.decide("Send "+factoryPlural(c.Known, "known defect", "known defects")+" back to the writer?", FactorySendBack, FactoryReasonKnown, "")
 }
 
 // doReady does option i of the ready card: a push or a drop asks y/N, a send

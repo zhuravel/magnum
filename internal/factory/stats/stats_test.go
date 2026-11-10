@@ -161,6 +161,7 @@ func TestStatsCountsTypedMessagesPerTask(t *testing.T) {
 		AnswerBatches: 2, Decisions: 2, ReviewRounds: 2}
 	got.OperatorSecs, got.WaitedOnYou, got.StartToReady = 0, 0, 0
 	got.Questions, got.QuestionsFrom, got.QuestionsShared = 0, nil, nil // counted apart (TestStatsCountTheQuestionsBySource)
+	got.SendBacks = nil                                                 // counted apart (TestStatsCountTheSendBacksByReason)
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("task A\n got %+v\nwant %+v", got, want)
 	}
@@ -625,6 +626,61 @@ func TestStatsCountALiaisonsAnswerAsACards(t *testing.T) {
 	screen.TaskID, screen.Key = liaison.TaskID, liaison.Key
 	if !reflect.DeepEqual(screen, liaison) {
 		t.Errorf("the liaison's task\n got %+v\nwant %+v, as the same from the screen", liaison, screen)
+	}
+}
+
+// The decisions that sent a card back count by the key of their reason, per
+// task: the screen's four reasons and known, the send back of the defects
+// the local review left open. A push, a drop and a decision with no key are
+// no send back by reason. The markdown names the reasons in a section of
+// their own, only for the tasks that had a send back; the JSON has the
+// counts only where there are some.
+func TestStatsCountTheSendBacksByReason(t *testing.T) {
+	t.Parallel()
+	r := openRegistry(t)
+	ctx := t.Context()
+	task := createTask(t, r, "PR-12305")
+	for i, d := range []registry.Decision{
+		{TaskID: task.ID, Kind: "ready_push", Choice: stats.SendBackChoice, Note: "known"},
+		{TaskID: task.ID, Kind: "ready_push", Choice: stats.SendBackChoice, Note: "thin-tests"},
+		{TaskID: task.ID, Kind: "ready_push", Choice: stats.SendBackChoice, Note: "known"},
+		{TaskID: task.ID, Kind: "ready_push", Choice: "push"},
+	} {
+		d.At = t0.Add(time.Duration(i+1) * time.Hour)
+		if err := r.RecordDecision(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	quiet := createTask(t, r, "PR-12304")
+	if err := r.RecordDecision(ctx, registry.Decision{TaskID: quiet.ID, Kind: "ready_push", Choice: "push", At: t0.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := stats.ComputeAt(ctx, r, time.Time{}, t0.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := only(t, rep, "PR-12305"); got.Decisions != 4 || !reflect.DeepEqual(got.SendBacks, map[string]int{"known": 2, "thin-tests": 1}) {
+		t.Errorf("PR-12305 = %+v, want 4 decisions and the send backs known 2, thin-tests 1", got)
+	}
+	if got := only(t, rep, "PR-12304"); got.SendBacks != nil {
+		t.Errorf("PR-12304 = %+v, want no send backs", got)
+	}
+	md := rep.Markdown()
+	for _, want := range []string{"## Send backs by reason", "| Task | Send backs | By reason |", "| PR-12305 | 3 | known 2, thin-tests 1 |"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("the markdown lacks %q:\n%s", want, md)
+		}
+	}
+	if _, section, _ := strings.Cut(md, "## Send backs by reason"); strings.Contains(section, "PR-12304") {
+		t.Errorf("the send backs section lists a task with none:\n%s", section)
+	}
+	b, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"send_backs":{"known":2,"thin-tests":1}`) || strings.Count(string(b), "send_backs") != 1 {
+		t.Errorf("the JSON %s, want send_backs on the one task that has some", b)
 	}
 }
 

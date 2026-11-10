@@ -248,11 +248,15 @@ func (p *cardPainter) readyLists(c ReadyCard, f readyFit) []string {
 }
 
 // readyHints are the ready card's own key hints: e for the QA run's shots
-// (its report) only when the card has one.
+// (its report) only when the card has one, and w for the known defects
+// only when it counts some.
 func (p *cardPainter) readyHints(c ReadyCard) []hint {
 	hs := []hint{{"d", "read the diff"}}
 	if c.QAReport != "" {
 		hs = append(hs, hint{reportKey, "QA shots"})
+	}
+	if c.Known > 0 {
+		hs = append(hs, hint{knownKey, "send known back"})
 	}
 	return append(hs, hint{"1-3", "pick"}, hint{"j k", "move"}, hint{"enter", "do it"}, hint{"esc", "back"})
 }

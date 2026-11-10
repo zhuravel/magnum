@@ -877,6 +877,72 @@ func TestEveryRoundIsACycleWithItsFindings(t *testing.T) {
 	}
 }
 
+// [factory.local_review] left_blocks = true makes a P3 defect that a round
+// leaves open block the loop's exit as a P2 one does: a round whose only
+// finding is a P3 does not end the loop clean, the writer gets the finding
+// (review-1.json), the finding counts as blocking in the registry, and the
+// loop ends clean once a round leaves none.
+func TestLeftBlocksMakesALeftP3BlockTheExitOfTheLoop(t *testing.T) {
+	r := newReviewRig(t, result(nitFinding), result())
+	r.cfg.Factory.LocalReview.LeftBlocks = true
+	task, _ := r.reviewTask("PR-12371")
+	r.run(4, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
+	ps := r.rt.promptsTo("fx-writer")
+	if len(ps) != 1 || !strings.Contains(ps[0].Text, reviewFile(1)) {
+		t.Fatalf("the writer's prompts %+v, want its fix turn naming %s", ps, reviewFile(1))
+	}
+	if got := r.readTask(task.ID, reviewFile(1)); !strings.Contains(got, nitFinding.Title) {
+		t.Fatalf("%s:\n%s, want the P3", reviewFile(1), got)
+	}
+	if got := r.reload(task.ID); got.Stage != "local_review" {
+		t.Fatalf("the task is at %s after a round whose only finding is a P3, want the loop still going", got.Stage)
+	}
+	if nit := r.findings(task.ID)[Fingerprint(nitFinding)]; !nit.Blocking {
+		t.Errorf("the P3 %+v, want it to count as blocking", nit)
+	}
+	r.writerFixes(task, 1, fixedCredit(1), nil)
+	r.run(8, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	var sum ReviewSummary
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, reviewSummaryFile)), &sum); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.reload(task.ID); got.Stage != "pr_body" || sum.Exit != registry.ExitClean || len(sum.Leftovers) != 0 {
+		t.Fatalf("task at %s, summary %+v, want a clean exit with nothing left after the P3 was fixed", got.Stage, sum)
+	}
+}
+
+// With left_blocks a P3 simplification still blocks nothing (the setting
+// is about defects), and a P3 the writer declined with its risk is kept
+// for the ready card as a P2 declined is.
+func TestLeftBlocksLeavesASimplificationAndADeclinedP3Alone(t *testing.T) {
+	simplify := nitFinding
+	simplify.Title, simplify.Simplification = "Inline the helper", true
+	r := newReviewRig(t, result(simplify), result())
+	r.cfg.Factory.LocalReview.LeftBlocks = true
+	task, _ := r.reviewTask("PR-12372")
+	r.run(8, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	var sum ReviewSummary
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, reviewSummaryFile)), &sum); err != nil {
+		t.Fatal(err)
+	}
+	if ps := r.rt.promptsTo("fx-writer"); len(ps) != 0 || sum.Exit != registry.ExitClean || len(sum.Leftovers) != 1 || !sum.Leftovers[0].Simplification {
+		t.Fatalf("writer prompts %+v, summary %+v, want a clean exit with the simplification left and no turn for the writer", ps, sum)
+	}
+
+	r = newReviewRig(t, rounds(2, result(nitFinding))...)
+	r.cfg.Factory.LocalReview.LeftBlocks = true
+	task, _ = r.reviewTask("PR-12373")
+	r.run(4, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
+	r.writerFixes(task, 1, fixedCredit(1), map[string]string{"F1": "the comment is the spec's own words"})
+	r.run(8, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, reviewSummaryFile)), &sum); err != nil {
+		t.Fatal(err)
+	}
+	if sum.Exit != registry.ExitClean || len(sum.Declined) != 1 || sum.Declined[0].Title != nitFinding.Title || len(sum.Leftovers) != 0 {
+		t.Fatalf("summary %+v, want the P3 among the declined, with its risk", sum)
+	}
+}
+
 // A Codex refusal in a local round makes the task Codex-never for good:
 // the round runs again with magnum's judge_fallback in place of the Codex
 // judge and without Codex's own review, and no later round runs a Codex

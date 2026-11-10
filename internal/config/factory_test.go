@@ -608,6 +608,33 @@ second_judge = "always"
 	}
 }
 
+// left_blocks is off by default, in the Go defaults and the embedded file,
+// and takes only a boolean: any other value is refused by the load, naming
+// the key; a user's lone key merges into the built-in table.
+func TestFactoryLeftBlocksIsOffByDefaultAndTakesOnlyABoolean(t *testing.T) {
+	for _, lr := range []FactoryLocalReview{Defaults().Factory.LocalReview, mustLoadDefaults(t).Factory.LocalReview} {
+		if lr.LeftBlocks {
+			t.Errorf("left_blocks = true by default, want off: %+v", lr)
+		}
+	}
+	cfg, err := loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml+`
+[factory.local_review]
+left_blocks = true
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lr := cfg.Factory.LocalReview; !lr.LeftBlocks || lr.Cycles != 3 || lr.SecondJudge != FactorySecondJudgeWide {
+		t.Errorf("local_review = %+v, want left_blocks on and the built-in cycles and second_judge", lr)
+	}
+	for _, bad := range []string{`"yes"`, `"true"`, `1`} {
+		_, err := loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml+"\n[factory.local_review]\nleft_blocks = "+bad+"\n")
+		if err == nil || !strings.Contains(err.Error(), "left_blocks") {
+			t.Errorf("left_blocks = %s: err = %v, want one naming left_blocks", bad, err)
+		}
+	}
+}
+
 func mustLoadDefaults(t *testing.T) *Config {
 	t.Helper()
 	cfg, err := LoadWithOptions(paths.Layout{Home: repoRoot(t)}, "", LoadOptions{NoOverlay: true})

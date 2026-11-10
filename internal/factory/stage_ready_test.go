@@ -18,6 +18,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/factory/stats"
 	"github.com/zhuravel/magnum/internal/gitx"
 )
 
@@ -841,6 +842,161 @@ func TestSendBackReturnsTheTaskToCodingWithTheReasonAndTheNote(t *testing.T) {
 		if err == nil || (!strings.Contains(err.Error(), "reason") && !strings.Contains(err.Error(), "note")) {
 			t.Errorf("a send back with reason %q and note %q: %v, want it refused for its reason or note", bad.reason, bad.note, err)
 		}
+	}
+}
+
+// The known defects of a review summary are its leftovers that are defects:
+// the P3 findings and the blocking ones a clean verdict left out, in the
+// order the summary has them. Its simplifications, the product questions
+// you answered, the declined findings, the doubts and the reviewers a round
+// went without are not: the first are suggestions, the rest are told, or
+// were decided by you.
+func TestKnownDefectsAreTheLeftoversThatAreDefects(t *testing.T) {
+	sum := ReviewSummary{
+		Leftovers: []ReviewItem{
+			{ID: "F1", Severity: "P3", Path: "app/credit.rb", Line: 1, Title: "A comment says cents"},
+			{ID: "F2", Severity: "P3", Path: "app/credit.rb", Line: 9, Title: "Inline the helper", Simplification: true},
+			{ID: "F3", Severity: "P2", Path: "app/user.rb", Line: 20, Title: "Keep the archived ones", Question: true},
+			{ID: "F4", Severity: "P2", Path: "app/user.rb", Line: 31, Title: "A blocking finding the verdict left out"},
+			{ID: "F5", Severity: "P3", Title: "A finding with no place"},
+		},
+		Declined: []ReviewItem{{ID: "F6", Severity: "P2", Path: "app/a.rb", Title: "Split the model", Risk: "it touches every caller"}},
+		Doubts:   []ReviewItem{{ID: "F7", Severity: "P2", Path: "app/b.rb", Title: "Archived rules may be skipped"}},
+		Missing:  []string{"claude-review"},
+	}
+	var got []string
+	for _, i := range knownDefects(sum) {
+		got = append(got, i.ID)
+	}
+	if !slices.Equal(got, []string{"F1", "F4", "F5"}) {
+		t.Errorf("known defects %v, want F1, F4 and F5", got)
+	}
+	if got := knownDefects(ReviewSummary{}); len(got) != 0 {
+		t.Errorf("known defects of an empty summary %v", got)
+	}
+}
+
+// The stats count the decisions that sent a card back by the choice the
+// factory records, so the two are one word.
+func TestTheStatsCountSendBacksByTheChoiceTheFactoryRecords(t *testing.T) {
+	if stats.SendBackChoice != ChoiceSendBack {
+		t.Errorf("the stats count %q, the factory records %q", stats.SendBackChoice, ChoiceSendBack)
+	}
+}
+
+// Send back with the reason "known" returns the task to its coding stage
+// with a note the factory writes from the card's review summary, never from
+// you: each known defect's priority, place and title, the simplifications
+// and the declined and doubted findings left out. The writer's next prompt
+// names the note's file and the reason's key; the decision keeps the
+// reason, the task's events say how many items went back, and no input
+// counts as a message you typed (you typed nothing).
+func TestSendBackKnownHandsTheWriterTheCardsKnownDefects(t *testing.T) {
+	second := evalrun.LocalFinding{Severity: "P3", Title: "The spec name hides what it proves", Path: "spec/models/credit_points_spec.rb", Line: 4}
+	simplify := evalrun.LocalFinding{Severity: "P3", Title: "Inline the helper", Path: "app/credit.rb", Line: 9, Simplification: true}
+	r := newReadyRig(t, result(nitFinding, second, simplify))
+	task, head := r.toCard("PR-12397")
+	c := r.card(task.ID)
+	if got := len(knownDefects(c.Review)); got != 2 {
+		t.Fatalf("the card's review %+v has %d known defects, want 2", c.Review, got)
+	}
+	if q := r.decideOn(task.ID, c, ChoiceSendBack, ReasonKnown, ""); q.State != registry.RequestDone {
+		t.Fatalf("send back request %s: %q", q.State, q.Result)
+	}
+	got := r.reload(task.ID)
+	if got.Stage != "coding" || got.State != registry.TaskActive {
+		t.Fatalf("task %s at %s, want active at coding", got.State, got.Stage)
+	}
+	noteFile := filepath.Join(r.layout.FactoryTaskDir(task.ID), sendBackFile(1))
+	b, err := os.ReadFile(noteFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	note := string(b)
+	for _, want := range []string{"(known)", "- P3 `app/credit.rb:1`: A comment says cents", "- P3 `spec/models/credit_points_spec.rb:4`: The spec name hides what it proves"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("%s:\n%s\nwant %q", noteFile, note, want)
+		}
+	}
+	if strings.Contains(note, simplify.Title) {
+		t.Errorf("%s:\n%s\nwant the simplification left out", noteFile, note)
+	}
+	rw, ok := readRework(r.layout.FactoryTaskDir(task.ID))
+	if !ok || rw.Kind != reworkSendBack || rw.Reason != ReasonKnown || rw.Note != sendBackFile(1) {
+		t.Fatalf("rework %+v (%v), want a send back for the reason known naming %s", rw, ok, sendBackFile(1))
+	}
+	r.run(3, func() bool { return len(r.rt.promptsTo("fx-writer")) > 1 })
+	ps := r.rt.promptsTo("fx-writer")
+	if len(ps) != 2 || !strings.Contains(ps[1].Text, noteFile) || !strings.Contains(ps[1].Text, ReasonKnown) {
+		t.Fatalf("the writer's prompts %+v, want a turn naming %s and the reason known", ps, noteFile)
+	}
+	if b := r.git(r.copyDir, "rev-parse", "HEAD"); b != head {
+		t.Fatalf("the copy at %s, want the branch kept at %s", b, head)
+	}
+	ds, err := r.reg.Decisions(r.ctx, task.ID)
+	if err != nil || len(ds) != 1 || ds[0].Choice != ChoiceSendBack || ds[0].Note != ReasonKnown || ds[0].HeadSHA != head {
+		t.Fatalf("decisions %+v (%v), want one send back with the note known", ds, err)
+	}
+	ins, _ := r.reg.Inputs(r.ctx, task.ID)
+	for _, in := range ins {
+		if in.Kind == registry.InputSendBack {
+			t.Errorf("input %+v: a send back of the known defects is no message you typed", in)
+		}
+	}
+	if !slices.ContainsFunc(ins, func(in registry.Input) bool {
+		return in.Kind == registry.InputDecision && in.Text == "send_back: known"
+	}) {
+		t.Errorf("inputs %+v, want the decision send_back: known", ins)
+	}
+	if !slices.ContainsFunc(r.eventTexts(task.ID, "ready"), func(s string) bool {
+		return strings.Contains(s, "2 known defects") && strings.Contains(s, sendBackFile(1))
+	}) {
+		t.Errorf("ready events %q, want one that says 2 known defects went back in %s", r.eventTexts(task.ID, "ready"), sendBackFile(1))
+	}
+
+	// The writer's commit is reviewed afresh, as after any send back: a new
+	// head starts a new local loop, whose round 1 runs at it before a new card.
+	r.clock.Add(time.Minute)
+	fix := r.commit("PR-12397 fixes the known defects", map[string]string{
+		"app/credit.rb": strings.Replace(creditRB, "    0\n", "    10\n", 1) + "# known defects fixed\n"})
+	r.taskFile(task.ID, proofFile, `{"specs": ["spec/models/credit_points_spec.rb"]}`)
+	r.ended(task, "fx-writer")
+	r.toBody(task)
+	if calls := r.rv.calls(); len(calls) != 2 || calls[0].HeadSHA != head || calls[1].HeadSHA != fix || calls[1].Round != 1 {
+		t.Fatalf("local rounds %+v, want round 1 at %s, then a fresh round 1 at %s", calls, short(head), short(fix))
+	}
+	if c := r.card(task.ID); c.Revision != 2 || c.Head != fix {
+		t.Fatalf("card %+v, want revision 2 at the new head", c)
+	}
+}
+
+// The reason "known" takes no note of yours (the factory writes it), and a
+// card whose review left no defect has nothing to send: both are refused
+// before any decision is recorded.
+func TestSendBackKnownIsRefusedWithANoteOrWithoutKnownDefects(t *testing.T) {
+	simplify := evalrun.LocalFinding{Severity: "P3", Title: "Inline the helper", Path: "app/credit.rb", Line: 9, Simplification: true}
+	for _, tc := range []struct {
+		name, note, want string
+		answers          []func(evalrun.LocalCase) evalrun.LocalResult
+	}{
+		{"a note", "my own words", "takes no note", []func(evalrun.LocalCase) evalrun.LocalResult{result(nitFinding)}},
+		{"only a simplification", "", "no known defect", []func(evalrun.LocalCase) evalrun.LocalResult{result(simplify)}},
+		{"nothing left", "", "no known defect", []func(evalrun.LocalCase) evalrun.LocalResult{result()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newReadyRig(t, tc.answers...)
+			task, _ := r.toCard("PR-12388")
+			q := r.decideOn(task.ID, r.card(task.ID), ChoiceSendBack, ReasonKnown, tc.note)
+			if q.State != registry.RequestFailed || !strings.Contains(q.Result, tc.want) {
+				t.Fatalf("send back request %s: %q, want it refused naming %q", q.State, q.Result, tc.want)
+			}
+			if ds, _ := r.reg.Decisions(r.ctx, task.ID); len(ds) != 0 {
+				t.Errorf("decisions %+v, want none", ds)
+			}
+			if got := r.reload(task.ID); got.State != registry.TaskNeedsYou || got.Stage == "coding" {
+				t.Errorf("task %s at %s, want it still waiting at its card", got.State, got.Stage)
+			}
+		})
 	}
 }
 

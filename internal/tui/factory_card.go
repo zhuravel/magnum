@@ -161,6 +161,7 @@ func cleanReadyCard(c ReadyCard) ReadyCard {
 	c.Unread, c.Reasons, c.Hints = cleanAll(c.Unread), cleanAll(c.Reasons), cleanHints(c.Hints)
 	c.Copy, c.NoPush, c.Failed = cleanText(c.Copy), cleanText(c.NoPush), cleanAll(c.Failed)
 	c.QA = cleanText(c.QA) // QAReport is a path the pager opens, never drawn
+	c.Known = max(c.Known, 0)
 	c.Files = slices.Clone(c.Files)
 	for i := range c.Files {
 		c.Files[i].Path = cleanText(c.Files[i].Path)

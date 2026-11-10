@@ -40,7 +40,9 @@ func newFactoryDecideCmd(c *Context) *cobra.Command {
 			"line, the local review's end, the QA run's line (when visual QA ran), and the y/N sentence of a push (the branch, the copy it frees and the queued "+
 			"task that then starts). push has the daemon push the head the card shows and open its PR, ready for "+
 			"review, under your login; send_back returns the task to its writer with --reason, the key of your "+
-			"reason, and --note, your note (the writer reads it from a file, never in its prompt); drop stops the "+
+			"reason, and --note, your note (the writer reads it from a file, never in its prompt), or --reason "+
+			factory.ReasonKnown+" alone, which sends the defects the local review left open (the KNOWN row's, not "+
+			"its simplifications or doubts) in a note the factory writes from the card; drop stops the "+
 			"task, freeing its copy and keeping its branch. A push or a send_back names --card, the revision you "+
 			"read: a card drawn since is refused, and the daemon refuses one whose branch, report, PR body or diff "+
 			"changed after the card was drawn (\"the branch changed after you read it\") and draws the card again. "+
@@ -74,8 +76,11 @@ func runFactoryDecideCmd(c *Context, f factoryDecideFlags, pos []string) int {
 		return inspUsage(c, "factory decide", fmt.Sprintf("unknown choice %q: push, send_back or drop", choice), factoryDecideUsage)
 	case (choice == factory.ChoicePush || choice == factory.ChoiceSendBack) && f.card < 1:
 		return inspUsage(c, "factory decide", "a push or a send_back names --card, the revision of the card you read", factoryDecideUsage)
-	case choice == factory.ChoiceSendBack && (f.reason == "" || strings.TrimSpace(f.note) == ""):
-		return inspUsage(c, "factory decide", "send_back takes --reason (the key of your reason) and --note (your note to the writer)", factoryDecideUsage)
+	case choice == factory.ChoiceSendBack && f.reason == factory.ReasonKnown && strings.TrimSpace(f.note) != "":
+		return inspUsage(c, "factory decide", "the reason "+factory.ReasonKnown+" takes no --note: the factory writes it from the card's known defects", factoryDecideUsage)
+	case choice == factory.ChoiceSendBack && (f.reason == "" || (f.reason != factory.ReasonKnown && strings.TrimSpace(f.note) == "")):
+		return inspUsage(c, "factory decide", "send_back takes --reason (the key of your reason) and --note (your note to the writer); "+
+			"--reason "+factory.ReasonKnown+" alone sends the card's known defects", factoryDecideUsage)
 	case choice != factory.ChoiceSendBack && (f.reason != "" || f.note != ""):
 		return inspUsage(c, "factory decide", "--reason and --note go with send_back", factoryDecideUsage)
 	}

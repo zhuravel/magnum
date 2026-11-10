@@ -172,11 +172,14 @@ func (m factoryModel) menuItems() []menuItem {
 	case fvRecap: // a click there answers its standing question with no: no menu
 	case fvReady:
 		c, _ := m.readyCard()
-		return []menuItem{
+		items := []menuItem{
 			{"read the diff", "d", "d", acts}, {"push + PR", "1", "1", acts && c.NoPush == ""},
 			{"send back", "2", "2", acts}, {"drop", "3", "3", acts}, {"read the QA report", reportKey, reportKey, c.QAReport != ""},
-			{"step into its pane", "o", "o", acts}, {"back", "esc", "esc", true},
 		}
+		if c.Known > 0 { // the key exists only on a card that counts known defects
+			items = append(items, menuItem{"send the known defects back", knownKey, knownKey, acts})
+		}
+		return append(items, menuItem{"step into its pane", "o", "o", acts}, menuItem{"back", "esc", "esc", true})
 	case fvTask:
 		if m.pendingRating() != 0 { // esc and "back" would store the rating with no reason: a click never does
 			return nil

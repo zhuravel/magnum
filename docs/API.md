@@ -6258,6 +6258,12 @@ type FactoryLocalReview struct {
 	// one more round with the watch's judge_fallback in its place, once per
 	// task: on a wide change (FactorySecondJudgeWide), always or never.
 	SecondJudge string `toml:"second_judge"`
+	// LeftBlocks makes the P3 defects a round leaves open (never its
+	// simplifications) block the loop's exit as P0 to P2 ones do: the
+	// writer gets them like any finding, and the loop ends clean only when
+	// a round leaves none. Off by default: they are then listed under
+	// KNOWN on the ready card, which sends them to the writer in one key.
+	LeftBlocks bool `toml:"left_blocks"`
 }
     FactoryLocalReview is [factory.local_review]. Round 1 runs the review roles
     of the repository's [[watch]]; later rounds run without LaterWithout.
@@ -13950,6 +13956,11 @@ const QAVerdictVersion = 1
     QAVerdictVersion is the version of the QA verdict this build reads;
     a verdict of any other version is refused.
 
+const ReasonKnown = "known"
+    ReasonKnown is the reason of the send back that hands the writer the known
+    defects of the card's review (knownDefects): the factory writes its note
+    from the card, so it takes no note of yours.
+
 const RedisDBsPerCopy = 16
     RedisDBsPerCopy is how many Redis databases a copy has: copy n's start at n
     × RedisDBsPerCopy (REDIS_DB_OFFSET).
@@ -14334,10 +14345,11 @@ type DecidePayload struct {
 }
     DecidePayload is a ReqDecide: your decision on task TaskID's ready card.
     Choice is push, send_back or drop; a send back takes the key of its Reason
-    and a Note to the writer. HeadSHA, ReportHash and DiffHash are what the
-    card showed (ReadyCardFile), Shown when it was shown, DiffOpened when you
-    opened the diff (zero: you did not) and DiffDwell how long you read it.
-    Surface is where you decided (the screen, the CLI).
+    and a Note to the writer (the reason ReasonKnown takes none: the factory
+    writes the note). HeadSHA, ReportHash and DiffHash are what the card showed
+    (ReadyCardFile), Shown when it was shown, DiffOpened when you opened the
+    diff (zero: you did not) and DiffDwell how long you read it. Surface is
+    where you decided (the screen, the CLI).
 
 type Deps struct {
 	Config   *config.Config
@@ -15300,10 +15312,15 @@ type ReviewItem struct {
 	Body        string `json:"body,omitempty"`
 	Question    bool   `json:"question,omitempty"`
 	Risk        string `json:"risk,omitempty"`
+	// Simplification is not in the summaries written before it was kept: it
+	// reads false on every leftover of one.
+	Simplification bool `json:"simplification,omitempty"`
 }
     ReviewItem is one finding of the local review as the factory hands it on:
     its id in the round's file (F1, F2, ...), its fingerprint, severity, title,
-    path, line and body, whether the judge marked it a product question, and,
+    path, line and body, whether the judge marked it a product question,
+    whether it is a simplification (a suggestion, never a defect: the ready
+    card's key that sends the known defects to the writer leaves it out) and,
     for one the writer declined, the risk it named.
 
 type ReviewReply struct {
@@ -17460,6 +17477,11 @@ const (
 )
     The states of a task's escapes (Quality.EscapesState).
 
+const SendBackChoice = "send_back"
+    SendBackChoice is the choice of a decision that sent the ready card back
+    to the writer, whose note holds the key of its reason (the factory's
+    ChoiceSendBack, which a test of the factory pins this to).
+
 
 VARIABLES
 
@@ -17870,6 +17892,7 @@ type TaskStats struct {
 	QuestionsFrom, QuestionsShared                    map[string]int
 	ReviewJudges                                      []string
 	SecondOpinion                                     int
+	SendBacks                                         map[string]int
 
 	OperatorSecs time.Duration //nolint:staticcheck // ST1011: the spec's name for the measure ("the operator's seconds per task")
 	WaitedOnYou  time.Duration
@@ -17907,6 +17930,9 @@ type TaskStats struct {
     by cycle ("" for a round whose begin event names no judge: an older build's;
     nil when no round names one), and SecondOpinion the cycle of the task's
     second opinion (0 for none), from the rounds' begin events (roundJudges).
+    SendBacks counts the decisions that sent the ready card back to the writer
+    by the key of their reason ("known" for the defects the local review left
+    open, sent by the card's w; nil for none).
 
 func (t TaskStats) MarshalJSON() ([]byte, error)
     MarshalJSON writes the task's stats with fixed keys and the durations in
@@ -32070,6 +32096,12 @@ const AgentWaitsOnYou = "waits on " + WaitsOnYou
     only agent state drawn in yellow, as the painter and the factory's screen
     data both spell it.
 
+const FactoryReasonKnown = "known"
+    FactoryReasonKnown is the reason of the send back that w makes on the
+    ready card: the known defects of the local review go back to the writer,
+    with a note the factory writes (factory.ReasonKnown, which a test in the cli
+    pins this to). Decide sends it with no note.
+
 const WaitsOnYou = "you"
     WaitsOnYou is the Who of a blocker that is the operator: the one word the
     painter draws in yellow ("you:"), and the word the data writes for it (the
@@ -32766,7 +32798,8 @@ type FactoryActions interface {
         index from 0: an option's label, the operator's words, or "ask:<login>";
         needless flags questions with the key of the reason.
       - Decide decides on the ready card: FactoryPush, FactorySendBack (with the
-        reason's key and the note) or FactoryDrop.
+        reason's key and the note; the reason FactoryReasonKnown takes none) or
+        FactoryDrop.
       - Stop drops a task (frees its copy, keeps its branch); Retry lets a task
         that waits on the operator go on at its stage.
       - Rate rates a published or a done task + (value 1) or − (-1), with the
@@ -33876,6 +33909,11 @@ type ReadyCard struct {
 	// findings the writer declined with their risks, the doubts, and the
 	// reviewers a round went without.
 	Leftovers []string
+	// Known is how many of the local review's leftovers are defects that w
+	// sends back to the writer, in one key (not the simplifications, the
+	// doubts or the declined findings, which the KNOWN row also lists). The
+	// key is offered only while it is above zero; the y/N names the count.
+	Known int
 	// Unread are the changed files the operator has not opened in the diff,
 	// drawn as "unread: <file>".
 	Unread []string

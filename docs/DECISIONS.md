@@ -23894,6 +23894,56 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestAHeldCIFixPlanWaitsForCOnItsRow`, `TestTheMenuListsFixCIAndAsksTheSameQuestion`, `TestTheHelpAndYourPRsCardOfferC` (internal/tui) and
   `TestCOnAPRRowOfTheFactoryScreenIsTheBoardsCIFix` (internal/cli), each failing first. No new dependencies.
 
+- **The ready card sends the known defects to the writer in one key, `w`, and `left_blocks` can make them block the
+  exit** (2026-11-10, R34, audit finding B #9). The local review can end clean with P3 defects left (the card's KNOWN
+  row, `review-summary.json`'s leftovers); twice GitHub's review then posted the same line after the push (talkable#12213,
+  #12215) and a fix loop followed, and the only way to have the writer fix them first was a send back with a typed note.
+  - The key: `w` on the ready card, offered (hint `w send known back`, a right-click menu item, the help) only when the
+    card counts known defects (`ReadyCard.Known`), and doing nothing otherwise. It asks "Send 2 known defects back to the
+    writer? y/N" and on y sends the ready card's send back with the reason `known` (`tui.FactoryReasonKnown`,
+    `factory.ReasonKnown`; a test in the cli pins the two) and no note: the daemon writes the note,
+    `send-back-<revision>.md`, from the card's `Review` (the summary the card reads), one line a defect (priority,
+    `file:line`, title), never a finding's body, the PR or the ticket. The path after that is a send back's: rework.json,
+    the coding stage's first prompt naming the note and the reason, and a new head starts a fresh local loop (round 1)
+    before a new card. The task's event says `you sent card 1 back with 2 known defects (send-back-1.md)`.
+  - What a known defect is: a leftover that is not a simplification and not a product question you answered
+    (`knownDefects`). `ReviewItem` gains `Simplification` (the leftovers did not say), so a summary written before this
+    build lists its simplifications among the defects (a task already at its card keeps that summary until a new head
+    starts a new loop): the y/N names the count and the note lists each. The declined findings, the doubts, the reviewers a round went without and QA's
+    notes are told on the card and are not sent: the first two were argued or are yours to decide.
+  - The daemon refuses the reason `known` with a note of yours (it takes none: it writes it) and on a card with no known
+    defect, before any decision is recorded. The CLI's `factory decide <task> send_back --card N --reason known` takes
+    no `--note` and is refused with one.
+  - No typed message: a send back records the operator's note as an input of kind `send_back`, which the stats count
+    as a typed message. The send back for `known` records none (the decision's own input, `send_back: known`, stays),
+    since the operator typed nothing.
+  - Visibility: the finding said the stats count send backs by reason already; they did not (only `Decisions`, a total).
+    `magnum factory stats` gains `Send backs by reason` (JSON `send_backs`, the decisions that sent a card back by the key
+    in their note, left out for a task with none), so `known` shows there beside the screen's four reasons.
+  - The setting: `[factory.local_review] left_blocks = false` (the audit's second option). True makes a P3 defect that a
+    round leaves (never a simplification) block the loop's exit as a P2 one does: it goes to the writer in the round's
+    findings, counts as blocking in the registry, and the loop ends clean only when a round leaves none; a P3 the writer
+    declines with its risk is kept for the card as a declined P2 is.
+    Any non-boolean is refused when the config loads. Off by default: a P3 is often taste, and each one that blocks costs
+    the loop another round. The writer's fix prompt is unchanged, so with it on a title still ends in "(optional, no reply
+    needed)" where the judge wrote it, while the prompt asks a reply for every finding.
+  - Rejected: a note built by the screen from the card's lines (the daemon is the one that reads the summary at the
+    decision, and the reason would then carry words the daemon cannot check); sending the doubts and the declined findings
+    too (the operator must decide them, and a decline names a risk the writer already argued); a note for the key on a card with no known
+    defect (the hints do not name it there, so the key does nothing); counting the send back as a typed message (nothing was typed); a `[factory]` setting that
+    sends the known defects on its own before the card (the operator decides each send back, and `left_blocks` is that
+    automation for those who want it); changing the liaison's prompt to offer the reason (another change's).
+  - Tests (failing first): `TestWSendsTheKnownDefectsBackToTheWriterOnY`, `TestNDoesNotSendTheKnownDefectsBack`,
+    `TestWDoesNothingOnACardWithoutKnownDefects`, `TestTheHintsAndTheMenuOfferWOnACardWithKnownDefects` and
+    `TestTheHelpNamesWOnTheReadyCard` (internal/tui); `TestKnownDefectsAreTheLeftoversThatAreDefects`,
+    `TestSendBackKnownHandsTheWriterTheCardsKnownDefects` (the note, the rework, the writer's prompt, the decision, the
+    events, no typed input, the fresh round at the new head), `TestSendBackKnownIsRefusedWithANoteOrWithoutKnownDefects`,
+    `TestScreenDataCountsTheKnownDefectsTheReadyCardCanSendBack`, `TestLeftBlocksMakesALeftP3BlockTheExitOfTheLoop`,
+    `TestLeftBlocksLeavesASimplificationAndADeclinedP3Alone` and `TestTheStatsCountSendBacksByTheChoiceTheFactoryRecords`
+    (internal/factory); `TestFactoryLeftBlocksIsOffByDefaultAndTakesOnlyABoolean` (internal/config);
+    `TestStatsCountTheSendBacksByReason` (internal/factory/stats); `TestFactoryDecideSendsTheCardYouRead` and
+    `TestTheScreensKnownReasonIsTheKeyTheFactoryTakes` (internal/cli). No new dependencies.
+
 
 ## Learned rules
 

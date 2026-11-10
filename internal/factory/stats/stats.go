@@ -63,7 +63,10 @@ const cardCap = 30 * time.Minute
 // round of the local review ran with, by cycle ("" for a round whose begin
 // event names no judge: an older build's; nil when no round names one), and
 // SecondOpinion the cycle of the task's second opinion (0 for none), from
-// the rounds' begin events (roundJudges).
+// the rounds' begin events (roundJudges). SendBacks counts the decisions
+// that sent the ready card back to the writer by the key of their reason
+// ("known" for the defects the local review left open, sent by the card's w;
+// nil for none).
 type TaskStats struct {
 	TaskID   int64
 	Key      string
@@ -78,11 +81,17 @@ type TaskStats struct {
 	QuestionsFrom, QuestionsShared                    map[string]int
 	ReviewJudges                                      []string
 	SecondOpinion                                     int
+	SendBacks                                         map[string]int
 
 	OperatorSecs time.Duration //nolint:staticcheck // ST1011: the spec's name for the measure ("the operator's seconds per task")
 	WaitedOnYou  time.Duration
 	StartToReady time.Duration
 }
+
+// SendBackChoice is the choice of a decision that sent the ready card back
+// to the writer, whose note holds the key of its reason (the factory's
+// ChoiceSendBack, which a test of the factory pins this to).
+const SendBackChoice = "send_back"
 
 // PR names a task's PR: its repository (owner/name) and number.
 type PR struct {
@@ -217,6 +226,7 @@ func (t TaskStats) MarshalJSON() ([]byte, error) {
 		ReviewRounds    int            `json:"review_rounds"`
 		ReviewJudges    []string       `json:"review_judges,omitempty"`
 		SecondOpinion   int            `json:"second_opinion,omitempty"`
+		SendBacks       map[string]int `json:"send_backs,omitempty"`
 		OperatorSecs    int64          `json:"operator_secs"`
 		WaitedOnYou     int64          `json:"waited_on_you_secs"`
 		StartToReady    int64          `json:"start_to_ready_secs"`
@@ -227,7 +237,7 @@ func (t TaskStats) MarshalJSON() ([]byte, error) {
 		FixLoops        *FixLoops      `json:"fix_loops,omitempty"`
 		Quality         *Quality       `json:"quality,omitempty"`
 	}{t.TaskID, t.Key, t.Typed, t.StepStarts, t.Approvals, t.Corrections, t.Access, t.UnknownOrigin, t.AnswerBatches, t.Decisions,
-		t.ReviewRounds, t.ReviewJudges, t.SecondOpinion, seconds(t.OperatorSecs), seconds(t.WaitedOnYou), seconds(t.StartToReady), t.Questions, t.QuestionsFrom,
+		t.ReviewRounds, t.ReviewJudges, t.SecondOpinion, t.SendBacks, seconds(t.OperatorSecs), seconds(t.WaitedOnYou), seconds(t.StartToReady), t.Questions, t.QuestionsFrom,
 		t.QuestionsShared, t.PR.String(), t.FixLoops, t.Quality})
 }
 
@@ -602,7 +612,7 @@ func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now
 	ts := TaskStats{TaskID: t.ID, Key: taskKey(t), PR: pr, Quality: quality, AnswerBatches: batches, Decisions: len(decisions),
 		Questions: asked, QuestionsFrom: from, QuestionsShared: shared,
 		ReviewRounds: len(cycles), ReviewJudges: judges, SecondOpinion: second, OperatorSecs: onQuestions + onDecisions(decisions), WaitedOnYou: waitedOnYou(spans, t, now),
-		StartToReady: startToReady(spans)}
+		StartToReady: startToReady(spans), SendBacks: sendBacksOf(decisions)}
 	for _, in := range inputs {
 		switch {
 		case in.Kind == registry.InputPaneTyped && in.Origin != registry.OriginHerdr:
@@ -629,6 +639,23 @@ func taskStats(ctx context.Context, reg *registry.Registry, t registry.Task, now
 		}
 	}
 	return ts, nil
+}
+
+// sendBacksOf counts the decisions among ds that sent the card back by the
+// key of their reason (a decision's note); nil for none. A send back that
+// kept no key counts as "unknown".
+func sendBacksOf(ds []registry.Decision) map[string]int {
+	var out map[string]int
+	for _, d := range ds {
+		if d.Choice != SendBackChoice {
+			continue
+		}
+		if out == nil {
+			out = map[string]int{}
+		}
+		out[cmp.Or(d.Note, "unknown")]++
+	}
+	return out
 }
 
 // qualityOf is what task t's PR said of the factory's work after the
@@ -960,6 +987,7 @@ func (r Report) Markdown() string {
 		b.WriteString("\nOrigin unknown: turns typed in a pane that nothing proves you typed, kept for evaluation only and never counted as typed.\n")
 	}
 	r.questionsMarkdown(&b)
+	r.sendBacksMarkdown(&b)
 	r.judgesMarkdown(&b)
 	r.fixLoopsMarkdown(&b)
 	r.qualityMarkdown(&b)
@@ -1004,6 +1032,31 @@ func (r Report) questionsMarkdown(b *strings.Builder) {
 	if head {
 		b.WriteString("\nA question counts once per task. Its sources are the investigators whose findings file its evidence names, else the roles " +
 			"that raised it: one source counts for that role alone (what it adds), several count apart as shared.\n")
+	}
+}
+
+// sendBacksMarkdown is the section of the decisions that sent a ready card
+// back to the writer, by the key of their reason (TaskStats.SendBacks), for
+// the tasks that had any; none, no section.
+func (r Report) sendBacksMarkdown(b *strings.Builder) {
+	head := false
+	for _, t := range r.Tasks {
+		if len(t.SendBacks) == 0 {
+			continue
+		}
+		if !head {
+			b.WriteString("\n## Send backs by reason\n\n| Task | Send backs | By reason |\n|---|---|---|\n")
+			head = true
+		}
+		total := 0
+		for _, n := range t.SendBacks {
+			total += n
+		}
+		fmt.Fprintf(b, "| %s | %d | %s |\n", t.Key, total, countsLine(t.SendBacks))
+	}
+	if head {
+		b.WriteString("\nEach send back counts under the key of its reason: the screen's four (wrong-cause, too-much, missed-words, thin-tests), " +
+			"a liaison's own, or known, the defects the local review left open that the ready card's w sends in one key.\n")
 	}
 }
 

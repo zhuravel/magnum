@@ -1090,7 +1090,7 @@ func (s *screen) comment(t registry.Task, q registry.Question, a ask) string {
 func (s *screen) readyCard(v *taskView) *tui.ReadyCard {
 	t, card := v.t, v.card
 	c := &tui.ReadyCard{TaskKey: TaskKey(t), Title: cmp.Or(card.Title, t.Title), Kind: t.Kind, Branch: cmp.Or(card.Remote, card.Branch, t.Branch),
-		Waited: max(s.now.Sub(v.since), 0), Flags: card.Flags, Leftovers: knownLines(card.Review, false), Copy: card.Copy}
+		Waited: max(s.now.Sub(v.since), 0), Flags: card.Flags, Leftovers: knownLines(card.Review, false), Known: len(knownDefects(card.Review)), Copy: card.Copy}
 	for _, f := range card.Files {
 		c.Files = append(c.Files, tui.CardFile{Path: f.Path, Added: f.Added, Removed: f.Removed, InPlan: f.InPlan, Flagged: f.Flagged})
 		c.Unread = append(c.Unread, f.Path) // in the card's order: the flagged ones first

@@ -552,6 +552,33 @@ func TestScreenDataShowsWhatALetGoPromptAsked(t *testing.T) {
 	}
 }
 
+// The ready card counts the known defects its key can send back to the
+// writer (the leftovers that are defects), apart from the KNOWN row, which
+// lists everything the review left: the simplifications, a product question
+// you answered, the declined findings and the doubts are listed there too,
+// and counted in none.
+func TestScreenDataCountsTheKnownDefectsTheReadyCardCanSendBack(t *testing.T) {
+	r := newScreenRig(t)
+	r.at(12 * time.Minute)
+	ready := r.task("PR-12360", "bug", "Custom activities lose points on copy", registry.TaskNeedsYou, "ready", waitsYou,
+		"ready to push (card 1): PR-12360 Custom activities lose points on copy")
+	r.card(ready.ID, ReadyCardFile{Revision: 1, Head: "ffff1111", Base: "base2222", ReportHash: "rh", DiffHash: "dh",
+		Branch: "zhuravel-PR-12360-points", Copy: "talkable.factory3", CopyPath: "/copies/talkable.factory3",
+		Review: ReviewSummary{Exit: registry.ExitClean, Rounds: 1, Leftovers: []ReviewItem{
+			{Severity: "P3", Path: "app/a.rb", Line: 18, Title: "the name hides a step"},
+			{Severity: "P3", Path: "app/b.rb", Line: 4, Title: "inline the helper", Simplification: true},
+			{Severity: "P2", Path: "app/c.rb", Line: 9, Title: "keep the archived ones", Question: true},
+			{Severity: "P3", Path: "app/d.rb", Line: 2, Title: "a stale comment"}},
+			Declined: []ReviewItem{{Severity: "P2", Path: "spec/e_spec.rb", Title: "one spec per rule", Risk: "3 slower specs"}}}})
+	c := r.data(screenNow).Cards[ready.ID].Ready
+	if c == nil {
+		t.Fatal("no ready card")
+	}
+	if c.Known != 2 || len(c.Leftovers) != 5 {
+		t.Errorf("known %d, KNOWN lines %q, want 2 defects among 5 lines", c.Known, c.Leftovers)
+	}
+}
+
 // The ready card carries the factory's card: its FLAGS line, the local
 // review's leftovers (the KNOWN row: leftovers, declined findings with
 // their risks, doubts, reviewers a round went without), every changed file
