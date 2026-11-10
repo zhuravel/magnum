@@ -51,6 +51,7 @@ type node struct {
 	Body   string
 	Author string // GraphQL login, no [bot]
 	Bot    bool
+	At     string // submittedAt (RFC 3339); "" is 2026-10-06T12:00:00Z
 }
 
 // world is a fake GitHub and checkout.
@@ -154,7 +155,7 @@ func (w *world) gh(c execx.Cmd) (execx.Result, error) {
 			}
 			nodes = append(nodes, map[string]any{"databaseId": n.ID, "state": cmpOr(n.State, "COMMENTED"), "body": n.Body,
 				"url":         fmt.Sprintf("https://github.com/talkable/talkable/pull/5#pullrequestreview-%d", n.ID),
-				"submittedAt": "2026-10-06T12:00:00Z", "commit": map[string]any{"oid": head},
+				"submittedAt": cmpOr(n.At, "2026-10-06T12:00:00Z"), "commit": map[string]any{"oid": head},
 				"author": map[string]any{"login": n.Author, "__typename": typ}})
 		}
 		return ok(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
@@ -283,6 +284,7 @@ type fakeComment struct {
 	Author string // GraphQL login, no [bot]
 	Bot    bool
 	Body   string
+	At     string // createdAt (RFC 3339); "" is 2026-10-06T12:00:00Z
 }
 
 // sentReply is a reply as the client posted it.
@@ -318,7 +320,7 @@ func (w *world) listThreads() (execx.Result, error) {
 			}
 			comments = append(comments, map[string]any{"databaseId": c.ID, "body": c.Body,
 				"url":       fmt.Sprintf("https://github.com/talkable/talkable/pull/5#discussion_r%d", c.ID),
-				"createdAt": "2026-10-06T12:00:00Z", "author": map[string]any{"login": c.Author, "__typename": typ},
+				"createdAt": cmpOr(c.At, "2026-10-06T12:00:00Z"), "author": map[string]any{"login": c.Author, "__typename": typ},
 				"pullRequestReview": map[string]any{"databaseId": 77}})
 		}
 		nodes = append(nodes, map[string]any{"id": fmt.Sprintf("PRRT_%d", i), "isResolved": false, "isOutdated": false,
@@ -389,7 +391,7 @@ func (w *world) listIssueComments() (execx.Result, error) {
 		}
 		nodes = append(nodes, map[string]any{"databaseId": c.ID, "body": c.Body,
 			"url":       fmt.Sprintf("https://github.com/talkable/talkable/pull/5#issuecomment-%d", c.ID),
-			"createdAt": "2026-10-06T12:00:00Z", "author": map[string]any{"login": c.Author, "__typename": typ}, "authorAssociation": "MEMBER"})
+			"createdAt": cmpOr(c.At, "2026-10-06T12:00:00Z"), "author": map[string]any{"login": c.Author, "__typename": typ}, "authorAssociation": "MEMBER"})
 	}
 	return ok(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
 		"comments": map[string]any{"pageInfo": map[string]any{"hasPreviousPage": false, "startCursor": ""}, "nodes": nodes}}}}})

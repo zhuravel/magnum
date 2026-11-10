@@ -368,6 +368,44 @@ func TestCommentPostsTheSameAgainAfterSomeoneElsesComment(t *testing.T) {
 	}
 }
 
+// The same comment on the conversation after someone else's review is a
+// new comment and goes out, as after someone else's conversation comment:
+// a colleague's review with only inline threads, or a reply in a thread
+// (GitHub makes each review comment part of a review), writes nothing on
+// the conversation, and "please take another look" is said again in the
+// next round. The App's own reviews after it, a review before it and a
+// review not submitted yet keep it a retry; a list of reviews cut short
+// may hide one, so it goes out.
+func TestCommentPostsTheSameAgainAfterSomeoneElsesReview(t *testing.T) {
+	text := "Addressed the review, please take another look."
+	signed := text + "\n\n" + CommentMarker
+	found := fakeComment{ID: 77, Author: "fixer-app", Bot: true, Body: signed, At: "2026-10-06T12:00:00Z"}
+	for name, tc := range map[string]struct {
+		nodes []node
+		cut   bool
+		post  bool
+	}{
+		"a colleague's review after it": {nodes: []node{{ID: 901, State: "CHANGES_REQUESTED", Author: "rev-ann", At: "2026-10-06T13:00:00Z"}}, post: true},
+		"magnum's review after it":      {nodes: []node{{ID: 902, Author: "talkable", Bot: true, At: "2026-10-06T13:00:00Z"}}, post: true},
+		"the App's own after it":        {nodes: []node{{ID: 903, Author: "fixer-app", Bot: true, At: "2026-10-06T13:00:00Z"}}},
+		"a colleague's before it":       {nodes: []node{{ID: 904, Author: "rev-ann", At: "2026-10-06T11:00:00Z"}}},
+		"a list cut short":              {cut: true, post: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w, _ := commentWorld(t)
+			w.issueComments = []fakeComment{found}
+			w.nodes, w.listCut = tc.nodes, tc.cut
+			out, _ := w.runComment(copts(0), text)
+			switch {
+			case tc.post && (out.Status != StatusPosted || out.Comment == nil || out.Comment.ID != 7001 || len(w.issuePosts) != 1):
+				t.Errorf("outcome = %+v (comment %+v), posts %q: want it posted again", out, out.Comment, w.issuePosts)
+			case !tc.post && (out.Status != StatusAlreadyPosted || out.Comment == nil || out.Comment.ID != 77 || len(w.issuePosts) != 0):
+				t.Errorf("outcome = %+v (comment %+v), posts %q: want 77 found", out, out.Comment, w.issuePosts)
+			}
+		})
+	}
+}
+
 // A comment is needed for the conversation and for a reply; with only a
 // title or review requests it may be left out, and a comment given with
 // them goes on the conversation first.
@@ -556,16 +594,47 @@ func TestCommentAFailureMidWayReportsWhatWentOut(t *testing.T) {
 	}
 }
 
-// GitHub must show the App as the comment's author: one it shows by anyone
-// else (a login the gh config of the App did not hold) is an error that
-// says to delete it, and is not reported as the App's post.
+// GitHub must show the App as the comment's author. The token is the
+// App's, so another App there means the identity's login in the config is
+// wrong, and a person means the comment went out under someone's login:
+// both are invalid (exit 2, never 1, which would ask to post it again),
+// the problem says what to set or to delete it, nothing more goes out, and
+// the caller still hears of the post with the author GitHub showed, so the
+// registry records it. Once the login names that App, the same line finds
+// the comment and posts nothing twice.
 func TestCommentReadsBackTheApp(t *testing.T) {
-	w, _ := commentWorld(t)
+	title := "Fix the order total"
+	o := copts(0)
+	o.Title = &title
+	w, p := commentWorld(t)
+	w.answerAs = "other-app[bot]"
+	out, posted := w.runComment(o, "Renamed.")
+	want := "GitHub shows comment 7001 (https://github.com/talkable/talkable/pull/5#issuecomment-7001) by other-app[bot], not fixer-app[bot]: " +
+		"the App's token posted it, so login of [[identity]] fixer-app is wrong; set it to other-app[bot] and run the same line again " +
+		"(it finds the comment and posts nothing twice)"
+	if out.Status != StatusInvalid || out.ExitCode() != 2 || !slices.Equal(out.Problems, []string{want}) || out.Comment == nil ||
+		out.Comment.ID != 7001 || out.Comment.Author != "other-app[bot]" {
+		t.Errorf("another App: outcome = %+v (comment %+v)", out, out.Comment)
+	}
+	if s := out.Summary(); !strings.HasSuffix(s, "; done before it, as fixer-app[bot]: posted a comment on the conversation, which GitHub shows by "+
+		"other-app[bot]: https://github.com/talkable/talkable/pull/5#issuecomment-7001") || strings.Contains(s, "nothing posted") {
+		t.Errorf("summary = %q", s)
+	}
+	if len(p.titles) != 0 || len(w.issuePosts) != 1 {
+		t.Errorf("went on past it: titles %q, posts %q", p.titles, w.issuePosts)
+	}
+	if len(posted) != 1 || !reflect.DeepEqual(posted[0], Posted{Kind: PostConversation, CommentID: 7001,
+		URL: "https://github.com/talkable/talkable/pull/5#issuecomment-7001", Author: "other-app[bot]"}) {
+		t.Errorf("posted = %+v, want the comment with GitHub's author", posted)
+	}
+
+	w, _ = commentWorld(t)
 	w.answerAs = "zhuravel"
-	out, posted := w.runComment(copts(0), "Renamed.")
-	if out.Status != StatusError || out.ExitCode() != 1 || len(posted) != 0 ||
-		out.Message != "GitHub shows comment 7001 by zhuravel, not the App fixer-app[bot]: delete it on GitHub; do not run it again" {
-		t.Errorf("outcome = %+v, posted %+v", out, posted)
+	out, posted = w.runComment(copts(0), "Renamed.")
+	want = "GitHub shows comment 7001 (https://github.com/talkable/talkable/pull/5#issuecomment-7001) by zhuravel, not fixer-app[bot]: " +
+		"it went out under a person's login, not the App's; delete it on GitHub and do not run it again until magnum identities check passes"
+	if out.Status != StatusInvalid || out.ExitCode() != 2 || !slices.Equal(out.Problems, []string{want}) || len(posted) != 1 || posted[0].Author != "zhuravel" {
+		t.Errorf("a person: outcome = %+v, posted %+v", out, posted)
 	}
 }
 

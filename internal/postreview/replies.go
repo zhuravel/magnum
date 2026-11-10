@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/github"
@@ -465,9 +466,10 @@ func checkSigned(text, marker, tool, what, markerName string) []string {
 // signedFound is a signed post found on GitHub: the same body already
 // there (a retry's earlier run), or the one just posted.
 type signedFound struct {
-	ID     int64
-	URL    string
-	Author string // Account form; "" when GitHub did not say
+	ID        int64
+	URL       string
+	Author    string    // Account form; "" when GitHub did not say
+	CreatedAt time.Time // when it was written (a comment found there); zero when GitHub did not say
 }
 
 // signedTarget is where a signed post goes, as findSigned read it: the
@@ -507,7 +509,7 @@ func findSigned(ctx context.Context, gh FixReplyGitHub, owner, repo string, numb
 			return accept(comments[i].Body, github.Account(comments[i].AuthorLogin, comments[i].AuthorType))
 		}, body); i >= 0 {
 			c := comments[i]
-			return signedTarget{Already: &signedFound{ID: c.ID, URL: c.URL, Author: github.Account(c.AuthorLogin, c.AuthorType)}}, nil, nil
+			return signedTarget{Already: &signedFound{ID: c.ID, URL: c.URL, Author: github.Account(c.AuthorLogin, c.AuthorType), CreatedAt: c.CreatedAt}}, nil, nil
 		}
 		return signedTarget{}, nil, nil
 	}
@@ -536,7 +538,8 @@ func findSigned(ctx context.Context, gh FixReplyGitHub, owner, repo string, numb
 		return accept(replies[j].Body, github.Account(replies[j].AuthorLogin, replies[j].AuthorType))
 	}, body); j >= 0 {
 		c := replies[j]
-		return signedTarget{Thread: first, Already: &signedFound{ID: c.ID, URL: c.URL, Author: github.Account(c.AuthorLogin, c.AuthorType)}}, nil, nil
+		return signedTarget{Thread: first, Already: &signedFound{ID: c.ID, URL: c.URL, Author: github.Account(c.AuthorLogin, c.AuthorType),
+			CreatedAt: c.CreatedAt}}, nil, nil
 	}
 	return signedTarget{Thread: first}, nil, nil
 }

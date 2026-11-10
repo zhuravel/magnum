@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/github"
@@ -47,8 +48,9 @@ const maxTitle = 256
 // of RequestReviews (users' logins). Login is the App it posts as (Account
 // form), the one GitHub must show as the author, and Identity the name of
 // its [[identity]]; MagnumLogins are the logins whose threads magnum's
-// review started (config.Config.MagnumThreadLogins and the PR's last
-// reviewer), where it refuses to reply. DryRun reads and checks
+// review started (config.Config.MagnumThreadLogins, or for a PR in the
+// registry PRThreadLogins, and the PR's last reviewer), where it refuses
+// to reply. DryRun reads and checks
 // everything and posts nothing.
 type CommentOptions struct {
 	Owner, Repo    string
@@ -154,6 +156,7 @@ func (o CommentOptions) outcome() CommentOutcome {
 // (*github.Client, as the watch's fixer App).
 type CommentGitHub interface {
 	FixReplyGitHub
+	AllReviews(ctx context.Context, owner, repo string, number int) ([]github.Review, bool, error)
 	Pull(ctx context.Context, owner, repo string, number int) (github.Pull, error)
 	RequestReviewers(ctx context.Context, owner, repo string, number int, logins []string) error
 	UpdatePullTitle(ctx context.Context, owner, repo string, number int, title string) (github.Pull, error)
@@ -168,6 +171,11 @@ type Posted struct {
 	URL       string   // the comment's link; the pull request's for a title or a review request
 	Reviewers []string // the logins asked (PostReviewRequest)
 	Already   bool     // the comment was there already: nothing posted now
+	// Author is who GitHub shows wrote the comment when that is not the
+	// App (Account form; "an account it does not name" when it named
+	// none): a wrong login in the config, or a post under a person's
+	// login. "" when it is the App.
+	Author string
 }
 
 // CommentPart is the comment of an outcome: on the conversation or a
@@ -180,6 +188,9 @@ type CommentPart struct {
 	URL     string `json:"url,omitempty"`
 	Already bool   `json:"already"`
 	Planned bool   `json:"planned,omitempty"`
+	// Author is who GitHub shows wrote the comment posted when that is not
+	// the App (Posted.Author); "" when it is.
+	Author string `json:"author,omitempty"`
 }
 
 // TitlePart is the title of an outcome: changed, already so, or planned.
@@ -242,6 +253,8 @@ func (o CommentOutcome) parts() []string {
 			out = append(out, there+": "+c.URL)
 		case c.Planned:
 			out = append(out, "would post "+where)
+		case c.ID != 0 && c.Author != "":
+			out = append(out, "posted "+where+", which GitHub shows by "+c.Author+": "+c.URL)
 		case c.ID != 0:
 			out = append(out, "posted "+where+": "+c.URL)
 		}
@@ -304,11 +317,14 @@ func (o CommentOutcome) Summary() string {
 // id (one of this pull request's, and in no thread magnum's review
 // started: the daemon's poll reads no comment text and would take the
 // App's reply there for the author's). A comment the same as one of the
-// App's already there with nobody else's after it (postedLast) is not
-// posted again, a title already so is not sent, and a login asked already
-// is skipped, so after an unclear failure the same line runs again
-// safely. GitHub must show the App as each comment's author. onPosted (nil:
-// none) hears of each post, and of a comment found already there.
+// App's already there with nobody else's after it (postedLast; on the
+// conversation nobody else's review either, reviewedSince) is not posted
+// again, a title already so is not sent, and a login asked already is
+// skipped, so after an unclear failure the same line runs again safely.
+// GitHub must show the App as each comment's author: another account
+// there is StatusInvalid (otherAuthor) and nothing more goes out. onPosted
+// (nil: none) hears of each post, with the author GitHub showed when it is
+// not the App, and of a comment found already there.
 func RunComment(ctx context.Context, gh CommentGitHub, o CommentOptions, text []byte, onPosted func(Posted)) CommentOutcome {
 	out, ok := o.CheckText(text)
 	if !ok {
@@ -346,6 +362,12 @@ func RunComment(ctx context.Context, gh CommentGitHub, o CommentOptions, text []
 		var found []string
 		var err error
 		target, found, err = findSigned(ctx, gh, o.Owner, o.Repo, o.Number, o.ReplyTo, o.ReplyTo == 0, body, mine, o.magnumThread)
+		if err == nil && o.ReplyTo == 0 && target.Already != nil {
+			var later bool
+			if later, err = o.reviewedSince(ctx, gh, target.Already.CreatedAt); later {
+				target.Already = nil // a new round: the same words go out again
+			}
+		}
 		if err != nil {
 			out.Status, out.Message = StatusError, err.Error()
 			return out
@@ -408,9 +430,9 @@ func RunComment(ctx context.Context, gh CommentGitHub, o CommentOptions, text []
 				return out
 			}
 			if !github.SameAccount(posted.Author, o.Login) {
-				out.Comment = nil
-				out.Status, out.Message = StatusError, fmt.Sprintf("GitHub shows comment %d by %s, not the App %s: delete it on GitHub; do not run it again",
-					posted.ID, cmp.Or(posted.Author, "an account it does not name"), o.Login)
+				c.ID, c.URL, c.Author = posted.ID, posted.URL, cmp.Or(posted.Author, "an account it does not name")
+				onPosted(Posted{Kind: c.Kind, CommentID: c.ID, Thread: c.Thread, URL: c.URL, Author: c.Author})
+				out.Status, out.Problems = StatusInvalid, []string{o.otherAuthor(posted, c.Author)}
 				return out
 			}
 			c.ID, c.URL = posted.ID, posted.URL
@@ -440,6 +462,41 @@ func RunComment(ctx context.Context, gh CommentGitHub, o CommentOptions, text []
 		out.Status = StatusPosted
 	}
 	return out
+}
+
+// otherAuthor is the problem of a comment GitHub shows by by, not by the
+// App o.Login. The token is the App's, so another App there means login of
+// the identity is wrong in the config: once it names that App, the same
+// line finds the comment and posts nothing twice. A person, or no account
+// named, means it went out under someone's login: delete it. Neither asks
+// to run the line again as it is, which would post it again.
+func (o CommentOptions) otherAuthor(posted signedFound, by string) string {
+	head := fmt.Sprintf("GitHub shows comment %d (%s) by %s, not %s: ", posted.ID, posted.URL, by, o.Login)
+	if strings.HasSuffix(strings.ToLower(posted.Author), "[bot]") {
+		return head + fmt.Sprintf("the App's token posted it, so login of [[identity]] %s is wrong; set it to %s and run the same line again "+
+			"(it finds the comment and posts nothing twice)", o.Identity, posted.Author)
+	}
+	return head + "it went out under a person's login, not the App's; delete it on GitHub and do not run it again until magnum identities check passes"
+}
+
+// reviewedSince reports whether someone other than the App o.Login
+// submitted a review of the pull request after at: GitHub makes every
+// review comment, a reply in a thread too, part of a review, and none of
+// them is a comment on the conversation, so without this a colleague's
+// review between two rounds would leave the App's same words of the next
+// round taken for a retry's. A list cut short may hide one: true. A review
+// not submitted yet has no time and counts for nothing.
+func (o CommentOptions) reviewedSince(ctx context.Context, gh CommentGitHub, at time.Time) (bool, error) {
+	reviews, complete, err := gh.AllReviews(ctx, o.Owner, o.Repo, o.Number)
+	if err != nil {
+		return false, fmt.Errorf("read the pull request's reviews: %w", err)
+	}
+	if !complete {
+		return true, nil
+	}
+	return slices.ContainsFunc(reviews, func(r github.Review) bool {
+		return r.SubmittedAt.After(at) && !github.SameAccount(github.Account(r.AuthorLogin, r.AuthorType), o.Login)
+	}), nil
 }
 
 // magnumThread refuses a thread magnum's review started (its first
