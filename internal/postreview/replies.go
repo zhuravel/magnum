@@ -407,10 +407,11 @@ func (o FixReplyOutcome) Summary() string {
 	return o.Message
 }
 
-// fixReplyBody is what the fixer's reply text becomes on GitHub: the text, a
-// blank line and FixReplyMarker.
-func fixReplyBody(text string) string {
-	return strings.TrimRight(text, " \t\r\n") + "\n\n" + FixReplyMarker
+// signedBody is what a signed post's text becomes on GitHub: the text, a
+// blank line and marker (FixReplyMarker for the fixer's replies,
+// CommentMarker for magnum comment's).
+func signedBody(text, marker string) string {
+	return strings.TrimRight(text, " \t\r\n") + "\n\n" + marker
 }
 
 // sameFixReply reports whether a comment's body on GitHub is body, the
@@ -442,21 +443,119 @@ func postedLast(n int, at func(int) (body, author string), body string) int {
 	return -1
 }
 
-// checkFixReply is what is wrong with text, the fixer's reply (nil: it can
-// go out once marked).
-func checkFixReply(text string) []string {
+// checkSigned is what is wrong with text, a post that tool signs with
+// marker (nil: it can go out once marked); what names the post ("the
+// reply", "the comment") and markerName the marker in the words
+// ("the fix marker").
+func checkSigned(text, marker, tool, what, markerName string) []string {
 	switch {
 	case strings.TrimSpace(text) == "":
-		return []string{"the reply is empty: pass it on standard input"}
+		return []string{what + " is empty: pass it on standard input"}
 	case strings.Contains(text, anyMarker):
-		return []string{fmt.Sprintf("the reply carries a %s… marker: fix-reply appends the fix marker, leave it out", anyMarker)}
+		return []string{fmt.Sprintf("%s carries a %s… marker: %s appends %s, leave it out", what, anyMarker, tool, markerName)}
 	case localPath(text) != "":
-		return []string{strings.Replace(localPathProblem(text), "body", "the reply", 1)}
+		return []string{strings.Replace(localPathProblem(text), "body", what, 1)}
 	}
-	if n := utf8.RuneCountInString(fixReplyBody(text)); n > MaxBody {
-		return []string{fmt.Sprintf("the reply is %d characters (the fix marker included); GitHub takes at most %d", n, MaxBody)}
+	if n := utf8.RuneCountInString(signedBody(text, marker)); n > MaxBody {
+		return []string{fmt.Sprintf("%s is %d characters (%s included); GitHub takes at most %d", what, n, markerName, MaxBody)}
 	}
 	return nil
+}
+
+// signedFound is a signed post found on GitHub: the same body already
+// there (a retry's earlier run), or the one just posted.
+type signedFound struct {
+	ID     int64
+	URL    string
+	Author string // Account form; "" when GitHub did not say
+}
+
+// signedTarget is where a signed post goes, as findSigned read it: the
+// first comment of its thread (0: the conversation) and the same post
+// already there, nil when there is none.
+type signedTarget struct {
+	Thread  int64
+	Already *signedFound
+}
+
+// findSigned reads where body, a signed post, goes on the pull request
+// owner/repo#number: with issue the conversation, read newest first until
+// a page holds body; else the review thread that holds comment commentID
+// (any comment of it), read once. A comment in none of the threads (one of
+// another pull request, or of none) is a problem, and so is whatever guard
+// (nil: none) finds wrong with the thread's comments. Already is the same
+// body posted with nobody else's comment after it (postedLast) among the
+// comments by an author mine accepts (nil: anyone): a retry's post, which
+// gets nothing more. A failed read is err.
+func findSigned(ctx context.Context, gh FixReplyGitHub, owner, repo string, number int, commentID int64, issue bool, body string,
+	mine func(author string) bool, guard func(thread []github.ThreadComment) []string) (signedTarget, []string, error) {
+	accept := func(b, author string) (string, string) {
+		if mine != nil && !mine(author) {
+			return "", author // never the same post: someone else's comment after it
+		}
+		return b, author
+	}
+	if issue {
+		same := func(c github.PRComment) bool {
+			return sameFixReply(c.Body, body) && (mine == nil || mine(github.Account(c.AuthorLogin, c.AuthorType)))
+		}
+		comments, _, err := gh.IssueComments(ctx, owner, repo, number, same)
+		if err != nil {
+			return signedTarget{}, nil, fmt.Errorf("read the pull request's comments: %w", err)
+		}
+		if i := postedLast(len(comments), func(i int) (string, string) {
+			return accept(comments[i].Body, github.Account(comments[i].AuthorLogin, comments[i].AuthorType))
+		}, body); i >= 0 {
+			c := comments[i]
+			return signedTarget{Already: &signedFound{ID: c.ID, URL: c.URL, Author: github.Account(c.AuthorLogin, c.AuthorType)}}, nil, nil
+		}
+		return signedTarget{}, nil, nil
+	}
+	threads, complete, err := gh.AllReviewThreads(ctx, owner, repo, number)
+	if err != nil {
+		return signedTarget{}, nil, fmt.Errorf("read the review threads: %w", err)
+	}
+	i := slices.IndexFunc(threads, func(t github.Thread) bool {
+		return slices.ContainsFunc(t.AllComments(), func(c github.ThreadComment) bool { return c.ID == commentID })
+	})
+	if i < 0 {
+		problem := fmt.Sprintf("comment %d is no review comment of %s/%s#%d: answer a thread of this pull request", commentID, owner, repo, number)
+		if !complete {
+			problem = fmt.Sprintf("comment %d is in none of the first %d review threads of %s/%s#%d", commentID, github.MaxReviewThreads, owner, repo, number)
+		}
+		return signedTarget{}, []string{problem}, nil
+	}
+	all := threads[i].AllComments()
+	if guard != nil {
+		if problems := guard(all); len(problems) > 0 {
+			return signedTarget{}, problems, nil
+		}
+	}
+	first, replies := all[0].ID, all[1:]
+	if j := postedLast(len(replies), func(j int) (string, string) {
+		return accept(replies[j].Body, github.Account(replies[j].AuthorLogin, replies[j].AuthorType))
+	}, body); j >= 0 {
+		c := replies[j]
+		return signedTarget{Thread: first, Already: &signedFound{ID: c.ID, URL: c.URL, Author: github.Account(c.AuthorLogin, c.AuthorType)}}, nil, nil
+	}
+	return signedTarget{Thread: first}, nil, nil
+}
+
+// postSigned posts body to t: a reply to its thread's first comment (the
+// only one GitHub takes a reply to), or a comment on the conversation.
+func postSigned(ctx context.Context, gh FixReplyGitHub, owner, repo string, number int, t signedTarget, body string) (signedFound, error) {
+	if t.Thread == 0 {
+		posted, err := gh.CreateIssueComment(ctx, owner, repo, number, body)
+		if err != nil {
+			return signedFound{}, fmt.Errorf("post the comment: %w", err)
+		}
+		return signedFound{ID: posted.ID, URL: posted.URL, Author: posted.Author()}, nil
+	}
+	posted, err := gh.ReplyToReviewComment(ctx, owner, repo, number, t.Thread, body)
+	if err != nil {
+		return signedFound{}, fmt.Errorf("post the reply to comment %d: %w", t.Thread, err)
+	}
+	return signedFound{ID: posted.ID, URL: posted.URL, Author: posted.Author()}, nil
 }
 
 // RunFixReply posts text, one reply of the fixer, on the pull request o
@@ -477,52 +576,22 @@ func RunFixReply(ctx context.Context, gh FixReplyGitHub, o FixReplyOptions, text
 	if out, ok := o.Check(); !ok {
 		return out
 	}
-	if problems := checkFixReply(string(text)); len(problems) > 0 {
+	if problems := checkSigned(string(text), FixReplyMarker, "fix-reply", "the reply", "the fix marker"); len(problems) > 0 {
 		return FixReplyOutcome{Status: StatusInvalid, Problems: problems}
 	}
-	body := fixReplyBody(string(text))
-	same := func(c github.PRComment) bool { return sameFixReply(c.Body, body) }
-	if o.Issue {
-		// Read from the newest back until a page holds the reply.
-		comments, _, err := gh.IssueComments(ctx, o.Owner, o.Repo, o.Number, same)
-		if err != nil {
-			return FixReplyOutcome{Status: StatusError, Message: "read the pull request's comments: " + err.Error()}
-		}
-		if i := postedLast(len(comments), func(i int) (string, string) {
-			return comments[i].Body, github.Account(comments[i].AuthorLogin, comments[i].AuthorType)
-		}, body); i >= 0 {
-			return FixReplyOutcome{Status: StatusAlreadyPosted, ID: comments[i].ID, URL: comments[i].URL}
-		}
-		posted, err := gh.CreateIssueComment(ctx, o.Owner, o.Repo, o.Number, body)
-		if err != nil {
-			return FixReplyOutcome{Status: StatusError, Message: "post the comment: " + err.Error()}
-		}
-		return FixReplyOutcome{Status: StatusReplied, ID: posted.ID, URL: posted.URL}
+	body := signedBody(string(text), FixReplyMarker)
+	t, problems, err := findSigned(ctx, gh, o.Owner, o.Repo, o.Number, o.CommentID, o.Issue, body, nil, nil)
+	switch {
+	case err != nil:
+		return FixReplyOutcome{Status: StatusError, Message: err.Error()}
+	case len(problems) > 0:
+		return FixReplyOutcome{Status: StatusInvalid, Problems: problems}
+	case t.Already != nil:
+		return FixReplyOutcome{Status: StatusAlreadyPosted, Thread: t.Thread, ID: t.Already.ID, URL: t.Already.URL}
 	}
-	threads, complete, err := gh.AllReviewThreads(ctx, o.Owner, o.Repo, o.Number)
+	posted, err := postSigned(ctx, gh, o.Owner, o.Repo, o.Number, t, body)
 	if err != nil {
-		return FixReplyOutcome{Status: StatusError, Message: "read the review threads: " + err.Error()}
+		return FixReplyOutcome{Status: StatusError, Thread: t.Thread, Message: err.Error()}
 	}
-	i := slices.IndexFunc(threads, func(t github.Thread) bool {
-		return slices.ContainsFunc(t.AllComments(), func(c github.ThreadComment) bool { return c.ID == o.CommentID })
-	})
-	if i < 0 {
-		problem := fmt.Sprintf("comment %d is no review comment of %s/%s#%d: answer a thread of this pull request", o.CommentID, o.Owner, o.Repo, o.Number)
-		if !complete {
-			problem = fmt.Sprintf("comment %d is in none of the first %d review threads of %s/%s#%d", o.CommentID, github.MaxReviewThreads, o.Owner, o.Repo, o.Number)
-		}
-		return FixReplyOutcome{Status: StatusInvalid, Problems: []string{problem}}
-	}
-	all := threads[i].AllComments()
-	first, replies := all[0].ID, all[1:]
-	if j := postedLast(len(replies), func(j int) (string, string) {
-		return replies[j].Body, github.Account(replies[j].AuthorLogin, replies[j].AuthorType)
-	}, body); j >= 0 {
-		return FixReplyOutcome{Status: StatusAlreadyPosted, Thread: first, ID: replies[j].ID, URL: replies[j].URL}
-	}
-	posted, err := gh.ReplyToReviewComment(ctx, o.Owner, o.Repo, o.Number, first, body)
-	if err != nil {
-		return FixReplyOutcome{Status: StatusError, Thread: first, Message: fmt.Sprintf("post the reply to comment %d: %v", first, err)}
-	}
-	return FixReplyOutcome{Status: StatusReplied, Thread: first, ID: posted.ID, URL: posted.URL}
+	return FixReplyOutcome{Status: StatusReplied, Thread: t.Thread, ID: posted.ID, URL: posted.URL}
 }
