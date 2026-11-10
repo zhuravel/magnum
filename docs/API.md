@@ -948,20 +948,28 @@ func HooksReviewShown(text string) bool
 
 func ImportPaths(text string, limit int) (paths []string, more bool)
     ImportPaths are the paths text imports (@path), each once, in order,
-    at most limit of them (more reports that text has more), read wider than
-    Claude Code reads them so that magnum errs toward a target: an @ at the
-    start of the text or after any character but a letter or a digit (an e-mail
-    address imports nothing; Claude wants a blank before it), up to the first
-    blank a backslash does not escape ("\ " is a space of the path), in a code
-    span or a fenced block too, which Claude skips. Each such token is given as
-    it is and as Claude Code's parser ends it (at a backslash no space follows:
-    `(?:^|\s)@((?:[^\s\\]|\\ )+)`), each of those without its #fragment too
-    (Claude drops it), and each with and without the punctuation that may end a
-    sentence after it. A home (~) or an absolute path is left out: no commit's
-    tree holds it, and Claude loads a file outside its working directory only
-    once the user approves the project's external imports, which magnum never
-    does. Its time is linear in text: a file the PR controls may hold any number
-    of tokens.
+    at most limit of them (more reports that text has more, or more readings
+    than ImportPaths compares in time linear in it), read wider than Claude
+    Code reads them so that magnum errs toward a target. Claude Code 2.1 matches
+    `(?:^|\s)@((?:[^\s\\]|\\ )+)` in each text token marked (without GFM) gives,
+    but in code spans and fenced blocks, and in an HTML block that starts with
+    a comment, with its comments taken out; it cuts the path at its first #,
+    makes "\ " a space and trims it. ImportPaths reads an @ where a text token
+    may start or after a blank (the text's start, a blank, or a mark an inline
+    token starts or ends with: > ) ] [ * _ ` or an escaped one; not ( " or a
+    letter), in code too, up to the first blank a backslash does not escape
+    (JS's \s: U+FEFF is one, U+0085 is not). It gives that token as it is and
+    as Claude's pattern ends it (at a backslash no space follows), each without
+    its #fragment too, and, since a text token ends where another begins,
+    the path up to each mark that may begin or end an emphasis, a code span,
+    a link's text, an image or inline HTML (* _ ` < [ ] and ![; an underscore
+    inside a word is none, so @app_config gives no app), each with and without
+    the punctuation that may end a sentence after it and an escaped space at its
+    end. It reads on after such a mark for a further @, and reads the text again
+    with its HTML comments taken out. A home (~) or an absolute path is left
+    out: no commit's tree holds it, and Claude loads a file outside its working
+    directory only once the user approves the project's external imports,
+    which magnum never does.
 
 func JoinCodexHookProblems(problems []CodexHookProblem) string
     JoinCodexHookProblems says problems in one sentence without its final
@@ -1138,14 +1146,14 @@ func ProjectBase(pr store.PR, repo store.Repo, base string) string
     head with the same base, so what that head brings from the PR's base branch
     counts there too.
 
-func ProjectLinks(kind, dir string) (targets []string, partial bool)
+func ProjectLinks(ctx context.Context, kind, dir string) (targets []string, partial bool)
     ProjectLinks are the targets, relative to the checkout dir's root, of the
-    links among kind's paths at its root and under its project directories, and
-    under a directory such a link leads to, and the files the instruction files
-    there import (addImports), as the disk has them (onDisk: what a session in
-    dir loaded through them), sorted; partial reports that the walk stopped at
-    maxLinkWalk entries, so one may be missing. None for a kind magnum does not
-    compare.
+    links among kind's paths at its root and under its project directories,
+    and under a directory such a link leads to, and the files the instruction
+    files there import (addImports), as the disk has them (onDisk: what a
+    session in dir loaded through them), sorted; partial reports that the walk
+    stopped at maxLinkWalk steps, or as ctx ended, so one may be missing.
+    None for a kind magnum does not compare.
 
 func ProjectPaths(kind string) []string
     ProjectPaths are the paths, relative to the checkout's root, that kind

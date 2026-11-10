@@ -46,9 +46,10 @@ const (
 // GFM) gives, but in code spans and fenced blocks, and in an HTML block
 // that starts with a comment, with its comments taken out; it cuts the
 // path at its first #, makes "\ " a space and trims it. ImportPaths reads
-// an @ where a text token may start or after a blank (importStarts), in
-// code too, up to the first blank a backslash does not escape (JS's \s:
-// U+FEFF is one, U+0085 is not). It gives that token as it is and as
+// an @ where a text token may start or after a blank (the text's start, a
+// blank, or a mark an inline token starts or ends with: > ) ] [ * _ ` or
+// an escaped one; not ( " or a letter), in code too, up to the first blank
+// a backslash does not escape (JS's \s: U+FEFF is one, U+0085 is not). It gives that token as it is and as
 // Claude's pattern ends it (at a backslash no space follows), each without
 // its #fragment too, and, since a text token ends where another begins,
 // the path up to each mark that may begin or end an emphasis, a code span,

@@ -1782,17 +1782,21 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   imports whatever its name, `CLAUDE.md` -> `.cursorrules`; an import resolves from the directory of each
   path Claude may read its file by, the file's own, a link's that leads to it, the one an import named it
   by, through the tree's links, five hops deep, one more than Claude's four; a path is read as written and
-  as Claude ends it, at a `#fragment` or a backslash no space follows; a home or an absolute import is
-  never the tree's). Paths match in ASCII case, which every case-insensitive filesystem folds alike; a
-  name outside ASCII equals an ASCII one only through the few characters that fold into ASCII (`ſ`, the
-  Kelvin sign, `ı`, `İ`, `ß`, the Latin ligatures) or that HFS+ ignores, and a listed path whose name may so
-  fold to a target's (APFS opens `claß.md` for `class.md`, `ﬁrst.md` for `first.md`; two names outside ASCII
-  always may), and a tree with a link whose path or text is outside ASCII where links or imports lead
-  anywhere (APFS checks `docſ` -> `evil` out in place of `docs/`), wait without a class: Magnum does not
-  model a filesystem's fold of such a name. Magnum reads the links and the imports from the head's own tree in the PR's clone, whatever head
-  its sessions launched on, and a head whose links it cannot read waits without a class (a failure the
-  tree always gives is kept for that head, any other for 2 minutes or until a round fetches the head;
-  every import and every 4 KiB of an imported file count against the walk's budget). They steer the review agents, and their hooks run on every
+  as Claude Code's Markdown lexer ends it, at a `#fragment`, a backslash no space follows, or where an
+  emphasis, a code span, a link's text or inline HTML begins or ends, so `**@docs/guide.md**` and
+  `[@docs/guide.md](docs/guide.md)` import the guide; a home or an absolute import is never the tree's).
+  Paths match in ASCII case, which every case-insensitive filesystem folds alike; a name outside ASCII
+  equals an ASCII one only through the few characters that fold into ASCII (`ſ`, the Kelvin sign, `ı`,
+  `İ`, `ß`, the Latin ligatures) or that HFS+ ignores, and a listed path whose name may so fold to a
+  target's (APFS opens `claß.md` for `class.md`, `ﬁrst.md` for `first.md`; two names outside ASCII always
+  may), and a tree with a link whose path or text is outside ASCII beside a link that steers the agents, or
+  at, on the way to or under a file they load through imports (APFS checks `docſ` -> `evil` out in place
+  of `docs/`), wait without a class: Magnum does not model a filesystem's fold of such a name (a test
+  fixture `café.txt` elsewhere holds nothing back). Magnum reads the links and the imports from the head's
+  own tree in the PR's clone, whatever head its sessions launched on, and a head whose links it cannot read
+  waits without a class (a failure the tree always gives is kept for that head, any other for 2 minutes or
+  until a round fetches the head; every import and every 4 KiB of an imported file count against the
+  walk's budget, and a path longer than 4096 bytes, which git checks nothing out at, leads nowhere). They steer the review agents, and their hooks run on every
   teammate's machine once merged. That a session of the head left the config out does not count by itself:
   git compared the slot's files with a merge base, so an ignored `__pycache__/*.pyc` an earlier PR's round
   left there, an uncommitted edit, a stacked PR's base branch, or a compare git could not make would hold
@@ -2674,8 +2678,10 @@ the root links to as well, what a link under `.claude/` or `.codex/` leads to in
 leads to (`app/CLAUDE.md` -> `../docs/app.md`, read from the checkout's index), a link under a directory
 such a link leads to, and, for Claude, the files the instruction files and the pages under `.claude/`
 import, a link's of any name included (`@path`, five hops deep, from the importing file's directory as its
-path reads it, as an import named it and as the disk has it; at most 10,000 imports), matching git's paths
-in ASCII case; a name outside ASCII that may fold to a target's counts, and
+path reads it, through a directory link by the link's path, as an import named it and as the disk has it;
+each file read once however many paths name it; at most 10,000 steps, a path, an import or 4 KiB read
+each, and 30 s), matching git's paths in ASCII case; a name outside ASCII that may fold to a
+target's counts, and
 with links the session reads every changed file itself, since git's case-insensitive pathspec folds ASCII
 only (a nested checkout, Claude Code's `.claude/worktrees/<name>`, is not looked into; past 10,000 entries
 the session leaves the config out, and so does a link to the checkout's root). A PR based on another branch than the repository's

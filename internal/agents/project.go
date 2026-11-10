@@ -1190,8 +1190,8 @@ func ProjectTouched(kind string, paths []string) bool {
 // directories, and under a directory such a link leads to, and the files
 // the instruction files there import (addImports), as the disk has them
 // (onDisk: what a session in dir loaded through them), sorted; partial
-// reports that the walk stopped at maxLinkWalk entries, so one may be
-// missing. None for a kind magnum does not compare.
+// reports that the walk stopped at maxLinkWalk steps, or as ctx ended, so
+// one may be missing. None for a kind magnum does not compare.
 func ProjectLinks(ctx context.Context, kind, dir string) (targets []string, partial bool) {
 	pc, ok := projectConfigs[kind]
 	if !ok || dir == "" {
