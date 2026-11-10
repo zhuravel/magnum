@@ -145,7 +145,7 @@ TOKENS_GO = [
 # the only part under (?i:), so a prefix that ends in the long s or the Kelvin sign is one of non-word characters,
 # as \b counts it. A quoted value reads escapes (scrub.scrubQuotedValue), written unrolled so that the engine runs
 # it in linear time on a string that never ends.
-KEYS_GO = r"(?:aws_)?(?:secret(?:_access)?_key(?:_base)?|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|master[_-]?key|signing[_-]?key|encryption[_-]?key|client[_-]?secret)"
+KEYS_GO = r"(?:aws_)?(?:secret(?:_access)?_key(?:_base)?|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|master[_-]?key|signing[_-]?key|encryption[_-]?key|client[_-]?secret|authorization)"
 QUOTED_VALUE_GO = r"""("[^"\\]*(?:\\[\s\S][^"\\]*)*"|'[^'\\]*(?:\\[\s\S][^'\\]*)*'"""
 PAIRS_GO = r'''(?i)\b((?:aws_)?(?:secret(?:_access)?_key|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret))(\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)'''
 QUOTED_GO = (r"""(["'](?:[^"'\s]*[^0-9A-Za-z"'\s])?(?i:""" + KEYS_GO + r""")["'])(\s*[=:]\s*)"""

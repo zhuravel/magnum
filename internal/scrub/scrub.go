@@ -18,7 +18,7 @@ import (
 
 // scrubKeyWords are the key names whose value is a secret, for the two newer key-value patterns. scrubPairs keeps
 // the names it had.
-const scrubKeyWords = `(?:aws_)?(?:secret(?:_access)?_key(?:_base)?|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|master[_-]?key|signing[_-]?key|encryption[_-]?key|client[_-]?secret)`
+const scrubKeyWords = `(?:aws_)?(?:secret(?:_access)?_key(?:_base)?|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|master[_-]?key|signing[_-]?key|encryption[_-]?key|client[_-]?secret|authorization)`
 
 // scrubQuotedValue is the value of a quoted key or an env-style name that starts with a quote: a double-quoted or
 // single-quoted string, in which a backslash escapes the next character (`"a\"b"`), over lines too. It is

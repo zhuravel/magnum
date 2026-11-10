@@ -173,3 +173,21 @@ func TestScrubReadsTheEscapesOfAQuotedValue(t *testing.T) {
 		}
 	}
 }
+
+// An Authorization header written as JSON or YAML keeps its token today:
+// execx.Redact's pattern needs the colon right after the word, and the key
+// words had no authorization (R59). The quoted key's whole value goes, the
+// scheme with it; a header with no scheme loses its raw token too.
+func TestScrubMasksAQuotedAuthorizationHeader(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{`{"Authorization":"Bearer MADEUP-OPAQUE-TOKEN-1"}`, `{"Authorization":<redacted>}`},
+		{`headers: {'authorization': 'token MADEUP-TOKEN-2', 'accept': 'json'}`, `headers: {'authorization': <redacted>, 'accept': 'json'}`},
+		{`"X-Authorization" = "MADEUP-RAW-3"`, `"X-Authorization" = <redacted>`},
+		{`Authorization: MADEUP-RAW-4`, `Authorization: <redacted>`},
+		{`Authorization: Bearer MADEUP-OPAQUE-5`, `Authorization: <redacted>`},
+	} {
+		if got := Secrets(tc.in); got != tc.want {
+			t.Errorf("Secrets(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

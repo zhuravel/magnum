@@ -530,6 +530,9 @@ var scrubSeeds = []scrubSeed{
 	{"- ", "eyJ", 2000, ""},
 	{"- ", "a.", 3000, " and token: DOTTED-NEXT"},
 	{"- ", "a", 5000, "@x"},
+	// R59: an Authorization header under a quoted key, with a scheme and without one.
+	{`{"Authorization":"Bearer `, "t", 30, `","Accept":"json"}`},
+	{`'x-authorization': `, "r", 30, ` , next`},
 }
 
 // FuzzEvidenceScrubMasksEveryByteScrubMasks wants the port's output of a text

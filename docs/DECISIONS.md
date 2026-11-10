@@ -23506,6 +23506,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   oracle and the pattern test, in `internal/scrub`; `TestScrubDropsTokensEmailsHostsAndLongPastes` and
   `TestScrubKeepsAMessageOfExactlyTheLimitsAndDropsOneMore` in `internal/factory/runtime`. No new dependencies.
 
+- **The scrub masks an Authorization header under a quoted key** (2026-11-10, R59). `{"Authorization":"Bearer x"}`
+  kept its token: execx.Redact's pattern needs the colon right after the word, and the scrub's key words had no
+  `authorization`. The word joins `scrubKeyWords` (internal/scrub, and scrub.py's list), so a quoted key's whole
+  value goes, its scheme with it (`{"Authorization":<redacted>}`), and an unquoted header with no scheme
+  (`Authorization: <raw token>`) loses its token to the env-style pass. execx.Redact is unchanged: the shared last
+  line of defence for logs keeps its one Authorization shape, and the scrub runs it first. Known gap: an unquoted
+  header of a scheme the Redact pattern does not name (`Authorization: Digest x`) masks the scheme word only.
+  Tests: TestScrubMasksAQuotedAuthorizationHeader (failing first) and two fuzz seeds. No new dependencies.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
