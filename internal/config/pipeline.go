@@ -304,6 +304,32 @@ func (c *Config) DedicatedFixApp(name string) bool {
 	return id != nil && id.Kind == "app" && c.reviewAppUse(name) == ""
 }
 
+// DaemonMintsActions reports whether the daemon makes the Actions calls as
+// the identity named name (ci_dispatch_as: the start of ci_dispatch's
+// workflow, the re-run of a run that started no job, the reads of runs and
+// jobs; engine ci_actions.go) over a token of its own with Actions write
+// added, not over the identity's own tokens: name is a dedicated App
+// (DedicatedFixApp) whose token_permissions are set and name no actions at
+// all, as the fixer rule keeps a fixer App's (fixerAppProblem: contents
+// and pull_requests write alone, which its panes hold), so its own tokens
+// can never use Actions and the operator cannot add it. Neither half is
+// exact alone: a dedicated App need not have a fixer's scope (it may read
+// Actions), and an App whose token_permissions leave actions out may be
+// one a watch reviews or polls as, which the engine falls back to without
+// ci_dispatch_as. Every other App keeps the scope the operator chose for
+// its own tokens, which a mint with Actions write would widen, and which
+// GitHub answers with 422 where the installation grants Actions read
+// alone; an App without token_permissions has its installation's whole
+// access.
+func (c *Config) DaemonMintsActions(name string) bool {
+	id := c.IdentityByName(name)
+	if id == nil || len(id.TokenPermissions) == 0 || !c.DedicatedFixApp(name) {
+		return false
+	}
+	_, named := id.TokenPermissions["actions"]
+	return !named
+}
+
 // reviewAppUse is how a watch uses the identity named name for its
 // reviews, "" when none does: "watch X posts its reviews as", "watch X
 // polls as" or "watch X approves as", followed by "(identity Y, the same

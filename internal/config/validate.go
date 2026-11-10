@@ -473,10 +473,11 @@ func validateCheckGlobs(where, key string, entries []string) []error {
 // that stay inside the clone, well-formed required_checks and
 // ignore_checks globs, a ci_dispatch that names a workflow file and a
 // ci_dispatch_as, with or without it, that names an [[identity]] whose
-// tokens reach the repository (an App's token_repositories name it). An
-// App whose token_permissions leave out actions = "write", such as a fixer
-// App, may be one: the daemon mints its Actions calls a token of its own
-// with Actions write added (engine ci_actions.go).
+// tokens reach the repository (an App's token_repositories name it) and
+// may start workflows: no App whose token_permissions leave out actions =
+// "write", unless it is a dedicated fixer App, whose Actions calls the
+// daemon makes over a token of its own with Actions write added
+// (DaemonMintsActions, engine ci_actions.go).
 func (c *Config) validateRepos() []error {
 	var errs []error
 	seen := map[string]bool{}
@@ -513,6 +514,14 @@ func (c *Config) validateRepos() []error {
 			// daemon's own for Actions too (engine ci_actions.go).
 			errs = append(errs, fmt.Errorf("repo %s: ci_dispatch_as %q is an App whose token_repositories leave out %q: "+
 				"GitHub refuses its every Actions call there; add %q to its token_repositories", r.Repo, r.CIDispatchAs, name, name))
+		case id.Kind == "app" && len(id.TokenPermissions) > 0 && id.TokenPermissions["actions"] != "write" && !c.DaemonMintsActions(id.Name):
+			// Its own tokens carry its token_permissions alone
+			// (identity.App.mint); only a dedicated fixer App's Actions
+			// calls go over a token of the daemon's own.
+			errs = append(errs, fmt.Errorf("repo %s: ci_dispatch_as %q is an App whose token_permissions leave out actions = \"write\": "+
+				"its tokens can neither start a workflow nor re-run one, and GitHub answers each with HTTP 403; add actions = \"write\" there, "+
+				"or name a gh identity, an App whose tokens carry it, or a dedicated fixer App (one no watch reviews, polls or approves as, "+
+				"whose token_permissions name no actions: the daemon mints its Actions calls a token of their own)", r.Repo, r.CIDispatchAs))
 		}
 		for _, msg := range trackerProblems("repo "+r.Repo, r.Trackers) {
 			errs = append(errs, errors.New(msg))

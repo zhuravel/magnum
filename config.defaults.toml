@@ -1415,12 +1415,14 @@ stages = [
 # ci_dispatch_as = "me"                   # the [[identity]] that starts ci_dispatch's workflow, where the poll
 #                                         # identity cannot (GitHub answers HTTP 403, as to an App with Actions:
 #                                         # read only); it needs Actions: write (an App, granted on its
-#                                         # installation; its token_repositories must name the repository) or
-#                                         # push access and the repo scope (a gh login); an App whose
-#                                         # token_permissions leave actions = "write" out, a fixer App too, makes
-#                                         # these calls over a token the daemon mints for them alone with Actions
-#                                         # write added, never written to a file, so its panes never hold it;
-#                                         # with or without ci_dispatch, it
+#                                         # installation and in its token_permissions where it sets them; its
+#                                         # token_repositories must name the repository) or push access and the
+#                                         # repo scope (a gh login); validation refuses an App whose
+#                                         # token_permissions leave actions = "write" out, but a dedicated fixer
+#                                         # App (no watch reviews, polls or approves as it; token_permissions
+#                                         # without actions) makes these calls over a token the daemon mints for
+#                                         # them alone with Actions write added, never written to a file, so its
+#                                         # panes never hold it; with or without ci_dispatch, it
 #                                         # also reads the runs at an own PR's head and re-runs, once per head, a
 #                                         # run that started no job (autofix = "open"); default: the watch's poll
 #                                         # identity

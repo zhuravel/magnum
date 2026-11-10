@@ -245,6 +245,89 @@ func TestTheLooksActionsCallsAsAGhLoginMintNothing(t *testing.T) {
 	h.wantMintedNothing("talkable-app")
 }
 
+// ownGH is an identity's own client: the harness's fake, whose reads of
+// a head's runs it records as "own <identity> head_runs" first.
+type ownGH struct {
+	*fakeGH
+	id string
+}
+
+func (g ownGH) HeadRuns(ctx context.Context, owner, repo, sha string) ([]github.WorkflowRun, error) {
+	g.record("own " + g.id + " head_runs")
+	return g.fakeGH.HeadRuns(ctx, owner, repo, sha)
+}
+
+// ciReaderApp is a dedicated App (no watch reviews, polls or approves as
+// it, and no fixer acts as it) whose token_permissions read Actions.
+const ciReaderApp = "ci-reader"
+
+// withCIReaderApp declares ciReaderApp.
+func withCIReaderApp(h *harness) {
+	h.cfg.Identities = append(h.cfg.Identities, config.Identity{Name: ciReaderApp, Kind: "app", Login: ciReaderApp + "[bot]",
+		AppID: 9, ClientID: "Iv-ci", InstallationID: 10, PrivateKeyEnv: "MAGNUM_TEST_CI_KEY",
+		TokenRepositories: []string{"talkable"}, TokenPermissions: map[string]string{"actions": "read", "contents": "read"}})
+	app := &fakeAppIdentity{fakeIdentity{name: ciReaderApp, login: ciReaderApp + "[bot]", kind: "app"}}
+	h.ids[ciReaderApp] = &app.fakeIdentity
+	h.d.Identities[ciReaderApp] = app
+}
+
+// An App whose scope the operator chose keeps it: one whose
+// token_permissions name actions (read here), as ci_dispatch_as, and the
+// App a watch polls as, narrowed without actions, which ciDispatchIdentity
+// falls back to, read the head's runs and re-run with their own client,
+// and nothing is minted for them. A mint with Actions write would widen the
+// scope, and where the installation grants Actions read alone GitHub
+// answers it 422, so reads that work would fail and the PR would need you
+// to grant the App Actions write. Only a dedicated fixer App mints
+// (config's DaemonMintsActions): the fixer rule keeps its
+// token_permissions to contents and pull_requests write, with no actions
+// key.
+func TestAnAppThatChoseItsActionsScopeMintsNothing(t *testing.T) {
+	narrow := func(perms map[string]string) func(*harness) {
+		return func(h *harness) { h.cfg.IdentityByName("talkable-app").TokenPermissions = perms }
+	}
+	for _, tc := range []struct {
+		name, who, as string
+		mod           func(*harness)
+	}{
+		{"a review App that reads Actions as ci_dispatch_as", "talkable-app", "talkable-app",
+			narrow(map[string]string{"actions": "read", "contents": "read", "pull_requests": "write"})},
+		{"the poll identity narrowed without actions", "talkable-app", "", func(h *harness) {
+			narrow(map[string]string{"contents": "read", "pull_requests": "write"})(h)
+			h.cfg.Watches[0].PollIdentity = "talkable-app"
+		}},
+		{"a dedicated App that reads Actions as ci_dispatch_as", ciReaderApp, ciReaderApp, withCIReaderApp},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := rerunHarnessWith(t, nil, withFixerApp, tc.mod, func(h *harness) {
+				if tc.as != "" {
+					h.cfg.Repos = append(h.cfg.Repos, config.Repo{Repo: "talkable/talkable", CIDispatchAs: tc.as})
+				}
+				plain := h.d.GitHub
+				h.d.GitHub = func(id string) GitHub {
+					if id == tc.who {
+						return ownGH{h.gh, id}
+					}
+					return plain(id)
+				}
+				h.d.GitHubEnv = func(string, map[string]string) GitHub { t.Error("GitHubEnv called"); return nil }
+			})
+			h.setHeadRuns(fixHead, noJobRun())
+			h.pastSettle()
+			h.tick()
+			h.tick()
+			if reads := h.ghCalls("own " + tc.who + " head_runs"); len(reads) == 0 {
+				t.Errorf("%s's own client read no runs (calls %q)", tc.who, h.ghCalls(""))
+			}
+			if n := len(h.ghCalls("rerun:")); n != 1 {
+				t.Errorf("reruns = %d, want 1", n)
+			}
+			h.wantMintedNothing(tc.who)
+			h.wantMintedNothing(fixerAppName)
+		})
+	}
+}
+
 // wantMintedNothing fails if the harness minted an Actions token for id.
 func (h *harness) wantMintedNothing(id string) {
 	h.t.Helper()

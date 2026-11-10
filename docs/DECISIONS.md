@@ -4321,46 +4321,56 @@ skill versions); people add theirs to the sections before it, at the end of the 
   token covers a batch's reads and its start), and hands it only as `GH_TOKEN` in the env of the gh commands.
   Their `GH_CONFIG_DIR` is a dir made fresh for the batch in the gh root (`batchConfigDir`: 0700, magnum's
   config.yml alone, no token), removed with the token at its release or sweep, not the App's ConfigDir, whose
-  hosts.yml keeps the pane's token: the pane's env names that dir and its agent can write its config.yml
-  (`gh config set http_unix_socket <socket>` makes gh send its `GH_TOKEN` to that socket and take the answers
-  as GitHub's), so the pane would receive a token that may start workflows and could forge the runs the
-  batch reads. A same-user agent that races a batch could still write the fresh dir, as it could read the
-  App's key; the dir closes the path that a plain `gh config set` takes and keeps nothing a pane wrote. The
-  push needs no such dir: git sends its token, and `gh auth git-credential` makes no HTTP call. The refresh's
-  mint is unchanged, so the panes' token never gains Actions. The engine makes the calls in batches
-  (`ciActions`, ci_actions.go): one per look of a PR (the read of the head's runs and of a run's jobs, the
-  re-run, the start; ended before the look starts a fixer), one per poll of a repository (`seeRerun`,
-  `dispatchedRun`) and one per tick of a push magnum made that waits (`RecentRuns`, and the start once nothing
-  holds it): while a run of the PR's branch is in progress the push mints and revokes a token every tick, as
-  the poll does while a re-run or a start waits, about two a minute, each living seconds. A batch mints at
-  its first call, at most once, and revokes at its end.
-  Every Actions endpoint of workflows.go needs Actions read on an App, so all six calls go through it. The
-  client over the token is the identity's own client `WithEnv` (`Deps.GitHubEnv`): the same runner and meter,
-  and no `Reauth` (a 401 of that token is no reason to refresh the App's own). It mints only for an App whose
-  `token_permissions` are set and leave out `actions = "write"` (`mintsActions`): a gh login keeps its client,
-  and so does an App without `token_permissions` (the installation's whole access, such as a poll App with
-  Actions: read only), whose mint with Actions write would get a 422 and break the reads that work today. The
-  record before the call is unchanged: the re-run and the start ask for their client after their record, so a
-  mint is never a start, and a mint that failed after the record counts as a failed start or re-run (needs
-  you, none again for the head), as a call whose answer was lost does. GitHub's 422 for the missing permission
-  is `identity.ErrActionsNotGranted`, and its words replace the 403's in a failed start's and re-run's record,
-  events and verdict ("fixer-app may not use Actions: grant Actions: write on the App and accept it on the
-  installation"; `actionsFailed`, one mapping for both, which replaced two copies). Since the batch's token is
-  write, a refused mint fails the read first: the re-run's record keeps the words (`ciRerun.UnreadWhy`), and
-  the look needs you with them before any start ("required check build did not run at a1a1a1a: magnum cannot
-  read the head's runs (...); run its workflow on the PR's branch, or push", kind ci_missing) and reads again
-  `settle_max` later. After magnum's push the refusal goes on to the start, which records it once for the
-  head, where a failed read would be asked again every tick. Validation accepts such an App as
-  `ci_dispatch_as`, alone or with `ci_dispatch`, and refuses an App whose `token_repositories` leave the
-  repository out (GitHub would refuse every call there). Rejected: widening the App's `token_permissions`
-  (every pane would hold Actions write), a token per call (a look that reads and re-runs would mint twice), a
-  read-only token for the poll's reads (a second mint for a look that reads and then re-runs; an installation
-  with Actions: read only now fails even the reads, which the grant words name), minting for every App (the
-  422 above), a hosts.yml of the daemon's own for the token (the App's panes run as the same user and can
-  read any file the daemon writes), and a token kept across a waiting push's ticks (a token that may start
-  workflows would outlive the calls it was minted for). The mint and the revoke are not metered (the
-  identity's own HTTP client), about two calls per batch. Tests, failing first by assertion with the seams in place (the batch
-  over the identity's own client, stubs of ActionsEnv and WithEnv):
+  hosts.yml keeps the pane's token: the pane's env names that dir and its agent can write its config.yml (`gh
+  config set http_unix_socket <socket>` makes gh send its `GH_TOKEN` to that socket and take the answers as
+  GitHub's), so the pane would receive a token that may start workflows and could forge the runs the batch
+  reads. A same-user agent that races a batch could still write the fresh dir, as it could read the App's key;
+  the dir closes the path that a plain `gh config set` takes and keeps nothing a pane wrote. The push needs no
+  such dir: git sends its token, and `gh auth git-credential` makes no HTTP call. The refresh's mint is
+  unchanged, so the panes' token never gains Actions. The engine makes the calls in batches (`ciActions`,
+  ci_actions.go): one per look of a PR (the read of the head's runs and of a run's jobs, the re-run, the
+  start; ended before the look starts a fixer), one per poll of a repository (`seeRerun`, `dispatchedRun`) and
+  one per tick of a push magnum made that waits (`RecentRuns`, and the start once nothing holds it): while a
+  run of the PR's branch is in progress the push mints and revokes a token every tick, as the poll does while
+  a re-run or a start waits, about two a minute, each living seconds. A batch mints at its first call, at most
+  once, and revokes at its end. Every Actions endpoint of workflows.go needs Actions read on an App, so all
+  six calls go through it. The client over the token is the identity's own client `WithEnv`
+  (`Deps.GitHubEnv`): the same runner and meter, and no `Reauth` (a 401 of that token is no reason to refresh
+  the App's own). It mints only for a dedicated fixer App (`config.DaemonMintsActions`): an App no watch
+  reviews, polls or approves as (`DedicatedFixApp`) whose `token_permissions` are set and name no actions at
+  all, which the fixer rule makes exact (contents and pull_requests write alone, so its own tokens can never
+  use Actions and the operator cannot add it). Neither half is exact alone: a dedicated App need not have a
+  fixer's scope (it may read Actions), and an App whose `token_permissions` leave actions out may be the one a
+  watch reviews or polls as, which `ciDispatchIdentity` falls back to. Every other App keeps its own client
+  and the scope the operator chose: a gh login, an App without `token_permissions` (the installation's whole
+  access), one that names actions (read or write), and the review or poll App whatever its
+  `token_permissions`. A mint with Actions write would widen that scope, and where the installation grants
+  Actions read alone GitHub answers it 422, so reads that work would fail and the PR would need you to grant
+  the review App Actions write (the rule before review minted for every App whose `token_permissions` left out
+  `actions = "write"`). The record before the call is unchanged: the re-run and the start ask for their client
+  after their record, so a mint is never a start, and a mint that failed after the record counts as a failed
+  start or re-run (needs you, none again for the head), as a call whose answer was lost does. GitHub's 422 for
+  the missing permission is `identity.ErrActionsNotGranted`, and its words replace the 403's in a failed
+  start's and re-run's record, events and verdict ("fixer-app may not use Actions: grant Actions: write on the
+  App and accept it on the installation"; `actionsFailed`, one mapping for both, which replaced two copies).
+  Since the batch's token is write, a refused mint fails the read first: the re-run's record keeps the words
+  (`ciRerun.UnreadWhy`), and the look needs you with them before any start ("required check build did not run
+  at a1a1a1a: magnum cannot read the head's runs (...); run its workflow on the PR's branch, or push", kind
+  ci_missing) and reads again `settle_max` later. After magnum's push the refusal goes on to the start, which
+  records it once for the head, where a failed read would be asked again every tick. Validation accepts a
+  dedicated fixer App as `ci_dispatch_as`, alone or with `ci_dispatch`, still refuses any other App whose
+  `token_permissions` leave out `actions = "write"` (its own tokens would get HTTP 403 on every start and
+  re-run), and refuses an App whose `token_repositories` leave the repository out (GitHub would refuse every
+  call there). Rejected: widening the App's `token_permissions` (every pane would hold Actions write), a token
+  per call (a look that reads and re-runs would mint twice), a read-only token for the poll's reads (a second
+  mint for a look that reads and then re-runs; an installation with Actions: read only now fails even the
+  reads, which the grant words name), minting for every App, or for every App whose `token_permissions` leave
+  out `actions = "write"` (the widening and the 422 above), and minting for every dedicated App (one that
+  reads Actions would be widened too), a hosts.yml of the daemon's own for the token (the App's panes run as
+  the same user and can read any file the daemon writes), and a token kept across a waiting push's ticks (a
+  token that may start workflows would outlive the calls it was minted for). The mint and the revoke are not
+  metered (the identity's own HTTP client), about two calls per batch. Tests, failing first by assertion with
+  the seams in place (the batch over the identity's own client, stubs of ActionsEnv and WithEnv):
   TestAnActionsTokenAddsActionsAndIsWrittenNowhere, TestAnActionsTokenSaysWhenTheAppLacksActions,
   TestWithEnvRunsAsTheParentOverTheBatchsToken,
   TestTheLooksActionsCallsAsAFixerAppGoOverATokenOfTheDaemonsOwn,
@@ -4379,7 +4389,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAPushMagnumMadeThatWaitsOnTheBranchsRunMintsOneTokenPerTick,
   TestTheLooksActionsCallsAsAGhLoginMintNothing, and the checks that talkable-app, an App without
   `token_permissions`, mints nothing in TestTheReRunGoesAsCIDispatchAsWithoutCIDispatch and
-  TestTheLookStartsTheCIWorkflowAsCIDispatchAs.
+  TestTheLookStartsTheCIWorkflowAsCIDispatchAs. After review, failing first by assertion:
+  TestAnAppThatChoseItsActionsScopeMintsNothing (a review App and a dedicated App that read Actions as
+  `ci_dispatch_as`, and the poll identity narrowed without actions, read and re-run with their own client and
+  mint nothing) and TestCIDispatchAsRefusesAnAppWhoseOwnTokensCannotStartWorkflows; with the rule moved into
+  config, TestDaemonMintsActionsForADedicatedFixerAppAlone.
 
 - **An App's own REST calls through gh read a gh config dir of each call's own** (2026-11-10, after review).
   With `[github] transport = "gh"`, the default, `identity.GhTransport` ran `gh api` with the daemon's

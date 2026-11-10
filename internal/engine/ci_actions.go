@@ -4,15 +4,15 @@ package engine
 // [[repo]] ci_dispatch's workflow, the re-run of a run that started no job,
 // and the reads of a head's runs, a run's jobs and a workflow's runs, as
 // ciDispatchIdentity, one batch at a time (ciActions). A gh login, and an
-// App whose tokens may use Actions, make them with the identity's own
-// client, as before. An App whose token_permissions leave actions =
-// "write" out (a fixer App: contents and pull_requests write alone, which
-// its panes hold in its gh config dir) makes them over a token of the
-// daemon's own with Actions write added (identity.App.ActionsEnv,
-// push_token.go's mint), minted at a batch's first call, handed only in
-// the env of its gh commands (GH_TOKEN, over a gh config dir of the
-// batch's own) and revoked at the batch's end: never in a file, so no pane
-// gains a token that may start workflows.
+// App whose scope the operator chose, make them with the identity's own
+// client, as before. A dedicated fixer App (config's DaemonMintsActions:
+// contents and pull_requests write alone, which its panes hold in its gh
+// config dir)
+// makes them over a token of the daemon's own with Actions write added
+// (identity.App.ActionsEnv, push_token.go's mint), minted at a batch's
+// first call, handed only in the env of its gh commands (GH_TOKEN, over a
+// gh config dir of the batch's own) and revoked at the batch's end: never
+// in a file, so no pane gains a token that may start workflows.
 
 import (
 	"context"
@@ -52,7 +52,7 @@ type ciActions struct {
 func (e *Engine) ciActions(identity string) *ciActions { return &ciActions{e: e, identity: identity} }
 
 // client is the batch's client, made at its first call: identity's own,
-// or, for an App whose tokens leave Actions out (mintsActions), one over a
+// or, for a dedicated fixer App (config's DaemonMintsActions), one over a
 // token minted for the batch. Later calls return the first's, so a batch
 // mints once.
 func (b *ciActions) client(ctx context.Context) (GitHub, error) {
@@ -65,7 +65,7 @@ func (b *ciActions) client(ctx context.Context) (GitHub, error) {
 	switch {
 	case own == nil:
 		b.err = fmt.Errorf("%w of %s", errNoGitHub, b.identity)
-	case !ok || !b.e.mintsActions(b.identity):
+	case !ok || !b.e.cfg.DaemonMintsActions(b.identity):
 		b.gh = own
 	case b.e.d.GitHubEnv == nil:
 		b.err = fmt.Errorf("%w of %s over a token of its own", errNoGitHub, b.identity)
@@ -89,15 +89,6 @@ func (b *ciActions) end() {
 		b.release()
 		b.release = nil
 	}
-}
-
-// mintsActions reports whether identity is an App whose token_permissions
-// leave actions = "write" out: its own tokens cannot start workflows, and
-// may not read Actions either. An App without token_permissions has its
-// installation's whole access, as its own tokens do: no mint.
-func (e *Engine) mintsActions(identity string) bool {
-	id := e.cfg.IdentityByName(identity)
-	return id != nil && id.Kind == "app" && len(id.TokenPermissions) > 0 && id.TokenPermissions["actions"] != "write"
 }
 
 // actionsFailed is how a start or a re-run as who that failed with err
