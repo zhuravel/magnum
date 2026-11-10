@@ -10,7 +10,11 @@ package engine
 // declined P1, a description finding), whose entries have no key; there
 // the verdict lists the leftovers instead. It lifts only an attention it
 // raised itself (its message is last_error), never one a loop or a round
-// wrote. magnum's late review of a head is toasted once per head.
+// wrote. A reply magnum has not re-decided holds the look's read of a PR
+// (the reply's round goes first), but not of one the look's own raise
+// holds: no reply round starts on a PR in needs attention, so the read and
+// the lift go first, and the reply's round follows the lift.
+// magnum's late review of a head is toasted once per head.
 
 import (
 	"context"
@@ -76,16 +80,22 @@ func (e *Engine) openRaise(ctx context.Context, repo store.Repo, pr store.PR, l 
 	return true
 }
 
+// raisedHere reports whether pr needs attention of kind for what the look
+// raised itself: kind fix, last_error the look's message, keys it raised.
+// A loop's or a round's Needs you is not.
+func (l openLedger) raisedHere(pr store.PR, kind string) bool {
+	return pr.State == store.PRNeedsAttention && kind == attention.KindFix && l.RaisedMsg != "" && deref(pr.LastError) == l.RaisedMsg &&
+		len(l.Raised) > 0
+}
+
 // openLift puts pr back to reviewed when it needs attention for what the
-// look raised (kind fix, last_error the look's message), no loop runs, and
-// the look's whole, fresh read shows none of the raised items open any
-// more: you answered them. A loop's or a round's attention, and one whose
-// items the look cannot read, are never lifted here. It reports whether it
-// lifted.
+// look raised (raisedHere), no loop runs, and the look's whole, fresh read
+// shows none of the raised items open any more: you answered them. A
+// loop's or a round's attention, and one whose items the look cannot read,
+// are never lifted here. It reports whether it lifted.
 func (e *Engine) openLift(ctx context.Context, repo store.Repo, pr store.PR, l *openLedger, f openFacts) bool {
 	switch {
-	case pr.State != store.PRNeedsAttention || f.attention != attention.KindFix, l.RaisedMsg == "" || deref(pr.LastError) != l.RaisedMsg,
-		f.fix != nil || f.fixBad || len(l.Raised) == 0, !f.whole || f.failed || len(f.cut) > 0, deref(pr.ReviewedSHA) != pr.HeadSHA:
+	case !l.raisedHere(pr, f.attention), f.fix != nil || f.fixBad, !f.whole || f.failed || len(f.cut) > 0, deref(pr.ReviewedSHA) != pr.HeadSHA:
 		return false
 	}
 	open := map[string]bool{}

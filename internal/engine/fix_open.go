@@ -231,6 +231,7 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 		}
 	}
 	f.pending = len(pr.PendingReplies())
+	f.raised = l.raisedHere(pr, f.attention) // fix_open_needs.go
 	f.sum = c.sum
 	if f.pause = e.userPause(ctx); f.pause != "" { // it holds the look's starts, as it held "own"'s rounds
 		f.pauseUntil, _ = e.kvTime(ctx, store.KVDaemonPausedUntil)
@@ -276,7 +277,12 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	l.Starts = slices.DeleteFunc(l.Starts, func(at time.Time) bool { return now.Sub(at) >= 24*time.Hour })
 	if !e.d.DryRun && e.openLift(ctx, repo, pr, &l, f) { // fix_open_needs.go: you answered what the look raised
 		pr.State, pr.LastError = store.PRReviewed, nil
-		f.pr, f.attention = pr, ""
+		f.pr, f.attention, f.raised = pr, "", false
+		if f.pending > 0 { // replies.go: the replies that waited behind the raise get their round, as after a round's end
+			if err := e.considerReplies(ctx, repo, *c.w, pr.ID, now); err != nil {
+				e.log.Info("autofix open: the replies after the lift", "subject", prSubject(repo, pr.Number), "err", err)
+			}
+		}
 	}
 	if f.whole && !f.failed && len(f.cut) == 0 {
 		openPrune(&l, f.items)
@@ -446,11 +452,14 @@ func openWhole(r openRead, fp, head string) (whole, failed bool) {
 // readWanted reports whether the look's read of GitHub can change f's
 // verdict: the look covers the PR, no loop runs or is held, no stalemate
 // waits, magnum is done at the head (one that needs attention after a
-// review of the head is) and has no replies to re-decide.
+// review of the head is) and has no replies to re-decide, unless the
+// look's own raise holds the PR: no reply round starts on a PR in needs
+// attention (considerReplies), so the read and the lift it allows go
+// first, and the replies get their round after the lift.
 // Otherwise the read waits, and spends no GitHub budget on a PR whose
 // verdict it cannot move.
 func readWanted(f openFacts) bool {
-	if f.off != "" || f.fix != nil || f.fixBad || f.held != "" || len(f.stalemate) > 0 || f.pending > 0 {
+	if f.off != "" || f.fix != nil || f.fixBad || f.held != "" || len(f.stalemate) > 0 || f.pending > 0 && !f.raised {
 		return false
 	}
 	if f.pr.State == store.PRNeedsAttention { // its leftovers, and the lift (fix_open_needs.go), need the read

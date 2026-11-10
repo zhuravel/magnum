@@ -407,6 +407,7 @@ type openFacts struct {
 	stalemate  []string
 	sum        *store.ReviewSummary
 	pending    int
+	raised     bool // the look's own raise holds it (openLedger.raisedHere), not a loop's or a round's Needs you
 	whole      bool
 	failed     bool
 	low        bool
