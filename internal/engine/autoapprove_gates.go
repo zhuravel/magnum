@@ -232,18 +232,41 @@ func prStateRefusal(pr store.PR) (why, short string) {
 // do before a new approval, also across a restart.
 func kvAutoApprovalGated(prID int64) string { return fmt.Sprintf("pr.%d.auto_approval_gated", prID) }
 
+// kvAutoApprovalBase records "<approval id>|<base branch>": the PR's base
+// branch when the approval was made (noteApprovalBase), and each later one
+// the files gate (changedFilesRefusal) let it stand on (baseGateRefusal):
+// a retarget starts no round, yet GitHub then lists what the head changes
+// against the new base.
+func kvAutoApprovalBase(prID int64) string { return fmt.Sprintf("pr.%d.auto_approval_base", prID) }
+
+// noteApprovalBase records pr's base branch for approval id, which the
+// gates (or the operator's A) just let through on it (kvAutoApprovalBase).
+func (e *Engine) noteApprovalBase(ctx context.Context, id int64, pr store.PR) {
+	e.setKV(ctx, kvAutoApprovalBase(pr.ID), fmt.Sprintf("%d|%s", id, deref(pr.BaseRef)))
+}
+
 // standingGateRefusal says why the gates a new approval runs
 // (autoGateRefusal) refuse sum, magnum's latest posted round of standing
 // approval a's PR, which then withdraws a: a new head that adds an
 // AGENTS.md, whose review went without codex-review or whose checks fail
 // is not covered by the operator's approval of an earlier head. "" when a
-// stands: sum is a's own round or none, the PR's head is not the one sum
-// reviewed (a head magnum has not reviewed changes nothing: its round
-// decides), sum leaves something to fix (that withdraws a anyway), the
+// stands: sum is none, the PR's head is not the one sum reviewed (a head
+// magnum has not reviewed changes nothing: its round decides), sum is a's
+// own round, sum leaves something to fix (that withdraws a anyway), the
 // head's checks still run (magnum waits for them, asked again every tick),
-// or the gates let sum's round through already (kvAutoApprovalGated).
+// or the gates let sum's round through already (kvAutoApprovalGated). On
+// the head sum reviewed, a's own round included, the files gate decides
+// again once the PR names another base branch than the approval was made
+// on (baseGateRefusal): a PR retargeted to another base changes other
+// files.
 func (e *Engine) standingGateRefusal(ctx context.Context, a store.AutoApprovalPR, sum *store.ReviewSummary) autoRefusal {
-	if sum == nil || sum.RunID == a.RunID || sum.SHA != a.PR.HeadSHA {
+	if sum == nil || sum.SHA != a.PR.HeadSHA {
+		return autoRefusal{}
+	}
+	if r := e.baseGateRefusal(ctx, a); r.why != "" {
+		return r
+	}
+	if sum.RunID == a.RunID {
 		return autoRefusal{}
 	}
 	if blocks, _ := roundBlocks(*sum, ""); blocks {
@@ -259,6 +282,29 @@ func (e *Engine) standingGateRefusal(ctx context.Context, a store.AutoApprovalPR
 		return autoRefusal{}
 	case r.why == "":
 		e.setKV(ctx, key, mark)
+	}
+	return r
+}
+
+// baseGateRefusal is the files gate's refusal (changedFilesRefusal) of
+// standing approval a's PR once its base branch is another than the one
+// the approval was made on, or last let stand on (kvAutoApprovalBase): a
+// retarget changes what GitHub lists the head as changing. An approval the
+// record does not name (one an earlier build made) takes the PR's base now
+// as its own, and stands.
+func (e *Engine) baseGateRefusal(ctx context.Context, a store.AutoApprovalPR) autoRefusal {
+	key, id, base := kvAutoApprovalBase(a.PRID), fmt.Sprintf("%d|", a.ID), deref(a.PR.BaseRef)
+	v, _ := e.getKV(ctx, key)
+	switch was, ok := strings.CutPrefix(v, id); {
+	case !ok:
+		e.noteApprovalBase(ctx, a.ID, a.PR)
+		return autoRefusal{}
+	case was == base:
+		return autoRefusal{}
+	}
+	r, _ := e.changedFilesRefusal(ctx, a.PR)
+	if r.why == "" {
+		e.noteApprovalBase(ctx, a.ID, a.PR)
 	}
 	return r
 }

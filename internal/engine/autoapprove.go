@@ -581,6 +581,9 @@ func (e *Engine) postAutoApproval(ctx context.Context, repo store.Repo, pr store
 		e.log.Info("auto approval not begun", "pr", pr.ID, "err", err)
 		return
 	}
+	if prior == nil {
+		e.noteApprovalBase(ctx, a.ID, pr) // autoapprove_gates.go
+	}
 	data := map[string]any{"approval_id": a.ID, "head_sha": pr.HeadSHA, "identity": id.Name, "run_id": sum.RunID,
 		"source_review_id": sum.ReviewID, "attempt": a.Attempts}
 	ignored := e.ignoredChecksNote(full, pr) // autoapprove_required.go; the body does not say it
@@ -681,8 +684,10 @@ func (e *Engine) adoptAutoApproval(ctx context.Context, repo store.Repo, pr stor
 			a = *prior
 		}
 	} else {
-		a, err = e.st.InsertAutoApproval(ctx, store.AutoApproval{PRID: pr.ID, RunID: sum.RunID, SourceReviewID: sum.ReviewID,
-			SourceURL: sum.URL, HeadSHA: pr.HeadSHA, Identity: id.Name, Login: id.Login})
+		if a, err = e.st.InsertAutoApproval(ctx, store.AutoApproval{PRID: pr.ID, RunID: sum.RunID, SourceReviewID: sum.ReviewID,
+			SourceURL: sum.URL, HeadSHA: pr.HeadSHA, Identity: id.Name, Login: id.Login}); err == nil {
+			e.noteApprovalBase(ctx, a.ID, pr) // autoapprove_gates.go
+		}
 	}
 	if err != nil {
 		e.log.Info("auto approval not adopted", "pr", pr.ID, "err", err)
@@ -818,10 +823,11 @@ func (e *Engine) resumeAutoPost(ctx context.Context, repo store.Repo, a store.Au
 // push, it does not), so a review GitHub already dismissed is never
 // withdrawn again; then a is withdrawn when the PR's latest round is a
 // later one that leaves something to fix (or cannot tell: earlier findings
-// open, the verdict line unread or unknown) or that the gates refuse
-// (standingWithdrawal), and a verdict of the operator's by hand since that
-// holds stops auto-approval (handHolds); an approval or changes request of
-// theirs also supersedes a. A list GitHub cut short still withdraws (the
+// open, the verdict line unread or unknown) or that the gates refuse, or
+// a's own round when the files gate refuses the head on a base branch the
+// PR was retargeted to (standingWithdrawal), and a verdict of the
+// operator's by hand since that holds stops auto-approval (handHolds); an
+// approval or changes request of theirs also supersedes a. A list GitHub cut short still withdraws (the
 // safe way), and tells nothing else until the PR moves.
 func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.AutoApprovalPR, sum *store.ReviewSummary,
 	hold *store.AutoApproveHold, gh GitHub, ag autoApproveGitHub) {
@@ -847,7 +853,7 @@ func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.Au
 			return
 		}
 	}
-	if sum != nil && sum.RunID != a.RunID {
+	if sum != nil && (sum.RunID != a.RunID || gate.why != "") { // a's own round: the files gate on a new base (baseGateRefusal)
 		if msg, note := standingWithdrawal(*sum, reviewBody(reviews, sum.ReviewID), gate, a.Login); msg != "" {
 			if err := e.withdrawAutoApproval(ctx, repo, a.PR, a.AutoApproval, gh, store.AutoEndedMagnum, msg, note); err == nil {
 				delete(e.autoFollow, a.ID)

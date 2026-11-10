@@ -237,6 +237,7 @@ func (e *Engine) approveAsOperator(ctx context.Context, repo store.Repo, pr stor
 	if err != nil {
 		return "", fmt.Errorf("approve %s as %s: %w", label, login, err)
 	}
+	e.noteApprovalBase(ctx, a.ID, pr) // autoapprove_gates.go
 	body := verdictBody(event, p.Message, pr.HeadSHA, sum) + "\n" + AutoApprovalMarker(pr.HeadSHA)
 	subject := prSubject(repo, pr.Number)
 	data := map[string]any{"event": event, "sha": pr.HeadSHA, "identity": id.Name, "approval_id": a.ID}

@@ -349,6 +349,13 @@ func TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions(t *testing.T) {
 			if got := h.created(); len(got) != 1 || !strings.HasPrefix(got[0], "APPROVE@b1:") {
 				t.Fatalf("posted = %q", got)
 			}
+			// The operator's A stands: the gates hold it again only on a
+			// later round or another base branch.
+			h.flush()
+			h.flush()
+			if a := h.autoApproval(2); a.State != store.AutoStanding {
+				t.Fatalf("A as the operator = %+v, want it standing", a)
+			}
 		})
 	}
 }
@@ -434,6 +441,44 @@ func TestAutoApprovalRefusesAHeadWhoseLinksItCannotRead(t *testing.T) {
 	v, _ := h.e.getKV(h.ctx, KVPRAutoApproveRefused(h.pr(2).ID))
 	if r, _ := ParseAutoApproveRefused(v); r.Public != "" {
 		t.Fatalf("the refusal's class = %q: want none", r.Public)
+	}
+}
+
+// A retarget starts no round, yet GitHub then lists what the head changes
+// against the new base: a standing automatic approval is held to the files
+// gate again once the PR's base branch moves, and withdrawn with the
+// class's words when it refuses (the head now changes .claude/ against
+// master); one the gate lets through stands, and is not asked again until
+// the base moves once more.
+func TestARetargetHoldsAStandingApprovalToTheFilesGateAgain(t *testing.T) {
+	h, _ := newAutoHarness(t)
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: []string{"app/x.rb"}})
+	h.tick()
+	h.reviewTo(2, "b1")
+	h.flush()
+	if a := h.autoApproval(2); a.State != store.AutoStanding {
+		t.Fatalf("approval = %+v, want it standing", a)
+	}
+	h.advance(time.Minute)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", base: "release", files: []string{"app/x.rb"}})
+	h.tick()
+	h.flush()
+	if a := h.autoApproval(2); a.State != store.AutoStanding {
+		t.Fatalf("approval after a retarget the gate lets through = %+v, want it standing", a)
+	}
+	h.advance(time.Minute)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: []string{"app/x.rb", ".claude/settings.json"}})
+	h.tick()
+	h.flush()
+	if a := h.autoApproval(2); a.State != store.AutoDismissed || a.EndedBy != store.AutoEndedMagnum {
+		t.Fatalf("approval after a retarget whose list changes .claude/ = %+v, want magnum's withdrawal", a)
+	}
+	d := h.ghCalls("dismiss:")
+	if len(d) != 1 || !strings.Contains(d[0], "found nothing to fix, but the PR changes the instructions or configuration of the AI review agents") {
+		t.Fatalf("dismissals = %q, want one in the class's words", d)
 	}
 }
 
