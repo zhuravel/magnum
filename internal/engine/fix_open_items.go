@@ -35,10 +35,11 @@ package engine
 // A key carries the thread's latest comment where it has one, so a new
 // reply makes a new key and opens the item again, and a remark's last
 // edit, so an edit in place does too (remarkKey). Another reviewer's item
-// also names its reviewer, says whether it is a review body that requests
-// changes, and whether its reviewer approved the PR after its latest word,
-// which accepts it (acceptedBy): the ledger's sort reads them (sortOpen).
-// Items carry kinds, links, counts and logins only, never PR text.
+// also names its reviewer, says when a review body that requests changes
+// got its latest word, and whether its reviewer approved the PR after its
+// latest word, which accepts it (acceptedBy): the ledger's sort reads them
+// (sortOpen). Items carry kinds, links, counts, logins and times only,
+// never PR text.
 
 import (
 	"cmp"
@@ -88,11 +89,12 @@ type openItem struct {
 	Resolved     bool   `json:"resolved,omitempty"`
 	Decision     bool   `json:"decision,omitempty"`
 	// By is another reviewer's item's reviewer (Account form, "ghost" for
-	// none; a thread's first comment's author), and Changes says that it is
-	// a review body that requests changes: their pushback once one of their
-	// items waited for you (openLedger.pushback).
-	By      string `json:"by,omitempty"`
-	Changes bool   `json:"changes,omitempty"`
+	// none; a thread's first comment's author), and ChangesAt, for a review
+	// body that requests changes, when it got its latest word (its last
+	// edit): their pushback when one of their items waited for you before
+	// it (openLedger.pushback). Zero for every other item.
+	By        string    `json:"by,omitempty"`
+	ChangesAt time.Time `json:"changes_at,omitzero"`
 	// Accepted says that the reviewer of another reviewer's item approved
 	// the PR after its latest word (acceptedBy): one that would wait for
 	// you waits for no one (sortOpen).
@@ -316,7 +318,7 @@ func othersItemsOf(read externalRead, quiet quietRules) []openItem {
 		if r.Answered || quiet.login(r.Author) || read.quiet[r.ID] {
 			continue
 		}
-		out = append(out, openItem{Key: remarkKey(r), Class: classOf(r.Author), Kind: r.Kind, URL: r.URL, By: r.Author, Changes: r.State == "CHANGES_REQUESTED",
+		out = append(out, openItem{Key: remarkKey(r), Class: classOf(r.Author), Kind: r.Kind, URL: r.URL, By: r.Author, ChangesAt: r.changesAt(),
 			Accepted: r.accepted})
 	}
 	for _, rt := range read.resolved {

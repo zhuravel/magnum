@@ -5,9 +5,11 @@ package engine
 // handed and that is still open at a later whole read raises the PR to
 // needs_attention, kind fix, with the items' links, and your answer to
 // every one of them, or a later approval by its reviewer (which accepts
-// it), lifts it again. A reviewer whose item waited for you is remembered:
-// a change request of theirs since waits for you too (pushback), and their
-// plain comment is new work. The look raises only a reviewed PR:
+// it), lifts it again. A reviewer whose item waited for you is remembered,
+// with when the look first saw it wait: a change request of theirs made
+// since waits for you too (pushback), in the look's sort and in a loop's
+// later cycles (pushbackKey), and their plain comment is new work. The
+// look raises only a reviewed PR:
 // needsAttentionKeyed replaces last_error, so a raise on a PR in
 // needs_attention would wipe the loop's own Needs you (a failed push, a
 // declined P1, a description finding), whose entries have no key; there
@@ -25,6 +27,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -101,13 +104,71 @@ func (l openLedger) leftToAuthor(it openItem) bool {
 }
 
 // pushback reports whether it is a person's review body that requests
-// changes (openItem.Changes) while or after one of that reviewer's items
-// waited for the author (Waited): they push back on the author's answer,
-// or ask again, which only the author can settle. Their plain comment is
-// no pushback: it is an item of its own, never handed, so work.
+// changes made after the look first saw one of that reviewer's items wait
+// for the author (pushedBack): they push back on the author's answer, or
+// ask again, which only the author can settle. Their plain comment is no
+// pushback: it is an item of its own, never handed, so work.
 func (l openLedger) pushback(it openItem) bool {
-	_, waited := l.Waited[strings.ToLower(it.By)]
-	return it.Class == classPerson && it.Changes && waited
+	return it.Class == classPerson && pushedBack(l.Waited, it.By, it.ChangesAt)
+}
+
+// pushedBack reports whether a change request by by whose latest word
+// came at at (zero: no change request) is their pushback: made after
+// waited's time for them (openLedger.Waited), when the look first saw one
+// of their items wait for the author. One made before is a request of its
+// own, which a fixer works on, though the look sees their item wait only
+// later: it came while the loop that left the item ran, or before.
+func pushedBack(waited map[string]time.Time, by string, at time.Time) bool {
+	since, ok := waited[strings.ToLower(by)]
+	return ok && !at.IsZero() && at.After(since)
+}
+
+// pushbackPrefix starts a pushbackKey.
+const pushbackPrefix = "changes:"
+
+// pushbackKey is the key, among a loop's FixState.Waits, of by's pushback
+// since since (Waited): "changes:rev-ann@<unix nanoseconds>". It names no
+// item: every cycle's external file marks each change request of theirs
+// made after since waiting (externalItems.waiting), so one that comes
+// while the loop runs reaches no fixer either.
+func pushbackKey(by string, since time.Time) string {
+	return pushbackPrefix + strings.ToLower(by) + "@" + strconv.FormatInt(since.UnixNano(), 10)
+}
+
+// pushbacksOf are the reviewers and times of the pushback keys among keys
+// (pushbackKey), as Waited holds them; nil for none.
+func pushbacksOf(keys []string) map[string]time.Time {
+	var out map[string]time.Time
+	for _, k := range keys {
+		rest, ok := strings.CutPrefix(k, pushbackPrefix)
+		i := strings.LastIndexByte(rest, '@')
+		if !ok || i <= 0 {
+			continue
+		}
+		ns, err := strconv.ParseInt(rest[i+1:], 10, 64)
+		if err != nil {
+			continue
+		}
+		if out == nil {
+			out = map[string]time.Time{}
+		}
+		out[rest[:i]] = time.Unix(0, ns)
+	}
+	return out
+}
+
+// loopWaits are the FixState.Waits of a loop the look starts beside needs:
+// the keys of needs and of the items it would wait for you on that their
+// reviewer accepted (acceptedWaits), then a pushback key for each reviewer
+// of Waited (pushbackKey), sorted.
+func (l openLedger) loopWaits(items, needs []openItem) []string {
+	keys := waitsOf(append(slices.Clone(needs), acceptedWaits(items, l)...))
+	var pushbacks []string
+	for by, since := range l.Waited {
+		pushbacks = append(pushbacks, pushbackKey(by, since))
+	}
+	slices.Sort(pushbacks)
+	return append(keys, pushbacks...)
 }
 
 // noteWaited records in l.Waited, at now the first time, the reviewers
@@ -150,20 +211,32 @@ func acceptedWaits(items []openItem, l openLedger) []openItem {
 
 // openLift puts pr back to reviewed when it needs attention for what the
 // look raised (raisedHere), no loop runs, and the look's whole, fresh read
-// shows none of the raised items open any more: you answered them. A
-// loop's or a round's attention, and one whose items the look cannot read,
-// are never lifted here. It reports whether it lifted.
+// shows none of the raised items open any more: you answered them, or
+// their reviewer approved the PR since (openItem.Accepted), which its
+// fix.open_answered event tells apart (liftWords). A loop's or a round's
+// attention, and one whose items the look cannot read, are never lifted
+// here. It reports whether it lifted.
 func (e *Engine) openLift(ctx context.Context, repo store.Repo, pr store.PR, l *openLedger, f openFacts) bool {
 	switch {
 	case !l.raisedHere(pr, f.attention), f.fix != nil || f.fixBad, !f.whole || f.failed || len(f.cut) > 0, deref(pr.ReviewedSHA) != pr.HeadSHA:
 		return false
 	}
-	open := map[string]bool{}
+	open, accepted := map[string]bool{}, map[string]string{}
 	for _, it := range f.items {
-		open[it.Key] = !it.Accepted // its reviewer approved since: it waits for no one (sortOpen)
+		if it.Accepted { // its reviewer approved since: it waits for no one (sortOpen)
+			accepted[it.Key] = strings.ToLower(it.By)
+		} else {
+			open[it.Key] = true
+		}
 	}
 	if slices.ContainsFunc(l.Raised, func(k string) bool { return open[k] }) {
 		return false
+	}
+	var approvers []string
+	for _, k := range l.Raised {
+		if by, ok := accepted[k]; ok {
+			approvers = append(approvers, by)
+		}
 	}
 	err := e.st.TransitionPR(ctx, pr.ID, []string{store.PRNeedsAttention}, store.PRReviewed, func(u *store.PRUpdate) {
 		u.Set("last_error", nil)
@@ -176,10 +249,27 @@ func (e *Engine) openLift(ctx context.Context, repo store.Repo, pr store.PR, l *
 		return false
 	}
 	e.delKV(ctx, KVPRAttention(pr.ID), kvPRAttentionRun(pr.ID))
-	e.event(ctx, "info", prSubject(repo, pr.Number), "fix.open_answered", "you answered what the fixer left; autofix goes on",
-		map[string]any{"items": len(l.Raised)})
+	e.event(ctx, "info", prSubject(repo, pr.Number), "fix.open_answered", liftWords(len(l.Raised), approvers),
+		map[string]any{"items": len(l.Raised), "accepted": len(approvers)})
 	l.Raised, l.RaisedMsg = nil, ""
 	return true
+}
+
+// liftWords is what the lift of n raised items says, approvers the
+// reviewers (one per item) whose later approval accepted some of them
+// (openLift): you answered the others.
+func liftWords(n int, approvers []string) string {
+	who := "the reviewer"
+	if len(slices.Compact(slices.Sorted(slices.Values(approvers)))) > 1 {
+		who = "the reviewers"
+	}
+	switch {
+	case len(approvers) == 0:
+		return "you answered what the fixer left; autofix goes on"
+	case len(approvers) == n:
+		return who + " approved what the fixer left; autofix goes on"
+	}
+	return "you answered what the fixer left, and " + who + " approved the rest; autofix goes on"
 }
 
 // openLate toasts, once per head, that magnum's review of pr's head is late

@@ -1,14 +1,17 @@
 package engine
 
 import (
+	"encoding/json"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -85,8 +88,12 @@ func TestYourConversationReplyLiftsTheLooksOwnNeedsYou(t *testing.T) {
 		h.advance(31 * time.Minute)
 		h.tick()
 	}
-	if _, ok := h.fixEvent("fix.open_answered"); !ok {
+	ev, ok := h.fixEvent("fix.open_answered")
+	if !ok {
 		t.Fatalf("no lift: state %s, last_error %q", h.pr(2).State, deref(h.pr(2).LastError))
+	}
+	if ev.Message != "you answered what the fixer left; autofix goes on" {
+		t.Errorf("the lift says %q, want your answer", ev.Message)
 	}
 	pr := h.wantState(2, store.PRReviewed)
 	if n := len(pr.PendingReplies()); n != 0 {
@@ -195,15 +202,24 @@ func (h *harness) revAnnReviews(id int64, state, body string) {
 
 // The reviewer whose change request waited for you approves the PR later,
 // and you never answered it: the approval accepts it, and the look lifts
-// the attention it raised, with no step of yours. A change request of
+// the attention it raised, with no step of yours, and its event says that
+// the reviewer approved, not that you answered. A change request of
 // theirs after the approval takes it back: the item waits for you again,
 // never for a fixer.
 func TestTheReviewersLaterApprovalLiftsWhatTheyAsked(t *testing.T) {
 	h := raisedChangeRequest(t)
 	h.advance(10 * time.Minute)
 	h.revAnnReviews(9002, "APPROVED", "")
-	if _, ok := h.fixEvent("fix.open_answered"); !ok {
+	ev, ok := h.fixEvent("fix.open_answered")
+	if !ok {
 		t.Fatalf("no lift after the approval: state %s, last_error %q", h.pr(2).State, deref(h.pr(2).LastError))
+	}
+	var data struct{ Items, Accepted int }
+	if err := json.Unmarshal(ev.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Message != "the reviewer approved what the fixer left; autofix goes on" || data.Items != 1 || data.Accepted != 1 {
+		t.Errorf("the lift says %q, %+v; want the reviewer's approval of the 1 item", ev.Message, data)
 	}
 	h.wantState(2, store.PRReviewed)
 	h.wantOpen(OpenIdle, "nothing open")
@@ -367,16 +383,18 @@ func TestTheReviewersPlainReplyIsItsOwnItemAndAChangeRequestWaitsForYou(t *testi
 	})
 }
 
-// A change request of a reviewer one of whose items waited for you
-// (Waited) waits for you too: no work, a need. Their plain comment, and
-// another reviewer's change request, are work as before. The look records
-// a reviewer the first time one of their person's items waits for you.
+// A change request a reviewer makes after one of their items waited for
+// you (Waited) waits for you too: no work, a need. One they made before
+// the look saw their item wait is work, as their plain comment and another
+// reviewer's change request are. The look records a reviewer, with the
+// time, the first time one of their person's items waits for you.
 func TestAChangeRequestWaitsForYouOnceTheReviewersItemWaited(t *testing.T) {
-	pushback := openItem{Key: "remark:9002", Class: classPerson, Kind: itemReview, URL: prPage + "#pullrequestreview-9002", By: "Rev-Ann", Changes: true}
+	pushback := openItem{Key: "remark:9002", Class: classPerson, Kind: itemReview, URL: prPage + "#pullrequestreview-9002", By: "Rev-Ann", ChangesAt: openNow.Add(-time.Minute)}
+	earlier := openItem{Key: "remark:9001", Class: classPerson, Kind: itemReview, URL: prPage + "#pullrequestreview-9001", By: "rev-ann", ChangesAt: openNow.Add(-2 * time.Hour)}
 	comment := openItem{Key: "remark:802", Class: classPerson, Kind: itemComment, URL: prPage + "#issuecomment-802", By: "rev-ann"}
-	alices := openItem{Key: "remark:9003", Class: classPerson, Kind: itemReview, URL: prPage + "#pullrequestreview-9003", By: "alice", Changes: true}
+	alices := openItem{Key: "remark:9003", Class: classPerson, Kind: itemReview, URL: prPage + "#pullrequestreview-9003", By: "alice", ChangesAt: openNow.Add(-time.Minute)}
 	f := idleFacts()
-	f.items = []openItem{pushback, comment, alices}
+	f.items = []openItem{pushback, earlier, comment, alices}
 	f.ledger.noteWaited([]openItem{
 		{Key: "thread:100@100", Class: classPerson, Kind: itemThread, By: "rev-ann"},
 		{Key: "thread:200@200", Class: classBot, Kind: itemThread, By: "lint-bot[bot]"},
@@ -387,8 +405,169 @@ func TestAChangeRequestWaitsForYouOnceTheReviewersItemWaited(t *testing.T) {
 		t.Errorf("waited = %v, want %v", f.ledger.Waited, want)
 	}
 	v, work, needs := decideOpen(f)
-	if len(needs) != 1 || needs[0].Key != pushback.Key || len(work) != 2 || work[0].Key != comment.Key || work[1].Key != alices.Key {
-		t.Errorf("work %v, needs %v; want rev-ann's change request waiting, her comment and alice's change request as work", work, needs)
+	if got := openKeys(work); len(needs) != 1 || needs[0].Key != pushback.Key || !slices.Equal(got, openKeys([]openItem{earlier, comment, alices})) {
+		t.Errorf("work %v, needs %v; want rev-ann's later change request waiting, her earlier one, her comment and alice's change request as work", work, needs)
 	}
 	wantVerdict(t, v, OpenFixing, "1 item waits for you: 1 review body of a person")
+}
+
+// A loop the look starts carries a pushback key per reviewer of Waited
+// beside the keys of what waits (loopWaits), and each cycle's file marks
+// that reviewer's change requests made after the key's time waiting: not
+// one made before, not their comment review, not another reviewer's.
+func TestAPushbackKeyMarksTheReviewersLaterChangeRequestsWaiting(t *testing.T) {
+	since := time.Date(2026, 11, 10, 9, 0, 0, 123, time.UTC)
+	l := openLedger{Waited: map[string]time.Time{"rev-ann": since}}
+	handed := personThread(4100)
+	keys := l.loopWaits(nil, []openItem{handed})
+	if want := []string{handed.Key, "changes:rev-ann@" + strconv.FormatInt(since.UnixNano(), 10)}; !slices.Equal(keys, want) {
+		t.Errorf("loop waits = %v, want %v", keys, want)
+	}
+	before, after, comment, alices := changeRequest(1, since.Add(-time.Second)), changeRequest(2, since.Add(time.Nanosecond)), changeRequest(3, since.Add(time.Minute)),
+		changeRequest(4, since.Add(time.Minute))
+	comment.State, alices.AuthorLogin = "COMMENTED", "alice"
+	x, _ := externalOf(externalInput{Reviews: []github.Review{before, after, comment, alices}, CommentsComplete: true, Author: "zhuravel"})
+	waits := map[int64]bool{}
+	for _, r := range x.waiting(keys).Conversation {
+		waits[r.ID] = r.Waits
+	}
+	if want := map[int64]bool{1: false, 2: true, 3: false, 4: false}; !maps.Equal(waits, want) {
+		t.Errorf("waits = %v, want %v", waits, want)
+	}
+	if got := pushbacksOf([]string{"changes:", "changes:@1", "changes:rev-ann@x", "remark:9"}); got != nil {
+		t.Errorf("pushbacks of malformed keys = %v, want none", got)
+	}
+}
+
+// reviewerAsks adds login's change request review id with body on PR #2
+// while a fixer works: GitHub lists it, with no poll, made a second after
+// now (the fake clock stands still while the fixer works).
+func (h *harness) reviewerAsks(login string, id int64, body string) {
+	r := changeRequest(id, h.clock.Now().Add(time.Second))
+	r.AuthorLogin, r.Body = login, body
+	h.gh.mu.Lock()
+	defer h.gh.mu.Unlock()
+	if h.gh.allReviews == nil {
+		h.gh.allReviews = map[int][]github.Review{}
+	}
+	h.gh.allReviews[2] = append(h.gh.allReviews[2], r)
+}
+
+// remarkWaits is the conversation of a fix run's external file: each
+// remark's id and whether it is marked waiting.
+func remarkWaits(t *testing.T, run store.Run) map[int64]bool {
+	t.Helper()
+	out := map[int64]bool{}
+	for _, r := range readExternalOf(t, run).Conversation {
+		out[r.ID] = r.Waits
+	}
+	return out
+}
+
+// A change request the reviewer made while a loop worked on her thread,
+// before the look ever saw that thread wait for you, is a request of its
+// own, not pushback: the look that sees the thread wait calls it work, and
+// so does every later look while the start waits (here `magnum pause`),
+// with nothing new on GitHub, so it reaches the next loop's fixer, and is
+// never raised as an item the fixer left.
+func TestAChangeRequestMadeBeforeTheReviewersItemWaitedIsWork(t *testing.T) {
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	h.setThreads(extThread(4322458360, "lib/sandbox.rb", 185, time.Date(2026, 10, 5, 9, 0, 0, 0, time.Local), "Why does it run twice?", "rev-ann"))
+	cycleFixer(h, git,
+		func(id string) (string, string) { // loop 1, while she asks for more
+			h.reviewerAsks("rev-ann", 9005, "Also rename the flag to keep_stderr")
+			return "", fixReport(id, "nothing", "1 threads (0 fixed, 0 already fixed, 1 not a bug, 0 won't fix)", "none")
+		},
+		func(id string) (string, string) {
+			return "", fixReport(id, "nothing", "1 review body answered", "none")
+		})
+	h.tick() // reviewed
+	h.pastSettle()
+	h.tick() // loop 1 leaves the thread to you
+	h.e.setKV(h.ctx, store.KVDaemonPaused, "1")
+	h.advance(time.Minute)
+	h.touch(fixHead) // the look sees the thread wait, and the change request as work; the start waits
+	if _, ok := h.ledgerOf(2).Waited["rev-ann"]; !ok {
+		t.Fatalf("waited = %v, want rev-ann's thread seen waiting", h.ledgerOf(2).Waited)
+	}
+	h.advance(time.Minute)
+	h.tick() // nothing new on GitHub
+	h.e.delKV(h.ctx, store.KVDaemonPaused)
+	h.advance(time.Minute)
+	h.tick()
+	pr := h.pr(2)
+	runs := h.fixRuns(pr.ID)
+	if len(runs) != 2 {
+		t.Fatalf("fix runs = %d (state %s, last_error %q): the earlier change request never reached a fixer", len(runs), pr.State, deref(pr.LastError))
+	}
+	if waits := remarkWaits(t, runs[1]); waits[9005] {
+		t.Errorf("the second loop's file marks the earlier change request waiting: %v", waits)
+	}
+}
+
+// A change request a reviewer makes while a loop runs beside her item that
+// waits for you is pushback all the same: the loop's waits name her
+// (FixState.Waits, pushbackKey), so the next cycle's file, read again from
+// GitHub, marks it waiting and its fixer leaves it to you. Another
+// reviewer's change request in that cycle is the fixer's to answer.
+func TestAChangeRequestDuringALoopWaitsForYouInItsNextCycle(t *testing.T) {
+	h, git := openHarness(t, func(in pipeline.RoundInput) (map[string]int, string) { // the re-review of the loop's push finds a P2
+		if in.TargetSHA == fixPushed {
+			return map[string]int{"P2": 1}, "COMMENTED"
+		}
+		return map[string]int{}, "COMMENTED"
+	})
+	person := extThread(4322458360, "lib/sandbox.rb", 185, h.clock.Now().Add(-time.Hour), "Why does it run twice?", "rev-ann")
+	h.setThreads(person)
+	cycleFixer(h, git,
+		func(id string) (string, string) { // loop 1 leaves her question to you
+			return "", fixReport(id, "nothing", "0 threads", "- 4322458360 lib/sandbox.rb:185: not fixed. only the author can say why")
+		},
+		func(id string) (string, string) { // loop 2's first cycle, while both reviewers ask for changes
+			h.reviewerAsks("rev-ann", 9002, "No, drop it")
+			h.reviewerAsks("alice", 9003, "Rename the spec")
+			return fixPushed, fixReport(id, fixPushed[:7]+" Fix the lint", "1 threads (1 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "none")
+		},
+		func(id string) (string, string) {
+			return "", fixReport(id, "nothing", "1 review body answered", "none")
+		})
+	h.tick() // reviewed
+	h.pastSettle()
+	h.tick() // loop 1
+	pr := h.wantState(2, store.PRNeedsAttention)
+	id := h.fix(FixPayload{Done: true, Seen: deref(pr.LastError)})
+	h.handle()
+	h.wantDone(id)
+	h.setThreads(person, extThread(4322458500, "spec/a_spec.rb", 12, h.clock.Now(), "Repeated describe block", "lint-bot"))
+	h.advance(time.Minute)
+	h.touch(fixHead)
+	h.pastSettle()
+	h.tick() // loop 2 on the lint thread pushes, its re-review finds a P2, and its second cycle runs
+	runs := h.fixRuns(pr.ID)
+	if len(runs) != 3 {
+		t.Fatalf("fix runs = %d, want loop 2's second cycle", len(runs))
+	}
+	if waits := remarkWaits(t, runs[2]); !waits[9002] || waits[9003] {
+		t.Errorf("waits in cycle 2's file = %v, want rev-ann's change request alone", waits)
+	}
+}
+
+// The lift's event says who closed what the fixer left: you, the
+// reviewer's later approval, or both, one reviewer or more.
+func TestTheLiftSaysWhoClosedWhatTheFixerLeft(t *testing.T) {
+	for _, c := range []struct {
+		n         int
+		approvers []string
+		want      string
+	}{
+		{2, nil, "you answered what the fixer left; autofix goes on"},
+		{1, []string{"rev-ann"}, "the reviewer approved what the fixer left; autofix goes on"},
+		{2, []string{"rev-ann", "rev-ann"}, "the reviewer approved what the fixer left; autofix goes on"},
+		{2, []string{"rev-ann", "alice"}, "the reviewers approved what the fixer left; autofix goes on"},
+		{3, []string{"rev-ann"}, "you answered what the fixer left, and the reviewer approved the rest; autofix goes on"},
+	} {
+		if got := liftWords(c.n, c.approvers); got != c.want {
+			t.Errorf("liftWords(%d, %v) = %q, want %q", c.n, c.approvers, got, c.want)
+		}
+	}
 }

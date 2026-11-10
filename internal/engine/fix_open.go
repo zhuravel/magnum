@@ -275,7 +275,7 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	_, f.ciLow = e.githubLow(e.cfg.CIDispatchAs(repo.FullName()))
 	f.approved, f.afterCount = e.openApproval(ctx, *c.w, pr, &l)
 	l.Starts = slices.DeleteFunc(l.Starts, func(at time.Time) bool { return now.Sub(at) >= 24*time.Hour })
-	if !e.d.DryRun && e.openLift(ctx, repo, pr, &l, f) { // fix_open_needs.go: you answered what the look raised
+	if !e.d.DryRun && e.openLift(ctx, repo, pr, &l, f) { // fix_open_needs.go: you answered what the look raised, or its reviewer approved it
 		pr.State, pr.LastError = store.PRReviewed, nil
 		f.pr, f.attention, f.raised = pr, "", false
 		if f.pending > 0 { // replies.go: the replies that waited behind the raise get their round, as after a round's end
@@ -322,14 +322,15 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 		}
 	}
 	acts.end() // before the fixer starts: the deferred end does nothing more
+	// fix_open_needs.go: a change request their reviewers make from now on waits for you, in the loop below too
+	l.noteWaited(needs, now)
 	switch {
 	case ci: // ci_fix.go: the record first, so a restart never starts a fourth
 		v = e.openStart(ctx, repo, pr, &l, v, work, FixState{Mode: FixModeCI, CIChecks: ciEntries(f.ci.failedRuns)}, fp)
 	case v.Verdict == OpenFixing && len(work) > 0:
-		// a person's handed items wait, and those their reviewer accepted: its fixer leaves them alone
-		v = e.openStart(ctx, repo, pr, &l, v, work, FixState{Waits: waitsOf(append(slices.Clone(needs), acceptedWaits(f.items, l)...))}, fp)
+		// a person's handed items wait, those their reviewer accepted, and their reviewers' pushback: its fixer leaves them alone
+		v = e.openStart(ctx, repo, pr, &l, v, work, FixState{Waits: l.loopWaits(f.items, needs)}, fp)
 	}
-	l.noteWaited(needs, now) // fix_open_needs.go: a change request of their reviewers waits for you from now on
 	e.openWrite(ctx, pr, c.raw, l, v)
 }
 

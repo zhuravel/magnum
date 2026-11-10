@@ -155,8 +155,21 @@ type externalRemark struct {
 	Answered  bool   `json:"answered"`
 	Waits     bool   `json:"waits,omitempty"`
 	// accepted (not in the file): its reviewer approved the PR after its
-	// last edit (acceptedBy), which the look reads.
+	// last edit (acceptedBy), which the look reads. latest (not in the file
+	// either) is when it got its latest word: its last edit, else when it
+	// was made.
 	accepted bool
+	latest   time.Time
+}
+
+// changesAt is, for a review body that requests changes, when it got its
+// latest word (openItem.ChangesAt, pushedBack); zero for any other remark,
+// and for one read back from a file.
+func (r externalRemark) changesAt() time.Time {
+	if r.Kind != remarkReview || r.State != "CHANGES_REQUESTED" {
+		return time.Time{}
+	}
+	return r.latest
 }
 
 // Remark kinds (externalRemark.Kind), also the place a "## Needs you" entry
@@ -194,11 +207,16 @@ func (x externalItems) unanswered() (threads, conversation int) {
 
 // waiting is x with its threads and conversation items whose key
 // (fix_open_items.go) is one of keys marked Waits (FixState.Waits), on
-// copies of its lists: the read a look hands a job is the look's too.
+// copies of its lists: the read a look hands a job is the look's too. A
+// pushback key among keys (pushbackKey) marks the change requests of its
+// reviewer made after its time, as the look's sort holds them for you
+// (pushback): a later cycle reads GitHub again, and one that came while
+// the loop ran waits for you too.
 func (x externalItems) waiting(keys []string) externalItems {
 	if len(keys) == 0 {
 		return x
 	}
+	pushbacks := pushbacksOf(keys) // fix_open_needs.go
 	x.Threads, x.Conversation = slices.Clone(x.Threads), slices.Clone(x.Conversation)
 	for i, t := range x.Threads {
 		if len(t.Comments) > 0 && slices.Contains(keys, threadKey(t.CommentID, t.Comments[len(t.Comments)-1].ID)) {
@@ -206,7 +224,7 @@ func (x externalItems) waiting(keys []string) externalItems {
 		}
 	}
 	for i, r := range x.Conversation {
-		if slices.Contains(keys, remarkKey(r)) {
+		if slices.Contains(keys, remarkKey(r)) || pushedBack(pushbacks, r.Author, r.changesAt()) {
 			x.Conversation[i].Waits = true
 		}
 	}
@@ -428,7 +446,7 @@ func externalOf(in externalInput) (externalItems, int) {
 	}
 	slices.SortStableFunc(items, func(a, b dated) int { return a.at.Compare(b.at) })
 	for _, it := range items {
-		it.r.accepted = acceptedBy(decisions, it.r.Author, it.text, nil)
+		it.r.accepted, it.r.latest = acceptedBy(decisions, it.r.Author, it.text, nil), it.text
 		it.r.Answered = it.r.URL != "" && slices.ContainsFunc(in.Comments, func(c github.PRComment) bool {
 			own := isOwn(c.AuthorLogin, c.AuthorType)
 			return c.CreatedAt.After(it.text) && ((postreview.IsFixReply(c.Body) && (byAuthor(c.AuthorLogin, c.AuthorType) || own)) || (postreview.IsComment(c.Body) && own)) &&

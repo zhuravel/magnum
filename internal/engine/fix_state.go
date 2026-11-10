@@ -70,7 +70,9 @@ func KVPRFixOff(prID int64) string { return fmt.Sprintf("pr.%d.fix_off", prID) }
 // items (fix_open_items.go) that an earlier loop was handed and that wait
 // for the author, a person's, beside which autofix = "open" started this
 // loop on work never handed (rule 9): every cycle's external file marks
-// them waiting, and the fixer leaves them alone (writeExternal). Mode is
+// them waiting, and the fixer leaves them alone (writeExternal); a
+// pushback key among them (pushbackKey) names a reviewer one of whose
+// items waited, and marks their change requests made since. Mode is
 // what the loop does: "" fixes findings, FixModeMerge merges the PR's
 // parent alone (fix_parent.go), FixModeCI fixes its failed required CI on
 // the loop's first cycle (ci_fix.go; the next cycles fix the re-review's
