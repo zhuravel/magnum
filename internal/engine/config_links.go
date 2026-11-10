@@ -198,10 +198,11 @@ func changedLinks(targets map[string]string, paths []string) (names []string, ma
 // (errLinksFoldUnknown), so every target returned is ASCII. It returns each path the agents load through
 // such a link, with the link's label: the link itself, each link it passes
 // through on the way (re-pointing one changes what loads), where it ends
-// (a file, or a directory and what lies under it), and, for each link
-// under such a directory (a path in a tree is never under a link), the
-// same again. A text that leaves the tree (absolute, or past its top)
-// leads nowhere a commit reaches; a path that is no link in the tree is
+// (a file, or a directory and what lies under it; "" for the tree's root,
+// which covers every path), and, for each link under such a directory (a
+// path in a tree is never under a link), the same again. A text that
+// leaves the tree (absolute, or past its top) leads nowhere a commit
+// reaches; a path that is no link in the tree is
 // taken as it is, there or not (a stale target only adds refusals). A loop
 // ends after maxLinkHops; past maxLinkSteps it fails (errLinksTooMany),
 // and it stops with ctx's error when ctx ends.
@@ -268,10 +269,14 @@ func (r *linkResolver) step() bool {
 
 // under calls fn with each link's path that lies under t (not t itself),
 // in ASCII case: the run of the sorted folded keys that start with t's
-// and a "/", found by a binary search rather than a scan of every link.
+// and a "/", found by a binary search rather than a scan of every link;
+// every link for t "" (a link to the tree's root, .claude/skills -> ..).
 // It stops when fn or the walk's budget says so.
 func (r *linkResolver) under(t string, fn func(l string) bool) {
-	prefix := foldKey(t) + "/"
+	prefix := ""
+	if t != "" {
+		prefix = foldKey(t) + "/"
+	}
 	i, _ := slices.BinarySearch(r.keys, prefix)
 	for ; i < len(r.keys) && strings.HasPrefix(r.keys[i], prefix); i++ {
 		for _, l := range r.byFold[r.keys[i]] {

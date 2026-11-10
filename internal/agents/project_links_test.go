@@ -118,6 +118,7 @@ func TestMatchTargetCannotTellANameOutsideASCII(t *testing.T) {
 		{"docs/日本.md", "docs/日本.md", Under},
 		{"app/日本.rb", ".agents/skills", NotUnder},
 		{"docs/guide.mdx", "docs/guide.md", NotUnder},
+		{"docs/guide.md", "", Under}, // a link to the checkout's root
 	} {
 		if got := MatchTarget(c.f, c.t); got != c.want {
 			t.Errorf("MatchTarget(%q, %q) = %v, want %v", c.f, c.t, got, c.want)
@@ -342,5 +343,28 @@ func TestAWalkPastTheLinkBudgetLeavesTheConfigOut(t *testing.T) {
 				t.Fatalf("log records = %+v", recs)
 			}
 		})
+	}
+}
+
+// A link to the checkout's root (.claude/skills -> ..) makes the whole
+// checkout what the agent loads through it: Claude takes <root>/*/SKILL.md
+// for skills. Its target is "", which covers every path, and the session
+// leaves the config out, whatever file the PR changes, without walking the
+// checkout for links.
+func TestALinkToTheCheckoutsRootLeavesTheConfigOut(t *testing.T) {
+	e, dir, ws := projectEnv(t, map[string]string{".claude/settings.json": "{}", "tools/lint/SKILL.md": "x\n"},
+		[]string{"tools/lint/SKILL.md"}, nil)
+	if err := os.Symlink("..", filepath.Join(dir, ".claude", "skills")); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], ""); err != nil {
+		t.Fatal(err)
+	}
+	n, ok := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindClaude)
+	if raw, _, _ := e.st.GetKV(e.ctx, store.KVPRProject(e.pr.ID, KindClaude)); !ok || !slices.Equal(n.Paths, []string{".claude/"}) {
+		t.Fatalf("record %s: want a decline for .claude/", raw)
+	}
+	if targets, partial := ProjectLinks(KindClaude, dir); !slices.Contains(targets, "") || partial {
+		t.Fatalf("ProjectLinks = %q, %v; want the root among the targets", targets, partial)
 	}
 }

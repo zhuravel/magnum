@@ -44,6 +44,8 @@ func TestResolveConfigLinksFollowsLinksAsTheFilesystemDoes(t *testing.T) {
 				"tools/lint": ".claude/skills"}},
 		{"a skill directory below the root", map[string]string{"apps/web/.claude/skills": "../../../shared/skills"},
 			map[string]string{"apps/web/.claude/skills": "apps/web/.claude/skills", "shared/skills": "apps/web/.claude/skills"}},
+		{"a link to the root", map[string]string{".claude/skills": "..", "lib/x": "../vendor/x"},
+			map[string]string{".claude/skills": ".claude/skills", "": ".claude/skills", "lib/x": ".claude/skills", "vendor/x": ".claude/skills"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got, err := resolveConfigLinks(context.Background(), c.links, isConfig)

@@ -299,6 +299,13 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 			m.logAt(slog.LevelWarn, "agents: %s: more than %d entries to look through for links under %s, so the session leaves them out",
 				role.Name, maxLinkWalk, pc.labels(nil))
 		}
+		if disk.root {
+			m.logAt(slog.LevelWarn, "agents: %s: a link of %s leads to the checkout's root, so the session leaves them out",
+				role.Name, pc.labels([]string{disk.links[""].label()}))
+			if !slices.ContainsFunc(changed, func(p projectPath) bool { return p == disk.links[""] }) {
+				changed = append(changed, disk.links[""])
+			}
+		}
 		if err != nil || len(changed) > 0 || disk.partial {
 			switch {
 			case errors.Is(err, errNoBase), errors.Is(err, errNoCheckout):
@@ -365,6 +372,11 @@ type diskPaths struct {
 	// partial: the walk for links under a directory path stopped at
 	// maxLinkWalk entries, so one may lead where git compares nothing.
 	partial bool
+	// root: a link leads to the checkout's root (.claude/skills -> ..), so
+	// the whole checkout is what the CLI loads through it (links[""]): the
+	// session leaves the config out, and nothing walks the checkout for
+	// links.
+	root bool
 }
 
 // maxLinkWalk caps the entries onDisk reads under a checkout's project
@@ -518,8 +530,19 @@ type linkWalk struct {
 
 // add records t, the target of a link of path p, unless it is one of pc's
 // paths (compared, and named, as itself) or recorded already; it reports
-// whether it recorded it.
+// whether it recorded it for git to compare. The checkout's root ("") is
+// recorded as such (diskPaths.root), never for git.
 func (w *linkWalk) add(t string, p projectPath) bool {
+	if t == "" {
+		if _, dup := w.d.links[t]; !dup {
+			if w.d.links == nil {
+				w.d.links = map[string]projectPath{}
+			}
+			w.d.links[t] = p
+		}
+		w.d.root = true
+		return false
+	}
 	if _, _, own := w.pc.pathOf(t); own {
 		return false
 	}
@@ -547,7 +570,7 @@ func (w *linkWalk) walk(start []string, p projectPath) []string {
 	for len(queue) > 0 {
 		rel := queue[0]
 		queue = queue[1:]
-		if w.seen[rel] {
+		if w.seen[rel] || rel == "" { // the root: diskPaths.root
 			continue
 		}
 		w.seen[rel] = true
@@ -583,16 +606,20 @@ func (w *linkWalk) walk(start []string, p projectPath) []string {
 }
 
 // linkTarget is where the symbolic link path leads, relative to root (the
-// checkout's real path), with forward slashes; false when it leads
-// nowhere or outside the checkout, where no commit of the PR reaches.
+// checkout's real path), with forward slashes, "" for the root itself;
+// false when it leads nowhere or outside the checkout, where no commit of
+// the PR reaches.
 func linkTarget(root, path string) (string, bool) {
 	t, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return "", false
 	}
 	rel, err := filepath.Rel(root, t)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+	switch {
+	case err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel):
 		return "", false
+	case rel == ".":
+		return "", true
 	}
 	return filepath.ToSlash(rel), true
 }
@@ -678,8 +705,12 @@ const (
 // target keeps (linkTarget), may spell it in another, and every
 // case-insensitive filesystem folds ASCII alike. An element with a byte
 // outside ASCII matches only one of the same bytes for sure; where it
-// differs, the answer is MaybeUnder.
+// differs, the answer is MaybeUnder. The target "" (a link to the
+// checkout's root, .claude/skills -> ..) covers every path.
 func MatchTarget(f, t string) TargetMatch {
+	if t == "" {
+		return Under
+	}
 	fp, tp := strings.Split(f, "/"), strings.Split(t, "/")
 	if len(fp) < len(tp) {
 		return NotUnder

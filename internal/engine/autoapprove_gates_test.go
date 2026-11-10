@@ -469,6 +469,24 @@ func TestAutoApprovalCannotTellANameOutsideASCIIThroughALink(t *testing.T) {
 	}
 }
 
+// A link of the agents' config to the checkout's root (.claude/skills ->
+// ..) makes every file of the tree one the agents may load (Claude takes
+// <root>/*/SKILL.md for skills): any file the PR changes is refused, by
+// the link's label.
+func TestAutoApprovalRefusesAnyFileUnderALinkToTheRoot(t *testing.T) {
+	h, _ := newAutoHarness(t, func(h *harness) {
+		h.d.Git = fakeGit{links: map[string]map[string]string{"b1": {".claude/skills": ".."}}}
+	})
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", files: []string{"tools/lint/SKILL.md"}})
+	h.tick()
+	h.reviewTo(2, "b1")
+	h.flush()
+	h.wantRefused(2, "it changes the review agents' instructions or hooks (.claude/skills)")
+}
+
 // A head whose links magnum cannot read (no clone with it, a git that
 // fails) may change what a link of the agents' config leads to: its
 // approval waits, refused without a class, and the next pass reads them
