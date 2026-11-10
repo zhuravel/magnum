@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -420,5 +421,53 @@ func TestAnImportInMarkdownsEmphasisOrALinksTextIsATarget(t *testing.T) {
 		if names, maybe := changedLinks(got, []string{"docs/guide.md"}); err != nil || !slices.Equal(names, []string{"AGENTS.md"}) || maybe {
 			t.Errorf("AGENTS.md %q: targets %q, %v: changedLinks = %q, %v; want AGENTS.md", text, got, err, names, maybe)
 		}
+	}
+}
+
+// One step of the walk builds a path as long as the one it extends, so a
+// single long import (an AGENTS.md of 2.4 MiB that imports
+// @aaa…/aaa…/…/x.md) or a chain of links, each a long way down, took
+// minutes within the budget's steps. No filesystem opens a path longer
+// than PATH_MAX, so an import that long imports nothing, and a path the
+// walk builds costs a step per linkBytesPerStep of it: either ends at
+// once.
+func TestALongPathStaysWithinTheWalksBudget(t *testing.T) {
+	kinds := defaultKinds()
+	isConfig := func(p string) (string, bool) { return agentConfigPath(kinds, p) }
+	long := "@" + strings.Repeat(strings.Repeat("a", 40)+"/", 60_000) + "x.md\n"
+	chain := map[string]string{"CLAUDE.md": "l0/x.md"}
+	dir := ""
+	for i := range 40 {
+		down := strings.Repeat("a/", 2000)
+		chain[path.Join(dir, fmt.Sprintf("l%d", i))] = down + fmt.Sprintf("l%d", i+1)
+		dir = path.Join(dir, down)
+	}
+	for name, c := range map[string]struct {
+		files map[string]string
+		links map[string]string
+	}{
+		"a long import":         {map[string]string{"AGENTS.md": long}, nil},
+		"a chain of long links": {map[string]string{"AGENTS.md": "x\n"}, chain},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tree, read := treeOf(c.files, c.links)
+			done := make(chan error, 1)
+			start := time.Now()
+			go func() {
+				got, err := resolveConfigTargets(context.Background(), tree, isConfig, read)
+				if err == nil && slices.ContainsFunc(slices.Collect(maps.Keys(got)), func(t string) bool { return strings.HasSuffix(t, "/x.md") }) {
+					err = fmt.Errorf("a target past PATH_MAX among %d", len(got))
+				}
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if err != nil && !errors.Is(err, errLinksTooMany) {
+					t.Fatal(err)
+				}
+			case <-time.After(20 * time.Second):
+				t.Fatalf("resolveConfigTargets still runs after %s", time.Since(start))
+			}
+		})
 	}
 }

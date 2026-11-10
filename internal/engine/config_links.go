@@ -650,13 +650,19 @@ func (r *linkResolver) follow(l, label string) {
 	}
 }
 
+// maxPathBytes is PATH_MAX (Linux's; macOS's is 1024): git checks out no
+// file or link at a longer path, and no filesystem opens one or holds a
+// link's text that long.
+const maxPathBytes = 4096
+
 // realpath is where text, a link's text in the directory dir ("" for the
 // top), leads in the tree: the paths (one per way a name folded in ASCII
 // case may go, when the tree holds links whose paths differ in case only), none
-// when it leaves the tree, loops or runs out of steps. Each link it passes
-// through is recorded with label.
+// when it leaves the tree, loops, runs out of steps or is longer than
+// maxPathBytes (a text, or a path it builds: nothing is checked out
+// there). Each link it passes through is recorded with label.
 func (r *linkResolver) realpath(dir, text string, hops int, label string) []string {
-	if path.IsAbs(text) || hops > maxLinkHops {
+	if path.IsAbs(text) || hops > maxLinkHops || len(text) > maxPathBytes {
 		return nil
 	}
 	cur := []string{dir}
@@ -677,6 +683,9 @@ func (r *linkResolver) realpath(dir, text string, hops int, label string) []stri
 				p := elem
 				if c != "" {
 					p = c + "/" + elem
+				}
+				if len(p) > maxPathBytes {
+					continue
 				}
 				via := r.byFold[foldKey(p)]
 				if !isASCII(elem) { // an import's name: it may fold to a link of c's
