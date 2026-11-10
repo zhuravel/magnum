@@ -22710,6 +22710,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
     TestScreenDataAsksForTheDeployRecordsInBothReads, TestOneReadOfTheDeployRecordsServesBothPassesOfAFrame and
     TestALiveDeployRecordIsNotBelievedWhileMagnumsDaemonIsDown. No new dependencies.
 
+- **The plan judge's prompt after your answers names report.md's sections in their order** (2026-11-10, R52). Its
+  turns after your answers failed the report's end fact 3 times of 3 ("its first section must be `## Architecture
+  decisions`"), each fixed by the next nudge in under a minute: the turn put what the answers changed ahead of the
+  first section, and the answers prompt said only "your first prompt still holds". `answersText` now takes the
+  stage's end, and a report end's prompt adds the order the end fact checks (`report.problem`): Architecture
+  decisions first, then Helpers and Files, nothing before the first section, the answers' changes inside them.
+  Other ends' prompts are unchanged. Rejected: repeating the whole first prompt (it still holds, and the order is
+  the one rule the turns missed). Tests: TestTheAnswersPromptOfAReportEndNamesItsSectionsInOrder and
+  TestTheAnswersPromptOfAnotherEndNamesNoReportSection, each failing first. No new dependencies.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
