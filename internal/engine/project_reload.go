@@ -178,7 +178,7 @@ func (p *headProbe) changedNames(ctx context.Context, base, head string) ([]stri
 func (p *headProbe) linkTargets(ctx context.Context, kind, head string) ([]string, bool) {
 	d, ok := p.disk[kind]
 	if !ok {
-		d.targets, d.partial = agents.ProjectLinks(kind, p.job.slot.Path)
+		d.targets, d.partial = agents.ProjectLinks(ctx, kind, p.job.slot.Path)
 		if p.disk == nil {
 			p.disk = map[string]diskLinks{}
 		}

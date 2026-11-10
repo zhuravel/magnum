@@ -379,7 +379,7 @@ func TestALinkToTheCheckoutsRootLeavesTheConfigOut(t *testing.T) {
 	if raw, _, _ := e.st.GetKV(e.ctx, store.KVPRProject(e.pr.ID, KindClaude)); !ok || !slices.Equal(n.Paths, []string{".claude/"}) {
 		t.Fatalf("record %s: want a decline for .claude/", raw)
 	}
-	if targets, partial := ProjectLinks(KindClaude, dir); !slices.Contains(targets, "") || partial {
+	if targets, partial := ProjectLinks(t.Context(), KindClaude, dir); !slices.Contains(targets, "") || partial {
 		t.Fatalf("ProjectLinks = %q, %v; want the root among the targets", targets, partial)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -292,7 +293,7 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 		var mb string
 		err := m.trackedLinks(ctx, g, dir, base, pc, &disk)
 		if err == nil {
-			pc.addImports(dir, &disk)
+			pc.addImports(ctx, dir, &disk)
 			files, mb, err = m.projectChanges(ctx, g, dir, base, pc.logFile, disk.git)
 		}
 		if err == nil && len(disk.links) > 0 {
@@ -669,6 +670,10 @@ func (w *linkWalk) source(rel string, p projectPath) {
 // Claude Code skips an instruction file over 4 MiB.
 const maxImportBytes = 4 << 20
 
+// importBytesPerStep is how many bytes of a file addImports reads for one
+// step of its walk's budget.
+const importBytesPerStep = 4096
+
 // addImports adds to d, as link targets of the importing file's project
 // path, the files d.sources import (@path, ImportPaths), and what those
 // import, to MaxImportHops hops (pc.imports): an import relative to the
@@ -679,11 +684,14 @@ const maxImportBytes = 4 << 20
 // followed all the same); a directory it names is walked for links (walk).
 // A file it names is read by the path the import names (CLAUDE.md's
 // @lib/guide.md, through lib -> a/b/shared, imports @../x.md from lib/ as
-// Claude resolves it, and from a/b/shared/ as the disk has it). Each file
-// read and each import counts against maxLinkWalk; past it the walk is
-// partial. A file that cannot be read, or is over maxImportBytes, imports
-// nothing.
-func (pc projectConfig) addImports(dir string, d *diskPaths) {
+// Claude resolves it, and from a/b/shared/ as the disk has it). A file is
+// read and scanned once per walk however many paths name it (its device
+// and inode), its imports resolved from the directory of each. Each path
+// a file is named by, each importBytesPerStep bytes read and each import
+// counts against maxLinkWalk, and ctx is asked before each read; past the
+// budget, or once ctx ends, the walk is partial. A file that cannot be
+// read, or is over maxImportBytes, imports nothing.
+func (pc projectConfig) addImports(ctx context.Context, dir string, d *diskPaths) {
 	if !pc.imports || len(d.sources) == 0 {
 		return
 	}
@@ -692,39 +700,59 @@ func (pc projectConfig) addImports(dir string, d *diskPaths) {
 		root = dir
 	}
 	w := linkWalk{pc: pc, d: d, root: root, seen: map[string]bool{}, budget: maxLinkWalk}
-	read := map[string]bool{}
+	named := map[string]bool{}      // the paths the walk read a file by
+	parsed := map[string][]string{} // a file's identity -> its imports, read once
+	resolved := map[string]bool{}   // a file's identity and a directory its imports were resolved from
 	srcs := slices.Clone(d.sources)
 	for hop := 1; hop <= MaxImportHops && len(srcs) > 0; hop++ {
 		var next []importFile
 		for _, src := range srcs {
-			if read[src.rel] {
+			if named[src.rel] {
 				continue
 			}
-			read[src.rel] = true
+			named[src.rel] = true
 			if w.budget--; w.budget < 0 {
 				d.partial = true
 				return
 			}
 			full := filepath.Join(root, filepath.FromSlash(src.rel))
-			text, ok := readImportFile(full)
-			if !ok {
+			fi, err := os.Stat(full)
+			if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxImportBytes {
 				continue
 			}
-			bases := []string{filepath.Dir(full)}
-			if resolved, err := filepath.EvalSymlinks(full); err == nil && filepath.Dir(resolved) != bases[0] {
-				bases = append(bases, filepath.Dir(resolved))
-			}
-			imps, more := ImportPaths(text, max(w.budget, 0))
-			if more {
-				d.partial = true
-				return
-			}
-			for _, imp := range imps {
-				if w.budget--; w.budget < 0 {
+			id := fileIdentity(full, fi)
+			imps, ok := parsed[id]
+			if !ok {
+				if ctx.Err() != nil {
 					d.partial = true
 					return
 				}
-				for _, base := range bases {
+				text, _ := readImportFile(full)
+				if w.budget -= len(text) / importBytesPerStep; w.budget < 0 {
+					d.partial = true
+					return
+				}
+				var more bool
+				if imps, more = ImportPaths(text, max(w.budget, 0)); more {
+					d.partial = true
+					return
+				}
+				parsed[id] = imps
+			}
+			bases := []string{filepath.Dir(full)}
+			if rp, err := filepath.EvalSymlinks(full); err == nil && filepath.Dir(rp) != bases[0] {
+				bases = append(bases, filepath.Dir(rp))
+			}
+			for _, base := range bases {
+				if resolved[id+"\x00"+base] {
+					continue
+				}
+				resolved[id+"\x00"+base] = true
+				for _, imp := range imps {
+					if w.budget--; w.budget < 0 {
+						d.partial = true
+						return
+					}
 					target := filepath.Join(base, filepath.FromSlash(imp))
 					t, ok := linkTarget(root, target)
 					if !ok {
@@ -743,6 +771,15 @@ func (pc projectConfig) addImports(dir string, d *diskPaths) {
 		}
 		srcs = next
 	}
+}
+
+// fileIdentity is the key two paths of one file share (its device and
+// inode), the path full where the filesystem gives none.
+func fileIdentity(full string, fi os.FileInfo) string {
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		return fmt.Sprintf("%d:%d", st.Dev, st.Ino)
+	}
+	return full
 }
 
 // namedPath is target, a path an import named (joined to its importing
@@ -1135,13 +1172,13 @@ func ProjectTouched(kind string, paths []string) bool {
 // (onDisk: what a session in dir loaded through them), sorted; partial
 // reports that the walk stopped at maxLinkWalk entries, so one may be
 // missing. None for a kind magnum does not compare.
-func ProjectLinks(kind, dir string) (targets []string, partial bool) {
+func ProjectLinks(ctx context.Context, kind, dir string) (targets []string, partial bool) {
 	pc, ok := projectConfigs[kind]
 	if !ok || dir == "" {
 		return nil, false
 	}
 	d, _ := pc.onDisk(dir)
-	pc.addImports(dir, &d)
+	pc.addImports(ctx, dir, &d)
 	return slices.Sorted(maps.Keys(d.links)), d.partial
 }
 

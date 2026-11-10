@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -102,7 +103,7 @@ func TestASessionComparesWhatTheInstructionsImport(t *testing.T) {
 			t.Fatalf("git %q: want the imported files compared, and no other", d.Args)
 		}
 	}
-	if targets, partial := ProjectLinks(KindClaude, dir); !slices.Contains(targets, ".docs/guide.md") || !slices.Contains(targets, ".docs/more.md") || partial {
+	if targets, partial := ProjectLinks(t.Context(), KindClaude, dir); !slices.Contains(targets, ".docs/guide.md") || !slices.Contains(targets, ".docs/more.md") || partial {
 		t.Fatalf("ProjectLinks = %q, %v; want the imported files", targets, partial)
 	}
 }
@@ -184,7 +185,7 @@ func TestASessionsImportsStayWithinTheWalksBudget(t *testing.T) {
 	writeFiles(t, dir, map[string]string{"CLAUDE.md": b.String()})
 	done := make(chan bool, 1)
 	go func() {
-		_, partial := ProjectLinks(KindClaude, dir)
+		_, partial := ProjectLinks(t.Context(), KindClaude, dir)
 		done <- partial
 	}()
 	select {
@@ -269,8 +270,85 @@ func TestASessionReadsAnImportInMarkdownsEmphasis(t *testing.T) {
 	for _, text := range []string{"Read **@.docs/guide.md** first.\n", "See [@.docs/guide.md](.docs/guide.md).\n", "@.docs/guide.md\ufeffsee\n"} {
 		dir := t.TempDir()
 		writeFiles(t, dir, map[string]string{"CLAUDE.md": text, ".docs/guide.md": "x\n"})
-		if targets, partial := ProjectLinks(KindClaude, dir); !slices.Contains(targets, ".docs/guide.md") || partial {
+		if targets, partial := ProjectLinks(t.Context(), KindClaude, dir); !slices.Contains(targets, ".docs/guide.md") || partial {
 			t.Errorf("CLAUDE.md %q: ProjectLinks = %q, %v; want .docs/guide.md", text, targets, partial)
 		}
+	}
+}
+
+// One file may be named many ways (here 300 links to it): the session reads
+// it once per walk, however many paths name it, so a large file there
+// costs one read and one scan at each Claude launch, not one per name.
+func TestASessionReadsAnImportedFileOncePerWalk(t *testing.T) {
+	dir := t.TempDir()
+	var b strings.Builder
+	for i := range 300 {
+		fmt.Fprintf(&b, "@.docs/l%d.md\n", i)
+	}
+	writeFiles(t, dir, map[string]string{"CLAUDE.md": b.String(), ".docs/big.md": strings.Repeat("@x ", (4<<20)/3), ".docs/x": "x\n"})
+	for i := range 300 {
+		if err := os.Symlink("big.md", filepath.Join(dir, ".docs", fmt.Sprintf("l%d.md", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	done := make(chan []string, 1)
+	start := time.Now()
+	go func() {
+		targets, _ := ProjectLinks(t.Context(), KindClaude, dir)
+		done <- targets
+	}()
+	select {
+	case targets := <-done:
+		if !slices.Contains(targets, ".docs/big.md") || !slices.Contains(targets, ".docs/x") {
+			t.Fatalf("ProjectLinks = %d targets, want .docs/big.md and what it imports", len(targets))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("ProjectLinks still runs after %s", time.Since(start))
+	}
+}
+
+// Every 4 KiB the session reads is a step of its walk, and every import:
+// files each within the budget may pass it together (eleven rules files
+// of 4 MiB, three of 4,000 imports), and the walk is then partial, as it
+// is for a context that ended before a read.
+func TestASessionsImportsOfManyFilesStayWithinTheWalksBudget(t *testing.T) {
+	big := t.TempDir()
+	writeFiles(t, big, map[string]string{"CLAUDE.md": "x\n"})
+	for i := range 11 {
+		name := filepath.Join(big, ".claude", "rules", fmt.Sprintf("r%d.md", i))
+		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Truncate(name, maxImportBytes); err != nil { // sparse: nothing is written
+			t.Fatal(err)
+		}
+	}
+	many := t.TempDir()
+	files := map[string]string{}
+	for i := range 3 {
+		var b strings.Builder
+		for j := range 4000 {
+			fmt.Fprintf(&b, "@f%d-%d.md\n", i, j)
+		}
+		files[fmt.Sprintf(".claude/rules/r%d.md", i)] = b.String()
+	}
+	writeFiles(t, many, files)
+	for name, dir := range map[string]string{"eleven files of 4 MiB": big, "three files of 4,000 imports": many} {
+		if _, partial := ProjectLinks(t.Context(), KindClaude, dir); !partial {
+			t.Errorf("%s: ProjectLinks not partial", name)
+		}
+	}
+	small := t.TempDir()
+	writeFiles(t, small, map[string]string{"CLAUDE.md": "@a.md\n", "a.md": "x\n"})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, partial := ProjectLinks(ctx, KindClaude, small); !partial {
+		t.Error("ProjectLinks with a context that ended: not partial")
+	}
+	if targets, partial := ProjectLinks(t.Context(), KindClaude, small); !slices.Equal(targets, []string{"a.md"}) || partial {
+		t.Errorf("ProjectLinks = %q, %v; want a.md", targets, partial)
 	}
 }
