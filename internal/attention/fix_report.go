@@ -19,6 +19,30 @@ import (
 // conflict need your call", "2 more findings need your call".
 var fixYourCallRe = regexp.MustCompile(`\b\d+ (?:more )?(?:findings?|conflicts?)(?: and \d+ conflicts?)? needs? your call\b`)
 
+// lookRaiseRe matches the look's raise (LookRaiseText) after its kind.
+var lookRaiseRe = regexp.MustCompile(`^\d+ items? the fixer left needs? you: `)
+
+// LookLift is what lifts the look's raise (LookRaise): the look reads the
+// PR again and puts it back to reviewed once each raised item is answered
+// on GitHub, or its reviewer approved the PR since (engine openLift). It is
+// the raise's remedy and `magnum fix --done`'s refusal of it.
+const LookLift = "answer each linked item on GitHub (or its reviewer approves the PR), and magnum lifts this at its next read of the PR"
+
+// LookRaiseText is the message of the look's raise (engine openRaise, with
+// autofix = "open"): n items that fix loops left and a later read of the
+// look found still open, at links: "fix: 2 items the fixer left need you:
+// <url>, <url>". No fixer's report or pane goes with it, and `magnum fix
+// --done` does not take it: the look lifts it itself (LookLift).
+func LookRaiseText(n int, links []string) string {
+	return KindFix + ": " + textx.Count(n, "item the fixer left needs you", "items the fixer left need you") + ": " + strings.Join(links, ", ")
+}
+
+// LookRaise reports whether msg, a PR's last_error (with its "fix: " or
+// without, as Explain reads it), is the look's raise (LookRaiseText).
+func LookRaise(msg string) bool {
+	return lookRaiseRe.MatchString(strings.TrimPrefix(textx.FirstLine(msg), KindFix+": "))
+}
+
 // FixReport is the fixer's report that a fix job's message msg (a PR's
 // last_error under KindFix) names: the last absolute path to a .md file of
 // its first line, as the remedy names the report (fixRemedy); "" when that

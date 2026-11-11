@@ -8,9 +8,10 @@ package engine
 // only its own raise (fix_open_needs.go). A person's item never closes on
 // the fixer's word, so it closes on yours: the lift takes only the fixer's
 // calls (attention.FixAsks, after "fix: "; not its cap or a failed run, even
-// one that kept your decision calls after its words, keepDecisions, nor the
-// look's raise or a round's attention), and only when they are all there is (no line under
-// them: a fixer that did not get the other reviewers' items, withUnread,
+// one that kept your decision calls after its words, keepDecisions, nor a
+// round's attention, nor the look's raise, whose refusal names its lift on
+// GitHub, attention.LookLift), and only when they are all there is (no line
+// under them: a fixer that did not get the other reviewers' items, withUnread,
 // may have left more), only the attention you saw (FixPayload.Seen; one you
 // did not see, Seen "", is refused), only on the head magnum reviewed, and
 // never while a loop runs or a fix is held, whose end could leave you
@@ -49,6 +50,9 @@ func (e *Engine) fixDone(ctx context.Context, repo store.Repo, pr store.PR, seen
 	}
 	_, under, _ := strings.Cut(msg, "\n")
 	switch reviewed := deref(pr.ReviewedSHA); {
+	case attention.LookRaise(msg): // fix_open_needs.go: the look lifts it once GitHub shows the items answered
+		return "", fmt.Errorf("PR #%d needs you for items fix loops left open on GitHub, which `magnum fix --done` does not take: %s",
+			pr.Number, attention.LookLift)
 	case !attention.FixAsks(msg) || !strings.HasPrefix(msg, attention.KindFix+": "): // a failure or the cap that kept your decision calls (keepDecisions) too
 		return "", fmt.Errorf("PR #%d's fix loop asks for something else than calls you can mark done (%s): %s",
 			pr.Number, oneLine(msg, 200), look)

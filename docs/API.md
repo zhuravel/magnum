@@ -4015,7 +4015,9 @@ const (
 	// "fix settle failed: …"), with the fixer's report path when it has one,
 	// or a call per finding with its thread's link and the report last
 	// ("fix: reply fixed in <sha7> in … and resolve it: <url>; …; details:
-	// <report>", FixCallsText), which Reason.NeedsYou and Steps carry.
+	// <report>", FixCallsText), which Reason.NeedsYou and Steps carry; or
+	// the look's raise of what loops left open ("fix: 2 items the fixer
+	// left need you: <url>, <url>", LookRaiseText), which GitHub lifts.
 	KindFix = "fix"
 	// KindShellHold: a command keeps one of the PR's shell panes in its slot
 	// busy, so nothing switches the slot's checkout, and the hold lasted 15
@@ -4039,6 +4041,12 @@ const (
 	StageFix          = "fix"
 )
     Stages: where the failure happened.
+
+const LookLift = "answer each linked item on GitHub (or its reviewer approves the PR), and magnum lifts this at its next read of the PR"
+    LookLift is what lifts the look's raise (LookRaise): the look reads the
+    PR again and puts it back to reviewed once each raised item is answered on
+    GitHub, or its reviewer approved the PR since (engine openLift). It is the
+    raise's remedy and `magnum fix --done`'s refusal of it.
 
 const SummaryMax = 160
     SummaryMax bounds Summary and Cause (runes).
@@ -4091,6 +4099,17 @@ func LaunchRole(msg string) (role string, ok bool)
     LaunchRole is the agent role a round setup's error msg says did not start
     (the engine's "start <role>: …"), whose CLI a CLIChange note may name;
     ok is false for any other error.
+
+func LookRaise(msg string) bool
+    LookRaise reports whether msg, a PR's last_error (with its "fix: " or
+    without, as Explain reads it), is the look's raise (LookRaiseText).
+
+func LookRaiseText(n int, links []string) string
+    LookRaiseText is the message of the look's raise (engine openRaise, with
+    autofix = "open"): n items that fix loops left and a later read of the look
+    found still open, at links: "fix: 2 items the fixer left need you: <url>,
+    <url>". No fixer's report or pane goes with it, and `magnum fix --done` does
+    not take it: the look lifts it itself (LookLift).
 
 func MagnumsDecision(c FixCall, priority, place string) bool
     MagnumsDecision reports whether c is the call to decide one of magnum's
@@ -4276,6 +4295,11 @@ var (
 	ErrOptions = errors.New("cleanup: invalid options")
 	// ErrUnconfirmed: an action needs typed confirmation that Apply was not given.
 	ErrUnconfirmed = errors.New("cleanup: needs typed confirmation")
+	// ErrNothingDropped says that every action of the plan needed its slug
+	// typed and Apply was not given it (Report.NothingConfirmed), so nothing
+	// ran. The command and the daemon's cleanup request fail with it: only a
+	// terminal asks for the slug.
+	ErrNothingDropped = errors.New("nothing dropped: run it on a terminal and type the slug")
 )
 
 FUNCTIONS
@@ -4455,6 +4479,11 @@ type Report struct {
 	DroppedDBs []string `json:"dropped_dbs,omitempty"`
 }
     Report is the outcome of Apply.
+
+func (r Report) NothingConfirmed() bool
+    NothingConfirmed reports whether Apply ran nothing because every action
+    of the plan needed typed confirmation it was not given: the report counts
+    unconfirmed actions and nothing done, failed or planned (ErrNothingDropped).
 
 type Result struct {
 	Action Action `json:"action"`
@@ -32633,6 +32662,11 @@ func StagingSummary(s StagingInfo, now time.Time) string
     env's name: its state, CI's or Jenkins' part of it, the head in the tip or
     how far behind, and when it was deployed or pushed, relative to now ("pushed
     · CI running · head aaa1111 · pushed 3m ago").
+
+func StalemateWhat(urls []string) string
+    StalemateWhat says that magnum stopped arguing in the threads at urls,
+    naming the first: the card's NEEDS YOU (stalemateSentence) and the attention
+    line `magnum status` and the dashboard give such a PR.
 
 func StopWatch(err error) error
     StopWatch wraps err so that RunWatch ends and returns err (for "the pane

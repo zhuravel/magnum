@@ -267,6 +267,28 @@ func TestIdentityVerdictRequest(t *testing.T) {
 	}
 }
 
+// On 11-08 four `magnum identities check` verdicts (requests 487, 488, 493,
+// 494) failed with a bare "unknown identity": the CLI had read an identity
+// config.toml had just gained, and the daemon still ran the config it
+// loaded at its start, until its restart a minute later. The reply says
+// when this daemon loaded its config, that it lacks the name, and that a
+// restart loads it.
+func TestAnUnknownIdentitysVerdictNamesTheConfigLoadAndTheRestart(t *testing.T) {
+	h := newHarness(t)
+	started := h.clock.Now().Add(-90 * time.Minute)
+	h.e.setKV(h.ctx, store.KVDaemonStartedAt, store.FormatTime(started))
+	id := h.enqueue(ReqIdentityVerdict, IdentityVerdictPayload{Name: "talkable-new", Pass: true})
+	h.e.handleRequests(h.ctx)
+	want := `unknown identity "talkable-new": this daemon loaded its config at ` + started.Local().Format("Jan 2 15:04") +
+		" without it; `magnum daemon-restart --drain` loads it"
+	if r := h.request(id); r.State != store.RequestFailed || deref(r.Result) != want {
+		t.Errorf("%s %q\nwant failed %q", r.State, deref(r.Result), want)
+	}
+	if _, ok := h.e.getKV(h.ctx, store.KVIdentityCheck("talkable-new")); ok {
+		t.Error("an unknown identity got a verdict")
+	}
+}
+
 // GitHub cut a PR's label list short: a skip label on the page still skips
 // it; without one the PR is reviewed and the truncation is reported once.
 func TestTruncatedLabelsSkipOnlyOnAVisibleSkipLabel(t *testing.T) {

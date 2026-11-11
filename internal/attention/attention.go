@@ -35,7 +35,9 @@ const (
 	// "fix settle failed: …"), with the fixer's report path when it has one,
 	// or a call per finding with its thread's link and the report last
 	// ("fix: reply fixed in <sha7> in … and resolve it: <url>; …; details:
-	// <report>", FixCallsText), which Reason.NeedsYou and Steps carry.
+	// <report>", FixCallsText), which Reason.NeedsYou and Steps carry; or
+	// the look's raise of what loops left open ("fix: 2 items the fixer
+	// left need you: <url>, <url>", LookRaiseText), which GitHub lifts.
 	KindFix = "fix"
 	// KindShellHold: a command keeps one of the PR's shell panes in its slot
 	// busy, so nothing switches the slot's checkout, and the hold lasted 15
@@ -458,8 +460,12 @@ func fixCause(line string) string {
 // nothing in output, the lines under chain), `magnum fix --done` for once
 // the author did them all; then `magnum fix` for another loop once the
 // author answered what it left, and `magnum abort` for a loop still
-// running.
+// running. The look's raise (LookRaise) has neither a report nor a pane,
+// and only GitHub lifts it: its remedy is LookLift.
 func fixRemedy(chain, output, ref string) string {
+	if LookRaise(chain) {
+		return LookLift + "; `magnum fix --done` does not apply to it"
+	}
 	who, report := "the fixer", lastReport(chain)
 	if report != "" {
 		who = strings.TrimSuffix(filepath.Base(report), ".md")

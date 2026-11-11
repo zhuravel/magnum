@@ -133,6 +133,12 @@ func TestFixDoneRefusesWhatIsNotTheFixersCalls(t *testing.T) {
 			return ""
 		}, want: "PR #2's fix loop asks for something else than calls you can mark done (3 fix cycles, 1 finding left: 1 new: " +
 			"/state/claude-fix.md): `magnum status talkable/talkable#2` says what"},
+		// talkable#12086: request 515 got the line above for the look's
+		// raise, whose lift is on GitHub, not --done.
+		{name: "the look's raise", mod: func(h *harness, pr store.PR) string {
+			setLastError(h, pr, attention.LookRaiseText(1, []string{prPage + "#discussion_r4322458360"}))
+			return ""
+		}, want: "PR #2 needs you for items fix loops left open on GitHub, which `magnum fix --done` does not take: " + attention.LookLift},
 		{name: "the other reviewers' items unread", mod: func(h *harness, pr store.PR) string {
 			setLastError(h, pr, deref(pr.LastError)+"\n"+unread)
 			return ""

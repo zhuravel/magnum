@@ -109,7 +109,7 @@ func TestANeedsYouLoopSaysWhatToDoPerThread(t *testing.T) {
 	if ev, ok := h.fixEvent("fix.needs_you"); !ok || ev.Message != want {
 		t.Errorf("fix.needs_you at the loop's end = %q", ev.Message)
 	}
-	if ev, ok := h.fixEvent("pr.needs_attention"); !ok || ev.Message != attention.KindFix+": "+want {
+	if ev, ok := h.fixEvent("pr.needs_attention"); !ok || ev.Message != want { // "fix: " once (attentionEventMsg)
 		t.Errorf("pr.needs_attention = %q", ev.Message)
 	}
 	why := attention.Explain(attention.KindFix, deref(cur.LastError), "talkable#2")

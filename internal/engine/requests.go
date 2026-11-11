@@ -377,10 +377,12 @@ func decode(req store.Request, v any) error {
 
 // requestIdentityVerdict records a CLI identity check through the path the
 // daemon's own checks take (recordIdentityVerdict), with the CLI's
-// identity.checked event.
+// identity.checked event. A name the daemon's config lacks is refused with
+// when it loaded that config: the CLI reads config.toml on disk, which can
+// have gained the identity since, and a restart loads it.
 func (e *Engine) requestIdentityVerdict(ctx context.Context, p IdentityVerdictPayload) (string, error) {
 	if e.cfg.IdentityByName(p.Name) == nil {
-		return "", fmt.Errorf("unknown identity %q", p.Name)
+		return "", fmt.Errorf("unknown identity %q: %s", p.Name, e.configLoadedWithout(ctx))
 	}
 	e.recordIdentityVerdict(ctx, p.Name, p.Pass, p.Reason)
 	result, level := "identities check: pass", "info"
@@ -389,6 +391,18 @@ func (e *Engine) requestIdentityVerdict(ctx context.Context, p IdentityVerdictPa
 	}
 	e.event(ctx, level, "identity:"+p.Name, "identity.checked", result, nil)
 	return result, nil
+}
+
+// configLoadedWithout says that this daemon runs a config it loaded at its
+// start (store.KVDaemonStartedAt: the daemon reads its config once, then)
+// without a name the request asked for, and that a restart loads the file
+// on disk.
+func (e *Engine) configLoadedWithout(ctx context.Context) string {
+	when := "at its start"
+	if at, ok := e.kvTime(ctx, store.KVDaemonStartedAt); ok {
+		when = "at " + at.Local().Format("Jan 2 15:04")
+	}
+	return "this daemon loaded its config " + when + " without it; `magnum daemon-restart --drain` loads it"
 }
 
 // resolve loads the PR a request names.
@@ -922,7 +936,8 @@ func modelLimitsNote(cleared []string) string {
 }
 
 // cleanupAsync hands a release/cleanup request to the heavy worker, which
-// completes it with the rendered report.
+// completes it with the rendered report: failed when an action failed, or
+// when every action wanted its slug typed and none was (nothing ran).
 func (e *Engine) cleanupAsync(ctx context.Context, id int64, p CleanupPayload) {
 	if e.d.Cleanup == nil {
 		e.complete(ctx, id, errors.New("cleanup is not available"), "")
@@ -944,6 +959,9 @@ func (e *Engine) cleanupAsync(ctx context.Context, id int64, p CleanupPayload) {
 		}
 		rep, err := e.d.Cleanup.Apply(ctx, *plan, p.Confirmed)
 		out := strings.TrimSpace(cleanup.Render(*plan) + "\n" + cleanup.RenderReport(rep))
+		if err == nil && rep.NothingConfirmed() { // a request that did nothing is no done (request 520)
+			err = cleanup.ErrNothingDropped
+		}
 		if err != nil {
 			return "", fmt.Errorf("%s\n%w", out, err)
 		}

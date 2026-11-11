@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/cleanup"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
@@ -620,5 +621,23 @@ func TestABareResumeNamesTheToolsStillPaused(t *testing.T) {
 	}
 	if res, err := h.e.requestPause(h.ctx, PausePayload{}, false); err != nil || res != "resumed" {
 		t.Fatalf("resume after the kind's = %q, %v, want resumed", res, err)
+	}
+}
+
+// Cleanup request 520 dropped nothing (its only action, an orphan's
+// databases, needed the slug typed, and no terminal could ask), yet it
+// ended done and the command exited 0, which a script reads as success. A
+// cleanup whose every action stayed unconfirmed fails, saying what to do;
+// one that applied something besides keeps its done.
+func TestACleanupThatDroppedNothingUnconfirmedFails(t *testing.T) {
+	h := newHarness(t)
+	drop := cleanup.Action{Kind: cleanup.KindDropDBs, Subject: "slug:pr27087fix", Why: "orphan databases", Slug: "pr27087fix",
+		DBNames: []string{"talkable_test__pr27087fix"}, Confirm: true}
+	id := h.enqueue(ReqCleanup, CleanupPayload{Plan: &cleanup.Plan{Actions: []cleanup.Action{drop}}})
+	h.tick()
+	r := h.request(id)
+	if r.State != store.RequestFailed || !strings.HasSuffix(deref(r.Result), "nothing dropped: run it on a terminal and type the slug") ||
+		!strings.Contains(deref(r.Result), "0 done, 0 failed, 1 unconfirmed") {
+		t.Errorf("%s %q, want failed with nothing dropped", r.State, deref(r.Result))
 	}
 }

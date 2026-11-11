@@ -76,7 +76,8 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"blocks on your approval, because it never counts a GitHub App's (its review decision is REVIEW_REQUIRED), "+
 			"and \"✔ lift your ✗\" (lift-yours) one whose only changes request is yours; the updated sort lists them "+
 			"first, the title counts them and --needs-me shows only them, and your own PRs whose merge is yours but must "+
-			"wait for a staging deploy (deploy-first in the printed rows; deploy_before_merge and open.deploy in the JSON). "+
+			"wait for a staging deploy (deploy-first in the printed rows; deploy_before_merge and open.deploy in the JSON), "+
+			"and the PRs where magnum stopped arguing after two rebuttals that you have not decided yet (stalemate). "+
 			"Your own open PRs carry autofix = \"open\"'s verdict as a tag before the title (open: needs you, open: waits, "+
 			"open: none for nothing open, open: looking while the verdict no longer tells the PR's state) and on the card "+
 			"(verdict: ...; open in the JSON); with [board] own_prs = \"factory\" they are left out (your drafts and closed PRs "+
@@ -96,7 +97,8 @@ func newPRsCmd(c *Context) *cobra.Command {
 	fs.BoolVar(&f.desc, "desc", true, "largest first (newest, latest, most recently requested, most changed, most urgent); --desc=false reverses")
 	fs.BoolVar(&f.all, "all", false, "also list closed and merged PRs")
 	fs.BoolVar(&f.needsMe, "needs-me", false, "only the PRs magnum approved that still need your approval on GitHub, "+
-		"or your own PRs whose merge is yours (approved, or no review required) but must go to a staging first")
+		"your own PRs whose merge is yours (approved, or no review required) but must go to a staging first, "+
+		"or the PRs where magnum stopped arguing that you have not decided yet")
 	fs.BoolVar(&f.autoApproved, "auto-approved", false, "only the PRs magnum approved as you ([[watch]] auto_approve) whose approval stands")
 	fs.BoolVar(&f.json, "json", false, "print JSON")
 	fs.IntVar(&f.limit, "limit", 0, "show at most N PRs (0 = all)")
@@ -123,8 +125,9 @@ type prsOptions struct {
 	All   bool
 	Limit int
 	// NeedsMe lists only the PRs that need the operator's approval
-	// (tui.PRBoardRow.NeedsMe) and their own PRs whose merge is theirs but
-	// waits for a staging deploy (tui.PRBoardRow.DeployNeedsYou):
+	// (tui.PRBoardRow.NeedsMe), their own PRs whose merge is theirs but
+	// waits for a staging deploy (tui.PRBoardRow.DeployNeedsYou) and the
+	// PRs with a stalemate they have not acted on (tui.PRBoardRow.Stalemate):
 	// --needs-me.
 	NeedsMe bool
 	// AutoApproved lists only the PRs magnum approved as the operator whose
@@ -189,9 +192,11 @@ func ownPRsSource(cfg *config.Config, src tui.PRBoardSourceFunc, hidden *atomic.
 }
 
 // source is src narrowed to what o shows beyond the registry query: with
-// NeedsMe, the PRs that need the operator's approval, and their own PRs
-// whose merge waits for their staging deploy (DeployNeedsYou); with
-// AutoApproved, those magnum approved as the operator.
+// NeedsMe, the PRs that need the operator's approval, their own PRs whose
+// merge waits for their staging deploy (DeployNeedsYou) and the PRs with
+// threads magnum stopped arguing in that they have not acted on
+// (PRBoardRow.Stalemate); with AutoApproved, those magnum approved as the
+// operator.
 func (o prsOptions) source(src tui.PRBoardSourceFunc) tui.PRBoardSourceFunc {
 	if !o.NeedsMe && !o.AutoApproved {
 		return src
@@ -199,7 +204,7 @@ func (o prsOptions) source(src tui.PRBoardSourceFunc) tui.PRBoardSourceFunc {
 	return func(ctx context.Context) ([]tui.PRBoardRow, error) {
 		rows, err := src(ctx)
 		return slices.DeleteFunc(rows, func(r tui.PRBoardRow) bool {
-			return (o.NeedsMe && r.NeedsMe == "" && !r.DeployNeedsYou()) || (o.AutoApproved && r.AutoApproved == nil)
+			return (o.NeedsMe && r.NeedsMe == "" && !r.DeployNeedsYou() && len(r.Stalemate) == 0) || (o.AutoApproved && r.AutoApproved == nil)
 		}), err
 	}
 }

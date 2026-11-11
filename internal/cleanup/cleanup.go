@@ -71,6 +71,11 @@ var (
 	ErrOptions = errors.New("cleanup: invalid options")
 	// ErrUnconfirmed: an action needs typed confirmation that Apply was not given.
 	ErrUnconfirmed = errors.New("cleanup: needs typed confirmation")
+	// ErrNothingDropped says that every action of the plan needed its slug
+	// typed and Apply was not given it (Report.NothingConfirmed), so nothing
+	// ran. The command and the daemon's cleanup request fail with it: only a
+	// terminal asks for the slug.
+	ErrNothingDropped = errors.New("nothing dropped: run it on a terminal and type the slug")
 )
 
 // Slots is the part of *slots.Manager cleanup drives.
@@ -269,6 +274,14 @@ type Report struct {
 	DiskBytes  int64    `json:"disk_bytes"`
 	MySQLBytes int64    `json:"mysql_bytes"`
 	DroppedDBs []string `json:"dropped_dbs,omitempty"`
+}
+
+// NothingConfirmed reports whether Apply ran nothing because every action
+// of the plan needed typed confirmation it was not given: the report
+// counts unconfirmed actions and nothing done, failed or planned
+// (ErrNothingDropped).
+func (r Report) NothingConfirmed() bool {
+	return r.Unconfirmed > 0 && r.Done == 0 && r.Failed == 0 && r.Planned == 0
 }
 
 func (p *Planner) now() time.Time {

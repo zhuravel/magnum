@@ -282,6 +282,10 @@ func cleanupExec(ctx context.Context, c *Context, pl cleanupPlanner, st *store.S
 	} else {
 		fmt.Fprint(c.Stdout, cleanupRenderReport(rep))
 	}
+	if aerr == nil && rep.NothingConfirmed() { // every action wanted its slug typed: nothing ran, which is no success
+		fmt.Fprintf(c.Stderr, "magnum %s: %v\n", cmd, cleanup.ErrNothingDropped)
+		return 1
+	}
 	if aerr != nil || rep.Failed > 0 {
 		if !f.asJSON && aerr != nil {
 			fmt.Fprintf(c.Stderr, "magnum %s: %d action(s) failed; `magnum logs` has the details\n", cmd, max(rep.Failed, 1))

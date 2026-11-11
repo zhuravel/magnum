@@ -176,6 +176,32 @@ func TestCleanupAppliesInProcess(t *testing.T) {
 	}
 }
 
+// Cleanup request 520 dropped nothing (its only action, an orphan's
+// databases, needed the slug typed, and no terminal could ask), and the
+// command exited 0, which a script reads as success. A cleanup whose every
+// action stayed unconfirmed exits non-zero and says what to do, in JSON
+// too; one that applied the rest (TestCleanupAppliesInProcess) exits 0.
+func TestACleanupThatDroppedNothingUnconfirmedExitsNonZero(t *testing.T) {
+	drop := cleanupPlanFixture().Actions[1]
+	for _, args := range [][]string{{"--yes"}, {"--yes", "--json"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			f := newInspFixture(t)
+			st := f.store()
+			fp := &fakePlanner{plan: cleanup.Plan{Actions: []cleanup.Action{drop}, Totals: cleanupTotals([]cleanup.Action{drop})},
+				report: cleanup.Report{Unconfirmed: 1, Results: []cleanup.Result{{Action: drop, Status: cleanup.StatusUnconfirmed,
+					Error: cleanup.ErrUnconfirmed.Error()}}}}
+			cf, _ := cleanupParse(f.Ctx, args)
+			code := cleanupExec(context.Background(), f.Ctx, fp, st, cf, "talkable/talkable")
+			if !fp.applied || fp.confirmed {
+				t.Fatalf("applied=%v confirmed=%v", fp.applied, fp.confirmed)
+			}
+			if code == 0 || !strings.Contains(f.Err.String(), "nothing dropped: run it on a terminal and type the slug") {
+				t.Errorf("code %d, stderr %q", code, f.Err.String())
+			}
+		})
+	}
+}
+
 func TestCleanupApplyFailureExitsOne(t *testing.T) {
 	f := newInspFixture(t)
 	st := f.store()

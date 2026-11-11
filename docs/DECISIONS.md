@@ -18368,6 +18368,60 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestDetailsReadTheBaseBranchsTipApartFromTheBaseOfTheLastSync. On master the first merge was refused. On
   master the second merge was pushed, with the last sync's commit taken as the tip.
 
+- **The look's raise names its lift on GitHub, and `magnum fix --done` says so** (2026-11-12). talkable#12086 sat in
+  needs_attention for 37 hours (11-08 21:37 to 11-10 10:40) on the raise of autofix = "open"'s look (items fix loops
+  left that a later read found still open: "fix: 1 item the fixer left needs you: <url>"), and only an unrelated
+  push ended it. Its next step (attention's fixRemedy) said that `magnum open` shows the fixer's pane and that
+  `magnum fix` runs the fixer again, but the raise has no report and no pane, and request 515 (`magnum fix --done`)
+  was refused with "asks for something else than calls you can mark done …: `magnum status` says what". What lifts
+  it is the look itself (openLift): a whole read that finds each raised item answered on GitHub, or its reviewer's
+  approval since. The raise's words now live in attention, `LookRaiseText` (which openNeedsMsg writes, in the words
+  the registry already holds) and `LookRaise` (which reads them), and its next step is `attention.LookLift` ("answer
+  each linked item on GitHub (or its reviewer approves the PR), and magnum lifts this at its next read of the PR")
+  with "`magnum fix --done` does not apply to it"; --done's refusal of the raise names the same lift. A loop's own
+  Needs you and its report keep their next step. Rejected: letting --done take the raise; the look lifts it from
+  what GitHub shows, and its ledger keeps the raised keys. Tests, failing first: TestTheLooksRaiseNamesItsLiftOnGitHub,
+  TestTheLooksRaiseSaysHowItLifts and the look's-raise case of TestFixDoneRefusesWhatIsNotTheFixersCalls.
+
+- **`magnum status`, the dashboard and `--needs-me` list the stalemates you have not acted on** (2026-11-12). 24
+  `pr.stalemate` warnings on 10 PRs (2 P1, 10 P2 and 3 P3 threads) reached the event log, the board row (`!`,
+  `reviewed · argued`) and the card's NEEDS YOU, and nothing else: flags on talkable#12048 from 10-29 and on
+  talkable#12179 from 11-04 waited, though "Replies on magnum's threads get an answer without a push" flags such a
+  PR until the operator acts on it. Status's ATTENTION listed needs_attention, Codex-flagged and merged-unreviewed
+  PRs only. Now an open PR whose `pr.<id>.stalemate` is set (not seen: a review the operator asks for, a verdict or
+  a mute clears it, seeStalemates) is an attention row of `magnum status`, and so of the dashboard's ATTENTION, with
+  the card's words (`tui.StalemateWhat`: "magnum stopped arguing after two rebuttals in 2 threads: <url>…") and a
+  fix that names the commands behind the card's keys ("decide it: `magnum review talkable#12048` has the judge
+  re-decide, `magnum approve …` or `magnum request-changes …` posts your verdict (the board's r, A/C)"); `magnum tui
+  --needs-me` keeps such rows too (`stalemate` in the printed STATE). One kv read (`pr.*.stalemate`) per status. A
+  merged or closed PR's flag is left out, as the board leaves it out. No toast, and the board row is unchanged.
+  Test, failing first: TestAStalemateNotYetSeenIsListedWhereTheOperatorLooks.
+
+- **An identity verdict for a name the daemon lacks says when the daemon loaded its config** (2026-11-12). On 11-08
+  at 15:58 four `identity_verdict` requests (487, 488, 493, 494) failed with a bare `unknown identity "…"`: `magnum
+  identities check` read a new identity from config.toml on disk, while the daemon ran the config it had loaded at
+  its start, until its restart at 15:59:44. The refusal now says `unknown identity "<name>": this daemon loaded its
+  config at Nov 8 09:12 without it; `magnum daemon-restart --drain` loads it`. The time is the daemon's start
+  (`daemon.started_at`): the daemon reads its config once, at its start, and records no other load time. Test,
+  failing first: TestAnUnknownIdentitysVerdictNamesTheConfigLoadAndTheRestart.
+
+- **A cleanup that dropped nothing for want of a typed slug fails** (2026-11-12). Cleanup request 520 (an orphan's
+  databases, whose slug must be typed, and no terminal to type it on) ended `done` with "0 done, 0 failed, 1
+  unconfirmed", and the command exited 0, which a script or an agent reads as success; the databases stayed. The
+  typed question is still asked only on a terminal ("cleanup's questions go to stderr …"), and no flag skips it. Now
+  a plan whose every action stayed unconfirmed (`cleanup.Report.NothingConfirmed`: unconfirmed actions, nothing
+  done, failed or planned) fails: the daemon's request ends `failed`, the existing state, with the report and
+  "nothing dropped: run it on a terminal and type the slug" (`cleanup.ErrNothingDropped`), and the command exits 1
+  with those words, in-process or through the daemon, with `--json` too. A plan that applied its other actions
+  keeps `done` and exit 0, its unconfirmed ones counted as before. Tests, failing first:
+  TestACleanupThatDroppedNothingUnconfirmedFails and TestACleanupThatDroppedNothingUnconfirmedExitsNonZero.
+
+- **The needs_attention event says "fix: " once** (2026-11-12). needsAttentionKeyed wrote the `pr.needs_attention`
+  event as `<kind>: <message>`, and a fix job's message and the look's raise begin with their kind already: 23
+  events read "fix: fix: …". The kind goes before the message only when the message does not lead with it
+  (attentionEventMsg); last_error, the toast and the event's data are unchanged. Tests, failing first:
+  TestALoopsNeedsYouEventSaysFixOnce, and TestTheLooksRaiseSaysHowItLifts for the raise.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is

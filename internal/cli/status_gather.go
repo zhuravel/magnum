@@ -758,6 +758,7 @@ func statusGatherPRs(ctx context.Context, d statusDeps, now time.Time, r *status
 			r.Attention = append(r.Attention, statusAttention{Subject: inspPRLabel(repo, pr.Number), Message: msg, Fix: fix})
 		}
 	}
+	statusStalemates(ctx, st, prs, repoByID, r)
 	statusQueueMarks(ctx, st, r.Queue, now)
 	statusSortQueue(r.Queue)
 	r.fixLoops, r.fixOffs = statusFixMarks(ctx, st)
@@ -768,6 +769,34 @@ func statusGatherPRs(ctx context.Context, d statusDeps, now time.Time, r *status
 		r.Attention = append(r.Attention, statusMergedUnreviewed(prs, repoByID, d.Config.Board.RecentClosed.Duration, now)...)
 	}
 	return nil
+}
+
+// statusStalemates lists as attention rows the open PRs with threads where
+// magnum stopped arguing that the operator has not acted on yet
+// (engine.KVPRStalemate, which a review they ask for, a verdict or a mute
+// clears), as the board's card names them: the card's words
+// (tui.StalemateWhat) and the commands behind its keys. One read of every
+// PR's flag.
+func statusStalemates(ctx context.Context, st *store.Store, prs []store.PR, repoByID map[int64]store.Repo, r *statusReport) {
+	flags, err := st.KVValues(ctx, "pr.*.stalemate")
+	if err != nil {
+		r.Warnings = append(r.Warnings, "stalemates: "+err.Error())
+		return
+	}
+	for _, pr := range prs {
+		v, ok := flags[engine.KVPRStalemate(pr.ID)]
+		if !ok || pr.GHState == store.GHMerged || pr.GHState == store.GHClosed { // nothing to decide on a PR that is over
+			continue
+		}
+		urls := prsStalemate(v)
+		if len(urls) == 0 {
+			continue
+		}
+		ref := inspPRLabel(repoByID[pr.RepoID].FullName(), pr.Number)
+		r.Attention = append(r.Attention, statusAttention{Subject: ref, Message: tui.StalemateWhat(urls),
+			Fix: "decide it: `magnum review " + ref + "` has the judge re-decide, `magnum approve " + ref + "` or `magnum request-changes " +
+				ref + "` posts your verdict (the board's r, A/C)"})
+	}
 }
 
 // statusFlagged reports whether Codex flagged pr (store.KVPRCodexFlag).

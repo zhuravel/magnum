@@ -60,10 +60,10 @@ func openLinks(items []openItem) []string {
 }
 
 // openNeedsMsg is the attention message of what a loop left: "fix: 2 items
-// the fixer left need you: <url>, <url>" (links only, never PR text).
+// the fixer left need you: <url>, <url>" (links only, never PR text), in
+// the words attention.LookRaise reads, so its remedy names the lift.
 func openNeedsMsg(needs []openItem) string {
-	return "fix: " + textx.Count(len(needs), "item the fixer left needs you", "items the fixer left need you") + ": " +
-		strings.Join(openLinks(needs), ", ")
+	return attention.LookRaiseText(len(needs), openLinks(needs))
 }
 
 // openRaise moves pr, reviewed, to needs_attention for needs, what loops

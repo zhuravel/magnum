@@ -190,6 +190,51 @@ func TestTheFixersCallsNameFixDone(t *testing.T) {
 	}
 }
 
+// talkable#12086 sat in needs_attention for 37 hours on the look's raise
+// (autofix = "open": items fix loops left that a later read of the look
+// found still open), whose remedy named the fixer's pane and `magnum fix`:
+// the raise has no pane, and `magnum fix --done` does not take it. Its
+// remedy names what lifts it, an answer to each item on GitHub or its
+// reviewer's approval at the look's next read, and says that --done does
+// not apply. A fix job's attention with the fixer's report keeps its own.
+func TestTheLooksRaiseNamesItsLiftOnGitHub(t *testing.T) {
+	const thread = "https://github.com/talkable/talkable/pull/2#discussion_r4322458360"
+	const review = "https://github.com/talkable/talkable/pull/2#pullrequestreview-77"
+	one := "fix: 1 item the fixer left needs you: " + thread
+	if got := LookRaiseText(1, []string{thread}); got != one {
+		t.Errorf("LookRaiseText = %q, want the words the registry holds, %q", got, one)
+	}
+	two := LookRaiseText(2, []string{thread, review})
+	for _, msg := range []string{one, two, strings.TrimPrefix(two, "fix: ")} {
+		if !LookRaise(msg) {
+			t.Errorf("LookRaise(%q) = false", msg)
+		}
+		r := Explain(KindFix, msg, "talkable#2")
+		if r.Kind != KindFix || !strings.HasPrefix(r.Summary, "fix: ") || strings.HasPrefix(r.Summary, "fix: fix: ") {
+			t.Errorf("%q: kind %q, summary %q", msg, r.Kind, r.Summary)
+		}
+		for _, want := range []string{"answer each linked item on GitHub", "its reviewer approves the PR", "magnum lifts this at its next read",
+			"`magnum fix --done` does not apply"} {
+			if !strings.Contains(r.Fix, want) {
+				t.Errorf("%q: fix %q lacks %q", msg, r.Fix, want)
+			}
+		}
+		for _, wrong := range []string{"`magnum open", "pane", "`magnum fix talkable#2`", "`magnum fix --done talkable#2`"} {
+			if strings.Contains(r.Fix, wrong) {
+				t.Errorf("%q: fix %q names %q, which does not lift the look's raise", msg, r.Fix, wrong)
+			}
+		}
+	}
+	const report = "/state/reviews/talkable/talkable/2/a1a1a1a1a1a1/claude-fix.md"
+	calls := "fix: 2 findings need your call: " + report
+	if LookRaise(calls) {
+		t.Errorf("LookRaise(%q) = true for the fixer's own Needs you", calls)
+	}
+	if fix := Explain(KindFix, calls, "talkable#2").Fix; !strings.HasPrefix(fix, "read claude-fix's report "+report) || strings.Contains(fix, "GitHub") {
+		t.Errorf("a report's remedy changed: %q", fix)
+	}
+}
+
 // A fix reason too long for the toast's one line keeps the counts, which come
 // first, and drops the report's path, which the next step names in full,
 // instead of cutting the path in the middle.

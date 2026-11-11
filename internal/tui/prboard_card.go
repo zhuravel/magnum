@@ -627,6 +627,13 @@ const maxStalemateURLs = 4
 // and what the operator can do; the card lists the rest of the threads
 // under it.
 func stalemateSentence(urls []string) string {
+	return StalemateWhat(urls) + "; decide it (r has the judge re-decide, A/C post your verdict)"
+}
+
+// StalemateWhat says that magnum stopped arguing in the threads at urls,
+// naming the first: the card's NEEDS YOU (stalemateSentence) and the
+// attention line `magnum status` and the dashboard give such a PR.
+func StalemateWhat(urls []string) string {
 	s := "magnum stopped arguing after two rebuttals in " + textx.Count(len(urls), "thread", "threads")
 	if len(urls) > 0 && urls[0] != "" {
 		s += ": " + urls[0]
@@ -634,7 +641,7 @@ func stalemateSentence(urls []string) string {
 			s += "…"
 		}
 	}
-	return s + "; decide it (r has the judge re-decide, A/C post your verdict)"
+	return s
 }
 
 // repliesSentence says that n replies on magnum's review wait for its judge

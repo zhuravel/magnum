@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -49,6 +50,53 @@ func TestAPersonsItemTheRunLeftUnansweredNeedsYou(t *testing.T) {
 		t.Error("no fix.open_needs_you event")
 	}
 	h.wantOpen(OpenNeedsYou, "needs your attention (fix)")
+}
+
+// talkable#12086 sat in needs_attention for 37 hours on the look's raise:
+// its pr.needs_attention event read "fix: fix: ..." and named the fixer's
+// pane and `magnum fix`, and `magnum fix --done` (request 515) was refused
+// with "`magnum status` says what". The event says "fix: " once and names
+// the lift, an answer on GitHub or the reviewer's approval, and --done's
+// refusal says the same; the PR stays where it is.
+func TestTheLooksRaiseSaysHowItLifts(t *testing.T) {
+	h := loopLeaves(t, extThread(4322458360, "lib/sandbox.rb", 185, time.Date(2026, 10, 5, 9, 0, 0, 0, time.Local), "MINOR: `run` drops stderr", "rev-ann"))
+	pr := h.wantState(2, store.PRNeedsAttention)
+	msg := deref(pr.LastError)
+	ev, ok := h.fixEvent("pr.needs_attention")
+	if !ok {
+		t.Fatal("no pr.needs_attention event")
+	}
+	if ev.Message != msg || strings.Count(ev.Message, "fix: ") != 1 {
+		t.Errorf("pr.needs_attention = %q, want the raise's words once: %q", ev.Message, msg)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(ev.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if fix, _ := data["fix"].(string); !strings.HasPrefix(fix, attention.LookLift) || !strings.Contains(fix, "`magnum fix --done` does not apply") {
+		t.Errorf("the event's fix = %q, want the lift on GitHub", fix)
+	}
+	id := h.fix(FixPayload{Done: true, Seen: msg})
+	h.handle()
+	if r := h.request(id); r.State != store.RequestFailed || !strings.HasSuffix(deref(r.Result), attention.LookLift) {
+		t.Errorf("fix --done: %s %q, want refused with the lift", r.State, deref(r.Result))
+	}
+	if cur := h.wantState(2, store.PRNeedsAttention); deref(cur.LastError) != msg {
+		t.Errorf("the refusal changed last_error to %q", deref(cur.LastError))
+	}
+}
+
+// A loop's own Needs you (its settle) put "fix: " twice before its words in
+// the pr.needs_attention event, as 23 of them read: once now.
+func TestALoopsNeedsYouEventSaysFixOnce(t *testing.T) {
+	h, pr := fixLeftADescription(t)
+	ev, ok := h.fixEvent("pr.needs_attention")
+	if !ok {
+		t.Fatal("no pr.needs_attention event")
+	}
+	if want := deref(pr.LastError); ev.Message != want || strings.Count(ev.Message, "fix: ") != 1 {
+		t.Errorf("pr.needs_attention = %q, want %q", ev.Message, want)
+	}
 }
 
 // A bot's receipt on the conversation that the loop left unanswered is

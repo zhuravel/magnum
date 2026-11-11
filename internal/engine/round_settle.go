@@ -153,10 +153,20 @@ func (e *Engine) needsAttentionKeyed(ctx context.Context, job *roundJob, pr stor
 	}
 	label := fmt.Sprintf("%s#%d", job.repo.Name, pr.Number)
 	reason := attention.Explain(why, msg, label)
-	e.event(ctx, "warn", prSubject(job.repo, pr.Number), "pr.needs_attention", why+": "+msg,
+	e.event(ctx, "warn", prSubject(job.repo, pr.Number), "pr.needs_attention", attentionEventMsg(why, msg),
 		map[string]any{"stage": reason.Stage, "cause": reason.Cause, "fix": reason.Fix})
 	e.urgent(key, "magnum: "+label+" needs attention", attentionToast(reason), window)
 	e.revealAttention(ctx, pr.ID, nil, why, key)
+}
+
+// attentionEventMsg is the pr.needs_attention event's message: the kind,
+// then msg, unless msg leads with the kind already (a fix job's "fix: 2
+// findings need your call: …", the look's raise), which read "fix: fix: …".
+func attentionEventMsg(why, msg string) string {
+	if strings.HasPrefix(msg, why+": ") {
+		return msg
+	}
+	return why + ": " + msg
 }
 
 // finish maps a round result onto the PR state machine.
