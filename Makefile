@@ -24,8 +24,9 @@ TEST_P    ?= 4
 TEST_P_FLAG = $(if $(TEST_P),-p $(TEST_P))
 # TEST_TZ: the time zone the gate's tests run in (make test, make test-race), here and on CI: neither UTC nor a whole
 # hour off it (Asia/Kathmandu, UTC+5:45), so a test that assumes UTC, or the zone of the machine it was written on,
-# fails everywhere instead of only on the machine in another zone. go test's cache does not key on TZ: a pass a plain
-# `go test ./internal/x` cached in another zone still passes make test; make test-race (-count=1) and CI run every test
+# fails everywhere instead of only on the machine in another zone. go test's cache does not key on TZ (the time package
+# reads it past the test log), so a pass cached by a run by hand in another zone would pass make test too: the gate adds
+# -skip TZ=$(TEST_TZ), which skips no test (no test name holds "=") and puts the zone into the cache's key
 TEST_TZ   ?= Asia/Kathmandu
 gate_locked = if [ -n "$$MAGNUM_GATE_LOCKED" ]; then $(1); \
   elif command -v lockf >/dev/null 2>&1; then \
@@ -62,7 +63,7 @@ gate: check-private
 	$(GO) mod verify
 	$(GO) mod tidy -diff
 	$(GO) vet ./...
-	TZ=$(TEST_TZ) $(GO) test $(TEST_P_FLAG) ./...
+	TZ=$(TEST_TZ) $(GO) test $(TEST_P_FLAG) -skip 'TZ=$(TEST_TZ)' ./...
 
 ## test-race: go test -count=1 -race -timeout 30m on PKGS (the packages you touched; default ./...) in TEST_TZ under
 ## GATE_LOCK, TEST_P binaries at once (the engine alone takes 8-10 minutes under -race on a busy laptop); TESTFLAGS

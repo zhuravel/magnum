@@ -61,8 +61,8 @@ entries and the reverts of skill versions), and keeping out of it keeps its land
 ## Gate
 
 ```bash
-make test        # the gate, one at a time per machine (waits for the gate lock): gofmt, check-private, go mod verify and tidy, go vet, go test (hermetic)
-make test-race PKGS="./internal/x ./internal/y"   # go test -count=1 -race on the packages you touched, under the same lock
+make test        # the gate, one at a time per machine (waits for the gate lock): gofmt, check-private, go mod verify and tidy, go vet, go test (hermetic, in TZ=Asia/Kathmandu)
+make test-race PKGS="./internal/x ./internal/y"   # go test -count=1 -race on the packages you touched, under the same lock and zone
 make build       # bin/magnum
 make api-doc     # regenerate docs/API.md after exported API changes (make api-doc-check diffs it)
 make lint        # golangci-lint (.golangci.yml; mise pins 2.15.0); make lint-fix applies only the safe fixes
@@ -77,8 +77,13 @@ Run `make test-race PKGS=…` on the packages you touched before `make test`. It
 (a `-timeout` in `TESTFLAGS` overrides it), since go test's 10-minute default is not enough: under
 `-race`, with 4 binaries at once on a busy laptop, the engine alone takes 8 to 10 minutes. Without
 `-race` the whole suite takes about 40 seconds (a test binary skips the file syncs of
-`fsx.WriteFileAtomic`). A change is done when the gate is green, the API doc is regenerated if exports
-changed, and the README or config comments describe any new key, command or key binding.
+`fsx.WriteFileAtomic`). Both run the tests in `TZ=Asia/Kathmandu` (UTC+5:45, the Makefile's `TEST_TZ`),
+on this machine and on CI alike: a test that checks a time the code shows in local time builds its
+expectation with the code's own formatter (`waitClock`) or from `.Local()`, never as a literal of the zone
+it was written in (go test's cache does not key on TZ: `make test` adds `-skip TZ=<zone>`, which skips no
+test, so a pass cached by a run by hand in your zone is not its pass). A change is done when the gate is
+green, the API doc is regenerated if exports changed, and the README or config comments describe any new
+key, command or key binding.
 
 **One gate at a time on this machine.** `make test` and `make test-race` take the lock file
 `/tmp/magnum-make-test.lock` (`lockf` on macOS, `flock` on Linux) and wait, saying so, while another
