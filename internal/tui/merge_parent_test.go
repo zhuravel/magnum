@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
