@@ -332,13 +332,23 @@ func TestImportPathsStartsAPathWhereACommentWasCut(t *testing.T) {
 // pairs with the --> inside a block's <!-->, and a <!-- the block leaves
 // open pairs with a --> further down: both cut the path Claude glues
 // together (as Claude Code 2.1.322's lexer reads these texts). marked ends
-// a line at a carriage return too.
+// a line at a carriage return too, and starts such a block after a block
+// quote's or a list item's marks (the code span's <!-- comes first, so the
+// read of the whole text pairs it with the block's first -->).
 func TestImportPathsReadsEachCommentBlockOnItsOwn(t *testing.T) {
 	for _, c := range []struct {
 		text string
 		want string
 	}{
 		{"Use `<!--` to open a comment.\n\n<!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"Use `<!--` to open a comment.\n\n> <!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"Use `<!--` to open a comment.\n\n> - <!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"Use `<!--` to open a comment.\n\n- <!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"Use `<!--` to open a comment.\n\n* <!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"Use `<!--` to open a comment.\n\n+ <!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"Use `<!--` to open a comment.\n\n1. <!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"Use `<!--` to open a comment.\n\n2) <!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"Use `<!--` to open a comment.\n\n-\t<!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
 		{"x <!--\n\n<!--> T <!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
 		{"`<!--`\n\n<!---><!--->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
 		{"- <!-->a<!-->@docs/ev<!--z-->il.md\n\n`<!--`\n", "docs/evil.md"},
@@ -349,6 +359,16 @@ func TestImportPathsReadsEachCommentBlockOnItsOwn(t *testing.T) {
 		if got, more := ImportPaths(c.text, 100); !slices.Contains(got, c.want) || more {
 			t.Errorf("ImportPaths(%q) = %q, %v; want %q among them", c.text, got, more, c.want)
 		}
+	}
+}
+
+// Comment blocks that start on many lines before one --> end at that -->
+// and read the same: ImportPaths reads them once, so a file of many open
+// comments stays within its work bound and gives its imports, not more.
+func TestImportPathsReadsCommentBlocksThatEndAtOneCloseOnce(t *testing.T) {
+	text := "<!--\n" + strings.Repeat("<!-- x\n", 20_000) + "-->\n@docs/a.md\n"
+	if got, more := ImportPaths(text, 100); !slices.Contains(got, "docs/a.md") || more {
+		t.Fatalf("ImportPaths of %d open comments = %q, %v; want docs/a.md, not more", 20_001, got, more)
 	}
 }
 
