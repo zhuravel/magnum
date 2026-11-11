@@ -351,6 +351,9 @@ func TestADeadlineOfTheDiffsStoresNothingAndTheNextTryCompares(t *testing.T) {
 		t.Fatal("a check whose diffs ran out of their bound was stored")
 	}
 	r.diff.set(func(d *fakeDiff) { d.block = false })
+	// The short bound is for the blocked try only. The next try runs in
+	// real time, and on a loaded machine it can take more than 20 ms.
+	r.e.esc.gitBound = escapeGitBound
 	r.clock.Add(escapeRetry)
 	c, es, ok := r.check()
 	if !ok || c.SameHeadOnly != 0 || c.Comparable != 1 || len(es) != 0 {
