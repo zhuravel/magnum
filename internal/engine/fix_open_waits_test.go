@@ -68,7 +68,8 @@ func TestAPersonsWaitingItemsStayNamedWhileTheWorkCannotStart(t *testing.T) {
 	act := openNow.Add(-time.Minute)
 	f.pr.HeadChangedAt, f.pr.ActivityAt = openNow.Add(-10*time.Minute), &act
 	v, _, _ = decideOpen(f)
-	wantVerdict(t, v, OpenWaits, "settling: 1 thread of a bot waits until 14:02; 1 item waits for you: 1 thread of a person")
+	wantVerdict(t, v, OpenWaits, "settling: 1 thread of a bot waits until "+waitClock(act.Add(3*time.Minute), openNow)+
+		"; 1 item waits for you: 1 thread of a person")
 	if v.leftovers {
 		t.Error("settling: the person's item is raised")
 	}
