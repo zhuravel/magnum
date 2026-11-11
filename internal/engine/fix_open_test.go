@@ -549,6 +549,38 @@ func TestAutofixOpenStartsNothingWhileThePRNeedsYou(t *testing.T) {
 	h.wantOpen(OpenNeedsYou, "needs your attention (failed)")
 }
 
+// The look reads each PR's fix loop first (openLoopRow): a row that
+// cannot be read needs you, its words naming the way out, and the first
+// look at a PR whose loop already runs (here after its ledger could not be
+// read and started over) counts that loop whole, from its start.
+func TestTheLookCountsARunningLoopFromItsStartAndABadFixRowNeedsYou(t *testing.T) {
+	h, _ := openOwnPRs(t, 2, 3)
+	running, bad := h.pr(2), h.pr(3)
+	started := h.clock.Now().Add(-time.Hour)
+	if err := h.e.setFixState(h.ctx, running.ID, FixState{Cycle: 1, Cap: 3, Phase: FixPhaseFixing, Head: headOf(2), By: autofixBy,
+		StartedAt: started}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SetKV(h.ctx, kvPRFixSeen(running.ID), "{"); err != nil { // the ledger starts over: the look's first look
+		t.Fatal(err)
+	}
+	if err := h.st.SetKV(h.ctx, KVPRFix(bad.ID), "{"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.e.autofixOpen(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if l := h.ledgerOf(2); !l.Since.Equal(started) {
+		t.Errorf("the ledger counts loops since %s, want the running loop's start %s", l.Since, started)
+	}
+	if v, ok := h.openOf(2); !ok || v.Verdict != OpenFixing || v.Why != "fixing, cycle 1 of 3" {
+		t.Errorf("the running loop's verdict = %+v, %v", v, ok)
+	}
+	if v, ok := h.openOf(3); !ok || v.Verdict != OpenNeedsYou || v.Why != "the fix row of #3 cannot be read: `magnum abort` clears it" {
+		t.Errorf("the bad row's verdict = %+v, %v", v, ok)
+	}
+}
+
 // One fetch of a base serves every PR of the clone in the tick.
 func TestOneBaseFetchServesEveryPROfAClone(t *testing.T) {
 	h, git := openOwnPRs(t, 2, 3, 4)

@@ -195,27 +195,7 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	now := e.now()
 	l := c.ledger
 	f := openFacts{now: now, pr: pr, settle: e.openSettle(), off: e.openOff(ctx, pr, *c.w)}
-	st, _, hasRow, rowErr := e.fixRow(ctx, pr.ID)
-	first := l.Since.IsZero() // the look's first look at the PR: it tracks the loops from here on
-	if first {
-		l.Since = now
-		if hasRow && !st.StartedAt.IsZero() { // the loop that runs now counts whole
-			l.Since = st.StartedAt
-		}
-	}
-	switch {
-	case rowErr != nil:
-		f.fixBad = true
-	case hasRow:
-		f.fix = &st
-		if st.Phase == FixPhaseReviewing {
-			l.FixerHeads = addFixerHead(l.FixerHeads, st.Head)
-		}
-	default:
-		if e.loopsToRead(pr.ID) {
-			e.openLoopsEnded(ctx, repo, pr, &l, first)
-		}
-	}
+	hasRow := e.openLoopRow(ctx, repo, &l, &f)
 	if raw, ok := e.getKV(ctx, KVPRFixHeld(pr.ID)); ok {
 		f.held = heldWhyOf(raw)
 	}
@@ -240,29 +220,7 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	fp := openPrint(pr)
 	_, f.low = e.githubLow(c.w.PollIdentity)
 	f.pollStale = e.pollBehind(ctx, *c.w, now)
-	if readWanted(f) {
-		if openReadDue(l.Read, fp, pr.HeadSHA, now) && !f.low && *reads < openReadsPerTick {
-			*reads++
-			e.openRead(ctx, repo, *c.w, pr, &l, fp, now)
-		}
-		e.openConflictCheck(ctx, repo, pr, &l, now)
-	}
-	f.whole, f.failed = openWhole(l.Read, fp, pr.HeadSHA)
-	if f.whole {
-		f.cut = l.Read.Cut
-		handed := !hasRow && f.sum != nil && l.handedReview(f.sum.RunID)
-		var optional map[int64]bool
-		if !f.failed && len(f.cut) == 0 { // fix_optional.go: the operator's optional calls, as the read shows them
-			f.optional, optional = e.openOptional(ctx, pr.ID, l.Read.Mine, f.sum)
-			f.optionalP3 = optionalSplit(l.Read.Mine, f.sum, optional)
-		}
-		f.described = f.sum != nil && e.reviewDescribed(repo, pr.Number, f.sum.SHA) // fix.go: the review's Description line is work
-		f.items = append(slices.Clone(l.Read.Others), magnumItemsOf(l.Read.Mine, f.sum, handed, l.Conflict.fixConflict(pr.HeadSHA), pr.HeadSHA, optional,
-			f.described)...)
-		if f.attention == attention.KindFix && !f.failed && len(f.cut) == 0 { // fix_decide.go: your decisions answer the fixer's calls
-			f.decided = callsDecided(deref(pr.LastError), func(root int64) bool { return decisionOf(f.items, root) })
-		}
-	}
+	e.openLookRead(ctx, c, &l, &f, fp, hasRow, reads)
 	if c := l.Conflict; c.Unchecked && c.Head == pr.HeadSHA {
 		f.mergeUnchecked = c.Base
 	}
@@ -335,6 +293,72 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 		v = e.openStart(ctx, repo, pr, &l, v, work, FixState{Waits: waits}, fp)
 	}
 	e.openWrite(ctx, pr, c.raw, l, v)
+}
+
+// openLoopRow is the look's read of the PR's fix loop into the facts: its
+// row (fix, or fixBad for one that cannot be read), a reviewing loop's head
+// among the ledger's fixer heads, or with no row the loops that ended since
+// the last look (openLoopsEnded). The look's first look at the PR starts
+// the ledger's count of loops (Since) now, or at the start of the loop
+// that runs, which then counts whole. It reports whether the PR has a row.
+func (e *Engine) openLoopRow(ctx context.Context, repo store.Repo, l *openLedger, f *openFacts) bool {
+	pr, now := f.pr, f.now
+	st, _, hasRow, rowErr := e.fixRow(ctx, pr.ID)
+	first := l.Since.IsZero() // the look's first look at the PR: it tracks the loops from here on
+	if first {
+		l.Since = now
+		if hasRow && !st.StartedAt.IsZero() { // the loop that runs now counts whole
+			l.Since = st.StartedAt
+		}
+	}
+	switch {
+	case rowErr != nil:
+		f.fixBad = true
+	case hasRow:
+		f.fix = &st
+		if st.Phase == FixPhaseReviewing {
+			l.FixerHeads = addFixerHead(l.FixerHeads, st.Head)
+		}
+	default:
+		if e.loopsToRead(pr.ID) {
+			e.openLoopsEnded(ctx, repo, pr, l, first)
+		}
+	}
+	return hasRow
+}
+
+// openLookRead is the look's read of GitHub and its check of the merge with
+// the base while the verdict wants them (readWanted; a read only when due,
+// above the budget floor and within the tick's openReadsPerTick, counted in
+// reads), then the items of a whole read into the facts: the others',
+// magnum's (its review handed to no loop while none runs: hasRow), the
+// operator's optional calls and your decisions on the fixer's calls. fp is
+// openPrint's.
+func (e *Engine) openLookRead(ctx context.Context, c *openCand, l *openLedger, f *openFacts, fp string, hasRow bool, reads *int) {
+	pr, repo, now := f.pr, c.repo, f.now
+	if readWanted(*f) {
+		if openReadDue(l.Read, fp, pr.HeadSHA, now) && !f.low && *reads < openReadsPerTick {
+			*reads++
+			e.openRead(ctx, repo, *c.w, pr, l, fp, now)
+		}
+		e.openConflictCheck(ctx, repo, pr, l, now)
+	}
+	f.whole, f.failed = openWhole(l.Read, fp, pr.HeadSHA)
+	if f.whole {
+		f.cut = l.Read.Cut
+		handed := !hasRow && f.sum != nil && l.handedReview(f.sum.RunID)
+		var optional map[int64]bool
+		if !f.failed && len(f.cut) == 0 { // fix_optional.go: the operator's optional calls, as the read shows them
+			f.optional, optional = e.openOptional(ctx, pr.ID, l.Read.Mine, f.sum)
+			f.optionalP3 = optionalSplit(l.Read.Mine, f.sum, optional)
+		}
+		f.described = f.sum != nil && e.reviewDescribed(repo, pr.Number, f.sum.SHA) // fix.go: the review's Description line is work
+		f.items = append(slices.Clone(l.Read.Others), magnumItemsOf(l.Read.Mine, f.sum, handed, l.Conflict.fixConflict(pr.HeadSHA), pr.HeadSHA, optional,
+			f.described)...)
+		if f.attention == attention.KindFix && !f.failed && len(f.cut) == 0 { // fix_decide.go: your decisions answer the fixer's calls
+			f.decided = callsDecided(deref(pr.LastError), func(root int64) bool { return decisionOf(f.items, root) })
+		}
+	}
 }
 
 // openPrune drops from the ledger's handed and raised keys those that a
