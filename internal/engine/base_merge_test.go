@@ -11,6 +11,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // The PR's own diff against master as it was reviewed: a changed method and
@@ -155,6 +156,7 @@ func TestRebaseWithTheSameOwnChangesIsNotReReviewed(t *testing.T) {
 // When the PR's own diff cannot be compared in full, the push is measured
 // as before: reviewed...head, master's lines included.
 func TestIncompleteOwnDiffFallsBack(t *testing.T) {
+	storetest.Parallel(t)
 	truncatedAfter := slices.Clone(ownAfterMerge)
 	truncatedAfter[1].Truncated = true
 	capped := make([]github.FileDelta, len(ownAfterMerge))

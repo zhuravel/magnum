@@ -10,6 +10,7 @@ import (
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // servedRounds makes PR n's live session of role the conversation conv that
@@ -85,6 +86,7 @@ func roleSessions(h *harness, n int, role string) []store.Session {
 // A live judge is quit first (parked, history kept); a parked one is not
 // resumed.
 func TestARoleSessionIsStartedFreshAfterItsMaxRounds(t *testing.T) {
+	storetest.Parallel(t)
 	for _, parked := range []bool{false, true} {
 		name := map[bool]string{false: "a live session is quit", true: "a parked session is not resumed"}[parked]
 		t.Run(name, func(t *testing.T) {
@@ -142,6 +144,7 @@ func TestARoleSessionIsStartedFreshAfterItsMaxRounds(t *testing.T) {
 // and a session under its limit is kept: an own pass is part of its round,
 // not a round of its own.
 func TestARoleWithoutMaxSessionRoundsKeepsItsSession(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name    string
 		max     int
@@ -185,6 +188,7 @@ func TestARoleWithoutMaxSessionRoundsKeepsItsSession(t *testing.T) {
 // A session at work, or blocked on a dialog, is never quit: it serves the
 // round as before and rotates at a later round's start.
 func TestABusySessionIsNeverRotated(t *testing.T) {
+	storetest.Parallel(t)
 	for _, status := range []herdr.Status{herdr.StatusWorking, herdr.StatusBlocked} {
 		t.Run(string(status), func(t *testing.T) {
 			h := newHarness(t)

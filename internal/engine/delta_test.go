@@ -11,6 +11,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // yamlCommentPatch is a delta that only rewrites YAML comment lines (the
@@ -97,6 +98,7 @@ func TestCommentOnlyPushIsNotReReviewed(t *testing.T) {
 }
 
 func TestTrivialPushClasses(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name    string
 		files   []github.FileDelta
@@ -133,6 +135,7 @@ func TestTrivialPushClasses(t *testing.T) {
 // can withdraw a standing approval of the operator's, and the log says why.
 // A page under docs/ still settles.
 func TestAPushOfTheAgentsInstructionsIsReReviewed(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		path    string
 		trivial bool
@@ -180,6 +183,7 @@ func TestAPushOfTheAgentsInstructionsIsReReviewed(t *testing.T) {
 // is re-reviewed, and so is a push whose reviewed commit's links magnum
 // cannot read. A docs page no link leads to still settles.
 func TestADocsPushThroughALinkOfTheAgentsConfigIsReReviewed(t *testing.T) {
+	storetest.Parallel(t)
 	skills := map[string]map[string]string{"b1": {".claude/skills": "../.agents/skills"}}
 	guide := map[string]map[string]string{"b1": {"CLAUDE.md": "notes.md/guide.md"}}
 	imports := map[string]map[string]string{"b1": {"AGENTS.md": "Read @.docs/guide.md first.\n"}}
@@ -229,6 +233,7 @@ func TestADocsPushThroughALinkOfTheAgentsConfigIsReReviewed(t *testing.T) {
 // the delta. The poll compares the range once either way (the since-review
 // size).
 func TestTrivialSkipCanBeTurnedOff(t *testing.T) {
+	storetest.Parallel(t)
 	zero := 0
 	for _, tc := range []struct {
 		name     string

@@ -13,6 +13,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // magnumApp is the talkable watch's posting login (Account form).
@@ -116,6 +117,7 @@ func emptyRepliedRounds(h *harness) {
 // record names the head), round.replies_none says how many replies started
 // it and why none was magnum's to answer, and nothing needs attention.
 func TestAReplyRoundWithNothingToAnswerEndsReplied(t *testing.T) {
+	storetest.Parallel(t)
 	for name, c := range map[string]struct {
 		remarks func(h *harness) []github.Remark
 		want    string
@@ -261,6 +263,7 @@ func TestAPushWinsOverAReplyRound(t *testing.T) {
 // elsewhere and a bot's top-level comment never start a round (the judge
 // still reads them in the threads file).
 func TestOnlyRepliesThatMayAnswerMagnumStartARound(t *testing.T) {
+	storetest.Parallel(t)
 	inThread := func(by, assoc string) func(h *harness) github.Remark {
 		return func(h *harness) github.Remark {
 			r := threadReply(h, by)
@@ -607,6 +610,7 @@ func TestAStalemateTheJudgeSettlesClearsWithoutASeenMark(t *testing.T) {
 // judge holds open, marks nothing seen and raises no event. A continue
 // whose result names none leaves the flag as it is.
 func TestAContinuedTurnSettlesTheStalemateItsPausedRoundFlagged(t *testing.T) {
+	storetest.Parallel(t)
 	a := pipeline.StopThread{ID: "PRRT_A", URL: "https://github.com/talkable/talkable/pull/2#discussion_r1", LastReply: 206}
 	d := pipeline.StopThread{ID: "PRRT_D", URL: "https://github.com/talkable/talkable/pull/2#discussion_r5", LastReply: 506}
 	for _, tc := range []struct {
@@ -766,6 +770,7 @@ func TestAContinuedReplyRoundKeepsItsReplies(t *testing.T) {
 // (30m), only by the push quiet period. A push 10 minutes after a review
 // round still is.
 func TestAReplyRoundDoesNotRestartTheRereviewInterval(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		reply bool
@@ -887,6 +892,7 @@ func TestAReplyThatIsGoneTakesThePRBackToReviewed(t *testing.T) {
 // request waits for its round, and so does the retry of a requested round
 // that failed.
 func TestAWaitThatIsNotTheRepliesStaysWhenTheyGo(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("a review request", func(t *testing.T) {
 		h := newHarness(t)
 		h.reviewedPR(2, "b1")
@@ -921,6 +927,7 @@ func TestAWaitThatIsNotTheRepliesStaysWhenTheyGo(t *testing.T) {
 // threads instead of posting a review. The mark ends with its request, and
 // a plain request clears one an older daemon left.
 func TestAReDecisionMarkEndsWithItsRequest(t *testing.T) {
+	storetest.Parallel(t)
 	for _, end := range []string{"needs attention", "dry run"} {
 		t.Run(end, func(t *testing.T) {
 			h := newHarness(t)

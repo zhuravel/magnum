@@ -16,6 +16,7 @@ import (
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/staging"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // typed sets PR #2's human_active_at to at, as the agents package does when
@@ -103,6 +104,7 @@ func TestTheStagingResolverPutsBackASlotWhosePRsPanesSomeoneTypedInto(t *testing
 // remote: a person's work) or that a pin keeps is never touched: the job
 // waits for a slot, and its PR is let go meanwhile.
 func TestTheStagingResolverWaitsForASlotTheGuardHoldsOrAPinKeeps(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		keep func(f *resolveFixture)
@@ -201,6 +203,7 @@ func (f *resolveFixture) moreConflicts(edit func(dir, side string)) {
 // and a file both sides renamed to two paths fail the job before its agent
 // starts, naming the paths, and the slot goes back.
 func TestTheStagingResolverGivesUpOnABinaryOrARenameRenameConflictItself(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		edit func(t *testing.T, dir, side string)
@@ -485,6 +488,7 @@ func TestARestartEndsAResolverJobCancelledWhileTheDaemonWasDown(t *testing.T) {
 // the row go on to its end, and past two days the row goes whatever git
 // says, the ref left as it is.
 func TestADoneResolverJobWhoseRefCannotBeDroppedStillGoes(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		dir  func(t *testing.T) string

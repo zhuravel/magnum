@@ -508,6 +508,7 @@ func (l *recordLog) since(n int) []slog.Record {
 // EnsureWorkspace passes no env of its own, and its session's pane gets the
 // App's hook socket and the binary, or neither without a listener.
 func TestThePaneAgentsPanesGetTheHookEnvOnlyWhileTheDaemonListens(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name, socket string
 	}{{"listening", "/state/run/hooks.sock"}, {"no listener", ""}} {
@@ -554,6 +555,7 @@ func TestThePaneAgentsPanesGetTheHookEnvOnlyWhileTheDaemonListens(t *testing.T) 
 // nothing, and are left to the run's own end (the round's backoff, its
 // model switch, the job's stop).
 func TestAHookFailureGoesWhereTheScreenReadFailureOfItsKindGoes(t *testing.T) {
+	storetest.Parallel(t)
 	reset := time.Date(2026, 10, 5, 13, 0, 0, 0, time.Local)
 	for _, tc := range []struct {
 		name    string

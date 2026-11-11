@@ -11,6 +11,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/learn"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // A held or passed proposal nobody decided within ProposalTTL expires at
@@ -226,6 +227,7 @@ func TestAProposalMasterHoldsAlreadyIsLandedNotExpiredAsMoved(t *testing.T) {
 // A check that cannot be made (git refuses, the branch or the worktree is
 // gone) tells nothing about the proposal: it waits, as it did.
 func TestAProposalWhoseCheckCannotBeMadeStaysWaiting(t *testing.T) {
+	storetest.Parallel(t)
 	for name, spoil := range map[string]func(t *testing.T, f *gateFixture, p store.LearnProposal){
 		"git refuses": func(_ *testing.T, f *gateFixture, _ store.LearnProposal) {
 			f.git.replayErr = errors.New("merge-tree: unknown option")

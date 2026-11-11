@@ -20,6 +20,7 @@ import (
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 const (
@@ -482,6 +483,7 @@ func TestAFixRequestStartsTheJobAndHoldsThePR(t *testing.T) {
 
 // The request names why it will not start a loop.
 func TestFixRefusals(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name     string
 		author   string
@@ -545,6 +547,7 @@ func TestFixRefusals(t *testing.T) {
 // earlier reviews. An earlier P3 left open alone is work too (rule A1:
 // TestAFixOnAReviewThatKeepsAP3OpenStarts).
 func TestAFixStartsOnAReviewThatKeepsAnEarlierFindingOpen(t *testing.T) {
+	storetest.Parallel(t)
 	const what = "fixes the 1 finding of the review on a1a1a1a, 1 of them open from earlier reviews, in review1"
 	t.Run("an open P2", func(t *testing.T) {
 		h, git := fixHarness(t)
@@ -591,6 +594,7 @@ func pinnedFixablePR(h *harness) time.Time {
 // reason, before anything is unpinned, and a person's agent the guard finds
 // once the pin went refuses with the guard's own words.
 func TestAFixOnAPinnedSlotUnpinsIt(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("pinned", func(t *testing.T) {
 		h, git := fixHarness(t)
 		pinnedAt := pinnedFixablePR(h)
@@ -669,6 +673,7 @@ func TestAFixOnAPinnedSlotUnpinsIt(t *testing.T) {
 // last error and the command that repairs it, as dispatch's wait names them,
 // not with the bare state.
 func TestAFixRefusedForABrokenSlotNamesTheRepair(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct{ state, lastError, want string }{
 		{store.SlotBroken, "schema reset failed",
 			"talkable/talkable#2: slot review1 is broken: schema reset failed (magnum slots repair review1)"},
@@ -831,6 +836,7 @@ func TestAFixWithoutAFreeSlotRefusesAndNamesTheRetry(t *testing.T) {
 // fetches nothing, a review with findings or one that found nothing on a
 // PR that conflicts with its base alike.
 func TestAFixWithoutAFreeSlotRefusesBeforeItReadsGitHubOrFetchesTheBase(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name     string
 		findings map[string]int
@@ -1272,6 +1278,7 @@ func TestAPushWithNeedsYouIsReReviewedFirst(t *testing.T) {
 // A run that ends without a report of its own fails the job: the loop ends
 // as needs attention, the slot goes back to the reviewed head.
 func TestAMissingFixReportFailsTheJob(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		report func(run store.Run) string
@@ -1368,6 +1375,7 @@ func TestAPushGitHubDoesNotShowFailsTheFix(t *testing.T) {
 // confirmed and re-reviewed; with neither answering, the push is not
 // confirmed and the loop fails.
 func TestAPushIsConfirmedOnTheBranchWhenGitHubCannotSay(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		remote string
@@ -1793,6 +1801,7 @@ func TestAbortEndsALoopWaitingForItsReReview(t *testing.T) {
 // in phase fixing, and when it cannot be read (no round starts over a loop
 // that may run); the wait says why.
 func TestAFixingRowHoldsDispatch(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		row  string
@@ -1992,6 +2001,7 @@ func stoodPR(h *harness, git *fixGit, outcome string) store.PR {
 // the head that ended otherwise (an error) leaves the head without a review
 // to fix, as before.
 func TestAFixStartsAfterARoundThatOnlyReplied(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("replied", func(t *testing.T) {
 		const what = "fixes the 1 finding of the review on a1a1a1a (the head d4d4d4d kept its verdict), 1 of them open from earlier reviews, in review1"
 		h, git := fixHarness(t)

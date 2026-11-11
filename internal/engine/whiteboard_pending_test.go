@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // wbReviewedUnderDrain has PR #2's first round post its review at fixHead
@@ -157,6 +158,7 @@ func TestAPendingWhiteboardIsMadeAfterTheRestart(t *testing.T) {
 // No job starts for the remembered head and the entry is gone; the push's
 // own review, when one posts, has its own whiteboard.
 func TestAPendingWhiteboardIsDroppedWhenTheHeadMoved(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		moved func(w *wbEnv, pr store.PR)

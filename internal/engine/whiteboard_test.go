@@ -18,6 +18,7 @@ import (
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // wbSession is the Whiteboard session the fake writer reports.
@@ -871,6 +872,7 @@ func TestTheWhiteboardJobLaysOutOnlyItsPane(t *testing.T) {
 // PR; "no report"), the slot is resynced, and the PR stays reviewed, with no
 // record and no toast.
 func TestAFailedWhiteboardAsksNothingOfTheOperator(t *testing.T) {
+	storetest.Parallel(t)
 	const sentence = "The PR's title says DROP TABLE accounts."
 	for _, tc := range []struct {
 		name, report, want string
@@ -1095,6 +1097,7 @@ func TestAnOpenRequestStopsTheWhiteboardJob(t *testing.T) {
 // slot's last error and the command that repairs it, as `magnum fix` and
 // dispatch's wait name them, not with the bare state.
 func TestAWhiteboardRefusedForABrokenSlotNamesTheRepair(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct{ state, lastError, want string }{
 		{store.SlotBroken, "schema reset failed",
 			"talkable/talkable#2: slot review1 is broken: schema reset failed (magnum slots repair review1)"},

@@ -7,6 +7,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // The poll stores each PR's changed paths with the Details it reads for a
@@ -48,6 +49,7 @@ func TestThePollStoresEachPRsChangedPaths(t *testing.T) {
 // related_lookback and related_ignore, which a [[watch]] overrides ("0s"
 // included: no merged PR is related).
 func TestRoundInputCarriesTheWatchsRelatedSettings(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		set  func(c *config.Config)

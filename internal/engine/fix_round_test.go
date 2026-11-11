@@ -10,6 +10,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // judgeRun records a judge run of round 1 the way the pipeline leaves it:
@@ -351,6 +352,7 @@ func TestOpenRestoresAreNotReviewRounds(t *testing.T) {
 // run", with operator_typed in its data; a run nobody typed into adds
 // neither.
 func TestSettlementSaysTheOperatorTypedIntoTheFixersPaneDuringTheRun(t *testing.T) {
+	storetest.Parallel(t)
 	for _, typed := range []bool{true, false} {
 		t.Run(map[bool]string{true: "typed", false: "not typed"}[typed], func(t *testing.T) {
 			h, git := fixHarness(t)

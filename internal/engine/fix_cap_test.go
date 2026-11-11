@@ -8,6 +8,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // recordTitlesOfReReviews wraps h's round script (reviewWith's) so that the
@@ -108,6 +109,7 @@ func TestTheCapSaysWhatIsLeft(t *testing.T) {
 // before the ledger, one that lists fewer posted findings than it counts)
 // gets no split rather than a guessed one.
 func TestTheCapNamesNoSplitTheRegistryCannotBack(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		titles []string

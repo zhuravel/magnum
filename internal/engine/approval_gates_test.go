@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // judgeApprovesHarness is a harness whose App judge approves a clean review
@@ -64,6 +65,7 @@ func roundOf(t *testing.T, h *harness, spec prSpec, force bool) pipeline.RoundIn
 // every gate carries no refusal, and every gated round asks the CI gate
 // when its judge's prompt is written.
 func TestTheJudgesApprovalIsHeldToTheGatesDecidedAtDispatch(t *testing.T) {
+	storetest.Parallel(t)
 	const (
 		workflows   = "the PR changes its own workflows or actions"
 		agentConfig = "the PR changes the review agents' instructions or hooks"
@@ -271,6 +273,7 @@ func TestAPausedRoundsContinueKeepsItsRefusalWithoutARecord(t *testing.T) {
 // passed and a registry that holds a newer head's checks than the round's
 // target, each with the CI state it decided by.
 func TestTheJudgesCIGateRefusesOnlyRedCIUnlikeTheBase(t *testing.T) {
+	storetest.Parallel(t)
 	failed, passed := github.CheckFailed, github.CheckPassed
 	audit := github.Check{Name: "Dependency Audit", State: failed, Workflow: "Audit", WorkflowFile: "audit.yml", At: ciBefore}
 	rspec := github.Check{Name: "rspec", State: failed, Workflow: "CI", WorkflowFile: "ci.yml", At: ciBefore}
@@ -353,6 +356,7 @@ func TestAPRsStateRefusalGivesTheCardsWordsAndThePromptsWords(t *testing.T) {
 // and the judge's round.judge event can tell "never read" from "passed". A
 // rollup of no checks (read, and empty) is green.
 func TestARollupNeverReadIsUnknownAndStillLetsTheApprovalThrough(t *testing.T) {
+	storetest.Parallel(t)
 	green := github.Check{Name: "rspec", State: github.CheckPassed, Workflow: "CI", WorkflowFile: "ci.yml", At: ciBefore}
 	for _, tc := range []struct {
 		name      string

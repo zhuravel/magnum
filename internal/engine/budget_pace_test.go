@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 	"github.com/zhuravel/magnum/internal/usage"
 )
 
@@ -149,6 +150,7 @@ func TestBudgetPaceWarnsAgainInANewWindow(t *testing.T) {
 // above codex_soft (the soft gate speaks then), the first tenth of a window
 // (one burst is no pace), a window with no known length and nothing used.
 func TestBudgetPaceStaysQuietWhenNothingIsAhead(t *testing.T) {
+	storetest.Parallel(t)
 	tests := []struct {
 		name        string
 		used, share float64

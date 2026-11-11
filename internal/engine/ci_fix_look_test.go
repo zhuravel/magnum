@@ -14,6 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // ciCompletion is talkable's required check Completion of ci.yml, in state.
@@ -352,6 +353,7 @@ func TestMagnumFixCIRefusesARunOfMagnumsThatRanAgain(t *testing.T) {
 // It said "its run lists no failed job magnum can read; it is yours", and
 // nothing read the head's checks again.
 func TestAPassedReRunByHandOfMagnumsFailedRunLeavesThePRIdle(t *testing.T) {
+	storetest.Parallel(t)
 	first := failedCIRun(fixHead, 1)
 	first.Event = "workflow_dispatch"
 	rerun := func(status, conclusion string) []github.WorkflowRun {

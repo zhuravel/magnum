@@ -8,6 +8,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // fixLeftADescription runs one loop on PR #2 whose fixer pushes nothing and
@@ -91,6 +92,7 @@ func TestFixDoneLiftsWhatTheFixerLeftWithoutAReview(t *testing.T) {
 // looked (Seen), and one you never saw (a command that showed no attention
 // sends Seen "") all stay as they are.
 func TestFixDoneRefusesWhatIsNotTheFixersCalls(t *testing.T) {
+	storetest.Parallel(t)
 	const unread = "the other reviewers' threads and comments were not read (HTTP 502): `magnum fix talkable/talkable#2` reads them again"
 	// A failed run keeps the decision calls of the attention it replaced
 	// after its own words (keepDecisions): still a failure, not calls alone.
@@ -176,6 +178,7 @@ func setLastError(h *harness, pr store.PR, msg string) {
 // end writes a Needs you of its own) and a fix held for later (a restart,
 // the GitHub budget) are refused, and nothing moves.
 func TestFixDoneRefusesWhileSomethingIsUnknown(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		mod  func(h *harness, pr store.PR)

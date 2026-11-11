@@ -11,6 +11,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 	"github.com/zhuravel/magnum/internal/usage"
 )
 
@@ -382,6 +383,7 @@ func TestAResumeOverrulesTheBudgetCapUntilCodexReportsAgain(t *testing.T) {
 // a snapshot stamped after the resume, still at the soft cap, holds the
 // next push's re-review again. `--tool all` does the same.
 func TestAResumeAtTheSoftCapOverrulesTheReading(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tool := range []string{agents.KindCodex, "all"} {
 		t.Run(tool, func(t *testing.T) {
 			h, u := newBudgetHarness(t)

@@ -24,6 +24,7 @@ import (
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/postreview"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // fixPushed2 is the head the fixer pushes in its second cycle.
@@ -156,6 +157,7 @@ func TestACleanReReviewEndsTheLoop(t *testing.T) {
 // info toast); at the cap the loop ends as needs attention, saying the
 // earlier findings are still open.
 func TestAChangesRequestedReReviewWithNoNewFindingsIsNotClean(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		cycles int
@@ -207,6 +209,7 @@ func TestAChangesRequestedReReviewWithNoNewFindingsIsNotClean(t *testing.T) {
 // the count of the earlier findings still open. An earlier P3 left open is
 // optional: the loop ends clean.
 func TestAReReviewThatKeepsAnEarlierFindingOpenKeepsTheLoop(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		cycles int
@@ -298,6 +301,7 @@ func TestFindingsAfterAFixStartTheNextCycle(t *testing.T) {
 // not reviewed, and the operator's push gets its own review. No fixer
 // starts, nothing is toasted as urgent and no fix.failed is recorded.
 func TestALoopWhosePRMovedOnBeforeItsNextCycleEndsQuietly(t *testing.T) {
+	storetest.Parallel(t)
 	const operator = "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
 	for _, tc := range []struct {
 		name string
@@ -476,6 +480,7 @@ func reReviewReads(h *harness, threads []agents.ReviewThread, mtime time.Time, r
 // keeps the call, and the judge's acknowledgement of the answer leaves only
 // the resolution to ask for.
 func TestTheLoopsEndAsksNoReplyForAFixedFindingTheReReviewShowsAnswered(t *testing.T) {
+	storetest.Parallel(t)
 	const url = prPage + "#discussion_r4302866759"
 	answered := func(resolved bool) []agents.ReviewThread {
 		return []agents.ReviewThread{{ID: "PRRT_1", CommentID: 4302866759, URL: url, Location: "app/models/offer.rb:42", Resolved: resolved,
@@ -594,6 +599,7 @@ func TestAFixersCallAfterAPushToastsAtOnce(t *testing.T) {
 // the toast alone), and a PR the round itself left needing attention keeps
 // the round's account of why.
 func TestAReReviewThatDidNotPostEndsTheLoop(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		outcome   string
 		state     string
@@ -676,6 +682,7 @@ func pausedReReview(h *harness, outcome string, prompted bool) {
 // its next cycle. A pause before the judge was prompted continues no turn,
 // so it still ends the loop as a re-review that did not post.
 func TestAReReviewThatPausesKeepsTheFixLoop(t *testing.T) {
+	storetest.Parallel(t)
 	for _, outcome := range []string{pipeline.OutcomeUsageLimit, pipeline.OutcomeLoginRequired} {
 		t.Run(outcome, func(t *testing.T) {
 			h, git := fixHarness(t)
@@ -914,6 +921,7 @@ func TestAutofixLeavesAFixOffPRAlone(t *testing.T) {
 // Autofix starts nothing after a review that approves, one that found
 // nothing, or on a watch whose autofix is "never" (the default).
 func TestAutofixLeavesAnApprovedOrCleanReviewAlone(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name     string
 		findings map[string]int
@@ -1058,6 +1066,7 @@ func (h *harness) wantNoLoopEnd(prID int64) {
 // re-review said (more to fix, nothing, the cap, the author's findings, a
 // failure), no fixer starts and nobody is asked.
 func TestAnAbortBeforeTheNextCycleEndsTheLoopQuietly(t *testing.T) {
+	storetest.Parallel(t)
 	more := pipeline.RoundResult{Outcome: pipeline.OutcomePosted, Event: "COMMENTED", Findings: map[string]int{"P2": 1}, TargetSHA: fixHead}
 	for _, tc := range []struct {
 		name string
@@ -1302,6 +1311,7 @@ func TestADrainEndedWithoutARestartContinuesTheLoopItHeld(t *testing.T) {
 // loop whose PR moved on ends quietly, and one whose re-review is still to
 // run waits for it.
 func TestALoopStrandedInReviewingIsDecidedAtStartup(t *testing.T) {
+	storetest.Parallel(t)
 	report := "/state/reviews/talkable/talkable/2/a1a1a1a1a1a1/claude-fix.md"
 	for _, tc := range []struct {
 		name     string

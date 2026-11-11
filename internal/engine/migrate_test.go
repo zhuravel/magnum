@@ -17,6 +17,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -304,6 +305,7 @@ func aLeftReviews() []github.Review {
 // turn parts of it off: keep_approvals keeps the approval, an App that does
 // not dismiss its stale change requests keeps the change request.
 func TestMigrationDismissesWhatTheFormerAppLeftStanding(t *testing.T) {
+	storetest.Parallel(t)
 	cases := []struct {
 		name string
 		mod  func(*harness)
@@ -475,6 +477,7 @@ func TestMigrationFormerWithoutAClientIsAWarning(t *testing.T) {
 // dismiss_own_stale_change_requests only its change requests go, with its own
 // client (the poll client here), and an approval of a user account stays.
 func TestMigrationFromAUserDismissesOnlyWhenOptedIn(t *testing.T) {
+	storetest.Parallel(t)
 	userReviews := []github.Review{
 		migReview(501, "CHANGES_REQUESTED", "zhuravel", "User"),
 		migReview(502, "APPROVED", "zhuravel", "User"),
@@ -521,6 +524,7 @@ func TestMigrationFromAUserDismissesOnlyWhenOptedIn(t *testing.T) {
 // logins with github.SameLogin alone, which ignores "[bot]", and so drop the
 // former identity as if it were the current one.
 func TestMigrationFromAUserToAnAppOfTheSameName(t *testing.T) {
+	storetest.Parallel(t)
 	setup := func(t *testing.T) (*migHarness, store.PR) {
 		m := newMigHarness(t, func(h *harness) {
 			h.cfg.Watches[0].Identity = "zhuravel"
@@ -552,6 +556,7 @@ func TestMigrationFromAUserToAnAppOfTheSameName(t *testing.T) {
 // round that ended otherwise), in a dry run, and for a former identity whose
 // login is the current one.
 func TestDismissFormerGuards(t *testing.T) {
+	storetest.Parallel(t)
 	setup := func(t *testing.T) (*migHarness, store.PR, *roundJob) {
 		m := newMigHarness(t)
 		pr := m.reviewedByA()
@@ -819,6 +824,7 @@ func TestFormerLoginsReadsTheList(t *testing.T) {
 // when the PR already has the watch's, when `--as` pinned it, when it is
 // paused, and when its row changed since it was read.
 func TestMigrateIdentityLeavesThePRAlone(t *testing.T) {
+	storetest.Parallel(t)
 	cases := []struct {
 		name  string
 		watch string

@@ -9,6 +9,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // operatorQuietHours is the operator's quiet_hours: the harness's day
@@ -23,6 +24,7 @@ const operatorQuietHours = "03:00-12:00"
 // request of it wait, their wait saying "quiet hours"; `magnum review`
 // starts a full round as before.
 func TestQuietHoursLetTheJudgeAloneRun(t *testing.T) {
+	storetest.Parallel(t)
 	quiet := func(h *harness) { h.cfg.Daemon.QuietHours = operatorQuietHours }
 	wantHeld := func(t *testing.T, h *harness, rounds int, short string) {
 		t.Helper()

@@ -13,6 +13,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // withoutDeltaCheck turns [daemon] delta_check off: a small delta waits for
@@ -256,6 +257,7 @@ func mustJSON(t *testing.T, v any) string {
 // The approval kept for a delta check goes when the check does not approve,
 // fails or needs attention, with the reason in the dismissal.
 func TestKeptApprovalIsDismissedWhenTheCheckDoesNotApprove(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name, verdict, why string
 		event              string // last_review_event after it
@@ -397,6 +399,7 @@ func TestKeptApprovalIsDismissedWhenTheDeltaGrows(t *testing.T) {
 // adds a file (added code is never a short check) and any delta with
 // delta_check off.
 func TestDeltasThatAreNoDeltaCheckGetAFullRoundAndTheApprovalGoes(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		mod   func(*harness)
@@ -540,6 +543,7 @@ func TestAnIdentityMigrationGivesADeltaCheckAFreshJudgeSession(t *testing.T) {
 // resume that fails, fresh sessions requested) checks the delta in a fresh
 // session too.
 func TestADeltaCheckWhoseJudgeLostItsSessionRunsWithAFreshOne(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name, reason string
 		lose         func(h *harness)
@@ -622,6 +626,7 @@ func parkSessions(h *harness, n int) {
 // 2,000-line rewrite after the fact. A first review reviews the whole PR and
 // has no delta.
 func TestEveryReReviewRecordsItsDeltaSize(t *testing.T) {
+	storetest.Parallel(t)
 	type roundStart struct {
 		DeltaCheck   bool `json:"delta_check"`
 		DeltaLines   *int `json:"delta_lines"`

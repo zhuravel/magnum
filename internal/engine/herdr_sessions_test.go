@@ -209,6 +209,7 @@ func TestATaggedEngineNeverReadsYourSessionWhenItObserves(t *testing.T) {
 // panes are in, the one that shows the PR's agent, not [terminal] session's
 // while they are elsewhere.
 func TestRevealOnAttentionRevealsThePaneSession(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name    string
 		panes   *herdr.Session
@@ -325,6 +326,7 @@ func TestADownReviewSessionIsOpenedAtMostTwiceAnHour(t *testing.T) {
 // it down opens nothing. Nor does a replay's engine (a tagged App) or a
 // dry run open the review session.
 func TestTheDaemonNeverOpensYourOwnSession(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		review string
@@ -357,6 +359,7 @@ func TestTheDaemonNeverOpensYourOwnSession(t *testing.T) {
 // new client would not make that server answer. Herdr is noted down and
 // dispatch waits, as before.
 func TestAReviewSessionThatRunsButDoesNotAnswerIsNotOpened(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		err  error

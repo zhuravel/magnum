@@ -8,6 +8,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // The live case (talkable#12106, 2026-10-28): an empty commit was queued as a
@@ -166,6 +167,7 @@ func TestAFailedSecondLookStartsTheRound(t *testing.T) {
 // re-review that waited for a small delta: it runs in full and measures
 // nothing again.
 func TestAReviewSomeoneAskedForDoesNotMeasureThePushAgain(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		ask  func(h *harness)

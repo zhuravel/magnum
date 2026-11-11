@@ -202,6 +202,7 @@ func TestNewBuildRestartsTheDaemonOnceNoRoundRuns(t *testing.T) {
 // does one when launchd does not run the daemon (nothing would start it
 // again) or when restart_on_new_build is off.
 func TestNewBuildDoesNotRestartWhenItFailsOrNothingRestartsTheDaemon(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name       string
 		check      error

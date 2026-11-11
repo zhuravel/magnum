@@ -11,6 +11,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // ---- helpers ----
@@ -179,6 +180,7 @@ func TestReviewRequestRunsAfterTheDebounceNotTheInterval(t *testing.T) {
 // GraphQL form (type Bot, no suffix) and its REST form ("[bot]"); not other
 // people or bots.
 func TestReviewRequestCountsOnlyForOurLogins(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name     string
 		reviewer github.Reviewer
@@ -221,6 +223,7 @@ func TestReviewRequestCountsOnlyForOurLogins(t *testing.T) {
 
 // A team counts only when the watch lists its slug in request_teams.
 func TestReviewRequestForATeamNeedsRequestTeams(t *testing.T) {
+	storetest.Parallel(t)
 	listed := func(teams ...string) func(*harness) {
 		return reqWatches(func(w *config.Watch) { w.RequestTeams = teams })
 	}
@@ -345,6 +348,7 @@ func TestReviewRequestOlderThanTheLastRoundStartRunsNothing(t *testing.T) {
 // Requests made before the repository's first sync (the PR was open then),
 // or at that very moment, are history.
 func TestReviewRequestBeforeTheFirstSyncIsIgnored(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		at   time.Duration // relative to the first sync at 10:00
@@ -407,6 +411,7 @@ func TestReviewRequestBeforeTheDaemonTrackedRequestsIsIgnored(t *testing.T) {
 // ---- which PRs a request queues ----
 
 func TestReviewRequestQueuesPRsThatWaitForNothing(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("baseline PR", func(t *testing.T) {
 		h := newHarness(t)
 		h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1"})
@@ -539,6 +544,7 @@ func TestReviewRequestShortensTheWaitOfAQueuedPR(t *testing.T) {
 // ---- a request skips every other timing rule ----
 
 func TestReviewRequestSkipsTheTimingRules(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		mod    func(*harness)
@@ -752,6 +758,7 @@ func TestReviewRequestDuringARoundThatMissedTheHeadRunsAsRequested(t *testing.T)
 // ---- draft -> ready for review ----
 
 func TestDraftMarkedReadyIsARequest(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("a new head", func(t *testing.T) {
 		h := newHarness(t, withDrafts)
 		before := h.reviewedPR(2, "b1")
@@ -960,6 +967,7 @@ func TestSmallDeltaHoldsTheReReviewUntilTheMaxWait(t *testing.T) {
 // period; one line short of the threshold it keeps waiting (delta_check
 // off).
 func TestLargerUnreviewedDeltaIsReviewedAfterTheQuietPeriod(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		files  []github.FileDelta // the delta b1...b3
@@ -1013,6 +1021,7 @@ func TestLargerUnreviewedDeltaIsReviewedAfterTheQuietPeriod(t *testing.T) {
 // rereview_min_lines = 0 (daemon or watch) turns the threshold off; a
 // watch's own value turns it on again (delta_check off).
 func TestSmallDeltaThresholdCanBeSetPerWatchOrTurnedOff(t *testing.T) {
+	storetest.Parallel(t)
 	zero, thirty := 0, 30
 	for _, tc := range []struct {
 		name string
@@ -1050,6 +1059,7 @@ func TestSmallDeltaThresholdCanBeSetPerWatchOrTurnedOff(t *testing.T) {
 // ---- the daily cap ----
 
 func TestDailyCapCountsAutomaticRoundsOnly(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("an automatic re-review counts", func(t *testing.T) {
 		h := newHarness(t)
 		h.reviewedPR(2, "b1")

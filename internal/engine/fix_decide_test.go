@@ -15,6 +15,7 @@ import (
 	"github.com/zhuravel/magnum/internal/postreview"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // decideThread is rev-ann's thread on PR #2 that the fixer leaves to you.
@@ -336,6 +337,7 @@ func (h *harness) readDecision() externalThread {
 // fixer's after it) is done and goes. An attention raised before magnum
 // recorded when calls are made has them dated when a loop starts over it.
 func TestAFailedRunKeepsYourDecisions(t *testing.T) {
+	storetest.Parallel(t)
 	failedPush := func(_ *harness, run store.Run) string {
 		return fixReport(run.ID, "push failed: rejected", noReplies, leftDecision)
 	}
@@ -458,6 +460,7 @@ func TestFixDecidePostsYourReplyThenStartsTheLoop(t *testing.T) {
 // no call in, an empty or marked reply, a PR that is not yours and a loop
 // that runs are refused, and nothing is posted.
 func TestFixDecideRefusals(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		decide []FixDecision
@@ -704,6 +707,7 @@ func fixLeftMagnumsCall(t *testing.T, next func(h *harness, run store.Run) strin
 // reply is there: one there lifts the attention, and none puts the call
 // back to you.
 func TestFixDecideTakesMagnumsOwnAuthorsCall(t *testing.T) {
+	storetest.Parallel(t)
 	decide := []FixDecision{{Thread: magnumsCallThread, Text: "Keep the cap: reply won't fix."}}
 	t.Run("built", func(t *testing.T) {
 		h := fixLeftMagnumsCall(t, func(h *harness, run store.Run) string {

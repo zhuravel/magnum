@@ -9,6 +9,7 @@ import (
 	"github.com/zhuravel/magnum/internal/eligibility"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // ---- helpers ----
@@ -73,6 +74,7 @@ func wantRequestDone(t *testing.T, req store.Request, want string) {
 // last round (the wait names the rule), while someone else's PR keeps the
 // normal 30m.
 func TestOwnPRReReviewWaitsTheOwnInterval(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("own", func(t *testing.T) {
 		h := newHarness(t, ownInterval(2*time.Hour))
 		start := *authoredPR(h, 2, "b1", "zhuravel").LastRoundStartedAt
@@ -243,6 +245,7 @@ func TestSnoozeHoldsAFirstReview(t *testing.T) {
 // A snooze holds a delta check and a reply round, which otherwise skip
 // some of the timing rules.
 func TestSnoozeHoldsADeltaCheckAndAReplyRound(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("delta check", func(t *testing.T) {
 		h := newHarness(t)
 		h.reviewedPR(2, "b1")
@@ -291,6 +294,7 @@ func TestSnoozeHoldsADeltaCheckAndAReplyRound(t *testing.T) {
 // A review request and `magnum review` pass a snooze, which stays for the
 // automatic rounds after them.
 func TestSnoozeLetsRequestsAndForcedReviewsThrough(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("review request", func(t *testing.T) {
 		h := newHarness(t)
 		h.reviewedPR(2, "b1")

@@ -18,6 +18,7 @@ import (
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // Post-merge review: `magnum review` of a PR GitHub merged before magnum
@@ -242,6 +243,7 @@ func TestPostMergeReviewOfANeverReviewedPRIsAFirstReview(t *testing.T) {
 // PR whose merged head magnum reviewed, and one whose slot is being
 // released. Nothing runs and the PR stays as it was.
 func TestPostMergeReviewRefusals(t *testing.T) {
+	storetest.Parallel(t)
 	cases := []struct {
 		name  string
 		setup func(h *harness)
@@ -486,6 +488,7 @@ func TestPausedPostMergeRoundContinuesAndEndsClosed(t *testing.T) {
 // a merged PR would never leave: forced cleared, the reason kept, a warning
 // and a toast, and the release follows.
 func TestPostMergeRoundThatFailsReturnsThePRToClosed(t *testing.T) {
+	storetest.Parallel(t)
 	for _, outcome := range []string{pipeline.OutcomeBlocked, pipeline.OutcomeClosed} {
 		t.Run(outcome, func(t *testing.T) {
 			h := newHarness(t)
@@ -737,6 +740,7 @@ func pmGraph(local bool) *graphGit {
 // head itself: every diff would be empty. Without a merge commit, the base
 // tip the last Details fetch recorded stands in.
 func TestPostMergeRoundReviewsFromTheBaseBeforeTheMerge(t *testing.T) {
+	storetest.Parallel(t)
 	cases := []struct {
 		name, mergeCommit, origin string
 		local                     bool

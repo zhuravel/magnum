@@ -8,6 +8,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // appPolls makes the talkable watch poll as the App it posts as, the
@@ -75,6 +76,7 @@ func TestUnderAnAppPollerARequestForTheOperatorsLoginSetsTheRequestedFlag(t *tes
 // operator's login, never the App's; under a gh poll identity it is the
 // poll login, as before.
 func TestThePanesSelfLoginIsTheOperatorsLogin(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		mods []func(*harness)

@@ -8,6 +8,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // What changed since the review counts the PR's own changes across a merge
@@ -39,6 +40,7 @@ func TestSinceReviewCountsThePRsOwnChangesAcrossABaseMerge(t *testing.T) {
 // still the PR's own, which need only the two comparisons' commit lists.
 // Only when a comparison of the own diff fails are they the push's too.
 func TestSinceReviewKeepsTheRawSizeButThePRsOwnCommitsWhenTheOwnDiffIsIncomplete(t *testing.T) {
+	storetest.Parallel(t)
 	tooLarge := slices.Clone(ownAfterConflict)
 	tooLarge[0] = github.FileDelta{Path: tooLarge[0].Path, Status: "modified", BlobSHA: "5716ca5", Truncated: true}
 	for _, tc := range []struct {

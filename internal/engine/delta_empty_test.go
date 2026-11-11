@@ -9,6 +9,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // The live case (an author's empty commit to re-run CI after a posted
@@ -85,6 +86,7 @@ func TestAnEmptyCommitKeepsTheAppApproval(t *testing.T) {
 // A watch whose skip_trivial_deltas leaves out empty re-reviews such a push
 // as before: the threshold holds it as a 0-line delta.
 func TestAnEmptyCommitIsReReviewedWhenTheWatchLeavesOutTheClass(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		mod  func(h *harness)
@@ -122,6 +124,7 @@ func TestAnEmptyCommitIsReReviewedWhenTheWatchLeavesOutTheClass(t *testing.T) {
 // tree: behind (a force push back to an ancestor) and a range with no
 // commit measure nothing and keep their re-review.
 func TestAnEmptyRangeThatIsNotAheadKeepsItsReReview(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name    string
 		status  string
@@ -149,6 +152,7 @@ func TestAnEmptyRangeThatIsNotAheadKeepsItsReReview(t *testing.T) {
 // merge logic: an own diff that cannot be read is re-reviewed, one that is
 // unchanged is the class base, not empty.
 func TestADivergedRangeWithNoFileIsNotEmpty(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("own diff unreadable", func(t *testing.T) {
 		h := newHarness(t)
 		pr := pushedEmpty(t, h, "diverged", 2)

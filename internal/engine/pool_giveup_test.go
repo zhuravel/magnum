@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // stalledSlotFailingRelease is PR #2's slot review1 stalled in releasing,
@@ -46,6 +47,7 @@ func resumesFailing(h *harness, n int) {
 // warning and one toast say which slot and what to run, and nothing is tried
 // again for as long as the slot is as the last try left it.
 func TestAStalledReleaseThatFailsThreeTimesInARowIsGivenUp(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("a failure that leaves its error on the row", func(t *testing.T) { failsThreeTimesAndIsGivenUp(t, stalledSlotFailingRelease(t)) })
 	t.Run("a refusal that leaves the row alone", func(t *testing.T) {
 		h := stalledSlotFailingRelease(t, false)
@@ -140,6 +142,7 @@ func TestAGivenUpReleaseStaysGivenUpAcrossARestart(t *testing.T) {
 // stalled for half an hour in its new state, and gives up again after three
 // more failures: the state and updated_at the last try left are the mark.
 func TestAGivenUpReleaseIsResumedAgainWhenTheSlotChangedByAnotherPath(t *testing.T) {
+	storetest.Parallel(t)
 	for name, c := range map[string]struct {
 		after  time.Duration // how long after the last try the other path comes
 		change func(h *harness, sl store.Slot) error

@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // lockedBuffer is a log sink safe for the engine's goroutines.
@@ -40,6 +41,7 @@ func (l *lockedBuffer) String() string {
 // the operator, triage keeps every role, asks no model and logs why;
 // elsewhere it is unchanged.
 func TestTriageKeepsEveryRoleWhereMagnumApprovesAsTheOperator(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name        string
 		autoApprove []string

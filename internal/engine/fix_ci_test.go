@@ -9,6 +9,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // wantFixRefused asks for a CI fix of PR #2 and fails unless the daemon
@@ -30,6 +31,7 @@ func (h *harness) wantCIFixRefused(want string) {
 // cap of 3 CI fixes, and a head whose review leaves work, which f fixes
 // first.
 func TestMagnumFixCIRefusesOthersPRsNothingFailedRedBaseAndTheCap(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("another's PR", func(t *testing.T) {
 		h, _ := autofixHarness(t, "alice", findings(map[string]int{}, "COMMENTED"), requiredCompletion)
 		h.tick()
@@ -179,6 +181,7 @@ func ciMergeHarness(t *testing.T, mods ...func(*harness)) (*harness, *mergeGit) 
 // A merge of the parent the daemon could not push goes to you as any
 // loop's does, though the CI fix ends quietly.
 func TestACIFixThatCannotOnTheParentsMergeKeepsItsClass(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("merged", func(t *testing.T) {
 		h, mg := ciMergeHarness(t)
 		fixer(h, mg.fixGit, "", func(run store.Run) string {

@@ -20,6 +20,7 @@ import (
 	"github.com/zhuravel/magnum/internal/learn"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 var (
@@ -521,6 +522,7 @@ func TestDailyRetroRunsOncePerDayAfterDailyAt(t *testing.T) {
 // 07:01 and stays paused; a usage pause of the CLI the retro's agent runs
 // (Claude or Codex) still holds it until that pause ends.
 func TestDailyRetroRunsDuringAUserPause(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		kind  string // the retro's agent kind

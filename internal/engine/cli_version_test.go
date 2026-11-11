@@ -20,6 +20,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // fakeCLIs are the agent CLIs on the daemon's PATH: files in a temporary
@@ -487,6 +488,7 @@ func TestAnInstallDuringTheMiseWhichWaitIsSeenAtTheNextCheck(t *testing.T) {
 // info, with no toast. The launch-failure path still names it, in a parked
 // launch's note and in a shared failure's line.
 func TestARoutineCLIUpdateRecordsInfoAndNoToast(t *testing.T) {
+	storetest.Parallel(t)
 	for name, inMise := range map[string]bool{
 		"not in mise's config": false,
 		"mise requests latest": true,
@@ -548,6 +550,7 @@ func TestARoutineCLIUpdateRecordsInfoAndNoToast(t *testing.T) {
 // by the install directory of the binary the kind's command runs; the pin
 // is read only when the version changed.
 func TestAChangeOfAPinnedCLIStillWarnsAndToasts(t *testing.T) {
+	storetest.Parallel(t)
 	for name, tc := range map[string]struct {
 		tool string // as mise's config names it
 		shim bool   // the daemon's PATH finds codex as mise's shim, which runs the pinned install
@@ -611,6 +614,7 @@ func TestAChangeOfAPinnedCLIStillWarnsAndToasts(t *testing.T) {
 // within the last day in the stored error, the needs-attention line and its
 // toast; an older change says nothing.
 func TestAParkedLaunchFailureNamesTheRecentCLIChange(t *testing.T) {
+	storetest.Parallel(t)
 	for name, tc := range map[string]struct {
 		ago  time.Duration
 		note bool

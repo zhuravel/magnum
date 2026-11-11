@@ -8,6 +8,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // The judge's own pass (a run of kind own_pass, prompted with the
@@ -94,6 +95,7 @@ func TestDaemonRestartDuringOwnPassStartsTheRoundAgain(t *testing.T) {
 // A round gets the judge's own pass from [pipeline] judge_own_pass
 // ("parallel" by default), which a [[watch]] overrides.
 func TestRoundInputFollowsJudgeOwnPass(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		set   func(c *config.Config)
@@ -124,6 +126,7 @@ func TestRoundInputFollowsJudgeOwnPass(t *testing.T) {
 // working reviewers would, while the same round with its judge idle (one
 // prompt after the reviewers) leaves room.
 func TestWorkingCodexCountIncludesTheJudgeInTheReviewersStage(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name        string
 		judgeStatus herdr.Status

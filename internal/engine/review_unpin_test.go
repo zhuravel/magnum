@@ -7,6 +7,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // openedPR reviews PR #2, releases it and restores it with `magnum open`,
@@ -66,6 +67,7 @@ func TestReviewRequestUnpinsThePRMagnumOpenPinned(t *testing.T) {
 // The guards still protect a person's work in the slot: the review unpins
 // the PR, and the reply and the PR's wait name the guard that holds it.
 func TestReviewRequestOfAPinnedPRNamesTheGuardThatKeepsItsSlot(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("persisted hold", func(t *testing.T) {
 		h := newHarness(t)
 		h.openedPR()

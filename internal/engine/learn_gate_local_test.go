@@ -13,6 +13,7 @@ import (
 	"github.com/zhuravel/magnum/internal/eval"
 	"github.com/zhuravel/magnum/internal/learn"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // localSeams is what the fixture's daemon reads of the local cases: their corpus (or why it cannot be
@@ -109,6 +110,7 @@ func localRow(t *testing.T, f *gateFixture, lc eval.Case) GateCase {
 // a local round runs every role. Its baseline is the stored replay that chose it, and a candidate that
 // finds what it found passes with no replay of the base.
 func TestAGateReplaysALocalGuardWithEveryRoleInARunOfItsOwn(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		files []string
@@ -156,6 +158,7 @@ func TestAGateReplaysALocalGuardWithEveryRoleInARunOfItsOwn(t *testing.T) {
 // find what the candidate lost; one base replay that does not find it is enough to call it lost at
 // the base, and no second is made.
 func TestALocalGuardLostTwiceIsALossOnlyWhenTwoFreshBaseReplaysFindIt(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		base   []*eval.Score
@@ -290,6 +293,7 @@ func TestALocalGuardsDefectsFoundByOneBaseReplayEachAreLostAtTheBase(t *testing.
 // replays with every role, up to four of 30 to 47 minutes, could not change the verdict. A revert,
 // which waits for the operator whatever the gate finds, still replays it.
 func TestAGateThatFailsOnItsOtherCasesReplaysNoLocalGuard(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("failed", func(t *testing.T) {
 		f, _, lc := localGateFixture(t, gateFullFiles, found(nil, "q"))
 		f.ev.script(f.wt, f.target.Name, found(nil, f.target.Name))
@@ -356,6 +360,7 @@ func TestAHeldGateThatStoppedBeforeItsLocalGuardsSaysWhyTheirRowsHaveNoScore(t *
 // is. config_error, which a replay cannot change until the config does, skips the row on the
 // candidate's second replay and the base's too.
 func TestALocalReplayThatCannotScoreIsNeverALossNorAStop(t *testing.T) {
+	storetest.Parallel(t)
 	for _, outcome := range []string{eval.OutcomeMissingRole, eval.OutcomeConfigError, eval.OutcomeEnvironment, "refused", eval.OutcomeFlagged, "error"} {
 		t.Run("first "+outcome, func(t *testing.T) {
 			f, _, lc := localGateFixture(t, gateFullFiles, found(nil, "q"))
@@ -410,6 +415,7 @@ func TestALocalReplayThatCannotScoreIsNeverALossNorAStop(t *testing.T) {
 // (gateAttemptLimit), never as a replay without a score (gateStopLimit); the row is not left out, as
 // a missing_role one would be.
 func TestALocalReplayAUsageLimitOrALogoutStoppedStopsTheGate(t *testing.T) {
+	storetest.Parallel(t)
 	for _, outcome := range []string{"usage_limit", "login_required"} {
 		t.Run(outcome, func(t *testing.T) {
 			f, _, lc := localGateFixture(t, gateFullFiles, found(nil, "q"))
@@ -435,6 +441,7 @@ func TestALocalReplayAUsageLimitOrALogoutStoppedStopsTheGate(t *testing.T) {
 // candidate's second replay or the base's it stops the gate as a posted case's does, the stop
 // counted, and the proposal stays gating for the next gate.
 func TestALocalReplayThatLostAReportLaterStopsTheGate(t *testing.T) {
+	storetest.Parallel(t)
 	for _, outcome := range []string{eval.OutcomeMissingRole, eval.OutcomeEnvironment} {
 		for _, which := range []string{"second", "base"} {
 			t.Run(which+" "+outcome, func(t *testing.T) {

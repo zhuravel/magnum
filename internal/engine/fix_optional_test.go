@@ -16,6 +16,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // optionalThread is magnum's thread on PR #2 whose P3's Fix ends "This is
@@ -65,6 +66,7 @@ func withOptional(report string, entries ...string) string {
 // a fix.optional event. A P0 to P2 there, or an entry magnum cannot read,
 // still holds as Needs you does: only a P3 is optional.
 func TestAnOptionalCallHoldsNothing(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("a P3", func(t *testing.T) {
 		h, git := fixHarness(t)
 		pr := fixablePR(h, "zhuravel", map[string]int{"P3": 1})
@@ -212,6 +214,7 @@ func TestFixDecideTakesAnOptionalCall(t *testing.T) {
 // Another open P3 beside it is still work, and so is the call once your
 // reply after it takes it.
 func TestALoopEndsAsDoneWhenItsOptionalCallIsAllThatIsLeft(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		open   int
@@ -390,6 +393,7 @@ func heldByAnEarlierP3(t *testing.T, needs string, next func(h *harness, run sto
 // a decision of yours in the P3's thread is no optional call: it goes back
 // to you unless the fixer builds it.
 func TestAnOptionalCallLiftsTheEarlierAttentionOfItsP3(t *testing.T) {
+	storetest.Parallel(t)
 	optionalOnly := func(_ *harness, run store.Run) string {
 		return withOptional(fixReport(run.ID, "nothing", noReplies, "none"), optionalEntry)
 	}

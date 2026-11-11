@@ -9,6 +9,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // sameHeadHarness is a harness with [triage] on (its model keeps every
@@ -29,6 +30,7 @@ func sameHeadHarness(t *testing.T) (*harness, int, func() int) {
 // commits, forced or requested on GitHub, runs the judge alone now, like a
 // delta check: no triage, no reruns, no restarts, and an event that says why.
 func TestAReReviewOfTheSameHeadRunsTheJudgeAlone(t *testing.T) {
+	storetest.Parallel(t)
 	for name, ask := range map[string]func(h *harness){
 		"magnum review": func(h *harness) {
 			h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}})
@@ -82,6 +84,7 @@ func TestAReReviewOfTheSameHeadRunsTheJudgeAlone(t *testing.T) {
 // A request that names roles (`--role`, `--simplify`) or asks for fresh
 // sessions (`--fresh`) keeps the full round on the same head.
 func TestAReReviewOfTheSameHeadThatNamesRolesOrFreshSessionsRunsInFull(t *testing.T) {
+	storetest.Parallel(t)
 	for name, p := range map[string]ReviewPayload{
 		"--role":     {PRTarget: PRTarget{Ref: "2"}, Roles: []string{"claude-simplify"}},
 		"--simplify": {PRTarget: PRTarget{Ref: "2"}, Simplify: true},

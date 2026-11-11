@@ -8,6 +8,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // pushDuringReview reviews PR #2 at b1 while one commit (b2, changing
@@ -53,6 +54,7 @@ func pushDuringReview(t *testing.T, h *harness, files []github.FileDelta, meanwh
 // starts by itself, and says when when it can; otherwise it says the commits
 // are not reviewed yet.
 func TestMovedHeadNoteFollowsThePRsWait(t *testing.T) {
+	storetest.Parallel(t)
 	const (
 		follows    = "101:_Reviewed b1; 1 commit arrived during the review, re-review follows._"
 		afterQuiet = "101:_Reviewed b1; 1 commit arrived during the review, re-review follows after the quiet period._"

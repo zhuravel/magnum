@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // waitOf is the wait the last tick recorded for PR n.
@@ -29,6 +30,7 @@ func pushedAfter(t *testing.T, h *harness, d time.Duration) store.PR {
 }
 
 func TestWaitTimingReasons(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("quiet period", func(t *testing.T) {
 		h := newHarness(t)
 		pushedAfter(t, h, 40*time.Minute)
@@ -96,6 +98,7 @@ func TestWaitTimingReasons(t *testing.T) {
 }
 
 func TestWaitRetryMuteAndQuietHours(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("retry", func(t *testing.T) {
 		h := newHarness(t)
 		pr := pushedAfter(t, h, 40*time.Minute)
@@ -139,6 +142,7 @@ func TestWaitRetryMuteAndQuietHours(t *testing.T) {
 }
 
 func TestWaitGlobalReasons(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		set    func(h *harness)
@@ -176,6 +180,7 @@ func TestWaitGlobalReasons(t *testing.T) {
 }
 
 func TestWaitDispatchGates(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("kind paused", func(t *testing.T) {
 		h := newHarness(t)
 		pushedAfter(t, h, 40*time.Minute)

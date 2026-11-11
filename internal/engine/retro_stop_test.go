@@ -14,6 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/learn"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // TestRetroLeavesThePRDueWhenTheRetroIsCutShort: a stop that is not the
@@ -23,6 +24,7 @@ import (
 // retro takes them; only a usage limit and a logout pause the agent's CLI,
 // as in rounds.
 func TestRetroLeavesThePRDueWhenTheRetroIsCutShort(t *testing.T) {
+	storetest.Parallel(t)
 	pause := func(kind string) func(*harness, ClassifyJob) (ClassifyResult, error) {
 		return func(h *harness, _ ClassifyJob) (ClassifyResult, error) {
 			return ClassifyResult{Pause: &pipeline.Pause{Kind: kind, Tool: "claude", Detail: "limit", Until: h.clock.Now().Add(time.Hour)}},
@@ -100,6 +102,7 @@ func TestRetroLeavesThePRDueWhenTheRetroIsCutShort(t *testing.T) {
 // PRs after it are not reached, and retro.done says "stopped: GitHub
 // unreachable".
 func TestRetroStopsWhenGitHubCannotBeReached(t *testing.T) {
+	storetest.Parallel(t)
 	for name, tc := range map[string]struct {
 		cut   func(*fakeGH, error)
 		err   string

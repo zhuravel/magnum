@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // fullPassHarness is the harness with [pipeline] full_pass_every = every,
@@ -187,6 +188,7 @@ func seedRereviews(t *testing.T, h *harness, n int) {
 // ordinary one. The count reads the runs, so a PR reviewed before the rule
 // counts its past re-reviews: with 20, that same re-review is a full pass.
 func TestFullPassOffByZero(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		every int
 		full  bool
@@ -322,6 +324,7 @@ func reviewAgain(t *testing.T, h *harness, fresh bool) pipeline.RoundInput {
 // full_pass_after), as an automatic re-review would, its reason naming the
 // rule and --fresh, and becomes the PR's last full pass.
 func TestAForcedFreshRoundRunsADueFullPass(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("full_pass_every", func(t *testing.T) {
 		h := fullPassHarness(t, 10)
 		preChurnPR(t, h, 34)
@@ -413,6 +416,7 @@ func TestAForcedRoundWithoutFreshRunsNoFullPass(t *testing.T) {
 // next review of new commits becomes it, as for a PR reviewed before the
 // churn rules.
 func TestASameHeadRoundNeverBecomesTheBaseline(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("without a baseline", func(t *testing.T) {
 		h := fullPassHarness(t, 0)
 		preChurnPR(t, h, 34)
@@ -612,6 +616,7 @@ func TestTouchedFilesSinceTheBaselineTriggerAFullPass(t *testing.T) {
 // wants the first push of a workday read whole; a week was too rare); a
 // push 11 hours after the baseline runs an ordinary re-review.
 func TestAnOldPRGetsAFullPass(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		files int
@@ -653,6 +658,7 @@ func TestABaseMergeIsNotChurn(t *testing.T) {
 // PR, 600 lines in 16 files since a baseline 8 days old), the full pass
 // names the first rule left on, and none runs with all three off.
 func TestFullPassRulesOffByZero(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		off  func(*harness)

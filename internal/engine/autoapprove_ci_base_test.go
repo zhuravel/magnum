@@ -7,6 +7,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // ciBefore is when the checks below finished: before every review, so no
@@ -75,6 +76,7 @@ func TestAFailingCheckThatFailsOnTheBaseTooDoesNotHoldTheApproval(t *testing.T) 
 // (whose error stays out of the reason). One that fails like the base while
 // another check still runs waits for it.
 func TestAFailingCheckTheBaseDoesNotFailTheSameWayHoldsTheApproval(t *testing.T) {
+	storetest.Parallel(t)
 	failed, passed, pending := github.CheckFailed, github.CheckPassed, github.CheckPending
 	for _, tc := range []struct {
 		name    string

@@ -16,6 +16,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // autoRefused is why auto-approval holds PR #n back, as the card reads it
@@ -121,6 +122,7 @@ func TestAReplyRoundKeepsTheRefusalOfAReviewThatDidNotHearEveryReviewer(t *testi
 // delta check of a new head) builds on the round before it, whose judge did
 // not hear codex-review: its review is refused too.
 func TestAJudgeAloneRoundAfterOneThatDidNotHearEveryReviewerIsRefused(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct{ name, head string }{{"a same-head re-review", "b1"}, {"a delta check", "b2"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, plan := newAutoHarness(t)
@@ -278,6 +280,7 @@ func TestAutoApprovalWaitsForTheHeadsChecks(t *testing.T) {
 // cannot read whole. A as the operator still approves it: they decide by
 // hand.
 func TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name      string
 		files     []string
@@ -372,6 +375,7 @@ func TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions(t *testing.T) {
 // record's link targets the list changes refuse
 // (TestAutoApprovalRefusesAPRThatChangesTheAgentsInstructions).
 func TestAutoApprovalIgnoresAgentConfigTheFileListDoesNotChange(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct{ name, note string }{
 		{"files left in the slot", `{"head":"b1","files":1,"compared":true,"paths":[".claude/"],"residue":true}`},
 		{"a record an older build wrote", `{"head":"b1","at":"2026-11-04T11:49:24Z","files":1,"compared":true,"paths":[".claude/"]}`},
@@ -432,6 +436,7 @@ func TestAutoApprovalRefusesAChangeToALinksTargetAtTheHeadWhateverHeadItsSession
 // class: magnum cannot tell what it changes. A path outside ASCII that no
 // link's target could name approves.
 func TestAutoApprovalCannotTellANameOutsideASCIIThroughALink(t *testing.T) {
+	storetest.Parallel(t)
 	const unknown = "Magnum cannot tell whether it changes the review agents' instructions or hooks"
 	guide := map[string]string{"AGENTS.md": "Read @docs/guide.md first.\n", "docs/guide.md": "x\n"}
 	for _, tc := range []struct {
@@ -506,6 +511,7 @@ func TestAutoApprovalRefusesAnyFileUnderALinkToTheRoot(t *testing.T) {
 // that changes an imported file, by the importing file's label. A home or
 // an absolute import, and a page nothing imports, refuse nothing.
 func TestAutoApprovalRefusesAChangeToAFileTheInstructionsImport(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		links map[string]string
@@ -730,6 +736,7 @@ func TestAnApprovalIsNotDecidedOnAFileListOfAnotherBase(t *testing.T) {
 // saying the new head; a list the gate lets through, or none of the new
 // head yet, leaves it to the round.
 func TestAPushTheFilesGateRefusesWithdrawsAStandingApprovalAtOnce(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name     string
 		files    []string
@@ -947,6 +954,7 @@ func (h *harness) wantGateWithdrawal(public, local string) {
 // approved head's links withdraws it at the push already:
 // TestAPushTheFilesGateRefusesWithdrawsAStandingApprovalAtOnce.)
 func TestAStandingApprovalIsWithdrawnWhenTheGatesRefuseANewHead(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		next   prSpec
@@ -1125,6 +1133,7 @@ func TestARefusedWithdrawalOfADismissedReviewEndsTheRow(t *testing.T) {
 // the PR; GitHub's on a push does not. magnum withdrew nothing: no toast
 // says it did.
 func TestARefusedWithdrawalOfAnApprovalDismissedByHandStopsAutoApproval(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name      string
 		dismissal github.ReviewDismissal
@@ -1217,6 +1226,7 @@ func TestRequestChangesAndARoundsAutoApprovalAtOnceLeaveNoApprovalStanding(t *te
 // begin event with a failure that says it was posted, for a changes request
 // as the PR's identity and for an approval as the operator.
 func TestAManualVerdictPostedButNotRecordedWritesItsFailure(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name, kind, as, trigger string
 	}{

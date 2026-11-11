@@ -8,6 +8,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 func (h *harness) parks(prID int64) int {
@@ -54,6 +55,7 @@ func TestIdleAgentsOfReviewedPRsAreParked(t *testing.T) {
 // waiting). A short wait, or a pinned slot (a person works there, whatever
 // the wait), keeps them.
 func TestIdleAgentsOfAPRThatWaitsLongAreParked(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		setup  func(h *harness, pr store.PR)
@@ -132,6 +134,7 @@ func TestIdleAgentsOfAPRThatWaitsLongAreParked(t *testing.T) {
 // TestParkIdleLeavesPinnedBusyAndHumanPRsAlone: a pinned slot, a working
 // agent, a recent human keystroke or park_idle_after = 0 keep the agents.
 func TestParkIdleLeavesPinnedBusyAndHumanPRsAlone(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		setup func(h *harness, pr store.PR)

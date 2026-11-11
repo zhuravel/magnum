@@ -14,6 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 	"github.com/zhuravel/magnum/internal/usage"
 )
 
@@ -363,6 +364,7 @@ func TestAPausedRoundWhoseJudgeWasParkedContinuesByResumingIt(t *testing.T) {
 // it in a new process. The same limit in a session started under the
 // current login pauses Codex as before.
 func TestAStaleSessionsUsageLimitPausesNoKind(t *testing.T) {
+	storetest.Parallel(t)
 	for _, stale := range []bool{true, false} {
 		t.Run(fmt.Sprintf("stale=%v", stale), func(t *testing.T) {
 			h, fl := newLoginHarness(t)

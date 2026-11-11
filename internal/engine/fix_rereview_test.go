@@ -8,6 +8,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // reReviewHeldByADrain runs the forced re-review of fixPushed that
@@ -181,6 +182,7 @@ func TestAHeldNextCycleStartsAfterTheRestart(t *testing.T) {
 // ends the loop clean, starts the next cycle or ends it at the cap, with
 // nothing ignored.
 func TestTheFixLoopActsOnItsOwnReReview(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		cycles int

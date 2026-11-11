@@ -6,6 +6,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // heldReviewedPR reviews PR #2 and leaves its slot review1 held by the slot
@@ -36,6 +37,7 @@ func (h *harness) heldReviewedPR(hold, oldHead, newHead string) store.Slot {
 // An unpinned PR whose slot holds nothing acknowledgeable, and a pinned one,
 // keep the answer they had.
 func TestUnpinByPRReferenceAcknowledgesTheSlotsHold(t *testing.T) {
+	storetest.Parallel(t)
 	for _, hold := range []string{slots.HoldHeadDrift, slots.HoldUnpushed} {
 		t.Run(hold, func(t *testing.T) {
 			h := newHarness(t)
@@ -102,6 +104,7 @@ func TestUnpinByPRReferenceAcknowledgesTheSlotsHold(t *testing.T) {
 // The review request's waiting line and the PR's wait (the board's detail and
 // the status card's sentence) say it, and so does the refusal of a fix.
 func TestAHoldHintNamesTheUnpinCommandWithTheSlot(t *testing.T) {
+	storetest.Parallel(t)
 	const hint = ` (magnum unpin "review1")`
 	t.Run("a review request", func(t *testing.T) {
 		h := newHarness(t)

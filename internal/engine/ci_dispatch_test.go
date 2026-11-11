@@ -8,6 +8,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // pushedCIHarness is a repository whose CI workflow ci.yml runs only when
@@ -70,6 +71,7 @@ func TestAPushMagnumMadeStartsTheCIWorkflowOnceAfterAGrace(t *testing.T) {
 // a run of the workflow ran at already (a repository whose CI runs on
 // pushes) needs no start at all.
 func TestAPushMagnumMadeWaitsForTheBranchsRunAndSkipsAHeadThatRan(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("a run of the branch in progress", func(t *testing.T) {
 		h, _ := pushedCIHarness(t, []string{"app/models/order.rb"})
 		running := github.WorkflowRun{ID: 7, Status: "in_progress", HeadSHA: fixHead, HeadBranch: "feature", Event: "workflow_dispatch"}
@@ -115,6 +117,7 @@ func TestAPushMagnumMadeWaitsForTheBranchsRunAndSkipsAHeadThatRan(t *testing.T) 
 // code with the repository's secrets), and a head that moved on since
 // magnum's push (the author pushed) is not magnum's to start.
 func TestAPushMagnumMadeKeepsR47sRefusals(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("the PR changes its own workflows", func(t *testing.T) {
 		h, _ := pushedCIHarness(t, []string{"app/models/order.rb", ".github/workflows/ci.yml"})
 		h.advance(ciPushGrace)

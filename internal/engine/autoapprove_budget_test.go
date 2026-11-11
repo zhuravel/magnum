@@ -8,6 +8,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // rateLimitRefusal is GitHub's GraphQL refusal of a call for its rate
@@ -80,6 +81,7 @@ func TestAutoApprovalReadsNothingWhileTheBudgetIsExhausted(t *testing.T) {
 // poll, until the reset; the first tick after it reads the reviews and
 // approves.
 func TestAutoApprovalWaitsForTheGitHubFloorAndThePollsPause(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		after func(h *harness, reset time.Time) // what the round's end leaves

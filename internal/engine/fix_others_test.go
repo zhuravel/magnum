@@ -14,6 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/postreview"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // othersOnly is the refusal of a fix on a review that found nothing while
@@ -29,6 +30,7 @@ const othersOnly = "nothing to fix: the review on a1a1a1a found nothing and no o
 // say the review found nothing, and a fixer that only replied ends the loop
 // clean, one that pushed goes on to the re-review as usual.
 func TestACleanReviewStartsAFixForAnotherReviewersUnansweredThread(t *testing.T) {
+	storetest.Parallel(t)
 	const what = "claude-fix answers the other reviewers' 1 unanswered thread or comment in review1 (magnum's review of a1a1a1a found nothing), cycle 1 of 3"
 	for _, pushed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "replied only", true: "pushed"}[pushed], func(t *testing.T) {
@@ -198,6 +200,7 @@ func TestACleanReviewsFixFailsWhenTheOtherReviewersFileCannotBeWritten(t *testin
 // refused with what was cut and a word to answer by hand, never as nothing
 // to fix. A cut read that shows an item waiting starts the fix on it.
 func TestACleanReviewWhoseOtherReviewersAreCutShortRefusesWithWhatWasCut(t *testing.T) {
+	storetest.Parallel(t)
 	const lead = "talkable/talkable#2: the review on a1a1a1a found nothing, and the other reviewers' threads and comments could not all be read ("
 	resolved := extThread(4322458800, "app/f.rb", 6, time.Date(2026, 10, 20, 7, 0, 0, 0, time.UTC), "Done already", "rev-ann")
 	resolved.Resolved = true

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // A pool slot whose release stalled (a restart cut its fetch_base, a
@@ -105,6 +106,7 @@ func TestTheTicksReconcileResumesAStalledRelease(t *testing.T) {
 // old. A step that ended (ok or fail), one begun before this daemon started
 // (a dead daemon's), and one older than two hours do not hold it.
 func TestAReleaseWithAStepRunningIsNotResumed(t *testing.T) {
+	storetest.Parallel(t)
 	step := func(h *harness, phase string, at time.Time) {
 		h.t.Helper()
 		subject, name := "slot:review1:release", "fetch_base"

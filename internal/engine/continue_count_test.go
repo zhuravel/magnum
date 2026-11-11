@@ -9,6 +9,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // nextRound is the round number a new round of the PR gets: one past the
@@ -54,6 +55,7 @@ func shutDown(h *harness, prID int64) error {
 // continue counts nothing again, also when it became a full round because
 // the judge's session was lost.
 func TestARoundStoppedDuringTheJudgesTurnCountsOnce(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("continued", func(t *testing.T) { stoppedDuringTheJudgesTurn(t, false) })
 	t.Run("the judge's session lost", func(t *testing.T) { stoppedDuringTheJudgesTurn(t, true) })
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // requiredCompletion makes GitHub's rulesets of talkable/talkable require
@@ -530,6 +531,7 @@ func TestTheLookLeavesAConfiguredCheckWithNoRunToTheRollupWithoutCIDispatch(t *t
 // or a [[repo]] required_checks list of a repository that sets ci_dispatch
 // names it, and the PR is idle once the rest passed.
 func TestARequiredCheckIgnoreChecksNamesIsNotMissingWhereItRan(t *testing.T) {
+	storetest.Parallel(t)
 	for name, mod := range map[string]func(*harness){
 		"GitHub's rulesets": func(h *harness) { h.gh.required = map[string][]string{"talkable/talkable": {"Vendor Gates"}} },
 		"required_checks":   withRequiredDispatch("Vendor Gates"),
@@ -594,6 +596,7 @@ func TestTheLookStartsTheCIWorkflowOncePerHeadByThatHeadsFiles(t *testing.T) {
 // it refuses any other once for the head (fix.open_ci_dispatch_refused),
 // and the PR needs you.
 func TestTheLookRefusesToStartTheCIWorkflowOfAHeadItCannotCheck(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("files GitHub did not list whole", func(t *testing.T) {
 		// a head of its own: the registry keeps the first list of a head
 		h := ciDispatchedAt(t, prSpec{head: fixPushed, ci: "SUCCESS", checks: othersChecks(), filesTruncated: true}, "app/models/order.rb")
@@ -664,6 +667,7 @@ func ciDispatchedAs(t *testing.T, as string) *harness {
 // starts it through that identity's client, and fix.open_ci_dispatch names
 // it. Unset, the look starts it as the poll identity, as before.
 func TestTheLookStartsTheCIWorkflowAsCIDispatchAs(t *testing.T) {
+	storetest.Parallel(t)
 	for _, c := range []struct{ as, call, identity string }{
 		{"talkable-app", "dispatch as talkable-app:talkable/talkable:ci.yml@feature", "talkable-app"},
 		{"", "dispatch:talkable/talkable:ci.yml@feature", "zhuravel"},

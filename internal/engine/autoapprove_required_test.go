@@ -7,6 +7,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // ciCheck is a check of workflow that finished (or started) before every
@@ -74,6 +75,7 @@ func reviewedSpec(h *harness, spec prSpec) {
 // and a required check that fails on the base tip too goes through as
 // before while the unrequired failure is ignored beside it.
 func TestAFailingCheckOutsideRequiredChecksDoesNotHoldTheApproval(t *testing.T) {
+	storetest.Parallel(t)
 	failed, passed, pending := github.CheckFailed, github.CheckPassed, github.CheckPending
 	const note = "ignored 1 failing check outside required_checks: Terraform scripts / lint"
 	for _, tc := range []struct {
@@ -142,6 +144,7 @@ func TestAFailingCheckOutsideRequiredChecksDoesNotHoldTheApproval(t *testing.T) 
 // names in another workflow's suite) whose base tip passes it, and a
 // running one, which waits however the unrequired checks beside it end.
 func TestAFailingRequiredCheckStillHoldsTheApproval(t *testing.T) {
+	storetest.Parallel(t)
 	failed, passed, pending := github.CheckFailed, github.CheckPassed, github.CheckPending
 	for _, tc := range []struct {
 		name     string
@@ -188,6 +191,7 @@ const ciMissingWords = "its head's required checks have not run (magnum approves
 // approves once the check ran and passed), and a required check that
 // fails as on the base tip waits for it too, where it would go through.
 func TestARequiredCheckThatNeverRanOnTheHeadHoldsTheApproval(t *testing.T) {
+	storetest.Parallel(t)
 	failed, passed := github.CheckFailed, github.CheckPassed
 	others := []github.Check{ciCheck("Pronto", "pronto", passed), ciCheck("", "Devin Review", passed)}
 	layout := []github.Check{ciCheck("CI", "rspec", passed), ciCheck("CI", "Completion", passed), ciCheck("Terraform scripts", "lint", failed)}
@@ -232,6 +236,7 @@ func TestARequiredCheckThatNeverRanOnTheHeadHoldsTheApproval(t *testing.T) {
 // approves a head whose other checks passed, and holds one where a check
 // outside the list fails.
 func TestARequiredCheckWithNoRunThatNothingEnforcesLeavesTheRollupToDecide(t *testing.T) {
+	storetest.Parallel(t)
 	failed, passed := github.CheckFailed, github.CheckPassed
 	for _, tc := range []struct {
 		name   string
@@ -300,6 +305,7 @@ func TestARequiredCheckWithNoRunWaitsAsChecksThatRun(t *testing.T) {
 // its checks has no run at the head): the 12036 layout is held for the
 // unrequired job, and a running one waits.
 func TestNoRequiredChecksKeepsEveryCheckCounting(t *testing.T) {
+	storetest.Parallel(t)
 	failed, passed, pending := github.CheckFailed, github.CheckPassed, github.CheckPending
 	layout := []github.Check{ciCheck("CI", "rspec", passed), ciCheck("CI", "Completion", passed), ciCheck("Terraform scripts", "lint", failed)}
 	for _, tc := range []struct {

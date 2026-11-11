@@ -7,6 +7,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // helperBot is a PR by the App helper as the poll reads it: GraphQL's login
@@ -148,6 +149,7 @@ func skippedApp(t *testing.T, h *harness, baseline bool, app prSpec) store.PR {
 // goes back to baseline, one first seen ineligible is queued and reviewed
 // at the first poll, each with its event.
 func TestAListedAppsPRLeavesIneligibleAtTheRestart(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name     string
 		baseline bool
@@ -196,6 +198,7 @@ func TestAListedAppsPRLeavesIneligibleAtTheRestart(t *testing.T) {
 // rule writes nothing. Here the list lets helper's App PR past the bot
 // rule and skip_labels rejects it.
 func TestAReclassifiedPRNamesTheRuleThatSkipsItNow(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name     string
 		baseline bool

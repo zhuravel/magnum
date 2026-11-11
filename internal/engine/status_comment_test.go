@@ -9,6 +9,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // appGitHub gives the talkable watch's posting identity, talkable-app, the
@@ -330,6 +331,7 @@ func TestAMutedPRsStatusCommentSaysNotReviewing(t *testing.T) {
 // reviewed until it is ready again. A tick that sees the PR released
 // writes a last edit GitHub refused while it was closed.
 func TestAClosedPRsStatusCommentEndsTruthfully(t *testing.T) {
+	storetest.Parallel(t)
 	keep := prSpec{n: 1, head: "base1"}
 	// wantEnded ticks past the close grace (released) and checks that the
 	// comment on #7 was not edited again.
@@ -727,6 +729,7 @@ const statusFailedLine = "Magnum failed to finish the review of `a1b2c3d`. The f
 // push starts a new review, which it does. A PR muted while parked and one
 // Codex refused keep the line that magnum will not review the head.
 func TestTheStatusCommentNamesMagnumsOwnFailure(t *testing.T) {
+	storetest.Parallel(t)
 	notReviewing := "Magnum will not review this head. The operator was told."
 	// parked runs PR #7's rounds to res until needs_attention (attempts
 	// rounds, a retry's backoff apart) and ticks its comment up to date.
@@ -803,6 +806,7 @@ func TestTheStatusCommentNamesMagnumsOwnFailure(t *testing.T) {
 // ready PR, whether the watch skips drafts (the request makes the draft
 // eligible) or reviews them; a draft nobody asked about still gets none.
 func TestARequestedReviewOnADraftOpensTheStatusComment(t *testing.T) {
+	storetest.Parallel(t)
 	for _, c := range []struct {
 		name string
 		mods []func(*harness)
@@ -844,6 +848,7 @@ func TestARequestedReviewOnADraftOpensTheStatusComment(t *testing.T) {
 // and the comment follows it again. A mute alone keeps the line that
 // magnum will not review the head.
 func TestARequestOnAMutedOrIneligiblePRGetsTheGenericLine(t *testing.T) {
+	storetest.Parallel(t)
 	generic := "Magnum is not reviewing this PR. The operator was told."
 	t.Run("muted", func(t *testing.T) {
 		h := newHarness(t, statusOn)
@@ -919,6 +924,7 @@ func TestARequestOnAMutedOrIneligiblePRGetsTheGenericLine(t *testing.T) {
 // blocking review, one with a problem to fix, one with optional findings
 // only and a clean one alike, with no score and no event name.
 func TestThePostedLineCarriesTheVerdictWords(t *testing.T) {
+	storetest.Parallel(t)
 	for _, c := range []struct{ name, result, words string }{
 		{"blocking", `{"event":"REQUEST_CHANGES","verdict":"blocking","findings":{"P1":1,"P2":1,"P3":1}}`,
 			"Blocking: 2 problems must be fixed before merging, 1 optional"},

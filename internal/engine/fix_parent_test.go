@@ -10,6 +10,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // fixOneFixed is a fixer's "## Replied" line for one fixed finding.
@@ -332,6 +333,7 @@ func TestAMergeOfAConflictingParentGoesToTheFixerAlone(t *testing.T) {
 // PR (own PRs alone for now), a base nobody names; a head that has the
 // base's tip already is answered with nothing to merge, and no job.
 func TestAMergeOfTheParentIsRefusedWhereItCannotRun(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name, author string
 		app, behind  bool
@@ -508,6 +510,7 @@ func TestAutofixDoesNotStartForABranchThatIsOnlyBehind(t *testing.T) {
 // push` refuses it. A merge of the parent is refused before any job, and
 // a fix run's first cycle leaves the parent unmerged and says why.
 func TestTheDaemonNeverPushesAParentMergeToMasterMainOrTheDefaultBranch(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct{ head, def string }{{"master", "main"}, {"main", "main"}, {"develop", "develop"}} {
 		t.Run("a merge of the parent from "+tc.head, func(t *testing.T) {
 			h, mg := mergeHarness(t, withFixerApp)

@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // rateLimited is GitHub refusing a GraphQL read for the rate limit, as it
@@ -56,6 +57,7 @@ func colleaguesThread(h *harness) {
 // the floor off the job starts as before, on magnum's findings alone, and
 // says so.
 func TestAFixWhoseOtherReviewersReadIsRateLimitedIsHeldUntilTheBudgetRecovers(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("held", func(t *testing.T) {
 		h, git := fixHarness(t)
 		pinnedFixablePR(h)
@@ -182,6 +184,7 @@ func TestAFixWithFindingsGoesOnWhenTheOtherReviewersFileCannotBeWritten(t *testi
 // loop's row, and the loop's end says so, with what reads them again: in
 // fix.replied, fix.done and their data, and in the toast of the loop's end.
 func TestALoopWhoseOthersWereNotReadSaysSoAtItsEnd(t *testing.T) {
+	storetest.Parallel(t)
 	const unread = "the other reviewers' threads and comments were not read (HTTP 502): `magnum fix talkable/talkable#2` reads them again"
 	badGateway := &github.APIError{Op: "review threads talkable/talkable#2", Status: 502, Message: "Bad Gateway"}
 	t.Run("clean after the re-review", func(t *testing.T) {

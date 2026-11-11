@@ -14,6 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 func evalCase(h *harness, checkout string, notes bool) EvalCase {
@@ -94,6 +95,7 @@ func TestRunEvalRunsABlindDryRunAtThePinnedHead(t *testing.T) {
 // checkout's setup made its databases with; a replay without one gets the
 // per-PR worktree env of its number, as before.
 func TestAReplaysPanesRunWithTheEnvItsCheckoutWasPreparedWith(t *testing.T) {
+	storetest.Parallel(t)
 	for name, tc := range map[string]struct {
 		env  map[string]string
 		want map[string]string

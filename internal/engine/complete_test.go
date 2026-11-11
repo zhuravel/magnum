@@ -13,6 +13,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // missedBusy is a clean round whose judge went without codex-review's
@@ -114,6 +115,7 @@ func TestACleanReviewThatMissedABusyReviewerIsCompleted(t *testing.T) {
 // usage limit needs the operator or time, which the pauses already wait
 // for: its clean review gets no completion, and the refusal stands.
 func TestCompletionIsNotForARefusedOrLoggedOutReviewer(t *testing.T) {
+	storetest.Parallel(t)
 	for _, status := range []string{"refused", "login_required", "usage_limit"} {
 		t.Run(status, func(t *testing.T) {
 			h, plan := newAutoHarness(t, approvesAsAlice)

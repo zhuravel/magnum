@@ -8,6 +8,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // wantPlan fails unless the dry run id answered a merge plan, and returns
@@ -131,6 +132,7 @@ func TestAMergeBoundToItsQuestionMergesWhatItAskedAbout(t *testing.T) {
 // minutes): the answer says what moved and that nothing was merged, and no
 // loop starts.
 func TestAMergeBoundToItsQuestionIsRefusedWhenWhatItAskedAboutMoved(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		move func(h *harness, mg *mergeGit, asked *MergeAsked)

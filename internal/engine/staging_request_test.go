@@ -11,6 +11,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/staging"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // otherHead is the head of a coworker's PR #3 in the deploy tests.
@@ -205,6 +206,7 @@ func TestAConflictAtThePlanGoesToTheResolver(t *testing.T) {
 // that adds a migration or a workflow change the question did not name,
 // and Plan's own refusal.
 func TestAStagingDeployRefusesWhatItCannotDeployAsAsked(t *testing.T) {
+	storetest.Parallel(t)
 	seenVoid := []StagingSeen{{Env: "void", Migrations: []string{"db/migrate/20261105_add_coupons.rb"}}}
 	headRef := func(ref string) func(*store.PRUpdate) { return func(u *store.PRUpdate) { u.Set("head_ref", ref) } }
 	for _, c := range []struct {

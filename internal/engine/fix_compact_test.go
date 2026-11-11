@@ -11,6 +11,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // fixPushed3 is the head the fixer pushes in its third cycle.
@@ -159,6 +160,7 @@ func TestAFixerStillFullAfterCompactionStartsFresh(t *testing.T) {
 // nothing is sent, nothing recorded. With fix_compact_at = 0 nothing is even
 // read, whatever the pane shows.
 func TestAFixerBelowTheKeyIsNotCompacted(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		at     int

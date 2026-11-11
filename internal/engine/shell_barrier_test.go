@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // barrierRound is a re-review that a restart ended because codex-review's
@@ -332,6 +333,7 @@ func stateAtLook(h *harness, run store.Run) *string {
 // magnum's own leftover there then counts as over, so it is stopped rather
 // than held for.
 func TestTheFixerAndAReleaseCloseACrashedDaemonsRunsBeforeTheirLook(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("the fixer", func(t *testing.T) {
 		h, _ := fixHarness(t)
 		pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})

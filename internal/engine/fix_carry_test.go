@@ -13,6 +13,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // cycleFixer makes h's fake fixer do work[i] in its i-th run (the last one
@@ -160,6 +161,7 @@ func TestACarriedCallIsDatedAtTheRunThatMadeIt(t *testing.T) {
 // toast of a fixer that only replied; a cycle that fails keeps the call
 // after its own words.
 func TestACycleThatEndsTheLoopAsksTheCallsItCarries(t *testing.T) {
+	storetest.Parallel(t)
 	for name, tc := range map[string]struct {
 		report func(id string) string
 		lead   string

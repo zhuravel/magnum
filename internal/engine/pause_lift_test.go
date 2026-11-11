@@ -9,6 +9,7 @@ import (
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // codexReviewLimit is a codex-review report of a usage limit whose turn
@@ -43,6 +44,7 @@ func codexReviewLimit(t *testing.T, h *harness, in pipeline.RoundInput, round in
 // pauses nothing, and one info event under the PR says so; the review
 // stands.
 func TestAContinuedRoundDoesNotPauseAKindAgainForAReportFromBeforeItsLift(t *testing.T) {
+	storetest.Parallel(t)
 	for _, lift := range []string{"login change", "magnum resume"} {
 		t.Run(lift, func(t *testing.T) {
 			h, fl := newLoginHarness(t)
@@ -117,6 +119,7 @@ func TestAContinuedRoundDoesNotPauseAKindAgainForAReportFromBeforeItsLift(t *tes
 // login check skipped has neither a run nor a paused round's turn: its
 // failure is the settle's, after every lift, and pauses the kind.
 func TestOnlyAReviewersLimitAfterTheLastLiftPausesItsKind(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name    string
 		lift    bool

@@ -14,6 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 	"github.com/zhuravel/magnum/prompts"
 )
 
@@ -421,6 +422,7 @@ func TestReconcileNotesPromptChanges(t *testing.T) {
 // (prepare, ready and their timeout from the [[pool]], each replaced by what
 // the [[repo]] block sets) and the pool's env for the slot.
 func TestRoundCarriesTheReadinessPlanAndThePoolEnv(t *testing.T) {
+	storetest.Parallel(t)
 	tests := []struct {
 		name        string
 		mod         func(c *config.Config)
@@ -472,6 +474,7 @@ func TestRoundCarriesTheReadinessPlanAndThePoolEnv(t *testing.T) {
 // reload makes the slot's schema unknown until it passed (Loaded records
 // the checkout's).
 func TestRoundReloadsTheSchemaOnlyWhenTheSlotCarriesAnother(t *testing.T) {
+	storetest.Parallel(t)
 	reset := []string{"bin/rails db:schema:load", "RAILS_ENV=test bin/rails db:schema:load"}
 	off := false
 	tests := []struct {
@@ -549,6 +552,7 @@ func TestRoundReloadsTheSchemaOnlyWhenTheSlotCarriesAnother(t *testing.T) {
 // with the cause and the repair; a third adds no toast. A reset that passed
 // between two failures starts the count again.
 func TestTheSecondRoundWhoseSchemaResetFailsToastsTheRepair(t *testing.T) {
+	storetest.Parallel(t)
 	const cause = "ActiveRecord::NoDatabaseError: Unknown database 'talkable_development__review1'"
 	for _, tc := range []struct {
 		name   string

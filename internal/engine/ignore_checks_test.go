@@ -9,6 +9,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // withIgnoreChecks sets talkable/talkable's [[repo]] ignore_checks.
@@ -79,6 +80,7 @@ func TestAnIgnoredCheckThatFailsAfterTheReviewQueuesNoJudgeCheck(t *testing.T) {
 // standing approval stays after a clean review of a new head whose only
 // failure is ignored, where without the key it is withdrawn.
 func TestTheAutomaticApprovalPassesAHeadWhoseOnlyFailedCheckIsIgnored(t *testing.T) {
+	storetest.Parallel(t)
 	failed, passed, pending := github.CheckFailed, github.CheckPassed, github.CheckPending
 	t.Run("the rest passed", func(t *testing.T) {
 		h, _ := newAutoHarness(t, withIgnoreChecks("Vendor Gates"))
@@ -149,6 +151,7 @@ func TestTheAutomaticApprovalPassesAHeadWhoseOnlyFailedCheckIsIgnored(t *testing
 // base tip never ran, not compared. The base tip is read only for a check
 // that counts and failed.
 func TestTheJudgesApprovalGateApprovesAHeadWhoseOnlyFailedCheckIsIgnored(t *testing.T) {
+	storetest.Parallel(t)
 	failed, passed, pending := github.CheckFailed, github.CheckPassed, github.CheckPending
 	for _, tc := range []struct {
 		name     string
@@ -197,6 +200,7 @@ func TestTheJudgesApprovalGateApprovesAHeadWhoseOnlyFailedCheckIsIgnored(t *test
 // in a repository that sets ci_dispatch, where an entry with no run at all
 // would hold the approval as missing.
 func TestRequiredChecksCountOnlyTheChecksMagnumSees(t *testing.T) {
+	storetest.Parallel(t)
 	failed, passed := github.CheckFailed, github.CheckPassed
 	for _, tc := range []struct {
 		name     string

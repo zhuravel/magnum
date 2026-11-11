@@ -17,6 +17,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 const triageSubject = "pr:talkable/talkable#2"
@@ -196,6 +197,7 @@ func TestTriageDropsReviewersTheDiffDoesNotNeed(t *testing.T) {
 
 // What the model may answer, and what magnum makes of it.
 func TestTriageAnswers(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		answer string
@@ -274,6 +276,7 @@ func TestTriageSkipsTheCallWithoutCandidates(t *testing.T) {
 // The size cap is magnum's: a diff of max_lines lines is asked about, one
 // line more runs every role without a call.
 func TestTriageOnlyAsksAboutSmallDiffs(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		lines int
@@ -331,6 +334,7 @@ func TestTriageCountsEveryChangedLine(t *testing.T) {
 // A failing command never costs a review: every role runs and the event
 // says why.
 func TestTriageFailureRunsEveryRole(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		rule execx.Rule
@@ -393,6 +397,7 @@ func TestTriageReasonIsClipped(t *testing.T) {
 // (a binary or empty file, complete with no line) leave the size unknown:
 // every role runs, said in the event, and the model is not asked.
 func TestTriageWithoutAFullDiffRunsEveryRole(t *testing.T) {
+	storetest.Parallel(t)
 	for name, noPatch := range map[string]github.FileDelta{
 		"a patch too large": {Path: "db/structure.sql", Status: "modified", Truncated: true},
 		"a binary file":     {Path: "logo.png", Status: "modified", BlobSHA: "b1"},
@@ -447,6 +452,7 @@ func TestTriageDiffTooLongToSend(t *testing.T) {
 // every role (a config that fails validation never gets here; a hand-built
 // one must not panic).
 func TestTriageWithoutARunnerOrACommandRunsEveryRole(t *testing.T) {
+	storetest.Parallel(t)
 	for name, mod := range map[string]func(*harness){
 		"no runner":  func(h *harness) { h.d.Runner = nil },
 		"no command": func(h *harness) { h.cfg.Triage.Command = nil },
@@ -552,6 +558,7 @@ func TestTriageRereviewMeasuresTheNewCommits(t *testing.T) {
 // a continued round, an eval and triage being off. (The control, an
 // ordinary first review, is asked.)
 func TestTriageGates(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		edit  func(*Engine, *roundJob, *roundSetup)

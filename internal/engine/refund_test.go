@@ -8,6 +8,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // promptedRun records a run of round that sent its prompt, as the pipeline
@@ -40,6 +41,7 @@ func refundEvents(t *testing.T, h *harness) []store.Event {
 }
 
 func TestRoundsMagnumCutShortAreRefunded(t *testing.T) {
+	storetest.Parallel(t)
 	renderErr := "pipeline: judge prompt: agents: render judge-rereview.md: template: judge-rereview.md:3:9: executing \"judge-rereview.md\" at <.ThreadsFile>: can't evaluate field ThreadsFile"
 	for _, tc := range []struct {
 		name   string
@@ -85,6 +87,7 @@ func TestRoundsMagnumCutShortAreRefunded(t *testing.T) {
 }
 
 func TestRoundsThatDidTheirWorkCount(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		result pipeline.RoundResult

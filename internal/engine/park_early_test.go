@@ -13,6 +13,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // withSessionIDs records a session id for every live agent session of the
@@ -83,6 +84,7 @@ const (
 // With judge_fresh_after "0" (always resume) the judge parks at
 // park_idle_after, with the others in one park.
 func TestIdleReviewersParkAtParkIdleAfterAndTheJudgeAtJudgeFreshAfter(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("judge_fresh_after 90m", func(t *testing.T) {
 		h := newHarness(t)
 		pr := h.reviewedPR(2, "b1")
@@ -291,6 +293,7 @@ func TestAWhiteboardRightAfterTheRoundMeetsNoPark(t *testing.T) {
 // remedies send the operator to read the pane), as do a pinned or held
 // slot and a keystroke within human_cooldown.
 func TestTheIdleParkTakesADraftsAgentsButNotAnAttentionPinHoldOrHumanPRs(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		setup  func(h *harness, pr store.PR)
@@ -348,6 +351,7 @@ func (h *harness) setSlotOf(prID int64, set func(u *store.SlotUpdate)) {
 // and an early park the agents refuse (an agent at work by the time it
 // runs, say) leaves the sessions live and records the busy failure.
 func TestAnEarlyParkTakesOnlyResumableIdleSessions(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("no session id", func(t *testing.T) {
 		h := newHarness(t)
 		pr := h.reviewedPR(2, "b1") // the fake records no session ids

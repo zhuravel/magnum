@@ -119,6 +119,7 @@ func walkCorpus(t *testing.T) []string {
 // the changed-line count of patchChangedLines, and, exactly when that count
 // is 0, the classes deltaPatchClasses accepted the patch with.
 func TestWalkPatchEqualsTheOldWalkers(t *testing.T) {
+	t.Parallel() // pure CPU over the package's test files, which it only reads
 	for _, patch := range walkCorpus(t) {
 		for _, p := range walkPaths {
 			lines, classes := walkPatch(p, patch)
@@ -136,6 +137,7 @@ func TestWalkPatchEqualsTheOldWalkers(t *testing.T) {
 // walkers) on random deltas of the corpus' patches, with random statuses,
 // truncation, documentation files and allowed classes.
 func TestOneWalkOfADeltaEqualsTheOldTwo(t *testing.T) {
+	t.Parallel() // pure CPU over the package's test files, which it only reads
 	corpus := walkCorpus(t)
 	r := rand.New(rand.NewPCG(7, 2026))
 	statuses := []string{"modified", "modified", "modified", "added", "removed", "renamed", "copied", "changed"}

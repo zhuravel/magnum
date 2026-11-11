@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/notes"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // scriptedCritic is a Critic whose Critique runs script, so a test can make
@@ -181,6 +182,7 @@ func TestACritiqueWhoseInputsCannotBeBuiltStopsBeforeTheAgentIsAsked(t *testing.
 // event and the toast name `magnum notes <repo> --curate`, which asks for
 // one; with curate set the mark is set and they say a new curation runs.
 func TestACriticRejectionPromisesACurationOnlyWhereOneCanRun(t *testing.T) {
+	storetest.Parallel(t)
 	const command = "`magnum notes talkable/talkable --curate`"
 	for _, decision := range []string{notes.DecisionReject, notes.DecisionRecurate} {
 		for _, c := range []struct {

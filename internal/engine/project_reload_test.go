@@ -17,6 +17,7 @@ import (
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // reloadingClaude makes claude-review's sessions reload the checkout's
@@ -203,6 +204,7 @@ func (g *projectGit) all() []string {
 // A head that changes the config, a git that cannot tell, and a fetch that
 // fails still quit the session.
 func TestALiveClaudeSessionStaysWhenTheNewHeadLeavesItsConfigAlone(t *testing.T) {
+	storetest.Parallel(t)
 	untouched := []string{"app/models/order.rb", "spec/models/order_spec.rb"}
 	for _, c := range []struct {
 		name      string
@@ -287,6 +289,7 @@ func TestALiveClaudeSessionStaysWhenTheNewHeadLeavesItsConfigAlone(t *testing.T)
 // (one the base added since); a head that leaves the targets alone keeps
 // it, and a slot whose links cannot all be read is no proof.
 func TestALiveClaudeSessionIsParkedWhenTheNewHeadChangesALinksTarget(t *testing.T) {
+	storetest.Parallel(t)
 	skill := []string{"app/x.rb", ".agents/skills/x/SKILL.md"}
 	tree := map[string]map[string]string{"b2": {".claude/skills": "../.agents/skills"}}
 	for _, c := range []struct {
@@ -462,6 +465,7 @@ func TestAQuitThatFailsIsChargedNotRetriedForGood(t *testing.T) {
 // PR's list against its base branch says; and so for a PR retargeted from
 // the default branch to another since its session started.
 func TestAReloadCheckOfAStackedPRComparesWithTheDefaultBranch(t *testing.T) {
+	storetest.Parallel(t)
 	untouched := []string{"app/models/order.rb"}
 	for _, c := range []struct {
 		name       string

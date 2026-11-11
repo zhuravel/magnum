@@ -10,6 +10,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/notes"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // awaitSignal waits for a goroutine to reach a fake's blocking point.
@@ -27,6 +28,7 @@ func awaitSignal(t *testing.T, ch <-chan struct{}, what string) {
 // waits for rounds; the CLI reads them from KVNotesCurating and
 // KVRetroRunning, which go once they ended.
 func TestANewBuildWaitsForARunningCurationOrRetro(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("a notes curation", func(t *testing.T) {
 		release, entered := make(chan struct{}), make(chan struct{}, 1)
 		h, _, _ := curationHarness(t, func(s notes.Scratch) {
@@ -101,6 +103,7 @@ func waitsThenRestarts(t *testing.T, h *harness, bin string, release chan struct
 // or ended invalid wrote only a warn event. Each toasts once; a curation
 // the daemon started on its own stays quiet, it is tried again.
 func TestARequestedCurationThatStopsOrFailsSaysSo(t *testing.T) {
+	storetest.Parallel(t)
 	toasts := func(h *harness) string {
 		h.advance(2 * time.Minute)
 		h.tick()

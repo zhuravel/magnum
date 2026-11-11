@@ -10,6 +10,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // confirmCloseMidRound takes #n off the OPEN list, GitHub answering state
@@ -185,6 +186,7 @@ func TestAConfirmedCloseStopsARoundInItsCheckout(t *testing.T) {
 // post-merge review (a merged PR, which the poll never confirms again) run
 // on as before, and the PR's close waits for them.
 func TestAConfirmedCloseLeavesARoundSomeoneAskedForRunning(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		start func(h *harness) int // starts the round, held in the pipeline; returns the PR's number

@@ -22,6 +22,7 @@ import (
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/staging"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // resolveFixture is a harness whose staging resolver works with real git:
@@ -483,6 +484,7 @@ func TestTheStagingClientsResolverRefusesUntilTheEngineIsBound(t *testing.T) {
 // changing a path outside the conflicts (the specs ran on what the merge
 // would not hold), or a result file that stays invalid after a nudge.
 func TestTheStagingResolversChecksFailAJobAndPutTheSlotBack(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		agent  func(f *resolveFixture) func(a *fakeStagingAgent, n int, prompt string)
@@ -730,8 +732,10 @@ func TestACancelledResolverJobWhoseAgentStaysNamesItsPaneAndWhy(t *testing.T) {
 // A restart goes on with a job whose agent still runs: it holds its PR
 // again before any round, the agent's turn is waited for again and the job
 // ends done; one whose agent is gone fails, saying so, and its slot goes
-// back.
+// back. The table stays out of the parallel phase: it waits for the agent's
+// turn in real time (awaitSignal).
 func TestARestartGoesOnWithAResolverJobWhoseAgentRuns(t *testing.T) {
+	storetest.Serial(t)
 	for _, alive := range []bool{true, false} {
 		t.Run(fmt.Sprintf("alive=%v", alive), func(t *testing.T) {
 			f := newResolveFixture(t)
@@ -866,6 +870,7 @@ func (f *resolveFixture) effectIs(effect, state string) {
 // days after its end, with its directory, and its Result is then an
 // unknown job's.
 func TestTheTickDropsAResolvedMergesRefOnceItsEffectEnded(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		after func(f *resolveFixture)

@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/identity"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // tokenGH is an identity's client over a token of the daemon's own
@@ -285,6 +286,7 @@ func withCIReaderApp(h *harness) {
 // token_permissions to contents and pull_requests write, with no actions
 // key.
 func TestAnAppThatChoseItsActionsScopeMintsNothing(t *testing.T) {
+	storetest.Parallel(t)
 	narrow := func(perms map[string]string) func(*harness) {
 		return func(h *harness) { h.cfg.IdentityByName("talkable-app").TokenPermissions = perms }
 	}

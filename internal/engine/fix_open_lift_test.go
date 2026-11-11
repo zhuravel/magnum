@@ -13,6 +13,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // changeRequest is rev-ann's change request on PR #2, at at.
@@ -446,6 +447,7 @@ func (h *harness) revAnnComments(id int64, body string) {
 // pushback: it waits for you, as the item it answers did, never for a
 // fixer, and the look raises it.
 func TestTheReviewersPlainReplyIsItsOwnItemAndAChangeRequestWaitsForYou(t *testing.T) {
+	storetest.Parallel(t)
 	answered := func(t *testing.T) *harness {
 		t.Helper()
 		h := raisedChangeRequest(t)

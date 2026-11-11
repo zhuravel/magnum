@@ -13,6 +13,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // liveRunID is the live case's run of ci.yml that started no job
@@ -215,6 +216,7 @@ func TestAReRunGitHubForbidsNeedsYou(t *testing.T) {
 // action, any action.yml or action.yaml) is never re-run: its run would
 // run its own code with the repository's secrets.
 func TestTheLookNeverReRunsAPRThatChangesItsWorkflowsOrActions(t *testing.T) {
+	storetest.Parallel(t)
 	for _, p := range []string{".github/workflows/ci.yml", ".github/actions/setup/action.yml", "tools/lint/action.yaml", "action.yml"} {
 		t.Run(p, func(t *testing.T) {
 			h := rerunHarness(t, "README.md", p)
@@ -275,6 +277,7 @@ func TestAQueuedRunIsNoStartThatFailed(t *testing.T) {
 // Any other run leaves rule 11's words as they were, and the head's runs
 // are read once for the head, never per look.
 func TestOnlyARunThatEndedWithNoJobStartedIsReRun(t *testing.T) {
+	storetest.Parallel(t)
 	for _, c := range []struct {
 		name            string
 		event, workflow string
@@ -613,6 +616,7 @@ func TestTheReRunIsRecordedBeforeItsCall(t *testing.T) {
 // saw no record): the read and the re-run each read the stored record
 // again before they act, and leave it as it is.
 func TestARecordedReRunIsNotRedoneByALookThatCouldNotReadTheRecord(t *testing.T) {
+	storetest.Parallel(t)
 	for _, c := range []struct {
 		name, path, event string
 	}{
@@ -661,6 +665,7 @@ func TestARecordedReRunIsNotRedoneByALookThatCouldNotReadTheRecord(t *testing.T)
 // ci.yml started by hand on the PR's branch, beside the run that started
 // no job.
 func TestTheWaitBesideARunOfTheHeadThatHasNotEndedSaysWhetherItStarted(t *testing.T) {
+	storetest.Parallel(t)
 	for _, c := range []struct{ status, why string }{
 		{"queued", "CI at a1a1a1a: run 42673098089 has started no job yet"},
 		{"pending", "CI at a1a1a1a: run 42673098089 has started no job yet"},

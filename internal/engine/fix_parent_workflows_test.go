@@ -9,6 +9,7 @@ import (
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/identity"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // daemonPushAs is how a push with the fixer App's daemon-only token goes
@@ -65,6 +66,7 @@ const noWorkflowsRefusal = "magnum did not merge the parent of talkable/talkable
 // of the parent the operator asked for at once, a fix run's when its loop
 // ends, since its first cycle goes on to the findings without it.
 func TestAMergeThatBringsTheBasesWorkflowsNeedsWorkflowsOnTheApp(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("a merge of the parent", func(t *testing.T) {
 		h, mg := mergeHarness(t, withFixerApp, withoutWorkflows)
 		fixablePR(h, "zhuravel", nil)
@@ -245,6 +247,7 @@ func TestTheFixersHandedMergeNeedsWorkflowsOnTheApp(t *testing.T) {
 // GitHub has it. Any other merge is not pushed, and no token is minted
 // for it.
 func TestAHandedMergeIsCheckedAgainstTheBaseAsGitHubHasIt(t *testing.T) {
+	storetest.Parallel(t)
 	const (
 		forged = "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0" // a commit of the pane's, which a ref it wrote puts on the slot's origin/master
 		older  = "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b" // an older commit of master that the head has already

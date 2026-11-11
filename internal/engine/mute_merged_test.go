@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // Muting a PR GitHub no longer lists as open dismisses its merged-unreviewed
@@ -61,6 +62,7 @@ func (h *harness) boardRow(n int) store.BoardRow {
 // already released and whether it was muted before or not. An unmute brings
 // the flag back and does not restore the mark.
 func TestMuteOfAMergedPRDismissesItsMergedUnreviewedFlag(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name     string
 		released bool
@@ -132,6 +134,7 @@ func TestMuteOfAClosedPRClearsItsStaleForcedMark(t *testing.T) {
 // dispatcher takes a merged PR only when it is forced, and a muted one only
 // then): the mute keeps it in every state a round is in.
 func TestMuteOfAMergedPRWithAPostMergeRoundKeepsItForced(t *testing.T) {
+	storetest.Parallel(t)
 	for _, state := range []string{store.PRQueued, store.PRRereviewPending, store.PRClaiming, store.PRReviewing, store.PRVerifying, store.PRPaused} {
 		t.Run(state, func(t *testing.T) {
 			h := newHarness(t)

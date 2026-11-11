@@ -11,6 +11,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // operatorShell adds a pane no session records (the operator's shell) to
@@ -419,6 +420,7 @@ func TestALostAgentsPaneIsClosedAtOnce(t *testing.T) {
 // sessions they parked once the park worked (the fresh start already did),
 // and a park that fails closes nothing.
 func TestEveryParkThatWorksClosesItsPanes(t *testing.T) {
+	storetest.Parallel(t)
 	closesAfterPark := func(h *harness, prID int64) bool {
 		calls := h.ag.all()
 		i := slices.Index(calls, fmt.Sprintf("park:%d", prID))

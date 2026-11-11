@@ -7,6 +7,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // workflowsWords is the card's words for a PR that changes its own
@@ -24,6 +25,7 @@ const workflowsWords = "the PR changes its own workflows or actions: approve by 
 // cannot tell. A path that only looks alike (a nested .github/, a
 // workflows-old directory, CODEOWNERS) is approved as before.
 func TestAPRThatChangesItsWorkflowsIsNotAutoApproved(t *testing.T) {
+	storetest.Parallel(t)
 	passed := github.CheckPassed
 	checks := []github.Check{
 		{Name: "rspec", State: passed, Workflow: "CI", WorkflowFile: "ci.yml", At: ciBefore},
@@ -99,6 +101,7 @@ func TestAStandingApprovalIsWithdrawnWhenTheNewHeadChangesAWorkflow(t *testing.T
 // changed-files gate (TestAPRThatChangesItsWorkflowsIsNotAutoApproved) is
 // the first guard, this the second.
 func TestASameNamedWorkflowAddedByThePRDoesNotPassTheGate(t *testing.T) {
+	storetest.Parallel(t)
 	failed, passed := github.CheckFailed, github.CheckPassed
 	base := github.Check{Name: "rspec", State: failed, Workflow: "CI", WorkflowFile: "ci.yml", At: ciBefore}
 	own := github.Check{Name: "rspec", State: passed, Workflow: "CI", WorkflowFile: "ci-pr.yml", At: ciBefore.Add(10 * time.Minute)}
@@ -133,6 +136,7 @@ func TestASameNamedWorkflowAddedByThePRDoesNotPassTheGate(t *testing.T) {
 // another app, which has no workflow), and so does a failing status beside
 // a passing run.
 func TestAStatusNeverReplacesACheckRun(t *testing.T) {
+	storetest.Parallel(t)
 	failed, passed := github.CheckFailed, github.CheckPassed
 	later := ciBefore.Add(10 * time.Minute)
 	for _, tc := range []struct {

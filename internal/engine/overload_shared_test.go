@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // overloadLine is the judge's pane line of the 2026-10-20 outage.
@@ -227,6 +228,7 @@ func TestALoneOverloadStillParksOnTheThirdAttempt(t *testing.T) {
 // (noteSharedFailures' lines). Older, of another kind or with another line,
 // it does not: the overload is lone and charged.
 func TestAnOverloadIsSharedOnlyWithinTheWindowAndOnItsKind(t *testing.T) {
+	storetest.Parallel(t)
 	overloadOf3 := func(kind string) func(h *harness, at time.Time) {
 		return func(h *harness, at time.Time) { // what the engine records when #3's round ends overloaded on kind
 			prEventAt(h, 3, "engine.round_result", map[string]any{"outcome": pipeline.OutcomeOverloaded, "tool": kind}, at)

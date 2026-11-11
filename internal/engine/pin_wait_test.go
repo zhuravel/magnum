@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // pinnedThenPushed restores #2 with `magnum open` (the PR and review1
@@ -111,6 +112,7 @@ func TestARoundWaitingOnAPinToastsOnceAfter30Minutes(t *testing.T) {
 // A retry says which attempt comes next and what failed, in a word read
 // from the error the failed attempt left; the narrow form drops the word.
 func TestRetryWaitSaysTheAttemptAndTheCause(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		lastError, cause string
 	}{

@@ -14,6 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/postreview"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // fixerAppName and fixerAppLogin are the dedicated fixer App of
@@ -234,6 +235,7 @@ func (h *harness) fixInput() agents.FixPromptInput {
 // and the App's login, and its external file says it posts as the App
 // (`fixer`); a gh fixer's names neither, and its file says the author.
 func TestAnAppFixersPromptNamesMagnumPushAndItsLogin(t *testing.T) {
+	storetest.Parallel(t)
 	for name, tc := range map[string]struct {
 		mods       []func(*harness)
 		push       bool

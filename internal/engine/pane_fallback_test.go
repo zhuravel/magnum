@@ -13,6 +13,7 @@ import (
 	"github.com/zhuravel/magnum/internal/notes"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // fableLimitScreen is what Claude Code prints when the Fable model is capped
@@ -309,8 +310,11 @@ func (p *paneHarness) unblockSessions() {
 // paneBlockedWait, long before the role's timeout: escape goes to the agent,
 // the run is abandoned and the screen read as it stood. An unknown dialog is
 // then nudged; Claude Code's consent before it bills Fable to usage credits
-// is Fable's limit, so the job goes on on the fallback.
+// is Fable's limit, so the job goes on on the fallback. The table stays out
+// of the parallel phase: each fake Sleep of 1 ms moves the clock while the
+// observer runs in real time, so a starved observer sees the turn end late.
 func TestATurnBlockedOnADialogEndsAfterPaneBlockedWait(t *testing.T) {
+	storetest.Serial(t)
 	for name, tc := range map[string]struct {
 		screen    string
 		restarted bool

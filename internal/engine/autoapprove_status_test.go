@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // The status comment's words for each class of refusal, as alice (the
@@ -360,6 +361,7 @@ func TestTheAuthorListsAndFiltersLeaveTheCommentAsWithoutAutoApproval(t *testing
 // author's PR (magnum unapprove, or a dismissal of an approval posted
 // before the list named them) or on a manual repository's.
 func TestAHoldOnAPRTheListsOrFiltersKeepSaysNothing(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		mod  func(*harness)
@@ -390,6 +392,7 @@ func TestAHoldOnAPRTheListsOrFiltersKeepSaysNothing(t *testing.T) {
 // watch that reviews drafts (include_drafts) would review the draft on its
 // own, so its filters do not silence the line: the draft does.
 func TestAStaleLineGoesOnADraftOrAMutedPR(t *testing.T) {
+	storetest.Parallel(t)
 	toDraft := func(h *harness) { h.moveTo(prSpec{head: "b1", ci: "FAILURE", draft: true}) }
 	for _, tc := range []struct {
 		name  string
@@ -504,6 +507,7 @@ func TestNoStoppedLineWhileTheApprovalStands(t *testing.T) {
 // after a restart on a changed configuration): auto-approval no longer
 // decides on the review, and the record stands as it was.
 func TestAFailedPostSaysNothingOnceTheListsOrFiltersKeepThePR(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		mod  func(*harness)
@@ -529,6 +533,7 @@ func TestAFailedPostSaysNothingOnceTheListsOrFiltersKeepThePR(t *testing.T) {
 // A file list GitHub cut short (more files than it lists) and failing
 // checks each say their own words.
 func TestTheExactWordsOfTheFileListAndTheFailingChecks(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		spec prSpec
@@ -633,6 +638,7 @@ func TestAWithdrawalKeepsItsDetailLocalAndItsGitHubWordsPublic(t *testing.T) {
 // (dismissed), refused every one (failed for good), or the PR was merged
 // before one went through.
 func TestEveryEndOfAWithdrawalDropsItsNote(t *testing.T) {
+	storetest.Parallel(t)
 	failing := &github.APIError{Op: "dismiss review", Status: 502, Message: "Bad Gateway"}
 	for _, tc := range []struct {
 		name  string
@@ -691,6 +697,7 @@ func TestEveryEndOfAWithdrawalDropsItsNote(t *testing.T) {
 // A repository magnum does not auto-approve, and a login it does not know,
 // get no line, whatever the refusal record says.
 func TestNoApprovalLineWithoutAutoApproveOrALogin(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("auto_approve dropped", func(t *testing.T) {
 		h, _ := newAutoHarness(t, approvesAsAlice)
 		h.reviewedFor(prSpec{head: "b1", files: aliceWorkflowFiles})
@@ -744,6 +751,7 @@ func TestAnOldRefusalRecordGainsItsClassWithoutASecondEvent(t *testing.T) {
 // and that magnum told alice, with no refusal event (the failure's own
 // records it). A post that is tried again says nothing yet.
 func TestAFinalPostFailureSaysTheLoginWasTold(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("for good", func(t *testing.T) {
 		h, _ := newAutoHarness(t, approvesAsAlice)
 		h.gh.createErr = fmt.Errorf("post: %w", github.ErrForbidden)
@@ -775,6 +783,7 @@ func TestAFinalPostFailureSaysTheLoginWasTold(t *testing.T) {
 // instructions or hooks (CLAUDE.md)"); a gate without a class says only
 // that magnum no longer approves the PR automatically.
 func TestTheWithdrawalMessageUsesThePublicWords(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		next  prSpec

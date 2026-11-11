@@ -8,6 +8,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // learnStarts lists the starts of retros and notes curations in the order
@@ -225,6 +226,7 @@ func TestAQueuedRetroWaitsOutADrain(t *testing.T) {
 // retro runs once, after the restart or once the drain is lifted without
 // one (its command interrupted: the CLI's endDrain).
 func TestARetroAskedDuringADrainStartsAfterTheRestart(t *testing.T) {
+	storetest.Parallel(t)
 	for _, end := range []string{"restart", "lifted"} {
 		t.Run(end, func(t *testing.T) {
 			fc := &fakeClassifier{}

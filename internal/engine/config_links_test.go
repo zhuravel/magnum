@@ -15,6 +15,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // resolveConfigLinks follows a tree's links that steer the review agents
@@ -159,6 +160,7 @@ func (g *symlinksGit) count() int {
 // other (a commit the clone lacks yet, a git that failed) for
 // linkRetryAfter, then read again.
 func TestConfigLinksKeepsAHeadsFailure(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		err    error

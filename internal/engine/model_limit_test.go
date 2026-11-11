@@ -9,6 +9,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // A per-model limit ("You've reached your Fable limit") is handled inside the
@@ -16,6 +17,7 @@ import (
 // model_limit report or pause must leave the agent kind running, while an
 // account-wide usage_limit in the same position still pauses it.
 func TestRoundResultPausesByHealthKind(t *testing.T) {
+	storetest.Parallel(t)
 	claudeReport := func(status agents.HealthKind, detail string, h *agents.Health) map[agents.Role]pipeline.RoleReport {
 		return map[agents.Role]pipeline.RoleReport{
 			store.RoleClaude: {Role: store.RoleClaude, Kind: config.KindClaude, Status: string(status), Detail: detail, Health: h},

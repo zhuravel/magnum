@@ -15,6 +15,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -546,6 +547,7 @@ func TestTheOperatorsApprovalByHandLeavesNothingToPostAndStopsNothing(t *testing
 // replies in magnum's own threads, a request the author met before the next
 // clean round and a note about the author's tooling.
 func TestACommentByHandDoesNotStopAutoApproval(t *testing.T) {
+	storetest.Parallel(t)
 	for name, body := range map[string]string{"a reply in a thread": "", "a review body": "Why this way?"} {
 		t.Run(name, func(t *testing.T) {
 			h, _ := newAutoHarness(t)
@@ -570,6 +572,7 @@ func TestACommentByHandDoesNotStopAutoApproval(t *testing.T) {
 // after it: a changes request followed by a comment holds, and one followed
 // by their approval (of an earlier head) does not.
 func TestTheOperatorsLatestVerdictByHandDecides(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		later github.Review
@@ -604,6 +607,7 @@ func TestTheOperatorsLatestVerdictByHandDecides(t *testing.T) {
 // unless its timeline says GitHub dismissed it as stale on a push, which it
 // does only to approvals.
 func TestADismissedReviewByHandStopsAutoApprovalUnlessGitHubDismissedItOnAPush(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		ds   []github.ReviewDismissal
@@ -635,6 +639,7 @@ func TestADismissedReviewByHandStopsAutoApprovalUnlessGitHubDismissedItOnAPush(t
 // approval replaces it as the operator's without stopping auto-approval,
 // and a changes request replaces it and stops auto-approval.
 func TestAReviewByHandAfterAStandingApproval(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		state      string
 		superseded bool
@@ -670,6 +675,7 @@ func TestAReviewByHandAfterAStandingApproval(t *testing.T) {
 // The operator dismissing one of magnum's automatic approvals by hand stops
 // auto-approval of the PR; GitHub dismissing it as stale on a push does not.
 func TestTheOperatorDismissingAnAutoApprovalStopsIt(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name    string
 		d       github.ReviewDismissal

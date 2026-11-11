@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 	"github.com/zhuravel/magnum/prompts"
 )
 
@@ -125,6 +126,7 @@ func TestNextPromptsRender(t *testing.T) {
 // in a branch only full data reaches (an {{if}}) or only empty data reaches
 // (an {{else}}), and the error names the role and the file.
 func TestCheckPromptsCatchesFieldsThisBuildLacks(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct{ file, text string }{
 		{"judge-initial.md", "Review {{.URL}} with {{.NewTemplateField}}."},
 		{"judge-rereview.md", "{{if .ForcePushed}}force pushed: {{.NewTemplateField}}{{end}}"},

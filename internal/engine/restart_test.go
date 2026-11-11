@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // queuedPR opens PR #n at head after a first sync and returns it queued.
@@ -110,6 +111,7 @@ func TestRoundRestartSwitchFailureKeepsTheSlotBusy(t *testing.T) {
 }
 
 func TestPushDuringTheJudgeNotesTheReview(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name      string
 		commits   int // GitHub's compare of b1...b3; -1 = it fails
@@ -167,6 +169,7 @@ func TestPushDuringTheJudgeNotesTheReview(t *testing.T) {
 }
 
 func TestBurstOfPushesLengthensTheQuietPeriod(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		pushes []string
@@ -221,6 +224,7 @@ func TestWatchTurnsTheBurstRuleOff(t *testing.T) {
 }
 
 func TestRereviewStartsAgentsAtTheRereviewEffort(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name   string
 		resume map[agents.Role]string

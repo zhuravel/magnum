@@ -10,6 +10,7 @@ import (
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // noEveryReview turns toast_every_review off (the default): only the rounds
@@ -127,6 +128,7 @@ func TestRequestedRoundWaitingForAPersonDoesNotToastAFailure(t *testing.T) {
 // A requested round that cannot start for a reason only the operator can
 // lift toasts once, after it has waited for it: 2 minutes, 15 for a drain.
 func TestRequestedRoundHeldByTheOperatorToastsOnce(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		setup func(h *harness)

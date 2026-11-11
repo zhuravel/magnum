@@ -17,6 +17,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // The swap line of 2026-10-19, when the machine was slow, and its used
@@ -586,6 +587,7 @@ func TestAnUnknownMemoryCauseIsWarnedOnce(t *testing.T) {
 // timeout, and a sysctl missing at its path, which also stops the probing
 // for the daemon's life and keeps the unknown sample with its cause.
 func TestEveryWarningOfTheMemoryProbeIsOncePerCause(t *testing.T) {
+	storetest.Parallel(t)
 	// Only the timeout case times out: the others' timeout outlasts a shell's
 	// start on a loaded machine (a load of 230 made 200ms one).
 	const ample = time.Minute

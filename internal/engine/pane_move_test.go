@@ -21,6 +21,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // The move of magnum's panes to the herdr session the config names
@@ -216,6 +217,7 @@ func TestTheStartRecordsWhereTheRegistrysPanesAre(t *testing.T) {
 // daemon does not restart. A `magnum daemon --once` never moves them
 // either: it has no launchd to start it again.
 func TestNoMoveWhenThePanesAreWhereTheConfigSays(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		mod  func(*harness)
@@ -264,6 +266,7 @@ func TestNoMoveWhenThePanesAreWhereTheConfigSays(t *testing.T) {
 // goes on and restarts; no round or retro started meanwhile. Without the
 // move, the same PR takes the free slot and the retro starts at once.
 func TestAMoveHoldsNewRoundsAndRetros(t *testing.T) {
+	storetest.Parallel(t)
 	for _, move := range []bool{false, true} {
 		t.Run(map[bool]string{false: "no move", true: "a move"}[move], func(t *testing.T) {
 			var ma *moveAgents
@@ -426,6 +429,7 @@ func TestAMoveParksEveryPRsSessionsThenRestarts(t *testing.T) {
 // goes on. With no herdr id recorded nothing can be restored, and the move
 // does not wait for the server.
 func TestAMoveFromASessionWithNoServerWaitsForItsServer(t *testing.T) {
+	storetest.Parallel(t)
 	noServer := func(s herdr.Session) error {
 		return fmt.Errorf("herdr session.snapshot: %w: dial unix %s: %w", herdr.ErrUnavailable, s.Socket, syscall.ECONNREFUSED)
 	}
@@ -590,6 +594,7 @@ func TestAMoveParksAnAgentTheOldServerRestoredByItsConversation(t *testing.T) {
 // say to start it by hand instead of that new rounds open there; under
 // launchd they say the new rounds open there.
 func TestAMoveByADaemonLaunchdDoesNotRunSaysToStartItAgainByHand(t *testing.T) {
+	storetest.Parallel(t)
 	for _, supervised := range []bool{false, true} {
 		t.Run(map[bool]string{false: "by hand", true: "under launchd"}[supervised], func(t *testing.T) {
 			h := newHarness(t, withPanesInYours)
@@ -676,6 +681,7 @@ func TestAMoveWhoseRestartIsRefusedWaitsAndSaysWhy(t *testing.T) {
 // parks nothing, forgets nothing, says why it waits, and goes on once the
 // server answers.
 func TestAMoveFromAServerThatTimesOutWaits(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -789,6 +795,7 @@ func TestAMoveThatCannotParkAPRWaitsAndSaysWhy(t *testing.T) {
 // nothing twice, whether it stopped during the parks or after it forgot
 // the ids.
 func TestAMoveCutShortGoesOnAtTheNextStart(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("during the parks", func(t *testing.T) {
 		h := newHarness(t, withPanesInYours)
 		pr := h.reviewedPR(2, "b1")

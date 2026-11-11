@@ -10,6 +10,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // noThreshold lets a 2-line re-review run at once.
@@ -193,6 +194,7 @@ func TestAPushBackToAnAncestorIsNotASmallDelta(t *testing.T) {
 // lists them: the merge commit and the PR's new one), not the 13 commits
 // of master the merge brought; one that only merges master too.
 func TestMovedHeadNoteCountsThePRsOwnCommitsAcrossABaseMerge(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		shas  []string

@@ -10,6 +10,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // fixInputsOf are the inputs the fake fix prompt was rendered with so far.
@@ -111,6 +112,7 @@ func TestAutofixDoesNotStartForAConflictAlone(t *testing.T) {
 // else was pushed) as it takes any listed commit, and the loop goes on to
 // the forced re-review of it.
 func TestAPushWhoseFirstCommitMergesTheBaseSettles(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name     string
 		findings map[string]int
@@ -151,6 +153,7 @@ func TestAPushWhoseFirstCommitMergesTheBaseSettles(t *testing.T) {
 // fix.conflict_unchecked warning says why. A review that found nothing, on
 // a PR no other reviewer waits on, is still refused, with the cause.
 func TestAFailedBaseFetchRunsTheFixWithoutTheMergeStep(t *testing.T) {
+	storetest.Parallel(t)
 	const fetchErr = "gitx: fetch master: exit 128: fatal: unable to access the remote"
 	t.Run("findings", func(t *testing.T) {
 		h, git := fixHarness(t)
@@ -200,6 +203,7 @@ func TestAFailedBaseFetchRunsTheFixWithoutTheMergeStep(t *testing.T) {
 // a rev-parse of origin/<base> or a merge-tree that git refuses leaves the
 // fixer without the merge step, and the warning says why.
 func TestAFailedConflictCheckAfterTheFetchRunsTheFixWithoutTheMergeStep(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		set  func(g *fixGit)
@@ -301,6 +305,7 @@ func TestAMergeOnlyFixWhoseConflictIsGoneEndsQuietly(t *testing.T) {
 // last one fetched (a stacked PR's parent may never have been fetched), and
 // the guard's own fetch runs on the job's goroutine with git's bound alone.
 func TestARequestFetchesTheBaseWithinItsBound(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("a drain", func(t *testing.T) {
 		h, git := fixHarness(t)
 		fixablePR(h, "zhuravel", map[string]int{})
@@ -404,6 +409,7 @@ func TestAConflictDoesNotStartAFixWhoseOtherReviewersReadHitTheRateLimit(t *test
 // A push that does not hold the tip (the fixer aborted the merge and pushed
 // a fix) keeps the call.
 func TestAConflictTheFixerMergedAndPushedAsksNothing(t *testing.T) {
+	storetest.Parallel(t)
 	const entry = "conflict: app/models/offer.rb: kept the base's label for the offer card"
 	for _, tc := range []struct {
 		name   string

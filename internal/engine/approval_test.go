@@ -15,6 +15,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // approvalID is the id of the first review a harness round posts when the
@@ -301,6 +302,7 @@ func TestKeptApprovalIsComparedAgainForANewerHead(t *testing.T) {
 }
 
 func TestKeepApprovalsLeavesTheApprovalAlone(t *testing.T) {
+	storetest.Parallel(t)
 	tests := []struct {
 		name string
 		mod  func(*config.Config)
@@ -459,6 +461,7 @@ func TestTransientDismissalErrorIsRetriedAtTheNextPoll(t *testing.T) {
 }
 
 func TestOnlyApprovingReviewsAreDismissed(t *testing.T) {
+	storetest.Parallel(t)
 	tests := []struct {
 		event string
 		want  bool
@@ -498,6 +501,7 @@ func TestOnlyApprovingReviewsAreDismissed(t *testing.T) {
 }
 
 func TestOnlyTheConfiguredAppsReviewIsDismissed(t *testing.T) {
+	storetest.Parallel(t)
 	tests := []struct {
 		name  string
 		login any // last_review_login; nil = none recorded
@@ -602,6 +606,7 @@ func TestGhUsersApprovalIsNeverDismissed(t *testing.T) {
 }
 
 func TestApprovalIsDismissedWhenTheCompareFails(t *testing.T) {
+	storetest.Parallel(t)
 	tests := []struct {
 		name string
 		fail func(h *harness)
@@ -640,6 +645,7 @@ func TestApprovalIsDismissedWhenTheCompareFails(t *testing.T) {
 // A dry run reads GitHub but changes nothing on it. Both halves run the same
 // scenario so that the dry one cannot pass by never reaching the follower.
 func TestDryRunDismissesNothing(t *testing.T) {
+	storetest.Parallel(t)
 	for _, dry := range []bool{false, true} {
 		t.Run(fmt.Sprintf("dry run %v", dry), func(t *testing.T) {
 			h, app := newApprovalHarness(t, func(h *harness) { h.d.DryRun = dry })

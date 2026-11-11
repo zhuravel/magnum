@@ -11,6 +11,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // kvOf is key's value in the test registry, and whether it is there.
@@ -87,6 +88,7 @@ func newWriteHarness(t *testing.T) (*harness, *autoPlan, *writeGH) {
 // stays on (the next clean round approves again); nothing says "you
 // dismissed it".
 func TestAWithdrawalWhoseAnswerWasLostIsMagnumsOwnWhenTheRetryFindsTheReviewDismissed(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -167,6 +169,7 @@ func TestAWithdrawalWhoseAnswerWasLostIsMagnumsOwnWhenTheRetryFindsTheReviewDism
 // next retry still stops auto-approval, as one magnum finds with no request
 // of its own out.
 func TestTheOperatorsDismissalAfterAKnownOutcomeStillStopsAutoApproval(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		first error

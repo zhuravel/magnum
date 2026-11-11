@@ -14,6 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry/registrytest"
 	"github.com/zhuravel/magnum/internal/learn"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // seedFactory writes the factory's registry where the layout keeps it,
@@ -199,6 +200,7 @@ func TestTheRetroOfAPRTheFactoryDidNotPublishIsAsBefore(t *testing.T) {
 // be read, the retro runs exactly as before and says why once per retro,
 // however many PRs it looks at.
 func TestTheRetroRunsAsBeforeWithoutAReadableFactoryRegistryAndSaysWhyOnce(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		setup func(h *harness)

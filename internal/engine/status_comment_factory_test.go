@@ -17,6 +17,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/prstatus"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // factoryNow is when the render tests draw the factory part: the day of
@@ -598,6 +599,7 @@ func TestAFactoryPRsStatusCommentCarriesTheFactoryPart(t *testing.T) {
 // them, on a watch with the comment off, and on a PR reviewed before the
 // watch switched the comment on (its posted line only edits a comment).
 func TestAFactoryStatusFileNeverOpensAComment(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("a draft the watch queues", func(t *testing.T) {
 		h := widgetHarness(t, func(h *harness) { h.cfg.Watches[len(h.cfg.Watches)-1].IncludeDrafts = new(true) })
 		h.writeWidgetStatus(12, factoryStatus())
@@ -869,6 +871,7 @@ func (h *harness) widgetEnds(state string) {
 // review), and nothing after it: the factory's own end, written a tick
 // later, edits nothing, as a later change of magnum's lines would not.
 func TestAnEndedFactoryPRsCommentEndsOnATrueNowLine(t *testing.T) {
+	storetest.Parallel(t)
 	wantEnded := func(t *testing.T, h *harness, ended fakeComment) {
 		t.Helper()
 		last := factoryStatus()
@@ -950,6 +953,7 @@ func TestAnEndedFactoryPRsCommentEndsOnATrueNowLine(t *testing.T) {
 // included, as its edit would have without the file, and a close then
 // posts nothing, as a last edit of a deleted comment does not.
 func TestADeletedCommentIsPostedOnceMoreOnlyForMagnumsChange(t *testing.T) {
+	storetest.Parallel(t)
 	// deleted posts #12's comment with its factory part, has a person
 	// delete it and the factory write three changes, and returns the last.
 	deleted := func(t *testing.T, h *harness) prstatus.Status {

@@ -236,6 +236,7 @@ func TestTheDaemonObservesBetweenItsTicks(t *testing.T) {
 // With observe_interval "0", and in --once, the tick observes alone, as
 // before the clock: Run never starts it.
 func TestTheTickObservesAloneWithTheClockOff(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		off  func(*harness)
@@ -276,6 +277,7 @@ func TestTheTickObservesAloneWithTheClockOff(t *testing.T) {
 // tick reads herdr only for the Codex count), and an engine without herdr
 // or agents has nothing to observe: none starts the clock.
 func TestTheObserveClockIsOffWhereNothingIsObserved(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name string
 		mod  func(*harness)

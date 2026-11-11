@@ -10,6 +10,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // quitTimedOut is the park failure of talkable#11932: the fixer's Claude
@@ -322,6 +323,7 @@ func TestAnIdleParkGoesHardAfterAQuitTimeout(t *testing.T) {
 // A hard try that fails with another cause hands the next one back to the
 // plain park.
 func TestAnIdleParkStaysPlainAfterAnotherFailure(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("busy", func(t *testing.T) {
 		h := newHarness(t)
 		pr := h.reviewedPR(2, "b1")

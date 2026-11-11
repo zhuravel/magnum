@@ -8,6 +8,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // auditHarness is evidenceHarness with [pipeline] audit_every = audit and
@@ -131,6 +132,7 @@ func TestAFullPassWinsOverAnAuditPass(t *testing.T) {
 // audit_every = 0 turns audit passes off, and a map whose every area was
 // read or probed on files unchanged since needs none.
 func TestAuditOffByZero(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		every int

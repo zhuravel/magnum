@@ -9,6 +9,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 	"github.com/zhuravel/magnum/internal/webhooks"
 )
 
@@ -211,6 +212,7 @@ func TestAKeptCursorTheClientWouldRefuseIsNeitherReadAfterNorWrittenAgain(t *tes
 // the page comes before the poll or after it; the backlog event is still
 // the last one read for the PR, and the next push is announced again.
 func TestAPushDuringASleepIsNoWebhookMiss(t *testing.T) {
+	storetest.Parallel(t)
 	for _, pageFirst := range []bool{true, false} {
 		name := map[bool]string{true: "the page before the poll", false: "the poll before the page"}[pageFirst]
 		t.Run(name, func(t *testing.T) {

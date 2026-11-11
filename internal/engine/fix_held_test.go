@@ -7,6 +7,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // heldFixDuringADrain has `magnum fix` asked on the operator's reviewed PR
@@ -51,6 +52,7 @@ func heldFixDuringADrain(t *testing.T, h *harness) store.PR {
 // without one, the fix starts cycle 1 on the review that still stands, as
 // the request would have, with nothing dropped.
 func TestAFixAskedDuringADrainStartsAfterTheRestartWhenTheReviewStands(t *testing.T) {
+	storetest.Parallel(t)
 	for _, end := range []string{"restart", "lifted"} {
 		t.Run(end, func(t *testing.T) {
 			h, git := fixHarness(t)
@@ -151,6 +153,7 @@ func pauseClaude(h *harness, until time.Time) {
 // ends starts it. A pause hold whose PR moved on meanwhile is dropped, as a
 // drain's is.
 func TestAFixHeldThroughADrainWaitsOutTheFixersPause(t *testing.T) {
+	storetest.Parallel(t)
 	const moved = "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
 	for _, push := range []bool{false, true} {
 		t.Run(map[bool]string{false: "the pause ends", true: "the head moved"}[push], func(t *testing.T) {
@@ -255,6 +258,7 @@ func TestAHeldFixPassesFromTheBudgetToThePauseAndBack(t *testing.T) {
 // a drain's, the GitHub budget's or the fixer's pause, no longer "the fix
 // held for the restart" for all three.
 func TestAbortingAFixTheBudgetHeldSaysSo(t *testing.T) {
+	storetest.Parallel(t)
 	for _, c := range []struct {
 		name, note string
 		hold       func(t *testing.T, h *harness)

@@ -18,6 +18,7 @@ import (
 	"github.com/zhuravel/magnum/internal/postreview"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // openHarness is autofixHarness with autofix = "open": the operator's PR
@@ -390,6 +391,7 @@ func TestYourDecisionCountsOnlyFromAReadThatDidNotFail(t *testing.T) {
 // Drafts, forks and PRs taken out with F get an off verdict and no loop;
 // another author's PR gets no row at all.
 func TestAutofixOpenLeavesDraftsForksFixOffAndOthersPRsAlone(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name, author, off string
 		edit              func(h *harness, pr store.PR)

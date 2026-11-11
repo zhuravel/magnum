@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/identity"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // The pending records of the operator's approval writes
@@ -52,6 +53,7 @@ func postsFailingUnanswered(t *testing.T, err error) *harness {
 // no pending record: nothing settles it now, and a record kept would make
 // an approval of the head found later look like this one's.
 func TestAnApprovalOutOfAttemptsLeavesNoPendingRecord(t *testing.T) {
+	storetest.Parallel(t)
 	for name, err := range map[string]error{"a bad gateway": errBadGateway, "a timeout": errTimedOut} {
 		t.Run(name, func(t *testing.T) {
 			h := postsFailingUnanswered(t, err)

@@ -10,6 +10,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // planVerdicts makes round n post the verdict plan[n-1] (the last one for
@@ -258,6 +259,7 @@ func TestAFullPassThatFindsProblemsBlocks(t *testing.T) {
 // approve_after_full_pass = 0 turns the hold off: the twentieth re-review
 // of a PR approves on its delta, while with 2 it is held.
 func TestApproveAfterFullPassOffByZero(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		after int
 		held  bool
@@ -366,6 +368,7 @@ func TestAutoApprovalWaitsForAHeldReviewsFullPass(t *testing.T) {
 // [[repo]] override that does, or auto-approval as the operator keep the
 // hold.
 func TestNoApprovalHoldInARepoThatCannotApprove(t *testing.T) {
+	storetest.Parallel(t)
 	comments := func(h *harness) { h.cfg.IdentityByName("talkable-app").NoFindingsEvent = "COMMENT" }
 	override := func(event string) func(*harness) {
 		return func(h *harness) {

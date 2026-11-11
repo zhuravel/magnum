@@ -11,6 +11,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // judgeTurnEnded records a judge turn of PR n that ended at at, as the
@@ -87,6 +88,7 @@ func agentStarts(h *harness) []string {
 // session through the recovery (which reads the earlier reviews and threads
 // from GitHub); the other roles keep their conversations.
 func TestAColdJudgeStartsFreshThroughTheRecovery(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name       string
 		freshAfter time.Duration
@@ -247,6 +249,7 @@ func TestAColdJudgeHerdrKeepsListingIsNeitherResumedNorAdopted(t *testing.T) {
 // one that is not cleared (it works, or its pane runs something) still
 // fails the setup as busy.
 func TestAColdJudgeClearsADeadLaunchThatKeepsItsName(t *testing.T) {
+	storetest.Parallel(t)
 	for _, cleared := range []bool{true, false} {
 		t.Run(fmt.Sprintf("cleared %v", cleared), func(t *testing.T) {
 			h := newHarness(t)
@@ -293,6 +296,7 @@ func TestAColdJudgeClearsADeadLaunchThatKeepsItsName(t *testing.T) {
 // the judge again as the round started it: a cold judge fresh at its
 // rereview effort, a lost session's recovery fresh at its full effort.
 func TestTheRoundStartsAGoneJudgeAgainAsItStartedIt(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name    string
 		idle    time.Duration
@@ -429,6 +433,7 @@ func TestAContinueKeepsAColdJudgesConversation(t *testing.T) {
 // judge_fresh_after 0: the round quits it and starts a fresh one. A judge
 // with an id keeps the idle rule.
 func TestACodexJudgeThatNeverTookAPromptStartsFreshWhateverItsIdle(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name       string
 		sessionID  string

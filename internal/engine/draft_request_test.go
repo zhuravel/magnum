@@ -10,6 +10,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // withoutDrafts sets include_drafts = false, the default, on every watch.
@@ -121,6 +122,7 @@ func TestNewSkippedDraftWithAReviewRequestIsQueued(t *testing.T) {
 // A request for someone else, or a team the watch does not list, leaves a
 // skipped draft skipped.
 func TestReviewRequestForSomeoneElseLeavesASkippedDraftSkipped(t *testing.T) {
+	storetest.Parallel(t)
 	for _, reviewer := range []github.Reviewer{{Type: "User", Login: "rev-ann"}, {Type: "Team", Login: "reviewers"}} {
 		t.Run(reviewer.Login, func(t *testing.T) {
 			h := draftSynced(t, withoutDrafts)
@@ -140,6 +142,7 @@ func TestReviewRequestForSomeoneElseLeavesASkippedDraftSkipped(t *testing.T) {
 // is skipped with the reason and starts no round, while a review request
 // for magnum still runs its round, and so does `magnum review`.
 func TestADefaultWatchReviewsADraftOnlyOnRequest(t *testing.T) {
+	storetest.Parallel(t)
 	skipped := func(t *testing.T) *harness {
 		t.Helper()
 		h := draftSynced(t)

@@ -19,6 +19,7 @@ import (
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // stagingPaneDeps are pane agent deps over a fakePaneAgents (made new for
@@ -331,6 +332,7 @@ func cancelledResolver(t *testing.T, h *harness, lag int, foreign bool) cancelle
 // wait (paneQuietWait, a check a second), Park is tried again while it
 // reports the agent busy, and its second try parks it.
 func TestTheStagingResolversCloseParksAnAgentHerdrStillShowsWorkingAfterTheEsc(t *testing.T) {
+	storetest.Parallel(t)
 	checks := int(paneQuietWait/time.Second) + 1 // the wait's snapshots
 	for _, tc := range []struct {
 		name  string
@@ -369,6 +371,7 @@ func TestTheStagingResolversCloseParksAnAgentHerdrStillShowsWorkingAfterTheEsc(t
 // forces (the retro, the curator, the critic, the editor) leaves even its
 // own workspace to you.
 func TestTheStagingResolversCloseEndsAnAgentThatStaysAtWorkByClosingItsOwnWorkspace(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name           string
 		foreign, never bool
