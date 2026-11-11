@@ -58,6 +58,7 @@ func TestTheLookLeavesAMigrationsStagingDeployToTheScreens(t *testing.T) {
 	h.tick() // reviewed clean
 	h.pastSettle()
 	h.stagingTick()
+	h.e.stagingWG.Wait() // the next tick writes the record only once this Refresh returned
 	h.stagingTick()
 	v := h.wantOpen(OpenIdle, "nothing open at a1a1a1a · approved, merge is yours")
 	if len(v.Needs) != 0 || strings.Contains(v.Why, "staging") {
