@@ -4319,6 +4319,7 @@ cap = "10m"                          # a precheck's cap: 10m, then cap_per_file 
 cap_per_file = "15s"                 # at most cap_max (default 30m, or cap when longer; never below cap,
 cap_max = "30m"                      # never below cap_per_file). The proof and the migrations keep cap alone;
                                      # the red specs' base run grows from the red files the same way
+                                     # (or takes twice the head's spec run, when that is longer)
 skip_specs_for_kinds = ["chore"]
 
 [[factory.repo.staging]]
@@ -4630,11 +4631,19 @@ stages = [
   - **Never the red examples or the migrations.** A spec red at the head is judged on the base whatever the
     cap: the lookup of its file there runs on the check's own context (quick git reads the cap does not cut),
     and the base run of only the red files is bounded by a cap grown from them as the precheck's is (`cap`,
-    then `cap_per_file` per red file, at most `cap_max`). A base run that does not end within it hangs: the
-    task needs you, and the line names `precheck.cap` and `precheck.cap_max` for a run that is only long. The
-    branch's migrations run up and down even after the cap, each command bounded by `cap` (CI never runs a
-    migration down and up); one that does not end within it hangs too. For every hang, `precheck.md` keeps the
-    last 40 lines of its stdout and the last 20 of its stderr, where a tool says what it waits for.
+    then `cap_per_file` per red file, at most `cap_max`), or by twice the head's spec run when that is longer
+    (the head's run covered the same files and more). A base run that does not end within it hangs: the task
+    needs you, the line names both times when the bound is the head's
+    (`did not end on the base within 26m22s (twice the head's run of 13m11s)`) and names `precheck.cap` and
+    `precheck.cap_max` for a run that is only long, and `precheck.md` lists the head's red examples, as it
+    does when the base run cannot start or meets changes the factory keeps for you. A base run stopped after
+    rspec printed a result line with no failure (`34 examples, 0 failures`, pending ones allowed) ran its
+    examples to their end: it is green on the base, so the head's red examples of its files are the change's.
+    One stopped after a line with a failure still hangs, since the list of failed examples follows that line
+    and the stop can cut it. The branch's migrations run up and down even after the cap, each command bounded
+    by `cap` (CI never runs a migration down and up); one that does not end within it hangs too. For every
+    hang, `precheck.md` keeps the last 40 lines of its stdout and the last 20 of its stderr, where a tool says
+    what it waits for.
   The proof's spec runs keep `cap` alone. `skip_specs_for_kinds` names the kinds of task that run no specs (a
   gem upgrade).
   `ghost_marker`, `table_stats` (a JSON object of table to rows, or to an object with `rows`) and

@@ -25008,6 +25008,54 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (with the folders, `spec/db/reporting_migrate` among them, and names it refuses),
   `TestAnEmptyMigrationDatabasesIsRefused`, and `TestMigrationDatabasesLoadFromAnInlineTable` (a pin of the key's
   TOML form, the brief's example) (internal/config).
+- **The base run of the red specs gets twice the head's run when that is longer, a base run stopped after a
+  green result line is green, and `precheck.md` names the red examples no base run judged** (2026-11-11, found
+  live). The precheck runs the change's spec files at the head and runs the red ones again on the base, bounded
+  by the cap grown from the red files (`precheckCap(repo, len(atBase))`: 10m + 15s × 1 file = 10m15s, from the
+  precheck's cap entry above). One spec file was red at the head, whose run of all the change's spec files took
+  13m11s (the check's `took_ms` 791000). On the base that file needed about 10m14s: rspec printed "Finished in 10
+  minutes 0 seconds (files took 14.18 seconds to load)" and "34 examples, 0 failures", then the factory stopped
+  the run at 10m15s and failed the precheck for you ("did not end on the base within 10m15s: it hangs"). The run
+  did not hang, it ran long: its bound ignored the time the head's run already took for the same files. And
+  `precheck.md` showed only the base run's tail, never which examples were red at the head.
+  - The bound (`baseBound`) is the larger of the grown cap and twice the head's run (`ProofRun.Took` of the
+    head's red run). The head's run covered these files and more, so a base run that takes twice as long is past
+    any normal run; the grown cap stays the floor. The head's run is bounded by the precheck's cap, so the base
+    run's bound is at most twice `cap_max`. The precheck times its commands on the engine's clock (`Engine.now`,
+    as the QA run's check does; `time.Now` in a daemon), so a test gives the head's run a known time without
+    waiting for it.
+  - A base run the factory stopped after rspec printed a result line with no failure (`greenResult`: every
+    result line in the ends of its stdout and stderr, terminal escapes stripped, reads `N examples, 0 failures`,
+    `, M pending` allowed) ran its examples to their end. It is judged green on the base, as a base run that
+    ended: every red example of its files at the head is the change's (`code`), and `precheck.md` says the
+    factory stopped it at its bound after its result line, naming the line. A stopped run whose result line names
+    a failure or an error outside of the examples still hangs for you.
+  - The hang names both times when the bound came from the head's run: ``precheck.specs `<script>` did not end
+    on the base within 26m22s (twice the head's run of 13m11s): it hangs; fix: …, or raise precheck.cap or
+    precheck.cap_max when it only runs long`` (the script still clipped, `textx.Clip`, 120 bytes). A bound that
+    is the grown cap keeps the old words.
+  - `precheck.md` names the head's red examples (`Red at the head, not judged on the base:`, their
+    `rspec ./spec/…` lines) on every path where the base run gives no verdict: it hangs, it has a problem (denied,
+    missing, not executable), its detach meets changes the factory keeps for you (`keptChanges`), or the put-back
+    before it keeps them (`restoreOwn`). They appeared only in the "red on the base too" and "the change's"
+    blocks.
+  - `(*precheckRun).specs` hands the base half (the lookup of the red files, the guarded base run and its
+    endings) to `onBase`, which keeps both under the ratchet's gocyclo and nestif limits.
+  Rejected: a larger default cap (`cap` or `cap_per_file`): one slow spec file of one repository then slows the
+  detection of every hang, in every repository. Reading the failures of any stopped run: rspec prints the list of
+  failed examples after its result line, and the stop can cut that list, so a stopped run with a red result line
+  would name fewer red examples on the base than it had and pass the rest off as the change's. A seam of its own
+  for the head run's time: the engine's clock already times the QA run's check.
+  Known gap: a specs command that runs rspec more than once over the red files (two invocations, parallel
+  processes) can print one invocation's green result line while another still runs its examples; the factory
+  then judges the base green though those examples never ended, and the writer gets a fix turn for them.
+  Tests (failing first): `TestTheBaseRunsBoundIsTwiceTheHeadsRunWhenThatIsLonger` (its case of a longer grown
+  cap passes before and after, a pin of the floor), `TestABaseRunStoppedAfterAResultLineWithNoFailureIsGreenOnTheBase`
+  (no failure, pending examples, in colour), `TestPrecheckMdNamesTheHeadsRedExamplesWhenTheBaseGivesNoVerdict`
+  (a hang, a base run that cannot start, a change its detach meets, one the put-back before it meets) and
+  `TestABaseRunPastTwiceTheHeadsRunNamesBothTimes`; passing before and after, as a guard,
+  `TestABaseRunStoppedAfterAResultLineWithAFailureStillHangsForYou` (one failure, an error outside of the
+  examples: a rule that takes any result line as green fails it), all in internal/factory.
 
 ## Learned rules
 

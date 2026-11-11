@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -542,6 +544,231 @@ func TestABaseRunPastItsBoundHangsForYou(t *testing.T) {
 		if !strings.Contains(report, want) {
 			t.Fatalf("%s lacks %q:\n%s", precheckFile, want, report)
 		}
+	}
+	r.onBranch(task.Branch, head)
+}
+
+// headRunTakes makes the precheck's spec run of the change at the head take
+// d on the engine's clock, which times the precheck's commands: the clock
+// moves by d inside the run, and nothing waits for it.
+func (r *codingRig) headRunTakes(d time.Duration) {
+	r.setDuring(func(_ string, run scriptRun) {
+		if precheckSpecs(run) {
+			r.clock.Add(d)
+		}
+	})
+}
+
+// hangOnTheBase makes the spec runs on the base (a detached copy) never end
+// on their own, after they printed printed on stdout.
+func (r *codingRig) hangOnTheBase(printed string) {
+	r.mu.Lock()
+	r.printed["bin/specs"] = printed
+	r.mu.Unlock()
+	r.setHang(func(run scriptRun) bool { return strings.HasPrefix(run.Script, "bin/specs ") && run.Branch == "" })
+}
+
+// headsRedLine is the example the change's spec run is red with at the head
+// after redOnMaster, as rspec lists it.
+const headsRedLine = "rspec ./spec/models/credit_spec.rb:2 # app/credit.rb expects def bonus"
+
+// The base run of the red files gets the time the head's run took: its
+// bound is twice the time of the head's run of the change's spec files when
+// that is longer than the cap grown from the red files, else that cap. The
+// head's run covered those files and more, so a base run twice as long is
+// past any normal run (live: a base run of 10m14s, stopped at its grown cap
+// of 10m15s, after a head run of 13m11s).
+func TestTheBaseRunsBoundIsTwiceTheHeadsRunWhenThatIsLonger(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		head, want time.Duration
+	}{
+		{"twice the head's run is longer than the grown cap", 5*time.Minute + 30*time.Second, 11 * time.Minute},
+		{"the grown cap is longer than twice the head's run", 5 * time.Minute, 10*time.Minute + 15*time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newCodingRig(t)
+			r.redOnMaster()
+			task := r.codingTask("PR-12481", "bug")
+			head := r.fix(task)
+			r.headRunTakes(tc.head)
+			var mu sync.Mutex
+			var baseBounds []time.Duration
+			r.seenMise = func(c execx.Cmd) {
+				if s := scriptOf(c); strings.HasPrefix(s, "bin/specs ") && !strings.Contains(s, "app/credit.rb") {
+					mu.Lock()
+					baseBounds = append(baseBounds, c.Timeout)
+					mu.Unlock()
+				}
+			}
+			res, err := r.e.precheck(r.ctx, task, r.cp)
+			if err != nil || !res.Passed {
+				t.Fatalf("precheck %+v, %v; want passed, its red example red on the base too", res, err)
+			}
+			mu.Lock()
+			if !slices.Equal(baseBounds, []time.Duration{tc.want}) {
+				t.Errorf("the base run of the red files is bounded by %v, want one run of %s", baseBounds, tc.want)
+			}
+			mu.Unlock()
+			if got := r.checksOf(task.ID, "spec"); !slices.Equal(got, []string{"fail/not_ours"}) {
+				t.Fatalf("spec checks %q, want the head's red run, not ours", got)
+			}
+			r.onBranch(task.Branch, head)
+		})
+	}
+}
+
+// A base run its bound stopped after rspec printed its result line with no
+// failure ("34 examples, 0 failures", with pending examples, in colour) ran
+// its examples to their end: it is green on the base, so every red example
+// of its files at the head is the change's, as for a base run that ended,
+// and precheck.md says the factory stopped it after that line.
+func TestABaseRunStoppedAfterAResultLineWithNoFailureIsGreenOnTheBase(t *testing.T) {
+	for _, tc := range []struct{ name, line, says string }{
+		{"no failure", "34 examples, 0 failures", "34 examples, 0 failures"},
+		{"pending examples", "34 examples, 0 failures, 2 pending", "34 examples, 0 failures, 2 pending"},
+		{"in colour", "\x1b[32m1 example, 0 failures\x1b[0m", "1 example, 0 failures"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newCodingRig(t)
+			r.redOnMaster()
+			task := r.codingTask("PR-12482", "bug")
+			head := r.fix(task)
+			r.smallCaps()
+			r.hangOnTheBase("..................................\n\nFinished in 10 minutes 0 seconds (files took 14.18 seconds to load)\n" +
+				tc.line + "\n\nCoverage report generated\n")
+			res, err := r.e.precheck(r.ctx, task, r.cp)
+			const why = "precheck: specs: 1 example red at the head and green on the base (spec/models/credit_spec.rb)"
+			if err != nil || res.Passed || res.ForYou || res.Why != why {
+				t.Fatalf("precheck %+v, %v; want the change's red example to fail it: %s", res, err, why)
+			}
+			if got := r.checksOf(task.ID, "spec"); !slices.Equal(got, []string{"fail/code"}) {
+				t.Fatalf("spec checks %q, want the head's red run, the change's", got)
+			}
+			report := r.readTask(task.ID, precheckFile)
+			for _, want := range []string{"after its result line (`" + tc.says + "`)", "the change's:\n\n```\n" + headsRedLine + "\n```"} {
+				if !strings.Contains(report, want) {
+					t.Fatalf("%s lacks %q:\n%s", precheckFile, want, report)
+				}
+			}
+			if strings.Contains(report, "hangs") {
+				t.Fatalf("%s says the base run hangs:\n%s", precheckFile, report)
+			}
+			r.onBranch(task.Branch, head)
+		})
+	}
+}
+
+// A base run its bound stopped after a result line that names a failure,
+// or an error outside of the examples, still hangs for you: rspec lists the
+// failed examples after that line, and the stop can cut the list, so no red
+// example is judged on it.
+func TestABaseRunStoppedAfterAResultLineWithAFailureStillHangsForYou(t *testing.T) {
+	for _, line := range []string{"34 examples, 1 failure", "34 examples, 0 failures, 1 error occurred outside of examples"} {
+		t.Run(line, func(t *testing.T) {
+			r := newCodingRig(t)
+			r.redOnMaster()
+			task := r.codingTask("PR-12483", "bug")
+			r.fix(task)
+			r.smallCaps()
+			r.hangOnTheBase("Finished in 10 minutes 0 seconds (files took 14.18 seconds to load)\n" + line + "\n\nFailed examples:\n\n")
+			res, err := r.e.precheck(r.ctx, task, r.cp)
+			const why = "precheck: precheck.specs `bin/specs spec/models/credit_spec.rb` did not end on the base within 600ms: it hangs; "
+			if err != nil || res.Passed || !res.ForYou || !strings.HasPrefix(res.Why, why) {
+				t.Fatalf("precheck %+v, %v; want a failure for you: %s…", res, err, why)
+			}
+			if got := r.checksOf(task.ID, "spec"); !slices.Equal(got, []string{"fail/unknown"}) {
+				t.Fatalf("spec checks %q, want the head's red run's row, unjudged", got)
+			}
+		})
+	}
+}
+
+// Where the base run gives no verdict (it hangs, it cannot start, or the
+// copy holds changes the factory did not make, which it keeps for you),
+// precheck.md names the head's red examples: they are judged nowhere else.
+func TestPrecheckMdNamesTheHeadsRedExamplesWhenTheBaseGivesNoVerdict(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(r *codingRig)
+		why  string
+	}{
+		{"the base run hangs", func(r *codingRig) {
+			r.smallCaps()
+			r.hangOnTheBase("1 example so far\n")
+		}, "did not end on the base within 600ms: it hangs"},
+		{"the base run cannot start", func(r *codingRig) {
+			r.mu.Lock()
+			r.startErr = func(run scriptRun) error {
+				if strings.HasPrefix(run.Script, "bin/specs ") && run.Branch == "" {
+					return exec.ErrNotFound
+				}
+				return nil
+			}
+			r.mu.Unlock()
+		}, "is missing or not executable"},
+		{"the copy holds a change the factory did not make", func(r *codingRig) {
+			var headRan, edited atomic.Bool
+			r.setDuring(func(_ string, run scriptRun) {
+				if precheckSpecs(run) {
+					headRan.Store(true)
+				}
+			})
+			r.setFailGit(func(args []string) error {
+				if headRan.Load() && slices.Contains(args, "diff") && !edited.Swap(true) {
+					r.write(r.copyDir, "README", "your edit\n")
+				}
+				return nil
+			})
+		}, "README"},
+		{"you came into the copy before the base run", func(r *codingRig) {
+			r.setDuring(func(dir string, run scriptRun) {
+				if precheckSpecs(run) {
+					r.write(dir, "README", "written during the head spec run\n")
+					r.rt.setOperatorIn("fx-writer")
+				}
+			})
+		}, "README"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newCodingRig(t)
+			r.redOnMaster()
+			task := r.codingTask("PR-12484", "bug")
+			r.fix(task)
+			tc.set(r)
+			res, err := r.e.precheck(r.ctx, task, r.cp)
+			if err != nil || res.Passed || !res.ForYou || !strings.Contains(res.Why, tc.why) {
+				t.Fatalf("precheck %+v, %v; want a failure for you naming %q", res, err, tc.why)
+			}
+			report := r.readTask(task.ID, precheckFile)
+			if want := "Red at the head, not judged on the base:\n\n```\n" + headsRedLine + "\n```"; !strings.Contains(report, want) {
+				t.Fatalf("%s does not name the head's red examples (%q):\n%s", precheckFile, want, report)
+			}
+		})
+	}
+}
+
+// A base run past a bound that came from the head's run names both times:
+// its bound, and the time of the head's run it doubles; the knobs of a run
+// that is only long stay named.
+func TestABaseRunPastTwiceTheHeadsRunNamesBothTimes(t *testing.T) {
+	r := newCodingRig(t)
+	r.redOnMaster()
+	task := r.codingTask("PR-12485", "bug")
+	head := r.fix(task)
+	r.smallCaps()
+	r.headRunTakes(400 * time.Millisecond)
+	r.hangOnTheBase("1 example so far\n")
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	const why = "precheck: precheck.specs `bin/specs spec/models/credit_spec.rb` did not end on the base within 800ms " +
+		"(twice the head's run of 400ms): it hangs; fix: find what it waits for in the copy (a lock, a server, a prompt), " +
+		"or raise precheck.cap or precheck.cap_max when it only runs long"
+	if err != nil || res.Passed || !res.ForYou || res.Why != why {
+		t.Fatalf("precheck %+v, %v; want a failure for you: %s", res, err, why)
+	}
+	report := r.readTask(task.ID, precheckFile)
+	if want := "did not end on the base within 800ms (twice the head's run of 400ms), and the factory stopped it."; !strings.Contains(report, want) {
+		t.Fatalf("%s lacks %q:\n%s", precheckFile, want, report)
 	}
 	r.onBranch(task.Branch, head)
 }

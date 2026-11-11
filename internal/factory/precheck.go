@@ -17,7 +17,8 @@ package factory
 // them. A lint the cap stops hangs, a failure for you. The red examples are
 // judged on the base, and the migrations run, whatever the cap: on the
 // caller's context, the base run of the red files bounded by a cap grown
-// from them as the precheck's is, each migration command by the
+// from them as the precheck's is, or by twice the head's run of the specs
+// when that is longer (baseBound), each migration command by the
 // repository's cap (capOf), since CI never runs a migration down and up.
 // Every command goes through the deny list.
 
@@ -550,7 +551,7 @@ func (p *precheckRun) record(c registry.Check) {
 func (p *precheckRun) run(key, what, cmd string) (ProofRun, bool) {
 	p.e.noteCheck(p.t.ID, "precheck: "+what)
 	run := ProofRun{Command: cmd}
-	start := time.Now()
+	start := p.e.now() // the engine's clock, as the QA run's: its time sets the base run's bound (baseBound)
 	var res execx.Result
 	var err error
 	if dbKeys[key] { // the copy's databases: in turn with the local review's reviewers (db-lock)
@@ -560,7 +561,7 @@ func (p *precheckRun) run(key, what, cmd string) (ProofRun, bool) {
 	} else {
 		res, err = p.e.script(p.ctx, p.c, cmd, "precheck "+what, p.limit)
 	}
-	run.Took = time.Since(start).Round(time.Millisecond)
+	run.Took = p.e.now().Sub(start).Round(time.Millisecond)
 	code, denied, err := ranTo(res, err)
 	run.Exit, run.Output = code, outputOf(res)
 	run.out, run.errOut = lastBytes(res.Stdout, precheckTailWindow), lastBytes(res.Stderr, precheckTailWindow)
@@ -929,18 +930,12 @@ func failures(out string) []specFailure {
 }
 
 // specs runs the specs the change affects (the specs command on the changed
-// files) at the head. Red ones are run again on the base, a detached
-// checkout of it (the same guarded step as the proof's base run), with the
-// base's own spec files: an example red there too is recorded as a failure
-// that is not ours (not_ours) and does not fail the precheck; one green
-// there, or of a spec file the base lacks, is the change's (code). They
-// are judged whatever the cap: the lookup of their files on the base and
-// the base run of only those files run on the caller's context, which the
-// cap never ends, the base run bounded by a cap grown from the red files
-// (precheckCap); one that does not end within it hangs, a failure for you
-// that names the caps to raise when it only runs long. A red run that
-// names no failure it can be read by fails the precheck. Every red run at
-// the head leaves its row.
+// files) at the head. Red ones are run again on the base (onBase): an
+// example red there too is recorded as a failure that is not ours
+// (not_ours) and does not fail the precheck; one green there, or of a spec
+// file the base lacks, is the change's (code). A red run that names no
+// failure it can be read by fails the precheck. Every red run at the head
+// leaves its row.
 func (p *precheckRun) specs(cmd string, files []string) {
 	p.say("\n## Specs\n")
 	if len(files) == 0 {
@@ -966,6 +961,51 @@ func (p *precheckRun) specs(cmd string, files []string) {
 		p.fail(fmt.Sprintf("specs: %s exited %d and names no failing spec", firstWord(cmd), run.Exit))
 		return
 	}
+	baseRed, judged := p.onBase(cmd, run, red)
+	if !judged {
+		return
+	}
+	var ours, theirs []specFailure
+	for _, f := range red {
+		if baseRed[f.key] {
+			theirs = append(theirs, f)
+		} else {
+			ours = append(ours, f)
+		}
+	}
+	if len(theirs) > 0 {
+		p.say("\nRed on the base too, so not the change's (red on the base too):\n\n```\n%s\n```\n", failureLines(theirs))
+		p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "not_ours", Command: script, Exit: run.Exit, Took: run.Took})
+	}
+	if len(ours) > 0 {
+		var specFiles []string
+		for _, f := range ours {
+			if !slices.Contains(specFiles, f.file) {
+				specFiles = append(specFiles, f.file)
+			}
+		}
+		p.say("\nRed at the head and green on the base, the change's:\n\n```\n%s\n```\n", failureLines(ours))
+		p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "code", Command: script, Exit: run.Exit, Took: run.Took})
+		p.fail(fmt.Sprintf("specs: %s red at the head and green on the base (%s)", plural(len(ours), "example"), clipList(specFiles)))
+	}
+}
+
+// onBase judges red, the red examples of run (the head's spec run of the
+// specs command cmd), on the base: the spec files of red that the base has
+// run there, in a detached checkout of it (the same guarded step as the
+// proof's base run), with the base's own spec files. baseRed are the keys of
+// the examples red there too; judged is false where the base run gives no
+// verdict. They are judged whatever the cap: the lookup of their files on
+// the base and the base run run on the caller's context, which the cap
+// never ends, the base run bounded by baseBound (the cap grown from the red
+// files, or twice the head's run when that is longer). A base run that does
+// not end within it hangs, a failure for you that names the caps to raise
+// when it only runs long, unless rspec printed its result line with no
+// failure before the stop (greenResult): that run ran its examples to their
+// end, so it is green on the base. Where the base run gives no verdict (it
+// hangs, has a problem, or meets changes the factory keeps for you),
+// precheck.md names the head's red examples (unjudged).
+func (p *precheckRun) onBase(cmd string, run ProofRun, red []specFailure) (baseRed map[string]bool, judged bool) {
 	// On the caller's context from here: the cap neither cuts the lookup
 	// (a red example of a file it did not find would be the change's) nor
 	// the base run.
@@ -979,78 +1019,115 @@ func (p *precheckRun) specs(cmd string, files []string) {
 		}
 	}
 	if p.parent.Err() != nil { // the daemon stops, or the head moved: no lookup that did not run judges an example
-		return
+		return nil, false
 	}
-	headRed := registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "unknown", Command: script, Exit: run.Exit, Took: run.Took}
-	baseRed := map[string]bool{}
-	if len(atBase) > 0 {
-		// The detach discards what differs from the branch: the precheck's
-		// own changes go back first, guarded; what it cannot vouch for stays.
-		if !p.restoreOwn() {
-			return
-		}
-		baseScript := renderCommand(cmd, atBase, p.base)
-		bound, _ := precheckCap(p.repo, len(atBase)) // as the precheck's grows from the change's files
-		p.e.noteCheck(p.t.ID, "precheck: specs on the base ("+plural(len(atBase), "spec file")+" red at the head)")
-		base, problem, err := p.e.baseRun(p.parent, p.t, p.c, p.started, p.base, p.head, nil, baseScript, bound)
-		if k, ok := errors.AsType[keptChanges](err); ok {
-			p.say("\n**Not run on the base: %s.**\n", k.why)
-			p.keep(k.why)
-			return
-		}
-		switch {
-		case p.parent.Err() != nil:
-			return
-		case err != nil:
-			p.err = err
-			return
-		case problem != "":
-			p.record(headRed)
-			p.failForYou("precheck.specs `" + baseScript + "` " + problem + problemFix("precheck.specs", baseScript, problem))
-			return
-		case base.Hung:
-			p.record(headRed)
-			p.say("\n`%s` did not end on the base within %s, and the factory stopped it.\n", baseScript, capText(bound))
-			p.sayTail("stdout", base.out, precheckCapTail)
-			p.sayTail("stderr", base.errOut, precheckErrTail)
-			p.failForYou("precheck.specs `" + textx.Clip(baseScript, 120) + "` did not end on the base within " + capText(bound) +
-				": it hangs; " + hangFix + ", or raise precheck.cap or precheck.cap_max when it only runs long")
-			return
-		}
-		for _, f := range failures(base.Output) {
-			baseRed[f.key] = true
-		}
+	if len(atBase) == 0 {
+		return map[string]bool{}, true
 	}
-	var ours, theirs []specFailure
-	for _, f := range red {
-		if baseRed[f.key] {
-			theirs = append(theirs, f)
-		} else {
-			ours = append(ours, f)
+	// The detach discards what differs from the branch: the precheck's
+	// own changes go back first, guarded; what it cannot vouch for stays.
+	if !p.restoreOwn() {
+		p.unjudged(red)
+		return nil, false
+	}
+	headRed := registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "unknown", Command: run.Command, Exit: run.Exit, Took: run.Took}
+	baseScript := renderCommand(cmd, atBase, p.base)
+	bound, within := baseBound(p.repo, len(atBase), run.Took)
+	p.e.noteCheck(p.t.ID, "precheck: specs on the base ("+plural(len(atBase), "spec file")+" red at the head)")
+	base, problem, err := p.e.baseRun(p.parent, p.t, p.c, p.started, p.base, p.head, nil, baseScript, bound)
+	if k, ok := errors.AsType[keptChanges](err); ok {
+		p.say("\n**Not run on the base: %s.**\n", k.why)
+		p.unjudged(red)
+		p.keep(k.why)
+		return nil, false
+	}
+	green := ""
+	if base.Hung {
+		green = greenResult(base)
+	}
+	switch {
+	case p.parent.Err() != nil:
+		return nil, false
+	case err != nil:
+		p.err = err
+		return nil, false
+	case problem != "":
+		p.record(headRed)
+		p.unjudged(red)
+		p.failForYou("precheck.specs `" + baseScript + "` " + problem + problemFix("precheck.specs", baseScript, problem))
+		return nil, false
+	case base.Hung && green == "":
+		p.record(headRed)
+		p.say("\n`%s` did not end on the base within %s, and the factory stopped it.\n", baseScript, within)
+		p.sayTail("stdout", base.out, precheckCapTail)
+		p.sayTail("stderr", base.errOut, precheckErrTail)
+		p.unjudged(red)
+		p.failForYou("precheck.specs `" + textx.Clip(baseScript, 120) + "` did not end on the base within " + within +
+			": it hangs; " + hangFix + ", or raise precheck.cap or precheck.cap_max when it only runs long")
+		return nil, false
+	case base.Hung:
+		p.say("\nThe factory stopped `%s` on the base at its bound of %s, after its result line (`%s`): its examples ran to their end, "+
+			"so it is green on the base.\n", baseScript, within, green)
+	}
+	baseRed = map[string]bool{}
+	for _, f := range failures(base.Output) {
+		baseRed[f.key] = true
+	}
+	return baseRed, true
+}
+
+// baseBound is the bound of the base run of n spec files red at the head,
+// whose run of the change's spec files took took: the cap grown from the n
+// files (precheckCap), or twice took when that is longer, since the head's
+// run covered those files and more; within says it as the hang does
+// ("26m22s (twice the head's run of 13m11s)"). The head's run is bounded by
+// the precheck's cap, so twice it is at most twice cap_max.
+func baseBound(repo config.FactoryRepo, n int, took time.Duration) (bound time.Duration, within string) {
+	bound, _ = precheckCap(repo, n) // as the precheck's grows from the change's files
+	if twice := 2 * took; twice > bound {
+		return twice, capText(twice) + " (twice the head's run of " + capText(took) + ")"
+	}
+	return bound, capText(bound)
+}
+
+// resultRe is rspec's result line, which it prints once its examples ran
+// ("34 examples, 1 failure"); greenRe the one of a run with no failure and
+// no error outside of its examples ("34 examples, 0 failures, 2 pending").
+var (
+	resultRe = regexp.MustCompile(`(?m)^[ \t]*\d+ examples?, \d+ failures?\b.*$`)
+	greenRe  = regexp.MustCompile(`^\d+ examples?, 0 failures(?:, \d+ pending)?$`)
+)
+
+// greenResult is the result line with no failure of a spec run the factory
+// stopped (greenRe), read from the ends of what it printed on stdout and on
+// stderr without what a terminal acts on: "" when no result line is there,
+// or one names a failure or an error. rspec lists the failed examples after
+// that line, and the stop can cut the list, so a red result judges nothing.
+func greenResult(run ProofRun) string {
+	var green string
+	for _, line := range resultRe.FindAllString(textx.StripTerminal(string(run.out)+"\n"+string(run.errOut)), -1) {
+		if line = strings.TrimSpace(line); !greenRe.MatchString(line) {
+			return ""
 		}
+		green = line
 	}
-	lines := func(fs []specFailure) string {
-		var out []string
-		for _, f := range fs {
-			out = append(out, f.line)
-		}
-		return strings.Join(out, "\n")
+	return green
+}
+
+// unjudged names the head's red examples red in precheck.md, where the
+// base run gave no verdict on them.
+func (p *precheckRun) unjudged(red []specFailure) {
+	p.say("\nRed at the head, not judged on the base:\n\n```\n%s\n```\n", failureLines(red))
+}
+
+// failureLines are the lines of the failing examples fs, as rspec lists
+// them, one a line.
+func failureLines(fs []specFailure) string {
+	out := make([]string, 0, len(fs))
+	for _, f := range fs {
+		out = append(out, f.line)
 	}
-	if len(theirs) > 0 {
-		p.say("\nRed on the base too, so not the change's (red on the base too):\n\n```\n%s\n```\n", lines(theirs))
-		p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "not_ours", Command: script, Exit: run.Exit, Took: run.Took})
-	}
-	if len(ours) > 0 {
-		var specFiles []string
-		for _, f := range ours {
-			if !slices.Contains(specFiles, f.file) {
-				specFiles = append(specFiles, f.file)
-			}
-		}
-		p.say("\nRed at the head and green on the base, the change's:\n\n```\n%s\n```\n", lines(ours))
-		p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "code", Command: script, Exit: run.Exit, Took: run.Took})
-		p.fail(fmt.Sprintf("specs: %s red at the head and green on the base (%s)", plural(len(ours), "example"), clipList(specFiles)))
-	}
+	return strings.Join(out, "\n")
 }
 
 // jest runs the related jest tests of the changed files.
