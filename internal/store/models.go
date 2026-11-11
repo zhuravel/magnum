@@ -213,7 +213,7 @@ type PR struct {
 	LatestReviews      []LatestReview `json:"latest_reviews"`      // latest_reviews_json
 	SinceReview        *SinceReview   `json:"since_review"`        // since_review_json; nil until computed
 	LastReviewLogin    *string        `json:"last_review_login"`   // who posted reviewed_sha's review (Account form: an App's keeps "[bot]")
-	BaseSHA            *string        `json:"base_sha"`            // base branch tip at the last Details fetch
+	BaseSHA            *string        `json:"base_sha"`            // the base of the PR's last sync (BaseRefOid), as the last Details fetch read it
 	DetailsAt          *time.Time     `json:"details_at"`          // last Details fetch; nil = never
 	// AuthorAssociation (migration 0006) is GitHub's authorAssociation of the
 	// author with the repository; nil until the next Details fetch.

@@ -173,8 +173,11 @@ func refusedHeadBranch(repo store.Repo, pr store.PR, base string) string {
 // Details, never a ref of the slot, which the fixer's pane can write): the
 // PR's base on GitHub is still b.base, b.sha is on it (its tip has it, as
 // the slot's git knows the tip: a fetch of the base brings it) and head
-// lacks b.sha. It returns that tip, or why not (refused), in a few words
-// for pushMerge's refusal.
+// lacks b.sha. The tip is the branch's now (BaseTipOid), never the base of
+// the PR's last sync (BaseRefOid), which trails the branch until the PR's
+// next push, so a tip the slot fetched since would not be on it; a branch
+// that is gone has none. It returns that tip, or why not (refused), in a
+// few words for pushMerge's refusal.
 func (e *Engine) baseOnGitHub(ctx context.Context, job *fixJob, b fixConflict, head string) (tip, refused string) {
 	gh := e.gh(job.watch.PollIdentity)
 	if gh == nil {
@@ -185,17 +188,17 @@ func (e *Engine) baseOnGitHub(ctx context.Context, job *fixJob, b fixConflict, h
 	switch {
 	case err != nil:
 		return "", fmt.Sprintf("GitHub does not say where the tip of %s is: %s", b.base, oneLine(err.Error(), 200))
-	case !ok || d.BaseRefOid == "":
+	case !ok || d.BaseTipOid == "":
 		return "", fmt.Sprintf("GitHub does not say where the tip of %s is", b.base)
 	case d.BaseRefName != b.base:
 		return "", fmt.Sprintf("the PR's base on GitHub is %s now, not %s", d.BaseRefName, b.base)
 	}
 	dir, short := job.slot.Path, textx.ShortSHA(b.sha)
-	switch on, err := e.d.Git.IsAncestor(ctx, dir, b.sha, d.BaseRefOid); {
+	switch on, err := e.d.Git.IsAncestor(ctx, dir, b.sha, d.BaseTipOid); {
 	case err != nil:
-		return "", fmt.Sprintf("whether %s is on %s as GitHub has it (its tip is %s) could not be checked: %s", short, b.base, textx.ShortSHA(d.BaseRefOid), oneLine(err.Error(), 200))
+		return "", fmt.Sprintf("whether %s is on %s as GitHub has it (its tip is %s) could not be checked: %s", short, b.base, textx.ShortSHA(d.BaseTipOid), oneLine(err.Error(), 200))
 	case !on:
-		return "", fmt.Sprintf("%s is not on %s as GitHub has it (its tip is %s)", short, b.base, textx.ShortSHA(d.BaseRefOid))
+		return "", fmt.Sprintf("%s is not on %s as GitHub has it (its tip is %s)", short, b.base, textx.ShortSHA(d.BaseTipOid))
 	}
 	switch in, err := e.d.Git.IsAncestor(ctx, dir, b.sha, head); {
 	case err != nil:
@@ -203,7 +206,7 @@ func (e *Engine) baseOnGitHub(ctx context.Context, job *fixJob, b fixConflict, h
 	case in:
 		return "", fmt.Sprintf("the head has %s already: the merge brings nothing of %s", short, b.base)
 	}
-	return d.BaseRefOid, ""
+	return d.BaseTipOid, ""
 }
 
 // fixerSignature is the identity the fix role whose identity is name acts

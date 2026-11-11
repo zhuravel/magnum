@@ -54,6 +54,72 @@ func TestAMergeThatBringsTheBasesWorkflowsIsPushedWithTheDaemonsOwnToken(t *test
 	}
 }
 
+// fixSyncedBase is the base of the PR's last sync that Details names
+// (BaseRefOid): an older commit of master that the head has, which GitHub
+// keeps until the PR's next push.
+const fixSyncedBase = "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+
+// A merge of the parent that brings the base's workflow changes is checked
+// against the base branch's tip as GitHub has it now (Details' BaseTipOid),
+// never against the base of the PR's last sync (BaseRefOid), which trails
+// the branch until the PR's next push: master's tip that the slot fetched
+// is past that, so the old check refused every such merge ("c0c0c0c is not
+// on master as GitHub has it (its tip is 0a0a0a0)") and asked the operator
+// to merge it on GitHub (a live PR, 2026-11-09).
+func TestAMergeThatBringsTheBasesWorkflowsIsCheckedAgainstTheBranchsTipNotTheLastSync(t *testing.T) {
+	h, mg := mergeHarness(t, withFixerApp)
+	fixablePR(h, "zhuravel", nil)
+	h.gh.mu.Lock()
+	h.gh.baseOid, h.gh.baseTip = fixSyncedBase, fixBaseTip
+	h.gh.mu.Unlock()
+	mg.behind, mg.workflows = true, []string{".github/workflows/ci.yml"}
+	id := h.fix(FixPayload{Mode: FixModeMerge})
+	h.handle()
+	h.wantDone(id)
+	if ev, ok := h.fixEvent("fix.parent_refused"); ok {
+		t.Errorf("fix.parent_refused = %q", ev.Message)
+	}
+	_, pushes := mg.made()
+	if want := fmt.Sprintf("talkable/talkable:%s:feature:%s:%s", fixParentMerge, fixHead, daemonPushAs); !slices.Equal(pushes, []string{want}) {
+		t.Errorf("pushes = %q, want %q", pushes, want)
+	}
+	if cur := h.pr(2); cur.HeadSHA != fixParentMerge || cur.State == store.PRNeedsAttention {
+		t.Errorf("the PR = %s at %s, want the merge and no call", cur.State, cur.HeadSHA)
+	}
+	if ev, ok := h.fixEvent("fix.parent_merged"); !ok || !strings.Contains(ev.Message, "with Workflows") {
+		t.Errorf("fix.parent_merged = %q, %v; want it to say the push took Workflows", ev.Message, ok)
+	}
+}
+
+// A base branch deleted on GitHub has no tip (Details' BaseTipOid is
+// empty, while BaseRefOid still names the PR's last sync): a merge that
+// brings its workflow changes is refused as one whose tip GitHub does not
+// name, nothing is pushed and no token is minted.
+func TestAMergeThatBringsTheWorkflowsOfADeletedBaseIsRefused(t *testing.T) {
+	h, mg := mergeHarness(t, withFixerApp)
+	fixablePR(h, "zhuravel", nil)
+	h.gh.mu.Lock()
+	h.gh.baseGone = true
+	h.gh.mu.Unlock()
+	mg.behind, mg.workflows = true, []string{".github/workflows/ci.yml"}
+	id := h.fix(FixPayload{Mode: FixModeMerge})
+	h.handle()
+	h.wantDone(id)
+	if _, pushes := mg.made(); len(pushes) != 0 {
+		t.Errorf("pushes = %v, want none", pushes)
+	}
+	if mints, _ := h.ids[fixerAppName].daemonPushes(); len(mints) != 0 {
+		t.Errorf("daemon push tokens minted: %v", mints)
+	}
+	const why = "the merge of master at c0c0c0c brings workflow changes (1 file), and GitHub does not say where the tip of master is"
+	if ev, ok := h.fixEvent("fix.parent_refused"); !ok || !strings.Contains(ev.Message, why) {
+		t.Errorf("fix.parent_refused = %q, %v; want it to say %q", ev.Message, ok, why)
+	}
+	if pr := h.wantState(2, store.PRNeedsAttention); !strings.Contains(deref(pr.LastError), why) {
+		t.Errorf("attention = %q, want it to say %q", deref(pr.LastError), why)
+	}
+}
+
 // noWorkflowsRefusal is the refusal of the daemon's merge of master into
 // PR #2 while the fixer App lacks Workflows, and what the operator does.
 const noWorkflowsRefusal = "magnum did not merge the parent of talkable/talkable#2: the merge of master at c0c0c0c brings its workflow " +

@@ -18341,6 +18341,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   checkptr change), a production change to the registry's 122 untransacted call sites, with dynamic SQL
   to bound.
 
+- **A merge of the parent is checked against the base branch's tip now, not the base of the PR's last sync**
+  (2026-11-12, the 2026-11-11 code-health lens). `baseOnGitHub` checks every merge of the parent that brings the
+  base's workflow changes: the daemon's own merge, the fixer's merge that `magnum push` handed over
+  (`pushHanded`), and `magnum merge-parent` (P). It took the Details' `baseRefOid` as the base branch's tip, and
+  the field's comment said so. But that field is the base of the PR's last sync. It is the tip of the branch at
+  the last push of the head or the last change of the base. It trails the branch until the PR's next push.
+  After the base moved past the PR's last push, the tip that the slot fetched was not on that commit. So the
+  merge was refused, for example on a live PR on 2026-11-09 whose base was 6 commits past its last sync ("... is
+  not on main as GitHub has it (its tip is ...)"). The operator was then asked to merge it on GitHub. The
+  Details query now also reads `baseRef { target { oid } }` (`github.PRDetails.BaseTipOid`). It is an object
+  and its field, not a connection, so the query's price stays the same. The ancestor check and the comparison of
+  the workflow files both use it. A base branch that is gone has no tip. Then the merge is refused with the same words as before
+  ("GitHub does not say where the tip of main is"). The other readers of `BaseRefOid` stay as they are:
+  - The PR's size since its base (`refreshSinceReview`) and the key of the renamed-files record (`renamedFiles`)
+    mean the commit GitHub compared the head with, which is the last sync's.
+  - `prs.base_sha` (`fillDetails`) is a fallback base for the post-merge round, and a merge base with an older
+    tip serves there.
+  - The CI gate's "fails like the base" (`failsLikeTheBase`) and the look's `ciBaseTip` mean the base's tip, but
+    they get the last sync's. `ciBaseTip` uses the tip its conflict check fetched first. Neither is on the merge
+    path, so they are left for a later change.
+
+  The comments on `BaseRefOid` and `prs.base_sha` now say what the field is. The tests are the engine's
+  TestAMergeThatBringsTheBasesWorkflowsIsCheckedAgainstTheBranchsTipNotTheLastSync and
+  TestAMergeThatBringsTheWorkflowsOfADeletedBaseIsRefused, and the github package's
+  TestDetailsReadTheBaseBranchsTipApartFromTheBaseOfTheLastSync. On master the first merge was refused. On
+  master the second merge was pushed, with the last sync's commit taken as the tip.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is

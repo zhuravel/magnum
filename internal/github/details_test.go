@@ -746,3 +746,33 @@ func TestDetailsReadEachChecksPageAndGitHubsMergeState(t *testing.T) {
 		t.Errorf("#302's merge state, from an answer without one = %q", m)
 	}
 }
+
+// The base branch's tip is baseRef's target (BaseTipOid), read in the same
+// query as a field (no connection, so the price stays): baseRefOid is the
+// base of the PR's last sync, which trails the branch until the PR's next
+// push (a live PR's base was 6 commits past it, 2026-11-09). A base branch
+// that is gone (baseRef null) has no tip, while baseRefOid still names the
+// last sync.
+func TestDetailsReadTheBaseBranchsTipApartFromTheBaseOfTheLastSync(t *testing.T) {
+	const synced, tip = "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0", "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
+	pr := func(n int, baseRef string) string {
+		return `"p` + fmt.Sprint(n) + `":{"id":"PR_` + fmt.Sprint(n) + `","number":` + fmt.Sprint(n) + `,"title":"t","url":"u","state":"OPEN",` +
+			`"baseRefName":"main","headRefOid":"d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4","baseRefOid":"` + synced + `","baseRef":` + baseRef + `}`
+	}
+	body := compact(t, `{"data":{"rateLimit":{"limit":5000,"cost":1,"remaining":4990,"used":10,"resetAt":"2026-11-09T16:00:00Z"},"repository":{`+
+		pr(601, `{"target":{"oid":"`+tip+`"}}`)+`,`+pr(602, `null`)+`}}}`)
+	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Result: execx.Result{Stdout: body}}}}
+	got, _, err := (&Client{Run: f}).Details(context.Background(), "example", "widget", []int{601, 602})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q := oneLine(decodeReq(t, f.Calls[0]).Query); !strings.Contains(q, "baseRef { target { oid } }") {
+		t.Errorf("query lacks the base branch's tip: %s", q)
+	}
+	if d := got[601]; d.BaseTipOid != tip || d.BaseRefOid != synced {
+		t.Errorf("#601 base tip %q, base of the last sync %q; want %q and %q", d.BaseTipOid, d.BaseRefOid, tip, synced)
+	}
+	if d := got[602]; d.BaseTipOid != "" || d.BaseRefOid != synced {
+		t.Errorf("#602 (its base branch deleted) base tip %q, base of the last sync %q; want none and %q", d.BaseTipOid, d.BaseRefOid, synced)
+	}
+}

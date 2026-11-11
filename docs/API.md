@@ -19325,7 +19325,8 @@ type PRDetails struct {
 	UpdatedAt         time.Time
 	IsDraft           bool
 	HeadRefOid        string
-	BaseRefOid        string   // the base branch's current tip
+	BaseRefOid        string   // the base of the PR's last sync, which trails the branch until its next push
+	BaseTipOid        string   // the base branch's tip now (baseRef's target); "" when the branch is gone
 	Assignees         []string // logins; never nil
 	ReviewRequests    []Reviewer
 	LatestReviews     []LatestReview // latest review per reviewer; never nil
@@ -30852,7 +30853,7 @@ type PR struct {
 	LatestReviews      []LatestReview `json:"latest_reviews"`      // latest_reviews_json
 	SinceReview        *SinceReview   `json:"since_review"`        // since_review_json; nil until computed
 	LastReviewLogin    *string        `json:"last_review_login"`   // who posted reviewed_sha's review (Account form: an App's keeps "[bot]")
-	BaseSHA            *string        `json:"base_sha"`            // base branch tip at the last Details fetch
+	BaseSHA            *string        `json:"base_sha"`            // the base of the PR's last sync (BaseRefOid), as the last Details fetch read it
 	DetailsAt          *time.Time     `json:"details_at"`          // last Details fetch; nil = never
 	// AuthorAssociation (migration 0006) is GitHub's authorAssociation of the
 	// author with the repository; nil until the next Details fetch.

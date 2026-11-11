@@ -43,7 +43,8 @@ type PRDetails struct {
 	UpdatedAt         time.Time
 	IsDraft           bool
 	HeadRefOid        string
-	BaseRefOid        string   // the base branch's current tip
+	BaseRefOid        string   // the base of the PR's last sync, which trails the branch until its next push
+	BaseTipOid        string   // the base branch's tip now (baseRef's target); "" when the branch is gone
 	Assignees         []string // logins; never nil
 	ReviewRequests    []Reviewer
 	LatestReviews     []LatestReview // latest review per reviewer; never nil
@@ -310,12 +311,14 @@ type PRState struct {
 // of up to 100 reviews, where the last ten reviews here would price batches
 // of 10, 20 and 40 at 2, 4 and 8 points instead of 1, 3 and 5 (dry run,
 // 2026-10-16). GitHub's merge state (PRDetails.MergeState) and the checks'
-// pages (Check.URL) are fields, which GitHub does not price.
+// pages (Check.URL) are fields, which GitHub does not price, and so is the
+// base branch's tip (baseRef's target, PRDetails.BaseTipOid): an object
+// and its field, no connection.
 const detailsFragment = `fragment PRDetails on PullRequest {
   id number title url
   author { login __typename } authorAssociation
   labels(first: 100) { totalCount pageInfo { hasNextPage } nodes { name } }
-  headRefName baseRefName isCrossRepository
+  headRefName baseRefName baseRef { target { oid } } isCrossRepository
   state merged mergedAt closedAt createdAt updatedAt lastEditedAt isDraft headRefOid baseRefOid mergeStateStatus
   additions deletions changedFiles commits { totalCount }
   files(first: 100) { totalCount pageInfo { hasNextPage } nodes { path changeType } }
@@ -375,6 +378,14 @@ func (c connInfo) complete(fetched int) bool {
 	return !c.PageInfo.HasNextPage && c.TotalCount <= fetched
 }
 
+// refJSON is a branch with the commit it points at (detailsJSON's baseRef);
+// Target is null when GitHub does not say.
+type refJSON struct {
+	Target *struct {
+		Oid string `json:"oid"`
+	} `json:"target"`
+}
+
 type detailsJSON struct {
 	ID     string     `json:"id"`
 	Number int        `json:"number"`
@@ -401,6 +412,7 @@ type detailsJSON struct {
 	IsDraft           bool      `json:"isDraft"`
 	HeadRefOid        string    `json:"headRefOid"`
 	BaseRefOid        string    `json:"baseRefOid"`
+	BaseRef           *refJSON  `json:"baseRef"` // null: the base branch is gone
 	MergeStateStatus  string    `json:"mergeStateStatus"`
 	Additions         int       `json:"additions"`
 	Deletions         int       `json:"deletions"`
@@ -606,6 +618,9 @@ func (d detailsJSON) details() PRDetails {
 	}
 	if d.Author != nil {
 		out.AuthorLogin, out.AuthorType = d.Author.Login, d.Author.Typename
+	}
+	if d.BaseRef != nil && d.BaseRef.Target != nil {
+		out.BaseTipOid = d.BaseRef.Target.Oid
 	}
 	out.AuthorAssociation = d.AuthorAssociation
 	out.LabelsComplete = d.Labels.complete(len(d.Labels.Nodes))

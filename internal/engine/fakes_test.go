@@ -163,10 +163,14 @@ type fakeGH struct {
 	// defaultFiles is the Details' file list of a PR whose spec lists none
 	// (nil: no list).
 	defaultFiles []string
-	// baseOid is the base's tip Details reports for every PR ("" =
-	// fakeBaseOid).
-	baseOid string
-	calls   []string
+	// baseOid is the base of the last sync Details reports for every PR
+	// (BaseRefOid; "" = fakeBaseOid). baseTip is the base branch's tip it
+	// reports (BaseTipOid) when the branch moved past that ("" = the same
+	// commit), and baseGone makes it report none (the branch is deleted).
+	baseOid  string
+	baseTip  string
+	baseGone bool
+	calls    []string
 	// onRadar and onCIStates run during those calls (outside the lock):
 	// what a person does while the daemon waits for GitHub.
 	onRadar, onCIStates func()
@@ -848,6 +852,9 @@ func (g *fakeGH) Details(ctx context.Context, owner, repo string, numbers []int)
 					Counts: specCounts(p)}}
 			if p.noBaseOid {
 				d.BaseRefOid = ""
+			}
+			if d.BaseTipOid = cmp.Or(g.baseTip, d.BaseRefOid); g.baseGone {
+				d.BaseTipOid = ""
 			}
 			if p.request {
 				d.ReviewRequests = []github.Reviewer{{Type: "User", Login: "zhuravel"}, {Type: "Team", Login: "engineers"}}
