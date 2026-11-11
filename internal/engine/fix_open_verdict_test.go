@@ -185,6 +185,33 @@ func TestTheOpenRowIsNeverIdleWhenAReadWasCutShort(t *testing.T) {
 	}
 }
 
+// Items are not known while the read is not whole: with no whole read, a
+// failed one or one GitHub cut short, a person's handed thread and a bot's
+// thread never handed count for nothing. The verdict holds no open item
+// and no need, and the look gets no work and no needs (it would note the
+// needs as waited on).
+func TestNoItemCountsWhileTheReadIsNotWhole(t *testing.T) {
+	person := personThread(4100)
+	lint := openItem{Key: "thread:4200@4200", Class: classBot, Kind: itemThread, URL: prPage + "#discussion_r4200"}
+	for name, edit := range map[string]func(*openFacts){
+		"failed":    func(f *openFacts) { f.failed = true },
+		"cut short": func(f *openFacts) { f.cut = []string{"over 1000 review threads"} },
+		"not read":  func(f *openFacts) { f.whole = false },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := idleFacts()
+			f.items = []openItem{person, lint}
+			f.ledger.Handed = map[string]time.Time{person.Key: openNow}
+			edit(&f)
+			v, work, needs := decideOpen(f)
+			if v.Open != 0 || len(v.Needs) != 0 || len(work) != 0 || len(needs) != 0 {
+				t.Errorf("%s %q: open %d, verdict needs %+v, work %v, needs %v; want none of them", v.Verdict, v.Why, v.Open, v.Needs, itemKeys(work),
+					itemKeys(needs))
+			}
+		})
+	}
+}
+
 // Idle says nothing is open at the head and whether a person approved;
 // every condition taken away gives something else.
 func TestTheOpenRowIsIdleOnlyWhenEverythingHolds(t *testing.T) {
