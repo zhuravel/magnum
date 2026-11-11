@@ -18279,9 +18279,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
     section at their closing `>`, mid-line, and lexes the next block right there, so after a paragraph
     that quotes `` `<!--` ``, `<?x?><!-->a<!-->@docs/ev<!--z-->il.md` loads `docs/evil.md`;
     `readCommentBlocks` took a `<!--` only after blanks and a container's marks, and skipped the rest of
-    a line after any `<!--`, which `<?x <!-- ?><!-->` holds. A `<!--` that a `>` and blanks precede now
-    starts a block too (wider: any tag's `>`, four blanks), and the scan goes on right after a `<!--`
-    that starts none; only a line's first `<!--` has its text before it trimmed, so a line of many stays
+    a line after any `<!--`, which `<?x <!-- ?><!-->` holds. A `<!--` now starts a block too when the run
+    of blanks and container marks before it holds a `>` (wider: any tag's `>`, four blanks), so a list
+    item or a block quote that marked starts right after such a token (`<?x?>- <!-->`) is read as well,
+    and the scan goes on right after a `<!--` that starts none; only a line's first `<!--` has its text before it trimmed, so a line of many stays
     linear. The review's nested-container fuzzer with these tokens found about 1,600 misses per 50,000
     inputs before and none in 150,000 after.
   - Tests the review's mutations survived: each class of the start rule's container marks (`>`, the
@@ -18295,9 +18296,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     hashed: 0.15 s and 97 MiB, and the review's skills trees resolve as many skills as before.
   - The entry above measured its 2 percent against the counts before the fifth round's step per
     directory, not before its own round's; its sentence now says so.
-  Not covered: a list item or a block quote that marked starts right after such a token, on the same
-  line (`<?x?>- <!-->a<!-->@docs/ev<!--z-->il.md`), whose comment block the start rule still rejects
-  (the round's own fuzzing found it; markup no editor writes). Tests, failing first: cases of
+  The round's own fuzzing found the container marks after such a token; a one-line change of the start
+  rule covers them (0 misses in 150,000 inputs of that generator). Tests, failing first: cases of
   TestImportPathsReadsEachCommentBlockOnItsOwn and TestAutoApprovalRefusesAChangeToAFileTheInstructionsImport,
   TestImportPathsReadsCommentBlocksThatEndAtOneCloseOnce (against the mutants) and
   TestTheWalksPathsCostTheBytesTheyCopy; TestImportPathsLooksForCommentBlocksOnALineInTimeLinearInIt guards
