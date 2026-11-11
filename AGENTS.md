@@ -61,8 +61,9 @@ entries and the reverts of skill versions), and keeping out of it keeps its land
 ## Gate
 
 ```bash
-make test        # the gate, one at a time per machine (waits for the gate lock): gofmt, check-private, go mod verify and tidy, go vet, go test (hermetic, in TZ=Asia/Kathmandu)
+make test        # the gate, one at a time per machine (waits for the gate lock): check-private, lint-ratchet, gofmt, go mod verify and tidy, go vet, go test (hermetic, in TZ=Asia/Kathmandu)
 make test-race PKGS="./internal/x ./internal/y"   # go test -count=1 -race on the packages you touched, under the same lock and zone
+make lint-ratchet   # gocyclo and nestif over the whole tree, under the same lock; part of make test
 make build       # bin/magnum
 make api-doc     # regenerate docs/API.md after exported API changes (make api-doc-check diffs it)
 make lint        # golangci-lint (.golangci.yml; mise pins 2.15.0); make lint-fix applies only the safe fixes
@@ -71,7 +72,11 @@ make vuln        # govulncheck, after a dependency or Go update
 
 `make lint` is not in `make test` while the backlog it reports is cleared: run it before a change lands
 and fix what it reports in the lines you touched (CI fails a PR on new issues only), and never run a
-blanket `golangci-lint run --fix` (errorlint's fix breaks `internal/pipeline/restart.go`).
+blanket `golangci-lint run --fix` (errorlint's fix breaks `internal/pipeline/restart.go`). Its complexity
+linters are in `make test` (`make lint-ratchet`, about a second): `--new-from-rev` reports a gocyclo or
+nestif hit only where a change touched the func or if line, so the gate lints them over the whole tree. A
+function your change pushes past a threshold fails the gate: split it, never add it to `.golangci.yml`'s
+ratchet, whose names only shrink.
 
 Run `make test-race PKGS=…` on the packages you touched before `make test`. It passes `-timeout 30m`
 (a `-timeout` in `TESTFLAGS` overrides it), since go test's 10-minute default is not enough: under
@@ -85,7 +90,7 @@ test, so a pass cached by a run by hand in your zone is not its pass). A change 
 green, the API doc is regenerated if exports changed, and the README or config comments describe any new
 key, command or key binding.
 
-**One gate at a time on this machine.** `make test` and `make test-race` take the lock file
+**One gate at a time on this machine.** `make test`, `make test-race` and `make lint-ratchet` take the lock file
 `/tmp/magnum-make-test.lock` (`lockf` on macOS, `flock` on Linux) and wait, saying so, while another
 checkout's gate holds it; after an hour they fail (the recipe's status is 75: make reports "Error 75"
 and exits 2). Run `go test` or `go vet` on `./...`, on several packages or with `-race` only through

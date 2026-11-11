@@ -1,9 +1,10 @@
 # CI for magnum. Three jobs:
 #   - test:   on macOS (magnum is a macOS tool: launchd, AppleScript; its tests run where it runs), the gate
 #             `make test` under the race detector with shuffled order (GOFLAGS carries the flags into the
-#             gate, so the gate stays one definition), the build, a smoke run of the built binary, an Intel
-#             cross-compile and the landing scripts' selftest. The weekly run adds Go "stable" (Homebrew
-#             builds the formula with its own, newest Go).
+#             gate, so the gate stays one definition; its tests run in the Makefile's TEST_TZ, and its
+#             complexity ratchet lints the whole tree with the golangci-lint the setup puts on PATH), the
+#             build, a smoke run of the built binary, an Intel cross-compile and the landing scripts'
+#             selftest. The weekly run adds Go "stable" (Homebrew builds the formula with its own, newest Go).
 #   - stress: weekly and on demand, the scheduling-sensitive packages at GOMAXPROCS 1 and 3 (the runner has
 #             3 vCPUs; a 16-core workstation hides these failures).
 #   - static: on ubuntu (no macOS queue): modules verified and tidy, gofmt over every tracked .go file,
@@ -50,7 +51,7 @@ jobs:
         with:
           go-version: ${{ matrix.go == 'stable' && 'latest' || '' }}
 
-      - name: gate under the race detector (gofmt, modules, vet, tests; the private-name checks skip without local patterns and registry)
+      - name: gate under the race detector (complexity ratchet, gofmt, modules, vet, tests; the private-name checks skip without local patterns and registry)
         env:
           # The engine package alone takes 15-20 minutes here under -race (about 5 locally), so 20m failed it.
           GOFLAGS: -race -shuffle=on -timeout=35m

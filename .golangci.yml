@@ -10,8 +10,10 @@
 # they are done, `make lint` stays out of `make test` and CI lints with only-new-issues. Never run a
 # blanket --fix: errorlint's fix for internal/pipeline/restart.go shadows the refusedError type and
 # breaks the build. The complexity linters start as a ratchet (high thresholds, the current offenders
-# listed). The modernize sweep later that day (go fix, then lint-fix, then hand fixes) left 212, none of
-# them modernize or intrange; modernize's stringsbuilder and embedlit stay off (settings).
+# listed); since 2026-11-11 `make lint-ratchet` runs them over the whole tree in `make test`, where a
+# hit fails the gate wherever it is. The modernize sweep later that day (go fix, then lint-fix, then
+# hand fixes) left 212, none of them modernize or intrange; modernize's stringsbuilder and embedlit
+# stay off (settings).
 version: "2"
 
 run:
@@ -233,6 +235,32 @@ linters:
       - linters: [nestif]
         path: internal/agents/lifecycle\.go
         text: "isAgentSession"
+      # Complexity ratchet, second block: the functions that crossed the thresholds between 2026-10-09 and
+      # 2026-11-11 because the landing gate linted only changed lines (gocyclo and nestif report on the func or
+      # if line, which a change inside it leaves alone); `make lint-ratchet`, in `make test`, now lints the whole
+      # tree. Split one, delete its name. Each name sits between the backticks golangci-lint prints, so
+      # `(*Engine).prepare` does not also cover prepareFix.
+      - linters: [gocyclo]
+        path: internal/agents/start\.go
+        text: "`\\(\\*Manager\\)\\.StartAgent`"
+      - linters: [gocyclo]
+        path: internal/cli/
+        text: "`(fixMain|prsSource)`"
+      - linters: [gocyclo]
+        path: internal/config/validate\.go
+        text: "`\\(\\*Config\\)\\.validatePipeline`"
+      - linters: [gocyclo]
+        path: internal/engine/
+        text: "`(\\(\\*Engine\\)\\.(requestFix|prepareFix|settleFix|prepare|finish)|externalOf)`"
+      - linters: [gocyclo]
+        path: internal/factory/review\.go
+        text: "`\\(\\*Engine\\)\\.decideRound`" # until its split, in flight on 2026-11-11, lands
+      - linters: [gocyclo]
+        path: internal/notes/curate\.go
+        text: "`Validate`"
+      - linters: [nestif]
+        path: internal/agents/project\.go
+        text: "`if untrust`"
 
 
 formatters:

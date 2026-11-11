@@ -11,12 +11,13 @@ INSTALL_FLAGS ?= --plugin
 # one the build keeps Go's ad-hoc signature, which macOS treats as a new app at every build.
 SIGN_IDENTITY ?= magnum local signing
 
-# GATE_LOCK: the lock every gate on this machine takes (make test, make test-race), so two checkouts never run their
-# tests at once. lockf(1) takes it where it exists (macOS), flock(1) elsewhere (Linux); with neither the gate runs
-# unlocked. A gate that finds it taken says so and waits up to an hour, then its recipe fails with status 75 (make
-# reports "Error 75" and exits 2). It is in /tmp, not $TMPDIR (agent shells get a TMPDIR of their own), and it is
-# not /tmp/magnum-gate.lock, which older `lockf -k /tmp/magnum-gate.lock make test` wrappers hold: the same lock
-# taken again inside them would wait for its own parent. MAGNUM_GATE_LOCKED=1 marks a process that already holds it.
+# GATE_LOCK: the lock every gate on this machine takes (make test, make test-race, make lint-ratchet), so two checkouts
+# never run their tests at once. lockf(1) takes it where it exists (macOS), flock(1) elsewhere (Linux); with neither
+# the gate runs unlocked. A gate that finds it taken says so and waits up to an hour, then its recipe fails with
+# status 75 (make reports "Error 75" and exits 2). It is in /tmp, not $TMPDIR (agent shells get a TMPDIR of their
+# own), and it is not /tmp/magnum-gate.lock, which older `lockf -k /tmp/magnum-gate.lock make test` wrappers hold: the
+# same lock taken again inside them would wait for its own parent. MAGNUM_GATE_LOCKED=1 marks a process that already
+# holds it.
 GATE_LOCK ?= /tmp/magnum-make-test.lock
 # TEST_P: how many test binaries one gate runs at once (go test -p); 4 keeps one gate's memory and CPU low on a
 # laptop; TEST_P= uses Go's default (one per CPU)
@@ -39,7 +40,7 @@ gate_locked = if [ -n "$$MAGNUM_GATE_LOCKED" ]; then $(1); \
     if [ $$st -eq 75 ]; then echo "make: gave up after an hour waiting for $(GATE_LOCK) (flock exit 75)"; fi; exit $$st; \
   else $(1); fi
 
-.PHONY: build test gate test-race check-private lint lint-fix vuln install api-doc api-doc-check release link unlink
+.PHONY: build test gate test-race check-private lint lint-ratchet lint-fix vuln install api-doc api-doc-check release link unlink
 
 ## build: compile bin/magnum (the binary launchd and the herdr plugin run), signed with SIGN_IDENTITY when your
 ## keychain has it, and moved into place only then, so a daemon that restarts on a new binary never runs it unsigned
@@ -55,10 +56,10 @@ build:
 test:
 	@$(call gate_locked,$(MAKE) --no-print-directory gate)
 
-## gate: gofmt check (every tracked .go file, and new ones git does not ignore), go.sum verified and go.mod tidy,
-## vet, the hermetic unit tests (TEST_P binaries at once, in TEST_TZ), and the private-name guard; run it as make
-## test, which holds the machine's gate lock
-gate: check-private
+## gate: the private-name guard, the complexity ratchet (lint-ratchet), gofmt check (every tracked .go file, and new
+## ones git does not ignore), go.sum verified and go.mod tidy, vet, and the hermetic unit tests (TEST_P binaries at
+## once, in TEST_TZ); run it as make test, which holds the machine's gate lock
+gate: check-private lint-ratchet
 	@out="$$(git ls-files -z --cached --others --exclude-standard '*.go' | xargs -0 gofmt -l)"; if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	$(GO) mod verify
 	$(GO) mod tidy -diff
@@ -86,8 +87,18 @@ check-private:
 	scripts/check-logins.sh
 
 ## lint: golangci-lint with .golangci.yml (the version mise.toml pins); not part of `test` until the backlog is cleared
+## (its complexity linters are, through lint-ratchet)
 lint:
 	$(GOLANGCI_LINT) run ./...
+
+## lint-ratchet: the complexity ratchet (gocyclo and nestif, with .golangci.yml's thresholds and exclusions) over the
+## whole tree, under GATE_LOCK, part of the gate (about a second: both read syntax only); it fails on any hit. CI's
+## lint and --new-from-rev report such a hit only where a change touched its func or if line, so a function grew past
+## a threshold unseen
+# a variable: the comma of the linters' list would split call's argument
+LINT_RATCHET = $(GOLANGCI_LINT) run --enable-only gocyclo,nestif ./...
+lint-ratchet:
+	@$(call gate_locked,$(LINT_RATCHET))
 
 ## lint-fix: apply only the safe automatic fixes (modernize, intrange), then the formatters; never a blanket --fix
 ## (errorlint's fix for internal/pipeline/restart.go breaks the build). The fix pass fails while it leaves hits it
