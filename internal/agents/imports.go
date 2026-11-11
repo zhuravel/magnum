@@ -103,8 +103,10 @@ func ImportPaths(text string, limit int) (paths []string, more bool) {
 // marks (a block quote's >, a list item's - * + 1. 1)) precede on its
 // line (a line feed or a carriage return ends one), or right after a
 // processing instruction, a declaration or a CDATA section, which marked
-// ends at its closing > mid-line (read here as any > and blanks before the
-// <!--; such a token may hold a <!-- of its own, so a <!-- that starts no
+// ends at its closing > mid-line (read here as any > in the run of blanks
+// and container marks before the <!--, since a list item or a block quote
+// may start right after it; such a token may hold a <!-- of its own, so a
+// <!-- that starts no
 // block does not end the scan of its line), and ends it at the end of the
 // line its first comment ends on: at
 // once for <!--> and <!--->, else at the first --> after the <!--. Claude
@@ -137,8 +139,11 @@ func (r *importReader) readCommentBlocks(t string) {
 		}
 		// Only the line's first <!-- may have only marks before it: an
 		// earlier <! precedes any later one, whose text is not trimmed again.
+		// After a > (the end of a processing instruction, a declaration or
+		// CDATA), a list item's or a block quote's marks may come before
+		// the <!-- too; that trailing run stops at an earlier <!--'s !.
 		if before := t[line:at]; (no >= line || strings.Trim(before, " \t>*+-.)0123456789") != "") &&
-			!strings.HasSuffix(strings.TrimRight(before, " \t"), ">") {
+			!strings.Contains(before[len(strings.TrimRight(before, " \t>*+-.)0123456789")):], ">") {
 			no, i = at, at+4
 			continue
 		}

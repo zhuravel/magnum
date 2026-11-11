@@ -336,7 +336,8 @@ func TestImportPathsStartsAPathWhereACommentWasCut(t *testing.T) {
 // quote's or a list item's marks (the code span's <!-- comes first, so the
 // read of the whole text pairs it with the block's first -->), and right
 // after a processing instruction, a declaration or a CDATA section, which
-// end at their closing >, mid-line (one may hold a <!-- of its own).
+// end at their closing >, mid-line (one may hold a <!-- of its own), with a
+// list item's or a block quote's marks after that > too.
 func TestImportPathsReadsEachCommentBlockOnItsOwn(t *testing.T) {
 	for _, c := range []struct {
 		text string
@@ -356,6 +357,11 @@ func TestImportPathsReadsEachCommentBlockOnItsOwn(t *testing.T) {
 		{"Use `<!--` to open a comment.\n\n<![CDATA[x]]><!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
 		{"Use `<!--` to open a comment.\n\n- <?x?><!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
 		{"Use `<!--` to open a comment.\n\n<?x <!-- ?><!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"Use `<!--` to open a comment.\n\n<?x?>- <!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"Use `<!--` to open a comment.\n\n<?x?>1. <!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"Use `<!--` to open a comment.\n\n<?x?>* <!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"Use `<!--` to open a comment.\n\n<?x?>> - <!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"Use `<!--` to open a comment.\n\n<?x?> - <!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
 		{"<?x?><!--a-->@docs/ev<!--b-->il<!--x.md\n\nMore text.\n<!-- end -->\n", "docs/evil<!--x.md"},
 		{"x <!--\n\n<!--> T <!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
 		{"`<!--`\n\n<!---><!--->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
