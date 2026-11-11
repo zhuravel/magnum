@@ -191,19 +191,22 @@ func TestAnIdleIdentitysExpiredHoursGo(t *testing.T) {
 // in its own hour, made in its place when the record has none.
 func TestACallOfAnEarlierHourCountsInItsOwnHour(t *testing.T) {
 	h := newHarness(t)
+	// The meter counts by UTC hour, and the harness's 10:00 local starts
+	// none in a zone a quarter hour off (Asia/Kathmandu): begin at one.
+	h.clock.Set(h.clock.Now().Truncate(time.Hour)) // H:00
 	reset := h.clock.Now().Add(2 * time.Hour)
-	h.advance(30 * time.Minute) // 10:30
+	h.advance(30 * time.Minute) // H:30
 	h.metered("zhuravel", opRound, 1, 4000, reset)
-	h.advance(40 * time.Minute) // 11:10
+	h.advance(40 * time.Minute) // H+1:10
 	h.metered("zhuravel", opRound, 2, 3999, reset)
-	h.advance(-20 * time.Minute) // 10:50: the clock stepped back
+	h.advance(-20 * time.Minute) // H:50: the clock stepped back
 	h.metered("zhuravel", opRound, 4, 3998, reset)
-	h.advance(-90 * time.Minute) // 09:20
+	h.advance(-90 * time.Minute) // H-1:20
 	h.metered("zhuravel", opRound, 8, 3997, reset)
 	h.e.flushGitHubCost(h.ctx, true)
 	c, _ := h.costRecord("zhuravel")
 	if len(c.Hours) != 3 {
-		t.Fatalf("hours = %+v, want 09, 10 and 11", c.Hours)
+		t.Fatalf("hours = %+v, want H-1, H and H+1", c.Hours)
 	}
 	for i, want := range []int{8, 5, 2} {
 		if c.Hours[i].Points != want {
