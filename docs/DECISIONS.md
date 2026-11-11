@@ -18253,7 +18253,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     lasting failure, 14 to 18 percent sooner; it also folded each link at each lookup (5,000 loop links and
     5,000 sources: 593 MiB). A lookup now counts a step when it finds links, and its keys one per 4 KiB
     hashed, and each link keeps its fold beside it: the review's trees resolve within 2 percent of their
-    counts before this round, and the 5,000 loop links allocate 21 MiB.
+    counts before the fifth round's step per directory (263, 1,886, 347 and 357 skills, against 268, 1,922,
+    353 and 362; 220, 1,612, 294 and 310 before this round), and the 5,000 loop links allocate 21 MiB.
   - Tests the review's mutations survived (P3): the frontmatter's opening blanks as JS's `\s` (U+FEFF, not
     U+0085), the engine's directory test counting links (a directory of links only), its file test (a file
     `docs` beside `Docs/x.md`), and `dirsOf`'s rule for a link to the root (twenty of them). The memory test
@@ -18269,6 +18270,38 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestImportPathsGivesThePathClaudeCodesMarkdownEnds (escaped brackets in a link's text),
   TestImportPathsReadsTheTextAfterAFrontmatterAsClaudeCodeDoes, TestAnImportOfADirectoryIsThatPathAlone and
   TestALinkLoopUnderTheClaudeDirectoryEndsTheEnginesWalk.
+
+- **The agents' config gate reads a comment block that starts after a processing instruction, and its walk
+  builds no path it cannot open** (2026-11-11, after two reviews of the sixth round's fixes; corrects the
+  baseline of the entry above's counts of the walk, in place). Each finding was checked against the code
+  and Claude Code 2.1.322's own JS, and fixed test first; all four were P3.
+  - Comment blocks that start mid-line. marked ends a processing instruction, a declaration and a CDATA
+    section at their closing `>`, mid-line, and lexes the next block right there, so after a paragraph
+    that quotes `` `<!--` ``, `<?x?><!-->a<!-->@docs/ev<!--z-->il.md` loads `docs/evil.md`;
+    `readCommentBlocks` took a `<!--` only after blanks and a container's marks, and skipped the rest of
+    a line after any `<!--`, which `<?x <!-- ?><!-->` holds. A `<!--` that a `>` and blanks precede now
+    starts a block too (wider: any tag's `>`, four blanks), and the scan goes on right after a `<!--`
+    that starts none; only a line's first `<!--` has its text before it trimmed, so a line of many stays
+    linear. The review's nested-container fuzzer with these tokens found about 1,600 misses per 50,000
+    inputs before and none in 150,000 after.
+  - Tests the review's mutations survived: each class of the start rule's container marks (`>`, the
+    ordered list's, the bullets, the tab), each block after a code span's `<!--` so that the read of the
+    whole text cannot cover it, and the single read of blocks that end at one `-->` (20,001 open comments
+    before one).
+  - The walk's copies. The engine's `dirsOf` copied a path three times for each link a lookup found
+    before it checked the path's length or whether it was seen, and counted no step for it: 1,000 links
+    of 3,900 bytes into a directory of 11,000 sources took 22 s and 153 GB for one head. A link whose path
+    would pass 4096 bytes is now skipped before it is built, and the bytes of each path built count as
+    hashed: 0.15 s and 97 MiB, and the review's skills trees resolve as many skills as before.
+  - The entry above measured its 2 percent against the counts before the fifth round's step per
+    directory, not before its own round's; its sentence now says so.
+  Not covered: a list item or a block quote that marked starts right after such a token, on the same
+  line (`<?x?>- <!-->a<!-->@docs/ev<!--z-->il.md`), whose comment block the start rule still rejects
+  (the round's own fuzzing found it; markup no editor writes). Tests, failing first: cases of
+  TestImportPathsReadsEachCommentBlockOnItsOwn and TestAutoApprovalRefusesAChangeToAFileTheInstructionsImport,
+  TestImportPathsReadsCommentBlocksThatEndAtOneCloseOnce (against the mutants) and
+  TestTheWalksPathsCostTheBytesTheyCopy; TestImportPathsLooksForCommentBlocksOnALineInTimeLinearInIt guards
+  the new scan.
 
 ## The factory (2026-11-03)
 
