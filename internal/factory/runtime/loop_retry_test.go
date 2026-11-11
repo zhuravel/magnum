@@ -96,9 +96,10 @@ func TestARetryInTheSameAttemptStartsARunOutLadderOver(t *testing.T) {
 }
 
 // The live case of 2026-11-10: the same failing check after every turn up
-// to the factory's cap (a compaction at the third). Your retry at the cap
-// starts the ladder over, so the fix turns it gives the writer go out as
-// they are: no fresh session in place of the first, no compaction.
+// to the factory's cap (a compaction at the third). Each of 3 retries at
+// the cap starts the ladder over, from the stage's prompts then, so the 2
+// fix turns it gives the writer go out as they are: exactly 2 prompts, no
+// ErrNoProgress, no fresh session, no compaction.
 func TestARetryAtTheCapStartsTheLadderOverForItsFixTurns(t *testing.T) {
 	g := newRig(t)
 	g.launch("fx-repro")
@@ -112,14 +113,22 @@ func TestARetryAtTheCapStartsTheLadderOverForItsFixTurns(t *testing.T) {
 		t.Fatalf("%d compactions before your retry, want one after the third same failure", compacts)
 	}
 
-	g.clock.Add(time.Minute)
-	g.retried()
-	for i := MaxStagePrompts + 1; i <= MaxStagePrompts+2; i++ {
-		g.failedTurn(i, why)
-	}
-	if c, s := g.ladderSteps(); c != compacts || s != starts {
-		t.Fatalf("your retry's fix turns took %d compactions and %d starts, want none: the ladder starts over at your retry",
-			c-compacts, s-starts)
+	const fixTurns = 2 // the factory's RetryFixTurns
+	for retry := 1; retry <= 3; retry++ {
+		g.clock.Add(time.Minute)
+		g.retried()
+		before := len(g.h.promptTexts())
+		first := MaxStagePrompts + (retry-1)*fixTurns + 1
+		for i := first; i < first+fixTurns; i++ {
+			g.failedTurn(i, why) // fails the test on any refusal, ErrNoProgress among them
+		}
+		if n := len(g.h.promptTexts()) - before; n != fixTurns {
+			t.Fatalf("retry %d let %d prompts out, want %d", retry, n, fixTurns)
+		}
+		if c, s := g.ladderSteps(); c != compacts || s != starts {
+			t.Fatalf("retry %d's fix turns took %d compactions and %d starts, want none: the ladder starts over at your retry",
+				retry, c-compacts, s-starts)
+		}
 	}
 }
 

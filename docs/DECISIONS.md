@@ -24798,7 +24798,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   newest prompt in the attempt starts the ladder over (`retryStartsOver`, the idea of `retriedSince` that the lost and
   stuck ladders use): step 0, its base the stage's prompts now, its failures forgotten, and a loop after it told again
   (`EventNoProgress`). It does so only when the ladder took a step since it last started or the role has the
-  factory's cap of prompts in the attempt, so a retry for another cause under the cap leaves it as it was. The prompt
+  factory's cap of prompts in the attempt. So a retry for another cause under the cap leaves the ladder as it was
+  only while the ladder took no step: a retry after a compaction or a fresh session starts it over too, whatever its
+  cause (a stuck pane, a crashed check, a let-go of another role), as your retry starts the lost and stuck ladders
+  over; the factory's cap of 6 prompts in the attempt bounds what that adds. The prompt
   the retry lets out is newer than it, so a retry starts the ladder over once, with nothing kept in memory, and a
   restart in between changes nothing. A retry whose record fails to write still lets the task go on, and its answer
   ends "your retry was not recorded: the writer gets no more fix turns; retry again", since the record is what both
@@ -24812,8 +24815,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestEveryRetryAtThePromptCapGivesTwoMoreFixTurnsAgain` (three retries, the same failure, two turns each),
   `TestARestartBetweenARetryAndItsFixTurnsKeepsTheirCount` and `TestARetryBelowTheCapAfterARetryAtTheCapGivesNoTurnMore`
   (these two on the new words only), `TestARetryWhoseRecordFailsSaysTheWriterGetsNoMoreFixTurns`, all in internal/factory;
-  `TestARetryInTheSameAttemptStartsARunOutLadderOver` and `TestARetryAtTheCapStartsTheLadderOverForItsFixTurns` in
-  internal/factory/runtime. Passing before and after, as guards against a wrong count:
+  `TestARetryInTheSameAttemptStartsARunOutLadderOver` and `TestARetryAtTheCapStartsTheLadderOverForItsFixTurns` (the
+  live case: the same failing why, 3 retries at the cap, exactly 2 prompts out after each with no step; a start-over
+  that keeps the ladder's old base fails it) in internal/factory/runtime. Passing before and after, as guards against a wrong count:
   `TestAChangeThatFailsTheChecksGetsFixTurnsUpToTheStagesCap` (no retry: 6 prompts, the wording as it was),
   `TestARetryBelowThePromptCapLeavesTheCapAsItWas` (a retry one prompt short of the cap, after a lint that crashed,
   gives no turn more), `TestARetryAtThePromptCapWhoseChecksPassSendsNoFixTurn`,
