@@ -85,7 +85,8 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 	rd.addDeltaCheck(ctx, &jd)
 	rd.addAudit(ctx, &jd) // audit.go
 	rd.addRelated(ctx, &jd)
-	cur := rd.registryPR(ctx) // one read of its checks: the failing checks' and the CI gate's
+	rd.addRepeatPaths(ctx, &jd) // repeat_paths.go
+	cur := rd.registryPR(ctx)   // one read of its checks: the failing checks' and the CI gate's
 	rd.addFailingChecks(ctx, &jd, cur)
 	ciGate := rd.applyCIGate(ctx, &jd, cur) // approval_gates.go
 	rd.mu.Lock()

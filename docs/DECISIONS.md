@@ -18672,6 +18672,32 @@ skill versions); people add theirs to the sections before it, at the end of the 
   rank line's pointer to the verdict, 37; section 8's "success or not", 22; "in your last review" after
   magnum's re-review line, 20; `former_logins`' "usually empty", 15; post_review's dry run, 13). The ceiling
   of 40,000 (Codex's output budget) stays; it leaves 198.
+- **A re-review names the paths whose P1 or P2 findings came back in three or more rounds** (2026-11-12, spec
+  07 of the 2026-11-11 run, item 6; serves section 6's "a mechanism that cannot be completed" of 2026-10-12).
+  That rule posted no finding from 2026-10-12 to 2026-11-11: the judge sees only its own threads and cannot
+  count the rounds per file. Since 2026-11-01 four (PR, path) pairs drew P1 or P2 findings in three or more
+  rounds; one path drew 8 findings over rounds 3, 6, 12, 25, 26, 27 and 35 of a PR that reached round 36.
+  When a re-review's or a recovery's judge prompt goes out (its own pass too), the round reads the PR's
+  findings from the registry (`store.FindingsByPR`; a posted round records them, with its round) and writes
+  `repeat-paths.json` to the report directory: each path with a posted P0 to P2 finding in three or more
+  rounds (P3s and rejected candidates left out; a path inside the checkout made relative), with those rounds,
+  the titles of those findings by round and, for a title ending `(in the fix for <earlier title>)`, that
+  title and the latest earlier round whose posted finding carries it (`in_the_fix_for`,
+  `in_the_fix_for_round`), the most rounds first. The prompts name it as `repeat_paths` after `evidence`
+  (judge-shared.md's `context-fields`, `agents.JudgeData.RepeatPaths`) only when a path qualifies; with none,
+  an earlier round's file on the head is removed. A first review, a continued turn, a blind replay and a local
+  round get none; a failure to read warns and the review goes on, as for `related_prs`. Titles stay in the file,
+  never in a prompt or an event (the `round.repeat_paths` event counts paths and rounds). SKILL.md lists it
+  among section 0's re-review and recovery fields ("`threads_file` and `repeat_paths` (section 6);", 16 bytes),
+  and section 6 follows the rule with "`repeat_paths` lists the paths with P1 or P2 findings in three or more
+  rounds: a new case on one from the same mechanism is that finding; name the mechanism." (158), so the
+  skill goes from 39,802 to 39,976 bytes and `skillMaxBytes` with it; the 40,000 ceiling leaves 24. The round
+  reads the registry, as `related_prs` does, not the engine: the judge's data is built in the round. Tests,
+  failing first: TestARereviewNamesThePathsWithP1OrP2FindingsInThreeOrMoreRounds (a re-review, its own pass
+  and a recovery get the entry for P1 or P2 findings in rounds 1, 3 and 5; a path with them in two rounds, a
+  P3 or a rejected candidate does not count; a first review gets no key, and a stale file goes),
+  TestInTheFixForReadsTheEarlierTitle, TestANewCaseOnARepeatPathIsTheOneStructuralFinding and
+  TestSkillDescribesEveryMagnumField's new field.
 
 ## The factory (2026-11-03)
 

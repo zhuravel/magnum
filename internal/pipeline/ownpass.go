@@ -160,6 +160,7 @@ func (rd *round) ownPassTurn(ctx context.Context, run store.Run, marker string) 
 	}
 	rd.addThreads(ctx, &jd)
 	rd.addRelated(ctx, &jd)
+	rd.addRepeatPaths(ctx, &jd)
 	text, err := rd.r.Agents.RolePrompt(judge, config.PromptOwnPass, jd)
 	if err != nil {
 		return fail(ReportFailed, err.Error()), nil

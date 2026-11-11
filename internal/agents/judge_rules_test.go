@@ -11,8 +11,9 @@ import (
 // The judge rules of 2026-11-12 (the operator approved each): what a choice
 // the PR states or copies covers, what `style_only` never is, a newly
 // reached model's defaults, a wrong value at P2, and a case that ends as on
-// the base. This file sorts before skill_pins_test.go, so its pins are
-// recorded before the pins file is compared.
+// the base, then the paths whose findings came back in three or more rounds.
+// This file sorts before skill_pins_test.go, so its pins are recorded before
+// the pins file is compared.
 
 // skillSection is section n of SKILL.md, from its "## <n>. " heading to the
 // next "## " heading, or "" when the skill has no such section.
@@ -132,5 +133,25 @@ func TestACaseThePRDoesNotReachThatEndsAsOnTheBaseIsP3AtMost(t *testing.T) {
 	}, nil)
 	if !strings.Contains(skillSection(4), "Report only a problem that this PR introduces or exposes. "+rule) {
 		t.Error("the rule on a case that ends as on the base does not follow section 4's first sentence")
+	}
+}
+
+// Section 6's rule that a mechanism two fixes patched cannot be completed
+// posted no finding from 2026-10-12 to 2026-11-11: the judge sees only its
+// own threads and cannot count rounds per file, while one path drew 8 P1 or
+// P2 findings over 7 rounds of a PR that reached round 36. A re-review and
+// a recovery name repeat-paths.json as `repeat_paths` (section 0's list),
+// and section 6 makes a new case there from the same mechanism that one
+// finding, which names the mechanism and cites the rounds.
+func TestANewCaseOnARepeatPathIsTheOneStructuralFinding(t *testing.T) {
+	const rule = "`repeat_paths` lists the paths with P1 or P2 findings in three or more rounds: " +
+		"a new case on one from the same mechanism is that finding; name the mechanism."
+	skillSays(t, []string{
+		"Re-review and recovery: `threads_file` and `repeat_paths` (section 6);",
+		"post it as one finding that the mechanism cannot be completed: name the structural fix and cite the rounds, " +
+			"even against a standing decision whose reason this answers. " + rule,
+	}, nil)
+	if !strings.Contains(skillSection(6), rule) {
+		t.Error("the repeat_paths rule is not in section 6, beside the rule on a mechanism that cannot be completed")
 	}
 }

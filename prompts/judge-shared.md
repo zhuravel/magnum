@@ -249,6 +249,9 @@ stakes: {{.Stakes}}
 {{- if .EvidenceMap}}
 evidence: {{.EvidenceMap}}
 {{- end}}
+{{- if .RepeatPaths}}
+repeat_paths: {{.RepeatPaths}}
+{{- end}}
 {{- end}}
 
 {{define "related-field"}}

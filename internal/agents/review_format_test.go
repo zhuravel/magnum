@@ -650,8 +650,13 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // 4's covers (69), the rank line's pointer to the verdict (37), section 8's
 // "success or not" (22), "in your last review" after magnum's re-review line
 // (20), `former_logins`' "usually empty" (15) and post_review's dry run (13).
+// Then 39,976 (2026-11-12, spec 07's item 6: 174 bytes) for `repeat_paths`,
+// the paths with P1 or P2 findings in three or more rounds: among section 0's
+// re-review and recovery fields (16) and section 6's sentence that a new
+// case on one from the same mechanism is the one structural finding, which
+// names the mechanism (158); the ceiling below leaves 24.
 // Every rule added must replace or shorten text.
-const skillMaxBytes = 39802
+const skillMaxBytes = 39976
 
 // skillCeilingBytes bounds SKILL.md whatever skillMaxBytes says. Codex's
 // default output budget returns at most 10,000 tokens of one tool call's
@@ -693,7 +698,7 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 	d.Readiness = Readiness{Failed: 1, File: "/r/readiness.json", Checks: []ReadinessCheck{
 		{Kind: ReadinessReady, Command: "bin/db-ready", Status: ReadinessFailed, Duration: "1s"}}}
 	d.RelatedPRs, d.HistoryFile, d.DocsFile, d.TicketFile = "/r/related.json", "/r/history.json", "/r/docs.json", "/r/ticket.md"
-	d.EvidenceFile, d.EvidenceMap = "/r/evidence.json", "/r/../evidence.json"
+	d.EvidenceFile, d.EvidenceMap, d.RepeatPaths = "/r/evidence.json", "/r/../evidence.json", "/r/repeat-paths.json"
 	d.ProjectChecks = "Codex ran without the PR's AGENTS.md changes; Claude ran without the PR's CLAUDE.md changes"
 	d.FailingChecks = "/r/failing-checks.json"
 	d.DeltaCheck, d.DeltaLines, d.DeltaFile, d.Replies = true, 4, "/r/delta-check.json", 2

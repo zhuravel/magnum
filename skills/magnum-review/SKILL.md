@@ -26,7 +26,7 @@ The latest `<magnum>` block holds:
 - `notes` (when present): the repository notes file. `notes_dir`: its harness directory; `notes_harness`: the files there now; `notes_lock`, `notes_unlock`: take and release its lock (section 2).
 - `result_file`: where to write the JSON result. `post_review`, `post_replies` (re-reviews): the commands that post your review and thread replies (sections 7, 8). `dry_run`: when `true`, post nothing.
 - `blind` (a `magnum eval` replay) and `post_merge` (GitHub merged the PR first): the prompt says what they change.
-- Re-review only: `previous_review_id`, `previous_head_sha`, `since`, `force_pushed`, `base_merged`, `delta_check`, `moved_from`. Re-review and recovery: `threads_file` (section 6) and `former_logins`, earlier logins of this PR's reviews (the prompt says how to treat them).
+- Re-review only: `previous_review_id`, `previous_head_sha`, `since`, `force_pushed`, `base_merged`, `delta_check`, `moved_from`. Re-review and recovery: `threads_file` and `repeat_paths` (section 6); `former_logins`, earlier logins of this PR's reviews (the prompt says how to treat them).
 
 Read `readiness` before any check: do not rerun one that is not `ok`; skip the checks it blocks as `skipped (machine)` (section 7).
 
@@ -152,7 +152,7 @@ Sentences: one fact each, at most 25 words; active voice; condition before resul
 
 ## 6. Re-review mode (`mode: rereview`, `continue` or `recovery`)
 
-Scope: what the prompt names, with the full PR diff as context. Do not re-derive an earlier finding the new commits leave unchanged: confirm and count it. A proved finding your earlier reviews missed on PR code is new, never `outside_diff`: end its title with `(missed earlier)`. A finding in code written to fix an earlier one ends its title with `(in the fix for <earlier title>)`. When fixes of two or more of your findings patched one mechanism (a word list, a pattern set, a list of cases) and a new case still gets through, post it as one finding that the mechanism cannot be completed: name the structural fix and cite the rounds, even against a standing decision whose reason this answers.
+Scope: what the prompt names, with the full PR diff as context. Do not re-derive an earlier finding the new commits leave unchanged: confirm and count it. A proved finding your earlier reviews missed on PR code is new, never `outside_diff`: end its title with `(missed earlier)`. A finding in code written to fix an earlier one ends its title with `(in the fix for <earlier title>)`. When fixes of two or more of your findings patched one mechanism (a word list, a pattern set, a list of cases) and a new case still gets through, post it as one finding that the mechanism cannot be completed: name the structural fix and cite the rounds, even against a standing decision whose reason this answers. `repeat_paths` lists the paths with P1 or P2 findings in three or more rounds: a new case on one from the same mechanism is that finding; name the mechanism.
 
 magnum's `Reviewed <sha>; N commits arrived…` line is no author reply: its commits are this re-review's.
 

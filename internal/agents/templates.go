@@ -619,6 +619,14 @@ type JudgeData struct {
 	// prompts, which say to read the unknown and stale areas first; "" when
 	// the PR has none, in a continued turn and in a blind replay.
 	EvidenceMap string
+	// RepeatPaths is repeat-paths.json in the report directory
+	// (pipeline.RepeatPathsFile): each path of the PR with posted P1 or P2
+	// findings in three or more rounds, with those rounds, the findings'
+	// titles and the earlier finding each "(in the fix for ...)" names,
+	// rendered as `repeat_paths` by the own pass and the rereview and
+	// recovery prompts; "" when no path qualifies, in a first review, a
+	// continued turn, a blind replay and a local round.
+	RepeatPaths string
 	// FailingChecks is failing-checks.json in the report directory: the
 	// head's failed CI checks as the poller last saw them (prs.ci_json:
 	// name, workflow, state, time), rendered as `failing_checks` by the
