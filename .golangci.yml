@@ -253,9 +253,6 @@ linters:
         path: internal/engine/
         text: "`(\\(\\*Engine\\)\\.(requestFix|prepareFix|settleFix|prepare|finish)|externalOf)`"
       - linters: [gocyclo]
-        path: internal/factory/review\.go
-        text: "`\\(\\*Engine\\)\\.decideRound`" # until its split, in flight on 2026-11-11, lands
-      - linters: [gocyclo]
         path: internal/notes/curate\.go
         text: "`Validate`"
       - linters: [nestif]
