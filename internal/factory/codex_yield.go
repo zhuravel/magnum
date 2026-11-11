@@ -35,10 +35,10 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
-	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/usage"
 )
 
@@ -268,7 +268,7 @@ func (e *Engine) sayYield(ctx context.Context, t registry.Task, st config.Factor
 	if e.saidOnce(ctx, t, lead) {
 		return nil
 	}
-	if err := e.reg.AppendEvent(ctx, t.ID, "stage", registry.PhaseInfo, execx.Redact(lead+": "+y.cause+tail)); err != nil {
+	if err := e.reg.AppendEvent(ctx, t.ID, "stage", registry.PhaseInfo, scrub.Text(lead+": "+y.cause+tail)); err != nil {
 		e.log.Warn("record a yield to Codex's budget", "task", t.ID, "role", y.role, "err", err)
 		return err
 	}

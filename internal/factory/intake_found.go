@@ -17,9 +17,9 @@ import (
 	"strings"
 
 	"github.com/zhuravel/magnum/internal/config"
-	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/jira"
+	"github.com/zhuravel/magnum/internal/scrub"
 )
 
 // foundBudget is the time all the reads of the keys of one start, or of one
@@ -54,9 +54,10 @@ const (
 type foundRefusal struct{ key, cause string }
 
 // note is the refusal in the words of the preview and of the task's events,
-// redacted as every event is (the cause names no token and no answer).
+// its secrets masked (scrub.Secrets: the preview shows you the hosts it
+// names; the event scrubs it whole, Engine.event).
 func (r foundRefusal) note(tail string) string {
-	return execx.Redact("Jira refused " + r.key + ": " + r.cause + "; " + tail)
+	return scrub.Secrets("Jira refused " + r.key + ": " + r.cause + "; " + tail)
 }
 
 // jiraRefusal is a refusal of Jira's in the words of a cause, without the

@@ -249,6 +249,28 @@ func TestAnAlertBecomesAToastAndASidebarToken(t *testing.T) {
 	}
 }
 
+// An alert is kept scrubbed, as every event the factory keeps (a wait that
+// names a host and a secret: the copy's database refused it), and it still
+// stands while its task waits on you for that: the wait it is compared with
+// is scrubbed alike, so its toast fires and nothing drops it as "no longer
+// waits on you".
+func TestAnAlertIsKeptScrubbedAndStandsWhileItsWaitHolds(t *testing.T) {
+	r := newAlertRig(t)
+	task := r.task("PR-12415", registry.TaskActive, "investigate")
+	r.rt.setWorkspaces(task.ID, "w1")
+	r.e.toOperator(r.ctx, task, "db1.example.com refused the copy's server (mysql -uroot -ppw-flag app)", "a test")
+	r.tick()
+	alerts := r.texts(task.ID, "alert")
+	if len(alerts) != 1 || !strings.Contains(alerts[0], "<host> refused") || strings.Contains(alerts[0], "pw-flag") {
+		t.Fatalf("alert events %q; want one, its host and password masked", alerts)
+	}
+	r.after(2 * time.Minute)
+	if dropped := r.texts(task.ID, alertDropped); len(dropped) > 0 {
+		t.Fatalf("the alert was dropped while its task waits on you for it: %q", dropped)
+	}
+	r.wantToasts("after the 2 minutes", shownToast{"factory: 1 needs you", "PR-12415 <host> refused the copy's server"})
+}
+
 // Alerts within 2 minutes of the first merge into one toast; its count is
 // every task that waits on you when it fires, one a toast before already
 // named among them.

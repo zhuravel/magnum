@@ -40,10 +40,10 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
-	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -522,7 +522,7 @@ func (e *Engine) qaToldOfFixStop(ctx context.Context, t registry.Task, stop qaFi
 	if err != nil {
 		return false, err
 	}
-	why := execx.Redact(stop.Why)
+	why := scrub.Text(stop.Why)
 	if slices.ContainsFunc(evs, func(ev registry.Event) bool {
 		return ev.Kind == "alert" && !ev.At.Before(stop.At) && strings.Contains(ev.Text, why)
 	}) {

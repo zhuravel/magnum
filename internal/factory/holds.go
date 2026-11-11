@@ -28,6 +28,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -132,8 +133,8 @@ func (e *Engine) hold(ctx context.Context, failures []error) (Hold, bool) {
 	for _, f := range failures {
 		c := infraCause(f)
 		if tf, ok := errors.AsType[taskFailure](f); ok && c == "" {
-			if sig, same := e.sameOnTwoTasks(tf, now); same {
-				c = "the same failure on 2 tasks: " + sig
+			if sig, same := e.sameOnTwoTasks(tf, now); same { // told apart redacted, kept scrubbed
+				c = "the same failure on 2 tasks: " + scrub.Text(sig)
 			}
 		}
 		if c != "" && cause == "" {

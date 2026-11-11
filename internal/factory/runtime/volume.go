@@ -37,9 +37,9 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
-	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/herdr"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -76,7 +76,7 @@ func deniedLine(screen string) string {
 			last = line
 		}
 	}
-	return textx.Clip(execx.Redact(last), 200)
+	return textx.Clip(scrub.Text(last), 200)
 }
 
 // paneMark is what a pane showed before a launch: its blank last lines
@@ -638,7 +638,7 @@ func (r *Runtime) stopFor(ctx context.Context, t registry.Task, a registry.Attem
 	others, liaison, err := r.othersLive(ctx, t, pr, snap)
 	if err != nil {
 		return &WaitError{Who: pauseAgent, What: "the factory's herdr server cannot read " + volume + " (macOS blocks it), and the " +
-			"factory cannot tell what else lives in it: " + textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200)}
+			"factory cannot tell what else lives in it: " + textx.Clip(textx.FirstLine(scrub.Text(err.Error())), 200)}
 	}
 	if len(others) > 0 || liaison {
 		holders := others
@@ -679,7 +679,7 @@ func (r *Runtime) stopFor(ctx context.Context, t registry.Task, a registry.Attem
 			return r.tell(ctx, t, st, h, "the factory's herdr has no server.stop (herdr 0.9.5 and later have it), so the factory "+
 				"cannot restart its server", "")
 		}
-		why := textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200)
+		why := textx.Clip(textx.FirstLine(scrub.Text(err.Error())), 200)
 		r.event(ctx, t.ID, registry.PhaseFail, "the stop of the factory's herdr server failed: "+why)
 		return &WaitError{Who: pauseAgent, What: "the factory's herdr server cannot read " + volume + " (macOS blocks it), and its " +
 			"stop failed (" + why + "): the factory tries again"}
@@ -754,7 +754,7 @@ func (r *Runtime) healStep(ctx context.Context, t registry.Task, a registry.Atte
 		if err := r.relaunchRole(ctx, t, a, st, stagger); err != nil {
 			r.log.Warn("relaunch a role on the fresh herdr server", "task", t.ID, "role", name, "err", err)
 			return &WaitError{Who: pauseAgent, What: "the factory relaunches " + name + " on its fresh herdr server once its start " +
-				"goes through: " + textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200)}
+				"goes through: " + textx.Clip(textx.FirstLine(scrub.Text(err.Error())), 200)}
 		}
 	}
 	r.mu.Lock()
@@ -837,7 +837,7 @@ func (r *Runtime) othersLive(ctx context.Context, t registry.Task, pr store.PR, 
 		}
 		cmd := "a process"
 		if len(pi.Foreground) > 0 {
-			cmd = textx.Clip(execx.Redact(cmp.Or(pi.Foreground[0].Cmdline, pi.Foreground[0].Name)), 60)
+			cmd = textx.Clip(scrub.Text(cmp.Or(pi.Foreground[0].Cmdline, pi.Foreground[0].Name)), 60)
 		}
 		others = append(others, r.paneWhose(ctx, p.ID)+" runs "+cmd)
 	}
@@ -900,7 +900,7 @@ func (r *Runtime) keyOf(ctx context.Context, id int64) string {
 // event records one of the heal's steps on task id (kind herdr, redacted);
 // a failed write is logged.
 func (r *Runtime) event(ctx context.Context, id int64, phase, text string) {
-	if err := r.reg.AppendEvent(context.WithoutCancel(ctx), id, "herdr", phase, execx.Redact(text)); err != nil &&
+	if err := r.reg.AppendEvent(context.WithoutCancel(ctx), id, "herdr", phase, scrub.Text(text)); err != nil &&
 		!errors.Is(err, registry.ErrNotFound) {
 		r.log.Warn("record a herdr heal's event", "task", id, "err", err)
 	}

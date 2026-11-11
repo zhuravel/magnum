@@ -31,8 +31,8 @@ type Event struct {
 
 // AppendEvent writes an audit row at the clock's time. taskID 0 is an event of
 // the daemon itself; any other must be an existing task (ErrNotFound). Kind is
-// required and phase must be begin, ok, fail or info. Callers redact secrets
-// (execx.Redact) before they put command output into text.
+// required and phase must be begin, ok, fail or info. Callers scrub text
+// (scrub.Text: secrets, emails and hosts) before they put it into an event.
 func (r *Registry) AppendEvent(ctx context.Context, taskID int64, kind, phase, text string) error {
 	if kind == "" {
 		return errors.New("append event: kind is required")

@@ -48,6 +48,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/jira"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -386,7 +387,7 @@ func (e *Engine) trackCause(r trackRead) (cause string, site bool) {
 		if je, ok := errors.AsType[*jira.Error](err); ok {
 			return je.Error()
 		}
-		return textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200)
+		return textx.Clip(textx.FirstLine(scrub.Text(err.Error())), 200)
 	}
 	if pe, ok := errors.AsType[*jira.PartError](r.err); ok {
 		return trackPartCause(pe.Part) + words(pe.Err), false

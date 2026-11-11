@@ -28,6 +28,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/herdr"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -485,7 +486,7 @@ func (r *Runtime) blocked(ctx context.Context, o agents.Observation) []Event {
 	case agents.HealthBlocked, agents.HealthTrustDialog:
 		ev.Kind, ev.Reason = EventBlocked, "dialog: "+cmpText(h.Detail, lastLine(screen))
 	default:
-		ev.Kind, ev.Reason = EventBlocked, "dialog: "+cmpText(execx.Redact(lastLine(screen)), "a dialog the factory does not answer")
+		ev.Kind, ev.Reason = EventBlocked, "dialog: "+cmpText(scrub.Text(lastLine(screen)), "a dialog the factory does not answer")
 	}
 	return []Event{ev}
 }
@@ -494,7 +495,7 @@ func (r *Runtime) blocked(ctx context.Context, o agents.Observation) []Event {
 func lastLine(text string) string {
 	for _, l := range slices.Backward(strings.Split(strings.ReplaceAll(text, "\r", ""), "\n")) {
 		if l = strings.TrimSpace(l); l != "" {
-			return textx.Clip(execx.Redact(l), 200)
+			return textx.Clip(scrub.Text(l), 200)
 		}
 	}
 	return ""

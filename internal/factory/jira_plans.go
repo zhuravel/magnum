@@ -60,10 +60,10 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
-	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/jira"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -511,7 +511,7 @@ func (e *Engine) writeComment(ctx context.Context, t registry.Task, key, m, k st
 		err = fsx.WriteFileAtomic(filepath.Join(dir, jiraCommentFile), []byte(jiraComment(t, m, e.now())), 0o600)
 	}
 	if err != nil {
-		msg := textx.FirstLine(execx.Redact(err.Error()))
+		msg := textx.FirstLine(scrub.Text(err.Error()))
 		if eerr := e.reg.EndEffect(ctx, k, registry.EffectFail, msg); eerr != nil {
 			e.trackStoreFailed(eerr)
 		}

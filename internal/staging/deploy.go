@@ -436,15 +436,29 @@ type mergeRead struct {
 	workflows  []string
 }
 
-// isMigration reports whether path is a migration: a file under a db
-// directory's child whose name holds "migrate" (db/migrate,
-// db/sharded_migrate, db/data_migrate), the root's or an engine's. Jenkins
-// runs every such kind on a staging deploy, so naming one too many in the
-// y/N is safe, and missing one is not.
+// migrationFileRe is a migration's file name: a version, "_", its name and
+// .rb (20261111090000_add_x_to_credits.rb).
+var migrationFileRe = regexp.MustCompile(`^[0-9]+_[^/]*\.rb$`)
+
+// isMigration reports whether path is a migration: a file whose name is a
+// version, "_", a name and .rb at any depth under a db directory's child
+// whose name holds "migrate" (db/migrate, db/sharded_migrate,
+// db/data_migrate), the root's or an engine's, never under a spec or test
+// directory (spec/db/reporting_migrate holds the specs of migrations), and
+// no README or helper without a version in such a folder. Jenkins runs every
+// such kind on a staging deploy, so missing one is not safe. It is a copy of
+// config.MigrationFolder's rule, which this package does not import, and
+// gives its answer for every path (TestStagingsMigrationRuleIsTheConfigs).
 func isMigration(path string) bool {
 	parts := strings.Split(path, "/")
+	if !migrationFileRe.MatchString(parts[len(parts)-1]) {
+		return false
+	}
 	for i := 0; i+2 < len(parts); i++ {
-		if parts[i] == "db" && strings.Contains(parts[i+1], "migrate") {
+		switch {
+		case parts[i] == "spec" || parts[i] == "test":
+			return false
+		case parts[i] == "db" && strings.Contains(parts[i+1], "migrate"):
 			return true
 		}
 	}

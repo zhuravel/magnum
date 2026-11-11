@@ -30,9 +30,9 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/evalrun"
-	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -226,7 +226,7 @@ func (e *Engine) runRecovery(ctx context.Context, tasks []registry.Task, left *a
 	r.tries++
 	r.next = e.now().Add(claimBackoff(r.tries))
 	e.recovery = r
-	if why := textx.Clip(textx.FirstLine(execx.Redact(cause.Error())), 300); why != r.why {
+	if why := textx.Clip(textx.FirstLine(scrub.Text(cause.Error())), 300); why != r.why {
 		r.why = why
 		e.log.Warn("the agents' recovery failed; what failed runs again", "err", cause)
 		e.event(ctx, 0, "recover", registry.PhaseFail, fmt.Sprintf("the agents' recovery runs again at %s for what failed (once herdr "+

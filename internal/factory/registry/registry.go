@@ -15,8 +15,10 @@
 // fixed-width RFC3339 UTC text, and compare-and-set state changes that return
 // ErrConflict or ErrNotFound.
 //
-// Callers redact secrets (execx.Redact) before they put text into an event, a
-// result or an error column: the registry stores what it is given.
+// Callers scrub text before they put it into an event or an error column
+// (scrub.Text: secrets, emails and hosts) or into a request's result, the
+// answer you read (scrub.Secrets: its hosts stay): the registry stores what
+// it is given.
 package registry
 
 import (

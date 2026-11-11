@@ -62,6 +62,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -1149,12 +1150,12 @@ func (e *Engine) qaUserFacing(ctx context.Context, t registry.Task, st config.Fa
 func qaWhenFailed(when string, err error) string {
 	if ee, ok := errors.AsType[*execx.ExitError](err); ok {
 		why := fmt.Sprintf("the user-facing check `%s` exited %d", when, ee.Code)
-		if line := textx.Clip(textx.FirstLine(execx.Redact(ee.Stderr)), qaWhyRunes); line != "" {
+		if line := textx.Clip(textx.FirstLine(scrub.Text(ee.Stderr)), qaWhyRunes); line != "" {
 			why += ": " + line
 		}
 		return why
 	}
-	return fmt.Sprintf("the user-facing check `%s` did not run to its end: %s", when, textx.Clip(textx.FirstLine(execx.Redact(err.Error())), qaWhyRunes))
+	return fmt.Sprintf("the user-facing check `%s` did not run to its end: %s", when, textx.Clip(textx.FirstLine(scrub.Text(err.Error())), qaWhyRunes))
 }
 
 // qaSession goes on with task t's session of run and returns it once it is
@@ -1278,7 +1279,7 @@ func (e *Engine) startQASession(ctx context.Context, t registry.Task, c Copy, ru
 		if errors.Is(err, ErrHeld) {
 			return err // the deferred teardown ends the session
 		}
-		sess.err = fmt.Errorf("the copy's server did not start: %s", textx.Clip(textx.FirstLine(execx.Redact(err.Error())), qaWhyRunes))
+		sess.err = fmt.Errorf("the copy's server did not start: %s", textx.Clip(textx.FirstLine(scrub.Text(err.Error())), qaWhyRunes))
 		cancel()
 		close(sess.done)
 		ok = true
@@ -1291,7 +1292,7 @@ func (e *Engine) startQASession(ctx context.Context, t registry.Task, c Copy, ru
 		defer cancel()
 		defer func() {
 			if p := recover(); p != nil {
-				msg := textx.Clip(strings.Join(strings.Fields(execx.Redact(fmt.Sprint(p))), " "), panicRunes)
+				msg := textx.Clip(strings.Join(strings.Fields(scrub.Text(fmt.Sprint(p))), " "), panicRunes)
 				e.log.Error("panic in a QA boot's probe; the daemon goes on", "task", t.ID, "panic", msg, "stack", execx.Redact(string(debug.Stack())))
 				sess.ready, sess.err = false, qaPanic{msg: msg}
 			}
@@ -1314,7 +1315,7 @@ func (e *Engine) bootQA(ctx context.Context, url, host, ready string, boot time.
 		case err == nil && status >= 200 && status < 400:
 			return true, nil
 		case err != nil:
-			last = textx.Clip(textx.FirstLine(execx.Redact(err.Error())), qaWhyRunes)
+			last = textx.Clip(textx.FirstLine(scrub.Text(err.Error())), qaWhyRunes)
 		default:
 			last = "it answered " + strconv.Itoa(status)
 		}
@@ -1371,7 +1372,7 @@ func (e *Engine) qaBrowser(ctx context.Context, t registry.Task, sess *qaSession
 		if ctx.Err() != nil {
 			return err
 		}
-		return e.qaUnavailable(ctx, t, sess.run, "the factory's Chrome did not start: "+textx.Clip(textx.FirstLine(execx.Redact(err.Error())), qaWhyRunes))
+		return e.qaUnavailable(ctx, t, sess.run, "the factory's Chrome did not start: "+textx.Clip(textx.FirstLine(scrub.Text(err.Error())), qaWhyRunes))
 	}
 	sess.run.CDP = cdp
 	sess.copy.Env[qaEnvCDP] = cdp
@@ -1531,7 +1532,7 @@ func (e *Engine) endQA(ctx context.Context, t registry.Task, why, cut string) er
 	step := func(what string, fn func() error) {
 		defer func() {
 			if p := recover(); p != nil {
-				msg := textx.Clip(strings.Join(strings.Fields(execx.Redact(fmt.Sprint(p))), " "), panicRunes)
+				msg := textx.Clip(strings.Join(strings.Fields(scrub.Text(fmt.Sprint(p))), " "), panicRunes)
 				e.log.Error("panic in a QA teardown; the teardown goes on", "task", t.ID, "step", what, "panic", msg,
 					"stack", execx.Redact(string(debug.Stack())))
 				errs = append(errs, fmt.Errorf("%s panicked: %s", what, msg))
@@ -1793,7 +1794,7 @@ func (e *Engine) quitWalkers(ctx context.Context, t registry.Task, st config.Fac
 		if err := e.d.Runtime.QuitRole(ctx, t, role.Name, why); err != nil {
 			e.log.Warn("quit the agent of a cut QA run", "task", t.ID, "role", role.Name, "err", err)
 			e.event(ctx, t.ID, "qa", registry.PhaseFail, "quit the "+role.Name+" agent of the cut run: "+
-				textx.Clip(textx.FirstLine(execx.Redact(err.Error())), qaWhyRunes))
+				textx.Clip(textx.FirstLine(scrub.Text(err.Error())), qaWhyRunes))
 			continue
 		}
 		e.event(ctx, t.ID, "qa", registry.PhaseOK, "quit the "+role.Name+" agent: "+why)

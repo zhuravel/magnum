@@ -27,6 +27,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -325,7 +326,7 @@ func (e *Engine) settleKept(ctx context.Context, t registry.Task) (why string, e
 		e.event(ctx, t.ID, "check", registry.PhaseBegin, "puts back "+list+" in "+name+": a check left them, and nobody else could have "+
 			"changed them since it began")
 		if err := e.d.Git.RestoreTracked(ctx, rec.Copy, back...); err != nil {
-			line := clipEnd(textx.FirstLine(execx.Redact(err.Error())), 240) // git says what went wrong at the end
+			line := clipEnd(textx.FirstLine(scrub.Text(err.Error())), 240) // git says what went wrong at the end
 			e.event(ctx, t.ID, "check", registry.PhaseFail, "put back "+list+" in "+name+": "+line)
 			return fmt.Sprintf("%s still has %s, which the factory could not put back (%s): commit or undo them, or let the task go "+
 				"on once git works there again; the factory never hands them to the writer", name, list, line), nil

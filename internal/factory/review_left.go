@@ -34,6 +34,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -176,7 +177,7 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 		strings.Join(counts, ", "), saved))
 	undo, err := saveLeft(ctx, e.d.Git, c.Path, dir, base, left)
 	if err != nil {
-		line := clipEnd(textx.FirstLine(execx.Redact(err.Error())), 240)
+		line := clipEnd(textx.FirstLine(scrub.Text(err.Error())), 240)
 		e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("save what %s left in %s: %s", name, c.Name, line))
 		return e.leftWait(t, c, cy, round, left, "", "the factory could not save it, so it put none of it back: "+line)
 	}
@@ -188,7 +189,7 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 	perr := putBackLeft(ctx, e.d.Git, c.Path, left, cy.Started)
 	line := ""
 	if perr != nil {
-		line = clipEnd(textx.FirstLine(execx.Redact(perr.Error())), 240)
+		line = clipEnd(textx.FirstLine(scrub.Text(perr.Error())), 240)
 		e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("put back what %s left in %s: %s", name, c.Name, line))
 	}
 	now, err := e.roundLeft(ctx, t, c, cy.HeadBefore, cy.N)

@@ -50,6 +50,7 @@ import (
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/pipeline"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/textx"
 	"github.com/zhuravel/magnum/internal/usage"
 )
@@ -595,7 +596,7 @@ func (e *Engine) reviewWait(ctx context.Context, t registry.Task, roles []string
 		busy, why, err := e.d.Magnum.Busy(ctx)
 		switch {
 		case err != nil:
-			return waitMagnum, textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 300), nil
+			return waitMagnum, textx.Clip(textx.FirstLine(scrub.Text(err.Error())), 300), nil
 		case busy:
 			return waitMagnum, why + "; the local review yields to it", nil
 		case why != "" && e.magnumNotes[t.ID] != why:
@@ -1308,7 +1309,7 @@ func (e *Engine) sortRound(seen []seenFinding, answered map[string]string) round
 // roundError is a round's own error as you read it: its first line,
 // redacted and clipped.
 func roundError(s string) string {
-	return textx.Clip(textx.FirstLine(execx.Redact(s)), 240)
+	return textx.Clip(textx.FirstLine(scrub.Text(s)), 240)
 }
 
 // loopMissing are the reviewers a round of the loop went without, by each

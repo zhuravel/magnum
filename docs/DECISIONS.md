@@ -25278,6 +25278,93 @@ skill versions); people add theirs to the sections before it, at the end of the 
   alike. Tests (failing first): `TestRealHasFileIsAQuietAnswerForAFileTheRevisionLacks` in internal/gitx and
   `TestTheProofsExistenceProbesLogNoWarningForAFileTheRevisionLacks` in internal/factory.
 
+- **The writer's fix budget counts its fix turns only** (2026-11-12, found live 2026-11-10). `fixBudgetOf` counted
+  every ledger entry of the role in the attempt that was not settled as never sent, against
+  `runtime.MaxStagePrompts` (6): the first prompt, the watchdog's nudge of a hung turn, the resume of a lost pane
+  and the prompt of your answers with the fix turns. Task 9 (attempt `t9-coding-1`) got its first prompt, a
+  nudge, two fix turns, your answers, a fix turn and your answers again, and went to you "after 6 prompts in the
+  stage" with 3 fix turns, where a writer with no other prompt gets 5; you then waited 171 minutes on that cause.
+  After a retry at the cap, one fix turn and one nudge spent the 2 fix turns of `RetryFixTurns`.
+  - A fix turn is a ledger entry whose text starts with `fixLead` (`mergeAsked` already read the merge's fix turn
+    so), alone or after the attempt's first prompt in the prompt a fresh session starts with
+    (`runtime.TurnText`, which reads what `freshText` carries after its lead): the watchdog's loop guard can
+    hand a fix turn to a fresh session, whose entry starts with the first prompt. `mergeAsked` reads through it
+    too.
+  - The cap is `StageFixTurns` (`runtime.MaxStagePrompts - 1` = 5) fix turns in the attempt: the number a writer
+    with no other prompt had, so a plain run reaches it at the same 6th prompt. A retry at the cap is one
+    recorded once the role had that many fix turns, and gives `RetryFixTurns` (2) fix turns after it, as before.
+    The runtime's own loop guard (watchdog.go, compact, then a fresh session, then no progress) still counts
+    every prompt; a retry still starts it over, and its first step (a compaction) can now come before the cap.
+  - The wait says what it counts: "the fx-writer agent's change does not pass after 5 fix turns in the stage:
+    <why>", and after a retry at the cap "after 2 more fix turns since your retry at the cap: <why>". The
+    README, prompts/README.md and `magnum factory retry --help` say so.
+  Tests (failing first): `TestOnlyFixTurnsSpendTheWritersFixBudget` (a first prompt, a nudge, two fix turns, your
+  answers and a resume are 2 fix turns of 5, and a retry with 6 prompts but 2 fix turns is no retry at the cap),
+  `TestANudgeAfterARetryAtTheCapSpendsNoFixTurn` (1 fix turn and 1 nudge leave 1 of 2), both in internal/factory;
+  `TestTurnTextIsWhatAFreshSessionCarriesAfterTheFirstPrompt` in internal/factory/runtime.
+
+- **The text the factory keeps has its secrets masked, and its one-line records their emails and hosts too**
+  (2026-11-12). `runtime/scrub.go` says the scrub runs before every place the factory keeps text, but the output of
+  the checks' commands (`outputOf`) and many waits and events went through `execx.Redact` only, which leaves
+  `DB_PASSWORD=x`, `secret_key_base: "x"`, `{"password"=>"x"}`, OpenAI, Stripe and AWS keys, `mysql2://app:x@host`,
+  `mysql -px` and `PGPASSWORD=x psql` as they are. That output goes into `precheck.md` (a failing lint, specs, jest,
+  migration) and `factory-proof.json`, which the pr-body agent reads into a PR on GitHub. No task held one yet.
+  internal/scrub has two passes: `scrub.Secrets` masks those shapes and every secret `execx.Redact` masks;
+  `scrub.Text` masks them and then emails, host names and IPv4 addresses. Which one a kept text gets depends on who
+  reads it and what for:
+  - The checks' output (`outputOf`: `precheck.md`, `factory-proof.json`) gets `scrub.Secrets`, the same tail cut, no
+    terminal stripping, as before. These files are the writer's evidence of what failed (its fix turns name them,
+    prompts/README.md), and AGENTS.md keeps `scrub.Secrets` for a failing test's or a CI log's output: with
+    `scrub.Text`, a spec that expected "a@example.com" and got "A@example.com" read `<email>` twice, a
+    `127.0.0.1:3306` refusal and a URL lost their host, and a file named as a host is (`docker-compose.dev.yml`,
+    `webpack.config.dev.js`) lost its name, so the writer could not see what to fix. `failures()` and the lint's
+    offenses are read from that output: a failing example's file and place and a lint's `path:line` keep their
+    names, and a secret in an example's words is masked alike at the head and on the base, so the same examples
+    come out with the same keys. (The precheck's tails of a stopped run already used `scrub.Text`, and still do.)
+  - The one-line records get `scrub.Text`, as the ledger and your inputs do: they name a cause, they go into the
+    registry, toasts and the screens, and the whole evidence stays in the task's files and the logs. These are
+    `othersLive` (a pane's command line in the task's wait and its herdr events), the event writers
+    (`Engine.event`, so every event and alert; `Runtime.event`; the yield to Codex's budget), `cleanLine` (a
+    crash's stderr line in a wait, a hold and `precheck.md`), the waits and events made of an error (coding's
+    checks, the local review, a kept change, the review's leftovers, the publish, the recovery, the stage's
+    events, the precheck's heal, QA's errors, the herdr server's heal, a dialog's line), the run error columns of
+    the agents store, the tracking row's error, a Jira effect's error, a broken copy's reason and its events, and
+    the hold's "the same failure on 2 tasks" reason (its signature still told apart redacted, as before). What an
+    event is compared with is scrubbed alike: `alertStands` (else an alert whose wait names a host dropped as "no
+    longer waits on you" at once), `qaToldOfFixStop`, `eventOnce` (which compared raw text before) and `saidOnce`.
+  - Your answers get `scrub.Secrets`: a request's result (what `magnum factory` commands print), the talk's answer
+    and the Jira refusal of the preview ("the factory reads no linear.app issue: add what to do after EX-15" names
+    the tracker you must act on); their events are scrubbed whole.
+  - Left on `execx.Redact`: lines only logged or only shown on a screen; text handed to an agent where a host or
+    a file name must stay exact, and what is compared with it (QA's `qaWord` nudge naming the host a walk left,
+    `qaQuote` and `qaClip`, which `qa-accepted.json` holds from before; `handoff.md`; `answers.md`, your own
+    words); the process names of a memory hold; `paneEnv`'s test of whether a value is a secret; the prompt hash
+    `typed.go` compares with the agents package's `prompt_text`.
+  Rejected: `scrub.Text` for the checks' output (this change's first cut, which read the lint's offenses from a
+  raw copy to keep file names: the writer lost its evidence all the same); scrubbing the output only where
+  `precheck.md` and `factory-proof.json` are written (each new writer would have to remember it). Tests (failing
+  first): `TestPrecheckMdKeepsNoSecretACheckPrinted` (each shape in a failing lint, spec, jest and migration run),
+  `TestFactoryProofJSONKeepsNoSecretASpecRunPrinted`, `TestPrecheckMdKeepsTheEmailsAndHostsAFailurePrints` (an
+  email, a host and `127.0.0.1:3306` kept, `DB_PASSWORD=` masked), `TestTheScrubbedSpecOutputNamesTheSameFailures`,
+  `TestTheScrubbedLintOutputKeepsAFileNamedLikeAHost` (the last three failing against `scrub.Text`),
+  `TestALintCrashsAskKeepsNoSecretOfItsStderr` and `TestAnAlertIsKeptScrubbedAndStandsWhileItsWaitHolds` in
+  internal/factory; `TestAPaneOfYoursThatHoldsTheStopIsNamedWithoutItsSecret` in internal/factory/runtime.
+
+- **staging's migration rule is config.MigrationFolder's** (2026-11-12). `staging.isMigration` was a copy of
+  `config.MigrationFolder`'s rule from before that rule was narrowed (the entry on migration folders above): it took
+  every file under a `db/*migrate*` folder, so `spec/db/reporting_migrate/*_spec.rb`, `db/migrate/README.md` and
+  `db/migrate/support/helper.rb` counted as migrations. In magnum.db, talkable #12160 and #12220 list spec paths
+  next to their real migrations. The rule drives the deploy-first nudge (`DeployBeforeMerge`, the board's and the
+  factory screen's `StagingFirst`), the deploy plan's list of the migrations a merge adds and the needs-you stop on
+  migrations the deploy's question did not name. It now takes what `MigrationFolder` takes: a file whose name is a
+  version, `_`, a name and `.rb`, at any depth in a `db` directory's child whose name holds `migrate` (the root's
+  or an engine's), never under a `spec` or `test` directory. `internal/staging` still does not import
+  `internal/config` (the rule stays copied, not imported), and a test pins the two copies to the same answers.
+  Test (failing first): `TestStagingsMigrationRuleIsTheConfigs` in internal/staging (a migration in `db/migrate`,
+  in `db/sharded_migrate`, in an engine's `db/migrate` and in a subfolder of `db/migrate`; a spec under
+  `spec/db/reporting_migrate`, one under `test/db/migrate`, `db/migrate/README.md`,
+  `db/migrate/support/helper.rb` and two structure files).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

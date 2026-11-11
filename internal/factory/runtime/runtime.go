@@ -36,6 +36,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -1146,7 +1147,7 @@ func (r *Runtime) settleRun(ctx context.Context, runID, outcome, why string) err
 	if !ok {
 		to = store.RunFailed
 	}
-	why = execx.Redact(strings.TrimSpace(why))
+	why = scrub.Text(strings.TrimSpace(why))
 	if err := r.st.TransitionRun(ctx, runID, []string{store.RunEnded}, to, func(u *store.RunUpdate) {
 		u.Set("outcome", outcome)
 		if ok {

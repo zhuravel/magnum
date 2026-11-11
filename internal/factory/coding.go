@@ -26,6 +26,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -562,7 +563,7 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 			e.dropCheck(t.ID)
 			e.checkRanToItsEnd(t.ID)
 			return operatorProblem(*t, "the checks", fmt.Sprintf("the factory's checks of %s did not run to their end "+
-				"%d times: %s", short(bh.Head), n, clipEnd(textx.FirstLine(execx.Redact(res.Err.Error())), 240))), "", false, nil
+				"%d times: %s", short(bh.Head), n, clipEnd(textx.FirstLine(scrub.Text(res.Err.Error())), 240))), "", false, nil
 		}
 		e.retryCheck(ctx, t, res.Err)
 		return nil, "", true, nil // a wait: a check that did not run to its end runs again after checkRetry
@@ -630,7 +631,7 @@ func (e *Engine) keptFirst(ctx context.Context, t *registry.Task) (p *endProblem
 				e.checkRanToItsEnd(t.ID)
 				e.clearPrecheckWait(ctx, t)
 				return operatorProblem(*t, "the checks", fmt.Sprintf("the factory's checks of %s did not run to their end "+
-					"%d times: %s", short(x.head), n, clipEnd(textx.FirstLine(execx.Redact(res.Err.Error())), 240))), false, nil
+					"%d times: %s", short(x.head), n, clipEnd(textx.FirstLine(scrub.Text(res.Err.Error())), 240))), false, nil
 			}
 		}
 		e.dropCheck(t.ID)
@@ -676,7 +677,7 @@ func (e *Engine) retryCheck(ctx context.Context, t *registry.Task, err error) {
 		e.forgetCheck(t.ID, x)
 		return
 	}
-	what := "the checks did not run to their end (" + clipEnd(textx.FirstLine(execx.Redact(err.Error())), 240) + "); they run again at " +
+	what := "the checks did not run to their end (" + clipEnd(textx.FirstLine(scrub.Text(err.Error())), 240) + "); they run again at " +
 		next.Local().Format("15:04")
 	e.waitOn(ctx, *t, waitPrecheck, what)
 	t.WaitsWho, t.WaitsWhat = waitPrecheck, what

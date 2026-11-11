@@ -5444,10 +5444,11 @@ func MigrationFolder(path string) (folder string, ok bool)
     never a subfolder of it (db/migrate/archive/<version>_x.rb is db/migrate's).
     A migration folder is a db directory's child whose name holds
     "migrate", the root's or an engine's (db/migrate, db/sharded_migrate,
-    engines/billing/db/migrate), but never one under a spec or test directory
-    (spec/db/reporting_migrate holds the specs of migrations). It narrows
-    internal/staging's isMigration (a staging deploy migrates every such folder)
-    to the migrations themselves, and names their folder.
+    engines/billing/db/migrate), but never one under a spec or test
+    directory (spec/db/reporting_migrate holds the specs of migrations).
+    internal/staging's isMigration is a copy of this rule (that package does
+    not import config), and a test there pins the two to the same answers;
+    this one also names the folder.
 
 func ParseDuration(s string) (time.Duration, error)
     ParseDuration is time.ParseDuration plus a leading whole-day count: "7d",
@@ -14209,13 +14210,21 @@ const RedisOffsetEnv = "REDIS_DB_OFFSET"
 
 const RetryFixTurns = 2
     RetryFixTurns is how many more fix turns a role whose change the factory's
-    checks still refuse gets after your retry at its stage's prompt cap
-    (runtime.MaxStagePrompts prompts in the attempt), counted from that retry;
-    each later retry at the cap gives them again (fixBudgetOf).
+    checks still refuse gets after your retry at its stage's cap (StageFixTurns
+    fix turns in the attempt), counted from that retry; each later retry at the
+    cap gives them again (fixBudgetOf).
 
 const ReviewFixPrompt = "factory-review-fix.md"
     ReviewFixPrompt is the prompt of the writer's fix turn in the local review:
     the coding stage's roles get it in place of their own prompt.
+
+const StageFixTurns = runtime.MaxStagePrompts - 1
+    StageFixTurns is how many fix turns a role whose change the factory's
+    checks refuse gets in its stage's attempt: the runtime's prompt cap
+    (runtime.MaxStagePrompts) less the attempt's first prompt, so a role that
+    got no other prompt reaches both at once. Only fix turns count (fixTurn):
+    the watchdog's nudge of a hung turn, the resume of a lost pane, the nudge
+    for a file and the prompt of your answers spend none (fixBudgetOf).
 
 
 VARIABLES
@@ -15324,10 +15333,10 @@ type ProofRun struct {
 
 	// Has unexported fields.
 }
-    ProofRun is one spec run of a proof: the command, its exit, the end of
-    its output (redacted), the tree of the commit it ran on (the base's,
-    with the head's spec files on it, for the base run), how long it took,
-    and whether it hung (the factory stopped it at its bound: exit -1).
+    ProofRun is one spec run of a proof: the command, its exit, the end of its
+    output (its secrets masked: outputOf), the tree of the commit it ran on (the
+    base's, with the head's spec files on it, for the base run), how long it
+    took, and whether it hung (the factory stopped it at its bound: exit -1).
 
 type QABlocked struct {
 	What        string `json:"what"`
@@ -15857,8 +15866,9 @@ connection per process, BEGIN IMMEDIATE transactions, timestamps as fixed-width
 RFC3339 UTC text, and compare-and-set state changes that return ErrConflict or
 ErrNotFound.
 
-Callers redact secrets (execx.Redact) before they put text into an event,
-a result or an error column: the registry stores what it is given.
+Callers scrub text before they put it into an event or an error column
+(scrub.Text: secrets, emails and hosts) or into a request's result, the answer
+you read (scrub.Secrets: its hosts stay): the registry stores what it is given.
 
 CONSTANTS
 
@@ -16534,10 +16544,10 @@ func (r *Registry) AnswerHistory(ctx context.Context, questionID int64) ([]Answe
     exist, has none.
 
 func (r *Registry) AppendEvent(ctx context.Context, taskID int64, kind, phase, text string) error
-    AppendEvent writes an audit row at the clock's time. taskID 0 is an event
-    of the daemon itself; any other must be an existing task (ErrNotFound).
-    Kind is required and phase must be begin, ok, fail or info. Callers redact
-    secrets (execx.Redact) before they put command output into text.
+    AppendEvent writes an audit row at the clock's time. taskID 0 is an event of
+    the daemon itself; any other must be an existing task (ErrNotFound). Kind
+    is required and phase must be begin, ok, fail or info. Callers scrub text
+    (scrub.Text: secrets, emails and hosts) before they put it into an event.
 
 func (r *Registry) AppendLedger(ctx context.Context, e LedgerEntry) (LedgerEntry, error)
     AppendLedger writes e before its prompt is sent and returns the stored
@@ -17273,6 +17283,12 @@ func TaskSessions(ctx context.Context, st *store.Store, id int64) ([]store.Sessi
     TaskSessions are the sessions of task id in the factory's agents store st,
     oldest first: every generation of every role the runtime launched for it.
     A task never launched has none.
+
+func TurnText(text string) string
+    TurnText is the prompt of the turn a ledger entry's text (scrubbed) starts:
+    what the caller meant to say, which the prompt of a fresh session
+    (freshText) carries after the attempt's first prompt, else text itself.
+    The factory tells its fix turns by it.
 
 func UnknownReason(task int64, roles ...string) string
     UnknownReason is the wait of task whose prompts to roles may or may not have

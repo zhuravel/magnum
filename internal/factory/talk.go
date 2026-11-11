@@ -25,6 +25,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -87,7 +88,7 @@ func (e *Engine) runTalk(q registry.Request, p TalkPayload) {
 	ctx := e.bgCtx
 	defer func() {
 		if r := recover(); r != nil {
-			msg := textx.Clip(strings.Join(strings.Fields(execx.Redact(fmt.Sprint(r))), " "), panicRunes)
+			msg := textx.Clip(strings.Join(strings.Fields(scrub.Secrets(fmt.Sprint(r))), " "), panicRunes)
 			e.log.Error("panic in a talk; the daemon goes on", "request", q.ID, "task", p.TaskID, "panic", msg,
 				"stack", execx.Redact(string(debug.Stack())))
 			e.complete(context.WithoutCancel(ctx), q, fmt.Errorf("the factory daemon failed on this request: %s", msg), "")
@@ -159,7 +160,7 @@ func (e *Engine) talkTask(ctx context.Context, p TalkPayload) (string, error) {
 	case errors.Is(talkErr, agents.ErrHumanActive):
 		return where + "; its first prompt waits: you typed into its pane within human_cooldown; the next talk sends it", nil
 	}
-	why := textx.Clip(strings.Join(strings.Fields(execx.Redact(textx.FirstLine(talkErr.Error()))), " "), panicRunes)
+	why := textx.Clip(strings.Join(strings.Fields(scrub.Secrets(textx.FirstLine(talkErr.Error()))), " "), panicRunes)
 	return where + "; its first prompt waits, and the next talk sends it: " + why, nil
 }
 

@@ -51,6 +51,7 @@ import (
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -307,11 +308,11 @@ func (e *Engine) dropStale(ctx context.Context, tasks []registry.Task) {
 // card revision changed is the same), or, for an ended task's leftovers
 // (its copy's release refused, what a base run left in its copy), while
 // they last; a server a QA teardown failed to stop, while it is left. An
-// alert's text is kept redacted (Engine.event), so what it is compared with
+// alert's text is kept scrubbed (Engine.event), so what it is compared with
 // is too.
 func (e *Engine) alertStands(byID map[int64]registry.Task, ev registry.Event) bool {
 	line := alertLine(ev.Text)
-	same := func(text string) bool { return line == alertLine(execx.Redact(text)) }
+	same := func(text string) bool { return line == alertLine(scrub.Text(text)) }
 	if _, left := e.servers[ev.TaskID]; left && ev.TaskID != 0 && strings.Contains(ev.Text, serverLeftWords) {
 		return true
 	}

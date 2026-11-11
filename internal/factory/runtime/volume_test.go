@@ -519,6 +519,27 @@ func TestOldScrollbackIsNoDenial(t *testing.T) {
 	}
 }
 
+// The command line of a pane of yours that holds the stop goes into the
+// task's wait and its herdr events scrubbed (scrub.Text), as all the text
+// the factory keeps: execx.Redact left the value of PGPASSWORD=x psql.
+func TestAPaneOfYoursThatHoldsTheStopIsNamedWithoutItsSecret(t *testing.T) {
+	g := newRig(t)
+	pane := g.h.yourPane("PGPASSWORD=pgpw-env psql -h db")
+	g.h.exitAtStart = deniedScreen
+	g.launch("fx-repro")
+
+	_, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug")
+	w, ok := errors.AsType[*WaitError](err)
+	if !ok || !strings.Contains(w.What, "a pane of yours, "+pane+", runs PGPASSWORD=<redacted> psql") {
+		t.Fatalf("Send = %v, want a wait that names your pane's command, scrubbed", err)
+	}
+	for _, text := range append(g.herdrEvents(), w.What) {
+		if strings.Contains(text, "pgpw-env") {
+			t.Fatalf("%q holds the pane's password", text)
+		}
+	}
+}
+
 // A pane of yours in the factory's session that runs something (no agent
 // of the factory's: a console, a server, an editor) holds the stop, and the
 // task's wait names it; once it is an idle shell, the next prompt heals.

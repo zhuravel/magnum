@@ -1514,9 +1514,9 @@ var migrationFileRe = regexp.MustCompile(`^[0-9]+_[^/]*\.rb$`)
 // holds "migrate", the root's or an engine's (db/migrate,
 // db/sharded_migrate, engines/billing/db/migrate), but never one under a
 // spec or test directory (spec/db/reporting_migrate holds the specs of
-// migrations). It narrows internal/staging's isMigration (a staging deploy
-// migrates every such folder) to the migrations themselves, and names
-// their folder.
+// migrations). internal/staging's isMigration is a copy of this rule (that
+// package does not import config), and a test there pins the two to the
+// same answers; this one also names the folder.
 func MigrationFolder(path string) (folder string, ok bool) {
 	parts := strings.Split(path, "/")
 	if !migrationFileRe.MatchString(parts[len(parts)-1]) {

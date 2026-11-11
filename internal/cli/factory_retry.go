@@ -25,13 +25,14 @@ func newFactoryRetryCmd(c *Context) *cobra.Command {
 			"the task's id or its Jira key, and the command waits for the daemon's answer as `start` does. The "+
 			"stage's own checks run again (a file you fixed, the local review's fresh loop after it stopped for you, "+
 			"what a check kept for you, the publish's checks before any step). "+
-			fmt.Sprintf("A retry at the prompt cap (a writer whose change the factory's checks refuse after %d prompts in the "+
-				"stage) runs the checks again; for checks that still fail, the writer gets %d more fix turns, then the task "+
-				"waits on you again (\"does not pass after %d more prompts since your retry at the cap\"), and each retry at "+
-				"the cap gives %d again. The agent's loop guard starts over at your retry too, so it lets those turns "+
-				"out rather than stop them as a loop without progress. When your retry cannot be recorded, its answer says so: the task "+
-				"goes on, and the writer gets no more fix turns. ", runtime.MaxStagePrompts, factory.RetryFixTurns,
-				factory.RetryFixTurns, factory.RetryFixTurns)+
+			fmt.Sprintf("A retry at the cap of fix turns (a writer whose change the factory's checks refuse after %d fix turns "+
+				"in the stage; the watchdog's nudges, resumes and the prompts of your answers spend none) runs the checks again; "+
+				"for checks that still fail, the writer gets %d more fix turns, then the task waits on you again (\"does not "+
+				"pass after %d more fix turns since your retry at the cap\"), and each retry at the cap gives %d again. The "+
+				"agent's loop guard starts over at your retry too, so it lets those turns out rather than stop them as a loop "+
+				"without progress. When your retry cannot be recorded, its answer says so: the task goes on, and the writer "+
+				"gets no more fix turns. ", factory.StageFixTurns, factory.RetryFixTurns, factory.RetryFixTurns,
+				factory.RetryFixTurns)+
 			"A prompt whose delivery is unknown is still sent to nobody (`magnum factory let-go` lets one go, once you "+
 			"looked at its pane), and a task Codex never works on stays so. When the task waits on a precheck failure and "+
 			"nothing changed since (the branch's head, the precheck commands, their environment), the answer says so, and "+

@@ -55,6 +55,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -276,8 +277,8 @@ type stageRole struct {
 
 // The prompts a role gets after its first (stageRole.next): its one nudge
 // for a file, a fix turn for a change the factory's checks refused (as many
-// as the stage's prompt cap allows), the one to go on after a pause, your
-// answers.
+// as its cap of fix turns allows, StageFixTurns), the one to go on after a
+// pause, your answers.
 const (
 	nextNudge    = "nudge"
 	nextFix      = "fix"
@@ -285,10 +286,18 @@ const (
 	nextAnswers  = "answers"
 )
 
+// StageFixTurns is how many fix turns a role whose change the factory's
+// checks refuse gets in its stage's attempt: the runtime's prompt cap
+// (runtime.MaxStagePrompts) less the attempt's first prompt, so a role that
+// got no other prompt reaches both at once. Only fix turns count (fixTurn):
+// the watchdog's nudge of a hung turn, the resume of a lost pane, the nudge
+// for a file and the prompt of your answers spend none (fixBudgetOf).
+const StageFixTurns = runtime.MaxStagePrompts - 1
+
 // RetryFixTurns is how many more fix turns a role whose change the
-// factory's checks still refuse gets after your retry at its stage's prompt
-// cap (runtime.MaxStagePrompts prompts in the attempt), counted from that
-// retry; each later retry at the cap gives them again (fixBudgetOf).
+// factory's checks still refuse gets after your retry at its stage's cap
+// (StageFixTurns fix turns in the attempt), counted from that retry; each
+// later retry at the cap gives them again (fixBudgetOf).
 const RetryFixTurns = 2
 
 // nudgeLead starts a role's one nudge for its end fact, fixLead a fix turn
@@ -754,7 +763,7 @@ func (e *Engine) leaveStage(ctx context.Context, t registry.Task, st config.Fact
 	}
 	if err != nil {
 		e.log.Warn("set aside the files of a role that left its stage", "task", t.ID, "role", role.Name, "err", err)
-		e.event(ctx, t.ID, "stage", registry.PhaseFail, lead+": its files were not set aside: "+textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200))
+		e.event(ctx, t.ID, "stage", registry.PhaseFail, lead+": its files were not set aside: "+textx.Clip(textx.FirstLine(scrub.Text(err.Error())), 200))
 	}
 	if len(moved) == 0 && e.saidOnce(ctx, t, lead) {
 		return
@@ -766,15 +775,17 @@ func (e *Engine) leaveStage(ctx context.Context, t registry.Task, st config.Fact
 	e.event(ctx, t.ID, "stage", registry.PhaseInfo, text)
 }
 
-// saidOnce reports whether one of task t's stage events starts with lead. A
-// failed read counts as not said: the event is written again, as a repeat
-// costs less than an event never written.
+// saidOnce reports whether one of task t's stage events starts with lead,
+// scrubbed as the events are kept (Engine.event). A failed read counts as
+// not said: the event is written again, as a repeat costs less than an
+// event never written.
 func (e *Engine) saidOnce(ctx context.Context, t registry.Task, lead string) bool {
 	evs, err := e.reg.TaskEvents(ctx, t.ID, "stage", 0)
 	if err != nil {
 		e.log.Warn("read a task's stage events", "task", t.ID, "err", err)
 		return false
 	}
+	lead = scrub.Text(lead)
 	return slices.ContainsFunc(evs, func(ev registry.Event) bool { return strings.HasPrefix(ev.Text, lead) })
 }
 
@@ -1051,7 +1062,7 @@ func (e *Engine) ended(ctx context.Context, tp *registry.Task, st config.Factory
 		retake := func(err error) string {
 			if err != nil {
 				e.log.Warn("check the coding stage's end", "task", t.ID, "err", err)
-				what := "the branch cannot be read: " + textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200)
+				what := "the branch cannot be read: " + textx.Clip(textx.FirstLine(scrub.Text(err.Error())), 200)
 				e.waitOn(ctx, t, waitPrecheck, what)
 				tp.WaitsWho, tp.WaitsWhat = waitPrecheck, what
 			}
@@ -1124,38 +1135,45 @@ func changeWait(r *stageRole, p *endProblem, b fixBudget) string {
 	return fmt.Sprintf("the %s agent's change does not pass after %s: %s", r.runAs.Name, b, p.why)
 }
 
-// fixBudget is a role's prompts in its stage's attempt against its cap of
-// fix turns (fixBudgetOf): n prompts counted against max, since your newest
-// retry at the cap when retried, else since the attempt began.
+// fixBudget is a role's fix turns in its stage's attempt against its cap
+// (fixBudgetOf): n fix turns counted against max, since your newest retry
+// at the cap when retried, else since the attempt began.
 type fixBudget struct {
 	n, max  int
 	retried bool
 }
 
 // String is the cap a change that still fails reached, as its wait names
-// it: "6 prompts in the stage", or after your retry at the cap "2 more
-// prompts since your retry at the cap" (the newest such retry: a retry for
-// another cause since is not the one it counts from).
+// it: "5 fix turns in the stage", or after your retry at the cap "2 more
+// fix turns since your retry at the cap" (the newest such retry: a retry
+// for another cause since is not the one it counts from).
 func (b fixBudget) String() string {
 	if b.retried {
-		return fmt.Sprintf("%d more prompts since your retry at the cap", b.max)
+		return fmt.Sprintf("%d more fix turns since your retry at the cap", b.max)
 	}
-	return fmt.Sprintf("%d prompts in the stage", b.max)
+	return fmt.Sprintf("%d fix turns in the stage", b.max)
 }
 
-// fixBudgetOf counts the prompts that went, or may have gone, to role r in
-// attempt a of task t's stage (the ledger's entries not settled as never
-// sent) against its cap of fix turns: runtime.MaxStagePrompts in the
-// attempt. Your retry at that cap (a retry of the task at the stage,
-// recorded once the role had the cap's prompts) starts a cap of
-// RetryFixTurns prompts sent after it, and a retry at that cap starts
-// another. A retry while the role was under its cap (the task waited on you
-// for another cause: a question, a QA stop, a check that crashed) changes
-// nothing, and a let-go (recorded as a retry with its role) is none. A new
-// attempt counts from 0, as the runtime's count of a loop without progress
-// starts again on a new attempt.
+// fixTurn reports whether text, a ledger entry's, is a fix turn: a prompt
+// that starts with fixLead, alone or after the attempt's first prompt in
+// the one a fresh session starts with (runtime.TurnText).
+func fixTurn(text string) bool { return strings.HasPrefix(runtime.TurnText(text), fixLead) }
+
+// fixBudgetOf counts the fix turns (fixTurn) that went, or may have gone,
+// to role r in attempt a of task t's stage (the ledger's entries not
+// settled as never sent) against its cap: StageFixTurns in the attempt.
+// Its other prompts (the first, the watchdog's nudges, the resume of a lost
+// pane, the nudge for a file, your answers) spend none; the runtime's own
+// guard against a loop without progress counts them all. Your retry at that
+// cap (a retry of the task at the stage, recorded once the role had the
+// cap's fix turns) starts a cap of RetryFixTurns fix turns sent after it,
+// and a retry at that cap starts another. A retry while the role was under
+// its cap (the task waited on you for another cause: a question, a QA stop,
+// a check that crashed) changes nothing, and a let-go (recorded as a retry
+// with its role) is none. A new attempt counts from 0, as the runtime's
+// count of a loop without progress starts again on a new attempt.
 func (e *Engine) fixBudgetOf(ctx context.Context, t registry.Task, a registry.Attempt, r *stageRole) (fixBudget, error) {
-	b := fixBudget{max: runtime.MaxStagePrompts}
+	b := fixBudget{max: StageFixTurns}
 	entries, err := e.reg.LedgerOf(ctx, t.ID)
 	if err != nil {
 		return b, err
@@ -1166,7 +1184,7 @@ func (e *Engine) fixBudgetOf(ctx context.Context, t registry.Task, a registry.At
 	}
 	var sent []time.Time
 	for _, en := range entries {
-		if en.Role == r.runAs.Name && en.AttemptID == a.ID && en.Delivered != registry.DeliveredNo {
+		if en.Role == r.runAs.Name && en.AttemptID == a.ID && en.Delivered != registry.DeliveredNo && fixTurn(en.Text) {
 			sent = append(sent, en.Sent)
 		}
 	}
@@ -1191,7 +1209,8 @@ func (e *Engine) fixBudgetOf(ctx context.Context, t registry.Task, a registry.At
 
 // mergeAsked reports whether role r got its fix turn for an unmerged base
 // in attempt a of task t's stage already (a ledger prompt that names it,
-// mergeWhy): the merge turn's one fix turn, which a restart keeps counted.
+// mergeWhy, alone or in a fresh session's first: runtime.TurnText): the
+// merge turn's one fix turn, which a restart keeps counted.
 func (e *Engine) mergeAsked(ctx context.Context, t registry.Task, a registry.Attempt, r *stageRole) bool {
 	entries, err := e.reg.LedgerOf(ctx, t.ID)
 	if err != nil {
@@ -1200,17 +1219,17 @@ func (e *Engine) mergeAsked(ctx context.Context, t registry.Task, a registry.Att
 	}
 	return slices.ContainsFunc(entries, func(en registry.LedgerEntry) bool {
 		return en.Role == r.runAs.Name && en.AttemptID == a.ID && en.Delivered != registry.DeliveredNo &&
-			strings.HasPrefix(en.Text, fixLead+": "+mergeWhy)
+			strings.HasPrefix(runtime.TurnText(en.Text), fixLead+": "+mergeWhy)
 	})
 }
 
 // noValidFile is the wait of a task whose role wrote no valid file after
 // its nudge, whose change still fails the factory's checks at the stage's
-// prompt cap, whose merge turn did not merge the base after its fix turn,
-// or whose end fact needs you (why). For a change it names the stage's cap:
-// a recheck (recheckFailed) checks a role this run of the stage failed, and
-// your retry rebuilds the stage, whose end of the turn (fixOrWait) names the
-// cap your retry at the cap set.
+// cap of fix turns, whose merge turn did not merge the base after its fix
+// turn, or whose end fact needs you (why). For a change it names the
+// stage's cap: a recheck (recheckFailed) checks a role this run of the
+// stage failed, and your retry rebuilds the stage, whose end of the turn
+// (fixOrWait) names the cap your retry at the cap set.
 func noValidFile(r *stageRole, p *endProblem) string {
 	switch {
 	case p.operator:
@@ -1218,7 +1237,7 @@ func noValidFile(r *stageRole, p *endProblem) string {
 	case p.merge != "":
 		return "the " + r.runAs.Name + " agent did not merge " + p.merge
 	case p.change:
-		return changeWait(r, p, fixBudget{max: runtime.MaxStagePrompts})
+		return changeWait(r, p, fixBudget{max: StageFixTurns})
 	}
 	return "the " + r.runAs.Name + " agent wrote no valid " + p.file
 }
@@ -1611,7 +1630,7 @@ func quitWhy(err error) string {
 	if err == nil {
 		return ""
 	}
-	return textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 200)
+	return textx.Clip(textx.FirstLine(scrub.Text(err.Error())), 200)
 }
 
 // quitHeld is what holds task t's stage while the quit of its Codex sessions
@@ -1737,7 +1756,7 @@ func (e *Engine) setAsideBeforeYou(ctx context.Context, t registry.Task, st conf
 		return
 	}
 	e.log.Warn("set aside a refused run's files", "task", t.ID, "err", err)
-	if text := textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 300); !e.saidOnce(ctx, t, text) {
+	if text := textx.Clip(textx.FirstLine(scrub.Text(err.Error())), 300); !e.saidOnce(ctx, t, text) {
 		e.event(ctx, t.ID, "stage", registry.PhaseFail, text)
 	}
 }

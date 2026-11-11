@@ -41,6 +41,7 @@ import (
 	"github.com/zhuravel/magnum/internal/jira"
 	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 	"github.com/zhuravel/magnum/internal/usage"
@@ -1520,9 +1521,10 @@ func (e *Engine) alert(ctx context.Context, taskID int64, text string) {
 	e.event(ctx, taskID, "alert", registry.PhaseInfo, text)
 }
 
-// event writes an audit row (redacted); a failed write is logged.
+// event writes an audit row, scrubbed (scrub.Text: secrets, emails and
+// hosts, as all the text the factory keeps); a failed write is logged.
 func (e *Engine) event(ctx context.Context, taskID int64, kind, phase, text string) {
-	if err := e.reg.AppendEvent(ctx, taskID, kind, phase, execx.Redact(text)); err != nil {
+	if err := e.reg.AppendEvent(ctx, taskID, kind, phase, scrub.Text(text)); err != nil {
 		e.log.Warn("factory event", "task", taskID, "kind", kind, "err", err)
 	}
 }
@@ -1575,7 +1577,7 @@ func (e *Engine) retryLater(t registry.Task, now time.Time) bool {
 // your retry, starts the count again). An error the infrastructure hold
 // covers never comes here (Tick).
 func (e *Engine) taskFailed(ctx context.Context, f taskFailure) {
-	text := textx.Clip(textx.FirstLine(execx.Redact(f.err.Error())), 300)
+	text := textx.Clip(textx.FirstLine(scrub.Text(f.err.Error())), 300)
 	now := e.now()
 	stage := e.stageRan(f.task) // a new task's first pass ran its kind's first stage
 	sf := e.lastFail[f.task.ID]

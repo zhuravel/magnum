@@ -2,6 +2,7 @@ package factory
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/dblock"
 	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 )
 
@@ -392,6 +394,29 @@ func TestALintCrashsAskNamesItsLastStderrLine(t *testing.T) {
 	}
 }
 
+// The line of stderr the ask carries is kept (the task's wait, its alert,
+// precheck.md), so it is scrubbed as all such text, not only redacted: the
+// values of a database's password in it are masked.
+func TestALintCrashsAskKeepsNoSecretOfItsStderr(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12416", "bug")
+	r.fix(task)
+	r.lintCrash = func([]string) string {
+		return "Error: cannot connect: PGPASSWORD=" + leakSecrets[8] + " mysql -uroot -p" + leakSecrets[7] + " app\n"
+	}
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := r.readTask(task.ID, precheckFile)
+	if !res.ForYou || !strings.Contains(res.Why, "PGPASSWORD=<redacted>") {
+		t.Fatalf("precheck %+v; want a failure for you naming its stderr's line, scrubbed", res)
+	}
+	if got := leaks(res.Why + report); len(got) > 0 {
+		t.Fatalf("the ask or %s holds %q: %q", precheckFile, got, res.Why)
+	}
+}
+
 // A lint command that names its format already gets no hint to name one:
 // the hint was wrong when rubocop crashed with `--format emacs` given.
 func TestALintCrashsAskDropsTheFormatHintWhenTheCommandNamesOne(t *testing.T) {
@@ -411,5 +436,178 @@ func TestALintCrashsAskDropsTheFormatHintWhenTheCommandNamesOne(t *testing.T) {
 		if strings.Contains(res.Why, "--format emacs, eslint") || strings.Contains(res.Why, "have it print") {
 			t.Fatalf("%s: the ask %q hints at a format the command names already", lint, res.Why)
 		}
+	}
+}
+
+// leakSecrets are the values of leakProbe, command output that holds a
+// secret in each shape execx.Redact leaves and scrub.Secrets masks (and
+// scrub.Text with it): an env pair, a Rails secret, a Ruby hash, OpenAI,
+// Stripe and AWS keys, a URL's password, mysql's -p and PGPASSWORD. The
+// tokens are built in parts, so no scanner reads the source as holding one.
+var leakSecrets = []string{"hunter2-env", "f3b1c9e8a7d6", "hunter2-hash", "sk-" + "proj-MADEUPMADEUPMADEUP1234",
+	"sk_" + "test_MADEUPMADEUP123456", "AKIA" + "MADEUPMADEUPMADE", "mysqlpw-url", "mysqlpw-flag", "pgpw-env"}
+
+var leakProbe = strings.Join([]string{
+	"DB_PASSWORD=" + leakSecrets[0],
+	`secret_key_base: "` + leakSecrets[1] + `"`,
+	`{"password"=>"` + leakSecrets[2] + `"}`,
+	"openai " + leakSecrets[3],
+	"stripe " + leakSecrets[4],
+	"aws " + leakSecrets[5],
+	"DATABASE_URL=mysql2://app:" + leakSecrets[6] + "@db.example.com/app",
+	"mysql -uroot -p" + leakSecrets[7] + " app",
+	"PGPASSWORD=" + leakSecrets[8] + " psql -h db -U app",
+}, "\n")
+
+// leaks are the leakSecrets that text holds.
+func leaks(text string) []string {
+	var out []string
+	for _, s := range leakSecrets {
+		if strings.Contains(text, s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// precheck.md is kept, and the pr-body agent reads it into a PR on GitHub:
+// what a failing lint, spec run, jest run or migration printed goes into it
+// with its secrets masked (scrub.Secrets), not only redacted.
+func TestPrecheckMdKeepsNoSecretACheckPrinted(t *testing.T) {
+	for _, word := range []string{"bin/lint", "bin/specs", "bin/jest", "bin/rails"} {
+		t.Run(strings.TrimPrefix(word, "bin/"), func(t *testing.T) {
+			r := newCodingRig(t)
+			task := r.codingTask("PR-12412", "feature")
+			r.fix(task)
+			if word == "bin/rails" {
+				r.commit("PR-12412 a column", map[string]string{"db/migrate/20261111090000_add_x_to_credits.rb": "class AddXToCredits < " +
+					"ActiveRecord::Migration[7.1]\n  def change\n    add_column :credits, :x, :integer\n  end\nend\n"})
+			}
+			r.adds = map[string]string{word: leakProbe}
+			res, err := r.e.precheck(r.ctx, task, r.cp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			report := r.readTask(task.ID, precheckFile)
+			if res.Passed || !strings.Contains(report, "DB_PASSWORD=<redacted>") {
+				t.Fatalf("precheck %+v; want it failed, %s naming the output:\n%s", res, precheckFile, report)
+			}
+			if got := leaks(report + res.Why); len(got) > 0 {
+				t.Fatalf("%s or the precheck's why holds %q:\n%s\n%s", precheckFile, got, res.Why, report)
+			}
+		})
+	}
+}
+
+// precheck.md is the writer's evidence of what failed (its fix turns name
+// it): the output keeps what a failure prints for the writer to act on, an
+// email, a host, an address and its port, and masks only the secrets. A
+// spec that expected "a@example.com" and got "A@example.com" reads so, not
+// "<email>" twice.
+func TestPrecheckMdKeepsTheEmailsAndHostsAFailurePrints(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12417", "bug")
+	r.fix(task)
+	r.adds = map[string]string{"bin/specs": `expected "a@example.com", got "A@example.com"` + "\n" +
+		"Mysql2::Error::ConnectionError: Can't connect to MySQL server on '127.0.0.1:3306'\n" +
+		"Net::OpenTimeout: shop.example.com\n" +
+		"DB_PASSWORD=" + leakSecrets[0]}
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := r.readTask(task.ID, precheckFile)
+	if res.Passed {
+		t.Fatalf("precheck %+v, want the red specs to fail it", res)
+	}
+	for _, want := range []string{`expected "a@example.com", got "A@example.com"`, "'127.0.0.1:3306'", "shop.example.com",
+		"DB_PASSWORD=<redacted>"} {
+		if !strings.Contains(report, want) {
+			t.Errorf("%s does not hold %q:\n%s", precheckFile, want, report)
+		}
+	}
+	if got := leaks(report); len(got) > 0 {
+		t.Fatalf("%s holds %q:\n%s", precheckFile, got, report)
+	}
+}
+
+// The lint's offenses are read from the kept output, whose scrub keeps file
+// names: a changed file named as a host is (webpack.config.dev.js, which a
+// pass that masks hosts would read as <host>.js) keeps its name, and an
+// offense on a changed line of it fails the precheck. What precheck.md
+// names of it holds no secret.
+func TestTheScrubbedLintOutputKeepsAFileNamedLikeAHost(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12414", "bug")
+	r.fix(task)
+	const file = "app/javascript/webpack.config.dev.js"
+	r.commit("PR-12414 the dev config", map[string]string{file: "module.exports = {}\n"})
+	r.lint = func([]string) string {
+		return file + ":1:1: error: no-undef, DB_PASSWORD=" + leakSecrets[0] + " (eslint)\n"
+	}
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Passed || !strings.Contains(res.Why, "lint: 1 offense on the changed lines") {
+		t.Fatalf("precheck %+v; want the offense on the changed line of %s to fail it", res, file)
+	}
+	report := r.readTask(task.ID, precheckFile)
+	if !strings.Contains(report, file+":1:1: error: no-undef") || len(leaks(report)) > 0 {
+		t.Fatalf("%s names the offense in %s %q, with the secret %q:\n%s", precheckFile, file, "no-undef", leaks(report), report)
+	}
+}
+
+// factory-proof.json is kept, and the pr-body agent reads it too: the
+// output of the proof's spec runs, on the base and at the head, has its
+// secrets masked.
+func TestFactoryProofJSONKeepsNoSecretASpecRunPrinted(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12413", "bug")
+	r.fix(task)
+	r.adds = map[string]string{"bin/specs": leakProbe}
+	p, err := r.e.runProof(r.ctx, task, r.cp)
+	if err != nil {
+		t.Fatalf("runProof: %v", err)
+	}
+	saved := r.readTask(task.ID, factoryProofFile)
+	var kept Proof
+	if err := json.Unmarshal([]byte(saved), &kept); err != nil || !strings.Contains(kept.Base.Output, "PGPASSWORD=<redacted>") ||
+		!strings.Contains(kept.Head.Output, "DB_PASSWORD=<redacted>") {
+		t.Fatalf("%s (%v) keeps base %q, head %q; want both runs' output, scrubbed", factoryProofFile, err, kept.Base.Output,
+			kept.Head.Output)
+	}
+	if got := leaks(saved + p.Base.Output + p.Head.Output); len(got) > 0 {
+		t.Fatalf("%s holds %q:\n%s", factoryProofFile, got, saved)
+	}
+}
+
+// failures reads a spec run's output after the scrub as it read it before:
+// the same failing examples, in the same files and places, and the same
+// keys at the head and on the base, so a spec red on the base too is still
+// not the change's. An example's words keep their email, host and address,
+// and a secret in them is masked alike in both runs.
+func TestTheScrubbedSpecOutputNamesTheSameFailures(t *testing.T) {
+	out := leakProbe + "\n\nFailed examples:\n\n" +
+		"rspec ./spec/models/credit_spec.rb:12 # Credit mails alice@example.com from shop.example.com\n" +
+		"rspec ./spec/models/user_spec.rb[1:2:3] # User with DB_PASSWORD=hunter2 logs in\n" +
+		"rspec spec/requests/api_spec.rb:40 # API answers 10.0.4.12 with a token: abc\n"
+	raw := failures(out)
+	head := failures(outputOf(execx.Result{Stdout: []byte(out)}))
+	base := failures(outputOf(execx.Result{Stdout: []byte(out)}))
+	if len(raw) != 3 || len(head) != len(raw) {
+		t.Fatalf("the scrubbed output names %d failures, the raw %d; want the 3 of the raw: %+v", len(head), len(raw), head)
+	}
+	place := func(f specFailure) string { return strings.Fields(f.line)[1] }
+	for i := range raw {
+		if head[i].file != raw[i].file || place(head[i]) != place(raw[i]) || head[i].key != base[i].key {
+			t.Errorf("failure %d: scrubbed %+v, raw %+v, base %+v; want its file and place, and one key at the head and on the base",
+				i, head[i], raw[i], base[i])
+		}
+	}
+	lines := failureLines(head)
+	if !strings.Contains(lines, "mails alice@example.com from shop.example.com") || !strings.Contains(lines, "answers 10.0.4.12") ||
+		strings.Contains(lines, "DB_PASSWORD=hunter2") {
+		t.Fatalf("the failing examples' lines read:\n%s\nwant their email, host and address as printed, the password masked", lines)
 	}
 }

@@ -30,9 +30,9 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
-	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -138,7 +138,7 @@ func (e *Engine) runPublish(ctx context.Context, t registry.Task) (bool, error) 
 	if err != nil || problem != "" {
 		why := problem
 		if err != nil {
-			why = textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 300)
+			why = textx.Clip(textx.FirstLine(scrub.Text(err.Error())), 300)
 		}
 		if eerr := e.reg.EndEffect(ctx, key, registry.EffectFail, why); eerr != nil {
 			e.log.Warn("end the publish effect", "task", t.ID, "err", eerr)
@@ -230,7 +230,7 @@ func (e *Engine) publish(ctx context.Context, t registry.Task, git *gitx.Client,
 		e.event(ctx, t.ID, "publish", registry.PhaseBegin, name+": "+begin)
 		ok, err := run()
 		if err != nil {
-			e.event(ctx, t.ID, "publish", registry.PhaseFail, name+": "+textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 300))
+			e.event(ctx, t.ID, "publish", registry.PhaseFail, name+": "+textx.Clip(textx.FirstLine(scrub.Text(err.Error())), 300))
 			return err
 		}
 		e.event(ctx, t.ID, "publish", registry.PhaseOK, name+": "+ok)

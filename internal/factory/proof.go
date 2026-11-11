@@ -38,6 +38,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -76,9 +77,10 @@ type Proof struct {
 }
 
 // ProofRun is one spec run of a proof: the command, its exit, the end of its
-// output (redacted), the tree of the commit it ran on (the base's, with the
-// head's spec files on it, for the base run), how long it took, and whether
-// it hung (the factory stopped it at its bound: exit -1).
+// output (its secrets masked: outputOf), the tree of the commit it ran on
+// (the base's, with the head's spec files on it, for the base run), how
+// long it took, and whether it hung (the factory stopped it at its bound:
+// exit -1).
 type ProofRun struct {
 	Command string        `json:"command,omitempty"`
 	Exit    int           `json:"exit"`
@@ -516,8 +518,11 @@ func ranTo(res execx.Result, err error) (code int, denied string, _ error) {
 	return -1, "", err
 }
 
-// outputOf is the end of a command's output (stdout, then stderr),
-// redacted.
+// outputOf is the end of a command's output (stdout, then stderr), its
+// secrets masked (scrub.Secrets): the factory keeps it in precheck.md and
+// factory-proof.json, which the pr-body agent reads into the PR, and the
+// writer's fix turns name them as the evidence of what failed, so the
+// emails, hosts, addresses and file names a failure prints stay as printed.
 func outputOf(res execx.Result) string {
 	out := strings.TrimSpace(string(res.Stdout) + "\n" + string(res.Stderr))
 	if len(out) > outputKeep {
@@ -526,7 +531,7 @@ func outputOf(res execx.Result) string {
 			out = out[i+1:]
 		}
 	}
-	return execx.Redact(out)
+	return scrub.Secrets(out)
 }
 
 // script runs a command of the repository in copy c, as its pool scripts
@@ -1078,7 +1083,7 @@ func (e *Engine) restoreOwn(ctx context.Context, t registry.Task, c Copy, since 
 		line := textx.Clip(textx.FirstLine(err.Error()), 300)
 		e.event(ctx, t.ID, "check", registry.PhaseFail, "restore "+list+" in "+c.Name+": "+line)
 		e.keepFor(t, c, since, dirty, true, "the factory could not put back "+list+" in "+c.Name+" ("+
-			clipEnd(textx.FirstLine(execx.Redact(err.Error())), 240)+")")
+			clipEnd(textx.FirstLine(scrub.Text(err.Error())), 240)+")")
 		return nil, "", fmt.Errorf("restore what %s changed in %s (%s): %w", what, c.Name, list, err)
 	}
 	e.event(ctx, t.ID, "check", registry.PhaseOK, "restored "+list+" in "+c.Name+" as the branch has it")

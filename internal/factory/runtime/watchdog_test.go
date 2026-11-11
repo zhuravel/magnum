@@ -17,6 +17,25 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
+// TurnText reads, in a ledger entry's text as the ledger keeps it (scrubbed),
+// the prompt its turn is for: a fresh session's first prompt carries the
+// caller's after the attempt's first, and the factory tells a fix turn by
+// it; any other entry is its own text.
+func TestTurnTextIsWhatAFreshSessionCarriesAfterTheFirstPrompt(t *testing.T) {
+	const first = "Read the task's files and make the change."
+	const fix = "The factory checked your change after your turn: precheck: lint: 1 offense on the changed lines."
+	for _, tc := range []struct{ text, want string }{
+		{ledgerText(freshText(first, fix)), fix},
+		{ledgerText(freshText(first, "")), first},
+		{ledgerText(fix), fix},
+		{ledgerText(nudgeText), nudgeText},
+	} {
+		if got := TurnText(tc.text); got != tc.want {
+			t.Errorf("TurnText(%q) = %q, want %q", tc.text, got, tc.want)
+		}
+	}
+}
+
 func TestAHungTurnClimbsTheWatchdogSteps(t *testing.T) {
 	g := newRig(t)
 	g.launch("fx-repro")

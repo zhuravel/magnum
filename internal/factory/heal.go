@@ -18,6 +18,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/herdr"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -75,7 +76,7 @@ func (e *Engine) contained(what string, pass func() error) (err error) {
 // panicked records the panic r of task t's step and settles the task; a
 // panic while settling is logged, never re-raised.
 func (e *Engine) panicked(ctx context.Context, t registry.Task, r any, stack []byte) error {
-	msg := textx.Clip(strings.Join(strings.Fields(execx.Redact(fmt.Sprint(r))), " "), panicRunes)
+	msg := textx.Clip(strings.Join(strings.Fields(scrub.Text(fmt.Sprint(r))), " "), panicRunes)
 	defer func() {
 		if r := recover(); r != nil {
 			e.log.Error("panic while settling a panic", "task", t.ID, "panic", fmt.Sprint(r),

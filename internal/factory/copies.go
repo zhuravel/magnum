@@ -36,6 +36,7 @@ import (
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/mysqlx"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/steps"
 	"github.com/zhuravel/magnum/internal/store"
@@ -409,7 +410,7 @@ func (c *copySet) markBroken(ctx context.Context, name, what string, cause error
 	if err != nil {
 		return copyBroke{}, err
 	}
-	why := execx.Redact(what + ": " + brokenWhy(cause) + " (" + setupLogWords +
+	why := scrub.Text(what + ": " + brokenWhy(cause) + " (" + setupLogWords +
 		filepath.Join(c.cfg.Layout.Logs(), "provision-"+name+".log") + ")")
 	stored := why
 	if sl.State != store.SlotProvisioning { // a verification failure: the slot code said why
@@ -1208,7 +1209,7 @@ func (c *copySet) repoOf(name string) (config.FactoryRepo, int, bool) {
 func (c *copySet) event(ctx context.Context, name, level, kind, msg string) {
 	subject := "slot:" + name
 	_, _ = c.st.AppendEvent(context.WithoutCancel(ctx), store.Event{Level: level, Subject: &subject, Kind: kind,
-		Message: execx.Redact(msg)})
+		Message: scrub.Text(msg)})
 }
 
 // phase records the begin, ok or fail event of a destructive step of copy
@@ -1226,5 +1227,5 @@ func (c *copySet) phase(ctx context.Context, name, kind, phase, msg string) {
 func (c *copySet) phaseAt(ctx context.Context, name, kind, phase, level, msg string) {
 	subject := "slot:" + name
 	_, _ = c.st.AppendEvent(context.WithoutCancel(ctx), store.Event{Level: level, Subject: &subject, Kind: kind, Phase: &phase,
-		Message: execx.Redact(msg)})
+		Message: scrub.Text(msg)})
 }

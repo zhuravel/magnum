@@ -860,7 +860,7 @@ func (p *precheckRun) heal(crash envCrash) (failed string) {
 		p.c.Name, firstWord(crash.cmd), crash.sig.lacks))
 	for _, in := range p.repo.Installs {
 		if _, err := p.e.script(p.ctx, p.c, in.Run, "precheck heal "+in.Run, p.limit); err != nil {
-			why := textx.Clip(textx.FirstLine(execx.Redact(err.Error())), outputLineRunes)
+			why := textx.Clip(textx.FirstLine(scrub.Text(err.Error())), outputLineRunes)
 			if ee, ok := errors.AsType[*execx.ExitError](err); ok && firstLine(ee.Stderr) != "" { // its own words, not mise's command line
 				why = fmt.Sprintf("exited %d: %s", ee.Code, firstLine(ee.Stderr))
 			}

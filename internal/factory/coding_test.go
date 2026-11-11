@@ -78,6 +78,9 @@ type codingRig struct {
 	// seenMise sees every command the copy runs (`mise …`) as the factory
 	// built it.
 	seenMise func(c execx.Cmd)
+	// adds is what a script whose first word it names prints on stdout
+	// after its own output, and it then exits 1: a red run that says it.
+	adds map[string]string
 }
 
 // scriptRun is one script the copy ran: the script, the copy's branch and
@@ -278,6 +281,12 @@ func (r *codingRig) script(ctx context.Context, c execx.Cmd) (execx.Result, erro
 		r.record(run)
 		return execx.Result{Code: 127, Stderr: []byte("sh: " + words[0] + ": not found")},
 			&execx.ExitError{Cmd: c, Code: 127, Stderr: "sh: " + words[0] + ": not found"}
+	}
+	r.mu.Lock()
+	add := r.adds[words[0]]
+	r.mu.Unlock()
+	if add != "" {
+		run.Out, run.Exit = strings.TrimPrefix(run.Out+"\n"+add, "\n"), 1
 	}
 	r.record(run)
 	res := execx.Result{Code: run.Exit, Stdout: []byte(run.Out)}

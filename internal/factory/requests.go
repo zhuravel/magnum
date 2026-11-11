@@ -27,6 +27,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -154,7 +155,7 @@ func (e *Engine) handleRequests(ctx context.Context) {
 func (e *Engine) handleRequest(ctx context.Context, q registry.Request) {
 	defer func() {
 		if r := recover(); r != nil {
-			msg := textx.Clip(strings.Join(strings.Fields(execx.Redact(fmt.Sprint(r))), " "), panicRunes)
+			msg := textx.Clip(strings.Join(strings.Fields(scrub.Secrets(fmt.Sprint(r))), " "), panicRunes)
 			e.log.Error("panic in a request handler; the daemon goes on", "request", q.ID, "kind", q.Kind, "panic", msg,
 				"stack", execx.Redact(string(debug.Stack())))
 			e.complete(context.WithoutCancel(ctx), q, fmt.Errorf("the factory daemon failed on this request: %s", msg), "")
@@ -220,12 +221,15 @@ func decode(q registry.Request, v any) error {
 // once answered, since only the inputs table keeps your words, scrubbed.
 var wordsKinds = []string{ReqPreview, ReqStart, ReqAnswer, ReqDecide}
 
-// complete marks q done with result, or failed with err's text (redacted),
-// and records it; the payload of a request of your words goes (wordsKinds).
+// complete marks q done with result, or failed with err's text, its secrets
+// masked (scrub.Secrets: the answer the CLI and the screen show you keeps
+// the hosts it names, a tracker's or a server's), and records it (its event
+// scrubbed whole, Engine.event); the payload of a request of your words goes
+// (wordsKinds).
 func (e *Engine) complete(ctx context.Context, q registry.Request, err error, result string) {
 	state, phase := registry.RequestDone, registry.PhaseOK
 	if err != nil {
-		state, phase, result = registry.RequestFailed, registry.PhaseFail, execx.Redact(err.Error())
+		state, phase, result = registry.RequestFailed, registry.PhaseFail, scrub.Secrets(err.Error())
 	}
 	if cerr := e.reg.CompleteRequest(ctx, q.ID, state, result); cerr != nil {
 		e.log.Warn("complete a factory request", "request", q.ID, "err", cerr)
@@ -502,7 +506,7 @@ func (e *Engine) letGo(ctx context.Context, p LetGoPayload) (string, error) {
 // task's head (acceptQA): the defects the writer declined, its fixes or
 // declines the run did not walk again, or the states it could not reach;
 // it is refused when QA left you none of them. Your retry's record (an
-// input) is what gives a writer at its prompt cap more fix turns
+// input) is what gives a writer at its cap of fix turns more of them
 // (fixBudgetOf) and starts the runtime's ladders over: a record that fails
 // to write still lets the task go on, and the answer says so
 // (retryUnrecorded).

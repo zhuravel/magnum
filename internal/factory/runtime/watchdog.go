@@ -590,14 +590,29 @@ func (r *Runtime) handOver(ctx context.Context, st *roleState, old []string, why
 	r.mu.Unlock()
 }
 
+// freshLead joins the attempt's first prompt and what the caller meant to
+// say in the prompt a fresh session starts with (freshText).
+const freshLead = "\n\n---\n\nmagnum started this session afresh: the one before made no progress. Read the task's files as " +
+	"the prompt above says, then:\n\n"
+
 // freshText is the prompt a fresh session starts with: the attempt's first
 // prompt, then what the caller meant to say when it is something else.
 func freshText(first, then string) string {
 	if strings.TrimSpace(then) == "" || normalPrompt(then) == normalPrompt(first) {
 		return first
 	}
-	return first + "\n\n---\n\nmagnum started this session afresh: the one before made no progress. Read the task's files as " +
-		"the prompt above says, then:\n\n" + then
+	return first + freshLead + then
+}
+
+// TurnText is the prompt of the turn a ledger entry's text (scrubbed)
+// starts: what the caller meant to say, which the prompt of a fresh session
+// (freshText) carries after the attempt's first prompt, else text itself.
+// The factory tells its fix turns by it.
+func TurnText(text string) string {
+	if _, then, ok := strings.Cut(text, freshLead); ok {
+		return then
+	}
+	return text
 }
 
 // emptyConversation reports whether the conversation of session id (its

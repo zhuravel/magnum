@@ -141,7 +141,7 @@ func TestAChangeThatFailsTheChecksGetsFixTurnsUpToTheStagesCap(t *testing.T) {
 		}
 	}
 	got := r.reload(task.ID)
-	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "does not pass after 6 prompts") ||
+	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "does not pass after 5 fix turns") ||
 		!strings.Contains(got.WaitsWhat, "lint: 1 offense on the changed lines") {
 		t.Fatalf("task %s waits %q; want needs_you naming the last failure", got.State, got.WaitsWhat)
 	}

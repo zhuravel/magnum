@@ -26,6 +26,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/scrub"
 )
 
 // secondOpinion is review-second.json in the task's directory, the task's
@@ -267,10 +268,12 @@ func (e *Engine) voidMoved(ctx context.Context, t registry.Task, last registry.C
 
 // eventOnce writes the review event text, of phase, for task t unless the
 // task has one that says it already: what a stop between a write and its
-// event left unsaid, said once. A read that fails writes it.
+// event left unsaid, said once. A read that fails writes it. The event is
+// kept scrubbed (Engine.event), so the text it is compared with is too.
 func (e *Engine) eventOnce(ctx context.Context, t registry.Task, phase, text string) {
 	evs, err := e.reg.TaskEvents(ctx, t.ID, "review", 0)
-	if err == nil && slices.ContainsFunc(evs, func(ev registry.Event) bool { return ev.Text == text }) {
+	kept := scrub.Text(text)
+	if err == nil && slices.ContainsFunc(evs, func(ev registry.Event) bool { return ev.Text == kept }) {
 		return
 	}
 	e.event(ctx, t.ID, "review", phase, text)

@@ -13,8 +13,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -58,9 +58,10 @@ func meaningfulLines(out string) []string {
 var rubyPlaceRe = regexp.MustCompile("^(?:from\\s+)?\\S+:\\d+:in\\s+[`'][^`']*':\\s*")
 
 // cleanLine is line as a NEEDS YOU, a hold or an event may name it: the
-// error's message without the place a Ruby error starts with, redacted (a
-// token or a key is masked), its control characters turned into spaces,
-// valid UTF-8, at most outputLineRunes runes.
+// error's message without the place a Ruby error starts with, scrubbed
+// (scrub.Text: a token, a key, a password, an email or a host is masked, as
+// in all the text the factory keeps), its control characters turned into
+// spaces, valid UTF-8, at most outputLineRunes runes.
 func cleanLine(line string) string { return cleanLineMax(line, outputLineRunes) }
 
 // cleanLineMax is cleanLine at most n runes long.
@@ -73,7 +74,7 @@ func cleanLineMax(line string, n int) string {
 			return ' '
 		}
 		return r
-	}, strings.ToValidUTF8(execx.Redact(line), "�"))
+	}, strings.ToValidUTF8(scrub.Text(line), "�"))
 	return textx.Clip(strings.TrimSpace(s), n)
 }
 

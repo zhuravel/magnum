@@ -23,9 +23,9 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
-	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/herdr"
+	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -328,7 +328,7 @@ func (r *Runtime) endRun(ctx context.Context, id, why string) bool {
 	err := r.st.TransitionRun(context.WithoutCancel(ctx), id,
 		[]string{store.RunPending, store.RunSubmitted, store.RunWorking, store.RunEnded}, store.RunAbandoned,
 		func(u *store.RunUpdate) {
-			u.Set("error", execx.Redact(why))
+			u.Set("error", scrub.Text(why))
 			u.Set("ended_at", r.now())
 		})
 	if err != nil && !errors.Is(err, store.ErrConflict) && !errors.Is(err, store.ErrNotFound) {
