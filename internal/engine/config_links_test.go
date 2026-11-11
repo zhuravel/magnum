@@ -590,8 +590,8 @@ func TestALinkOutsideASCIIAwayFromWhatTheAgentsLoadIsFollowed(t *testing.T) {
 }
 
 // A link back up under .claude/ (.claude/rules/back -> .., a loop; twenty
-// of them, in any order), a link to the root (.claude/skills/root -> ../..)
-// or two links that lead into
+// of them, in any order), a link to the root (.claude/skills/root -> ../..;
+// twenty of them) or two links that lead into
 // each other (.claude/rules/up -> ../../docs, docs/rules ->
 // ../.claude/rules) give a rules file endless paths to be read by, each
 // longer than the last. Claude Code's rules walk enters each directory once
@@ -601,9 +601,10 @@ func TestALinkOutsideASCIIAwayFromWhatTheAgentsLoadIsFollowed(t *testing.T) {
 func TestALinkLoopUnderTheClaudeDirectoryEndsTheEnginesWalk(t *testing.T) {
 	kinds := defaultKinds()
 	isConfig := func(p string) (string, bool) { return agentConfigPath(kinds, p) }
-	backs := map[string]string{}
+	backs, roots := map[string]string{}, map[string]string{}
 	for i := range 20 {
 		backs[fmt.Sprintf(".claude/rules/back%d", i)] = ".."
+		roots[fmt.Sprintf(".claude/skills/root%d", i)] = "../.."
 	}
 	for _, c := range []struct {
 		name  string
@@ -614,6 +615,7 @@ func TestALinkLoopUnderTheClaudeDirectoryEndsTheEnginesWalk(t *testing.T) {
 		{"a link back up", map[string]string{".claude/rules/back": ".."}, "@x.md\n", ".claude/rules/x.md"},
 		{"twenty links back up", backs, "@x.md\n", ".claude/rules/x.md"},
 		{"a link to the root", map[string]string{".claude/skills/root": "../.."}, "@x.md\n", ".claude/rules/x.md"},
+		{"twenty links to the root", roots, "@x.md\n", ".claude/rules/x.md"},
 		// The file is read as docs/rules/api.md too, whose @../y.md is docs/y.md.
 		{"two links into each other", map[string]string{".claude/rules/up": "../../docs", "docs/rules": "../.claude/rules"}, "@../y.md\n",
 			"docs/y.md"},
@@ -646,16 +648,17 @@ func TestEachDirectoryTheWalkLooksUpIsAStep(t *testing.T) {
 // Claude Code loads no directory an import names, and nothing under it,
 // while ImportPaths reads code and prose wide: a regex in a code span
 // (`^.*@.*$`) gives the root, @config[:x] in a fenced block or "see @docs"
-// a directory of the tree. Such a target is that path alone: a change
-// under it is none, while one that makes it a file or a link, or a path on
-// the way to it a link, is; the root is never one.
+// a directory of the tree, here one that holds only links (shared/). Such
+// a target is that path alone: a change under it is none, while one that
+// makes it a file or a link, or a path on the way to it a link, is; the
+// root is never one.
 func TestAnImportOfADirectoryIsThatPathAlone(t *testing.T) {
 	kinds := defaultKinds()
 	isConfig := func(p string) (string, bool) { return agentConfigPath(kinds, p) }
 	tree, read := treeOf(map[string]string{
-		"AGENTS.md":           "Validate e-mail with `^.*@.*$` first.\n\n```ruby\n@config[:x]\n```\n\nSee @docs and @lib/tasks for more.\n",
+		"AGENTS.md":           "Validate e-mail with `^.*@.*$` first.\n\n```ruby\n@config[:x]\n```\n\nSee @docs, @lib/tasks and @shared for more.\n",
 		"config/database.yml": "x\n", "docs/guide.md": "y\n", "app/models/user.rb": "z\n", "lib/tasks/a.rake": "w\n",
-	}, nil)
+	}, map[string]string{"shared/guide.md": "../docs/guide.md"})
 	got, err := resolveConfigTargets(context.Background(), tree, isConfig, read)
 	if err != nil {
 		t.Fatal(err)
@@ -668,11 +671,27 @@ func TestAnImportOfADirectoryIsThatPathAlone(t *testing.T) {
 		want bool
 	}{
 		{"app/models/user.rb", false}, {"config/database.yml", false}, {"docs/guide.md", false}, {"lib/tasks/a.rake", false},
-		{"config", true}, {"docs", true}, {"lib", true}, {"lib/tasks", true},
+		{"shared/guide.md", false}, {"shared/new.md", false},
+		{"config", true}, {"docs", true}, {"lib", true}, {"lib/tasks", true}, {"shared", true},
 	} {
 		if names, maybe := changedLinks(got, []string{c.path}); (len(names) > 0) != c.want || maybe {
 			t.Errorf("changedLinks(%q) = %q, %v; want a change %v (targets %q)", c.path, names, maybe, c.want, got)
 		}
+	}
+}
+
+// A tree may hold a file and a directory whose names differ only in case
+// (docs and Docs/x.md), which a case-insensitive filesystem checks out as
+// one: git writes the file last, and Claude loads it. An import of that
+// name is the file's, whose own imports are read, not a directory's path
+// alone.
+func TestAnImportOfAFileBesideADirectoryInAnotherCaseIsTheFiles(t *testing.T) {
+	kinds := defaultKinds()
+	isConfig := func(p string) (string, bool) { return agentConfigPath(kinds, p) }
+	tree, read := treeOf(map[string]string{"AGENTS.md": "@docs\n", "docs": "@evil.md\n", "Docs/x.md": "x\n", "evil.md": "y\n"}, nil)
+	got, err := resolveConfigTargets(context.Background(), tree, isConfig, read)
+	if err != nil || got["docs"] != "AGENTS.md" || got["evil.md"] != "AGENTS.md" {
+		t.Fatalf("resolveConfigTargets = %q, %v; want docs and what it imports, evil.md", got, err)
 	}
 }
 

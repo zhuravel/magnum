@@ -267,7 +267,8 @@ func TestImportPathsGivesThePathClaudeCodesMarkdownEnds(t *testing.T) {
 // binary): the closing --- need not stand on its own line, and the text
 // after it starts a text token, so an @ right after it imports. ImportPaths
 // reads that text as its own too; a --- that opens no frontmatter starts
-// nothing.
+// nothing. JS's \s, which the pattern's blanks are, holds U+FEFF and not
+// U+0085.
 func TestImportPathsReadsTheTextAfterAFrontmatterAsClaudeCodeDoes(t *testing.T) {
 	for _, c := range []struct {
 		text string
@@ -279,6 +280,8 @@ func TestImportPathsReadsTheTextAfterAFrontmatterAsClaudeCodeDoes(t *testing.T) 
 		{"---\ntitle: x---@docs/c.md\n", []string{"docs/c.md"}},
 		{"---  \r\ntitle: x\r\n--- @docs/d.md\n", []string{"docs/d.md"}},
 		{"---\ntitle: x\n---<!-- a -->@docs/e.md\n", []string{"docs/e.md"}},
+		{"---\ufeff\n---@docs/f.md\n", []string{"docs/f.md"}},
+		{"---\u0085\n---@docs/no.md\n", nil},
 		{"Notes\n---@docs/no.md\n", nil},
 		{"----\n---@docs/no.md\n", nil},
 	} {
@@ -343,9 +346,11 @@ func TestImportPathsReadsEachCommentBlockOnItsOwn(t *testing.T) {
 
 // A path with an escaped space is a copy of its text ("\ " a space), and a
 // run of many @ holds many such paths, each the rest of the run: ImportPaths
-// copies a run once, whose paths all share it, so what it gives keeps at
-// most about its text's size (31 @ in 4 MiB kept 124 MiB when each @ copied
-// the rest of the run, and both walks keep a source's imports).
+// copies a run once per read, whose paths all share it, so what it gives
+// keeps about its text's size (31 @ in 4 MiB kept 124 MiB when each @
+// copied the rest of the run, and both walks keep a source's imports). The
+// text is kept alive to the last measure, so its own bytes are not counted
+// freed against the copy.
 func TestImportPathsKeepsOneCopyOfARunWithEscapedSpaces(t *testing.T) {
 	text := strings.Repeat("@a\\ ", 31) + strings.Repeat("b", 4<<20)
 	runtime.GC()
@@ -358,10 +363,11 @@ func TestImportPathsKeepsOneCopyOfARunWithEscapedSpaces(t *testing.T) {
 	if len(got) < 31 || more {
 		t.Fatalf("ImportPaths = %d paths, more %v; want 31 or more", len(got), more)
 	}
-	if kept > 3*int64(len(text)) {
-		t.Fatalf("ImportPaths of %d bytes keeps %d MiB", len(text), kept>>20)
+	if kept > 3*int64(len(text))/2 {
+		t.Fatalf("ImportPaths of %d bytes keeps %d KiB", len(text), kept>>10)
 	}
 	runtime.KeepAlive(got)
+	runtime.KeepAlive(text)
 }
 
 // A session loads what a rules file imports right after its frontmatter:
