@@ -18221,6 +18221,55 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestAutoApprovalRefusesAChangeToAFileTheInstructionsImport and
   TestImportPathsGivesThePathClaudeCodesMarkdownEnds.
 
+- **The agents' config gate reads each comment block on its own and a link's escaped brackets as marked
+  does, opens a rules file by its real path, and counts the walk's lookups by what they find** (2026-11-11,
+  after two reviews of the fifth round's fixes;
+  corrects in parts the entry above: its claim that the read without comments agrees with Claude's within a
+  block once past its first comment, and its step per directory looked up). Each finding was checked
+  against the code and Claude Code 2.1.322's own JS, and fixed test first.
+  - Comment blocks (P2). The read of the whole file without comments agreed with Claude's at neither end of
+    a block: a `<!--` in a code span or a paragraph paired with the `-->` inside a block's `<!-->`, and the
+    block's next `<!-->` then with a later `-->`; a `<!--` a block leaves open (it ends on the line its first
+    comment ends on) paired with a `-->` further down. Both cut a path Claude glues together: after a
+    paragraph that quotes `` `<!--` ``, `<!-->a<!-->@docs/ev<!--z-->il.md` loads `docs/evil.md`, and
+    `ImportPaths` gave `docs/ev<!--z-->il.md` and `docs/ev`; a later PR that edits the target was neither
+    refused nor parked. `ImportPaths` now also reads each HTML block that starts with a comment on its own,
+    as marked ends it, its comments paired within it; blocks whose first comments end at one `-->` are read
+    once, so the bytes read stay within about twice the text's. 300,000 inputs of the round's differential
+    fuzzers show no miss.
+  - Line ends and escaped brackets (P2, found by this round's own fuzzing of the same class). marked ends a
+    line at a lone carriage return too, which the block read did not: it does now. marked also unescapes
+    `\[` and `\]` in a link's text before it lexes it (again in a link that text holds), so
+    `[see @docs/ev\[il.md](u)` imports `docs/ev[il.md`, which `ImportPaths` ended at the backslash; it now
+    also reads each text with every backslash right before a bracket taken out (wider outside a link's
+    text). A fuzzer of link texts found 2,556 misses in 100,000 inputs before and none in 600,000 after.
+  - A rules file by its real path (P3). The session opened a file its link walk found by the path through
+    the links it followed; Claude's rules walk recurses by each entry's resolved path and reads the file
+    there. A chain of directory links with names of 250 bytes passed macOS's PATH_MAX after four links, the
+    stat failed and the session dropped the file's imports. The walk now records each file's real path too,
+    and the session opens it by that path.
+  - The walk's lookups (P3). The engine's `dirsOf` counted a step for every directory of every path it
+    looked up, so a tree whose pages lie under a steering directory link reached `errLinksTooMany`, a
+    lasting failure, 14 to 18 percent sooner; it also folded each link at each lookup (5,000 loop links and
+    5,000 sources: 593 MiB). A lookup now counts a step when it finds links, and its keys one per 4 KiB
+    hashed, and each link keeps its fold beside it: the review's trees resolve within 2 percent of their
+    counts before this round, and the 5,000 loop links allocate 21 MiB.
+  - Tests the review's mutations survived (P3): the frontmatter's opening blanks as JS's `\s` (U+FEFF, not
+    U+0085), the engine's directory test counting links (a directory of links only), its file test (a file
+    `docs` beside `Docs/x.md`), and `dirsOf`'s rule for a link to the root (twenty of them). The memory test
+    of a run with escaped spaces measured net of its text, which the GC freed: it keeps the text alive and
+    bounds the copy at one and a half times the text.
+  Not covered: a chain of directory links whose read path passes 4096 bytes is not entered by the session
+  (a bound on the walk's memory), while Claude's rules walk, by real paths, reads it; the documented gap of
+  paths longer than PATH_MAX. On Linux, whose PATH_MAX is the walk's cap, the real-path test passes without
+  its fix. Tests, failing first: TestImportPathsReadsEachCommentBlockOnItsOwn (with two carriage-return
+  cases), TestASessionReadsARulesFileByItsRealPath, TestTheWalksLookupsCountByWhatTheyFindAndHash (replacing
+  TestEachDirectoryTheWalkLooksUpIsAStep), TestAnImportOfAFileBesideADirectoryInAnotherCaseIsTheFiles, and
+  cases of TestAutoApprovalRefusesAChangeToAFileTheInstructionsImport,
+  TestImportPathsGivesThePathClaudeCodesMarkdownEnds (escaped brackets in a link's text),
+  TestImportPathsReadsTheTextAfterAFrontmatterAsClaudeCodeDoes, TestAnImportOfADirectoryIsThatPathAlone and
+  TestALinkLoopUnderTheClaudeDirectoryEndsTheEnginesWalk.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is

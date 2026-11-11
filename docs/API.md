@@ -961,25 +961,28 @@ func ImportPaths(text string, limit int) (paths []string, more bool)
     `(?:^|\s)@((?:[^\s\\]|\\ )+)` in each text token marked (without GFM) gives,
     but in code spans and fenced blocks, and in an HTML block that starts with
     a comment, with its comments taken out; it cuts the path at its first #,
-    makes "\ " a space and trims it. ImportPaths reads an @ where a text
-    token may start or after a blank (the text's start, a blank, or a mark
-    an inline token starts or ends with: > ) ] [ * _ ` or an escaped one;
-    not ( " or a letter), in code too, up to the first blank a backslash does
-    not escape (JS's \s: U+FEFF is one, U+0085 is not). It gives that token as
-    it is and as Claude's pattern ends it (at a backslash no space follows),
-    each without its #fragment too, and, since a text token ends where another
-    begins, the path up to each mark that may begin or end an emphasis,
-    a code span, a link's text, an image or inline HTML (* _ ` < [ ] and ![;
-    an underscore inside a word is none, so @app_config gives no app),
-    each with and without the punctuation that may end a sentence after it and
-    an escaped space at its end. It reads on after such a mark for a further @,
-    reads the text after a YAML frontmatter on its own (Claude strips one
-    before it lexes the rest, so an @ right after the closing --- imports),
-    and reads each again with its HTML comments taken out, where a cut starts
-    a path too (Claude reads a block that starts with a comment on its own).
-    A home (~) or an absolute path is left out: no commit's tree holds it,
-    and Claude loads a file outside its working directory only once the user
-    approves the project's external imports, which magnum never does.
+    makes "\ " a space and trims it. ImportPaths reads an @ where a text token
+    may start or after a blank (the text's start, a blank, or a mark an inline
+    token starts or ends with: > ) ] [ * _ ` or an escaped one; not ( " or a
+    letter), in code too, up to the first blank a backslash does not escape
+    (JS's \s: U+FEFF is one, U+0085 is not). It gives that token as it is and
+    as Claude's pattern ends it (at a backslash no space follows), each without
+    its #fragment too, and, since a text token ends where another begins,
+    the path up to each mark that may begin or end an emphasis, a code span,
+    a link's text, an image or inline HTML (* _ ` < [ ] and ![; an underscore
+    inside a word is none, so @app_config gives no app), each with and without
+    the punctuation that may end a sentence after it and an escaped space at its
+    end. It reads on after such a mark for a further @, reads the text after a
+    YAML frontmatter on its own (Claude strips one before it lexes the rest,
+    so an @ right after the closing --- imports), and each text again with \[
+    and \] made brackets (marked makes them so in a link's text before it lexes
+    it, so a path there goes on through them: linkTextUnescaped). It reads each
+    again with its HTML comments taken out, where a cut starts a path too,
+    and each HTML block that starts with a comment on its own, so taken out,
+    as Claude does (readCommentBlocks). A home (~) or an absolute path is left
+    out: no commit's tree holds it, and Claude loads a file outside its working
+    directory only once the user approves the project's external imports,
+    which magnum never does.
 
 func JoinCodexHookProblems(problems []CodexHookProblem) string
     JoinCodexHookProblems says problems in one sentence without its final

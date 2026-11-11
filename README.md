@@ -1783,10 +1783,12 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   path Claude may read its file by, the file's own, a link's that leads to it, the one an import named it
   by, through the tree's links, five hops deep, one more than Claude's four; a path is read as written and
   as Claude Code's Markdown lexer ends it, at a `#fragment`, a backslash no space follows, or where an
-  emphasis, a code span, a link's text or inline HTML begins or ends, so `**@docs/guide.md**` and
-  `[@docs/guide.md](docs/guide.md)` import the guide, and the text after a YAML frontmatter is read on its
-  own, as Claude strips one; a home or an absolute import is never the tree's, and an import of a
-  directory, which Claude skips, is that path alone: a change under it is none, the root never one).
+  emphasis, a code span, a link's text or inline HTML begins or ends (in a link's text with `\[` and `\]`
+  made brackets, as marked makes them), so `**@docs/guide.md**` and `[@docs/guide.md](docs/guide.md)`
+  import the guide, and the text after a YAML frontmatter and each HTML block that starts with a comment,
+  its comments taken out, are read on their own, as Claude reads them; a home or an absolute import is
+  never the tree's, and an import of a directory, which Claude skips, is that path alone: a change under
+  it is none, the root never one).
   Paths match in ASCII case, which every case-insensitive filesystem folds alike; a name outside ASCII
   equals an ASCII one only through the few characters that fold into ASCII (`ſ`, the Kelvin sign, `ı`,
   `İ`, `ß`, the Latin ligatures) or that HFS+ ignores, and a listed path whose name may so fold to a
@@ -2682,7 +2684,8 @@ such a link leads to, and, for Claude, the files the instruction files and the p
 import, a link's of any name included (`@path`, five hops deep, from the importing file's directory as its
 path reads it, through a directory link by the link's path, as an import named it and as the disk has it;
 a directory an import names is that path alone, since Claude loads none, and the root none; a directory
-read by a path longer than 4096 bytes is not entered;
+read by a path longer than 4096 bytes is not entered, and a file the walk finds is opened by its real path,
+as Claude's rules walk opens it;
 each file read once however many paths name it; at most 10,000 steps, a path, an import or 4 KiB read
 each, and 30 s), matching git's paths in ASCII case; a name outside ASCII that may fold to a
 target's counts, and
