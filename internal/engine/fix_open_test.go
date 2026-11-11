@@ -284,6 +284,109 @@ func TestAutofixOpenHoldsBelowTheGitHubFloor(t *testing.T) {
 	}
 }
 
+// A read GitHub cut short reaches the look's facts: the colleague's thread
+// it got is not the PR's whole work, so no loop starts on it, and the PR
+// needs you to answer its items by hand, naming what GitHub cut.
+func TestAutofixOpenStartsNothingOnAReadGitHubCutShort(t *testing.T) {
+	h, git := openHarness(t, findings(map[string]int{}, "COMMENTED"))
+	h.setThreads(h.colleagueThread(4322458360))
+	h.gh.mu.Lock()
+	h.gh.threadsCut = map[int]bool{2: true}
+	h.gh.mu.Unlock()
+	fixer(h, git, "", func(run store.Run) string {
+		return fixReport(run.ID, "nothing", "1 threads (0 fixed, 0 already fixed, 1 not a bug, 0 won't fix)", "none")
+	})
+	h.tick() // reviewed
+	h.pastSettle()
+	h.tick()
+	if n := len(h.fixRuns(h.pr(2).ID)); n != 0 {
+		t.Errorf("fix runs = %d on a read GitHub cut short", n)
+	}
+	v := h.wantOpen(OpenNeedsYou, fmt.Sprintf("GitHub cut the read short (over %d review threads): answer the open items by hand",
+		github.MaxReviewThreads))
+	if v.Open != 0 || len(v.Needs) != 0 {
+		t.Errorf("open %d, needs %+v: the items of a read cut short count for nothing", v.Open, v.Needs)
+	}
+}
+
+// While a loop runs on magnum's review, the review's threads the whole read
+// shows unanswered are the loop's work in flight: the look keeps them out
+// of the verdict's open items and needs. Once no loop runs, the same read's
+// unanswered thread is a finding the fixer skipped, and it needs you.
+func TestAReviewsUnansweredThreadIsNoNeedWhileItsLoopRuns(t *testing.T) {
+	h, _ := openOwnPRs(t, 2)
+	pr, now := h.pr(2), h.clock.Now()
+	if err := h.e.setFixState(h.ctx, pr.ID, FixState{Cycle: 1, Cap: 3, Phase: FixPhaseFixing, Head: headOf(2), By: autofixBy,
+		StartedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	finding := magnumThread{RootID: 5000, URL: prPage + "#discussion_r5000", ReviewID: 102, LatestID: 5000, LatestAt: now.Add(-time.Minute)}
+	raw, err := json.Marshal(openLedger{Since: now.Add(-time.Hour), Reviews: []string{reviewKey("run-review-2")},
+		Read: openRead{Print: openPrint(pr), At: now, Head: headOf(2), Mine: []magnumThread{finding}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SetKV(h.ctx, kvPRFixSeen(pr.ID), string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.e.autofixOpen(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := h.openOf(2); !ok || v.Verdict != OpenFixing || v.Open != 0 || len(v.Needs) != 0 {
+		t.Errorf("verdict while the loop runs = %+v, %v; want fixing with nothing open or needed", v, ok)
+	}
+	if err := h.e.clearFixState(h.ctx, pr.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.e.autofixOpen(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := h.openOf(2); !ok || v.Verdict != OpenNeedsYou || v.Open != 1 || len(v.Needs) != 1 || v.Needs[0].URL != finding.URL {
+		t.Errorf("verdict after the loop = %+v, %v; want the skipped finding to need you", v, ok)
+	}
+}
+
+// Your decision on the fixer's call counts only from a read that did not
+// fail: the last whole read showed it, but the read since failed, so the
+// attention still needs you. Once the read stands again, the decision lets
+// the attention stop nothing (here the hands off after the push holds the
+// loop).
+func TestYourDecisionCountsOnlyFromAReadThatDidNotFail(t *testing.T) {
+	h, _ := openOwnPRs(t, 2)
+	pr, now := h.pr(2), h.clock.Now()
+	call := "fix: " + attention.FixCallsText([]attention.FixCall{{Thread: itoa(decideThread), URL: prPage + "#discussion_r" + itoa(decideThread),
+		Action: decideCall}}, "", "/state/claude-fix.md")
+	if err := h.st.TransitionPR(h.ctx, pr.ID, []string{store.PRReviewed}, store.PRNeedsAttention, func(u *store.PRUpdate) {
+		u.Set("last_error", call)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.e.setKV(h.ctx, KVPRAttention(pr.ID), attention.KindFix)
+	pr = h.pr(2)
+	decision := openItem{Key: threadKey(decideThread, decideThread+2), Class: classPerson, Kind: itemThread, URL: prPage + "#discussion_r" +
+		itoa(decideThread), Decision: true}
+	seen := func(failedAt time.Time) {
+		t.Helper()
+		raw, err := json.Marshal(openLedger{Since: now.Add(-time.Hour), Read: openRead{Print: openPrint(pr), At: now.Add(-2 * time.Minute),
+			Head: headOf(2), FailedAt: failedAt, Others: []openItem{decision}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.st.SetKV(h.ctx, kvPRFixSeen(pr.ID), string(raw)); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.e.autofixOpen(h.ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen(now.Add(-time.Minute))
+	h.wantOpen(OpenNeedsYou, "needs your attention (fix)")
+	seen(time.Time{})
+	if v := h.wantOpen(OpenWaits, "hands off"); v.Open != 1 {
+		t.Errorf("open = %d, want your decision as the work", v.Open)
+	}
+}
+
 // Drafts, forks and PRs taken out with F get an off verdict and no loop;
 // another author's PR gets no row at all.
 func TestAutofixOpenLeavesDraftsForksFixOffAndOthersPRsAlone(t *testing.T) {
