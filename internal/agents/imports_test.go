@@ -326,7 +326,8 @@ func TestImportPathsStartsAPathWhereACommentWasCut(t *testing.T) {
 // file-wide pairing takes as a comment (one in a code span or a paragraph)
 // pairs with the --> inside a block's <!-->, and a <!-- the block leaves
 // open pairs with a --> further down: both cut the path Claude glues
-// together (as Claude Code 2.1.322's lexer reads these texts).
+// together (as Claude Code 2.1.322's lexer reads these texts). marked ends
+// a line at a carriage return too.
 func TestImportPathsReadsEachCommentBlockOnItsOwn(t *testing.T) {
 	for _, c := range []struct {
 		text string
@@ -337,6 +338,8 @@ func TestImportPathsReadsEachCommentBlockOnItsOwn(t *testing.T) {
 		{"`<!--`\n\n<!---><!--->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
 		{"- <!-->a<!-->@docs/ev<!--z-->il.md\n\n`<!--`\n", "docs/evil.md"},
 		{"<!--a-->@docs/ev<!--b-->il<!--x.md\n\nMore text.\n<!-- end -->\n", "docs/evil<!--x.md"},
+		{"x <!--\r<!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"<!--a-->@docs/ev<!--b-->il<!--x.md\r\rMore text.\r<!-- end -->\n", "docs/evil<!--x.md"},
 	} {
 		if got, more := ImportPaths(c.text, 100); !slices.Contains(got, c.want) || more {
 			t.Errorf("ImportPaths(%q) = %q, %v; want %q among them", c.text, got, more, c.want)

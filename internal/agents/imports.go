@@ -93,7 +93,8 @@ func ImportPaths(text string, limit int) (paths []string, more bool) {
 // on its own, its comments taken out, as Claude Code does: marked (without
 // GFM) starts such a block at a <!-- that only blanks and a container's
 // marks (a block quote's >, a list item's - * + 1. 1)) precede on its
-// line, and ends it at the end of the line its first comment ends on: at
+// line (a line feed or a carriage return ends one), and ends it at the
+// end of the line its first comment ends on: at
 // once for <!--> and <!--->, else at the first --> after the <!--. Claude
 // skips a block with no -->. The read of the whole text without comments
 // pairs a <!-- Claude takes for none (in a code span, a paragraph) with
@@ -104,8 +105,8 @@ func ImportPaths(text string, limit int) (paths []string, more bool) {
 // read stay within about twice the text's, each counted against the work
 // bound.
 func (r *importReader) readCommentBlocks(t string) {
-	lineEnd := func(p int) int { // the end of p's line, its line feed included
-		if j := strings.IndexByte(t[p:], '\n'); j >= 0 {
+	lineEnd := func(p int) int { // the end of p's line, the line feed or carriage return that ends it included
+		if j := strings.IndexAny(t[p:], "\n\r"); j >= 0 {
 			return p + j + 1
 		}
 		return len(t)
@@ -119,7 +120,7 @@ func (r *importReader) readCommentBlocks(t string) {
 		}
 		at := i + k
 		i = lineEnd(at) // a later <!-- on the line follows this one's <: no block starts there
-		if strings.Trim(t[strings.LastIndexByte(t[:at], '\n')+1:at], " \t>*+-.)0123456789") != "" {
+		if strings.Trim(t[strings.LastIndexAny(t[:at], "\n\r")+1:at], " \t>*+-.)0123456789") != "" {
 			continue
 		}
 		var block string
