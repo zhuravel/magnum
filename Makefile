@@ -22,6 +22,11 @@ GATE_LOCK ?= /tmp/magnum-make-test.lock
 # laptop; TEST_P= uses Go's default (one per CPU)
 TEST_P    ?= 4
 TEST_P_FLAG = $(if $(TEST_P),-p $(TEST_P))
+# TEST_TZ: the time zone the gate's tests run in (make test, make test-race), here and on CI: neither UTC nor a whole
+# hour off it (Asia/Kathmandu, UTC+5:45), so a test that assumes UTC, or the zone of the machine it was written on,
+# fails everywhere instead of only on the machine in another zone. go test's cache does not key on TZ: a pass a plain
+# `go test ./internal/x` cached in another zone still passes make test; make test-race (-count=1) and CI run every test
+TEST_TZ   ?= Asia/Kathmandu
 gate_locked = if [ -n "$$MAGNUM_GATE_LOCKED" ]; then $(1); \
   elif command -v lockf >/dev/null 2>&1; then \
     lockf -k -s -t 0 "$(GATE_LOCK)" true || echo "make: waiting for $(GATE_LOCK): another checkout's gate runs"; \
@@ -50,21 +55,21 @@ test:
 	@$(call gate_locked,$(MAKE) --no-print-directory gate)
 
 ## gate: gofmt check (every tracked .go file, and new ones git does not ignore), go.sum verified and go.mod tidy,
-## vet, the hermetic unit tests (TEST_P binaries at once), and the private-name guard; run it as make test, which
-## holds the machine's gate lock
+## vet, the hermetic unit tests (TEST_P binaries at once, in TEST_TZ), and the private-name guard; run it as make
+## test, which holds the machine's gate lock
 gate: check-private
 	@out="$$(git ls-files -z --cached --others --exclude-standard '*.go' | xargs -0 gofmt -l)"; if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	$(GO) mod verify
 	$(GO) mod tidy -diff
 	$(GO) vet ./...
-	$(GO) test $(TEST_P_FLAG) ./...
+	TZ=$(TEST_TZ) $(GO) test $(TEST_P_FLAG) ./...
 
-## test-race: go test -count=1 -race -timeout 30m on PKGS (the packages you touched; default ./...) under GATE_LOCK,
-## TEST_P binaries at once (the engine alone takes 8-10 minutes under -race on a busy laptop); TESTFLAGS adds flags
-## and overrides these (-run, -count=3 -cpu 1,3 -shuffle=on, -timeout 45m)
+## test-race: go test -count=1 -race -timeout 30m on PKGS (the packages you touched; default ./...) in TEST_TZ under
+## GATE_LOCK, TEST_P binaries at once (the engine alone takes 8-10 minutes under -race on a busy laptop); TESTFLAGS
+## adds flags and overrides these (-run, -count=3 -cpu 1,3 -shuffle=on, -timeout 45m)
 PKGS ?= ./...
 test-race:
-	@$(call gate_locked,$(GO) test -count=1 -race -timeout 30m $(TEST_P_FLAG) $(TESTFLAGS) $(PKGS))
+	@$(call gate_locked,env TZ=$(TEST_TZ) $(GO) test -count=1 -race -timeout 30m $(TEST_P_FLAG) $(TESTFLAGS) $(PKGS))
 
 ## check-private: this repo is public; fail when a tracked file mentions a name listed in MAGNUM_PRIVATE_PATTERNS
 ## (a grep -E pattern set in the gitignored mise.local.toml, never in a tracked file), or a person's GitHub
