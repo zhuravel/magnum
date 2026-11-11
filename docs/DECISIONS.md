@@ -18303,6 +18303,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheWalksPathsCostTheBytesTheyCopy; TestImportPathsLooksForCommentBlocksOnALineInTimeLinearInIt guards
   the new scan.
 
+- **The gate runs its tests in Asia/Kathmandu and lints gocyclo and nestif over the whole tree** (2026-11-11,
+  after CI failed the v0.3.0 push). One test wanted a settle's end as this Mac's clock (UTC+2) shows it and
+  failed in CI's UTC; another read the cost meter's UTC hours as local ones and failed in a zone a quarter
+  hour off. Both now build their expectation from the code (`waitClock`, the hour's UTC start). `make test`
+  and `make test-race` run the tests with `TZ` set to `TEST_TZ`, Asia/Kathmandu (UTC+5:45): neither UTC nor a
+  whole hour off it, so a test that assumes UTC, a whole-hour zone or the operator's fails on every machine.
+  go test's cache does not key on `TZ`, so the gate adds `-skip TZ=<zone>`, which skips no test and puts the
+  zone into the key. The same push's lint found `lookOpen` (61) and `decideOpen` (69) above gocyclo's 50:
+  `--new-from-rev` and CI's only-new-issues report a gocyclo or nestif hit only where a change touches the
+  func or if line, and 14 functions and one if had passed the thresholds outside the ratchet unseen. Both
+  are split with no behaviour change (41 and 43), and `make lint-ratchet` (`golangci-lint run --enable-only
+  gocyclo,nestif ./...`, about a second, since both read syntax only) runs in `make test`, so every landing
+  and CI's test job fail on any hit. The rest are a second, dated block of `.golangci.yml`'s ratchet, each
+  name between the backticks golangci-lint prints; split one, delete its name, never add one.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is
