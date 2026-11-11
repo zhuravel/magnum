@@ -248,7 +248,7 @@ func resolveConfigTargets(ctx context.Context, tree gitx.Tree, isConfig func(str
 	read func(paths []string) (map[string]string, error)) (map[string]string, error) {
 	links := tree.Links
 	r := linkResolver{ctx: ctx, links: links, byFold: map[string][]string{}, out: map[string]string{}, walked: map[string]bool{},
-		via: map[string][]string{}, sources: map[string]bool{}}
+		via: map[string][]viaLink{}, sources: map[string]bool{}}
 	paths := slices.Sorted(maps.Keys(links))
 	steering := map[string]string{}
 	var odd []string // the links whose path or text has a byte outside ASCII, at a path git checks out
@@ -403,7 +403,7 @@ func (r *linkResolver) imports(files []string, isConfig func(string) (string, bo
 			if ok {
 				break
 			}
-			label, ok = steers(l)
+			label, ok = steers(l.path)
 		}
 		if ok && !r.addSource(&srcs, at, f, label) {
 			return
@@ -576,7 +576,9 @@ func coveredBy(covers map[string]string, f string) (string, bool) {
 // gives no path, nor does a link a path was already built with, or a
 // path longer than maxPathBytes: Claude Code's rules walk enters each
 // directory once, and opens nothing that long, so the paths end. Each
-// path and each of its directories looked up counts a step.
+// path built, each lookup that finds links and every linkBytesPerStep
+// bytes of the keys looked up count a step: a path of ordinary length
+// costs nothing where no link leads, and a deep one its hashing.
 func (r *linkResolver) dirsOf(f string) []string {
 	if len(r.via) == 0 {
 		return []string{linkDir(f)}
@@ -596,19 +598,28 @@ func (r *linkResolver) dirsOf(f string) []string {
 		return false
 	}
 	seen := map[string]bool{foldKey(f): true}
+	hashed := 0 // bytes of keys looked up that no step counted yet
 	for i := 0; i < len(paths); i++ {
 		q := paths[i].path
 		t, k := q, agents.LooseFold(q) // a directory of q, with its key (LooseFold keeps each /)
 		for {
-			if !r.step() {
-				return nil
+			links := r.via[k]
+			hashed += len(k) + 1
+			n := hashed / linkBytesPerStep
+			if hashed %= linkBytesPerStep; len(links) > 0 {
+				n = max(n, 1)
+			}
+			for range n {
+				if !r.step() {
+					return nil
+				}
 			}
 			rest := strings.TrimPrefix(q[len(t):], "/")
-			for _, l := range r.via[k] {
-				if lk := agents.LooseFold(l); k == "" || lk == k || strings.HasPrefix(lk, k+"/") || built(i, l) {
+			for _, v := range links {
+				if k == "" || atOrUnder(v.key, k) || built(i, v.path) {
 					continue
 				}
-				a := l
+				a := v.path
 				if rest != "" {
 					a += "/" + rest
 				}
@@ -617,7 +628,7 @@ func (r *linkResolver) dirsOf(f string) []string {
 						return nil
 					}
 					seen[fk] = true
-					paths = append(paths, named{path: a, from: i, link: l})
+					paths = append(paths, named{path: a, from: i, link: v.path})
 				}
 			}
 			if t == "" {
@@ -649,14 +660,25 @@ func (r *linkResolver) dirsOf(f string) []string {
 type linkResolver struct {
 	ctx     context.Context
 	links   map[string]string
-	byFold  map[string][]string // foldKey of a path -> the links' paths that fold to it
-	keys    []string            // byFold's keys, sorted: the links under a path are a run of them (under)
-	out     map[string]string   // target -> label
-	walked  map[string]bool     // the targets whose links below were followed (follow)
-	via     map[string][]string // agents.LooseFold of a target -> the links that lead to it (dirsOf)
-	sources map[string]bool     // the files whose imports the walk read (foldsOnto)
+	byFold  map[string][]string  // foldKey of a path -> the links' paths that fold to it
+	keys    []string             // byFold's keys, sorted: the links under a path are a run of them (under)
+	out     map[string]string    // target -> label
+	walked  map[string]bool      // the targets whose links below were followed (follow)
+	via     map[string][]viaLink // agents.LooseFold of a target -> the links that lead to it (dirsOf)
+	sources map[string]bool      // the files whose imports the walk read (foldsOnto)
 	steps   int
 	err     error // errLinksTooMany, or the context's: the walk stopped
+}
+
+// viaLink is a link the walk followed to a target: its path, and the
+// path's agents.LooseFold, which dirsOf compares at each lookup.
+type viaLink struct {
+	path, key string
+}
+
+// atOrUnder reports whether the key p is the key dir or lies under it.
+func atOrUnder(p, dir string) bool {
+	return strings.HasPrefix(p, dir) && (len(p) == len(dir) || p[len(dir)] == '/')
 }
 
 // linkCtxEvery is how many steps the walk takes between two looks at its
@@ -719,8 +741,8 @@ func (r *linkResolver) follow(l, label string) {
 				return
 			}
 			r.add(t, label)
-			if k := agents.LooseFold(t); !slices.Contains(r.via[k], l) {
-				r.via[k] = append(r.via[k], l)
+			if k := agents.LooseFold(t); !slices.ContainsFunc(r.via[k], func(v viaLink) bool { return v.path == l }) {
+				r.via[k] = append(r.via[k], viaLink{path: l, key: agents.LooseFold(l)})
 			}
 			if r.walked[t] {
 				continue

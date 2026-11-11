@@ -633,15 +633,35 @@ func TestALinkLoopUnderTheClaudeDirectoryEndsTheEnginesWalk(t *testing.T) {
 	}
 }
 
-// Building the paths a file is read by, the walk hashes each directory of
-// each path it looks up, so a deep file read through many links (a
-// thousand links to d/, a source 1,900 directories below it) cost seconds
-// between two looks at the context: each directory looked up is a step,
+// Building the paths a file is read by, the walk looks each directory of
+// each path up among where the links lead. A lookup that finds links is a
+// step, and so is every linkBytesPerStep bytes of the keys it hashes: a
+// path of ordinary length costs nothing where no link leads (a step per
+// directory brought the budget's end 14 to 18 percent sooner for a tree
+// whose pages lie under a directory link), while a deep file read through
+// many links (a source 1,900 directories deep) still counts its hashing,
 // which bounds the work and asks the context in time.
-func TestEachDirectoryTheWalkLooksUpIsAStep(t *testing.T) {
-	r := linkResolver{ctx: context.Background(), via: map[string][]string{"x": {"y"}}}
-	if dirs := r.dirsOf("a/b/c/d.md"); !slices.Equal(dirs, []string{"a/b/c"}) || r.steps < 5 {
-		t.Fatalf("dirsOf = %q after %d steps; want a/b/c, after a step for each of its 5 lookups", dirs, r.steps)
+func TestTheWalksLookupsCountByWhatTheyFindAndHash(t *testing.T) {
+	r := linkResolver{ctx: context.Background(), via: map[string][]viaLink{"x": {{path: "y", key: "y"}}}}
+	if dirs := r.dirsOf("a/b/c/d.md"); !slices.Equal(dirs, []string{"a/b/c"}) || r.steps != 0 {
+		t.Errorf("dirsOf = %q after %d steps; want a/b/c, after none", dirs, r.steps)
+	}
+	r = linkResolver{ctx: context.Background(), via: map[string][]viaLink{"a": {{path: "l", key: "l"}}}}
+	if dirs := r.dirsOf("a/b.md"); !slices.Equal(dirs, []string{"a", "l"}) || r.steps != 2 {
+		t.Errorf("dirsOf = %q after %d steps; want a and l, after a step for the lookup that found l and one for l/b.md", dirs, r.steps)
+	}
+	r = linkResolver{ctx: context.Background(), via: map[string][]viaLink{"x": {{path: "y", key: "y"}}}}
+	deep := strings.Repeat("d/", 2000) + "f.md"
+	hashed := 0
+	for k := deep; ; k = linkDir(k) {
+		hashed += len(k) + 1
+		if k == "" {
+			break
+		}
+	}
+	if r.dirsOf(deep); r.steps < hashed/linkBytesPerStep {
+		t.Errorf("dirsOf of a path 2,000 directories deep took %d steps; want one per %d bytes hashed, %d", r.steps, linkBytesPerStep,
+			hashed/linkBytesPerStep)
 	}
 }
 
