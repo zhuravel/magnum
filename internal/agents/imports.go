@@ -59,9 +59,12 @@ const (
 // space at its end. It reads on after such a mark for a further @, reads
 // the text after a YAML frontmatter on its own (Claude strips one before
 // it lexes the rest, so an @ right after the closing --- imports), and
-// reads each again with its HTML comments taken out, where a cut starts a
-// path too, and each HTML block that starts with a comment on its own, so
-// taken out, as Claude does (readCommentBlocks).
+// each text again with \[ and \] made brackets (marked makes them so in a
+// link's text before it lexes it, so a path there goes on through them:
+// linkTextUnescaped).
+// It reads each again with its HTML comments taken out, where a cut starts
+// a path too, and each HTML block that starts with a comment on its own,
+// so taken out, as Claude does (readCommentBlocks).
 // A home (~) or an absolute path is left out: no commit's tree holds it,
 // and Claude loads a file outside its working directory only once the
 // user approves the project's external imports, which magnum never does.
@@ -69,6 +72,11 @@ func ImportPaths(text string, limit int) (paths []string, more bool) {
 	texts := []string{text}
 	if body, ok := frontmatterBody(text); ok {
 		texts = append(texts, body)
+	}
+	for _, t := range texts { // the texts appended here are not ranged over
+		if strings.Contains(t, `\[`) || strings.Contains(t, `\]`) {
+			texts = append(texts, linkTextUnescaped(t))
+		}
 	}
 	work := importWorkSlack
 	for _, t := range texts {
@@ -148,6 +156,30 @@ func (r *importReader) readCommentBlocks(t string) {
 		if text, joints := withoutComments(block); len(joints) > 0 {
 			r.read(text, joints)
 		}
+	}
+}
+
+// linkTextUnescaped is t with every backslash right before a bracket
+// taken out: marked makes \[ and \] brackets in a link's text before it
+// lexes it, and again in a link nested in it (\\[ there is a bracket).
+func linkTextUnescaped(t string) string {
+	var b strings.Builder
+	b.Grow(len(t))
+	for {
+		k := strings.IndexByte(t, '\\')
+		if k < 0 {
+			b.WriteString(t)
+			return b.String()
+		}
+		b.WriteString(t[:k])
+		j := k
+		for j < len(t) && t[j] == '\\' {
+			j++
+		}
+		if j == len(t) || t[j] != '[' && t[j] != ']' {
+			b.WriteString(t[k:j])
+		}
+		t = t[j:]
 	}
 }
 

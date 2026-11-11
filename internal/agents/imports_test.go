@@ -249,6 +249,11 @@ func TestImportPathsGivesThePathClaudeCodesMarkdownEnds(t *testing.T) {
 		{"_x_@docs/k.md\n", []string{"docs/k.md"}},
 		{"\\.@docs/l.md\n", []string{"docs/l.md"}},
 		{"@docs/m.md[x](y)\n", []string{"docs/m.md"}},
+		// marked unescapes \[ and \] in a link's text before it lexes it,
+		// and again in a link that text then holds.
+		{"[see @docs/ev\\[il.md](u)\n", []string{"docs/ev[il.md"}},
+		{"[@docs/a\\]b.md][r]\n\n[r]: u\n", []string{"docs/a]b.md"}},
+		{"[\\[@docs/ev\\\\[il.md](u) [b]](v)\n", []string{"docs/ev[il.md"}},
 	} {
 		got, more := ImportPaths(c.text, 100)
 		for _, w := range c.want {
