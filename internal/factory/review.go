@@ -1074,43 +1074,9 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 	res evalrun.LocalResult) (bool, error) {
 	round := len(loop)
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
-	again := func(why, said string) (bool, error) {
-		if err := setAside(dir, cy.N, why); err != nil {
-			return false, err
-		}
-		e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("round %d (cycle %d) %s: it runs once more", round, cy.N, said))
-		return false, nil
-	}
-	if res.Outcome == pipeline.OutcomeRefused && res.Refused == config.KindCodex {
-		if err := e.markCodexNever(ctx, t, fmt.Sprintf("Codex refused round %d of the local review", round)); err != nil {
-			return false, err
-		}
-		return again("refused", "was refused by Codex; Codex never works on "+TaskKey(t)+" again")
-	}
 	blocks, unavailable, why := Blocks(res)
-	switch {
-	case unavailable && res.ConfigKey != "":
-		// A configuration fault: running it again changes nothing.
-		return false, e.stopForYou(ctx, t, cy, registry.ExitUnavailable, why+": "+roundError(res.Error), "the local review cannot run")
-	case (unavailable || (!blocks && len(res.Missing) > 0)) && e.reviewHerdrDown(ctx) != "":
-		// magnum's review session went away under the round: it runs
-		// again once the session answers (reviewWait), never unavailable
-		// for that.
-		return again("herdr", "did not finish while magnum's review session did not answer")
-	case unavailable && roundTries(dir, cy.N, "retry") == 0 && (res.Outcome == pipeline.OutcomeError || res.Outcome == pipeline.OutcomeTimeout):
-		return again("retry", "ended "+res.Outcome)
-	case unavailable:
-		if res.Error != "" {
-			why += ": " + roundError(res.Error)
-		}
-		return false, e.stopForYou(ctx, t, cy, registry.ExitUnavailable, why, "the local review did not finish")
-	case !blocks && len(res.Missing) > 0 && roundTries(dir, cy.N, "missing") == 0:
-		return again("missing", "went without "+strings.Join(res.Missing, ", ")+"'s report")
-	case !blocks && len(res.Missing) > 0:
-		// A second round without it: what it would have found is unknown,
-		// so the review did not finish (Review Focus 1).
-		return false, e.stopForYou(ctx, t, cy, registry.ExitUnavailable, "review unavailable (no report from "+strings.Join(res.Missing, ", ")+")",
-			"the local review went without a reviewer twice")
+	if done, err := e.roundUndecided(ctx, t, cy, res, round, dir, blocks, unavailable, why); done || err != nil {
+		return false, err
 	}
 	seen, err := e.seeFindings(ctx, cy, res)
 	if err != nil {
@@ -1125,26 +1091,8 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 		return false, err
 	}
 	declined := readDeclined(dir)
-	var live, questions, doubts, rebutted, leftovers []ReviewItem
-	for _, s := range seen {
-		item := s.item
-		switch {
-		case !e.blocksLoop(s.f):
-			leftovers = append(leftovers, item)
-		case s.reg.Outcome == registry.FindingRebutted || s.reg.Outcome == registry.FindingWaived:
-			rebutted = append(rebutted, item)
-		case s.f.Question && strings.EqualFold(strings.TrimSpace(answered[QuestionKey(item.Title)]), changeIt):
-			live = append(live, item) // you said change it, and the round finds it still: the writer did not
-		case s.f.Question && answered[QuestionKey(item.Title)] != "":
-			leftovers = append(leftovers, item) // you decided it: keep it
-		case s.f.Question:
-			questions = append(questions, item)
-		case s.reg.Reopened >= 2:
-			doubts = append(doubts, item)
-		default:
-			live = append(live, item)
-		}
-	}
+	r := e.sortRound(seen, answered)
+	live, questions, doubts, rebutted, leftovers := r.live, r.questions, r.doubts, r.rebutted, r.leftovers
 	if blocks && len(live)+len(questions)+len(doubts)+len(rebutted) == 0 {
 		// The judge's verdict blocks with no P0 to P2 among the findings:
 		// the writer gets what it flagged.
@@ -1204,6 +1152,90 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 	e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("round %d (cycle %d) blocks: %s for the writer (%s)%s", round, cy.N,
 		plural(len(live), "finding"), reviewFile(cy.N), map[bool]string{true: fmt.Sprintf(", %s for you first", plural(len(questions), "question")), false: ""}[len(questions) > 0]))
 	return e.fixPhase(ctx, t, st, cy, rf)
+}
+
+// roundUndecided takes the steps of decideRound for round (in task
+// directory dir) of cycle cy that end before its findings are read: a
+// Codex refusal, a fault of the configuration, magnum's review session
+// gone, a round that did not finish, and one without a reviewer's report
+// (blocks, unavailable and why are Blocks(res)). done is true when it took
+// one: the round runs again, or the task needs you (err from stopForYou).
+func (e *Engine) roundUndecided(ctx context.Context, t registry.Task, cy registry.Cycle, res evalrun.LocalResult, round int, dir string,
+	blocks, unavailable bool, why string) (done bool, err error) {
+	again := func(why, said string) (bool, error) {
+		if err := setAside(dir, cy.N, why); err != nil {
+			return true, err
+		}
+		e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("round %d (cycle %d) %s: it runs once more", round, cy.N, said))
+		return true, nil
+	}
+	if res.Outcome == pipeline.OutcomeRefused && res.Refused == config.KindCodex {
+		if err := e.markCodexNever(ctx, t, fmt.Sprintf("Codex refused round %d of the local review", round)); err != nil {
+			return true, err
+		}
+		return again("refused", "was refused by Codex; Codex never works on "+TaskKey(t)+" again")
+	}
+	switch {
+	case unavailable && res.ConfigKey != "":
+		// A configuration fault: running it again changes nothing.
+		return true, e.stopForYou(ctx, t, cy, registry.ExitUnavailable, why+": "+roundError(res.Error), "the local review cannot run")
+	case (unavailable || (!blocks && len(res.Missing) > 0)) && e.reviewHerdrDown(ctx) != "":
+		// magnum's review session went away under the round: it runs
+		// again once the session answers (reviewWait), never unavailable
+		// for that.
+		return again("herdr", "did not finish while magnum's review session did not answer")
+	case unavailable && roundTries(dir, cy.N, "retry") == 0 && (res.Outcome == pipeline.OutcomeError || res.Outcome == pipeline.OutcomeTimeout):
+		return again("retry", "ended "+res.Outcome)
+	case unavailable:
+		if res.Error != "" {
+			why += ": " + roundError(res.Error)
+		}
+		return true, e.stopForYou(ctx, t, cy, registry.ExitUnavailable, why, "the local review did not finish")
+	case !blocks && len(res.Missing) > 0 && roundTries(dir, cy.N, "missing") == 0:
+		return again("missing", "went without "+strings.Join(res.Missing, ", ")+"'s report")
+	case !blocks && len(res.Missing) > 0:
+		// A second round without it: what it would have found is unknown,
+		// so the review did not finish (Review Focus 1).
+		return true, e.stopForYou(ctx, t, cy, registry.ExitUnavailable, "review unavailable (no report from "+strings.Join(res.Missing, ", ")+")",
+			"the local review went without a reviewer twice")
+	}
+	return false, nil
+}
+
+// roundItems are a round's findings by what they do to its loop: live ones
+// go to the writer, questions to you first, doubts (a finding reopened
+// twice) and rebutted or waived ones are told, leftovers do not block.
+type roundItems struct {
+	live, questions, doubts, rebutted, leftovers []ReviewItem
+}
+
+// sortRound sorts the findings a round saw (seen) by what they do to its
+// loop, with your answers to the product questions (answered, by
+// QuestionKey): a question you answered "change it" that the round finds
+// still goes to the writer, one you answered otherwise is kept as a
+// leftover.
+func (e *Engine) sortRound(seen []seenFinding, answered map[string]string) roundItems {
+	var r roundItems
+	for _, s := range seen {
+		item := s.item
+		switch {
+		case !e.blocksLoop(s.f):
+			r.leftovers = append(r.leftovers, item)
+		case s.reg.Outcome == registry.FindingRebutted || s.reg.Outcome == registry.FindingWaived:
+			r.rebutted = append(r.rebutted, item)
+		case s.f.Question && strings.EqualFold(strings.TrimSpace(answered[QuestionKey(item.Title)]), changeIt):
+			r.live = append(r.live, item) // you said change it, and the round finds it still: the writer did not
+		case s.f.Question && answered[QuestionKey(item.Title)] != "":
+			r.leftovers = append(r.leftovers, item) // you decided it: keep it
+		case s.f.Question:
+			r.questions = append(r.questions, item)
+		case s.reg.Reopened >= 2:
+			r.doubts = append(r.doubts, item)
+		default:
+			r.live = append(r.live, item)
+		}
+	}
+	return r
 }
 
 // roundError is a round's own error as you read it: its first line,
