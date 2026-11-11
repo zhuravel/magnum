@@ -26,7 +26,7 @@ func TestThePaneCuratorProducesAProposalAfterANudge(t *testing.T) {
 	h := newHarness(t, func(h *harness) {
 		h.cfg.Notes.MaxBytes = 64
 		h.d.Curator = paneCurators(paneDeps{
-			Config: h.cfg, Layout: h.layout, Logger: h.d.Logger, Herdr: h.hd, Now: h.clock.Now,
+			Config: h.cfg, Layout: h.layout, Logger: h.d.Logger, Herdr: h.hd, Now: h.clock.Now, OpenScratch: openScratch,
 			Sleep:        func(ctx context.Context, _ time.Duration) error { return sleepCtx(ctx, time.Millisecond) },
 			ObserveEvery: time.Millisecond, Poll: time.Millisecond, CloseWorkspace: h.hd.WorkspaceClose,
 			Agents: func(st *store.Store, cfg *config.Config, layout paths.Layout) paneAgents {

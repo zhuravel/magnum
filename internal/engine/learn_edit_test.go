@@ -1118,7 +1118,7 @@ func (f *editFixture) usePaneEditor(step time.Duration) *fakePaneAgents {
 	t := f.h.t
 	ag := &fakePaneAgents{}
 	f.h.e.d.Editor = paneEditors(paneDeps{
-		Config: f.h.cfg, Layout: f.h.layout, Logger: f.h.d.Logger, Herdr: f.h.hd, Now: f.h.clock.Now,
+		Config: f.h.cfg, Layout: f.h.layout, Logger: f.h.d.Logger, Herdr: f.h.hd, Now: f.h.clock.Now, OpenScratch: openScratch,
 		Sleep: func(ctx context.Context, _ time.Duration) error {
 			f.h.advance(step)
 			return sleepCtx(ctx, time.Millisecond)

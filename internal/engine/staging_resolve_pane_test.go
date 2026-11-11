@@ -26,7 +26,7 @@ import (
 // each manager the agent makes) on h's herdr and clock.
 func stagingPaneDeps(t *testing.T, h *harness, ag **fakePaneAgents) paneDeps {
 	t.Helper()
-	return paneDeps{Config: h.cfg, Layout: h.layout, Logger: h.d.Logger, Herdr: h.hd, Store: h.st, Now: h.clock.Now, Hooks: h.e.agentHooks,
+	return paneDeps{Config: h.cfg, Layout: h.layout, Logger: h.d.Logger, Herdr: h.hd, Store: h.st, Now: h.clock.Now, Hooks: h.e.agentHooks, OpenScratch: openScratch,
 		Sleep:        func(ctx context.Context, _ time.Duration) error { return sleepCtx(ctx, time.Millisecond) },
 		ObserveEvery: time.Millisecond, Poll: time.Millisecond, CloseWorkspace: h.hd.WorkspaceClose,
 		Keys: func(context.Context, string, ...string) error { return nil },
@@ -441,7 +441,9 @@ func TestAPaneAgentsCloseOfAnAgentThatStaysAtWorkFitsInTheDaemonStopsWait(t *tes
 // its title (claude --name), while its herdr name stays the one tagged name
 // every job shares (TaggedAgentName of LearnAgentTag, magnum/staging, #1),
 // by which a later job's clearLeftover finds an agent an earlier one left,
-// and its workspace stays "staging merge".
+// and its workspace stays "staging merge". Its deps keep the daemon's
+// scratch opener (OpenScratch nil: store.Open migrates the new file), the
+// one pane test that does: the others seed theirs (openScratch).
 func TestTheStagingResolversAgentIsNamedAfterItsDeploy(t *testing.T) {
 	h := newHarness(t)
 	eh := newEvalHerdr()

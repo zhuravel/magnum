@@ -119,6 +119,10 @@ type paneDeps struct {
 	Sleep        func(ctx context.Context, d time.Duration) error
 	ObserveEvery time.Duration
 	Poll         time.Duration
+	// OpenScratch opens the job's scratch registry at path, a new file the
+	// first time (nil = store.Open, which migrates it); tests open one
+	// seeded from a migrated image.
+	OpenScratch func(path string) (*store.Store, error)
 }
 
 // withDefaults fills d's optional fields.
@@ -137,6 +141,9 @@ func (d paneDeps) withDefaults() paneDeps {
 	}
 	if d.Logger == nil {
 		d.Logger = slog.New(slog.DiscardHandler)
+	}
+	if d.OpenScratch == nil {
+		d.OpenScratch = store.Open
 	}
 	return d
 }
@@ -351,7 +358,7 @@ func (c *paneAgent) setup(ctx context.Context) error {
 	if err := os.MkdirAll(c.scratch, 0o700); err != nil {
 		return err
 	}
-	st, err := store.Open(layout.DB())
+	st, err := c.d.OpenScratch(layout.DB())
 	if err != nil {
 		return err
 	}

@@ -29,7 +29,7 @@ func TestACriticOnFableContinuesOnOpusAtAModelLimit(t *testing.T) {
 		h.cfg.Notes.Critic = true
 		h.d.Curator = func(context.Context, CurateRun) (Curator, error) { return cur, nil }
 		h.d.Critic = paneCritics(paneDeps{
-			Config: h.cfg, Layout: h.layout, Logger: h.d.Logger, Herdr: h.hd, Store: h.st, Now: h.clock.Now,
+			Config: h.cfg, Layout: h.layout, Logger: h.d.Logger, Herdr: h.hd, Store: h.st, Now: h.clock.Now, OpenScratch: openScratch,
 			Sleep:        func(ctx context.Context, _ time.Duration) error { return sleepCtx(ctx, time.Millisecond) },
 			ObserveEvery: time.Millisecond, Poll: time.Millisecond, CloseWorkspace: h.hd.WorkspaceClose,
 			Agents: func(st *store.Store, cfg *config.Config, layout paths.Layout) paneAgents {

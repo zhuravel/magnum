@@ -2773,6 +2773,16 @@ func (w testWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// openScratch opens a pane agent's scratch registry (paneDeps.OpenScratch)
+// as store.Open would, from a file seeded with storetest's migrated image
+// instead of a new one every migration runs on.
+func openScratch(path string) (*store.Store, error) {
+	if err := storetest.SeedFile(path); err != nil {
+		return nil, err
+	}
+	return store.Open(path)
+}
+
 // tick runs one tick, then lets launched rounds and heavy jobs finish.
 func (h *harness) tick() {
 	h.t.Helper()

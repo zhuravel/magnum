@@ -10,6 +10,7 @@ package storetest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -104,27 +105,38 @@ func Memory(tb testing.TB) *store.Store {
 // is left as it is.
 func Seed(t testing.TB, path string) {
 	t.Helper()
+	if err := SeedFile(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// SeedFile is Seed without a test, for an opener a test hands the code under
+// test (the engine's scratch registries), which runs on the code's own
+// goroutines where t.Fatal must not be called: it returns the error Seed
+// would fail the test with.
+func SeedFile(path string) error {
 	image, err := template()
 	if err != nil {
-		t.Fatalf("storetest: migrate the template: %v", err)
+		return fmt.Errorf("storetest: migrate the template: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatalf("storetest: %v", err)
+		return fmt.Errorf("storetest: %w", err)
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, fs.ErrExist) {
-		return
+		return nil
 	}
 	if err != nil {
-		t.Fatalf("storetest: %v", err)
+		return fmt.Errorf("storetest: %w", err)
 	}
 	if _, err := f.Write(sqlitetest.FileImage(image)); err != nil {
 		f.Close()
-		t.Fatalf("storetest: write %s: %v", path, err)
+		return fmt.Errorf("storetest: write %s: %w", path, err)
 	}
 	if err := f.Close(); err != nil {
-		t.Fatalf("storetest: %v", err)
+		return fmt.Errorf("storetest: %w", err)
 	}
+	return nil
 }
 
 // OpenFile seeds path (see Seed) and opens it with store.Open; the store is

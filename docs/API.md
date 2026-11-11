@@ -32321,6 +32321,12 @@ func Seed(t testing.TB, path string)
     for code under test that opens the registry itself. A file already at path
     is left as it is.
 
+func SeedFile(path string) error
+    SeedFile is Seed without a test, for an opener a test hands the code
+    under test (the engine's scratch registries), which runs on the code's own
+    goroutines where t.Fatal must not be called: it returns the error Seed would
+    fail the test with.
+
 func Serial(t *testing.T)
     Serial keeps t serial when its fixture helpers call Parallel: for a test
     that swaps a package variable or signals the test binary. Go runs every
