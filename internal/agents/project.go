@@ -397,10 +397,14 @@ type diskPaths struct {
 }
 
 // importFile is a file of a checkout whose @path imports a CLI loads: its
-// path relative to the root, and the project path it counts as.
+// path relative to the root as the CLI reads it, the project path it counts
+// as, and, for a file the link walk found, its path through no link but
+// its own (real): Claude Code's rules walk reads a rules file there, and
+// the path through a chain of directory links may be too long to open.
 type importFile struct {
-	rel string
-	p   projectPath
+	rel  string
+	p    projectPath
+	real string
 }
 
 // maxLinkWalk caps the entries onDisk reads under a checkout's project
@@ -479,7 +483,7 @@ func (pc projectConfig) onDisk(dir string) (d diskPaths, present bool) {
 		if pc.imports && p.docs {
 			for _, n := range found {
 				if fi, err := os.Stat(filepath.Join(dir, n)); err == nil && fi.Mode().IsRegular() {
-					d.sources = append(d.sources, importFile{n, p})
+					d.sources = append(d.sources, importFile{rel: n, p: p})
 				}
 			}
 		}
@@ -519,7 +523,7 @@ func (m *Manager) trackedLinks(ctx context.Context, g *gitx.Client, dir, base st
 	if pc.imports {
 		for _, f := range files {
 			if p, rest, ok := pc.pathOf(f); ok && (p.docs || p.dir && rest != "" && strings.EqualFold(path.Ext(f), ".md")) {
-				disk.sources = append(disk.sources, importFile{f, p})
+				disk.sources = append(disk.sources, importFile{rel: f, p: p})
 			}
 		}
 	}
@@ -559,7 +563,7 @@ func (pc projectConfig) addLinks(dir string, d *diskPaths, links []string) {
 		case pc.imports && (p.docs || p.dir && rest != "" && strings.EqualFold(path.Ext(l), ".md")):
 			// Claude reads it by the link's path (app/CLAUDE.md -> ../.cursorrules),
 			// whatever the name of the file it leads to.
-			d.sources = append(d.sources, importFile{l, p})
+			d.sources = append(d.sources, importFile{rel: l, p: p})
 		}
 	}
 }
@@ -636,7 +640,7 @@ type walkDir struct {
 }
 
 // maxPathBytes is PATH_MAX (Linux's; macOS's is 1024): no filesystem opens
-// a longer path.
+// a longer path, and the link walk enters no directory by one.
 const maxPathBytes = 4096
 
 // walk reads the directories start (relative to the root, with forward
@@ -648,9 +652,10 @@ const maxPathBytes = 4096
 // Code's .claude/worktrees/<name>) is not entered, and a directory that
 // cannot be read is skipped, and so is one read by a path longer than
 // maxPathBytes (a chain of directory links grows it while the real paths
-// stay short: nothing opens it, and the links that lead there are targets
-// already). A file there is a source of imports by the path Claude reads
-// it by (source). Past the budget it stops and marks the paths partial.
+// stay short, and the walk's memory with it; the links that lead there are
+// targets already). A file there is a source of imports by the path Claude
+// reads it by, opened by its real path (source). Past the budget it stops
+// and marks the paths partial.
 func (w *linkWalk) walk(start []walkDir, p projectPath) []string {
 	var targets []string
 	var queue []*walkDir
@@ -699,12 +704,12 @@ func (w *linkWalk) walk(start []walkDir, p projectPath) []string {
 				if fi, err := os.Stat(full); err == nil && fi.IsDir() {
 					enter(t, asRead)
 				} else if err == nil {
-					w.source(asRead, p)
+					w.source(asRead, child, p)
 				}
 			case e.IsDir():
 				enter(child, asRead)
 			case e.Type().IsRegular():
-				w.source(asRead, p)
+				w.source(asRead, child, p)
 			}
 		}
 	}
@@ -712,11 +717,12 @@ func (w *linkWalk) walk(start []walkDir, p projectPath) []string {
 }
 
 // source records rel, a file under a project directory or where a link of
-// one leads, as a file whose imports the CLI loads, when it loads imports
-// and rel is a Markdown file (a rules file, a CLAUDE.md under .claude/).
-func (w *linkWalk) source(rel string, p projectPath) {
+// one leads, at disk through no directory link, as a file whose imports the
+// CLI loads, when it loads imports and rel is a Markdown file (a rules
+// file, a CLAUDE.md under .claude/).
+func (w *linkWalk) source(rel, disk string, p projectPath) {
 	if w.pc.imports && strings.EqualFold(path.Ext(rel), ".md") {
-		w.d.sources = append(w.d.sources, importFile{rel, p})
+		w.d.sources = append(w.d.sources, importFile{rel: rel, p: p, real: disk})
 	}
 }
 
@@ -740,7 +746,9 @@ const importBytesPerStep = 4096
 // under it is compared or walked, and the root is none).
 // A file it names is read by the path the import names (CLAUDE.md's
 // @lib/guide.md, through lib -> a/b/shared, imports @../x.md from lib/ as
-// Claude resolves it, and from a/b/shared/ as the disk has it). A file is
+// Claude resolves it, and from a/b/shared/ as the disk has it); a file the
+// link walk found is opened by its real path, as Claude's rules walk
+// opens it, and its imports resolve from there too. A file is
 // read and scanned once per walk however many paths name it (its device
 // and inode), its imports resolved from the directory of each. Each path
 // a file is named by, each importBytesPerStep bytes read and each import
@@ -772,6 +780,9 @@ func (pc projectConfig) addImports(ctx context.Context, dir string, d *diskPaths
 				return
 			}
 			full := filepath.Join(root, filepath.FromSlash(src.rel))
+			if src.real != "" {
+				full = filepath.Join(root, filepath.FromSlash(src.real))
+			}
 			fi, err := os.Stat(full)
 			if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxImportBytes {
 				continue
@@ -795,7 +806,7 @@ func (pc projectConfig) addImports(ctx context.Context, dir string, d *diskPaths
 				}
 				parsed[id] = imps
 			}
-			bases := []string{filepath.Dir(full)}
+			bases := []string{filepath.Dir(filepath.Join(root, filepath.FromSlash(src.rel)))}
 			if rp, err := filepath.EvalSymlinks(full); err == nil && filepath.Dir(rp) != bases[0] {
 				bases = append(bases, filepath.Dir(rp))
 			}
@@ -823,7 +834,7 @@ func (pc projectConfig) addImports(ctx context.Context, dir string, d *diskPaths
 						d.git = append(d.git, t)
 					}
 					if err == nil && t != "" {
-						next = append(next, importFile{namedPath(root, target, t), src.p})
+						next = append(next, importFile{rel: namedPath(root, target, t), p: src.p})
 					}
 				}
 			}

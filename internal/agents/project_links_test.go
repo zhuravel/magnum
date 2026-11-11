@@ -412,9 +412,9 @@ func TestLooseFoldKeysNamesAFilesystemMayOpenAsOne(t *testing.T) {
 // name> -> ../dN+1) grows the path Claude would read the next directory by
 // with each link while the real paths stay short: the walk copied that
 // path, and the directories on the way, at every level (4,000 levels took
-// 1.9 GB). No filesystem opens a path longer than PATH_MAX, so the walk
-// enters no directory by one; the links on the way are targets all the
-// same, and the walk is whole.
+// 1.9 GB). The walk enters no directory by a path longer than PATH_MAX
+// (4,096 bytes); the links on the way are targets all the same, and the
+// walk is whole.
 func TestAChainOfDirectoryLinksKeepsTheWalksMemorySmall(t *testing.T) {
 	dir := t.TempDir()
 	writeFiles(t, dir, map[string]string{".claude/settings.json": "{}"})
@@ -444,6 +444,33 @@ func TestAChainOfDirectoryLinksKeepsTheWalksMemorySmall(t *testing.T) {
 	}
 	if n := after.TotalAlloc - before.TotalAlloc; n > 64<<20 {
 		t.Fatalf("ProjectLinks of a chain of 1,000 directory links allocated %d MiB", n>>20)
+	}
+}
+
+// Claude Code's rules walk enters each directory by its real path and
+// reads a rules file there by its real path, so a rules file at the end of
+// a chain of directory links with long names (.claude/rules -> ../d0, then
+// each dN/<250 bytes> -> ../dN+1) loads its imports, though the path
+// through the links is longer than macOS's PATH_MAX (1,024 bytes). The
+// session reads it by its real path too: what it imports is a target.
+func TestASessionReadsARulesFileByItsRealPath(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{"CLAUDE.md": "x\n", ".claude/settings.json": "{}", "docs/evil.md": "x\n",
+		"d5/r.md": "@../docs/evil.md\n"})
+	if err := os.Symlink("../d0", filepath.Join(dir, ".claude", "rules")); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 5 {
+		d := filepath.Join(dir, "d"+strconv.Itoa(i))
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("../d"+strconv.Itoa(i+1), filepath.Join(d, strings.Repeat(string(rune('a'+i)), 250))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if targets, partial := ProjectLinks(t.Context(), KindClaude, dir); !slices.Contains(targets, "docs/evil.md") || partial {
+		t.Fatalf("ProjectLinks = %q, %v; want docs/evil.md, whole", targets, partial)
 	}
 }
 
