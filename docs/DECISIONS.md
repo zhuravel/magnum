@@ -18319,6 +18319,28 @@ skill versions); people add theirs to the sections before it, at the end of the 
   blocks scope each name to its file and put it between the backticks golangci-lint prints, so a new
   `applySlots` is not hidden by `applySlot`; split one, delete its name, never add one.
 
+- **Go 1.27.4, and the engine's race tests in a CI job of their own** (2026-11-11, after CI failed on
+  729bb7d5). govulncheck failed the static job on GO-2026-6859 (net/http's MaxBytesReader header race,
+  reached from magnum-relay's server), fixed in go1.27.4: `mise.toml`, go.mod's `go` line and the relay's
+  Dockerfile move to 1.27.4 together, as for 1.27.3. The test job timed out at 35 minutes in
+  internal/engine (1370 s on 6c420596, 2034 s on v0.3.0): 552 new tests, and 54 other race-built binaries
+  on the same 3 vCPUs. No test is removed and no assertion changes. `-race`'s checkptr is turned off for
+  modernc.org's packages alone (`RACE_GCFLAGS`, and the test job's GOFLAGS), about 30% of the engine's
+  CPU spent checking the transpiled SQLite; magnum's code keeps it. The 286 tables whose cases build a
+  harness call `storetest.Parallel` first, since Go ran them, cases and all, before every parallel test
+  (TestATableWhoseCasesBuildAHarnessRunsBesideTheOtherTests keeps it so). Two park tests wait out a
+  judge_fresh_after of 20 minutes, not 90, and the tests' pane agents but one (which keeps the daemon's
+  default, store.Open) open scratch registries seeded from storetest's image (`paneDeps.OpenScratch`). Two
+  tables that wait in real time stay serial (`storetest.Serial`). The engine runs in an `engine` job split
+  like the local gate (`-run ^TestA`, `-run ^Test[B-Z]`), the rest in the test job (`TEST_PKGS`). Under
+  -race the package took 534 s before and 341 s after at 16 cores, and 384 s at GOMAXPROCS 3 (209 s and
+  175 s, against 562 s before), 7 to 12 minutes a half on a runner 2 to 3.3 times as slow under -race:
+  `-timeout 20m` per half in a 30-minute job, and 25m per binary in the test job's 60, so a hang still
+  dies with its stacks inside its job. Rejected for now: a
+  per-Store prepared-statement cache (each query is parsed again, about 12% of the engine's CPU after the
+  checkptr change), a production change to the registry's 122 untransacted call sites, with dynamic SQL
+  to bound.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is
