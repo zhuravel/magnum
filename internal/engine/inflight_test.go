@@ -13,12 +13,15 @@ import (
 	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
-// awaitSignal waits for a goroutine to reach a fake's blocking point.
+// awaitSignal waits for a goroutine to reach a fake's blocking point, in
+// real time. The bound only ends a test whose signal never comes, so it is
+// long: the callers run in the parallel phase, and at -cpu 1 on a loaded
+// machine a resolver's turn took more than 5 s to start.
 func awaitSignal(t *testing.T, ch <-chan struct{}, what string) {
 	t.Helper()
 	select {
 	case <-ch:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatalf("%s never started", what)
 	}
 }
