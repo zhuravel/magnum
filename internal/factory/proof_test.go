@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/config"
@@ -192,6 +195,54 @@ func TestANewHeadVoidsTheProof(t *testing.T) {
 	}
 	if n := len(r.ran("bin/specs")); n < 4 {
 		t.Fatalf("%d spec runs, want the proof run twice", n)
+	}
+}
+
+// warnLines records the lines the rig's git logs at Warn (an
+// execx.LevelLogger).
+type warnLines struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (w *warnLines) Printf(format string, args ...any) { w.Logf(slog.LevelInfo, format, args...) }
+
+func (w *warnLines) Logf(level slog.Level, format string, args ...any) {
+	if level < slog.LevelWarn {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.lines = append(w.lines, fmt.Sprintf(format, args...))
+}
+
+func (w *warnLines) all() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.lines)
+}
+
+// The proof asks whether the head has each spec file proof.json names, and
+// the restore after its base run whether the base has the spec files it
+// laid there: each a probe, whose no (a new spec the base lacks, on disk
+// only) is an answer that logs no warning ("exists on disk, but not in
+// 'HEAD'": 155 lines in a day of the factory's log).
+func TestTheProofsExistenceProbesLogNoWarningForAFileTheRevisionLacks(t *testing.T) {
+	r := newCodingRig(t)
+	var log warnLines
+	r.real.Log = &log
+	task := r.codingTask("PR-12358", "bug")
+	head := r.fix(task)
+	p, err := r.e.runProof(r.ctx, task, r.cp)
+	if err != nil || !p.Passed {
+		t.Fatalf("proof %+v, %v; want it passed", p, err)
+	}
+	r.onBranch(task.Branch, head)
+	// The rig's own git (its spec script reads the branch it runs on, none
+	// on the base) is no probe of the factory's.
+	probes := slices.DeleteFunc(log.all(), func(l string) bool { return !strings.Contains(l, "cat-file") && !strings.Contains(l, "ls-tree") })
+	if len(probes) > 0 {
+		t.Fatalf("the proof's probes logged warnings: %q", probes)
 	}
 }
 

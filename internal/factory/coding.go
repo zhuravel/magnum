@@ -450,6 +450,24 @@ func (r checkResult) why() string {
 	return ""
 }
 
+// failedCommand is the command of the failure why says, as it ran, for the
+// writer to run until it passes: the head's spec run of a proof that failed
+// there (red, or a hang), the precheck's failing command; "" when no
+// command ran to that failure (a spec that passes on the base too, a
+// proof.json naming a spec the head lacks).
+func (r checkResult) failedCommand() string {
+	switch {
+	case r.Proof != nil && !r.Proof.Passed:
+		if r.Proof.Head.Exit != 0 {
+			return r.Proof.Head.Command
+		}
+		return ""
+	case r.Precheck != nil && !r.Precheck.Passed:
+		return r.Precheck.Command
+	}
+	return ""
+}
+
 // provenHead is the rest of the proof end fact, past proof.json (checkEnd):
 // task t's branch has commits after origin/<base> and no tracked change in
 // copy c, and the factory's proof and the precheck passed at its head. While
@@ -561,7 +579,7 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 		if res.forYou() {
 			return operatorProblem(*t, file, res.why()), "", false, nil
 		}
-		return &endProblem{file: file, why: res.why(), change: true}, "", false, nil
+		return &endProblem{file: file, why: res.why(), change: true, command: res.failedCommand()}, "", false, nil
 	}
 	return nil, bh.Head, false, nil
 }

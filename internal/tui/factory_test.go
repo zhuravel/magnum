@@ -641,6 +641,28 @@ func TestThePushQuestionNamesWhatItFrees(t *testing.T) {
 	}
 }
 
+// A decision on the ready card carries the recommendation the card showed:
+// none before the diff was read (the card draws none), the recommended
+// choice after it, whichever choice you take; the factory records whether
+// one was shown and whether you followed it.
+func TestADecisionCarriesTheRecommendationTheCardShowed(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.open("PR-12360")
+	h.press("3", "y") // a drop before the diff: no recommendation drawn
+	if len(h.act.decides) != 1 || h.act.decides[0].bound.Recommended != "" {
+		t.Fatalf("a decision before the diff carries %+v, want no recommendation", h.act.decides)
+	}
+	h = testFactory(t, 100, 40)
+	h.open("PR-12360")
+	h.press("d")
+	h.feed(factoryPagerMsg{task: 3})
+	mustContain(t, h.view(), "recommended")
+	h.press("3", "y")
+	if len(h.act.decides) != 1 || h.act.decides[0].choice != FactoryDrop || h.act.decides[0].bound.Recommended != FactoryPush {
+		t.Fatalf("a drop after the diff = %+v, want it to carry the card's recommendation, push", h.act.decides)
+	}
+}
+
 func TestDOpensTheDiffInThePager(t *testing.T) {
 	h := testFactory(t, 100, 40)
 	h.open("PR-12360")

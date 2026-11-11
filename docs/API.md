@@ -6448,6 +6448,13 @@ func (k FactoryKind) RedRun() bool
 type FactoryLocalReview struct {
 	// Cycles is the most rounds the loop runs (1 to MaxFactoryCycles).
 	Cycles int `toml:"cycles"`
+	// ExtraCycles is how many rounds past Cycles a converging loop runs by
+	// itself (0 to MaxFactoryCycles; 0 turns them off): a round at the cap
+	// that blocks goes on, its findings to the writer, while it has no P0 or
+	// P1 finding, fewer blocking findings than the round before and a
+	// verdict that does not block. The loop never counts more than
+	// MaxFactoryCycles rounds.
+	ExtraCycles int `toml:"extra_cycles"`
 	// LaterWithout names the review roles that run in round 1 only.
 	LaterWithout []string `toml:"later_without"`
 	// SecondJudge says when a clean round of a Codex judge is followed by
@@ -13602,11 +13609,14 @@ type LocalFinding struct {
 	Line                     int
 	Body                     string
 	Simplification, Question bool
+	Sources                  []string `json:",omitempty"`
 }
     LocalFinding is one finding of a local round: its Severity (P0 to P3, "" for
     a simplification), Title, Path and Line (0 for one in the review's body),
-    its Body, and whether it is a simplification or a question for the operator
-    (the judge's provenance marks it, the skill's Local round).
+    its Body, whether it is a simplification or a question for the operator (the
+    judge's provenance marks it, the skill's Local round), and its Sources,
+    the roles that raised it as the provenance names them (`judge` for the
+    judge's own pass; none for a finding no entry of the provenance names).
 
 type LocalInputs struct {
 	Task    int64     `json:"task"`
@@ -14430,6 +14440,13 @@ func ReadSeen(l paths.Layout) (time.Time, error)
     ReadSeen is when you last saw the factory screen's home, as SaveSeen kept it
     in layout l; the zero time before the first.
 
+func ReadyRecommendation(ctx context.Context, reg *registry.Registry, t registry.Task, card ReadyCardFile) (choice, why string)
+    ReadyRecommendation is the choice task t's ready card recommends (push,
+    send_back) and why, as the screen's card says it once you read the diff and
+    `magnum factory decide` prints it: from card and the checks the factory ran
+    itself at its head, read from reg (a registry that cannot be read counts
+    none failed).
+
 func ReviewCandidateDir(l paths.Layout) string
     ReviewCandidateDir is where the factory writes its review candidate:
     <data>/factory/review-candidate/.
@@ -14575,14 +14592,19 @@ type DecidePayload struct {
 	DiffOpened, Shown                                   time.Time
 	DiffDwell                                           time.Duration
 	Surface                                             string
+	Recommended                                         string
 }
     DecidePayload is a ReqDecide: your decision on task TaskID's ready card.
-    Choice is push, send_back or drop; a send back takes the key of its Reason
-    and a Note to the writer (the reason ReasonKnown takes none: the factory
-    writes the note). HeadSHA, ReportHash and DiffHash are what the card showed
-    (ReadyCardFile), Shown when it was shown, DiffOpened when you opened the
-    diff (zero: you did not) and DiffDwell how long you read it. Surface is
-    where you decided (the screen, the CLI).
+    Choice is push, send_back or drop; a send back takes the key of its
+    Reason and a Note to the writer (the reason ReasonKnown takes none:
+    the factory writes the note). HeadSHA, ReportHash and DiffHash are what
+    the card showed (ReadyCardFile), Shown when it was shown, DiffOpened when
+    you opened the diff (zero: you did not) and DiffDwell how long you read it.
+    Surface is where you decided (the screen, the CLI). Recommended is the
+    choice the card recommended as it showed it to you (push, send_back or drop;
+    the screen draws it once you read the diff, the CLI's card always), "" when
+    it showed none: the decision records that one was shown and whether your
+    choice took it.
 
 type Deps struct {
 	Config   *config.Config
@@ -15148,6 +15170,7 @@ type PrecheckResult struct {
 	Why        string
 	ForYou     bool
 	Unfinished string
+	Command    string
 }
     PrecheckResult is a precheck's end: whether it passed, the checks it
     recorded (the factory's), the migrations the branch adds with their flags,
@@ -15161,6 +15184,9 @@ type PrecheckResult struct {
     tests did not run"; "" when it ran to its end): no failure of its own,
     so a precheck its cap stopped there passes unless something failed before
     (precheck.json keeps it, and the ready card and the PR body name it).
+    Command is the command of the failure Why says, as it ran (its files in it),
+    when that failure is the writer's to fix: its fix turn asks for a run of it
+    until it passes; "" for none.
 
 type PreviewPayload struct {
 	Text, Repo string
@@ -15201,6 +15227,10 @@ type PromptData struct {
 	// findings stage after Codex's usage limit, left as they stood, perhaps
 	// unfinished (satOutFindings), as paths joined with " and "; "" for none.
 	SatOut string
+	// Checks are the repository's precheck lint lines and its jest line, as
+	// configured ({files} and {base} in them): the writer's prompts name them
+	// for the writer to run before its turn ends; none without them.
+	Checks []string
 	// The QA walker's turn of a qa stage (factory-qa.md), each "" (0) in any
 	// other: QARun is the run's folder (qa/<n>-<sha7> in TaskDir), where the
 	// walker saves its pages and console logs; QAURL the copy's server
@@ -20169,6 +20199,14 @@ func (c *Client) FirstParentIdentities(ctx context.Context, dir, from, to string
     which ignore .mailmap: the commit's own words). A merge is one entry,
     without the commits it brought in. Nothing when from has every commit of to.
     `magnum push` checks that each is the fixer's.
+
+func (c *Client) HasFile(ctx context.Context, dir, rev, file string) (bool, error)
+    HasFile reports whether rev has file (a clean path from the top) as a file,
+    the existence probe FileAt is not: `git ls-tree --full-tree <rev> --
+    <file>` lists the path's entry, and a path rev lacks (one on disk only,
+    one nowhere, a directory's) lists none, a plain no that logs nothing,
+    where `cat-file blob` fails and warns. A revision dir lacks is an error.
+    rev must name a commit.
 
 func (c *Client) InProgress(ctx context.Context, repo string) (string, error)
     InProgress names the operation repo is in the middle of: "rebase", "merge",
@@ -34282,11 +34320,15 @@ type ReadyBinding struct {
 	HeadSHA, ReportHash, DiffHash string
 	DiffOpened, Shown             time.Time
 	DiffDwell                     time.Duration
+	Recommended                   string
 }
     ReadyBinding binds a decision on the ready card to what the card showed:
     the head and the hashes of the report and the diff (from the source),
-    and the screen's own times: when the card was first shown, when the diff was
-    first opened and how long the pager was open in all (zero: never).
+    and the screen's own times: when the card was first shown, when the diff
+    was first opened and how long the pager was open in all (zero: never).
+    Recommended is the choice the card marked recommended as it was drawn when
+    you decided (FactoryPush, FactorySendBack or FactoryDrop), "" when it drew
+    none (before the diff was read, or push not offered).
 
 type ReadyCard struct {
 	// TaskKey is the task's Jira key or its GitHub number.
@@ -34941,6 +34983,10 @@ type TaskCard struct {
 	// magnum keeps, "" for none.
 	FixNeeds  []string
 	FixReport string
+	// Findings are the local review's blocking findings of a task its cap
+	// stopped for you ("P2 <title> · <path>"), one each, drawn under WAITING
+	// FOR as FixNeeds are; none for any other task.
+	Findings []string
 	// PRInfo is the PR's own lines (CardPR), drawn first in the card's
 	// body: on your PR's card and on a published task's once magnum read
 	// its PR; nil before.

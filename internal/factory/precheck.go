@@ -72,6 +72,9 @@ const specsLockPoll = 2 * time.Second
 // the jest tests did not run"; "" when it ran to its end): no failure of its
 // own, so a precheck its cap stopped there passes unless something failed
 // before (precheck.json keeps it, and the ready card and the PR body name it).
+// Command is the command of the failure Why says, as it ran (its files in
+// it), when that failure is the writer's to fix: its fix turn asks for a
+// run of it until it passes; "" for none.
 type PrecheckResult struct {
 	Passed     bool
 	Checks     []registry.Check
@@ -79,6 +82,7 @@ type PrecheckResult struct {
 	Why        string
 	ForYou     bool
 	Unfinished string
+	Command    string
 }
 
 // errOverCap is the cause of a precheck's context its cap ended.
@@ -520,9 +524,9 @@ func (p *precheckRun) keep(why string) {
 
 // fail fails the precheck with why, its first failure's reason, unless a
 // failure for you came first.
-func (p *precheckRun) fail(why string) {
+func (p *precheckRun) fail(why, cmd string) {
 	if p.res.Passed {
-		p.res.Passed, p.res.Why = false, "precheck: "+why
+		p.res.Passed, p.res.Why, p.res.Command = false, "precheck: "+why, cmd
 	}
 }
 
@@ -784,12 +788,12 @@ func (p *precheckRun) lintCmd(cmd string, files []string, changed map[string]map
 	case len(mine) > 0:
 		check.Result, check.Cause = registry.CheckFail, "code"
 		p.say("\n- `%s`: %s on the changed lines:\n\n```\n%s\n```\n", script, plural(len(mine), "offense"), strings.Join(mine, "\n"))
-		p.fail(fmt.Sprintf("lint: %s on the changed lines (%s)", plural(len(mine), "offense"), firstWord(cmd)))
+		p.fail(fmt.Sprintf("lint: %s on the changed lines (%s)", plural(len(mine), "offense"), firstWord(cmd)), script)
 	case named == 0:
 		check.Result, check.Cause = registry.CheckFail, "unknown"
 		p.say("\n- `%s` exited %d and names no offense by path:line:\n\n```\n%s\n```\n", script, run.Exit, run.Output)
 		if crash, ok := crashOf("precheck.lint", cmd, p.c.Path, p.stderr); ok {
-			check.Cause, healed = p.lintCrashed(crash, files)
+			check.Cause, healed = p.lintCrashed(crash, script, files)
 			break
 		}
 		p.failForYou(p.lintCrashWhy(cmd))
@@ -812,7 +816,7 @@ func (p *precheckRun) lintCmd(cmd string, files []string, changed map[string]map
 //     lint loads, or its stderr names a changed file: branchCaused) is the
 //     writer's to fix, and any other is yours, with the fix. Neither holds
 //     another task.
-func (p *precheckRun) lintCrashed(crash envCrash, files []string) (cause string, healed bool) {
+func (p *precheckRun) lintCrashed(crash envCrash, script string, files []string) (cause string, healed bool) {
 	switch {
 	case crash.sig.machine:
 		p.say("\nIt crashed for lack of %s: the infrastructure hold runs the checks again at its next try.\n", crash.sig.lacks)
@@ -828,7 +832,7 @@ func (p *precheckRun) lintCrashed(crash envCrash, files []string) (cause string,
 		p.say("\nIt crashed for lack of %s, and the change touches %s, which the lint loads: the writer's to fix.\n",
 			crash.sig.lacks, clipList(theirs))
 		p.fail(fmt.Sprintf("lint: `%s` crashed for lack of %s (%s), and the change touches %s, which the lint loads",
-			firstWord(crash.cmd), crash.sig.lacks, crash.line, clipList(theirs)))
+			firstWord(crash.cmd), crash.sig.lacks, crash.line, clipList(theirs)), script)
 		return "code", false
 	}
 	fix := crash.fix()
@@ -964,7 +968,7 @@ func (p *precheckRun) specs(cmd string, files []string) {
 	if len(red) == 0 {
 		p.say("\n`%s` exited %d and names no failing spec:\n\n```\n%s\n```\n", script, run.Exit, run.Output)
 		p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "unknown", Command: script, Exit: run.Exit, Took: run.Took})
-		p.fail(fmt.Sprintf("specs: %s exited %d and names no failing spec", firstWord(cmd), run.Exit))
+		p.fail(fmt.Sprintf("specs: %s exited %d and names no failing spec", firstWord(cmd), run.Exit), script)
 		return
 	}
 	baseRed, judged := p.onBase(cmd, run, red)
@@ -992,7 +996,7 @@ func (p *precheckRun) specs(cmd string, files []string) {
 		}
 		p.say("\nRed at the head and green on the base, the change's:\n\n```\n%s\n```\n", failureLines(ours))
 		p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "code", Command: script, Exit: run.Exit, Took: run.Took})
-		p.fail(fmt.Sprintf("specs: %s red at the head and green on the base (%s)", plural(len(ours), "example"), clipList(specFiles)))
+		p.fail(fmt.Sprintf("specs: %s red at the head and green on the base (%s)", plural(len(ours), "example"), clipList(specFiles)), script)
 	}
 }
 
@@ -1020,7 +1024,7 @@ func (p *precheckRun) onBase(cmd string, run ProofRun, red []specFailure) (baseR
 		if slices.Contains(atBase, f.file) {
 			continue
 		}
-		if _, err := p.e.d.Git.FileAt(p.parent, p.c.Path, p.base, f.file); err == nil {
+		if has, err := p.e.d.Git.HasFile(p.parent, p.c.Path, p.base, f.file); err == nil && has { // a probe: a file the base lacks warns nothing
 			atBase = append(atBase, f.file)
 		}
 	}
@@ -1139,7 +1143,7 @@ func (p *precheckRun) jest(cmd string, files []string) {
 	case run.Exit != 0:
 		check.Result, check.Cause = registry.CheckFail, "code"
 		p.say("\n## Jest\n\n`%s` exited %d:\n\n```\n%s\n```\n", script, run.Exit, run.Output)
-		p.fail(fmt.Sprintf("jest: %s exited %d", firstWord(cmd), run.Exit))
+		p.fail(fmt.Sprintf("jest: %s exited %d", firstWord(cmd), run.Exit), script)
 	default:
 		p.say("\n## Jest\n\n`%s`: passed\n", script)
 	}
@@ -1232,7 +1236,7 @@ func (p *precheckRun) migrate(path, version, db string, cmds []string) {
 			p.record(check)
 			p.say("\n%s%s: `%s` exited %d:\n\n```\n%s\n```\n", path, on, script, run.Exit, run.Output)
 			p.say("\n%s\n", partWay(path, db))
-			p.fail(fmt.Sprintf("migration %s%s: %s exited %d", path, on, script, run.Exit))
+			p.fail(fmt.Sprintf("migration %s%s: %s exited %d", path, on, script, run.Exit), script)
 			return
 		}
 		p.record(check)

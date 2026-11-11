@@ -614,6 +614,58 @@ func TestTheWritersPromptNamesItsInputsAndTheProofFile(t *testing.T) {
 	}
 }
 
+// Both writer prompts, the coding stage's and the local review's fix turn's,
+// name the repository's precheck lint and jest lines, as configured, for
+// the writer to run before its turn ends: a jest failure the precheck finds
+// costs a fix turn and a precheck run of about 17 minutes. A repository
+// without them gets no such sentence.
+func TestTheWriterPromptsNameThePrechecksLintAndJestLines(t *testing.T) {
+	cfg := config.Defaults()
+	for _, name := range []string{"factory-writer.md", ReviewFixPrompt} {
+		d := fullPromptData()
+		text := renderFactory(t, cfg, name, d)
+		for _, want := range []string{"`bin/lint {files}`", "`bin/rubocop {files}`", "`pnpm jest --findRelatedTests {files}`",
+			"before your turn ends", "until they pass", "origin/" + d.Base} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s lacks %q:\n%s", name, want, text)
+			}
+		}
+		d.Checks = nil
+		if text := renderFactory(t, cfg, name, d); strings.Contains(text, "before your turn ends") || strings.Contains(text, "{files}") {
+			t.Errorf("%s of a repository without precheck lint or jest names them:\n%s", name, text)
+		}
+	}
+}
+
+// The review's fix turn tells the writer that a finding can be one case of
+// a mechanism, whose other cases it finds and fixes, each with a spec: in
+// all 3 rounds of a 145-file task the A/B-winner mapping of one file drew a
+// blocking finding (7 of 24), one case fixed per round, since each round is
+// a fresh review that never says "in the fix for ...".
+func TestTheReviewFixPromptAsksForEveryCaseOfAMechanism(t *testing.T) {
+	text := renderFactory(t, config.Defaults(), ReviewFixPrompt, fullPromptData())
+	for _, want := range []string{"one case of a mechanism", "a mapping, a list of cases, a switch", "find its other cases, fix them all",
+		"a spec for each"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the review's fix prompt lacks %q:\n%s", want, text)
+		}
+	}
+}
+
+// The prompts' data takes the precheck's lint and jest lines from the
+// task's repository, as configured, its specs' line never (the writer runs
+// the specs it wrote through the database lock already).
+func TestThePromptDataNamesTheRepositorysLintAndJestLines(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12359", "bug")
+	st, _ := r.e.stageOf(task, "coding")
+	role, _ := r.cfg.FactoryRole("fx-writer")
+	d := r.e.promptData(r.ctx, task, st, role, role, r.cp)
+	if want := []string{"bin/lint {files}", "bin/jest {files}"}; !slices.Equal(d.Checks, want) {
+		t.Fatalf("the prompt's checks %q, want %q", d.Checks, want)
+	}
+}
+
 // The writer's prompt follows the kind's proof, as the proof does
 // (PromptData.RedRun), never the kind's name: a kind of another name whose
 // proof is green keeps its specs green and is not told they must fail on

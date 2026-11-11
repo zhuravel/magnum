@@ -471,7 +471,7 @@ func TestReviewLoopStopsAtThreeRounds(t *testing.T) {
 	r.run(10, func() bool { return !isLive(r.reload(task.ID)) })
 	got := r.reload(task.ID)
 	cs := r.cycles(task.ID)
-	if got.State != registry.TaskNeedsYou || got.WaitsWhat != "1 blocking finding after 3 review rounds" || len(cs) != 3 || cs[2].Exit != registry.ExitCap {
+	if got.State != registry.TaskNeedsYou || got.WaitsWhat != "1 blocking finding after 3 review rounds (blocking 1 → 1 → 1, P1 1 → 0 → 1; verdict blocking): P1 "+logFinding.Title+" (app/notes.rb)" || len(cs) != 3 || cs[2].Exit != registry.ExitCap {
 		t.Fatalf("task %s waits %q; cycles %+v", got.State, got.WaitsWhat, cs)
 	}
 	if n := len(r.rv.calls()); n != 3 {
@@ -874,6 +874,33 @@ func TestEveryRoundIsACycleWithItsFindings(t *testing.T) {
 	}
 	if sum.Exit != registry.ExitClean || len(sum.Leftovers) != 1 || sum.Leftovers[0].Title != nitFinding.Title {
 		t.Fatalf("summary %+v, want the P3 among the leftovers", sum)
+	}
+}
+
+// A local round's findings keep the roles that raised them, as the judge's
+// provenance names them, in the registry (sources_json): a later round adds
+// its own to a finding it sees again.
+func TestALocalRoundsFindingsKeepTheirSources(t *testing.T) {
+	refund, nit := refundFinding, nitFinding
+	refund.Sources, nit.Sources = []string{"claude-review", "judge"}, []string{"codex-review"}
+	again := refundFinding
+	again.Sources = []string{"codex-review"}
+	r := newReviewRig(t, result(refund, nit), result(again))
+	task, _ := r.reviewTask("PR-12391")
+	r.run(4, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
+	fs := r.findings(task.ID)
+	if got := fs[Fingerprint(refundFinding)].Sources; !slices.Equal(got, []string{"claude-review", "judge"}) {
+		t.Errorf("the P1's sources %q after round 1", got)
+	}
+	if got := fs[Fingerprint(nitFinding)].Sources; !slices.Equal(got, []string{"codex-review"}) {
+		t.Errorf("the P3's sources %q after round 1", got)
+	}
+	r.writerFixes(task, 1, fixedCredit(1), nil)
+	r.run(8, func() bool {
+		return len(r.rv.calls()) == 2 && len(r.cycles(task.ID)) == 2 && !r.cycles(task.ID)[1].Ended.IsZero()
+	})
+	if got := r.findings(task.ID)[Fingerprint(refundFinding)].Sources; !slices.Equal(got, []string{"claude-review", "judge", "codex-review"}) {
+		t.Errorf("the P1's sources %q after round 2, want round 2's added", got)
 	}
 }
 

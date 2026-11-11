@@ -93,6 +93,38 @@ func TestALocalResultWhosePlannedReviewDoesNotParseKeepsItsFindings(t *testing.T
 	}
 }
 
+// A finding of the provenance keeps the roles that raised it (its
+// sources: a list, or one name as a string), which the factory stores with
+// the finding; a planned comment no entry names has none.
+func TestALocalFindingKeepsTheSourcesOfItsProvenance(t *testing.T) {
+	data := []byte(`{"status":"dry_run","verdict":"blocking","event":"REQUEST_CHANGES",
+ "findings":{"P0":0,"P1":1,"P2":2,"P3":0},
+ "provenance":[{"id":"F1","title":"Points skip the refunded activities","severity":"P1","path":"app/credit.rb","line":42,"sources":["claude-review","judge"],"verdict":"posted"},
+  {"id":"F2","title":"The log names the wrong method","severity":"P2","path":"app/notes.rb","line":31,"sources":"codex-review","verdict":"posted"},
+  {"id":"F3","title":"Points count cancelled activities","severity":"P2","path":"app/credit.rb","line":14,"sources":{"bad":1},"verdict":"posted"}],
+ "planned_review":{"event":"REQUEST_CHANGES","body":"Blocking.","comments":[{"path":"app/credit.rb","line":42,"body":"**[P1] Points skip the refunded activities**"},
+  {"path":"app/unit.rb","line":7,"body":"**[P2] A comment no entry names**"}]}}`)
+	r := ParseLocalResult(data)
+	got := map[string][]string{}
+	for _, f := range r.Findings {
+		got[f.Title] = f.Sources
+	}
+	want := map[string][]string{
+		"Points skip the refunded activities": {"claude-review", "judge"},
+		"The log names the wrong method":      {"codex-review"},
+		"Points count cancelled activities":   nil,
+		"A comment no entry names":            nil,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("findings %+v, want %d", r.Findings, len(want))
+	}
+	for title, w := range want {
+		if g, ok := got[title]; !ok || !slices.Equal(g, w) {
+			t.Errorf("%q: sources %q, want %q", title, g, w)
+		}
+	}
+}
+
 func TestRunLocalSeedsAFreshScratchPerRound(t *testing.T) {
 	d, runs := localFixture(t, cleanResult)
 	for _, n := range []int{1, 2} {

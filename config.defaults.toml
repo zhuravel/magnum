@@ -909,6 +909,10 @@ kind_by_jira_type = { Bug = "bug", Story = "feature", Task = "chore" }   # the J
 [factory.local_review]            # magnum's full review of the change on this Mac, before the PR
 cycles = 3                        # at most this many rounds (1 to 10); round 1 runs the review roles of the
                                   # repository's [[watch]], so a factory repository needs one
+extra_cycles = 2                  # rounds past cycles that a converging loop runs by itself (0 to 10; 0 = none): a
+                                  # round at the cap that blocks goes on, its findings to the writer, when it has no
+                                  # P0 or P1 finding, fewer blocking findings than the round before and a judge's
+                                  # verdict that does not block; else the loop stops for you. Never past 10 rounds
 later_without = ["claude-simplify"]   # the review roles that run in round 1 only
 second_judge = "wide"             # a second opinion: after a clean round whose judge runs on Codex, one more round
                                   # of the same roles with the watch's judge_fallback (a judge of another kind) in

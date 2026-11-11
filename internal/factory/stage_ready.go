@@ -70,6 +70,10 @@ const (
 	ChoiceDrop     = "drop"
 )
 
+// readyChoices are the ready card's choices in the order the card lists
+// them: its options' indexes (tui.ReadyCard.Recommended) are theirs.
+var readyChoices = []string{ChoicePush, ChoiceSendBack, ChoiceDrop}
+
 // ReasonKnown is the reason of the send back that hands the writer the
 // known defects of the card's review (knownDefects): the factory writes its
 // note from the card, so it takes no note of yours.
@@ -86,12 +90,17 @@ var reasonKeyRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 // what the card showed (ReadyCardFile), Shown when it was shown,
 // DiffOpened when you opened the diff (zero: you did not) and DiffDwell how
 // long you read it. Surface is where you decided (the screen, the CLI).
+// Recommended is the choice the card recommended as it showed it to you
+// (push, send_back or drop; the screen draws it once you read the diff, the
+// CLI's card always), "" when it showed none: the decision records that one
+// was shown and whether your choice took it.
 type DecidePayload struct {
 	TaskID                                              int64
 	Choice, Reason, Note, HeadSHA, ReportHash, DiffHash string
 	DiffOpened, Shown                                   time.Time
 	DiffDwell                                           time.Duration
 	Surface                                             string
+	Recommended                                         string
 }
 
 // ReadyCardFile is ready-card.json, the ready card as the factory drew it:
@@ -915,7 +924,8 @@ func (e *Engine) decideRequest(ctx context.Context, p DecidePayload) (string, er
 // card's conditions no longer hold (readyProblem). A drop is bound to no
 // card: it takes a task at its ready stage whatever its card says, or
 // when none could be drawn. A decision taken is recorded with what the
-// card showed, and your input with it; then a push moves the task on to
+// card showed (its recommendation, when it showed one, and whether your
+// choice took it), and your input with it; then a push moves the task on to
 // its publish, a send back writes your note to send-back-<revision>.md and
 // returns the task to its coding stage (rework.json names the note and the
 // reason's key), and a drop stops the task, freeing its copy and keeping
@@ -981,8 +991,10 @@ func (e *Engine) decide(ctx context.Context, p DecidePayload) error {
 	if b, err := os.ReadFile(filepath.Join(dir, factoryProofFile)); err == nil {
 		proof = sha256Hex(b)
 	}
+	shown := slices.Contains(readyChoices, p.Recommended) // a value no choice has is no recommendation
 	d := registry.Decision{TaskID: t.ID, Kind: config.FactoryDecisionReadyPush, Choice: p.Choice, Note: p.Reason, HeadSHA: p.HeadSHA,
-		ReportHash: p.ReportHash, DiffHash: p.DiffHash, Shown: p.Shown, DiffOpened: p.DiffOpened, DiffDwell: p.DiffDwell, Proof: proof}
+		ReportHash: p.ReportHash, DiffHash: p.DiffHash, Shown: p.Shown, DiffOpened: p.DiffOpened, DiffDwell: p.DiffDwell, Proof: proof,
+		RecommendationShown: shown, RecommendationFollowed: shown && p.Recommended == p.Choice}
 	if err := e.reg.RecordDecision(ctx, d); err != nil {
 		return err
 	}

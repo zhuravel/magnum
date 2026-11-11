@@ -575,6 +575,28 @@ func TestFactoryLocalReviewDefaultsToThreeRoundsWithoutSimplifyLater(t *testing.
 	wantError(t, cfg.Validate(), "factory.local_review.later_without", "Not A Role")
 }
 
+// A converging local review runs 2 rounds past its cycles by default
+// (extra_cycles); 0 turns them off, and a value below 0 or past
+// MaxFactoryCycles is refused, naming the key.
+func TestFactoryLocalReviewExtraCyclesDefaultToTwo(t *testing.T) {
+	for _, lr := range []FactoryLocalReview{Defaults().Factory.LocalReview, mustLoadDefaults(t).Factory.LocalReview} {
+		if lr.ExtraCycles != 2 {
+			t.Errorf("local_review = %+v, want 2 extra cycles", lr)
+		}
+	}
+	cfg := validFactoryConfig()
+	for _, ok := range []int{0, 2, MaxFactoryCycles} {
+		cfg.Factory.LocalReview.ExtraCycles = ok
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("extra_cycles = %d: %v", ok, err)
+		}
+	}
+	for _, bad := range []int{-1, MaxFactoryCycles + 1} {
+		cfg.Factory.LocalReview.ExtraCycles = bad
+		wantError(t, cfg.Validate(), "factory.local_review.extra_cycles", fmt.Sprint(bad))
+	}
+}
+
 // The second-opinion round of the local review runs on wide changes by
 // default; second_judge takes "wide", "always" or "never" and refuses any
 // other word, naming the three; a user's lone key merges into the built-in

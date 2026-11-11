@@ -182,6 +182,49 @@ func TestRealFileAtReadsARevisionsFile(t *testing.T) {
 	}
 }
 
+// HasFile asks whether a revision has a file, as an answer: a file the
+// revision lacks (on disk only, or nowhere, or a directory's path) is a no
+// that logs no warning, where FileAt's `cat-file blob` warns ("exists on
+// disk, but not in 'HEAD'": 155 lines in a day of the factory's existence
+// probes). A revision the checkout lacks is an error, and a path FileAt
+// refuses is refused.
+func TestRealHasFileIsAQuietAnswerForAFileTheRevisionLacks(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	base, head := prepassFixture(t, fx)
+	var log levelLines
+	fx.r.Log = &log
+	fx.write(fx.origin, "spec/laid_spec.rb", "laid\n") // on disk, in no commit
+	for _, tc := range []struct {
+		rev, path string
+		want      bool
+	}{
+		{head, "app/jobs/sync.rb", true},
+		{head, `app/we"ird.rb`, true},
+		{base, "app/models/order.rb", true},
+		{head, "lib/report.rb", false},       // deleted at the head
+		{"HEAD", "spec/laid_spec.rb", false}, // on disk only
+		{head, "app/nowhere.rb", false},
+		{head, "app/jobs", false}, // a directory
+		{head, "app/jobs/sync.rb/x", false},
+	} {
+		if got, err := fx.c.HasFile(ctx, fx.origin, tc.rev, tc.path); err != nil || got != tc.want {
+			t.Errorf("HasFile(%s, %s) = %v, %v; want %v", tc.rev, tc.path, got, err, tc.want)
+		}
+	}
+	if warns := log.find("WARN "); len(warns) > 0 {
+		t.Errorf("the probes logged warnings: %q", warns)
+	}
+	if _, err := fx.c.HasFile(ctx, fx.origin, strings.Repeat("ab", 20), "app/jobs/sync.rb"); err == nil {
+		t.Error("HasFile at a commit the checkout lacks answered, want an error")
+	}
+	for _, p := range []string{"", "/etc/hosts", "../x.rb", "./app/jobs/sync.rb", "two\nlines.rb"} {
+		if _, err := fx.c.HasFile(ctx, fx.origin, head, p); err == nil {
+			t.Errorf("HasFile(%q) answered, want an error", p)
+		}
+	}
+}
+
 // DirFiles lists the files directly in each directory at a revision, the
 // top as ".", never a subdirectory or a file of one, nor an uncommitted
 // file of the checkout.

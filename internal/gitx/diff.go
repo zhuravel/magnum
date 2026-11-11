@@ -402,9 +402,8 @@ func (c *Client) FileAt(ctx context.Context, dir, rev, file string) (string, err
 	if err := checkCommit(rev); err != nil {
 		return "", err
 	}
-	if file == "" || path.Clean(file) != file || path.IsAbs(file) || file == ".." || strings.HasPrefix(file, "../") ||
-		strings.ContainsAny(file, "\n\x00") {
-		return "", errors.New("gitx: cat-file: the file must be a clean path from the top, one line")
+	if err := checkTopPath("cat-file", file); err != nil {
+		return "", err
 	}
 	res, err := c.git(ctx, dir, call{label: "cat-file blob " + rev}, "cat-file", "blob", rev+":"+file)
 	if err != nil {
@@ -414,4 +413,42 @@ func (c *Client) FileAt(ctx context.Context, dir, rev, file string) (string, err
 		return "", fmt.Errorf("gitx: cat-file blob %s: %w", rev, ErrFileTooLarge)
 	}
 	return string(res.Stdout), nil
+}
+
+// checkTopPath refuses a file that is no clean path from the top on one
+// line, for command what.
+func checkTopPath(what, file string) error {
+	if file == "" || path.Clean(file) != file || path.IsAbs(file) || file == ".." || strings.HasPrefix(file, "../") ||
+		strings.ContainsAny(file, "\n\x00") {
+		return errors.New("gitx: " + what + ": the file must be a clean path from the top, one line")
+	}
+	return nil
+}
+
+// HasFile reports whether rev has file (a clean path from the top) as a
+// file, the existence probe FileAt is not: `git ls-tree --full-tree <rev> --
+// <file>` lists the path's entry, and a path rev lacks (one on disk only,
+// one nowhere, a directory's) lists none, a plain no that logs nothing,
+// where `cat-file blob` fails and warns. A revision dir lacks is an error.
+// rev must name a commit.
+func (c *Client) HasFile(ctx context.Context, dir, rev, file string) (bool, error) {
+	if err := checkCommit(rev); err != nil {
+		return false, err
+	}
+	if err := checkTopPath("ls-tree", file); err != nil {
+		return false, err
+	}
+	res, err := c.git(ctx, dir, call{label: "ls-tree " + rev}, "ls-tree", "-z", "--full-tree", rev, "--", file)
+	if err != nil {
+		return false, err
+	}
+	// One entry, "<mode> SP <type> SP <oid> TAB <path>" NUL, for a path rev
+	// has; none for one it lacks.
+	for rec := range strings.SplitSeq(string(res.Stdout), "\x00") {
+		meta, name, ok := strings.Cut(rec, "\t")
+		if f := strings.Fields(meta); ok && name == file && len(f) == 3 && f[1] == "blob" {
+			return true, nil
+		}
+	}
+	return false, nil
 }

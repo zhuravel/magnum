@@ -124,15 +124,33 @@ const cardFixNeedsShown = 5
 // text: one line each behind a dash, cut at the edge, at most
 // cardFixNeedsShown and a line that counts the rest.
 func (p *cardPainter) fixNeedRows(items []string) []string {
+	return p.itemRows(items, cardFixNeedsShown, fmt.Sprintf("more: %s opens the report", reportKey))
+}
+
+// cardFindingsShown bounds the local review's findings WAITING FOR lists
+// at a stop at its cap; a last line counts the rest, which the task's
+// review-<n>.json has.
+const cardFindingsShown = 8
+
+// findingRows are the local review's findings of a stop at its cap, under
+// WAITING FOR's text, as fixNeedRows draws the fixer's items.
+func (p *cardPainter) findingRows(items []string) []string {
+	return p.itemRows(items, cardFindingsShown, "more in the task's review file")
+}
+
+// itemRows are items under WAITING FOR's text: one line each behind a
+// dash, cut at the edge, at most shown and a line that counts the rest
+// ("+3 " and more).
+func (p *cardPainter) itemRows(items []string, most int, more string) []string {
 	const x = 1 + len("WAITING FOR") + 2
 	w := max(p.width-1-x, 1)
-	shown := items[:min(len(items), cardFixNeedsShown)]
+	shown := items[:min(len(items), most)]
 	out := make([]string, 0, len(shown)+1)
 	for _, it := range shown {
 		out = append(out, p.line(at(x, w, seg{p.dash() + " ", p.st.Dim}, seg{it, noStyle})))
 	}
 	if n := len(items) - len(shown); n > 0 {
-		out = append(out, p.line(at(x, w, seg{fmt.Sprintf("+%d more: %s opens the report", n, reportKey), p.st.Dim})))
+		out = append(out, p.line(at(x, w, seg{fmt.Sprintf("+%d %s", n, more), p.st.Dim})))
 	}
 	return out
 }

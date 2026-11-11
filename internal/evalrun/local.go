@@ -108,13 +108,17 @@ type LocalResult struct {
 
 // LocalFinding is one finding of a local round: its Severity (P0 to P3, ""
 // for a simplification), Title, Path and Line (0 for one in the review's
-// body), its Body, and whether it is a simplification or a question for the
-// operator (the judge's provenance marks it, the skill's Local round).
+// body), its Body, whether it is a simplification or a question for the
+// operator (the judge's provenance marks it, the skill's Local round), and
+// its Sources, the roles that raised it as the provenance names them
+// (`judge` for the judge's own pass; none for a finding no entry of the
+// provenance names).
 type LocalFinding struct {
 	Severity, Title, Path    string
 	Line                     int
 	Body                     string
 	Simplification, Question bool
+	Sources                  []string `json:",omitempty"`
 }
 
 // localNumberBase is where the local rounds' synthetic PR numbers start:
@@ -478,12 +482,34 @@ func localTag() (string, error) {
 // localProvenance is the part of a provenance entry of the judge's result a
 // local round reads.
 type localProvenance struct {
-	Title    string `json:"title"`
-	Severity string `json:"severity"`
-	Path     string `json:"path"`
-	Line     *int   `json:"line"`
-	Verdict  string `json:"verdict"`
-	Question bool   `json:"question"`
+	Title    string          `json:"title"`
+	Severity string          `json:"severity"`
+	Path     string          `json:"path"`
+	Line     *int            `json:"line"`
+	Sources  json.RawMessage `json:"sources"`
+	Verdict  string          `json:"verdict"`
+	Question bool            `json:"question"`
+}
+
+// localSources are the sources of a provenance entry: a list of role names,
+// or one name as a string; anything else names none, and never keeps the
+// other entries from being read.
+func localSources(raw json.RawMessage) []string {
+	var list []string
+	if json.Unmarshal(raw, &list) != nil {
+		var one string
+		if json.Unmarshal(raw, &one) != nil {
+			return nil
+		}
+		list = []string{one}
+	}
+	var out []string
+	for _, s := range list {
+		if s = strings.TrimSpace(s); s != "" && !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // localBodyTitle is the title of the finding a local result makes of the
@@ -526,7 +552,8 @@ func ParseLocalResult(data []byte) LocalResult {
 		if p.Verdict != "" && p.Verdict != "posted" {
 			continue
 		}
-		lf := LocalFinding{Severity: strings.ToUpper(strings.TrimSpace(p.Severity)), Title: strings.TrimSpace(p.Title), Path: p.Path, Question: p.Question}
+		lf := LocalFinding{Severity: strings.ToUpper(strings.TrimSpace(p.Severity)), Title: strings.TrimSpace(p.Title), Path: p.Path, Question: p.Question,
+			Sources: localSources(p.Sources)}
 		if p.Line != nil {
 			lf.Line = *p.Line
 		}

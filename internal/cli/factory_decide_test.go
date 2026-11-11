@@ -126,6 +126,32 @@ func TestFactoryDecideSendsTheCardYouRead(t *testing.T) {
 	}
 }
 
+// The card `magnum factory decide <task>` prints names the factory's
+// recommendation and why, as the screen's card does once you read the
+// diff, and a decision on that card carries it, so the factory records
+// that it was shown and whether you took it.
+func TestFactoryDecideSendsTheRecommendationItsCardShowed(t *testing.T) {
+	storetest.Serial(t)
+	var got factory.DecidePayload
+	dt := newFactoryStartTest(t, 250, func(q registry.Request) (string, string) {
+		if err := json.Unmarshal(q.Payload, &got); err != nil {
+			t.Error(err)
+		}
+		return registry.RequestDone, "done"
+	})
+	seedReadyCard(t, dt)
+	if code := dt.run("factory", "decide", "PR-12360"); code != 0 {
+		t.Fatalf("exit %d, stderr %s", code, dt.stderr)
+	}
+	if out, want := dt.stdout.String(), "recommends push: the local review ended clean after 2 rounds and the factory's proof holds at cccccccc"; !strings.Contains(out, want) {
+		t.Errorf("the card lacks %q:\n%s", want, out)
+	}
+	if code := dt.run("factory", "decide", "PR-12360", "send_back", "--card", "2", "--reason", "scope", "--note", "keep archived out"); code != 0 ||
+		got.Choice != factory.ChoiceSendBack || got.Recommended != factory.ChoicePush {
+		t.Fatalf("send back: exit %d, stderr %s, payload %+v, want the card's recommendation, push", code, dt.stderr, got)
+	}
+}
+
 // The card `magnum factory decide <task>` prints has its QA line, as the
 // screen's does: what the QA run that passed at its head found.
 func TestFactoryDecidePrintsTheCardsQALine(t *testing.T) {

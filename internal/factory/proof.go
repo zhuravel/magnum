@@ -296,7 +296,7 @@ func (e *Engine) runProof(ctx context.Context, t registry.Task, c Copy) (Proof, 
 		return done()
 	}
 	for _, s := range pf.Specs {
-		if _, err := e.d.Git.FileAt(ctx, c.Path, bh.Head, s); err != nil {
+		if has, err := e.d.Git.HasFile(ctx, c.Path, bh.Head, s); err != nil || !has { // a probe: a miss warns nothing
 			proof.Why = "proof.json names " + s + ", which the head does not have: commit the spec"
 			return done()
 		}
@@ -814,7 +814,7 @@ func (e *Engine) restoreBranch(ctx context.Context, t registry.Task, rec detache
 		}
 	}
 	for _, s := range rec.Specs {
-		if _, err := e.d.Git.FileAt(ctx, rec.Copy, "HEAD", s); err == nil {
+		if has, err := e.d.Git.HasFile(ctx, rec.Copy, "HEAD", s); err == nil && has { // a probe: a laid spec HEAD lacks warns nothing
 			continue
 		}
 		if err := os.Remove(filepath.Join(rec.Copy, s)); err != nil && !errors.Is(err, fs.ErrNotExist) {

@@ -803,8 +803,13 @@ func (s *screen) taskCard(v *taskView, row tui.FactoryRow) tui.TaskCard {
 		Started: t.Created, PR: row.GitHub, PRURL: prURL(t, v.link), Issue: t.JiraKey, IssueURL: s.issueURL(t), Retry: v.retry,
 		Rate: t.State == registry.TaskPublished || t.State == registry.TaskDone} // + and − rate a task once it is out or merged
 	parts := make([]string, 0, len(row.WaitsOn)+len(v.letGo))
-	for _, w := range row.WaitsOn {
-		parts = append(parts, w.Who+": "+w.What)
+	stopHead, stopItems, capped := s.capStop(t)
+	for i, w := range row.WaitsOn {
+		what := w.What
+		if i == 0 && capped && w.OnYou && what == t.WaitsWhat { // a stop at the cap: its findings follow, one a line
+			what, c.Findings = stopHead, stopItems
+		}
+		parts = append(parts, w.Who+": "+what)
 	}
 	// A prompt you let go of may not have reached its agent: its first line
 	// is on the WAITING FOR line, which the card always draws.
@@ -834,6 +839,26 @@ func (s *screen) taskCard(v *taskView, row tui.FactoryRow) tui.TaskCard {
 	c.AgentsNote = yieldNote(v.yields)
 	c.Report = s.report(t)
 	return c
+}
+
+// capStop is the stop at the local review's cap that task t waits on you
+// for (review-stop.json): the head of its NEEDS YOU line (the count, the
+// trend and the verdict) and its findings as the card lists them (capItem);
+// ok is false for a task that does not wait on you for it (its wait is not
+// the stop's line), and for a stop without findings (another cause, an
+// older build's).
+func (s *screen) capStop(t registry.Task) (head string, items []string, ok bool) {
+	if t.State != registry.TaskNeedsYou {
+		return "", nil, false
+	}
+	st, found := readReviewStop(s.l.FactoryTaskDir(t.ID))
+	if !found || st.Head == "" || len(st.Findings) == 0 || st.Fixed || st.Why != t.WaitsWhat {
+		return "", nil, false
+	}
+	for _, i := range st.Findings {
+		items = append(items, capItem(i))
+	}
+	return st.Head, items, true
 }
 
 // prURL is the GitHub page of task t's PR, which the screen's b opens: its
@@ -1125,25 +1150,48 @@ func (s *screen) readyCard(v *taskView) *tui.ReadyCard {
 		}
 		c.Leftovers = append(c.Leftovers, qaKnownLines(*q)...)
 	}
-	c.Failed = s.failedChecks(t, card.Head)
+	c.Failed = failedChecksOf(s.ctx, s.reg, t.ID, card.Head)
+	c.NoPush = noPushOf(*card)
+	choice, why := readyRecommendation(*card, c.Failed)
+	c.Recommended, c.Why = slices.Index(readyChoices, choice), why
+	return c
+}
+
+// noPushOf is why the ready card does not offer push ("" when it does):
+// the change conflicts with the base.
+func noPushOf(card ReadyCardFile) string {
 	for _, f := range card.Flags {
 		if strings.HasPrefix(f, conflictsFlag) {
-			c.NoPush = "the base conflicts: the writer merges it first"
+			return "the base conflicts: the writer merges it first"
 		}
 	}
+	return ""
+}
+
+// readyRecommendation is the choice the ready card recommends (one of
+// readyChoices) and why, from what it shows: card, and the checks the
+// factory ran itself that failed at its head (failed).
+func readyRecommendation(card ReadyCardFile, failed []string) (choice, why string) {
 	rev := card.Review
 	switch {
-	case c.NoPush != "":
-		c.Recommended, c.Why = 1, "the change conflicts with the base: send it back, and the writer merges the base first"
-	case len(c.Failed) > 0:
-		c.Recommended, c.Why = 1, "a check failed at this head: send it back to fix it"
+	case noPushOf(card) != "":
+		return ChoiceSendBack, "the change conflicts with the base: send it back, and the writer merges the base first"
+	case len(failed) > 0:
+		return ChoiceSendBack, "a check failed at this head: send it back to fix it"
 	case rev.Exit == registry.ExitOscillation:
-		c.Recommended, c.Why = 0, fmt.Sprintf("the local review went back and forth after %s: read KNOWN, then push", reviewRounds(rev))
-	default:
-		c.Recommended, c.Why = 0, fmt.Sprintf("the local review ended clean after %s and the factory's proof holds at %s%s",
-			reviewRounds(rev), short(card.Head), qaWhy(card.QA))
+		return ChoicePush, fmt.Sprintf("the local review went back and forth after %s: read KNOWN, then push", reviewRounds(rev))
 	}
-	return c
+	return ChoicePush, fmt.Sprintf("the local review ended clean after %s and the factory's proof holds at %s%s",
+		reviewRounds(rev), short(card.Head), qaWhy(card.QA))
+}
+
+// ReadyRecommendation is the choice task t's ready card recommends (push,
+// send_back) and why, as the screen's card says it once you read the diff
+// and `magnum factory decide` prints it: from card and the checks the
+// factory ran itself at its head, read from reg (a registry that cannot be
+// read counts none failed).
+func ReadyRecommendation(ctx context.Context, reg *registry.Registry, t registry.Task, card ReadyCardFile) (choice, why string) {
+	return readyRecommendation(card, failedChecksOf(ctx, reg, t.ID, card.Head))
 }
 
 // reviewRounds is the local review's rounds for the ready card ("2
@@ -1156,11 +1204,14 @@ func reviewRounds(rev ReviewSummary) string {
 	return s
 }
 
-// failedChecks are the checks the factory ran itself at head that failed
-// in their newest run, one each ("lint: failed, exit 1").
-func (s *screen) failedChecks(t registry.Task, head string) []string {
-	cs, err := s.reg.Checks(s.ctx, t.ID)
-	if err != nil || head == "" {
+// failedChecksOf are the checks the factory ran itself on task id at head
+// that failed in their newest run, one each ("lint: failed, exit 1").
+func failedChecksOf(ctx context.Context, reg *registry.Registry, id int64, head string) []string {
+	if reg == nil || head == "" {
+		return nil
+	}
+	cs, err := reg.Checks(ctx, id)
+	if err != nil {
 		return nil
 	}
 	newest := map[string]registry.Check{}

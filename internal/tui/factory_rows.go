@@ -532,6 +532,10 @@ type TaskCard struct {
 	// magnum keeps, "" for none.
 	FixNeeds  []string
 	FixReport string
+	// Findings are the local review's blocking findings of a task its cap
+	// stopped for you ("P2 <title> · <path>"), one each, drawn under WAITING
+	// FOR as FixNeeds are; none for any other task.
+	Findings []string
 	// PRInfo is the PR's own lines (CardPR), drawn first in the card's
 	// body: on your PR's card and on a published task's once magnum read
 	// its PR; nil before.

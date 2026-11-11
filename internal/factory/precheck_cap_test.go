@@ -332,8 +332,8 @@ func TestRedExamplesAreJudgedOnTheBaseWhateverTheCap(t *testing.T) {
 		name string
 		at   func(c execx.Cmd) bool
 	}{
-		{"the lookup of the red files on the base", func(c execx.Cmd) bool {
-			return c.Name == "git" && slices.Contains(c.Args, "cat-file")
+		{"the lookup of the red files on the base", func(c execx.Cmd) bool { // gitx.HasFile's probe of a spec file
+			return c.Name == "git" && slices.Contains(c.Args, "ls-tree") && strings.HasSuffix(c.Args[len(c.Args)-1], "_spec.rb")
 		}},
 		{"the base run of the red files", func(c execx.Cmd) bool {
 			return strings.HasPrefix(scriptOf(c), "bin/specs ") && !strings.Contains(scriptOf(c), "app/credit.rb")

@@ -42,6 +42,7 @@ func (p *cardPainter) task(c TaskCard, height, scroll int) (string, int) {
 	if c.WaitingFor != "" {
 		head = append(head, p.waitingRows(c.WaitingFor)...)
 		head = append(head, p.fixNeedRows(c.FixNeeds)...)
+		head = append(head, p.findingRows(c.Findings)...)
 		head = append(head, p.waitLinkRows(c.Links)...)
 		head = append(head, "")
 	}

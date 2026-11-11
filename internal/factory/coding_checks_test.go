@@ -147,6 +147,55 @@ func TestAChangeThatFailsTheChecksGetsFixTurnsUpToTheStagesCap(t *testing.T) {
 	}
 }
 
+// A fix turn for a change the precheck refused names the command that
+// failed, as it ran (the failing check's command, which precheck.md shows),
+// and asks the writer to run it until it passes before it commits: two fix
+// turns in a row ended in "jest: pnpm exited 1" when the text only said
+// "fix it", at about 17 minutes per precheck run.
+func TestAFixTurnNamesTheCommandThatFailed(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12392", "bug")
+	r.lint = func([]string) string { return "app/credit.rb:3:5: C: Style/NumericLiterals: on the changed line\n" }
+	r.startStage(task)
+	r.fix(task)
+	r.endTurns(task, 1)
+	ps := r.rt.promptsTo("fx-writer")
+	if len(ps) != 2 || !strings.HasPrefix(ps[1].Text, fixLead) {
+		t.Fatalf("the writer's prompts %+v, want a fix turn", ps)
+	}
+	checks, err := r.reg.Checks(r.ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(checks, func(c registry.Check) bool { return c.Kind == registry.CheckLint && c.Result == registry.CheckFail })
+	if i < 0 || !strings.HasPrefix(checks[i].Command, "bin/lint ") {
+		t.Fatalf("checks %+v, want the lint's failure", checks)
+	}
+	for _, want := range []string{"`" + checks[i].Command + "`", "until it passes", precheckFile} {
+		if !strings.Contains(ps[1].Text, want) {
+			t.Errorf("the fix turn %q lacks %q", ps[1].Text, want)
+		}
+	}
+	if strings.Index(ps[1].Text, "until it passes") > strings.Index(ps[1].Text, "commit it") {
+		t.Errorf("the fix turn %q asks for the commit before the run that passes", ps[1].Text)
+	}
+}
+
+// A fix turn whose failure names no command that ran (a proof.json naming
+// a spec the head lacks) keeps its words: no command to run. A long
+// command is clipped: precheck.md has it whole.
+func TestAFixTurnWithoutAFailedCommandNamesNone(t *testing.T) {
+	p := &endProblem{file: factoryProofFile, why: "the factory's proof: proof.json names spec/x_spec.rb, which the head does not have", change: true}
+	if text := fixText("/state/factory/tasks/7", p); strings.Contains(text, "until it passes") || strings.Contains(text, "``") {
+		t.Fatalf("fix text %q names a command", text)
+	}
+	p.file, p.command = precheckFile, strings.Repeat("bin/jest 'app/javascript/a.js' ", 40)
+	text := fixText("/state/factory/tasks/7", p)
+	if !strings.Contains(text, "until it passes") || len(text) > 1200 {
+		t.Fatalf("fix text of a long command (%d bytes): %q", len(text), text)
+	}
+}
+
 // A proof.json that is missing or malformed keeps its one nudge (Review
 // Focus 4): then the task needs you, naming the file.
 func TestAMalformedProofFileGetsOneNudgeThenNeedsYou(t *testing.T) {

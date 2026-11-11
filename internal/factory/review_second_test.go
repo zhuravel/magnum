@@ -187,7 +187,7 @@ func TestTheSecondOpinionRunsPastTheLastRoundCyclesAllows(t *testing.T) {
 	r.run(10, func() bool { return !isLive(r.reload(task.ID)) })
 	got := r.reload(task.ID)
 	cs := r.cycles(task.ID)
-	if got.State != registry.TaskNeedsYou || got.WaitsWhat != "1 blocking finding after 2 review rounds" || len(cs) != 2 || cs[1].Exit != registry.ExitCap {
+	if got.State != registry.TaskNeedsYou || got.WaitsWhat != "1 blocking finding after 2 review rounds (blocking 0 → 1, P1 0 → 0; verdict non_blocking): P2 "+unitFinding.Title+" (app/credit.rb)" || len(cs) != 2 || cs[1].Exit != registry.ExitCap {
 		t.Fatalf("task %s waits %q; cycles %+v", got.State, got.WaitsWhat, cs)
 	}
 	if ps := r.rt.promptsTo("fx-writer"); len(ps) != 0 {

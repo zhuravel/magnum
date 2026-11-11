@@ -37,6 +37,20 @@ const (
 	readyDrop
 )
 
+// readyChoices are the choices Decide sends for the ready card's options,
+// by index.
+var readyChoices = []string{readyPush: FactoryPush, readySendBack: FactorySendBack, readyDrop: FactoryDrop}
+
+// shownRecommendation is the option the card marks recommended as drawn,
+// -1 for none: the factory's pick, once the diff was read, and never a
+// push the card does not offer.
+func (c ReadyCard) shownRecommendation() int {
+	if c.DiffOpened.IsZero() || c.Recommended < 0 || c.Recommended >= len(readyOptions) || (c.NoPush != "" && c.Recommended == readyPush) {
+		return -1
+	}
+	return c.Recommended
+}
+
 func (p *cardPainter) ready(c ReadyCard, height int) string {
 	head := []string{
 		p.titleLine(p.chip(hint{"esc", "back"}), seg{c.TaskKey, p.st.Accent}, seg{"ready to push", noStyle}),
@@ -49,17 +63,11 @@ func (p *cardPainter) ready(c ReadyCard, height int) string {
 	head = append(head, truncate(line3, p.width), "")
 
 	read := !c.DiffOpened.IsZero()
-	rec, cursor := -1, c.Cursor
-	if read && c.Recommended >= 0 && c.Recommended < len(readyOptions) {
-		rec = c.Recommended
-	}
+	rec, cursor := c.shownRecommendation(), c.Cursor
 	opts := readyOptions
 	if c.NoPush != "" { // the card does not offer push: it says why, and push is never marked
 		opts = slices.Clone(readyOptions)
 		opts[readyPush].Means = "not offered: " + c.NoPush
-		if rec == readyPush {
-			rec = -1
-		}
 		if cursor == readyPush {
 			cursor = -1
 		}

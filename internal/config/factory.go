@@ -114,6 +114,13 @@ type Factory struct {
 type FactoryLocalReview struct {
 	// Cycles is the most rounds the loop runs (1 to MaxFactoryCycles).
 	Cycles int `toml:"cycles"`
+	// ExtraCycles is how many rounds past Cycles a converging loop runs by
+	// itself (0 to MaxFactoryCycles; 0 turns them off): a round at the cap
+	// that blocks goes on, its findings to the writer, while it has no P0 or
+	// P1 finding, fewer blocking findings than the round before and a
+	// verdict that does not block. The loop never counts more than
+	// MaxFactoryCycles rounds.
+	ExtraCycles int `toml:"extra_cycles"`
 	// LaterWithout names the review roles that run in round 1 only.
 	LaterWithout []string `toml:"later_without"`
 	// SecondJudge says when a clean round of a Codex judge is followed by
@@ -566,7 +573,7 @@ func DefaultFactory() Factory {
 		Poll:           Duration{45 * time.Second},
 		HumanCooldown:  Duration{15 * time.Minute},
 		Sensitive:      []string{"Gemfile.lock", ".github/workflows/**", "config/**"},
-		LocalReview:    FactoryLocalReview{Cycles: 3, LaterWithout: []string{RoleClaudeSimplify}, SecondJudge: FactorySecondJudgeWide},
+		LocalReview:    FactoryLocalReview{Cycles: 3, ExtraCycles: 2, LaterWithout: []string{RoleClaudeSimplify}, SecondJudge: FactorySecondJudgeWide},
 		Roles:          DefaultFactoryRoles(),
 		CodexFallback: map[string]string{"fx-cause": "fx-cause-claude", "fx-critic": "fx-critic-claude", "fx-critic-narrow": "fx-critic-claude",
 			"fx-points-codex": "fx-points"},
@@ -917,6 +924,9 @@ func (l FactoryLocalReview) validate() []error {
 	var errs []error
 	if l.Cycles < 1 || l.Cycles > MaxFactoryCycles {
 		errs = append(errs, fmt.Errorf("factory.local_review.cycles must be between 1 and %d, got %d", MaxFactoryCycles, l.Cycles))
+	}
+	if l.ExtraCycles < 0 || l.ExtraCycles > MaxFactoryCycles {
+		errs = append(errs, fmt.Errorf("factory.local_review.extra_cycles must be between 0 and %d, got %d", MaxFactoryCycles, l.ExtraCycles))
 	}
 	if !slices.Contains(FactorySecondJudges, l.SecondJudge) {
 		errs = append(errs, fmt.Errorf("factory.local_review.second_judge must be %q, %q or %q, got %q",

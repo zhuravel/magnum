@@ -37,8 +37,8 @@ func newFactoryDecideCmd(c *Context) *cobra.Command {
 	cmd := newCommand("", factoryDecideUsage, "decide on a factory task's ready card",
 		"Decide on the ready card of a factory task, as the screen does: <task> is the task's id or its Jira key. "+
 			"Without a choice it prints the card: its revision, the PR's title, the branch and its head, the FLAGS "+
-			"line, the local review's end, the QA run's line (when visual QA ran), and the y/N sentence of a push (the branch, the copy it frees and the queued "+
-			"task that then starts). push has the daemon push the head the card shows and open its PR, ready for "+
+			"line, the local review's end, the QA run's line (when visual QA ran), the factory's recommendation and why, and the y/N sentence of a push "+
+			"(the branch, the copy it frees and the queued task that then starts). push has the daemon push the head the card shows and open its PR, ready for "+
 			"review, under your login; send_back returns the task to its writer with --reason, the key of your "+
 			"reason, and --note, your note (the writer reads it from a file, never in its prompt), or --reason "+
 			factory.ReasonKnown+" alone, which sends the defects the local review left open (the KNOWN row's, not "+
@@ -51,7 +51,8 @@ func newFactoryDecideCmd(c *Context) *cobra.Command {
 			"when the card was shown the time this command read it, else --shown <time> (RFC 3339), which the factory's "+
 			"liaison, the agent that asks you in a chat, passes with --surface liaison (the default, cli, is you by "+
 			"hand). The decision records an unread diff unless you say with --diff-read that you read this card's "+
-			"diff, as of the time it was shown.",
+			"diff, as of the time it was shown, and a push or a send_back records the recommendation the card printed and whether "+
+			"your choice took it.",
 		func(pos []string) int { return runFactoryDecideCmd(c, f, pos) })
 	cmd.Flags().IntVar(&f.card, "card", 0, "the revision of the card you read (the printed card names it)")
 	cmd.Flags().StringVar(&f.reason, "reason", "", "send_back: the key of your reason (a word: lowercase letters, digits, - and _)")
@@ -135,8 +136,9 @@ func runFactoryDecideCmd(c *Context, f factoryDecideFlags, pos []string) int {
 			card.Revision, factory.TaskKey(t), f.card, t.ID)
 		return 1
 	}
+	recommended, _ := factory.ReadyRecommendation(ctx, reg, t, card) // the card you read printed it
 	p := factory.DecidePayload{TaskID: t.ID, Choice: choice, Reason: f.reason, Note: strings.TrimSpace(f.note), HeadSHA: card.Head,
-		ReportHash: card.ReportHash, DiffHash: card.DiffHash, Shown: read, DiffOpened: diffOpened, Surface: surface}
+		ReportHash: card.ReportHash, DiffHash: card.DiffHash, Shown: read, DiffOpened: diffOpened, Surface: surface, Recommended: recommended}
 	return sendFactoryRequest(ctx, c, reg, "factory decide", factory.ReqDecide, p, "it takes your decision")
 }
 
@@ -173,6 +175,9 @@ func printReadyCard(ctx context.Context, c *Context, reg *registry.Registry, t r
 		}
 	}
 	fmt.Fprintf(w, "body     %s\n", filepath.Join(c.Layout.FactoryTaskDir(t.ID), "pr-body.md"))
+	if choice, why := factory.ReadyRecommendation(ctx, reg, t, card); choice != "" {
+		fmt.Fprintf(w, "factory  recommends %s: %s\n", choice, why)
+	}
 	fmt.Fprintf(w, "\n%s\n", factory.ConfirmSentence(t, card.Copy, factory.NextQueued(tasks)))
 	fmt.Fprintf(w, "decide with `magnum factory decide %d push --card %d`, `send_back --card %d --reason <key> --note <text>` or "+
 		"`drop`\n", t.ID, card.Revision, card.Revision)

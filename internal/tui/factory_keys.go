@@ -1333,6 +1333,10 @@ func (m *factoryModel) decide(sentence, choice, reason, note string) tea.Cmd {
 	c, _ := m.readyCard()
 	rs := m.readyState()
 	bound.Shown, bound.DiffOpened, bound.DiffDwell = rs.shown, c.DiffOpened, rs.dwell
+	bound.Recommended = ""
+	if rec := c.shownRecommendation(); rec >= 0 {
+		bound.Recommended = readyChoices[rec]
+	}
 	return m.ask(&factoryFollow{kind: followDecide, task: task}, sentence, func(ctx context.Context) (ActionResult, error) {
 		return act.Decide(ctx, task, choice, reason, note, bound)
 	})

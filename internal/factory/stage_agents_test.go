@@ -128,7 +128,7 @@ func fullPromptData() PromptData {
 		QARun: dir + "/qa/1-abc1234", QAURL: "http://app.example.localhost:3001", QACDP: "http://127.0.0.1:9222",
 		QAProbe: dir + "/qa/1-abc1234/probe.js", QAVerdict: dir + "/qa/1-abc1234/verdict.json", QAChanged: dir + "/qa/1-abc1234/changed.txt",
 		QASignIn: "/dev/sign-in?as=qa@example.com", QASkill: "example:qa", QASession: "magnum-qa-7-1", QAMaxPages: 12, QAMaxShots: 30,
-		SatOut: dir + "/findings-fx-points-codex.md"}
+		SatOut: dir + "/findings-fx-points-codex.md", Checks: []string{"bin/lint {files}", "bin/rubocop {files}", "pnpm jest --findRelatedTests {files}"}}
 }
 
 // The QA walker's prompt names the browser it drives, the probe it runs on

@@ -293,9 +293,11 @@ func (e *Engine) sweepRounds(tasks []registry.Task) {
 // that ended one: with you (cap, unavailable, operator), and your "go on"
 // after it starts a loop afresh, or clean or on an oscillation, and a head
 // the loop did not review (a send back's commits, the base merged after a
-// conflict at the ready card) starts a fresh loop of up to cycles rounds. A
-// build without the local reviewer, agents or git leaves the task where it
-// is.
+// conflict at the ready card) starts a fresh loop of up to cycles rounds.
+// Your "go on" after a stop at the cap, at the head its round reviewed,
+// first hands that round's findings to the writer (capFix), and the fresh
+// loop reviews the writer's head. A build without the local reviewer,
+// agents or git leaves the task where it is.
 func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.FactoryStage) (bool, error) {
 	if e.d.Review == nil || e.d.Runtime == nil || e.d.Git == nil {
 		return false, nil
@@ -330,6 +332,15 @@ func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.Facto
 	if last != nil && last.Ended.IsZero() {
 		return e.goOnCycle(ctx, t, st, c, *last, loop)
 	}
+	if last != nil && last.Exit == registry.ExitCap {
+		rf, due, err := e.capFix(ctx, t, st, *last, cycles)
+		if err != nil {
+			return false, err
+		}
+		if due {
+			return e.fixPhase(ctx, t, st, *last, rf)
+		}
+	}
 	return false, e.startRound(ctx, t, c, nil, len(loop)+1)
 }
 
@@ -338,31 +349,53 @@ func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.Facto
 // ends (stopForYou).
 const reviewStopFile = "review-stop.json"
 
-// reviewStop is review-stop.json.
+// reviewStop is review-stop.json: the cycle that stopped the loop, why (the
+// NEEDS YOU line), and for a stop at the cap the line's head (the count, the
+// trend and the verdict), the cap round's findings for the writer, which the
+// task card lists, and whether the fix turn of your "go on" at its head is
+// over (Fixed: capFix).
 type reviewStop struct {
-	Cycle int64  `json:"cycle"`
-	Why   string `json:"why"`
+	Cycle    int64        `json:"cycle"`
+	Why      string       `json:"why"`
+	Head     string       `json:"head,omitempty"`
+	Findings []ReviewItem `json:"findings,omitempty"`
+	Fixed    bool         `json:"fixed,omitempty"`
+}
+
+// readReviewStop reads review-stop.json in dir; ok is false when there is
+// none, or it does not parse.
+func readReviewStop(dir string) (reviewStop, bool) {
+	var s reviewStop
+	b, err := os.ReadFile(filepath.Join(dir, reviewStopFile))
+	return s, err == nil && json.Unmarshal(b, &s) == nil
 }
 
 // stopForYou ends the loop on cycle cy with exit (unavailable, the cap) and
-// moves task t to you with why. why goes to the task's directory first, the
-// cycle ends next, the move comes last: a daemon that stops before the move
-// finds the ended cycle with no word to you since and makes the move then
-// (toldOfStop), never a fresh loop.
+// moves task t to you with why (stopWith).
 func (e *Engine) stopForYou(ctx context.Context, t registry.Task, cy registry.Cycle, exit, why, because string) error {
-	if err := writeJSON(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), reviewStopFile), reviewStop{Cycle: cy.ID, Why: why}); err != nil {
+	return e.stopWith(ctx, t, cy, exit, reviewStop{Why: why}, because)
+}
+
+// stopWith ends the loop on cycle cy with exit and moves task t to you with
+// s.Why. s goes to the task's directory first, the cycle ends next, the
+// move comes last: a daemon that stops before the move finds the ended cycle
+// with no word to you since and makes the move then (toldOfStop), never a
+// fresh loop.
+func (e *Engine) stopWith(ctx context.Context, t registry.Task, cy registry.Cycle, exit string, s reviewStop, because string) error {
+	s.Cycle = cy.ID
+	if err := writeJSON(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), reviewStopFile), s); err != nil {
 		return err
 	}
 	if err := e.endCycle(ctx, cy, cy.HeadBefore, exit); err != nil {
 		return err
 	}
-	e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("cycle %d ended %s: %s", cy.N, exit, why))
+	e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("cycle %d ended %s: %s", cy.N, exit, s.Why))
 	if e.beforeStop != nil {
 		if err := e.beforeStop(); err != nil {
 			return err
 		}
 	}
-	e.toOperator(ctx, t, why, because)
+	e.toOperator(ctx, t, s.Why, because)
 	return nil
 }
 
@@ -1067,9 +1100,10 @@ func roundTries(dir string, n int, why string) int {
 //     the loop clean, unless the task's second opinion runs first
 //     (decideSecond), only doubts on an oscillation (the stage passes for
 //     both, with the summary for the ready card), anything else at the cap
-//     (cycles rounds besides the second opinion) needs you, and before it
-//     the writer gets the findings (fixPhase), the product questions among
-//     them asked first.
+//     (cycles rounds besides the second opinion) needs you with its
+//     findings (stopAtCap) unless the loop converges (extraRound), and
+//     before it the writer gets the findings (fixPhase), the product
+//     questions among them asked first.
 func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.FactoryStage, c Copy, cy registry.Cycle, loop []registry.Cycle,
 	res evalrun.LocalResult) (bool, error) {
 	round := len(loop)
@@ -1078,42 +1112,17 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 	if done, err := e.roundUndecided(ctx, t, cy, res, round, dir, blocks, unavailable, why); done || err != nil {
 		return false, err
 	}
-	seen, err := e.seeFindings(ctx, cy, res)
+	rr, err := e.readRound(ctx, t, cy, res, blocks, why)
 	if err != nil {
 		return false, err
 	}
-	heldByLeft := false // the round blocks only because left_blocks makes its P3 defects block
-	if !blocks && slices.ContainsFunc(seen, func(s seenFinding) bool { return e.blocksLoop(s.f) && !blockingSeverity(s.f.Severity) }) {
-		blocks, heldByLeft = true, true
-	}
-	answered, err := e.answeredQuestions(ctx, t)
-	if err != nil {
-		return false, err
-	}
-	declined := readDeclined(dir)
-	r := e.sortRound(seen, answered)
-	live, questions, doubts, rebutted, leftovers := r.live, r.questions, r.doubts, r.rebutted, r.leftovers
-	if blocks && len(live)+len(questions)+len(doubts)+len(rebutted) == 0 {
-		// The judge's verdict blocks with no P0 to P2 among the findings:
-		// the writer gets what it flagged.
-		for _, s := range seen {
-			if !s.f.Simplification {
-				live = append(live, s.item)
-			}
-		}
-		if len(live) == 0 {
-			live = append(live, ReviewItem{ID: "F1", Fingerprint: "verdict", Title: "the review's verdict is blocking", Body: why})
-		}
-		leftovers = slices.DeleteFunc(leftovers, func(i ReviewItem) bool {
-			return slices.ContainsFunc(live, func(l ReviewItem) bool { return l.ID == i.ID })
-		})
-	}
+	live, questions, doubts, leftovers := rr.live, rr.questions, rr.doubts, rr.leftovers
 	// Every finding the writer declined with its risk, whichever round
 	// raised it: the ready card and the PR body's "Known" name them.
-	all := slices.SortedFunc(maps.Values(declined), func(a, b ReviewItem) int { return strings.Compare(a.Fingerprint, b.Fingerprint) })
+	all := slices.SortedFunc(maps.Values(readDeclined(dir)), func(a, b ReviewItem) int { return strings.Compare(a.Fingerprint, b.Fingerprint) })
 	sum := ReviewSummary{Rounds: round, Head: cy.HeadBefore, Leftovers: leftovers, Declined: all, Doubts: doubts, Missing: loopMissing(dir, loop)}
 	switch {
-	case !blocks || len(live)+len(questions)+len(doubts) == 0:
+	case !rr.blocks || len(live)+len(questions)+len(doubts) == 0:
 		// A finding posted at a blocking priority that the counts left out
 		// (the judge disagreeing with itself) is no blocker, but stays told;
 		// a doubt is told among the doubts, once.
@@ -1122,7 +1131,7 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 	case len(live)+len(questions) == 0:
 		sum.Exit = registry.ExitOscillation
 		return e.endLoop(ctx, t, cy, withSecond(dir, loop, sum))
-	case heldByLeft && e.atCap(dir, loop, round) && len(questions)+len(doubts) == 0 &&
+	case rr.heldByLeft && e.atCap(dir, loop, round) && len(questions)+len(doubts) == 0 &&
 		!slices.ContainsFunc(live, func(i ReviewItem) bool { return blockingSeverity(i.Severity) }):
 		// The last round blocks only through left_blocks: the writer had the
 		// earlier rounds for the P3s, and parking the task on you for the
@@ -1133,25 +1142,83 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 		sum.Exit, sum.Leftovers = registry.ExitClean, slices.Concat(leftovers, live, questions)
 		return e.endClean(ctx, t, c, cy, loop, sum)
 	case e.atCap(dir, loop, round):
-		return false, e.stopForYou(ctx, t, cy, registry.ExitCap, fmt.Sprintf("%s after %s", plural(len(live)+len(questions)+len(doubts), "blocking finding"),
-			plural(round, "review round")), "the local review's cap")
+		next, extra, ok := e.extraRound(dir, loop, round, res, len(live)+len(questions))
+		if !ok {
+			return false, e.stopAtCap(ctx, t, st, cy, loop, res, live, questions, doubts)
+		}
+		e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("round %d (cycle %d) is at the cap, and the loop converges (%s, no P0 or P1, "+
+			"verdict %s): it goes on, extra round %d of %d", round, cy.N, plural(len(live)+len(questions), "blocking finding"), res.Verdict, next, extra))
 	}
-	n, err := e.attemptsOf(ctx, t, st)
-	if err != nil {
-		return false, err
-	}
-	rf := ReviewFile{Round: cy.N, Head: cy.HeadBefore, AttemptsBefore: n, Findings: append(live, questions...)}
 	if len(questions) > 0 {
 		if err := e.writeReviewQuestions(dir, st, questions, round); err != nil {
 			return false, err
 		}
 	}
-	if err := writeJSON(filepath.Join(dir, reviewFile(cy.N)), rf); err != nil {
+	rf, err := e.writeReview(ctx, t, st, cy, slices.Concat(live, questions))
+	if err != nil {
 		return false, err
 	}
 	e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("round %d (cycle %d) blocks: %s for the writer (%s)%s", round, cy.N,
 		plural(len(live), "finding"), reviewFile(cy.N), map[bool]string{true: fmt.Sprintf(", %s for you first", plural(len(questions), "question")), false: ""}[len(questions) > 0]))
 	return e.fixPhase(ctx, t, st, cy, rf)
+}
+
+// roundRead is a round's findings as decideRound reads them: sorted by
+// what they do to its loop (roundItems), and whether the round blocks
+// (blocks, Blocks' or through left_blocks alone: heldByLeft).
+type roundRead struct {
+	roundItems
+	blocks, heldByLeft bool
+}
+
+// readRound reads the findings of cycle cy's round, result res (blocks and
+// why are Blocks(res)): it records them (seeFindings) and sorts them
+// (sortRound) with your answers; a P3 defect left_blocks makes block blocks
+// the round, and a verdict that blocks with no P0 to P2 among them hands the
+// writer what the judge flagged (the review's verdict itself when it flagged
+// nothing).
+func (e *Engine) readRound(ctx context.Context, t registry.Task, cy registry.Cycle, res evalrun.LocalResult, blocks bool, why string) (roundRead, error) {
+	seen, err := e.seeFindings(ctx, cy, res)
+	if err != nil {
+		return roundRead{}, err
+	}
+	rr := roundRead{blocks: blocks}
+	if !blocks && slices.ContainsFunc(seen, func(s seenFinding) bool { return e.blocksLoop(s.f) && !blockingSeverity(s.f.Severity) }) {
+		rr.blocks, rr.heldByLeft = true, true // the round blocks only because left_blocks makes its P3 defects block
+	}
+	answered, err := e.answeredQuestions(ctx, t)
+	if err != nil {
+		return roundRead{}, err
+	}
+	rr.roundItems = e.sortRound(seen, answered)
+	if rr.blocks && len(rr.live)+len(rr.questions)+len(rr.doubts)+len(rr.rebutted) == 0 {
+		// The judge's verdict blocks with no P0 to P2 among the findings:
+		// the writer gets what it flagged.
+		for _, s := range seen {
+			if !s.f.Simplification {
+				rr.live = append(rr.live, s.item)
+			}
+		}
+		if len(rr.live) == 0 {
+			rr.live = append(rr.live, ReviewItem{ID: "F1", Fingerprint: "verdict", Title: "the review's verdict is blocking", Body: why})
+		}
+		rr.leftovers = slices.DeleteFunc(rr.leftovers, func(i ReviewItem) bool {
+			return slices.ContainsFunc(rr.live, func(l ReviewItem) bool { return l.ID == i.ID })
+		})
+	}
+	return rr, nil
+}
+
+// writeReview writes review-<n>.json of cycle cy in task t's directory: the
+// findings items for the writer, at the head the round reviewed, with the
+// attempts of review stage st so far (its fix turn is the next).
+func (e *Engine) writeReview(ctx context.Context, t registry.Task, st config.FactoryStage, cy registry.Cycle, items []ReviewItem) (ReviewFile, error) {
+	n, err := e.attemptsOf(ctx, t, st)
+	if err != nil {
+		return ReviewFile{}, err
+	}
+	rf := ReviewFile{Round: cy.N, Head: cy.HeadBefore, AttemptsBefore: n, Findings: items}
+	return rf, writeJSON(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), reviewFile(cy.N)), rf)
 }
 
 // roundUndecided takes the steps of decideRound for round (in task
@@ -1287,8 +1354,9 @@ func (e *Engine) blocksLoop(f evalrun.LocalFinding) bool {
 
 // seeFindings records every finding of cycle cy's round in the registry
 // (SeeFinding, by its fingerprint: seen again in one cycle, nothing
-// changes), with its class (a defect, a simplification or a question) and
-// whether it blocks.
+// changes), with its class (a defect, a simplification or a question),
+// whether it blocks and the roles that raised it (its sources, the judge's
+// provenance's: a finding seen again keeps the union).
 func (e *Engine) seeFindings(ctx context.Context, cy registry.Cycle, res evalrun.LocalResult) ([]seenFinding, error) {
 	out := make([]seenFinding, 0, len(res.Findings))
 	for i, f := range res.Findings {
@@ -1301,7 +1369,7 @@ func (e *Engine) seeFindings(ctx context.Context, cy registry.Cycle, res evalrun
 			class = "question"
 		}
 		reg, err := e.reg.SeeFinding(ctx, cy.ID, registry.Finding{Fingerprint: fp, Path: f.Path, StartLine: f.Line, EndLine: f.Line,
-			TitleHash: titleHash(f.Title), Priority: f.Severity, Class: class, Verdict: "posted", Blocking: e.blocksLoop(f)})
+			TitleHash: titleHash(f.Title), Priority: f.Severity, Class: class, Sources: f.Sources, Verdict: "posted", Blocking: e.blocksLoop(f)})
 		if err != nil {
 			return nil, err
 		}
@@ -1489,6 +1557,16 @@ func (e *Engine) closeFix(ctx context.Context, t registry.Task, cy registry.Cycl
 	}
 	if err := e.endCycle(ctx, cy, head, ""); err != nil {
 		return err
+	}
+	if cy.Exit == registry.ExitCap { // the fix of your "go on" at the cap's head: the fresh loop starts next (capFix)
+		s, ok := readReviewStop(dir)
+		if !ok || s.Cycle != cy.ID {
+			s = reviewStop{Cycle: cy.ID, Why: "the local review's cap"}
+		}
+		s.Fixed = true
+		if err := writeJSON(filepath.Join(dir, reviewStopFile), s); err != nil {
+			return err
+		}
 	}
 	e.event(ctx, t.ID, "review", registry.PhaseOK, fmt.Sprintf("cycle %d's fix at %s: %d fixed, %d declined", cy.N, short(head), fixed, kept))
 	return nil

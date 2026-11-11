@@ -106,11 +106,14 @@ type AcceptanceCheck struct {
 // checks wrote ("the branch" for none). operator marks one the agent cannot
 // fix (the configuration's or the machine's): no turn, the task needs you
 // with why. merge names the base a turn back from the ready card did not
-// merge (a change problem with one fix turn, then you).
+// merge (a change problem with one fix turn, then you). command is the
+// command of a change problem's failure, as the checks ran it, which its
+// fix turn asks the writer to run until it passes ("" for none).
 type endProblem struct {
 	file, why        string
 	change, operator bool
 	merge            string
+	command          string
 }
 
 func (p *endProblem) String() string { return p.file + ": " + p.why }

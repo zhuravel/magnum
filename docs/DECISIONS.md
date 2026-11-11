@@ -25163,6 +25163,120 @@ skill versions); people add theirs to the sections before it, at the end of the 
   and `TestABaseRunStoppedAtItsBoundHangsWhateverItsResultLineSays` (a base run that printed "3 examples, 0
   failures" and did not end: the task needs you, and the writer gets no fix turn; failing against the first
   cut, and its case of "34 examples, 1 failure" a pin), all in internal/factory.
+- **Your "go on" after the local review's cap at the same head sends the cap round's findings to the writer first,
+  and the stop names them** (2026-11-12, found live 2026-11-11). This amends the entry of 2026-11-04 that says your
+  "go on" after the last round starts a fresh loop. A task of 145 files stopped at the cap after 3 rounds. Its
+  blocking findings went 11, 8, 5, and its P1 findings 5, 3, 0. `decideRound` stopped before `fixPhase`. So the
+  writer never got the cap round's findings, and no `review-3.json` existed. The "go on" then started a fresh round 1
+  at the same head. That round took about 50 minutes to review a head whose 5 proven P2 findings the factory held.
+  - Now the cap round writes its `review-<n>.json`, as every blocking round does. It holds the live findings and the
+    questions, the head the round reviewed and the attempts of the review stage so far.
+  - When the newest cycle ended at the cap, `runReview` asks `capFix` first. At the head the cap round reviewed, your
+    "go on" gives those findings to the writer in a fix turn (`fixPhase`). The questions among them go to you first,
+    as in any round. After the turn, `closeFix` settles the findings, and the fresh loop's round 1 reviews the
+    writer's head.
+  - The cycle keeps its exit `cap`. `review-stop.json` records that the fix is over (`fixed`), and the next pass
+    starts the fresh loop. A turn that began goes on to its end, whatever the head.
+  - A new head before the turn starts the fresh loop at once, as before: a send back's commits, a merge of the base,
+    or your own commit in the copy.
+  - A stop of an older build has no `review-<n>.json`. `capReview` reads the cap round's result again
+    (`local-review-<n>.json`), as `decideRound` reads it (`readRound`, now shared), and writes the file. A second
+    read in the same cycle changes nothing in the registry. So a task that stopped before this build gets its fix
+    too.
+  - The NEEDS YOU line names the count, the trend and the judge's verdict, then the first 3 findings with their
+    priority, title and path (`and 2 more`). The trend counts what each round of the loop gave the writer:
+    `blocking 11 → 8 → 5, P1 5 → 3 → 0`. A clean round before a second opinion counts 0.
+  - `review-stop.json` keeps the head of that line and all the findings. The task card reads them while the task
+    waits on you for that stop. Its WAITING FOR line shows the head. The findings follow under it, one a line
+    (`P2 <title> · <path>`, 8 at most and a count). Before, the card showed the plan's lines and not the findings.
+  Rejected: a fix turn on every "go on" after the cap. At a new head, it fixes findings of a head that nobody
+  reviews. Also rejected: findings rebuilt from the registry, which keeps a hash of each title and no body.
+  Tests (failing first): `TestARetryAtTheCapsHeadHandsItsFindingsToTheWriterFirst`,
+  `TestARetryOfAnOlderBuildsCapStopHandsTheRoundsFindingsToTheWriter`,
+  `TestACapStopNamesItsFindingsTheTrendAndTheVerdict` and `TestTheCardOfACapStopListsItsFindings`.
+  `TestARetryAfterANewHeadStartsAFreshLoopAtOnce` passes before and after, as a pin of the new head. All are in
+  internal/factory.
+- **A loop that converges runs up to 2 rounds past the local review's cap by itself** (2026-11-12, approved by the
+  operator after the same task). This amends "at most `cycles` rounds" (`[factory.local_review] cycles`, 3). The
+  task's third round had no P1 and fewer blocking findings than the second. Its judge said `non_blocking`. Still,
+  the task waited 776 minutes on you.
+  - When all of these hold, a round at the cap that blocks goes on like any fixing round. Its findings have no P0
+    or P1, new or still open (the counts, the open counts and the findings). It gives the writer fewer findings than
+    the round before it did (that round's `review-<n>.json`). Its verdict is not `blocking` (`LocalResult.Verdict`,
+    as `Blocks` reads it).
+  - `[factory.local_review] extra_cycles` caps these rounds in a loop: 2 by default, 0 turns them off, 0 to 10. A
+    loop never counts more than `config.MaxFactoryCycles` rounds. The second opinion still runs outside the count.
+    `evalrun.MaxLocalRound` numbers rounds up to 99, so 10 counted rounds and a second opinion fit.
+  - An event names each extra round (`extra round 1 of 2`). When a condition fails, the loop stops at the cap, as
+    above.
+  Rejected: more rounds without the conditions, since a loop that does not converge only spends rounds. Also
+  rejected: a P1 that the writer declined with its risk counted out. The judge still says P1, and you decide it.
+  Tests (failing first): `TestAConvergingRoundAtTheCapGoesOn`, `TestARoundAtTheCapThatDoesNotConvergeStops` (a P1,
+  as many findings as the round before, a blocking verdict) and `TestTheExtraRoundsStopAtExtraCycles` (2 and 0), in
+  internal/factory. `TestFactoryLocalReviewExtraCyclesDefaultToTwo` is in internal/config.
+- **The review's fix turn tells the writer that a finding can be one case of a mechanism** (2026-11-12). In all 3
+  rounds of the same task, the mapping of A/B winners in one file drew a blocking finding: 7 of the 24. Each round
+  is a fresh synthetic PR with no earlier findings. So the skill's "(in the fix for ...)" never fires, and the
+  writer fixed one case of the mapping per round. `factory-review-fix.md` now tells the writer that a finding can be one
+  case of a mechanism (a mapping, a list of cases, a switch). The writer finds the other cases, fixes them all and
+  adds a spec for each. A later round as a re-review with the earlier findings is a separate change. Test:
+  `TestTheReviewFixPromptAsksForEveryCaseOfAMechanism` in internal/factory.
+- **A fix turn names the command that failed, and both writer prompts name the precheck's lint and jest lines**
+  (2026-11-12). Three heads of the same task failed the precheck's jest. Two fix turns in a row ended in "jest: pnpm
+  exited 1", and each precheck run took about 17 minutes. `fixText` said only "Fix it in the copy, commit it".
+  - The precheck now keeps the command of the failure that its result names (`PrecheckResult.Command`). `fail` sets
+    it with the script of the run: the lint, the specs, jest or a migration. When its head run failed, a failed proof
+    gives the command of that run.
+  - The fix turn then names that command, as precheck.md shows it. It asks the writer to fix the change and run the
+    command until it passes, then to commit. A command that uses the databases runs through the copy's database
+    lock. The command is clipped at 400 runes, since jest on a wide change names every file. The file has it whole.
+  - A failure that no command ran to keeps the old words: a spec that the base passes too, or a proof.json that names
+    a spec the head lacks.
+  - The writer's prompt and the review's fix prompt name the repository's precheck `lint` lines and its `jest` line,
+    as configured (`PromptData.Checks`, the `checks` block of `factory-shared.md`). The writer runs them before its
+    turn ends. `{files}` stands for the files the branch changes, and `{base}` for the commit it starts from. A
+    repository without them gets no such sentence. The specs' line is not among them: the writer runs its specs
+    through the database lock already.
+  Tests (failing first): `TestAFixTurnNamesTheCommandThatFailed`, `TestAFixTurnWithoutAFailedCommandNamesNone`,
+  `TestTheWriterPromptsNameThePrechecksLintAndJestLines` and `TestThePromptDataNamesTheRepositorysLintAndJestLines`,
+  in internal/factory.
+- **The local review's findings keep their sources** (2026-11-12). All 57 rows of `review_findings` had
+  `sources_json = []`. Yet each judge's provenance names the roles that raised a finding, and the R42 and R44 trials
+  need them. `evalrun.LocalFinding` now carries `Sources`, read from the provenance entry. The entry gives a list,
+  or one name as a string. Anything else gives none and never stops the read of the other entries. `seeFindings`
+  stores them, and `SeeFinding` keeps the union across rounds. A finding that no entry names has none: a planned
+  comment, a simplification, the review's body. Tests (failing first):
+  `TestALocalFindingKeepsTheSourcesOfItsProvenance` in internal/evalrun and `TestALocalRoundsFindingsKeepTheirSources`
+  in internal/factory.
+- **A ready_push decision records the recommendation that its card showed** (2026-11-12). This closes the known gap
+  that the stats entry names ("`decide` records no `recommendation_shown`"). All 6 `ready_push` decisions had
+  `recommendation_shown` 0, though `readyCard` always computes a recommendation. So the stats line "a recommendation
+  was shown on 0" was wrong.
+  - `DecidePayload.Recommended` carries the choice that the card recommended as it showed it. `decide` stores
+    `recommendation_shown` (the value is one of the card's choices) and `recommendation_followed` (the choice took
+    it), for the screen and the CLI alike.
+  - The screen sends the recommendation it drew (`ReadyCard.shownRecommendation`): only after you read the diff, and
+    never a push that the card does not offer.
+  - `magnum factory decide <task>` now prints the recommendation and why (`factory  recommends push: ...`), and a
+    push or a send back sends it. `factory.ReadyRecommendation` holds the screen's rule, moved out of `readyCard`
+    (`readyRecommendation`, `noPushOf`, `failedChecksOf`).
+  Rejected: the recommendation stored in `ready-card.json`. The failed checks it reads can change without a new
+  revision of the card. Tests (failing first): `TestADecisionRecordsTheRecommendationItsCardShowed` in
+  internal/factory, `TestADecisionCarriesTheRecommendationTheCardShowed` in internal/tui and
+  `TestFactoryDecideSendsTheRecommendationItsCardShowed` in internal/cli.
+- **The factory's existence probes log nothing on a miss** (2026-11-12). The factory's log held 155 WARN lines
+  "exists on disk, but not in 'HEAD'" in a day. They came from `FileAt` (`git cat-file blob`), used to ask whether a
+  revision has a file. Three places asked so:
+  - the restore after a base run, for each spec it laid,
+  - the lookup of the red spec files on the base,
+  - the proof's check that the head has each spec of proof.json.
+  - A new `gitx.HasFile` asks with `git ls-tree --full-tree <rev> -- <file>`. A path that the revision lacks lists
+    nothing: a plain no that logs nothing. A revision that the checkout lacks is still an error.
+  - The callers read an error as before (not on the base, removed after the base run, missing at the head).
+    `FileAt` keeps its WARN for real reads.
+  Rejected: `git cat-file -e`, which prints the same fatal line and exits 128 for a missing path and a bad revision
+  alike. Tests (failing first): `TestRealHasFileIsAQuietAnswerForAFileTheRevisionLacks` in internal/gitx and
+  `TestTheProofsExistenceProbesLogNoWarningForAFileTheRevisionLacks` in internal/factory.
 
 ## Learned rules
 

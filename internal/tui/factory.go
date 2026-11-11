@@ -120,10 +120,14 @@ type FactoryCards struct {
 // the head and the hashes of the report and the diff (from the source), and
 // the screen's own times: when the card was first shown, when the diff was
 // first opened and how long the pager was open in all (zero: never).
+// Recommended is the choice the card marked recommended as it was drawn
+// when you decided (FactoryPush, FactorySendBack or FactoryDrop), "" when
+// it drew none (before the diff was read, or push not offered).
 type ReadyBinding struct {
 	HeadSHA, ReportHash, DiffHash string
 	DiffOpened, Shown             time.Time
 	DiffDwell                     time.Duration
+	Recommended                   string
 }
 
 // The ready card's choices, as Decide sends them.

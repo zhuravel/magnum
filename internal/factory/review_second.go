@@ -325,13 +325,25 @@ func (e *Engine) endClean(ctx context.Context, t registry.Task, c Copy, cy regis
 // last: [factory.local_review] cycles rounds besides the second opinion
 // (secondIn), which runs outside the count, and never more counted rounds
 // than config.MaxFactoryCycles. The second opinion's round may be the
-// eleventh: evalrun numbers rounds up to evalrun.MaxLocalRound.
+// eleventh: evalrun numbers rounds up to evalrun.MaxLocalRound. A round
+// past it is a converging loop's extra round (extraRound), at the cap too.
 func (e *Engine) atCap(dir string, loop []registry.Cycle, round int) bool {
-	counted := round
+	return countedRound(dir, loop, round) >= e.capRounds()
+}
+
+// capRounds is the loop's cap of counted rounds: [factory.local_review]
+// cycles, 1 to config.MaxFactoryCycles.
+func (e *Engine) capRounds() int {
+	return min(max(1, e.cfg.Factory.LocalReview.Cycles), config.MaxFactoryCycles)
+}
+
+// countedRound is round `round` of loop as the cap counts it: the second
+// opinion's round (secondIn) runs outside the count.
+func countedRound(dir string, loop []registry.Cycle, round int) int {
 	if secondIn(dir, loop) >= 0 {
-		counted--
+		return round - 1
 	}
-	return counted >= min(max(1, e.cfg.Factory.LocalReview.Cycles), config.MaxFactoryCycles)
+	return round
 }
 
 // secondSpent reports whether task t's second opinion so is spent at clean

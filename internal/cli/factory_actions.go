@@ -176,7 +176,7 @@ func (a *factoryActions) doing(name string) string {
 func (a *factoryActions) Decide(ctx context.Context, taskID int64, choice, reason, note string, b tui.ReadyBinding) (tui.ActionResult, error) {
 	return a.send(ctx, factory.ReqDecide, factory.DecidePayload{TaskID: taskID, Choice: choice, Reason: reason, Note: note,
 		HeadSHA: b.HeadSHA, ReportHash: b.ReportHash, DiffHash: b.DiffHash, Shown: b.Shown, DiffOpened: b.DiffOpened,
-		DiffDwell: b.DiffDwell, Surface: screenSurface})
+		DiffDwell: b.DiffDwell, Surface: screenSurface, Recommended: b.Recommended})
 }
 
 // Stop drops a task: its agents stop, its copy is freed, its branch kept.

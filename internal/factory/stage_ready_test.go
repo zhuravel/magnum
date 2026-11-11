@@ -789,6 +789,39 @@ func TestTheConfirmationNamesTheCopyItFreesAndTheTaskThatStarts(t *testing.T) {
 	}
 }
 
+// A ready_push decision records the recommendation its card showed
+// (recommendation_shown) and whether your choice took it
+// (recommendation_followed), for the screen and the CLI alike: all six
+// decisions of the factory's first week had it 0, though every card drew one.
+// A decision whose card showed none (the screen draws it only once you read
+// the diff) records none, and a value no choice has is none too.
+func TestADecisionRecordsTheRecommendationItsCardShowed(t *testing.T) {
+	for _, tc := range []struct {
+		name, choice, reason, note, recommended string
+		shown, followed                         bool
+	}{
+		{"push as recommended", ChoicePush, "", "", ChoicePush, true, true},
+		{"a send back against the push", ChoiceSendBack, "scope", "keep archived campaigns out", ChoicePush, true, false},
+		{"a drop with none shown", ChoiceDrop, "", "", "", false, false},
+		{"an unknown value", ChoicePush, "", "", "merge", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newReadyRig(t)
+			task, _ := r.toCard("PR-12393")
+			c := r.card(task.ID)
+			q := r.decideWith(DecidePayload{TaskID: task.ID, Choice: tc.choice, Reason: tc.reason, Note: tc.note, HeadSHA: c.Head,
+				ReportHash: c.ReportHash, DiffHash: c.DiffHash, Shown: c.Drawn, Surface: "screen", Recommended: tc.recommended})
+			if q.State != registry.RequestDone {
+				t.Fatalf("decide %s: %q", q.State, q.Result)
+			}
+			ds, err := r.reg.Decisions(r.ctx, task.ID)
+			if err != nil || len(ds) != 1 || ds[0].RecommendationShown != tc.shown || ds[0].RecommendationFollowed != tc.followed {
+				t.Fatalf("decisions %+v (%v), want shown %v, followed %v", ds, err, tc.shown, tc.followed)
+			}
+		})
+	}
+}
+
 // Send back hands the writer your reason and your note: the note goes to a
 // file of the task's directory, which the writer's next prompt names with
 // the reason's key, never the note's words; the task is back at coding,
