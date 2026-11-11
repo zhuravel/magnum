@@ -516,12 +516,7 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 		v.Off = f.off
 		return say(OpenOff, offWords(f.off)), nil, nil
 	}
-	work, needs := sortOpen(f.items, f.ledger)
-	if !f.whole || f.failed || len(f.cut) > 0 { // the items are not known: none counts
-		work, needs = nil, nil
-	} else if it, ok := ciWorkOf(f, work, needs); ok { // ci_fix.go: red required CI is work once nothing else is open
-		work = append(work, it)
-	}
+	work, needs := openWorkOf(f)
 	v.Open = len(work) + len(needs)
 	v.Needs = openNeeds(needs)
 	switch {
@@ -584,57 +579,7 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 	}
 	settled, until := settleDone(f)
 	if len(work) > 0 {
-		ww, ci := workWords(work), len(work) == 1 && work[0].Kind == itemCI
-		if ci {
-			ww = ciWorkWords(f)
-		}
-		handsOff := f.pr.HeadChangedAt.Add(f.settle.handsOff)
-		quietEnd, quiet := quietHoursNow(f.settle.quietHours, f.now)
-		// waiting names a person's handed items beside the work, which wait
-		// for the loop the work starts (rule 8's exception), as long as the
-		// work itself waits too: raised now, they would hold the PR and no
-		// loop would start on it.
-		waiting := func(why string) string {
-			if len(needs) == 0 {
-				return why
-			}
-			return why + "; " + textx.Count(len(needs), "item waits", "items wait") + " for you: " + workWords(needs)
-		}
-		switch {
-		case onlyRebuttals:
-			v.Needs = append(v.Needs, openNeeds(work)...)
-			return say(OpenNeedsYou, "magnum's reply waits for your answer: "+work[0].URL), nil, work
-		case f.ledger.startsSince(f.now.Add(-24*time.Hour)) >= f.settle.maxLoops:
-			if len(needs) > 0 { // no loop starts today: rule 8, as with no work beside them
-				v.leftovers = true
-				return say(OpenNeedsYou, needsWords(needs)), nil, needs
-			}
-			v.Needs = append(v.Needs, OpenNeed{Kind: "loop", URL: f.pr.URL})
-			capped := fmt.Sprintf("%s today: f starts another", textx.Count(f.settle.maxLoops, "loop", "loops"))
-			if ci { // the factory reads "f starts another"; c starts a CI fix by hand
-				capped += ", c a CI fix"
-			}
-			return say(OpenNeedsYou, capped), nil, needs
-		case f.pause != "" && f.pauseUntil.After(f.now):
-			v.Until = f.pauseUntil
-			return say(OpenWaits, waiting(f.pause+": "+ww+" waits until "+waitClock(f.pauseUntil, f.now))), nil, needs
-		case f.pause != "":
-			return say(OpenWaits, waiting(f.pause+": "+ww+" waits for `magnum resume`")), nil, needs
-		case quiet:
-			v.Until = quietEnd
-			return say(OpenWaits, waiting(fmt.Sprintf("quiet hours (%s): %s waits until %s", f.settle.quietHours, ww,
-				waitClock(quietEnd, f.now)))), nil, needs
-		case !slices.Contains(f.ledger.FixerHeads, head) && f.now.Before(handsOff):
-			v.Until = handsOff
-			return say(OpenWaits, waiting(fmt.Sprintf("you pushed %s at %s; hands off until %s", short, waitClock(f.pr.HeadChangedAt, f.now),
-				waitClock(handsOff, f.now)))), nil, needs
-		case !settled:
-			v.Until = until
-			return say(OpenWaits, waiting("settling: "+ww+" waits until "+waitClock(until, f.now))), nil, needs
-		case ci:
-			return say(OpenFixing, fmt.Sprintf("starts a CI fix of %s at %s (CI fix %d of %d)", f.ci.failed, short, f.ciFix.starts+1, ciFixMax)), work, needs
-		}
-		return say(OpenFixing, waiting("starts a fix loop on "+workWords(work))), work, needs // the loop leaves the person's items alone
+		return decideWork(f, v, work, needs, onlyRebuttals, settled, until)
 	}
 	if !settled {
 		v.Until = until
@@ -655,7 +600,98 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 	case f.mergeUnchecked != "":
 		return say(OpenUnknown, "the merge with "+f.mergeUnchecked+" could not be checked; trying again shortly"), nil, needs
 	}
-	why := "nothing open at " + short
+	why, optional := idleWords(f, short)
+	v.Optional = optional
+	return say(OpenIdle, why), nil, nil
+}
+
+// openWorkOf sorts f's items into work and needs (sortOpen), none of
+// either while the items are not known (no whole read, a failed one, or
+// one GitHub cut short); red required CI is work once nothing else is
+// open (ciWorkOf).
+func openWorkOf(f openFacts) (work, needs []openItem) {
+	work, needs = sortOpen(f.items, f.ledger)
+	if !f.whole || f.failed || len(f.cut) > 0 { // the items are not known: none counts
+		work, needs = nil, nil
+	} else if it, ok := ciWorkOf(f, work, needs); ok { // ci_fix.go: red required CI is work once nothing else is open
+		work = append(work, it)
+	}
+	return work, needs
+}
+
+// decideWork is decideOpen's verdict on open work, v as decideOpen made it
+// so far (rule 9 and what holds its start, in this order): magnum's
+// replies alone wait for your answer, then the day's cap of loops, `magnum
+// pause`, quiet hours, the hands off after your push and the settle
+// (settled and until are settleDone's) hold the start; else a CI fix or a
+// loop starts on work. A person's handed items (needs) wait beside the
+// work, named in the words of each wait and of the loop's start.
+func decideWork(f openFacts, v OpenVerdict, work, needs []openItem, onlyRebuttals, settled bool, until time.Time) (OpenVerdict, []openItem, []openItem) {
+	head := f.pr.HeadSHA
+	short := textx.ShortSHA(head)
+	say := func(verdict, why string) OpenVerdict {
+		v.Verdict, v.Why = verdict, why
+		return v
+	}
+	ww, ci := workWords(work), len(work) == 1 && work[0].Kind == itemCI
+	if ci {
+		ww = ciWorkWords(f)
+	}
+	handsOff := f.pr.HeadChangedAt.Add(f.settle.handsOff)
+	quietEnd, quiet := quietHoursNow(f.settle.quietHours, f.now)
+	// waiting names a person's handed items beside the work, which wait
+	// for the loop the work starts (rule 8's exception), as long as the
+	// work itself waits too: raised now, they would hold the PR and no
+	// loop would start on it.
+	waiting := func(why string) string {
+		if len(needs) == 0 {
+			return why
+		}
+		return why + "; " + textx.Count(len(needs), "item waits", "items wait") + " for you: " + workWords(needs)
+	}
+	switch {
+	case onlyRebuttals:
+		v.Needs = append(v.Needs, openNeeds(work)...)
+		return say(OpenNeedsYou, "magnum's reply waits for your answer: "+work[0].URL), nil, work
+	case f.ledger.startsSince(f.now.Add(-24*time.Hour)) >= f.settle.maxLoops:
+		if len(needs) > 0 { // no loop starts today: rule 8, as with no work beside them
+			v.leftovers = true
+			return say(OpenNeedsYou, needsWords(needs)), nil, needs
+		}
+		v.Needs = append(v.Needs, OpenNeed{Kind: "loop", URL: f.pr.URL})
+		capped := fmt.Sprintf("%s today: f starts another", textx.Count(f.settle.maxLoops, "loop", "loops"))
+		if ci { // the factory reads "f starts another"; c starts a CI fix by hand
+			capped += ", c a CI fix"
+		}
+		return say(OpenNeedsYou, capped), nil, needs
+	case f.pause != "" && f.pauseUntil.After(f.now):
+		v.Until = f.pauseUntil
+		return say(OpenWaits, waiting(f.pause+": "+ww+" waits until "+waitClock(f.pauseUntil, f.now))), nil, needs
+	case f.pause != "":
+		return say(OpenWaits, waiting(f.pause+": "+ww+" waits for `magnum resume`")), nil, needs
+	case quiet:
+		v.Until = quietEnd
+		return say(OpenWaits, waiting(fmt.Sprintf("quiet hours (%s): %s waits until %s", f.settle.quietHours, ww,
+			waitClock(quietEnd, f.now)))), nil, needs
+	case !slices.Contains(f.ledger.FixerHeads, head) && f.now.Before(handsOff):
+		v.Until = handsOff
+		return say(OpenWaits, waiting(fmt.Sprintf("you pushed %s at %s; hands off until %s", short, waitClock(f.pr.HeadChangedAt, f.now),
+			waitClock(handsOff, f.now)))), nil, needs
+	case !settled:
+		v.Until = until
+		return say(OpenWaits, waiting("settling: "+ww+" waits until "+waitClock(until, f.now))), nil, needs
+	case ci:
+		return say(OpenFixing, fmt.Sprintf("starts a CI fix of %s at %s (CI fix %d of %d)", f.ci.failed, short, f.ciFix.starts+1, ciFixMax)), work, needs
+	}
+	return say(OpenFixing, waiting("starts a fix loop on "+workWords(work))), work, needs // the loop leaves the person's items alone
+}
+
+// idleWords are rule 12's words on a PR with nothing open: the head, who
+// merges, the commits after the approval, the operator's optional calls
+// (optional: their links, for the verdict) and the CI fix whose push made
+// CI pass.
+func idleWords(f openFacts, short string) (why string, optional []string) {
+	why = "nothing open at " + short
 	switch g := f.pr.ReviewGate; {
 	case !OpenMergeIsYours(g):
 		why += " · no approval yet"
@@ -668,13 +704,13 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 		why += " · " + textx.Count(f.afterCount, "commit", "commits") + " after the approval"
 	}
 	if len(f.optional) > 0 { // fix_optional.go: the operator's calls, seen at the merge
-		v.Optional = optionalLinks(f.optional)
-		why += " · " + OptionalCallsWords(v.Optional)
+		optional = optionalLinks(f.optional)
+		why += " · " + OptionalCallsWords(optional)
 	}
 	if c := f.ciFix; ciAfter(f) != "" && len(c.last.Entries) > 0 { // ci_fix.go: the CI fix's push passed
 		why += fmt.Sprintf(" · CI fix %d of %d made %s pass", c.lastN, ciFixMax, missingWhat(c.last.Entries))
 	}
-	return say(OpenIdle, why), nil, nil
+	return why, optional
 }
 
 // ciFailedAt is rule 11's failure in words: "required check Completion
