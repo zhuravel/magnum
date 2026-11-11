@@ -143,8 +143,7 @@ func serialTables(funcs map[string]*ast.FuncDecl) []string {
 		// harness of its own) anywhere in them keeps it out, since its
 		// subtests start only once its body returns.
 		marked, table := false, false
-		var walk func(n ast.Node) bool
-		walk = func(n ast.Node) bool {
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
 			switch n := n.(type) {
 			case *ast.FuncLit:
 				for _, p := range n.Type.Params.List {
@@ -170,8 +169,7 @@ func serialTables(funcs map[string]*ast.FuncDecl) []string {
 				}
 			}
 			return true
-		}
-		ast.Inspect(fn.Body, walk)
+		})
 		if table && !marked {
 			found = append(found, name)
 		}
@@ -194,7 +192,7 @@ func TestATableWhoseCasesBuildAHarnessRunsBesideTheOtherTests(t *testing.T) {
 		t.Fatal(err)
 	}
 	if b := harnessBuilders(funcs); !b["newHarness"] || !b["appEngine"] || !b["newMigHarness"] {
-		t.Fatalf("harness builders = %v: newHarness, appEngine and newMigHarness are among them", len(b))
+		t.Fatalf("the %d harness builders found miss newHarness, appEngine or newMigHarness: the parse finds none of them", len(b))
 	}
 	if found := serialTables(funcs); len(found) > 0 {
 		t.Errorf("%d tests run subtests that build a harness, yet stay serial themselves; call storetest.Parallel(t) first (storetest.Serial(t) when the test swaps a package variable):\n%s",
