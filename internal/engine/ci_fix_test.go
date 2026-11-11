@@ -353,6 +353,31 @@ func TestTheVerdictWhileTheCIFixRunsWhileItsPushIsReReviewedWhileCIRerunsAndAfte
 	wantVerdict(t, v, OpenIdle, "nothing open at b2b2b2b · approved, merge is yours · CI fix 1 of 3 made required check Completion pass")
 }
 
+// The idle words credit a CI fix with the pass only at its own push: once
+// you push on top of it and CI passes there, the pass is not the CI
+// fix's, and the words leave it out.
+func TestTheIdleWordsCreditTheCIFixOnlyAtItsPush(t *testing.T) {
+	pushed := strings.Repeat("b2", 20)
+	at := func(head string) openFacts {
+		f := idleFacts()
+		f.pr.HeadSHA, f.pr.ReviewedSHA = head, &head
+		f.sum.SHA = head
+		f.ledger.FixerHeads = []string{pushed}
+		f.pr.CI = &store.CIStatus{SHA: head, Complete: true, ByWorkflowFile: true, Checks: []store.CheckResult{
+			{Name: "Completion", Workflow: "CI", WorkflowFile: "ci.yml", State: store.CheckPassed}}}
+		f.ci = openCIOf(f.pr, completionRequired, false, nil)
+		f.ciFix = ciFixFacts{starts: 1, last: ciFixStart{Head: fixHead, Entries: []string{"Completion"}, Outcome: ciOutcomePushed, Pushed: pushed},
+			lastN: 1}
+		return f
+	}
+	v, _, _ := decideOpen(at(pushed))
+	wantVerdict(t, v, OpenIdle, "nothing open at b2b2b2b · approved, merge is yours · CI fix 1 of 3 made required check Completion pass")
+	v, _, _ = decideOpen(at(strings.Repeat("d4", 20)))
+	if v.Verdict != OpenIdle || v.Why != "nothing open at d4d4d4d · approved, merge is yours" {
+		t.Errorf("verdict = %s %q, want idle with no CI fix's pass at your push", v.Verdict, v.Why)
+	}
+}
+
 // The newest commit of the base that finished the check decides where it
 // passed: a run that has not ended on the tip (a busy base merges every few
 // minutes) is passed over for the first parent that passed it. A tip that

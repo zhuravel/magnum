@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -486,6 +487,9 @@ func TestOnlyAMagnumRebuttalWithNoReviewWorkNeedsYou(t *testing.T) {
 	wantVerdict(t, v, OpenNeedsYou, "magnum's reply waits for your answer: "+rebuttal.URL)
 	if len(work) != 0 {
 		t.Errorf("work = %v, want no start", work)
+	}
+	if !slices.ContainsFunc(v.Needs, func(n OpenNeed) bool { return n.URL == rebuttal.URL }) {
+		t.Errorf("verdict needs = %+v, want the reply's link", v.Needs)
 	}
 	f.sum.Counts[2] = 1
 	f.ledger.Reviews = []string{"review:r1"}
