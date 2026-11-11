@@ -3,10 +3,13 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 // While the daemon runs, `magnum status` says whether its hook listener is
@@ -51,5 +54,44 @@ func TestStatusSaysWhetherTheDaemonsHookListenerIsUp(t *testing.T) {
 	d.DaemonPID = func() (int, error) { return 0, nil }
 	if _, line := hooksLine(); line != "" {
 		t.Fatalf("no daemon: %q", line)
+	}
+}
+
+// `magnum status` prints how often the agents' own hooks' state agreed with
+// herdr's status at the observe passes of the last 24 hours, per kind, the
+// measure that decides whether the hooks can stand in for herdr; nothing
+// while no pass compared them, and an hour older than the window does not
+// count.
+func TestStatusShowsHowOftenTheHookStateAgreedWithHerdr(t *testing.T) {
+	_, st, d, now := statusFixture(t)
+	ctx := context.Background()
+	shadowLine := func() string {
+		t.Helper()
+		r, err := statusGather(ctx, d, statusOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b bytes.Buffer
+		statusRender(&b, r)
+		for line := range strings.SplitSeq(b.String(), "\n") {
+			if strings.HasPrefix(line, "shadow:") {
+				return line
+			}
+		}
+		return ""
+	}
+	if line := shadowLine(); line != "" {
+		t.Fatalf("no readings: %q", line)
+	}
+	hour := now.UTC().Truncate(time.Hour)
+	tally := fmt.Sprintf(`[{"hour":%q,"kind":"claude","agreed":90,"differed":10},{"hour":%q,"kind":"claude","agreed":97,"differed":3},`+
+		`{"hour":%q,"kind":"codex","agreed":1,"differed":2},{"hour":%q,"kind":"codex","agreed":50,"differed":0}]`,
+		store.FormatTime(hour.Add(-2*time.Hour)), store.FormatTime(hour), store.FormatTime(hour), store.FormatTime(hour.Add(-24*time.Hour)))
+	if err := st.SetKV(ctx, store.KVHookAgreement, tally); err != nil {
+		t.Fatal(err)
+	}
+	const want = "shadow:   the hooks' state agreed with herdr's status at the observe passes of the last 24 h: claude 93% of 200 readings, codex 33% of 3 readings"
+	if line := shadowLine(); line != want {
+		t.Fatalf("line = %q\nwant   %q", line, want)
 	}
 }

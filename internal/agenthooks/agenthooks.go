@@ -1,6 +1,7 @@
 // Package agenthooks carries an agent's own hook events (a Claude Code or
-// Codex Stop, StopFailure, PermissionRequest, SessionStart, SessionEnd or
-// Interrupt) from a magnum pane to the daemon that started the pane. The
+// Codex Stop, StopFailure, PermissionRequest, SessionStart, SessionEnd,
+// Interrupt or UserPromptSubmit) from a magnum pane to the daemon that
+// started the pane. The
 // hook script (hooks/magnum-agent-hook.sh, Script) runs `magnum hook-event
 // <agent> <event>`, which reads the hook's payload (ReadPayload), keeps a
 // few of its fields (Parse) and sends one Unix datagram (Send) to the
@@ -38,6 +39,7 @@ const (
 	NameSessionStart      = "session_start"      // the session's id and transcript (Event.Source: startup, resume, ...)
 	NameSessionEnd        = "session_end"        // Claude: the session ended
 	NameInterrupt         = "interrupt"          // Codex: the turn was cut
+	NameUserPromptSubmit  = "user_prompt_submit" // a prompt was submitted: a turn begins (the prompt itself is never kept)
 )
 
 // PingName is the event `magnum doctor` sends a daemon's hook socket to see
@@ -54,6 +56,10 @@ const (
 	EnvBin = "MAGNUM_HOOK_BIN"
 	// EnvPane is herdr's id of the pane (Event.Pane).
 	EnvPane = "HERDR_PANE_ID"
+	// EnvAgent is magnum's own key of the pane (Event.PaneKey): the name
+	// of the agent magnum starts there (its session row's agent_name),
+	// which needs no herdr.
+	EnvAgent = "MAGNUM_AGENT"
 	// EnvCodexThread is the Codex thread the hook runs in
 	// (Event.CodexThread): a helper's differs from its session's id.
 	EnvCodexThread = "CODEX_THREAD_ID"
@@ -100,8 +106,10 @@ type Event struct {
 	Error          string `json:"error,omitempty"`
 	ToolName       string `json:"tool_name,omitempty"`
 	AgentID        string `json:"agent_id,omitempty"`
-	// Pane is the pane's HERDR_PANE_ID, CodexThread its CODEX_THREAD_ID.
+	// Pane is the pane's HERDR_PANE_ID, PaneKey its MAGNUM_AGENT, CodexThread
+	// its CODEX_THREAD_ID. An event names a pane, a pane key or both.
 	Pane        string `json:"pane"`
+	PaneKey     string `json:"pane_key,omitempty"`
 	CodexThread string `json:"codex_thread,omitempty"`
 	// Background is how many background tasks a Claude Stop reports still
 	// running.
@@ -114,7 +122,7 @@ func knownAgent(a string) bool { return a == AgentClaude || a == AgentCodex }
 
 func knownName(n string) bool {
 	switch n {
-	case NameStop, NameStopFailure, NamePermissionRequest, NameSessionStart, NameSessionEnd, NameInterrupt:
+	case NameStop, NameStopFailure, NamePermissionRequest, NameSessionStart, NameSessionEnd, NameInterrupt, NameUserPromptSubmit:
 		return true
 	}
 	return false

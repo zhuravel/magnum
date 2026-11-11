@@ -257,7 +257,7 @@ func TestHooksStatusSaysEveryStateAndExitsOneUnlessCurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.write(f.claudeSettings(), string(partial))
-	if code, out := status("claude"); code != 1 || !strings.HasPrefix(out, "claude: incomplete (v1) (") || !strings.Contains(out, "no entry for SessionStart, SessionEnd in "+f.claudeSettings()) {
+	if code, out := status("claude"); code != 1 || !strings.HasPrefix(out, "claude: incomplete (v1) (") || !strings.Contains(out, "no entry for SessionStart, SessionEnd, UserPromptSubmit in "+f.claudeSettings()) {
 		t.Fatalf("incomplete = %d %q", code, out)
 	}
 	f.write(f.claudeSettings(), settings)

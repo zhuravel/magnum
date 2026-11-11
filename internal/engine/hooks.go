@@ -313,25 +313,22 @@ func (e *Engine) routeHook(ctx context.Context, ev agenthooks.Event) {
 }
 
 // hookOwner reports whether registry st (named registry in the log) records
-// a live session on ev's pane, and logs the event's debug line then: its
-// name, the pane (a herdr id the registry recorded), the registry, the
-// session's role and row and its run in flight, never a field of the
-// payload.
+// a live session of ev's pane, by its pane key or else its herdr pane
+// (agents.HookSessionOf), and logs the event's debug line then: its name,
+// the pane (a herdr id the registry recorded) and the key (the agent name
+// it recorded), the registry, the session's role and row and its run in
+// flight, never a field of the payload.
 func (e *Engine) hookOwner(ctx context.Context, st *store.Store, ev agenthooks.Event, registry string) bool {
 	live, err := st.LiveSessions(ctx)
 	if err != nil {
 		e.log.Debug("hook event: the live sessions cannot be read", "event", ev.Name, "registry", registry, "err", err)
 		return false
 	}
-	var s *store.Session
-	for i := range live {
-		if ev.Pane != "" && deref(live[i].HerdrPaneID) == ev.Pane && (s == nil || live[i].ID > s.ID) {
-			s = &live[i]
-		}
-	}
-	if s == nil {
+	found, ok := agents.HookSessionOf(live, ev)
+	if !ok {
 		return false
 	}
+	s := &found
 	run := ""
 	if active, err := st.ActiveRuns(ctx); err == nil {
 		for _, r := range active {
@@ -340,7 +337,11 @@ func (e *Engine) hookOwner(ctx context.Context, st *store.Store, ev agenthooks.E
 			}
 		}
 	}
-	e.log.Debug(hookEventMsg, "event", ev.Name, "pane", ev.Pane, "registry", registry, "role", s.Role, "session", s.ID, "run", run)
+	key := ""
+	if ev.PaneKey != "" && deref(s.AgentName) == ev.PaneKey {
+		key = ev.PaneKey // the agent name the registry recorded, never one the event made up
+	}
+	e.log.Debug(hookEventMsg, "event", ev.Name, "pane", ev.Pane, "key", key, "registry", registry, "role", s.Role, "session", s.ID, "run", run)
 	return true
 }
 

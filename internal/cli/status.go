@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/config"
@@ -290,6 +291,11 @@ type statusDaemon struct {
 	// (engine.KVDaemonHooks): its socket, or why it polls them alone; nil
 	// before a daemon recorded it.
 	Hooks *engine.DaemonHooks `json:"hooks,omitempty"`
+	// HookAgreement is how often, per agent kind, the agents' own hooks'
+	// state agreed with herdr's status at the observe passes of the last
+	// 24 hours (agents.ReadHookAgreement); empty while no pass compared
+	// them.
+	HookAgreement []agents.HookAgreement `json:"hook_agreement,omitempty"`
 }
 
 // statusConfig is the user config (Path) while its bytes differ from the

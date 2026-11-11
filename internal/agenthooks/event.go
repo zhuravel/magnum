@@ -27,7 +27,7 @@ const (
 
 // Parse builds the Event of hook event name of agent from its payload (the
 // JSON the agent wrote to the hook's stdin, ReadPayload) and its env
-// (getenv: EnvPane, EnvCodexThread). It keeps only session_id,
+// (getenv: EnvPane, EnvAgent, EnvCodexThread). It keeps only session_id,
 // transcript_path, turn_id, source, error, tool_name, agent_id and the
 // number of background_tasks; every other field (the last assistant
 // message, a prompt, a tool's input, the cwd) is dropped unread. A payload
@@ -37,8 +37,8 @@ const (
 // &, anything outside printable ASCII) is left out whole, the free text
 // (the path, the error, the tool, the source) loses its control characters
 // and is cut, and the event always fits one datagram (fit). An unknown agent
-// or event, and a hook outside a herdr pane (no valid HERDR_PANE_ID), are
-// errors: there is nothing to send.
+// or event, and a hook in a pane that names neither a valid HERDR_PANE_ID
+// nor a valid MAGNUM_AGENT, are errors: there is nothing to send.
 func Parse(agent, name string, payload []byte, getenv func(string) string) (Event, error) {
 	if !knownAgent(agent) {
 		return Event{}, fmt.Errorf("agenthooks: unknown agent %q", agent)
@@ -46,11 +46,11 @@ func Parse(agent, name string, payload []byte, getenv func(string) string) (Even
 	if !knownName(name) {
 		return Event{}, fmt.Errorf("agenthooks: unknown event %q", name)
 	}
-	pane := hookID(getenv(EnvPane))
-	if pane == "" {
-		return Event{}, errors.New("agenthooks: not in a herdr pane (no " + EnvPane + ")")
+	pane, key := hookID(getenv(EnvPane)), hookID(getenv(EnvAgent))
+	if pane == "" && key == "" {
+		return Event{}, errors.New("agenthooks: not in a pane magnum started (no " + EnvPane + " and no " + EnvAgent + ")")
 	}
-	ev := Event{V: Version, Agent: agent, Name: name, Pane: pane, CodexThread: hookID(getenv(EnvCodexThread))}
+	ev := Event{V: Version, Agent: agent, Name: name, Pane: pane, PaneKey: key, CodexThread: hookID(getenv(EnvCodexThread))}
 	readFields(payload, &ev)
 	fit(&ev)
 	return ev, nil

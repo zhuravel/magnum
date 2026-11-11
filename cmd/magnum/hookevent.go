@@ -31,7 +31,8 @@ func runHookEvent(args []string) {
 // started the pane (agenthooks.EnvSocket): its payload read from stdin
 // (agenthooks.ReadPayload) and parsed with the pane's env
 // (agenthooks.Parse). Outside a magnum pane (no socket), with arguments it
-// does not know or outside a herdr pane, it returns at once, stdin unread;
+// does not know or in a pane that names neither herdr's pane nor magnum's
+// agent (HERDR_PANE_ID, MAGNUM_AGENT), it returns at once, stdin unread;
 // a daemon that is not there fails the send at once.
 func hookEvent(args []string, stdin io.Reader, getenv func(string) string) {
 	socket := getenv(agenthooks.EnvSocket)

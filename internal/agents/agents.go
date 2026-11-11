@@ -371,6 +371,13 @@ type Manager struct {
 	// (forgetStaleTrustOf).
 	launches map[int64]time.Time
 	wakes    sync.WaitGroup
+	// hookStates is what each session's hooks said, in shadow beside
+	// herdr's status (noteHookEvent, shadowHookState), hookTallies the
+	// passes' readings of both not yet in the registry, and hookFlushed
+	// when they last went there (flushHookTally); all under mu.
+	hookStates  map[int64]*hookShadow
+	hookTallies map[hookTallyKey]HookAgreement
+	hookFlushed time.Time
 }
 
 // New returns a Manager.
@@ -386,7 +393,8 @@ func New(d Deps) *Manager {
 		bg: map[int64]*bgWatch{}, settingsLock: make(chan struct{}, 1), replaced: map[string]string{}, launched: map[string]bool{},
 		jobs: map[string]ownedShell{}, lookedAt: map[int64]time.Time{}, woken: map[int64]*woken{},
 		hookIDs: map[int64]agenthooks.Event{}, looks: map[int64]*lookMark{}, failing: map[int64]*lookMark{}, failed: map[int64]failKey{},
-		relooks: map[int64]*relook{}, hooksAnswered: map[string]time.Time{}, launches: map[int64]time.Time{}}
+		relooks: map[int64]*relook{}, hooksAnswered: map[string]time.Time{}, launches: map[int64]time.Time{},
+		hookStates: map[int64]*hookShadow{}, hookTallies: map[hookTallyKey]HookAgreement{}}
 }
 
 // markedLive records that session id became live at t (see liveAt).

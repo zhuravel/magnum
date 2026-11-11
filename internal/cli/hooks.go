@@ -96,6 +96,10 @@ type hookTarget struct {
 	// fromShell: the directory comes from this shell's env
 	// (CLAUDE_CONFIG_DIR, CODEX_HOME) or the default, not from a role's env.
 	fromShell bool
+	// promptSubmit: Codex's UserPromptSubmit (codexPromptSubmit) is one of
+	// t's events, by the install's --prompt-submit or because its
+	// hooks.json holds magnum's entry for it already (adopt).
+	promptSubmit bool
 }
 
 // codexForgetStep is the way out of a stale trust record Codex will never
@@ -133,10 +137,29 @@ func (t hookTarget) settings() string {
 }
 
 func (t hookTarget) events() []hookEvent {
-	if t.agent == agenthooks.AgentClaude {
+	switch {
+	case t.agent == agenthooks.AgentClaude:
 		return claudeHookEvents
+	case t.promptSubmit:
+		return append(slices.Clone(codexHookEvents), codexPromptSubmit)
 	}
 	return codexHookEvents
+}
+
+// adopt is t with Codex's UserPromptSubmit among its events when the
+// settings doc holds magnum's entry for it (a drifted one too), so status
+// counts its trust and an install keeps it current without the flag; t as
+// it is for Claude, and for a doc that cannot be read (its readers refuse
+// it themselves).
+func (t hookTarget) adopt(doc []byte) hookTarget {
+	if t.agent != agenthooks.AgentCodex || t.promptSubmit || len(doc) == 0 {
+		return t
+	}
+	e := hookEntry{Event: codexPromptSubmit.name, Command: hookCommand(t.script(), t.agent, codexPromptSubmit.arg), Timeout: codexPromptSubmit.timeout}
+	if states, err := readHookEntries(doc, t.agent, []hookEntry{e}); err == nil && states[0].state != entryAbsent {
+		t.promptSubmit = true
+	}
+	return t
 }
 
 // entries are magnum's handlers in t, one per event.
@@ -292,6 +315,8 @@ func readHookStatus(t hookTarget) hookStatus {
 	}
 	var states []hookEntryState
 	if rerr == nil {
+		t = t.adopt(doc)
+		s.t = t
 		states, rerr = readHookEntries(doc, t.agent, t.entries())
 		if skip, ok := errors.AsType[*codexSkipsFileError](rerr); ok {
 			s.skipKey = skip.key
@@ -417,9 +442,9 @@ func unwrapPathErr(err error) error {
 const codexTrustStep = "run `codex` once and choose Trust all (or `/hooks`), or `magnum resume --tool codex`"
 
 // hooksFlags are the parsed `magnum hooks` flags.
-type hooksFlags struct{ dry, yes, forget, assumeUntrusted bool }
+type hooksFlags struct{ dry, yes, forget, assumeUntrusted, promptSubmit bool }
 
-const hooksUsage = "[status|install [--dry-run] [--forget-stale] [--assume-untrusted]|uninstall [--dry-run] [--yes]] [claude|codex]"
+const hooksUsage = "[status|install [--dry-run] [--forget-stale] [--assume-untrusted] [--prompt-submit]|uninstall [--dry-run] [--yes]] [claude|codex]"
 
 func newHooksCmd(c *Context) *cobra.Command {
 	var f hooksFlags
@@ -428,8 +453,9 @@ func newHooksCmd(c *Context) *cobra.Command {
 			"(hooks/magnum-agent-hook.sh), which runs `magnum hook-event` only in a pane magnum started and exits at once in "+
 			"every other session. `install` writes the script (mode 0755) to ~/.claude/hooks/ ($CLAUDE_CONFIG_DIR when set) "+
 			"and to each Codex home the Codex roles read, and appends one entry per event (`sh '<script>' <agent> <event>`, "+
-			"async, timeout 5 s, 1 s for Claude's SessionEnd and Codex's Interrupt) to ~/.claude/settings.json (Stop, StopFailure, PermissionRequest, SessionStart, SessionEnd) "+
-			"and to each Codex home's hooks.json (Stop, SessionStart, PermissionRequest, Interrupt). It only appends, at the end "+
+			"async, timeout 5 s, 1 s for Claude's SessionEnd and Codex's Interrupt) to ~/.claude/settings.json (Stop, StopFailure, PermissionRequest, SessionStart, SessionEnd, UserPromptSubmit) "+
+			"and to each Codex home's hooks.json (Stop, SessionStart, PermissionRequest, Interrupt, and UserPromptSubmit with "+
+			"`install --prompt-submit`, which Codex asks to trust; once there, it stays). It only appends, at the end "+
 			"of each event's list, and keeps every other byte; an entry already there is rewritten in its place only when its "+
 			"command, timeout or async drifted. It refuses a file at the script's path that is not magnum's and a settings file "+
 			"that is not valid JSON, and changes nothing then. Codex asks to trust new hooks once: "+codexTrustStep+". "+
@@ -440,18 +466,21 @@ func newHooksCmd(c *Context) *cobra.Command {
 			"script). `status` (the default) prints one line per target and exits 1 unless every target is current. With no "+
 			"agent named, the targets are those the configured roles use.",
 		func(pos []string) int { return runHooks(c, "status", f, pos) })
-	install := newCommand("", "install [claude|codex] [--dry-run] [--forget-stale] [--assume-untrusted]", "write the hook script and append magnum's entries",
+	install := newCommand("", "install [claude|codex] [--dry-run] [--forget-stale] [--assume-untrusted] [--prompt-submit]", "write the hook script and append magnum's entries",
 		"Write the hook script and append magnum's entries to the agents' hook settings; --dry-run prints each file and what "+
 			"would be added or changed, and writes nothing. After a rewrite of a Codex entry, status counts its place untrusted "+
 			"while Codex keeps the trust entry of the hook before the rewrite; when `codex` asks nothing (it trusts the hook as "+
 			"it is), --forget-stale forgets those records for the Codex homes first. A place magnum appends to can hold a "+
 			"trust entry a hook that once stood there left: install records it the same way, but for magnum's own hook an "+
 			"uninstall removed, put back identical at its place. For an install from before it did, --assume-untrusted "+
-			"records those entries on your word.",
+			"records those entries on your word. --prompt-submit also appends Codex's UserPromptSubmit, the turn's start "+
+			"(Claude's is always installed): a new Codex hook, so Codex asks to trust it once per Codex home, and the daemon "+
+			"holds new Codex sessions until it does; a later install keeps it.",
 		func(pos []string) int { return runHooks(c, "install", f, pos) })
 	install.Flags().BoolVar(&f.dry, "dry-run", false, "print the plan; change nothing")
 	install.Flags().BoolVar(&f.forget, "forget-stale", false, "also forget magnum's records of Codex trust entries a rewrite left stale, for when `codex` asks nothing")
 	install.Flags().BoolVar(&f.assumeUntrusted, "assume-untrusted", false, "record the Codex trust entries at magnum's places as ones Codex no longer accepts, on your word that you chose no Trust all since the install")
+	install.Flags().BoolVar(&f.promptSubmit, "prompt-submit", false, "also append Codex's UserPromptSubmit (a new hook Codex asks to trust once; new Codex sessions wait until then)")
 	uninstall := newCommand("", "uninstall [claude|codex] [--dry-run] [--yes]", "remove magnum's entries and the hook script",
 		"Remove magnum's entries from the agents' hook settings and the hook scripts; asks y/N before it moves another Codex "+
 			"hook to a new place (it loses its trust there).",
@@ -499,6 +528,9 @@ func runHooks(c *Context, verb string, f hooksFlags, pos []string) int {
 	defer stop()
 	switch verb {
 	case "install":
+		for i := range targets {
+			targets[i].promptSubmit = f.promptSubmit && targets[i].agent == agenthooks.AgentCodex
+		}
 		return hooksInstall(c, targets, f)
 	case "uninstall":
 		return hooksUninstall(ctx, c, targets, f)
@@ -605,6 +637,8 @@ func planHookInstall(t hookTarget) (hookInstall, error) {
 		return p, err
 	}
 	p.before = doc
+	t = t.adopt(doc)
+	p.t = t
 	out, changes, err := spliceHooks(doc, t.agent, t.entries())
 	if skip, ok := errors.AsType[*codexSkipsFileError](err); ok {
 		return p, fmt.Errorf("%s: %s: %w; nothing changed\nfix: %s, then re-run magnum hooks install %s",

@@ -155,13 +155,16 @@ func (l *Listener) Close() error {
 // Serve reads the socket until ctx ends, then closes it, and hands each
 // event to handle, one at a time, on Serve's goroutine. It drops a datagram
 // over MaxDatagram, one that is no JSON object, of another V than Version,
-// or without a pane, an agent or an event this version knows, and a pane's
-// events past its rate (rateBurst at once, then one per rateEvery, and all
-// panes' past globalBurst, then one per globalEvery). The ids
-// of an event it hands on are ids (as Parse makes them) and its free text is
-// cut, since anyone with the pane's env can send one. Each event it hands
-// on logs one debug line with its name and its pane (paneForLog), never
-// another field. A handler that panics costs its event, not the listener.
+// or without an agent or an event this version knows, one that names
+// neither a pane nor a pane key, and a pane's events past its rate
+// (rateBurst at once, then one per rateEvery, and all panes' past
+// globalBurst, then one per globalEvery; an event without a pane counts
+// against its pane key's). The ids of an event it hands on are ids (as
+// Parse makes them; a pane or key that is none is left out) and its free
+// text is cut, since anyone with the pane's env can send one. Each event it
+// hands on logs one debug line with its name, its pane (paneForLog) and its
+// key (keyForLog), never another field. A handler that panics costs its
+// event, not the listener.
 func (l *Listener) Serve(ctx context.Context, handle func(Event)) {
 	defer l.Close()
 	defer context.AfterFunc(ctx, func() { _ = l.Close() })()
@@ -193,10 +196,10 @@ func (l *Listener) take(data []byte, handle func(Event)) {
 		l.log.Debug("hook datagram dropped", "why", why)
 		return
 	}
-	if !l.allow(ev.Pane) {
+	if !l.allow(ev.bucket()) {
 		return
 	}
-	l.log.Debug("hook event", "event", ev.Name, "pane", paneForLog(ev.Pane))
+	l.log.Debug("hook event", "event", ev.Name, "pane", paneForLog(ev.Pane), "key", keyForLog(ev.PaneKey))
 	l.dispatch(handle, ev)
 }
 
@@ -212,14 +215,27 @@ func decode(data []byte) (Event, string) {
 	switch {
 	case ev.V != Version:
 		return Event{}, fmt.Sprintf("version %d", ev.V)
-	case !knownAgent(ev.Agent) || !knownName(ev.Name) || hookID(ev.Pane) == "":
-		return Event{}, "no pane, agent or event this version knows"
+	case !knownAgent(ev.Agent) || !knownName(ev.Name):
+		return Event{}, "no agent or event this version knows"
+	}
+	ev.Pane, ev.PaneKey = hookID(ev.Pane), hookID(ev.PaneKey)
+	if ev.Pane == "" && ev.PaneKey == "" {
+		return Event{}, "no pane and no pane key"
 	}
 	ev.SessionID, ev.TurnID, ev.AgentID, ev.CodexThread = hookID(ev.SessionID), hookID(ev.TurnID), hookID(ev.AgentID), hookID(ev.CodexThread)
 	ev.TranscriptPath, ev.Error = freeText(ev.TranscriptPath, pathMax), freeText(ev.Error, errorMax)
 	ev.Source, ev.ToolName = freeText(ev.Source, shortMax), freeText(ev.ToolName, shortMax)
 	ev.Background = max(ev.Background, 0)
 	return ev, ""
+}
+
+// bucket is the rate bucket ev counts against: its herdr pane, else its
+// pane key (the two never collide: a key's bucket is prefixed).
+func (ev Event) bucket() string {
+	if ev.Pane != "" {
+		return ev.Pane
+	}
+	return "key:" + ev.PaneKey
 }
 
 // allow reports whether pane's bucket and the bucket of all panes both
@@ -292,6 +308,19 @@ var herdrPane = regexp.MustCompile(`^w[0-9A-Za-z]{1,16}:p[0-9]{1,6}$`)
 func paneForLog(pane string) string {
 	if herdrPane.MatchString(pane) {
 		return pane
+	}
+	return "other"
+}
+
+// agentKey is the shape of magnum's agent names (agents.AgentName: herdr's
+// ^[a-z][a-z0-9_-]{0,31}$), which a pane key has.
+var agentKey = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+
+// keyForLog is a pane key as a log line names it: one in the shape of
+// magnum's agent names as it is, "" for none, any other as "other".
+func keyForLog(key string) string {
+	if key == "" || agentKey.MatchString(key) {
+		return key
 	}
 	return "other"
 }

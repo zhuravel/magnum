@@ -38,6 +38,12 @@ const (
 	// writes it; the App opens its panes there. Absent: they are in your
 	// session ([herdr] socket), where every build before the key opened them.
 	KVHerdrPanes = "herdr.panes"
+	// KVHookAgreement is how often the agents' own hooks' state agreed with
+	// herdr's status at the observe passes, per agent kind and hour, kept
+	// 25 hours: a JSON list of {"hour", "kind", "agreed", "differed"} that
+	// the agents' passes add to (agents.ReadHookAgreement reads it for
+	// `magnum status`).
+	KVHookAgreement = "agents.hook_agreement"
 )
 
 // KVToolPausedUntil holds when a tool's pause ends ("codex", "claude";

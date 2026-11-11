@@ -240,8 +240,11 @@ func (m *Manager) observeAt(ctx context.Context, snap herdr.Snapshot, capturedAt
 		if o.Kind == ObsCompleted || o.Kind == ObsLost {
 			m.wakeEnded() // the waiter goes on now, not at its next poll
 		}
+		m.shadowHookState(ctx, o, capturedAt) // in shadow: nothing above reads it
 		out = append(out, o)
 	}
+	m.forgetHookStates(ctx, sessions)
+	m.flushHookTally(ctx, now)
 	return out, errors.Join(errs...)
 }
 

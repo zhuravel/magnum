@@ -171,6 +171,9 @@ func statusGatherDaemon(ctx context.Context, d statusDeps, kv statusKV, r *statu
 	if h, ok := engine.ReadDaemonHooks(ctx, d.Store); ok {
 		r.Daemon.Hooks = &h
 	}
+	if a, err := agents.ReadHookAgreement(ctx, d.Store, r.GeneratedAt); err == nil {
+		r.Daemon.HookAgreement = a
+	}
 	r.Daemon.PromptsLoadedAt = kv.getTime(engine.KVPromptsLoadedAt)
 	if n := kv.getInt(engine.KVPromptsChanged); n != nil && *n > 0 {
 		r.Daemon.PromptsChanged = *n

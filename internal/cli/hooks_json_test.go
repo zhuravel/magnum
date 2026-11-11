@@ -139,6 +139,18 @@ const herdrSettingsInstalled = `{
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh '/Users/x/.claude/hooks/magnum-agent-hook.sh' claude user_prompt_submit",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
     ]
   },
   "statusLine": {"type": "command", "command": "ccstatusline"}
@@ -189,7 +201,7 @@ func TestInstallKeepsEveryByteOfTheSettingsButTheAppendedGroups(t *testing.T) {
 				}
 				added = append(added, c.event)
 			}
-			if !slices.Equal(added, []string{"Stop", "StopFailure", "PermissionRequest", "SessionStart", "SessionEnd"}) {
+			if !slices.Equal(added, []string{"Stop", "StopFailure", "PermissionRequest", "SessionStart", "SessionEnd", "UserPromptSubmit"}) {
 				t.Errorf("added %v", added)
 			}
 		})
@@ -370,8 +382,8 @@ func TestUninstallGivesBackTheFileTheInstallFound(t *testing.T) {
 		if string(out) != in {
 			t.Fatalf("%s: uninstall =\n%s\nwant\n%s", st.name, out, in)
 		}
-		if removed != 5 {
-			t.Errorf("%s: removed %d, want 5", st.name, removed)
+		if removed != len(claudeHookEvents) {
+			t.Errorf("%s: removed %d, want %d", st.name, removed, len(claudeHookEvents))
 		}
 	}
 	for _, in := range []string{"{\n  \"model\": \"opus\"\n}\n", "{\n  \"hooks\": {\n    \"SessionStart\": []\n  }\n}\n", `{"hooks": {"SessionStart": []}}`} {
@@ -491,10 +503,10 @@ func TestReadHookEntriesTellsEachEventsState(t *testing.T) {
 func TestTheHookTimeoutsStayWithinTheAgentsLimitsAndNeverChange(t *testing.T) {
 	t.Parallel()
 	want := map[string]map[string]int{
-		"claude": {"Stop": 5, "StopFailure": 5, "PermissionRequest": 5, "SessionStart": 5, "SessionEnd": 1},
-		"codex":  {"Stop": 5, "SessionStart": 5, "PermissionRequest": 5, "Interrupt": 1},
+		"claude": {"Stop": 5, "StopFailure": 5, "PermissionRequest": 5, "SessionStart": 5, "SessionEnd": 1, "UserPromptSubmit": 5},
+		"codex":  {"Stop": 5, "SessionStart": 5, "PermissionRequest": 5, "Interrupt": 1, "UserPromptSubmit": 5},
 	}
-	for agent, events := range map[string][]hookEvent{"claude": claudeHookEvents, "codex": codexHookEvents} {
+	for agent, events := range map[string][]hookEvent{"claude": claudeHookEvents, "codex": append(slices.Clone(codexHookEvents), codexPromptSubmit)} {
 		if len(events) != len(want[agent]) {
 			t.Fatalf("%s hooks %d events, want %d", agent, len(events), len(want[agent]))
 		}

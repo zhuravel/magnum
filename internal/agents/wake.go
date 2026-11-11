@@ -89,8 +89,8 @@ func (f StopFailure) shownBy(kind HealthKind) bool {
 
 // hookEnv sets env's hook variables (agenthooks.EnvSocket, EnvBin) from
 // Deps.HookSocket (read under mu: SetHookSocket) and the binary (hookBin),
-// or removes them when there is no socket or no binary; env itself is never
-// changed.
+// or removes them, and the pane key (agenthooks.EnvAgent, withAgentKey),
+// when there is no socket or no binary; env itself is never changed.
 func (m *Manager) hookEnv(env map[string]string) map[string]string {
 	m.mu.Lock()
 	socket := m.d.HookSocket
@@ -98,7 +98,8 @@ func (m *Manager) hookEnv(env map[string]string) map[string]string {
 	bin := m.hookBin()
 	_, hasSocket := env[agenthooks.EnvSocket]
 	_, hasBin := env[agenthooks.EnvBin]
-	if (socket == "" || bin == "") && !hasSocket && !hasBin {
+	_, hasKey := env[agenthooks.EnvAgent]
+	if (socket == "" || bin == "") && !hasSocket && !hasBin && !hasKey {
 		return env
 	}
 	out := make(map[string]string, len(env)+2)
@@ -106,6 +107,7 @@ func (m *Manager) hookEnv(env map[string]string) map[string]string {
 	if socket == "" || bin == "" {
 		delete(out, agenthooks.EnvSocket)
 		delete(out, agenthooks.EnvBin)
+		delete(out, agenthooks.EnvAgent)
 		return out
 	}
 	out[agenthooks.EnvSocket], out[agenthooks.EnvBin] = socket, bin
@@ -136,8 +138,9 @@ func (m *Manager) hookBin() string {
 
 // Wake takes an event of an agent's hook (agenthooks.Listener's) as a hint
 // to look at its pane now, outside the observe passes. The pane is mapped
-// to its starting or live session by herdr_pane_id; an event of a pane no
-// such session (of an agent) records is dropped. Every look takes the
+// to its starting or live session by its pane key (agent_name), else by
+// herdr_pane_id (HookSessionOf); an event of a pane no such session (of an
+// agent) records is dropped. Every look takes the
 // observe lock the passes take (obsMu), one herdr snapshot and the
 // session's in-flight runs, and goes through observeOne, as a pass would;
 // a pass whose snapshot started before a look's came back leaves the
@@ -181,6 +184,11 @@ func (m *Manager) hookBin() string {
 //     Until the file is there the event waits, and the pane's next event
 //     checks it again.
 //   - session_end: a look now.
+//   - user_prompt_submit: no look.
+//
+// Every event first moves the session's hooks' state (noteHookEvent), which
+// the observe passes only compare with herdr's status (hook_state.go):
+// nothing decides on it.
 //
 // The rules a receiver keeps: ctx bounds the later looks too, so pass the
 // daemon's, not one that ends when Wake returns, and call WaitWakes once
@@ -194,6 +202,7 @@ func (m *Manager) Wake(ctx context.Context, ev agenthooks.Event) {
 	if !ok {
 		return
 	}
+	m.noteHookEvent(s, ev)
 	switch ev.Name {
 	case agenthooks.NameStop, agenthooks.NameInterrupt, agenthooks.NamePermissionRequest:
 		var hint *agenthooks.Event
@@ -225,25 +234,45 @@ func lookAgainAfter(o Observation) bool {
 }
 
 // hookSession is the starting or live agent session whose pane sent ev
-// (the newest, should two rows record the pane); false, logged at debug
-// level with the event's name alone, when there is none.
+// (HookSessionOf); false, logged at debug level with the event's name
+// alone, when there is none.
 func (m *Manager) hookSession(ctx context.Context, ev agenthooks.Event) (store.Session, bool) {
 	live, err := m.d.Store.LiveSessions(ctx)
 	if err != nil {
 		m.logErr(ctx, err, "agents: hook %s: %v", ev.Name, err)
 		return store.Session{}, false
 	}
-	var found *store.Session
-	for i, s := range live {
-		if ev.Pane != "" && store.Deref(s.HerdrPaneID) == ev.Pane && (found == nil || s.ID > found.ID) {
-			found = &live[i]
-		}
-	}
-	if found == nil || !m.isAgentSession(*found) {
+	found, ok := HookSessionOf(live, ev)
+	if !ok || !m.isAgentSession(found) {
 		m.logAt(slog.LevelDebug, "agents: hook %s: no agent session of magnum's has its pane", ev.Name)
 		return store.Session{}, false
 	}
-	return *found, true
+	return found, true
+}
+
+// HookSessionOf is the session of live (starting and live rows) whose pane
+// sent hook event ev: by its pane key (agenthooks.Event.PaneKey, the pane's
+// MAGNUM_AGENT: the row's agent_name, which needs no herdr), else, for an
+// event without the key (a pane made before it, an older hook-event) or
+// one whose key no row's agent has (a row whose name a failed rename
+// cleared), by its herdr pane (HERDR_PANE_ID); the newest row when two
+// match. false when none does.
+func HookSessionOf(live []store.Session, ev agenthooks.Event) (store.Session, bool) {
+	for _, match := range []func(store.Session) bool{
+		func(s store.Session) bool { return ev.PaneKey != "" && store.Deref(s.AgentName) == ev.PaneKey },
+		func(s store.Session) bool { return ev.Pane != "" && store.Deref(s.HerdrPaneID) == ev.Pane },
+	} {
+		var found *store.Session
+		for i, s := range live {
+			if match(s) && (found == nil || s.ID > found.ID) {
+				found = &live[i]
+			}
+		}
+		if found != nil {
+			return *found, true
+		}
+	}
+	return store.Session{}, false
 }
 
 // creditable reports whether Stop ev may count as a turn's end by what it

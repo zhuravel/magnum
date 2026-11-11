@@ -362,6 +362,40 @@ func TestAHookEventReachesTheManagerThatOwnsItsPane(t *testing.T) {
 	}
 }
 
+// An event that names its pane key (the pane's MAGNUM_AGENT) and no herdr
+// pane reaches the manager whose registry records a live session of that
+// agent name: the daemon's own for a review agent, the retro's for its own;
+// a key no registry records reaches none. The debug line names the key.
+func TestAHookEventReachesTheManagerThatOwnsItsPaneKey(t *testing.T) {
+	logs := &recordLog{}
+	h := newHarness(t, func(hs *harness) { hs.d.Logger = slog.New(logs) })
+	h.prInFlight(1, config.RoleClaudeReview, "mg-1-claude-review-abc123", "w1:p1", t.TempDir())
+	scratch := storetest.Open(t, filepath.Join(t.TempDir(), "scratch", "magnum.db"))
+	paneSession(t, scratch, "w2:p1")
+	retro := &fakeAgents{st: scratch}
+	h.e.agentHooks.open(h.ctx)
+	if h.e.agentHooks.add("retro", scratch, retro) == nil {
+		t.Fatal("no pane agent registered while the daemon listens")
+	}
+	keyed := func(key string) agenthooks.Event {
+		ev := hookEvent("")
+		ev.PaneKey = key
+		return ev
+	}
+	for _, key := range []string{"mg-1-claude-review-abc123", "mg-learn", "mg-9-gone-000000"} {
+		h.e.routeHook(h.ctx, keyed(key))
+	}
+	if got := h.ag.wakes(); len(got) != 1 || got[0].PaneKey != "mg-1-claude-review-abc123" {
+		t.Fatalf("the daemon's manager woke for %+v, want its review agent's key alone", got)
+	}
+	if got := retro.wakes(); len(got) != 1 || got[0].PaneKey != "mg-learn" {
+		t.Fatalf("the retro's manager woke for %+v, want its agent's key alone", got)
+	}
+	if got := logs.attr(slog.LevelDebug, hookEventMsg, "key"); got != "mg-1-claude-review-abc123" {
+		t.Fatalf("the routed line's key = %q", got)
+	}
+}
+
 // No pane agent registers while the daemon does not listen: its manager has
 // no hook env to wake for.
 func TestNoPaneAgentRegistersWithoutAListener(t *testing.T) {

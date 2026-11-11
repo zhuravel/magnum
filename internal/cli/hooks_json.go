@@ -46,12 +46,18 @@ type hookEvent struct {
 // the background too) and defaults the others to 600 s; Claude enforces no
 // timeout on an async hook, but a SessionEnd hook's own timeout raises the
 // 1.5 s budget all SessionEnd hooks share, so magnum's is 1 s there.
+// codexPromptSubmit is Codex's UserPromptSubmit, which the install adds
+// only on the operator's word (--prompt-submit) and keeps where it stands
+// (hookTarget.adopt): a new Codex hook asks for trust in every Codex home,
+// and until then the daemon holds new Codex sessions. Claude has no
+// per-hook trust, so its UserPromptSubmit is one of its events.
 var (
 	claudeHookEvents = []hookEvent{{"Stop", agenthooks.NameStop, 5}, {"StopFailure", agenthooks.NameStopFailure, 5},
 		{"PermissionRequest", agenthooks.NamePermissionRequest, 5}, {"SessionStart", agenthooks.NameSessionStart, 5},
-		{"SessionEnd", agenthooks.NameSessionEnd, 1}}
+		{"SessionEnd", agenthooks.NameSessionEnd, 1}, {"UserPromptSubmit", agenthooks.NameUserPromptSubmit, 5}}
 	codexHookEvents = []hookEvent{{"Stop", agenthooks.NameStop, 5}, {"SessionStart", agenthooks.NameSessionStart, 5},
 		{"PermissionRequest", agenthooks.NamePermissionRequest, 5}, {"Interrupt", agenthooks.NameInterrupt, 1}}
+	codexPromptSubmit = hookEvent{"UserPromptSubmit", agenthooks.NameUserPromptSubmit, 5}
 )
 
 // hookEntry is magnum's handler of one event: Event as the settings name

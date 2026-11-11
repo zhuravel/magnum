@@ -4818,6 +4818,64 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestATeammateWatchReadsABoundedPartOfItsTranscriptPerReading the bounded incremental read (a whole read fails
   it), TestBackgroundProgressChangesWhileATeammatesTranscriptGrows the progress text and
   TestTeammateSpawnIsNoBackgroundTask the record.
+- **A hook event finds its session by magnum's own pane key, `MAGNUM_AGENT`, before herdr's pane** (2026-11-12,
+  spec 09, step 1 of the tmux backend the operator decided on beside herdr, whose desktop app's sessions do not
+  work with its TUI). A hook event found its session only by `HERDR_PANE_ID` (agenthooks, Wake, the review
+  daemon's router), so without herdr no event had a session. Every agent pane a daemon with a hook listener makes
+  now also gets `MAGNUM_AGENT`, its agent's name (`agent_name`, unique among the live rows), beside
+  `MAGNUM_HOOK_SOCKET`; a shell pane gets none, and a pane made without a socket loses it with the socket.
+  `magnum hook-event` sends it as the event's `pane_key` (an additive field under version 1, read as an id: a
+  value that is none is left out) and sends an event that names either; the listener takes either, rate-limited by
+  the pane, else the key, and logs the key only in the shape of an agent name. `agents.HookSessionOf`, which Wake
+  and the router share, matches the key first, then the pane: a pane made before the key, an older hook-event, or a
+  row whose name a failed rename cleared (markStarted) still match by the pane. The key is read in the pane's env
+  by `magnum hook-event`, so the hook script and its command lines stay as they were (v1): Codex keys its trust on
+  them, and whether it hashes the script is untested. An agent still in a pane after magnum lost it, which herdr's
+  pane id would have dropped, now reaches the live session of its name: an early look, as any late or forged
+  event costs. Tests: TestAnEventCarriesItsPanesAgentKey, TestTheListenerTakesAnEventThatNamesOnlyItsPaneKey,
+  TestHookEventSendsThePanesAgentKey, TestAnAgentsPaneNamesItsAgentAsTheHookKey,
+  TestNoPaneGetsTheHookKeyWithoutASocket, TestAHookEventReachesItsSessionByItsPaneKey,
+  TestAnEventWithOnlyItsHerdrPaneStillReachesItsSession and TestAHookEventReachesTheManagerThatOwnsItsPaneKey.
+- **magnum hooks UserPromptSubmit: Claude's always, Codex's only with `magnum hooks install --prompt-submit`**
+  (2026-11-12, spec 09). herdr's status was magnum's only sign that an agent works (observe.go), and both CLIs
+  run a UserPromptSubmit hook (Codex 0.167.1 lists it among its hook events and documents its payload: the
+  session, the turn and the prompt, which hook-event drops unread). Claude has no per-hook trust, so its entry is
+  one of its events: an install from before reads `incomplete` until `magnum hooks install claude`. A new Codex
+  hook makes every Codex session ask "Hooks need review" until the operator trusts it (the 2026-10-22 outage),
+  and the daemon holds new Codex sessions meanwhile, so the install appends Codex's only with `--prompt-submit`
+  and prints the trust step; once it is there, status counts it and its trust, a later install keeps it current
+  without the flag, and without it status does not miss it. A UserPromptSubmit starts no look: it only moves the
+  hooks' state below. Tests: TestAUserPromptSubmitKeepsNoPrompt, TestHooksGiveClaudeAUserPromptSubmitEntry,
+  TestCodexGetsUserPromptSubmitOnlyWithTheInstallFlag; TestTheHookTimeoutsStayWithinTheAgentsLimitsAndNeverChange
+  pins both entries' 5 s.
+- **The hooks give each session a state of their own, which the observe passes measure against herdr's status
+  and nothing reads** (2026-11-12, spec 09). A tmux backend needs its own sign of an agent's state, and the
+  operator decides on step 2 by how well the hooks' signals match herdr's. Each session's hooks' state is ready
+  (SessionStart; a compaction's keeps a known state), working (UserPromptSubmit), blocked (PermissionRequest,
+  a subagent's too), idle (Stop, StopFailure, Interrupt; a subagent's or a Codex helper's prompt or turn end
+  moves nothing), none after a SessionEnd, and idle when, while the hooks say working and herdr idle or done,
+  the session's transcript (Claude's turn_duration) or rollout (Codex's task_complete or turn_aborted) shows
+  the turn ended after that; the file is read only then, so a pass pays nothing while both agree. Each observe
+  pass (never a look, which follows an event and would read herdr's lag) compares it with herdr's status, ready
+  counting as idle and done as idle; an unknown status or no hooks' state is no reading. A disagreement that
+  outlasts the observe interval (`observe_interval`, else `poll_interval`) writes one `agent.hook_state_differs`
+  info event per session and pair of states, when they agree again, differ in another pair, can no longer be
+  compared or the session is no longer live, with both states, what moved the hooks' state and the seconds from
+  the later of the two changes (the hooks' event, the row's agent_status_at) to the last pass that saw them
+  differ: a lower bound, since a pass sees no change between two passes. Every reading counts per kind and
+  hour as agreed or not, in memory, written to `agents.hook_agreement` in the kv at most once a minute (by
+  compare and set; an hour is kept 25 hours; a daemon that stops loses its last minute), which `magnum status`
+  sums over the current hour and the 23 before it on its `shadow:` line and as `hook_agreement` in the JSON.
+  Codex's share stays low until its UserPromptSubmit is installed: without it the hooks never say working. The
+  factory's tally stays in its own agents.db and the pane agents' in their registries; status reads the review
+  daemon's. No decision, wait or retry reads the hooks' state: herdr's status stays the truth. No migration.
+  Rejected: an event per disagreeing reading (a lag of a second at every turn would flood the log), and writing
+  the event when the disagreement crosses the interval (its length would always read the interval). Tests:
+  TestTheHooksGiveEachSessionAStateOfItsOwn,
+  TestAHerdrStatusThatDisagreesLongerThanTheIntervalWritesOneEvent,
+  TestADisagreementOfASessionThatEndsIsWrittenAtItsEnd,
+  TestATurnEndInTheTranscriptOrRolloutMakesTheHookStateIdle, TestThePassesTallyTheHookStatesAgreementPerKind and
+  TestStatusShowsHowOftenTheHookStateAgreedWithHerdr.
 
 ## Screens and commands
 

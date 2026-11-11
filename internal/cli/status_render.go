@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/inventory"
 	"github.com/zhuravel/magnum/internal/store"
@@ -72,6 +73,9 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 	fmt.Fprintf(w, "daemon:   %s\n", daemon)
 	if h := dm.Hooks; dm.Running && h != nil {
 		fmt.Fprintf(w, "hooks:    %s\n", statusHooksText(*h))
+	}
+	if line := statusHookAgreementText(dm.HookAgreement); line != "" {
+		fmt.Fprintf(w, "shadow:   %s\n", line)
 	}
 	if dm.Skew != "" {
 		fmt.Fprintf(w, "build:    %s\n", statusSafe(dm.Skew, 0))
@@ -1103,6 +1107,25 @@ func findingsSentence(f store.ReviewSummary) string {
 		s += fmt.Sprintf("; earlier: %d fixed, %d open, %d answered", f.Fixed, f.Open, f.Answered)
 	}
 	return s
+}
+
+// statusHookAgreementText is the shadow line: how often, per agent kind,
+// the agents' own hooks' state agreed with herdr's status at the observe
+// passes of the last 24 hours ("claude 93% of 200 readings"), the share cut
+// down to a whole percent; "" without a reading.
+func statusHookAgreementText(as []agents.HookAgreement) string {
+	var parts []string
+	for _, a := range as {
+		n := a.Agreed + a.Differed
+		if n <= 0 {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s %d%% of %s", statusSafe(a.Kind, 0), a.Agreed*100/n, textx.Count(n, "reading", "readings")))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "the hooks' state agreed with herdr's status at the observe passes of the last 24 h: " + strings.Join(parts, ", ")
 }
 
 // statusHooksText is the hooks line: "listening on <socket>: the agents'

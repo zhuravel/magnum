@@ -365,7 +365,7 @@ func doctorAgentHooks(_ context.Context, d doctorDeps) []doctorCheck {
 		switch s.state {
 		case hookCurrent:
 			out = append(out, doctorOK(name, fmt.Sprintf("%s are current (v%d) (%s, with its %s in %s; %s): magnum's %s panes report a turn's end at once",
-				what, s.version, inspTilde(t.script()), textx.Count(len(t.events()), "entry", "entries"), inspTilde(t.settings()), used, agentName(t.agent))))
+				what, s.version, inspTilde(t.script()), textx.Count(len(s.t.events()), "entry", "entries"), inspTilde(t.settings()), used, agentName(t.agent))))
 		case hookMissing:
 			out = append(out, doctorWarned(name, fmt.Sprintf("%s are not installed (%s; %s): %s", what, inspTilde(t.settings()), used, blind), fix))
 		case hookRefused:

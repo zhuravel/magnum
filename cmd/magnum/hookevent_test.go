@@ -118,6 +118,21 @@ func TestHookEventSendsTheParsedEvent(t *testing.T) {
 	}
 }
 
+// The pane's MAGNUM_AGENT goes with the event as its pane key, so a pane
+// with no HERDR_PANE_ID (one outside herdr) sends its events too; a
+// UserPromptSubmit goes as any other event, without its prompt.
+func TestHookEventSendsThePanesAgentKey(t *testing.T) {
+	path, evs := listener(t)
+	const key = "mg-11920-claude-review-5d01cf"
+	hookEvent([]string{"claude", "user_prompt_submit"}, strings.NewReader(`{"session_id": "s-1", "prompt": "SECRET-PROMPT"}`),
+		getenv(map[string]string{agenthooks.EnvSocket: path, agenthooks.EnvAgent: key}))
+	ev := first(t, path, evs)
+	want := agenthooks.Event{V: 1, Agent: agenthooks.AgentClaude, Name: agenthooks.NameUserPromptSubmit, SessionID: "s-1", PaneKey: key}
+	if ev != want {
+		t.Fatalf("sent %+v, want %+v", ev, want)
+	}
+}
+
 // A daemon that is not there, or a stdin that never ends, costs the hook
 // its bound at most.
 func TestHookEventEndsWithinItsBound(t *testing.T) {

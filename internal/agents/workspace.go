@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agenthooks"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
@@ -91,7 +92,8 @@ func roleNames(roles []config.Role) []Role {
 // Every pane gets env with the role's env (Config.RoleEnv) laid over it; a
 // role with an identity gets that identity's env instead of env's gh selection,
 // and a fix role whose identity does not resolve fails the call before herdr
-// is touched (see paneEnv).
+// is touched (see paneEnv). With the hook env, an agent role's pane also
+// names its agent as the key of its hook events (withAgentKey).
 // Every newly assigned pane gets a sessions row (state starting, agent
 // name/kind or agent_kind "shell", pane/workspace/tab ids, cwd, env_json) and
 // is renamed "PR #N <role>" (TaggedPaneLabel; Deps.OwnerName's owner, such as a
@@ -109,6 +111,9 @@ func (m *Manager) EnsureWorkspace(ctx context.Context, pr store.PR, slotPath str
 	envs := make(map[Role]map[string]string, len(roles))
 	for _, role := range roles {
 		penv, err := m.paneEnv(env, role)
+		if err == nil {
+			penv, err = m.withAgentKey(ctx, pr, role, penv)
+		}
 		if err != nil { // before herdr is touched: no workspace is left half made
 			return Workspace{}, fmt.Errorf("agents: workspace pr %d: %w", pr.Number, err)
 		}
@@ -237,6 +242,9 @@ func (m *Manager) EnsureWorkspace(ctx context.Context, pr store.PR, slotPath str
 func (m *Manager) EnsurePane(ctx context.Context, pr store.PR, ws Workspace, slotPath string, env map[string]string, role config.Role) (Workspace, error) {
 	r := Role(role.Name)
 	penv, err := m.paneEnv(env, role)
+	if err == nil {
+		penv, err = m.withAgentKey(ctx, pr, role, penv)
+	}
 	if err != nil {
 		return ws, fmt.Errorf("agents: %s pane pr %d: %w", r, pr.Number, err)
 	}
@@ -295,6 +303,34 @@ func (m *Manager) paneEnv(env map[string]string, role config.Role) (map[string]s
 		return nil, err
 	}
 	return m.hookEnv(out), nil
+}
+
+// withAgentKey is env with the name of role's agent on pr (agentName) as
+// the pane key its hook events carry (agenthooks.EnvAgent), while env names
+// the hook socket (hookEnv); without a key for a shell role, which runs no
+// agent (one the env it is made from carried is dropped), and as it is for a
+// pane without the hook env (hookEnv dropped the key). env itself is never
+// changed.
+func (m *Manager) withAgentKey(ctx context.Context, pr store.PR, role config.Role, env map[string]string) (map[string]string, error) {
+	_, keyed := env[agenthooks.EnvAgent]
+	switch {
+	case env[agenthooks.EnvSocket] == "":
+		return env, nil
+	case role.IsShell() && !keyed:
+		return env, nil
+	}
+	out := make(map[string]string, len(env)+1)
+	maps.Copy(out, env)
+	if role.IsShell() {
+		delete(out, agenthooks.EnvAgent)
+		return out, nil
+	}
+	name, err := m.agentName(ctx, pr, Role(role.Name))
+	if err != nil {
+		return nil, err
+	}
+	out[agenthooks.EnvAgent] = name
+	return out, nil
 }
 
 // roleEnv is paneEnv without the hook env (hookEnv).

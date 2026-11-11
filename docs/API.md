@@ -31,7 +31,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 
 | Package | Synopsis |
 |---|---|
-| [agenthooks](#agenthooks) | Package agenthooks carries an agent's own hook events (a Claude Code or Codex Stop, StopFailure, PermissionRequest, SessionStart, SessionEnd or Interrupt) from a magnum pane to the daemon that started the pane. |
+| [agenthooks](#agenthooks) | Package agenthooks carries an agent's own hook events (a Claude Code or Codex Stop, StopFailure, PermissionRequest, SessionStart, SessionEnd, Interrupt or UserPromptSubmit) from a magnum pane to the daemon that started the pane. |
 | [agents](#agents) | Package agents runs magnum's review agents inside herdr: one workspace per PR with a pane per configured role (config.Role: the judge plus reviewers such as claude-review, the codex-review shell and claude-simplify), agent start (fresh or resumed) on any configured kind (config.Kind: codex, claude, droid, omp, ...), prompts, per-tick completion tracking, pane-output health classification, login preflight, quit, park and crash recovery. |
 | [app](#app) | Package app wires magnum's components from config.toml: the store, the subprocess runner (wrapped in execx.DryRun under --dry-run), the herdr, GitHub, MySQL and git clients, the identities, and the slots, inventory, agents, pipeline, cleanup and notify layers built on top of them. |
 | [attention](#attention) | Package attention explains why a PR needs the user. |
@@ -90,12 +90,12 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 package agenthooks // import "github.com/zhuravel/magnum/internal/agenthooks"
 
 Package agenthooks carries an agent's own hook events (a Claude Code or Codex
-Stop, StopFailure, PermissionRequest, SessionStart, SessionEnd or Interrupt)
-from a magnum pane to the daemon that started the pane. The hook script
-(hooks/magnum-agent-hook.sh, Script) runs `magnum hook-event <agent> <event>`,
-which reads the hook's payload (ReadPayload), keeps a few of its fields
-(Parse) and sends one Unix datagram (Send) to the socket the pane's env names
-(EnvSocket). The daemon's Listener reads it (Serve) and hands it on.
+Stop, StopFailure, PermissionRequest, SessionStart, SessionEnd, Interrupt or
+UserPromptSubmit) from a magnum pane to the daemon that started the pane.
+The hook script (hooks/magnum-agent-hook.sh, Script) runs `magnum hook-event
+<agent> <event>`, which reads the hook's payload (ReadPayload), keeps a few of
+its fields (Parse) and sends one Unix datagram (Send) to the socket the pane's
+env names (EnvSocket). The daemon's Listener reads it (Serve) and hands it on.
 
 An event is a hint, never the source of truth: the daemon reads herdr,
 the transcript or the rollout again before it acts, and polling stays the floor.
@@ -120,6 +120,7 @@ const (
 	NameSessionStart      = "session_start"      // the session's id and transcript (Event.Source: startup, resume, ...)
 	NameSessionEnd        = "session_end"        // Claude: the session ended
 	NameInterrupt         = "interrupt"          // Codex: the turn was cut
+	NameUserPromptSubmit  = "user_prompt_submit" // a prompt was submitted: a turn begins (the prompt itself is never kept)
 )
     The events (Event.Name, the hook script's second argument).
 
@@ -131,6 +132,10 @@ const (
 	EnvBin = "MAGNUM_HOOK_BIN"
 	// EnvPane is herdr's id of the pane (Event.Pane).
 	EnvPane = "HERDR_PANE_ID"
+	// EnvAgent is magnum's own key of the pane (Event.PaneKey): the name
+	// of the agent magnum starts there (its session row's agent_name),
+	// which needs no herdr.
+	EnvAgent = "MAGNUM_AGENT"
 	// EnvCodexThread is the Codex thread the hook runs in
 	// (Event.CodexThread): a helper's differs from its session's id.
 	EnvCodexThread = "CODEX_THREAD_ID"
@@ -226,8 +231,10 @@ type Event struct {
 	Error          string `json:"error,omitempty"`
 	ToolName       string `json:"tool_name,omitempty"`
 	AgentID        string `json:"agent_id,omitempty"`
-	// Pane is the pane's HERDR_PANE_ID, CodexThread its CODEX_THREAD_ID.
+	// Pane is the pane's HERDR_PANE_ID, PaneKey its MAGNUM_AGENT, CodexThread
+	// its CODEX_THREAD_ID. An event names a pane, a pane key or both.
 	Pane        string `json:"pane"`
+	PaneKey     string `json:"pane_key,omitempty"`
 	CodexThread string `json:"codex_thread,omitempty"`
 	// Background is how many background tasks a Claude Stop reports still
 	// running.
@@ -238,19 +245,20 @@ type Event struct {
     they carry PR text.
 
 func Parse(agent, name string, payload []byte, getenv func(string) string) (Event, error)
-    Parse builds the Event of hook event name of agent from its payload (the
-    JSON the agent wrote to the hook's stdin, ReadPayload) and its env (getenv:
-    EnvPane, EnvCodexThread). It keeps only session_id, transcript_path,
-    turn_id, source, error, tool_name, agent_id and the number of
-    background_tasks; every other field (the last assistant message, a prompt,
-    a tool's input, the cwd) is dropped unread. A payload cut short or that is
-    no JSON keeps the fields read before the break; a value of another type than
-    its field's is no value. An id that is too long or holds a character no id
-    has (a space, a quote, a backslash, <, >, &, anything outside printable
-    ASCII) is left out whole, the free text (the path, the error, the tool,
-    the source) loses its control characters and is cut, and the event always
-    fits one datagram (fit). An unknown agent or event, and a hook outside a
-    herdr pane (no valid HERDR_PANE_ID), are errors: there is nothing to send.
+    Parse builds the Event of hook event name of agent from its payload
+    (the JSON the agent wrote to the hook's stdin, ReadPayload) and its env
+    (getenv: EnvPane, EnvAgent, EnvCodexThread). It keeps only session_id,
+    transcript_path, turn_id, source, error, tool_name, agent_id and the
+    number of background_tasks; every other field (the last assistant message,
+    a prompt, a tool's input, the cwd) is dropped unread. A payload cut short
+    or that is no JSON keeps the fields read before the break; a value of
+    another type than its field's is no value. An id that is too long or holds
+    a character no id has (a space, a quote, a backslash, <, >, &, anything
+    outside printable ASCII) is left out whole, the free text (the path,
+    the error, the tool, the source) loses its control characters and is cut,
+    and the event always fits one datagram (fit). An unknown agent or event,
+    and a hook in a pane that names neither a valid HERDR_PANE_ID nor a valid
+    MAGNUM_AGENT, are errors: there is nothing to send.
 
 type Listener struct {
 	// Has unexported fields.
@@ -277,12 +285,14 @@ func (l *Listener) Serve(ctx context.Context, handle func(Event))
     Serve reads the socket until ctx ends, then closes it, and hands each
     event to handle, one at a time, on Serve's goroutine. It drops a datagram
     over MaxDatagram, one that is no JSON object, of another V than Version,
-    or without a pane, an agent or an event this version knows, and a
-    pane's events past its rate (rateBurst at once, then one per rateEvery,
-    and all panes' past globalBurst, then one per globalEvery). The ids of an
-    event it hands on are ids (as Parse makes them) and its free text is cut,
-    since anyone with the pane's env can send one. Each event it hands on logs
-    one debug line with its name and its pane (paneForLog), never another field.
+    or without an agent or an event this version knows, one that names neither
+    a pane nor a pane key, and a pane's events past its rate (rateBurst at once,
+    then one per rateEvery, and all panes' past globalBurst, then one per
+    globalEvery; an event without a pane counts against its pane key's).
+    The ids of an event it hands on are ids (as Parse makes them; a pane or key
+    that is none is left out) and its free text is cut, since anyone with the
+    pane's env can send one. Each event it hands on logs one debug line with its
+    name, its pane (paneForLog) and its key (keyForLog), never another field.
     A handler that panics costs its event, not the listener.
 
 ```
@@ -617,6 +627,15 @@ const EventHerdrIDsReused = "agents.herdr_ids_reused"
     outside their checkout there. It names ids, never a pane's text or
     directory.
 
+const EventHookStateDiffers = "agent.hook_state_differs"
+    EventHookStateDiffers is recorded (info, on the PR) once per session and
+    pair of states, when herdr's status and the hooks' state agree again after
+    they disagreed for longer than the observe interval (hookObserveEvery),
+    or the pass can no longer compare them: data role, session, kind, hook,
+    herdr, by (what last moved the hooks' state: an event's name, "transcript"
+    or "rollout") and seconds, from the later of the two changes to the last
+    pass that saw them differ. No PR text.
+
 const EventHooksTrustUnsaved = "agents.hooks_trust_unsaved"
     EventHooksTrustUnsaved is recorded (warn, subject tool:<kind>) when magnum
     trusted a Codex hooks review and a hook whose place had no trust entry
@@ -947,6 +966,15 @@ func HasOwnCodexTrust(home string, hook OwnCodexHook) bool
 
 func HasSessionID(s store.Session) bool
     HasSessionID reports whether session s has its CLI's session id.
+
+func HookSessionOf(live []store.Session, ev agenthooks.Event) (store.Session, bool)
+    HookSessionOf is the session of live (starting and live rows) whose
+    pane sent hook event ev: by its pane key (agenthooks.Event.PaneKey,
+    the pane's MAGNUM_AGENT: the row's agent_name, which needs no herdr), else,
+    for an event without the key (a pane made before it, an older hook-event) or
+    one whose key no row's agent has (a row whose name a failed rename cleared),
+    by its herdr pane (HERDR_PANE_ID); the newest row when two match. false when
+    none does.
 
 func HooksReviewShown(text string) bool
     HooksReviewShown reports whether text, a pane's visible screen,
@@ -1761,6 +1789,32 @@ type Herdr interface {
 }
     Herdr is the subset of *herdr.Client this package uses.
 
+type HookAgreement struct {
+	Kind     string `json:"kind"`
+	Agreed   int    `json:"agreed"`
+	Differed int    `json:"differed"`
+}
+    HookAgreement is how often the hooks' state of a kind's sessions agreed with
+    herdr's status at the observe passes (ReadHookAgreement).
+
+func ReadHookAgreement(ctx context.Context, st *store.Store, now time.Time) ([]HookAgreement, error)
+    ReadHookAgreement is how often, per agent kind (by name), the hooks' state
+    of a session agreed with herdr's status at the observe passes of the current
+    hour and the 23 before it, as now reads them; kinds without a reading are
+    left out.
+
+type HookState string
+    HookState is a session's state as its agent's own hooks tell it.
+
+const (
+	HookReady   HookState = "ready"   // a SessionStart: the agent came up and waits
+	HookWorking HookState = "working" // a UserPromptSubmit: a turn began
+	HookBlocked HookState = "blocked" // a PermissionRequest: the agent waits on an approval
+	HookIdle    HookState = "idle"    // the turn ended: a Stop, a StopFailure, an Interrupt, the transcript or the rollout
+)
+    The hooks' states ("" while the hooks said nothing, or after the session's
+    SessionEnd).
+
 type JudgeData struct {
 	// Readiness is what magnum's prepare/ready probes found before the
 	// reviewers (status and reason only; command output stays in
@@ -2336,15 +2390,16 @@ func (m *Manager) EnsureWorkspace(ctx context.Context, pr store.PR, slotPath str
     Every pane gets env with the role's env (Config.RoleEnv) laid over it;
     a role with an identity gets that identity's env instead of env's gh
     selection, and a fix role whose identity does not resolve fails the call
-    before herdr is touched (see paneEnv). Every newly assigned pane gets
-    a sessions row (state starting, agent name/kind or agent_kind "shell",
-    pane/workspace/tab ids, cwd, env_json) and is renamed "PR #N <role>"
-    (TaggedPaneLabel; Deps.OwnerName's owner, such as a factory's "PR-12345",
-    in place of "PR #N"); a new workspace whose root pane cannot be recorded
-    is closed again (nothing else would find it). Live rows whose pane is
-    gone are marked lost first, keeping their session_id for ResumeID.
-    Pane envs are stored in sessions.env_json, so they must not carry secrets
-    (identity.Source.Env never does).
+    before herdr is touched (see paneEnv). With the hook env, an agent role's
+    pane also names its agent as the key of its hook events (withAgentKey).
+    Every newly assigned pane gets a sessions row (state starting, agent
+    name/kind or agent_kind "shell", pane/workspace/tab ids, cwd, env_json)
+    and is renamed "PR #N <role>" (TaggedPaneLabel; Deps.OwnerName's owner,
+    such as a factory's "PR-12345", in place of "PR #N"); a new workspace whose
+    root pane cannot be recorded is closed again (nothing else would find it).
+    Live rows whose pane is gone are marked lost first, keeping their session_id
+    for ResumeID. Pane envs are stored in sessions.env_json, so they must not
+    carry secrets (identity.Source.Env never does).
 
 func (m *Manager) FallbackModel(ctx context.Context, s store.Session, tried []string) (string, bool)
     FallbackModel is the model session s switches to next: the first of its
@@ -2934,20 +2989,21 @@ func (m *Manager) WaitWakes()
     and the last Wake returned, before it closes the registry.
 
 func (m *Manager) Wake(ctx context.Context, ev agenthooks.Event)
-    Wake takes an event of an agent's hook (agenthooks.Listener's) as a hint
-    to look at its pane now, outside the observe passes. The pane is mapped
-    to its starting or live session by herdr_pane_id; an event of a pane
-    no such session (of an agent) records is dropped. Every look takes the
-    observe lock the passes take (obsMu), one herdr snapshot and the session's
-    in-flight runs, and goes through observeOne, as a pass would; a pass whose
-    snapshot started before a look's came back leaves the session alone,
-    and the next pass returns the looks' observations (each session's newest,
-    and every run's end and session's loss), so the daemon handles them as
-    its own (the factory's turn end, the engine's lost pane, the clock's
-    SecondReadingAt). A look never counts as an observe tick (nextObserveTick),
-    so the deny's pace (answerPermission) and the namer's stay the passes'.
-    The looks of one session merge: one within lookMerge of the last, or while
-    another waits for the observe lock, is skipped.
+    Wake takes an event of an agent's hook (agenthooks.Listener's) as a hint to
+    look at its pane now, outside the observe passes. The pane is mapped to its
+    starting or live session by its pane key (agent_name), else by herdr_pane_id
+    (HookSessionOf); an event of a pane no such session (of an agent) records
+    is dropped. Every look takes the observe lock the passes take (obsMu),
+    one herdr snapshot and the session's in-flight runs, and goes through
+    observeOne, as a pass would; a pass whose snapshot started before a look's
+    came back leaves the session alone, and the next pass returns the looks'
+    observations (each session's newest, and every run's end and session's
+    loss), so the daemon handles them as its own (the factory's turn end,
+    the engine's lost pane, the clock's SecondReadingAt). A look never counts
+    as an observe tick (nextObserveTick), so the deny's pace (answerPermission)
+    and the namer's stay the passes'. The looks of one session merge: one
+    within lookMerge of the last, or while another waits for the observe lock,
+    is skipped.
 
       - stop, interrupt and permission_request: a look now. A Stop counts as
         the second idle reading when herdr shows the agent idle and all of
@@ -2979,6 +3035,11 @@ func (m *Manager) Wake(ctx context.Context, ev agenthooks.Event)
         in the slot, or the Codex rollout of the TUI in the slot. Until the file
         is there the event waits, and the pane's next event checks it again.
       - session_end: a look now.
+      - user_prompt_submit: no look.
+
+    Every event first moves the session's hooks' state (noteHookEvent),
+    which the observe passes only compare with herdr's status (hook_state.go):
+    nothing decides on it.
 
     The rules a receiver keeps: ctx bounds the later looks too, so pass the
     daemon's, not one that ends when Wake returns, and call WaitWakes once
@@ -29359,6 +29420,12 @@ const (
 	// writes it; the App opens its panes there. Absent: they are in your
 	// session ([herdr] socket), where every build before the key opened them.
 	KVHerdrPanes = "herdr.panes"
+	// KVHookAgreement is how often the agents' own hooks' state agreed with
+	// herdr's status at the observe passes, per agent kind and hour, kept
+	// 25 hours: a JSON list of {"hour", "kind", "agreed", "differed"} that
+	// the agents' passes add to (agents.ReadHookAgreement reads it for
+	// `magnum status`).
+	KVHookAgreement = "agents.hook_agreement"
 )
     kv keys shared by the daemon (which writes them) and the CLI (`magnum
     status`, `doctor`, `pause`, `resume`, `identities`), so neither side spells
