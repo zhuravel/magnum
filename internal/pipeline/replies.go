@@ -128,6 +128,41 @@ var (
 	// replyMadeVerb in such a clause says the follow-up was made ("pushed as a
 	// follow-up"): no deferral.
 	replyMadeVerb = regexp.MustCompile(`(?i)\b(?:pushed|landed|committed|merged|shipped|added|made|done|fixed|applied)\b`)
+	// replyChangeVerb is a clause (replyClauseLead dropped) that starts with
+	// the change made and the word after it: "Added the cases you listed",
+	// "Renamed the flag". A verb before "in" names a place or a time ("Added
+	// in 12 places", "Removed in a later PR"); before "in <sha>" it is
+	// replyClasses'.
+	replyChangeVerb = regexp.MustCompile(`(?i)^(?:added|removed|replaced|narrowed|refreshed|renamed|moved|dropped|switched|changed|verified)\s+([\pL\pN]+)`)
+	// replyNowVerb is a clause "<subject> now <verb>s": "Section 4 now
+	// lists the steps", "the loader now checks the row".
+	replyNowVerb = regexp.MustCompile(`(?i)^(?:\S+\s+){1,6}?now\s+([a-z]+s)\b`)
+	// replyNotChanged in a change clause takes its claim back: a negation,
+	// a later time, a follow-up or a list it went to ("Added to the backlog"),
+	// a check that still fails, a changed mind, an opinion ("now makes
+	// sense").
+	replyNotChanged = regexp.MustCompile(`(?i)\b(?:not|no|never|nothing|none|later|still|fails|backlog|todo|ticket|follow[- ]?ups?|(?:my|our)\s+mind|makes\s+sense)\b|n't\b`)
+	// replyNotYet in the rest of a change clause's sentence says the change
+	// is not made yet: "Changed it locally, not pushed yet", "Added to my
+	// list, will add the cases later".
+	replyNotYet = regexp.MustCompile(`(?i)\b(?:yet|later|still|follow[- ]?ups?)\b`)
+	// replyDeferring is a clause (replyClauseLead dropped) that sends the
+	// fix elsewhere: "Deferring this to the default-theme follow-up PR",
+	// "we're deferring the rename", "moving this to a follow-up PR", "it
+	// lands in the follow-up PR", "I'll switch it in the follow-up round".
+	replyDeferring = regexp.MustCompile(`(?i)^(?:(?:i|we)(?:'m|'re|\s+am|\s+are)\s+)?deferring\b|` +
+		`\bmoving\s+(?:this|it|that|them)\s+to\s+(?:a|an|the)\s+(?:[a-z-]+\s+){0,2}?follow[- ]?up\b|\bin\s+the\s+follow[- ]?up\s+(?:round|pr)\b`)
+	// replyKeeping is a clause (replyClauseLead dropped) that keeps what the
+	// finding asks to change: "Keeping the current count", "We're keeping
+	// the shared key", "Kept as a warning". Past a reply's first clause it
+	// describes the code ("…, kept as its own commit") and claims nothing.
+	replyKeeping = regexp.MustCompile(`(?i)^(?:(?:i|we)(?:'m|'re|\s+am|\s+are)\s+)?(?:keeping\s+(?:the|this)|kept\s+as)\b`)
+	// replyNotDeferred in such a clause takes the deferral back: a
+	// negation, a deferral still asked about, a count that fails.
+	replyNotDeferred = regexp.MustCompile(`(?i)\b(?:not|no|never|still|fails)\b|n't\b`)
+	// replySentenceEnd ends a sentence: ".", "!" or "?" (with any closing
+	// markup) before a space or the end, or a line break.
+	replySentenceEnd = regexp.MustCompile("[.!?]+[*_`)\\]]*(?:\\s|$)|\\n")
 )
 
 // ClassifyReply says what a reply claims from its first clause: "fixed",
@@ -159,12 +194,21 @@ var (
 // <sha>"); a low priority acknowledgement no verdict follows is ReplyWontFix
 // ("Low priority (Net +1): not worth a change on its own"; "Low priority —
 // fixed in <sha>" stays ReplyFixed). "Resolved", "added" or "closed" without a
-// commit is no verdict.
+// commit is no verdict, but a first clause (past any acknowledgement) that
+// describes its change without one is ReplyFixed (replyChanged): it starts
+// with the change and what it changed ("Added the cases you listed",
+// "Renamed the flag"; not "Added in 12 places") or says "<subject> now
+// <verb>s" ("Section 4 now lists the steps"), and holds no negation, later
+// time, follow-up, "still" or "fails", its sentence going on to no "yet" or
+// "later" ("Changed it locally, not pushed yet") and asking nothing; one that
+// keeps what the finding would change ("Keeping the current count", "Kept as
+// a warning", replyKeeps) is ReplyWontFix.
 // Anything else is ReplyOther, as is another acknowledgement no verdict
 // follows, unless the paragraph declines the fix before any clause says fixed
 // or not a bug (replyDeclined: "Confirmed. Still open … so I score that fix at
-// −8", "I did not make this change", "we are not patching them here" are
-// ReplyWontFix), or says "by design" or "by decision" anywhere and no clause
+// −8", "I did not make this change", "we are not patching them here",
+// "Deferring this to the follow-up PR" and "moving this to a follow-up PR"
+// are ReplyWontFix, replyDefersFix), or says "by design" or "by decision" anywhere and no clause
 // names a verdict (ReplyNotABug: "…, so such a behaviour is by design"). The
 // class is a hint for the judge, not a verdict. Case does not matter; leading
 // quoted lines (">"), markup, emoji, an agent's "(Claude)" tag (however often
@@ -201,7 +245,7 @@ func ClassifyReply(body string) string {
 		s, rest = para, after
 	}
 	clauses := replyClauses(s)
-	acked, low := false, false
+	acked, low, said := false, false, false
 	for _, c := range clauses {
 		if class := replyVerdict(c.text); class != "" {
 			return class
@@ -209,7 +253,16 @@ func ClassifyReply(body string) string {
 		if replyAck.MatchString(c.text) {
 			acked = true
 			low = low || replyLowPriority.MatchString(c.text)
-		} else if !acked {
+			continue
+		}
+		if !said && replyChanged(c) {
+			return ReplyFixed // the first clause past any acknowledgement describes its change
+		}
+		if !said && replyKeeps(c) {
+			return ReplyWontFix // the first clause past any acknowledgement keeps what the finding would change
+		}
+		said = true
+		if !acked {
 			break // the first clause claims nothing known
 		}
 	}
@@ -233,7 +286,7 @@ func ClassifyReply(body string) string {
 // for the fix anywhere ("I score that fix at −8", "Net: −3"), a clause "we
 // accept the risk", "not worth it", "I did not make this change" or "we are
 // not patching them here" (replyDeclines), or one that sends the fix to a
-// follow-up (replyDefers). Otherwise it is ReplyOther.
+// follow-up (replyDefersFix). Otherwise it is ReplyOther.
 func replyDeclined(s string, clauses []replyClause) string {
 	scored := len(s)
 	if loc := replyNegativeScore.FindStringIndex(s); loc != nil {
@@ -244,7 +297,7 @@ func replyDeclined(s string, clauses []replyClause) string {
 			return ReplyOther
 		}
 		v := c.text[len(replyClauseLead.FindString(c.text)):]
-		if scored < c.end || replyDeclines.MatchString(v) || replyDefers(v) {
+		if scored < c.end || replyDeclines.MatchString(v) || replyDefersFix(v) {
 			return ReplyWontFix
 		}
 	}
@@ -252,7 +305,7 @@ func replyDeclined(s string, clauses []replyClause) string {
 }
 
 // replyDeferredLater reports whether the paragraphs after a reply's first
-// (rest) send the fix to a follow-up (replyDefers) before any of their
+// (rest) send the fix to a follow-up (replyDefersFix) before any of their
 // clauses says fixed or not a bug. Only a deferral counts there: a verdict, a
 // score or a decline past the first paragraph claims nothing.
 func replyDeferredLater(rest string) bool {
@@ -260,7 +313,7 @@ func replyDeferredLater(rest string) bool {
 		if class := replyVerdict(c.text); class == ReplyFixed || class == ReplyNotABug {
 			return false
 		}
-		if replyDefers(c.text[len(replyClauseLead.FindString(c.text)):]) {
+		if replyDefersFix(c.text[len(replyClauseLead.FindString(c.text)):]) {
 			return true
 		}
 	}
@@ -275,12 +328,35 @@ func replyDefers(v string) bool {
 	return replyAsFollowUp.MatchString(v) && !replyMadeVerb.MatchString(v)
 }
 
+// replyDefersFix reports whether a clause (replyClauseLead dropped) sends
+// the fix elsewhere: to the follow-up it ends in (replyDefers), or with
+// "Deferring this to ...", "moving this to a follow-up PR" or "in the
+// follow-up PR" (replyDeferring), unless the clause holds a negation,
+// "still" or "fails" ("We're not moving this to a follow-up PR", "Still
+// deferring this?").
+func replyDefersFix(v string) bool {
+	return replyDefers(v) || replyDeferring.MatchString(v) && !replyNotDeferred.MatchString(v)
+}
+
+// replyKeeps reports whether clause c, the first of a reply past any
+// acknowledgement, keeps what the finding asks to change ("Keeping the
+// current count", replyKeeping), with no negation, "still" or "fails"
+// ("Keeping the current count fails the new spec").
+func replyKeeps(c replyClause) bool {
+	v := c.text[len(replyClauseLead.FindString(c.text)):]
+	return replyKeeping.MatchString(v) && !replyNotDeferred.MatchString(v)
+}
+
 // replyClause is a clause of a reply's first paragraph (or of the paragraphs
 // after it, for replyDeferredLater), trimmed of what is no letter or digit at
-// either end, and the offset in that text where it ends.
+// either end, and the offset in that text where it ends. sentence is the
+// text from the clause's start to the end of its sentence (replySentenceEnd,
+// its "." "!" or "?" kept), and question is true when that end is a "?".
 type replyClause struct {
-	text string
-	end  int
+	text     string
+	end      int
+	sentence string
+	question bool
 }
 
 // replyClauses splits a reply's first paragraph at replyClauseEnd, leaving
@@ -289,13 +365,26 @@ func replyClauses(s string) []replyClause {
 	var out []replyClause
 	start := 0
 	for _, loc := range append(replyClauseEnd.FindAllStringIndex(s, -1), []int{len(s), len(s)}) {
-		c := strings.TrimFunc(s[start:loc[0]], func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+		raw := s[start:loc[0]]
+		from := start + strings.IndexFunc(raw, isReplyWordRune)
 		start = loc[1]
-		if c != "" {
-			out = append(out, replyClause{text: c, end: loc[0]})
+		c := strings.TrimFunc(raw, func(r rune) bool { return !isReplyWordRune(r) })
+		if c == "" {
+			continue
 		}
+		rc := replyClause{text: c, end: loc[0], sentence: s[from:]}
+		if end := replySentenceEnd.FindStringIndex(rc.sentence); end != nil {
+			rc.question = strings.Contains(rc.sentence[end[0]:end[1]], "?")
+			rc.sentence = rc.sentence[:end[1]]
+		}
+		out = append(out, rc)
 	}
 	return out
+}
+
+// isReplyWordRune is a letter or a digit: what a clause keeps at its ends.
+func isReplyWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 // replyVerdict is the class a clause claims (replyClauseLead dropped), or ""
@@ -311,6 +400,28 @@ func replyVerdict(c string) string {
 		return ReplyFixed
 	}
 	return ""
+}
+
+// replyChanged reports whether clause c, the first of a reply past any
+// acknowledgement, claims a fix by the change it describes, with no commit
+// (replyClauseLead dropped): it starts with the change and what it changed
+// ("Added the cases you listed", "Renamed the flag", replyChangeVerb, but no
+// verb before "in") or says "<subject> now <verb>s" ("Section 4 now lists the
+// steps", replyNowVerb; "is", "was", "seems", "looks", "sounds" and "feels"
+// say no change). The clause holds no negation, later time, follow-up,
+// "still" or "fails" (replyNotChanged), its sentence goes on to no "yet",
+// "later", "still" or follow-up ("Changed it locally, not pushed yet",
+// replyNotYet), and it asks no question.
+func replyChanged(c replyClause) bool {
+	v := c.text[len(replyClauseLead.FindString(c.text)):]
+	if c.question || replyNotChanged.MatchString(v) || replyNotYet.MatchString(c.sentence) {
+		return false
+	}
+	if m := replyChangeVerb.FindStringSubmatch(v); m != nil {
+		return !strings.EqualFold(m[1], "in")
+	}
+	m := replyNowVerb.FindStringSubmatch(v)
+	return m != nil && !slices.Contains([]string{"is", "was", "seems", "looks", "sounds", "feels"}, strings.ToLower(m[1]))
 }
 
 // replyCommitFixes reports whether a clause starts with a commit and the
@@ -370,6 +481,9 @@ func (rd *round) ownThreads(ts []github.Thread) []agents.ReviewThread {
 				author = "ghost"
 			}
 			rep := agents.ThreadReply{ID: c.ID, Author: author, Own: rd.isOwnHistory(c.AuthorLogin, c.AuthorType)}
+			if !c.CreatedAt.IsZero() {
+				rep.CreatedAt = c.CreatedAt.UTC().Format(time.RFC3339)
+			}
 			if !rep.Own {
 				rep.Class = ClassifyReply(c.Body)
 			} else if _, kind, ok := postreview.ParseReplyMarker(c.Body); ok {

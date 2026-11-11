@@ -18,6 +18,10 @@
 # with the Codex points each case used. The worktree is removed at the end,
 # also on a failure or an interrupt. The run directory is --run-dir, else
 # $MAGNUM_IMPROVE_RUN. The results stay where `magnum eval list` finds them.
+# A case argument may hold several names apart by spaces or line breaks (the
+# lines of `magnum eval guards`, which zsh passes as one argument). It exits
+# non-zero when the build, `magnum eval baseline` or the run fails: run it
+# unpiped (a pipe's status is its last command's) and read the log it names.
 # Each replayed case costs a review round of Codex usage; run it in the
 # background.
 set -euo pipefail
@@ -41,7 +45,10 @@ while (($#)); do
         elif [[ -z $label ]]; then
             label=$1
         else
-            names+=("$1")
+            # A case name has no space, so an argument with several names (zsh passes an unquoted
+            # guards=$(magnum eval guards) as one, a name per line) counts as each.
+            read -r -d '' -a split <<<"$1" || true
+            names+=(${split[@]+"${split[@]}"})
         fi
         shift
         ;;

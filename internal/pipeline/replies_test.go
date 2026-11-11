@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -490,6 +491,77 @@ func TestClassifyReplyReadsAFixedInReplyThatNamesTheSameDefectsOtherSites(t *tes
 	}
 }
 
+// 53 replies of the 2026-10-29 to 2026-11-11 window were `other` where a
+// person reads a fix or a deferral (the declined-findings lens of the
+// 2026-11-11 run read all of them). A fix described by its change, "Added
+// the cases you listed" or "Section 4 now lists ...", names no commit; a
+// deferral says "Deferring this to ...", "moving this to a follow-up PR",
+// "in the follow-up PR" or "Keeping the current count". A change clause
+// that holds a negation, a later time or a follow-up, whose sentence goes
+// on to "yet", "later" or "still", or that asks a question claims no fix;
+// a clause with "still" or "fails" claims neither, and a fix said first
+// still wins over a deferral after it. The change and the keeping count
+// only as the reply's first clause past an acknowledgement: later in it they
+// describe the code ("..., kept as its own commit").
+func TestClassifyReplyReadsDescribedFixesAndDeferrals(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		// A fix described by the change it made.
+		{"Section 4 now lists the steps in the order the installer runs them.", ReplyFixed},
+		{"(Claude) Added the cases you listed.", ReplyFixed},
+		{"Added the cases you listed: an empty list, a nil locale and a locale the store lacks.", ReplyFixed},
+		{"Good catch, narrowed the rescue to `ActiveRecord::RecordNotFound`.", ReplyFixed},
+		{"Removed the unused parameter; it had no other caller.", ReplyFixed},
+		{"Renamed the flag to `--dry-run` as suggested.", ReplyFixed},
+		{"Replaced the loop with one query.", ReplyFixed},
+		{"Refreshed the fixtures from the new schema.", ReplyFixed},
+		{"Moved the check before the catch.", ReplyFixed},
+		{"Dropped the second call.", ReplyFixed},
+		{"Switched to the shared helper.", ReplyFixed},
+		{"Changed the default to 30 seconds.", ReplyFixed},
+		{"Verified the guard with the spec from your comment, and it passes.", ReplyFixed},
+		{"Agreed. The loader now checks the row before it writes.", ReplyFixed},
+		{"It was moved to the helper.", ReplyFixed},
+		// A deferral.
+		{"Deferring this to the default-theme follow-up PR.", ReplyWontFix},
+		{"(Claude) Valid. We're deferring the rename until the API freeze ends.", ReplyWontFix},
+		{"Good point, moving this to a follow-up PR.", ReplyWontFix},
+		{"Moving this to a separate follow-up with the other copies.", ReplyWontFix},
+		{"This lands in the follow-up PR with the new theme.", ReplyWontFix},
+		{"Keeping the current count: the dashboard reads it.", ReplyWontFix},
+		{"Kept as a warning, since the importer retries.", ReplyWontFix},
+		{"(Claude) Noted — keeping this copy: the default note is the documented wording.", ReplyWontFix},
+		{"We're keeping the shared key.", ReplyWontFix},
+		{"Thanks, a real regression. In the follow-up round I'll keep the input read-only while it loads.", ReplyWontFix},
+		{"Thanks!\n\nMoving this to a follow-up PR.", ReplyWontFix},
+		// Counter-examples of the fix: not fixed yet, will add later, a question, a check that still fails.
+		{"Not fixed yet: moved the check, but the retry still fails.", ReplyOther},
+		{"Changed it locally, not pushed yet.", ReplyOther},
+		{"Will add the cases later.", ReplyOther},
+		{"Added to my list, will add the cases later.", ReplyOther},
+		{"Added nothing: the spec covers it.", ReplyOther},
+		{"Moved to a follow-up.", ReplyOther},
+		{"The loader now checks the row, but the import still fails.", ReplyOther},
+		{"The loader now checks the row?", ReplyOther},
+		{"That now makes sense, thanks.", ReplyOther},
+		{"This now is the only caller.", ReplyOther},
+		{"Changed my mind on the helper.", ReplyOther},
+		{"Verified.", ReplyOther},
+		{"Verified: not a bug, the lock is held.", ReplyNotABug},
+		// Counter-examples of the deferral: still deferring, a count that fails, not moving it, a fix said first.
+		{"Still deferring this? The fix is one line.", ReplyOther},
+		{"Keeping the current count fails the new spec.", ReplyOther},
+		{"We're not moving this to a follow-up PR.", ReplyOther},
+		{"Fixed in 1a2b3c4; moving the docs to a follow-up PR.", ReplyFixed},
+		{"Option 1 in 3f9e2a1, kept as its own commit.", ReplyOther},
+		{"The guard runs first, keeping the old name for the API.", ReplyOther},
+		{"Added the guard. Deferring the rename to the follow-up PR.", ReplyFixed},
+	} {
+		if got := ClassifyReply(tc.body); got != tc.want {
+			t.Errorf("ClassifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		}
+	}
+}
+
 func TestExcerpt(t *testing.T) {
 	if s, cut := excerpt("  short  ", 600); s != "short" || cut {
 		t.Fatalf("short = %q, %v", s, cut)
@@ -719,6 +791,73 @@ func TestThreadsFileSaysWhenAndWhereEachFindingWasPosted(t *testing.T) {
 		if v, ok := raw[1][key]; ok {
 			t.Errorf("second thread has %s = %v; GitHub reported none", key, v)
 		}
+	}
+}
+
+// Each reply in the threads file keeps when it was written (created_at, UTC,
+// as GitHub reports it), so the improvement loop can read replies by their
+// time instead of bracketing them by comment id; a reply GitHub reports no
+// time for has none.
+func TestAThreadsFileKeepsEachReplysTime(t *testing.T) {
+	e := newEnv(t)
+	kyiv := time.FixedZone("UTC+2", 2*60*60)
+	threads := []github.Thread{{ID: "PRRT_1", Path: "app/models/order.rb", Line: 42, Comments: []github.ThreadComment{
+		{ID: 101, AuthorLogin: "talkable", AuthorType: "Bot", Body: "**[P2] Retry sends the email twice**", CreatedAt: t0.Add(-3 * time.Hour)},
+		{ID: 102, AuthorLogin: "alice", AuthorType: "User", Body: "Added the cases you listed.", CreatedAt: time.Date(2026, 10, 3, 11, 30, 0, 0, kyiv)},
+		{ID: 103, AuthorLogin: "talkable", AuthorType: "Bot", Body: "Thanks.", CreatedAt: t0.Add(-time.Hour)},
+		{ID: 104, AuthorLogin: "alice", AuthorType: "User", Body: "Deferring the rest to the follow-up PR."},
+	}}}
+	e.r.GitHub = &threadsGitHub{fakeGitHub: e.gh, threads: threads}
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(601, "COMMENTED", "COMMENT").behavior(t)}
+
+	res, err := e.r.RunRound(e.ctx, e.rereviewInput())
+	if err != nil || res.Outcome != OutcomePosted {
+		t.Fatalf("RunRound = %+v, %v", res, err)
+	}
+	b, err := os.ReadFile(filepath.Join(res.ReportDir, ThreadsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw []struct {
+		Replies []map[string]any `json:"replies"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil || len(raw) != 1 || len(raw[0].Replies) != 3 {
+		t.Fatalf("threads file: %v\n%s", err, b)
+	}
+	r := raw[0].Replies
+	if r[0]["created_at"] != "2026-10-03T09:30:00Z" || r[0]["class"] != ReplyFixed {
+		t.Errorf("the author's reply = %v, want created_at 2026-10-03T09:30:00Z (UTC) and class fixed", r[0])
+	}
+	if r[1]["created_at"] != "2026-10-03T11:00:00Z" {
+		t.Errorf("magnum's own reply = %v, want its time too", r[1])
+	}
+	if v, ok := r[2]["created_at"]; ok || r[2]["class"] != ReplyWontFix {
+		t.Errorf("a reply without a time = %v (created_at %v), want no created_at and class won't fix", r[2], v)
+	}
+}
+
+// A threads file written before replies carried their time reads as before:
+// its threads, their replies and classes, with no reply time.
+func TestAThreadsFileWithoutReplyTimesReadsAsBefore(t *testing.T) {
+	old := `[{"id": "PRRT_1", "comment_id": 101, "url": "https://example.test/c", "finding": "**[P2] Retry sends the email twice**",
+  "location": "app/models/order.rb:42", "review_id": 9001, "created_at": "2026-10-03T09:00:00Z", "resolved": false, "outdated": false,
+  "replies": [{"id": 102, "author": "alice", "class": "fixed", "body": "Fixed in 1a2b3c4."},
+    {"id": 103, "author": "talkable", "own": true, "kind": "ack", "body": "Thanks."}]}]`
+	path := filepath.Join(t.TempDir(), ThreadsFile)
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var ts []agents.ReviewThread
+	if err := json.Unmarshal([]byte(old), &ts); err != nil {
+		t.Fatal(err)
+	}
+	want := []agents.ThreadReply{{ID: 102, Author: "alice", Class: ReplyFixed, Body: "Fixed in 1a2b3c4."},
+		{ID: 103, Author: "talkable", Own: true, Kind: "ack", Body: "Thanks."}}
+	if len(ts) != 1 || ts[0].CreatedAt != "2026-10-03T09:00:00Z" || !slices.Equal(ts[0].Replies, want) {
+		t.Fatalf("old threads file = %+v", ts)
+	}
+	if ids, ok := threadIDs(path); !ok || !slices.Equal(ids, []string{"PRRT_1"}) {
+		t.Fatalf("threadIDs = %v, %v", ids, ok)
 	}
 }
 

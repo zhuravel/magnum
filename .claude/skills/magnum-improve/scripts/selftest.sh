@@ -14,7 +14,9 @@
 #     not built;
 #   - restart.sh: its arguments and the drain it runs;
 #   - eval-at.sh: its arguments, run directory, worktree, build and log, the
-#     cleanup on a failure, the reuse of a stored replay with the same inputs
+#     cleanup on a failure, a failing baseline's non-zero exit, the guards
+#     one case each (from $(cat <file>) in zsh and bash, or as one argument),
+#     the reuse of a stored replay with the same inputs
 #     and Go files (and none with other Go files, an unknown commit or
 #     --fresh), and the report with the points it prints;
 #   - evidence.sh: against a registry with only the columns it reads, the rejected findings of claude-review
@@ -24,7 +26,8 @@
 #     read, the latest answer of each finding, the rounds of test gaps only), and the fixer trial line (the
 #     replies to a fix run's own commits, those naming "also at", and the next round's tagged findings on the
 #     answered round's paths, read from the round's first run when its nudge twin is the later one), the misses'
-#     origin, stage and posted catch; against a
+#     origin, stage and posted catch, each answered thread's reply time and posting skill hash (and the count of
+#     threads without them), the recovery rounds by cause and the warn and error kinds per day; against a
 #     factory registry with only the columns it reads, its holds and alerts by their real kinds and phases, the time
 #     per stage (after the publish left out), the waits on you by cause (a wait of several spans once), the take
 #     rate of recommended answers by role, the liaison's notes (scrubbed, cut to their last lines), the factory's
@@ -103,6 +106,10 @@ daemon-restart)
     echo "restarted the daemon" ;;
 eval)
     if [ "$2" = baseline ]; then
+        if [ -n "${FAKE_BASELINE_EXIT:-}" ]; then
+            echo 'magnum eval baseline: eval: unknown case case-x (corpus has: case-a)' >&2
+            exit "$FAKE_BASELINE_EXIT"
+        fi
         [ -z "${FAKE_BASELINE:-}" ] || cat "$FAKE_BASELINE"
         exit 0
     fi
@@ -365,6 +372,34 @@ FAKE_MAGNUM_EXIT=3 run "$scripts/eval-at.sh" --run-dir "$run_dir2" HEAD before c
 [[ $(git worktree list --porcelain | grep -c '^worktree ') == 1 ]] || fail "no worktree is left"
 ok "--run-dir wins over MAGNUM_IMPROVE_RUN; a failing eval exits with its code and leaves no worktree"
 
+# A baseline that fails (an unknown case, as when zsh passed two guards as one argument on 2026-11-12) stops the
+# proof with a non-zero exit and its error: no replay, no worktree left.
+: >"$FAKE_MAGNUM_ARGS"
+FAKE_BASELINE_EXIT=1 run "$scripts/eval-at.sh" HEAD baseline-fails case-a
+[[ $rc != 0 ]] && has "magnum eval baseline failed" && has "unknown case case-x" ||
+    fail "a failing eval baseline exits non-zero and shows its error (got $rc)"
+! grep -qx run "$FAKE_MAGNUM_ARGS" || fail "no eval run after a failed baseline"
+[[ ! -e $run_dir/tmp/eval-baseline-fails && $(git worktree list --porcelain | grep -c '^worktree ') == 1 ]] ||
+    fail "no worktree is left after a failed baseline"
+ok "a failing eval baseline exits non-zero with its error, replays nothing and leaves no worktree"
+
+# The guards as `magnum eval guards` prints them, one per line: saved to a file and passed as $(cat <file>), which
+# zsh (the operator's shell) and bash both split into words, and as one argument (zsh's unquoted $guards), which
+# eval-at.sh splits itself (a case name has no space).
+printf 'case-b\ncase-c\n' >"$tmp/guards.txt"
+printf '%s\n' eval baseline --case case-a --case case-b --case case-c eval run --case case-a --case case-b --case case-c \
+    --label guards >"$tmp/want"
+for sh in bash zsh; do
+    command -v "$sh" >/dev/null || continue
+    : >"$FAKE_MAGNUM_ARGS"
+    run "$sh" -c '"$1" HEAD guards case-a $(cat "$2")' "$sh" "$scripts/eval-at.sh" "$tmp/guards.txt"
+    [[ $rc == 0 ]] && cmp -s "$FAKE_MAGNUM_ARGS" "$tmp/want" || fail "$sh passes \$(cat <guards file>) as one case per line"
+done
+: >"$FAKE_MAGNUM_ARGS"
+run "$scripts/eval-at.sh" HEAD guards case-a "$(cat "$tmp/guards.txt")"
+[[ $rc == 0 ]] && cmp -s "$FAKE_MAGNUM_ARGS" "$tmp/want" || fail "a case argument with a name per line counts as each"
+ok "the guards reach eval-at.sh one case each, from \$(cat <file>) in zsh and bash and as one argument"
+
 mkdir -p "$run_dir/tmp/eval-busy"
 run "$scripts/eval-at.sh" HEAD busy case-a
 [[ $rc == 2 ]] && has "exists" || fail "eval-at.sh refuses a worktree path that exists"
@@ -447,7 +482,7 @@ cat >"$ev/reviews/example/app/2/bbb222bbb222/review-threads.json" <<'JSON'
 [
   {"id": "T1", "comment_id": 101, "url": "https://github.com/example/app/pull/2#discussion_r101", "finding": "**[P2] Regression test missing for the locale guard**",
    "location": "app/locale.rb:5", "review_id": 91, "created_at": "2026-10-11T10:00:00Z", "resolved": true, "outdated": false,
-   "replies": [{"id": 201, "author": "alice", "class": "fixed",
+   "replies": [{"id": 201, "author": "alice", "class": "fixed", "created_at": "2026-10-11T12:00:00Z",
      "body": "Fixed in 1a2b3c4: the locale guard has an example, also at app/locale.rb:20, `rspec spec/locale_spec.rb` passed\n\n<!-- magnum:fix -->"}]},
   {"id": "T2", "comment_id": 102, "url": "https://github.com/example/app/pull/2#discussion_r102", "finding": "**[P2] Region guard lacks regression coverage**",
    "location": "app/region.rb:8", "review_id": 91, "created_at": "2026-10-11T10:00:00Z", "resolved": true, "outdated": false,
@@ -456,7 +491,11 @@ cat >"$ev/reviews/example/app/2/bbb222bbb222/review-threads.json" <<'JSON'
   {"id": "T3", "comment_id": 99, "url": "https://github.com/example/app/pull/2#discussion_r99", "finding": "**[P2] Old finding**",
    "location": "app/old.rb:1", "review_id": 90, "created_at": "2026-10-09T10:00:00Z", "resolved": true, "outdated": false,
    "replies": [{"id": 203, "author": "alice", "class": "fixed",
-     "body": "Fixed in 9d8c7b6: an older fix, also at app/old.rb:4\n\n<!-- magnum:fix -->"}]}
+     "body": "Fixed in 9d8c7b6: an older fix, also at app/old.rb:4\n\n<!-- magnum:fix -->"}]},
+  {"id": "T4", "comment_id": 104, "url": "https://github.com/example/app/pull/2#discussion_r104", "finding": "**[P3] Count drifts**",
+   "location": "app/count.rb:2", "review_id": 92, "created_at": "2026-10-11T11:00:00Z", "resolved": false, "outdated": false,
+   "replies": [{"id": 205, "author": "alice", "class": "won't fix", "created_at": "2026-10-11T13:30:00Z",
+     "body": "Keeping the current count."}]}
 ]
 JSON
 sqlite3 "$ev/magnum.db" <<SQL
@@ -470,11 +509,12 @@ create table findings (id integer primary key, run_id text, pr_id integer, round
 create table misses (class text, scope text, severity text, raised text, state text, created_at text, source_url text,
   title text, lesson text, origin text, stage text, posted_caught integer not null default 0);
 create table declines (id integer primary key, source_url text, finding_row_id integer, outcome text);
-create table events (level text, kind text, at text);
+create table events (id integer primary key, level text, kind text, at text, subject text, data_json text);
 create table requests (kind text, state text, created_at text);
 create table kv (key text primary key, value text);
 insert into repos values (1, 'example', 'app');
-insert into prs values (1, 1, 1, 'OPEN', 'reviewed', 0, null), (2, 1, 2, 'OPEN', 'reviewed', 0, null);
+insert into prs values (1, 1, 1, 'OPEN', 'reviewed', 0, null), (2, 1, 2, 'OPEN', 'reviewed', 0, null),
+  (3, 1, 3, 'OPEN', 'reviewed', 0, null);
 insert into runs (id, pr_id, round, role, kind, state, outcome, report_path, review_id, review_event, created_at) values
   ('r1', 1, 1, 'codex-judge', 'initial', 'verified', 'posted', '$ev/reviews/example/app/1/abc123def456/codex-judge.json', 77, 'COMMENT', '2026-10-10T10:00:00Z'),
   ('r2', 1, 1, 'codex-judge', 'nudge', 'verified', 'posted', '$ev/reviews/example/app/1/abc123def456/codex-judge.json', 77, 'COMMENT', '2026-10-10T10:05:00Z'),
@@ -484,6 +524,34 @@ insert into runs (id, pr_id, round, role, kind, state, outcome, report_path, rev
   ('j1n', 2, 1, 'codex-judge', 'nudge', 'verified', 'posted', '$ev/reviews/example/app/2/aaa111aaa111/codex-judge.json', 91, 'COMMENT', '2026-10-11T10:05:00Z'),
   ('fx1', 2, 1, 'claude-fix', 'fix', 'verified', 'pushed', '$ev/reviews/example/app/2/aaa111aaa111/claude-fix.md', null, null, '2026-10-11T10:30:00Z'),
   ('j2', 2, 2, 'codex-judge', 'rereview', 'verified', 'posted', '$ev/reviews/example/app/2/bbb222bbb222/codex-judge.json', 92, 'COMMENT', '2026-10-11T11:00:00Z');
+update runs set prompt_text = 'skill_file: /state/skill/abc123def456/SKILL.md' where id = 'j1';
+-- PR 3's recovery rounds, each after its round's engine.round_start: one before any (rc0), a cold judge (rc1, its
+-- round.judge_fresh_cold after the round_start before), a full pass (rc2), a lost judge (rc3: the cold event is two
+-- round_starts back; rc3b: a reviewer's rotation counts for nothing), a rotated judge (rc4) and an audit pass (rc5). None
+-- is posted, so the tables of posted rounds stay as they are.
+insert into runs (id, pr_id, round, role, kind, state, outcome, created_at) values
+  ('rc0', 3, 0, 'codex-judge', 'recovery', 'ended', 'head_moved', '2026-10-12T08:00:00Z'),
+  ('rc1', 3, 0, 'codex-judge', 'recovery', 'ended', 'head_moved', '2026-10-12T10:01:00Z'),
+  ('rc2', 3, 0, 'codex-judge', 'recovery', 'ended', 'head_moved', '2026-10-12T11:01:00Z'),
+  ('rc3', 3, 0, 'codex-judge', 'recovery', 'ended', 'head_moved', '2026-10-12T12:01:00Z'),
+  ('rc3b', 3, 0, 'codex-judge', 'recovery', 'ended', 'head_moved', '2026-10-12T12:16:00Z'),
+  ('rc4', 3, 0, 'codex-judge', 'recovery', 'ended', 'head_moved', '2026-10-12T12:31:00Z'),
+  ('rc5', 3, 0, 'codex-judge', 'recovery', 'ended', 'head_moved', '2026-10-12T13:01:00Z');
+insert into events (level, kind, at, subject, data_json) values
+  ('info', 'engine.round_start', '2026-10-12T09:00:00Z', 'pr:example/app#3', '{"kind":"initial"}'),
+  ('info', 'round.judge_fresh_cold', '2026-10-12T09:59:00Z', 'pr:example/app#3', '{"kind":"rereview"}'),
+  ('info', 'engine.round_start', '2026-10-12T10:00:00Z', 'pr:example/app#3', '{"kind":"recovery"}'),
+  ('info', 'round.judge_fresh_cold', '2026-10-12T10:59:00Z', 'pr:example/app#2', '{"kind":"rereview"}'),
+  ('info', 'engine.round_start', '2026-10-12T11:00:00Z', 'pr:example/app#3', '{"kind":"recovery","full_pass":true}'),
+  ('info', 'engine.round_start', '2026-10-12T12:00:00Z', 'pr:example/app#3', '{"kind":"recovery"}'),
+  ('info', 'agent.session_rotated', '2026-10-12T12:10:00Z', 'pr:example/app#3', '{"role":"codex-review"}'),
+  ('info', 'engine.round_start', '2026-10-12T12:15:00Z', 'pr:example/app#3', '{"kind":"recovery"}'),
+  ('info', 'agent.session_rotated', '2026-10-12T12:29:00Z', 'pr:example/app#3', '{"role":"codex-judge"}'),
+  ('info', 'engine.round_start', '2026-10-12T12:30:00Z', 'pr:example/app#3', '{"kind":"recovery"}'),
+  ('info', 'engine.round_start', '2026-10-12T13:00:00Z', 'pr:example/app#3', '{"kind":"recovery","audit_pass":true}'),
+  ('warn', 'poll.error', '2026-10-12T09:00:00Z', null, null), ('warn', 'poll.error', '2026-10-12T09:01:00Z', null, null),
+  ('error', 'poll.error', '2026-10-12T09:02:00Z', null, null), ('warn', 'agent.lost', '2026-10-12T09:03:00Z', null, null),
+  ('warn', 'agent.lost', '2026-10-13T09:00:00Z', null, null);
 insert into findings (id, run_id, pr_id, round, finding_id, severity, path, line, sources_json, verdict, created_at, title) values
   (11, 'j1', 2, 1, 'F1', 'P2', 'app/locale.rb', 5, '["codex-review"]', 'posted', '2026-10-11T10:00:00Z', 'Regression test missing for the locale guard'),
   (12, 'j1', 2, 1, 'F2', 'P2', 'app/region.rb', 8, '["codex-review"]', 'posted', '2026-10-11T10:00:00Z', 'Region guard lacks regression coverage'),
@@ -557,6 +625,34 @@ grep -Fxq '| example/app#2 | fx1 | 2026-10-11T10:30 | 2 | 2 | 1 | j2 (r2) | 3 | 
     fail "the fixer trial's row of fx1: $(sed -n '/^## Fixer trial/,/^## Role minutes/p' "$ev_md" | tr '\n' ';')"
 ! grep -q '^| example/app#2 | fx0 ' "$ev_md" || fail "a fix run that pushed nothing has no row"
 ok "evidence.sh's fixer trial counts the replies to a fix run's commits, \"also at\" and the next round's tagged findings"
+
+# Each answered thread shows when its reply was written ("-" in a file from before replies carried it) and the skill
+# hash of the run that posted the finding ("-" when no run names one, or none posted it), and the summary says how
+# many lack either.
+grep -Fq '| fixed |  | 1/0 | fixer | 2026-10-11 10:00 | 2026-10-11 12:00 | abc123def456 | run j1, r1 initial | **[P2] Regression test missing' "$ev_md" &&
+    grep -Fq '| fixed |  | 1/0 | person? | 2026-10-11 10:00 | - | abc123def456 | run j1, r1 initial | ' "$ev_md" &&
+    grep -Fq "| won't fix |  | 1/0 | person | 2026-10-11 11:00 | 2026-10-11 13:30 | - | run j2, r2 rereview | " "$ev_md" &&
+    grep -Fq '| fixed |  | 1/0 | fixer | 2026-10-09 10:00 | - | - | - | **[P2] Old finding**' "$ev_md" ||
+    fail "the answered threads' time and skill: $(grep -F '| 1/0 |' "$ev_md" | cut -c1-120 | tr '\n' ';')"
+grep -Fxq "Of the answered threads, 2 come from a threads file written before replies carried their time (answered \`-\`); the registry's runs hold no skill hash for 1 (no run of its review names a skill copy: skill \`-\`); 1 has no run in the registry that posted its review (round and skill \`-\`)." "$ev_md" ||
+    fail "the summary of what the answered threads lack: $(grep '^Of the answered' "$ev_md" || echo none)"
+ok "evidence.sh shows each answered thread's reply time and posting skill, and counts the threads without them"
+
+# A recovery names its cause from its round's engine.round_start event and the events of the PR since the one before.
+for want in 'no round_start event | head_moved | 1' 'cold-cache fresh judge | head_moved | 1' \
+    'scheduled full pass | head_moved | 1' 'lost or parked judge | head_moved | 2' \
+    'judge session rotated | head_moved | 1' 'audit pass | head_moved | 1'; do
+    grep -Fxq "| recovery: $want |" <<<"$rows" ||
+        fail "the recovery rounds by cause ($want): $(sed -n '/^## Rounds by kind/,/^## Posted reviews/p' "$ev_md" | tr -s ' ' | tr '\n' ';')"
+done
+grep -Fxq '| initial | posted | 2 |' <<<"$rows" && grep -Fxq '| nudge | posted | 3 |' <<<"$rows" ||
+    fail "the other kinds keep one row per outcome: $(sed -n '/^## Rounds by kind/,/^## Posted reviews/p' "$ev_md" | tr -s ' ' | tr '\n' ';')"
+ok "evidence.sh splits the recovery rounds by cause: full pass, audit, cold judge, rotated judge, lost or parked judge"
+
+grep -Fxq '| 2026-10-12 | 3 | 1 | poll.error 2, agent.lost 1, poll.error (error) 1 |' "$ev_md" &&
+    grep -Fxq '| 2026-10-13 | 1 | 0 | agent.lost 1 |' "$ev_md" ||
+    fail "the warn and error events by day: $(sed -n '/^## Warn and error events by day/,/^## Operator requests/p' "$ev_md" | tr '\n' ';')"
+ok "evidence.sh prints the warn and error kinds per day"
 
 # 10. evidence.sh reads the factory's registry and its tasks' local review rounds: the PRs the factory published
 # (whose comments by people are misses of its local review) and the rounds' report directories; without a factory

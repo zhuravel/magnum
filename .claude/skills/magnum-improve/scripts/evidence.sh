@@ -272,8 +272,35 @@ test_gap_posted="test_gap_words(w) as (values ('*regression*'), ('*coverage*'), 
 	echo "# magnum since $since"
 	echo
 	echo "## Rounds by kind and outcome (judge runs)"
-	q "select kind, coalesce(outcome, state) as outcome, count(*) as runs
-	   from runs where role like '%judge%' and created_at >= '$since' group by 1, 2 order by 3 desc"
+	echo
+	echo "A recovery names its cause, read from the engine.round_start event of its round (the PR's latest at or before"
+	echo "the run): \`scheduled full pass\` (full_pass), \`audit pass\` (audit_pass), \`cold-cache fresh judge\` (a"
+	echo "round.judge_fresh_cold event of the PR since its round_start before), \`judge session rotated\` (an"
+	echo "agent.session_rotated event of a judge role there), else \`lost or parked judge\` (its session was gone or parked,"
+	echo "or fresh sessions were asked for); \`no round_start event\` when the PR has none."
+	echo
+	q "with judge as (select r.id, r.kind, coalesce(r.outcome, r.state) as outcome, r.created_at,
+	         'pr:' || rp.owner || '/' || rp.name || '#' || p.number as subject
+	       from runs r join prs p on p.id = r.pr_id join repos rp on rp.id = p.repo_id
+	       where r.role like '%judge%' and r.created_at >= '$since'),
+	     starts as (select j.id, j.subject, e.at, e.data_json,
+	         (select max(o.at) from events o where o.kind = 'engine.round_start' and o.subject = j.subject and o.at < e.at) as prev
+	       from judge j left join events e on e.id = (select x.id from events x where x.kind = 'engine.round_start'
+	         and x.subject = j.subject and x.at <= j.created_at order by x.at desc, x.id desc limit 1)
+	       where j.kind = 'recovery'),
+	     causes as (select s.id, case
+	         when s.at is null then 'no round_start event'
+	         when json_extract(s.data_json, '\$.full_pass') then 'scheduled full pass'
+	         when json_extract(s.data_json, '\$.audit_pass') then 'audit pass'
+	         when exists (select 1 from events c where c.subject = s.subject and c.at <= s.at and c.at > coalesce(s.prev, '')
+	             and c.kind = 'round.judge_fresh_cold') then 'cold-cache fresh judge'
+	         when exists (select 1 from events c where c.subject = s.subject and c.at <= s.at and c.at > coalesce(s.prev, '')
+	             and c.kind = 'agent.session_rotated' and json_extract(c.data_json, '\$.role') like '%judge%')
+	           then 'judge session rotated'
+	         else 'lost or parked judge' end as cause
+	       from starts s)
+	   select j.kind || coalesce(': ' || c.cause, '') as kind, j.outcome, count(*) as runs
+	   from judge j left join causes c on c.id = j.id group by 1, 2 order by 3 desc, 1, 2"
 	echo
 	echo "## Posted reviews"
 	echo
@@ -495,6 +522,34 @@ PY
 	q "select level, kind, count(*) as n, max(substr(at, 1, 16)) as last
 	   from events where level in ('warn', 'error') and at >= '$since' group by 1, 2 order by 3 desc limit 40"
 	echo
+	echo "## Warn and error events by day (UTC)"
+	echo
+	echo "Each day's warn and error events, and its kinds by count, the most first (\"(error)\" marks an error kind; past"
+	echo "the first 8 the rest are counted): an outage's burst shows as one day."
+	echo
+	python3 - "$db" "$since" <<'PY'
+import collections, json, subprocess, sys
+
+db, since = sys.argv[1:3]
+res = subprocess.run(["sqlite3", "-readonly", "-json", db,
+                      "select substr(at, 1, 10) as day, level, kind, count(*) as n from events "
+                      f"where level in ('warn', 'error') and at >= '{since}' group by 1, 2, 3"],
+                     capture_output=True, text=True, check=True)
+days = collections.defaultdict(lambda: {"warn": 0, "error": 0, "kinds": []})
+for r in json.loads(res.stdout or "[]"):
+    d = days[r["day"]]
+    d[r["level"]] += r["n"]
+    d["kinds"].append((-r["n"], r["kind"] + (" (error)" if r["level"] == "error" else "")))
+print("| day | warn | error | kinds |\n|---|---|---|---|")
+for day in sorted(days):
+    d = days[day]
+    kinds = sorted(d["kinds"])
+    shown = ", ".join(f"{k} {-n}" for n, k in kinds[:8]) + (f", {len(kinds) - 8} more kinds" if len(kinds) > 8 else "")
+    print(f"| {day} | {d['warn']} | {d['error']} | {shown} |")
+if not days:
+    print("| - | 0 | 0 | - |")
+PY
+	echo
 	echo "## Operator requests (what the operator did by hand)"
 	q "select kind, state, count(*) as n from requests where created_at >= '$since' group by 1, 2 order by 3 desc"
 	echo
@@ -524,7 +579,10 @@ rm -f "$stamp"
 # free form (a score such as "Net: -3", a deferral, an argument), so the
 # declined-findings lens reads each reply and decides its meaning itself. A
 # thread says when magnum posted its finding (created_at) and in which review
-# (review_id, joined to the run that posted it); "current skill" marks a
+# (review_id, joined to the run that posted it), and each reply when it was
+# written (its created_at, absent in a file written before replies carried
+# it): the table shows the answer's time and the skill hash the posting run
+# named in its prompt, and says how many threads lack either; "current skill" marks a
 # finding whose run named the skill copy (<state>/skill/<hash>/SKILL.md) that
 # the running daemon's rounds name: the newest judge run since the daemon
 # loaded its prompts (kv daemon.prompts_loaded_at) tells which. Right after a
@@ -604,6 +662,7 @@ def who(r):
     return "person?" if r.get("truncated") else "person"
 
 guess, by, rows, unanswered, under_current = collections.Counter(), collections.Counter(), [], 0, 0
+untimed, no_skill, no_run = 0, 0, 0
 for pr, f in sorted(latest.items()):
     try:
         threads = json.load(open(f))
@@ -625,14 +684,19 @@ for pr, f in sorted(latest.items()):
                 repliers.append(who(r))
         guess[cls] += 1
         at = (t.get("created_at") or "-").replace("T", " ")[:16]
+        answered = (last.get("created_at") or "-").replace("T", " ")[:16]
+        untimed += answered == "-"
         run = posted.get(t.get("review_id"))
         where = f"run {run[0]}, r{run[1]} {run[2]}" if run else "-"
+        sk = (run[3] if run else None) or "-"
+        no_run += not run
+        no_skill += bool(run) and sk == "-"
         if run and current and run[3] == current:
             at += ", current skill"
             under_current += 1
         text = " ".join((last.get("body") or "").split())[:400].replace("|", "/")
         by[REBUTTED if rebutted else who(last)] += 1
-        rows.append(f"| {cls} | {net(last.get('body'))} | {len(theirs)}/{own} | {', '.join(repliers)} | {at} | {where} | {t.get('finding','')[:90]} | {t.get('location','')} | {t.get('url','')} | {text} |")
+        rows.append(f"| {cls} | {net(last.get('body'))} | {len(theirs)}/{own} | {', '.join(repliers)} | {at} | {answered} | {sk} | {where} | {t.get('finding','')[:90]} | {t.get('location','')} | {t.get('url','')} | {text} |")
 print("\n## Replies to magnum's threads (latest round per PR)\n")
 skill_note = f", {under_current} of them posted under the current skill" if current else ""
 if from_file:
@@ -642,6 +706,21 @@ print("read every reply below and decide what it says. A thread whose last reply
 print("class and \"last reply by\" columns: the author has not answered it, and the reply shown is the author's earlier one, which the rebuttal")
 print("answered. \"(here)\" and \"follow-up\" in a reply mark a deferral (\"fixed (here) ... template follow-up\": part of the work is done and the")
 print("rest waits for a later change), not a fix.\n")
+print("\"answered\" is when the reply shown was written (its created_at); \"skill\" is the hash of the skill copy that the run that")
+print("posted the finding named in its prompt (<state>/skill/<hash>/SKILL.md), the skill version to read a reply against.")
+def one(n, single, plural):
+    return single if n == 1 else plural
+
+gaps = []
+if untimed:
+    gaps.append(f"{untimed} {one(untimed, 'comes', 'come')} from a threads file written before replies carried their time (answered `-`)")
+if no_skill:
+    gaps.append(f"the registry's runs hold no skill hash for {no_skill} (no run of {one(no_skill, 'its', 'their')} review names a skill copy: skill `-`)")
+if no_run:
+    gaps.append(f"{no_run} {one(no_run, 'has', 'have')} no run in the registry that posted {one(no_run, 'its', 'their')} review (round and skill `-`)")
+if gaps:
+    print("Of the answered threads, " + "; ".join(gaps) + ".")
+print()
 print("| class at round time | threads |\n|---|---|")
 for k, v in guess.most_common():
     print(f"| {k} | {v} |")
@@ -649,9 +728,9 @@ print("\n| last reply by | threads |\n|---|---|")
 for k, v in by.most_common():
     print(f"| {k} | {v} |")
 print("\n### Every answered thread\n")
-print("| class at round time | net | replies theirs/own | by | posted (UTC) | round | finding | where | thread | last reply (first 400 chars) |")
-print("|---|---|---|---|---|---|---|---|---|---|")
-print("\n".join(rows) or "| - | - | - | - | - | - | - | - | - | - |")
+print("| class at round time | net | replies theirs/own | by | posted (UTC) | answered (UTC) | skill | round | finding | where | thread | last reply (first 400 chars) |")
+print("|---|---|---|---|---|---|---|---|---|---|---|---|")
+print("\n".join(rows) or "| - | - | - | - | - | - | - | - | - | - | - | - |")
 PY
 
 # How often each review rule shows in the reports: the phrase counts of rules.txt (one `<rule> | <pattern>` line

@@ -78,13 +78,16 @@ Append one entry to `~/.local/share/magnum/improve/runs.md` per run:
 - next run: <what to look at first, and the measurements to read>
 ```
 
-The `measures` line comes from `magnum stats --since <since> --json`, so every run reads one definition
+The `measures` line comes from `magnum stats --since <date> --json`, so every run reads one definition
 (DECISIONS "`magnum stats` counts the reviewed heads to a pass and the merges on magnum's approval alone"),
 never its own SQL: PASS@1 and 5+ of the others' PRs in total, the missed-earlier share of the re-reviews'
-P0-P2 (full passes apart) and MAGNUM ONLY of AUTO-APPROVED per repository:
+P0-P2 (full passes apart) and MAGNUM ONLY of AUTO-APPROVED per repository. `--since` takes a date (local
+midnight) or a duration (7d, 36h), not an RFC 3339 time, so pass the local date of the run's since, which starts
+at or before it (the window may add the rounds of that day before the since):
 
 ```bash
-magnum stats --since <since> --json | jq -r '(.convergence.rows[] | select(.repo == null and .authors == "others")) as $c
+day=$(date -r "$(date -j -u -f %Y-%m-%dT%H:%M:%SZ <since> +%s)" +%Y-%m-%d)   # since's local date (macOS date)
+magnum stats --since "$day" --json | jq -r '(.convergence.rows[] | select(.repo == null and .authors == "others")) as $c
   | "PASS@1 \($c.pass_at_1)/\($c.prs), 5+ \($c.five_plus)/\($c.prs), missed earlier \(.convergence.rereview_findings.missed_earlier_share * 100 | round)% of \(.convergence.rereview_findings | .new + .missed_earlier + .fallout) re-review P0-P2, MAGNUM ONLY \([.approvals[] | "\(.repo) \(.magnum_only)/\(.auto_approved)"] | join(", "))"'
 ```
 

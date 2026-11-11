@@ -3623,6 +3623,10 @@ type ThreadReply struct {
 	Class     string `json:"class,omitempty"`
 	Body      string `json:"body"`                // an excerpt: at most 600 characters
 	Truncated bool   `json:"truncated,omitempty"` // Body was cut
+	// CreatedAt is when the reply was written (RFC3339, UTC); omitted when
+	// GitHub reports none, and in a threads file written before replies
+	// carried it.
+	CreatedAt string `json:"created_at,omitempty"`
 }
     ThreadReply is one reply of a ReviewThread.
 
@@ -25077,18 +25081,27 @@ func ClassifyReply(body string) string
     same fix is now on this branch as <sha>"); a low priority acknowledgement
     no verdict follows is ReplyWontFix ("Low priority (Net +1): not worth a
     change on its own"; "Low priority — fixed in <sha>" stays ReplyFixed).
-    "Resolved", "added" or "closed" without a commit is no verdict. Anything
-    else is ReplyOther, as is another acknowledgement no verdict follows, unless
-    the paragraph declines the fix before any clause says fixed or not a bug
-    (replyDeclined: "Confirmed. Still open … so I score that fix at −8", "I did
-    not make this change", "we are not patching them here" are ReplyWontFix),
-    or says "by design" or "by decision" anywhere and no clause names a verdict
-    (ReplyNotABug: "…, so such a behaviour is by design"). The class is a hint
-    for the judge, not a verdict. Case does not matter; leading quoted lines
-    (">"), markup, emoji, an agent's "(Claude)" tag (however often it repeats)
-    and the comment it answers ("Re 4100000001:") are skipped, and a verdict may
-    follow "but" or "this is" ("Valid, but out of scope", "Analyzed — this is
-    intentional").
+    "Resolved", "added" or "closed" without a commit is no verdict, but a first
+    clause (past any acknowledgement) that describes its change without one is
+    ReplyFixed (replyChanged): it starts with the change and what it changed
+    ("Added the cases you listed", "Renamed the flag"; not "Added in 12 places")
+    or says "<subject> now <verb>s" ("Section 4 now lists the steps"), and
+    holds no negation, later time, follow-up, "still" or "fails", its sentence
+    going on to no "yet" or "later" ("Changed it locally, not pushed yet") and
+    asking nothing; one that keeps what the finding would change ("Keeping the
+    current count", "Kept as a warning", replyKeeps) is ReplyWontFix. Anything
+    else is ReplyOther, as is another acknowledgement no verdict follows,
+    unless the paragraph declines the fix before any clause says fixed or not a
+    bug (replyDeclined: "Confirmed. Still open … so I score that fix at −8", "I
+    did not make this change", "we are not patching them here", "Deferring this
+    to the follow-up PR" and "moving this to a follow-up PR" are ReplyWontFix,
+    replyDefersFix), or says "by design" or "by decision" anywhere and no clause
+    names a verdict (ReplyNotABug: "…, so such a behaviour is by design"). The
+    class is a hint for the judge, not a verdict. Case does not matter; leading
+    quoted lines (">"), markup, emoji, an agent's "(Claude)" tag (however often
+    it repeats) and the comment it answers ("Re 4100000001:") are skipped,
+    and a verdict may follow "but" or "this is" ("Valid, but out of scope",
+    "Analyzed — this is intentional").
 
 func CompletionRoles(roles, toRun []config.Role, names []string) []config.Role
     CompletionRoles is the roles a completion runs: the first judge of toRun

@@ -18468,6 +18468,85 @@ skill versions); people add theirs to the sections before it, at the end of the 
   missing file is; a file entry is copied as before. Tests: TestCopyFilesCopiesADirectorysTreeAndSkipsFilesAlreadyCurrent
   (failing first), TestCopyFilesSkipsAMissingSourceDirectory, TestCopyFilesRefusesADirectoryPathThatLeavesEitherRoot.
 
+- **The reply classifier reads a fix described by its change and a deferral without a commit** (2026-11-12, amends
+  "The reply classifier reads "added in", "removed in", "closed by … in" and "not adding it""). The 2026-11-11
+  declined-findings lens read by hand all 676 threads of magnum's reviews answered since 2026-10-29. It found 53
+  replies stored as `other` that say a fix or a deferral. Many fixes describe the change and name no commit:
+  "Added the cases you listed", "Section 4 now lists …". Many deferrals name no follow-up at the clause's end:
+  "Deferring this to the default-theme follow-up PR", "moving this to a follow-up PR", "Keeping the current count".
+  - The fix form (replyChanged) reads the reply's first clause past any acknowledgement. The clause starts with a
+    change verb and a word after it: "added", "removed", "replaced", "narrowed", "refreshed", "renamed", "moved",
+    "dropped", "switched", "changed" or "verified". A verb before "in" is no fix: "Added in 12 places" and "Added
+    in the next PR" stay `other`. A clause "<subject> now <verb>s" is a fix too, but not with "is", "was",
+    "seems", "looks", "sounds" or "feels". Such a clause is `fixed`.
+  - The fix form does not count in four cases. The clause holds a negation, a later time, a follow-up, a backlog,
+    a ticket, a todo, "still", "fails", a changed mind or "makes sense". The rest of its sentence says "yet",
+    "later", "still" or follow-up ("Changed it locally, not pushed yet"). The sentence is a question.
+  - The keep form (replyKeeps) also reads only that first clause. A clause that starts "keeping the", "keeping
+    this" or "kept as" is `won't fix`.
+  - The defer form (replyDefersFix) reads every clause of the first paragraph, and after an acknowledgement the
+    later paragraphs too, as the "as a follow-up" deferral does. A clause that starts "deferring", or holds
+    "moving this to a … follow-up" or "in the follow-up round" or "PR", is `won't fix`.
+  - A clause with a negation, "still" or "fails" is no keep and no deferral: "We are not moving this to a
+    follow-up PR", "Keeping the current count fails the new spec". A fix said first still wins.
+  Only the first clause counts for the change and the keeping. The lens's own pattern also matched later clauses.
+  On the stored replies, it turned "Low priority (net -3) … `X` now sets …" into `fixed`. It turned "Option 1 in
+  <sha>, kept as its own commit" into `won't fix`. Past the first clause, such words describe the code.
+  The new classifier ran on the 2,118 stored replies (their 600-character excerpts), against master's. It moves 29
+  from `other` to `fixed` and 8 to `won't fix`, the 8 deferrals the lens counted. It moves none of another class.
+  The lens's looser pattern moved 47 to `fixed`. The class stays a hint for the judge's reply turn. It is also a
+  hint for the fixer's settle (`answeredBy`), which then asks the operator only for the resolution. No author sees
+  it, so no stop condition of the spec applied. Test, failing first: TestClassifyReplyReadsDescribedFixesAndDeferrals. It
+  has two counter-examples per form ("not fixed yet", "will add later", a question, "still", "fails"), and every
+  case the older tests pin still passes.
+
+- **A threads file keeps each reply's time** (2026-11-12). `agents.ThreadReply` had no time. So the improvement
+  loop bracketed the replies by comment id, not by the time they were written. A reply now
+  carries `created_at`: GitHub's creation time in UTC (RFC 3339). A round fills it where it reads the threads
+  (ownThreads, for addThreads), for magnum's own replies too. When GitHub reports no time, the field is left out.
+  The judge's prompts do not name it, so no golden file changes. A threads file written before it still reads: the
+  field is optional, and threadIDs and the engine's threadsFileNow decode the file as before. Tests, failing
+  first: TestAThreadsFileKeepsEachReplysTime. TestAThreadsFileWithoutReplyTimesReadsAsBefore pins the old form.
+
+- **evidence.sh shows each answer's time and skill version, the recovery rounds by cause and the warnings per
+  day** (2026-11-12).
+  - The "Every answered thread" table gains two columns. `answered (UTC)` is the shown reply's `created_at`, and
+    `-` in an older threads file. `skill` is the hash of the skill copy that the posting run named in its prompt
+    (`<state>/skill/<hash>/SKILL.md`). It comes from the first run of the review that names one. The
+    2026-11-11 lens saw "current skill" on only 40 rows, but SKILL.md changed five times after skill version 4.
+    The summary counts three groups of answered threads: those without a time, those whose runs name no skill
+    copy (the registry's runs hold no hash for them), and those without a posting run.
+  - The "Rounds by kind and outcome" table splits recovery by cause. The cause comes from the round's
+    `engine.round_start` event: the PR's latest at or before the run. A full_pass in its data is a `scheduled full
+    pass`, and an audit_pass an `audit pass`. A round.judge_fresh_cold event of the PR since its round_start
+    before is a `cold-cache fresh judge`. An agent.session_rotated event of a judge role there is a `judge session
+    rotated`. Any other recovery is a `lost or parked judge`. A PR without the event shows `no round_start event`. The reliability lens counted 120
+    of 246 recovery rounds as cold-cache judges and 116 as full passes by design. Only 10 came after a lost
+    judge, but the table showed them as one row. On the registry since 2026-10-29, the split gives 117, 119 and
+    10 posted rounds.
+  - A new table, "Warn and error events by day (UTC)", gives each day's warn and error counts and its kinds by
+    count, the first 8 by name. An outage's burst shows as one day there. The table by kind spreads it over the
+    window. Python sorts the kinds, because `group_concat … ORDER BY` needs SQLite 3.44, and CI's macOS runner
+    can have an older one.
+  Tests: selftest.sh's registry gains the events' subject and data, PR 3's six recovery causes and a day of
+  warnings. It checks the new columns, the summary, the rows and the table.
+
+- **The improve loop's eval proof passes its guards one case each, and its measures line takes a date**
+  (2026-11-12).
+  - SKILL.md said `guards=$(magnum eval guards)` and then `scripts/eval-at.sh … $guards`. zsh, the operator's
+    shell, does not split an unquoted parameter. So on 2026-11-12 both guards reached `magnum eval baseline` as
+    one case, and it failed with `unknown case "a\nb"`. The proof was piped into `tail`, which reported the pipe's
+    0, but eval-at.sh had exited 1.
+  - SKILL.md now says to save the guards to `<run-dir>/tmp/eval-guards.txt` and to pass `$(cat <file>)`: zsh and
+    bash both split a command substitution. It says to run eval-at.sh unpiped and to read the log it names.
+  - eval-at.sh also splits a case argument at spaces and line breaks (a case name has none). So an unquoted
+    `$guards` works too.
+  - selftest.sh pins a failing baseline's non-zero exit. It pins the guards reaching the script one case each:
+    from `$(cat <file>)` in zsh and bash, and as one argument.
+  - landing.md's `measures` command passed the RFC 3339 since to `magnum stats --since`. That flag takes a date
+    (local midnight) or a duration. The command now passes the since's local date
+    (`date -r "$(date -j -u -f %Y-%m-%dT%H:%M:%SZ <since> +%s)" +%Y-%m-%d`), which starts at or before the since.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is

@@ -283,6 +283,10 @@ type ThreadReply struct {
 	Class     string `json:"class,omitempty"`
 	Body      string `json:"body"`                // an excerpt: at most 600 characters
 	Truncated bool   `json:"truncated,omitempty"` // Body was cut
+	// CreatedAt is when the reply was written (RFC3339, UTC); omitted when
+	// GitHub reports none, and in a threads file written before replies
+	// carried it.
+	CreatedAt string `json:"created_at,omitempty"`
 }
 
 // JudgeData feeds every judge prompt (judge-*.md). Fields a template does not
