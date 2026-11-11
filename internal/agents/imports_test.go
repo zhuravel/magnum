@@ -317,6 +317,30 @@ func TestImportPathsStartsAPathWhereACommentWasCut(t *testing.T) {
 	}
 }
 
+// Claude Code reads each HTML block that starts with a comment on its own:
+// the block ends at the end of the line its first comment ends on (at once
+// for <!--> and <!--->), and its comments are paired within it. A <!-- the
+// file-wide pairing takes as a comment (one in a code span or a paragraph)
+// pairs with the --> inside a block's <!-->, and a <!-- the block leaves
+// open pairs with a --> further down: both cut the path Claude glues
+// together (as Claude Code 2.1.322's lexer reads these texts).
+func TestImportPathsReadsEachCommentBlockOnItsOwn(t *testing.T) {
+	for _, c := range []struct {
+		text string
+		want string
+	}{
+		{"Use `<!--` to open a comment.\n\n<!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"x <!--\n\n<!--> T <!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"`<!--`\n\n<!---><!--->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"- <!-->a<!-->@docs/ev<!--z-->il.md\n\n`<!--`\n", "docs/evil.md"},
+		{"<!--a-->@docs/ev<!--b-->il<!--x.md\n\nMore text.\n<!-- end -->\n", "docs/evil<!--x.md"},
+	} {
+		if got, more := ImportPaths(c.text, 100); !slices.Contains(got, c.want) || more {
+			t.Errorf("ImportPaths(%q) = %q, %v; want %q among them", c.text, got, more, c.want)
+		}
+	}
+}
+
 // A path with an escaped space is a copy of its text ("\ " a space), and a
 // run of many @ holds many such paths, each the rest of the run: ImportPaths
 // copies a run once, whose paths all share it, so what it gives keeps at

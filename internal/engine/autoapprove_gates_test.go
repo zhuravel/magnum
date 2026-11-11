@@ -549,6 +549,12 @@ func TestAutoApprovalRefusesAChangeToAFileTheInstructionsImport(t *testing.T) {
 		// stays open.
 		{name: "an import a comment splits", files: map[string]string{"AGENTS.md": "Notes (<!--\n\n<!--a-->@docs/ev<!--b-->il.md\n"},
 			list: []string{"docs/evil.md"}, want: "(AGENTS.md)"},
+		// A <!-- in a code span pairs with the --> of a block's <!--> when
+		// the whole file's comments pair, while Claude reads the block on
+		// its own.
+		{name: "an import in a block a code span's comment mark precedes", files: map[string]string{
+			"AGENTS.md": "Use `<!--` to open a comment.\n\n<!-->a<!-->@docs/ev<!--z-->il.md\n"},
+			list: []string{"docs/evil.md"}, want: "(AGENTS.md)"},
 		// Claude ends a path at a #fragment.
 		{name: "an import with a fragment", files: map[string]string{"CLAUDE.md": "Setup: @docs/guide.md#setup\n"},
 			list: []string{"docs/guide.md"}, want: "(CLAUDE.md)"},

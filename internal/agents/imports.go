@@ -60,7 +60,8 @@ const (
 // the text after a YAML frontmatter on its own (Claude strips one before
 // it lexes the rest, so an @ right after the closing --- imports), and
 // reads each again with its HTML comments taken out, where a cut starts a
-// path too (Claude reads a block that starts with a comment on its own).
+// path too, and each HTML block that starts with a comment on its own, so
+// taken out, as Claude does (readCommentBlocks).
 // A home (~) or an absolute path is left out: no commit's tree holds it,
 // and Claude loads a file outside its working directory only once the
 // user approves the project's external imports, which magnum never does.
@@ -79,10 +80,74 @@ func ImportPaths(text string, limit int) (paths []string, more bool) {
 			break
 		}
 		if strings.Contains(t, "<!--") {
-			r.read(withoutComments(t))
+			if r.read(withoutComments(t)); r.more {
+				break
+			}
+			r.readCommentBlocks(t)
 		}
 	}
 	return r.paths, r.more
+}
+
+// readCommentBlocks reads each HTML block of t that starts with a comment
+// on its own, its comments taken out, as Claude Code does: marked (without
+// GFM) starts such a block at a <!-- that only blanks and a container's
+// marks (a block quote's >, a list item's - * + 1. 1)) precede on its
+// line, and ends it at the end of the line its first comment ends on: at
+// once for <!--> and <!--->, else at the first --> after the <!--. Claude
+// skips a block with no -->. The read of the whole text without comments
+// pairs a <!-- Claude takes for none (in a code span, a paragraph) with
+// the --> of a block's <!-->, and a <!-- a block leaves open with a -->
+// further down; this read pairs them within the block. A <!-- in code or
+// indented deeper starts a block here too (wider), blocks whose first
+// comments end at one --> are read once (they read the same), so the bytes
+// read stay within about twice the text's, each counted against the work
+// bound.
+func (r *importReader) readCommentBlocks(t string) {
+	lineEnd := func(p int) int { // the end of p's line, its line feed included
+		if j := strings.IndexByte(t[p:], '\n'); j >= 0 {
+			return p + j + 1
+		}
+		return len(t)
+	}
+	shut := -1 // the first --> at or after the last search's start
+	last := -1 // the --> that ended the first comment of the last such block read
+	for i := 0; i < len(t) && !r.more; {
+		k := strings.Index(t[i:], "<!--")
+		if k < 0 {
+			return
+		}
+		at := i + k
+		i = lineEnd(at) // a later <!-- on the line follows this one's <: no block starts there
+		if strings.Trim(t[strings.LastIndexByte(t[:at], '\n')+1:at], " \t>*+-.)0123456789") != "" {
+			continue
+		}
+		var block string
+		switch rest := t[at+4:]; {
+		case strings.HasPrefix(rest, ">") || strings.HasPrefix(rest, "->"):
+			block = t[at:i]
+		default:
+			if shut < at+4 {
+				j := strings.Index(rest, "-->")
+				if j < 0 {
+					return // and no later block holds one
+				}
+				shut = at + 4 + j
+			}
+			if shut == last {
+				continue
+			}
+			last = shut
+			block = t[at:lineEnd(shut+3)]
+		}
+		if r.work -= len(block); r.work < 0 {
+			r.more = true
+			return
+		}
+		if text, joints := withoutComments(block); len(joints) > 0 {
+			r.read(text, joints)
+		}
+	}
 }
 
 // frontmatterBody is what follows the YAML frontmatter text opens with,
@@ -336,11 +401,12 @@ func (r *importReader) paths1(t string, at int, run *importRun) bool {
 
 // withoutComments is t with its HTML comments (each <!-- to the first -->
 // after it) taken out, as Claude Code reads an HTML block that starts with
-// one, and the offsets in it where one was cut (joints). Claude pairs them
-// within each such block, whose text after its first comment starts a
-// path; an earlier <!-- it does not read as a comment (in a paragraph, a
-// heading, a frontmatter) pairs here with that first comment's -->, which
-// glues the text before it to the block's, so the cut is a start.
+// one (/<!--[\s\S]*?-->/g), and the offsets in it where one was cut
+// (joints). Over a whole text, an earlier <!-- Claude does not read as a
+// comment (in a paragraph, a heading, a frontmatter) pairs with a block's
+// first -->, which glues the text before it to the block's, so a cut is a
+// start; it may also pair a block's comment marks across the block's ends,
+// which readCommentBlocks' read of each block on its own covers.
 func withoutComments(t string) (string, []int) {
 	var b strings.Builder
 	var joints []int
