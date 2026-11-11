@@ -18315,8 +18315,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   func or if line, and 14 functions and one if had passed the thresholds outside the ratchet unseen. Both
   are split with no behaviour change (41 and 43), and `make lint-ratchet` (`golangci-lint run --enable-only
   gocyclo,nestif ./...`, about a second, since both read syntax only) runs in `make test`, so every landing
-  and CI's test job fail on any hit. The rest are a second, dated block of `.golangci.yml`'s ratchet, each
-  name between the backticks golangci-lint prints; split one, delete its name, never add one.
+  and CI's test job fail on any hit. The rest are a second, dated block of `.golangci.yml`'s ratchet. Both
+  blocks scope each name to its file and put it between the backticks golangci-lint prints, so a new
+  `applySlots` is not hidden by `applySlot`; split one, delete its name, never add one.
 
 ## The factory (2026-11-03)
 

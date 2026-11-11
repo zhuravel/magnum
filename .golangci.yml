@@ -230,11 +230,26 @@ linters:
         linters: [gocritic]
         text: "filepathJoin|stringXbytes|mapKey|unlambda"  # fixture paths and keys with spaces are the point of those tests
       # Complexity ratchet: the functions above the thresholds on 2026-10-09. Split one, delete its line.
+      # Each name is scoped to its file and sits between the backticks golangci-lint prints, so a new
+      # function whose name only contains one (applySlots, say) is still linted.
       - linters: [gocyclo]
-        text: "observeOne|applySlot|\\(\\*Config\\)\\.Validate|validateRole|cardContent|actionRefusal"
+        path: internal/agents/observe\.go
+        text: "`\\(\\*Manager\\)\\.observeOne`"
+      - linters: [gocyclo]
+        path: internal/cleanup/apply\.go
+        text: "`\\(\\*Planner\\)\\.applySlot`"
+      - linters: [gocyclo]
+        path: internal/config/validate\.go
+        text: "`\\(\\*Config\\)\\.(Validate|validateRole)`"
+      - linters: [gocyclo]
+        path: internal/tui/prboard_card\.go
+        text: "`\\(\\*prbPainter\\)\\.cardContent`"
+      - linters: [gocyclo]
+        path: internal/tui/rowacts\.go
+        text: "`actionRefusal`"
       - linters: [nestif]
         path: internal/agents/lifecycle\.go
-        text: "isAgentSession"
+        text: "`if m\\.isAgentSession\\(s\\)`"
       # Complexity ratchet, second block: the functions that crossed the thresholds between 2026-10-09 and
       # 2026-11-11 because the landing gate linted only changed lines (gocyclo and nestif report on the func or
       # if line, which a change inside it leaves alone); `make lint-ratchet`, in `make test`, now lints the whole
