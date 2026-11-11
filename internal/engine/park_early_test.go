@@ -443,6 +443,7 @@ func TestAnEarlyParkTakesOnlyResumableIdleSessions(t *testing.T) {
 // of the early park's doubled wait.
 func TestAnEarlyParkThatKeepsFailingDoesNotHoldThePRsPark(t *testing.T) {
 	h := newHarness(t)
+	h.shortJudgeFreshAfter() // the early park tries at 15, 16 and 18 minutes, its next at 22
 	pr := h.reviewedPR(2, "b1")
 	h.withSessionIDs(pr.ID)
 	h.ag.mu.Lock()
@@ -453,8 +454,8 @@ func TestAnEarlyParkThatKeepsFailingDoesNotHoldThePRsPark(t *testing.T) {
 		h.advance(tick)
 		h.tick()
 	}
-	if n := h.earlyParks(pr.ID); n < 2 || n > 8 {
-		t.Fatalf("early park tries = %d, want a few, backed off: %v", n, h.ag.all())
+	if n := h.earlyParks(pr.ID); n != 3 { // a wait that never doubled would try 5 times, at every minute
+		t.Fatalf("early park tries = %d, want 3, each failed try doubling the wait: %v", n, h.ag.all())
 	}
 	if h.ag.count(fmt.Sprintf("park_hard:%d", pr.ID))+h.parks(pr.ID) != 0 {
 		t.Fatalf("the PR's park came before judge_fresh_after: %v", h.ag.all())

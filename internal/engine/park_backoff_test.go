@@ -57,6 +57,14 @@ func (h *harness) nextParkAttempt(prID int64) int {
 	return 0
 }
 
+// shortJudgeFreshAfter sets judge_fresh_after to 5 minutes past
+// park_idle_after (20m against 90m by default): still the judge's own, longer
+// threshold, which a test of the PR's park waits out one poll interval at a
+// time, in 40 ticks instead of 180.
+func (h *harness) shortJudgeFreshAfter() {
+	h.cfg.Pipeline.JudgeFreshAfter.Duration = h.cfg.Daemon.ParkIdleAfter.Duration + 5*time.Minute
+}
+
 // TestAFailedParkBacksOff: a failed park of a PR's idle agents is tried
 // again after twice the last wait, starting from the tick interval (two
 // ticks, then four, eight, ...) up to 12 hours, rather than on every tick
@@ -64,6 +72,7 @@ func (h *harness) nextParkAttempt(prID int64) int {
 // Claude pane). A round of the PR resets the wait.
 func TestAFailedParkBacksOff(t *testing.T) {
 	h := newHarness(t)
+	h.shortJudgeFreshAfter()
 	h.cfg.Pipeline.FullPassAfter.Duration = 0 // 55 hours pass: the age rule would make the push's re-review a full pass, whose fresh start the failing park blocks
 	pr := h.reviewedPR(2, "b1")
 	h.failEveryPark(quitTimedOut(2))
