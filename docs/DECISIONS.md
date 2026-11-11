@@ -18605,6 +18605,74 @@ skill versions); people add theirs to the sections before it, at the end of the 
     (local midnight) or a duration. The command now passes the since's local date
     (`date -r "$(date -j -u -f %Y-%m-%dT%H:%M:%SZ <since> +%s)" +%Y-%m-%d`), which starts at or before the since.
 
+- **A choice the PR states or copies covers only what its text names** (2026-11-12, spec 07 of the 2026-11-11
+  run, item 1; the operator approved it that day; narrows "Impact that nobody measured is not "no impact"" of
+  2026-10-08, whose words on a listed mechanism it takes in). The misses lens counted 15 real P1 and P2
+  findings since 2026-10-29 that a reviewer raised and the judge rejected. In two of them the judge waived a
+  consequence as the author's choice. A reviewer proved that a staff tool grant tests only a per-site flag
+  while the PR's own decision record says the gate keeps the tools from client sites; the judge rejected it as
+  `style_only` ("the author explicitly chose" that flag), and a person ranked it P1. The judge's own pass
+  waived a guard copied from a blocklist as a documented rule, though the blocklist tightens and the copy
+  loosens, so one write lifts the caps of every site of an account; a person called it major. Section 4 said
+  that a deliberate reason "covers only the consequences it names", and the judge waived both anyway: the
+  sentence sits where findings are proved, not where a rejection's reason code is picked. Section 3 now says,
+  after the reason codes: "A choice the PR states or copies (a predicate, a default, a fallback chain, a tool
+  set, a sibling's guard) covers only what its text names: a consequence that breaks a goal the same text
+  states stands at its priority, as does a copied guard that relaxes where its source restricts." Section 4's
+  deliberate reason ends "covers only the consequences it names (section 3)."; its old "listing a mechanism (a
+  fallback chain, a default) does not make its unnamed consequences deliberate" is the default and the
+  fallback chain in the new rule's list. The platform rules' "a reason that calls it deliberate covers only
+  the rule it names" went too, as section 4's sentence covers it. Tests, failing first:
+  TestAChoiceThePRStatesOrCopiesCoversOnlyWhatItsTextNames, and the moved pins of
+  TestSkillCountsImpactNobodyMeasuredAsImpact.
+- **`style_only` is never a green mutation, a stated repository rule or a false fact** (2026-11-12, spec 07 of
+  the 2026-11-11 run, item 2). The judge used `style_only` for substance: it reproduced a mutation of the
+  production output that left 65 examples green and rejected the test gap as style (a person: P2); a stand-in
+  that only a spec calls, against the repository's stated rule on unused code, went the same way (P2), as did
+  six false documentation sentences at P3. Section 3's bullet now reads "`style_only`: taste, naming or
+  formatting, never a green mutation of production output, a stated repository rule or a false fact;"; its
+  "(section 4)", which pointed at nothing there on style, went. Section 1's "an unstated preference is
+  `style_only`" and section 3's "more combinations of a rule an example already pins are `style_only`" stand:
+  neither is a green mutation of production output. Test, failing first:
+  TestStyleOnlyIsNeverAGreenMutationAStatedRuleOrAFalseFact.
+- **The reviewers read the defaults of a model a call now reaches** (2026-11-12, spec 07 of the 2026-11-11
+  run, item 3). A PR dropped a sampling parameter, so a summary call could reach models that think by default.
+  Their thinking tokens count toward the call's small output limit, so a reply can end before any text; a
+  person ranked it P1 from the provider's migration guide, and magnum posted a P3 about the parameter on the
+  same lines. The version sentence covered an API version, a runtime and an SDK, and only their age. The
+  claude reviewer prompts (claude-review.md, claude-rereview.md, claude-restart.md) and the judge's own pass
+  (judge-own-pass.md) now follow it with: "When the PR changes which model a call reaches (a model id, a
+  parameter dropped or changed), read that model's page on the provider's own site (WebFetch) for the defaults
+  that change the call (thinking on by default and counted in the output limit, parameters it rejects,
+  data-use terms), and check each call's parameters against them." (the own pass without "(WebFetch)", as its
+  judge may be Codex). The prompts share no block for it: the reviewer prompts have no partials file, and
+  judge-shared.md's blocks serve the judge prompts, of which only the own pass carries the version sentence.
+  The skill does not change for it (section 2's version clause stays), and neither does the factory's local
+  review prompt (claude-review-local.md), which the spec left alone. Test, failing first:
+  TestReviewersReadTheDefaultsOfAModelACallNowReaches, and the reviewer and own-pass goldens.
+- **A wrong value shown or sent in normal use that others act on is at least P2** (2026-11-12, spec 07 of the
+  2026-11-11 run, item 4; widens "A rendering defect users see in normal use is at least P2" of 2026-11-07).
+  magnum's own probe showed that every unsubscribe webhook of a loyalty program sends the member flag as false,
+  posted at P3 (a person: P2), and a rewarded trusted referral shows as fraud in a portal and its API, posted at
+  P3 (a person: major). The rendering rule named markup, raw keys, error pages and layouts, not wrong values.
+  Section 4 now follows it with "So is a wrong value shown or sent in normal use that others act on." "In
+  normal use" keeps section 4's reachability, as for the rendering rule, whose sentence stays as it was. Test,
+  failing first: TestAWrongValueShownOrSentThatOthersActOnIsAtLeastP2.
+- **A case the PR's new behaviour does not reach that ends as on the base is P3 at most** (2026-11-12, spec 07
+  of the 2026-11-11 run, item 5). Two P2s on one PR were declined because the case ends "as on master", and 5
+  P3s since skill version 3 because "the base does the same". Section 4's first paragraph now says, after
+  "Report only a problem that this PR introduces or exposes.": "A case the PR's new behaviour does not reach
+  that ends as on the base is P3 at most unless the PR claims to cover it; its comment says `On <base_ref>, the
+  same.` The same result for the same trigger on the base is `pre_existing`." The incomplete-fix rule of
+  2026-10-23 is unchanged ("a site of that class left failing is its incomplete fix"): a case the PR claims to
+  cover keeps its priority. Test, failing first: TestACaseThePRDoesNotReachThatEndsAsOnTheBaseIsP3AtMost,
+  which also pins the incomplete-fix rule. With items 1 to 5 the skill goes from 39,411 to 39,802 bytes and
+  `skillMaxBytes` from 39,414 to 39,802: the four rules add 656 bytes, and 265 of wording went (section 4's
+  listed mechanism, 89, and the platform rules' deliberate clause, 69, both covered by the rules above; the
+  rank line's pointer to the verdict, 37; section 8's "success or not", 22; "in your last review" after
+  magnum's re-review line, 20; `former_logins`' "usually empty", 15; post_review's dry run, 13). The ceiling
+  of 40,000 (Codex's output budget) stays; it leaves 198.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is

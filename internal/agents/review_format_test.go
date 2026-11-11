@@ -638,8 +638,20 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // person's: a behaviour it calls intended that neither the ticket nor the
 // operator's answers decide is a product question, never intent; 3 bytes
 // are left, and the ceiling below leaves 586.
+// Then 39,802 (2026-11-12, spec 07 of the 2026-11-11 run: 656 bytes for four
+// rules the operator approved that day, less 265, the cap raised by the 391
+// left, less the 3 it had): a choice the PR states or copies covers only
+// what its text names, in section 3 (254, and 29 for the default and the
+// fallback chain it takes over from section 4's deliberate reason, whose
+// words on a listed mechanism went: -89), `style_only` never a green
+// mutation, a stated rule or a false fact (75), a wrong value shown or sent
+// in normal use at least P2 (68) and a case that ends as on the base P3 at
+// most (230); trimmed: the platform rules' deliberate clause, which section
+// 4's covers (69), the rank line's pointer to the verdict (37), section 8's
+// "success or not" (22), "in your last review" after magnum's re-review line
+// (20), `former_logins`' "usually empty" (15) and post_review's dry run (13).
 // Every rule added must replace or shorten text.
-const skillMaxBytes = 39414
+const skillMaxBytes = 39802
 
 // skillCeilingBytes bounds SKILL.md whatever skillMaxBytes says. Codex's
 // default output budget returns at most 10,000 tokens of one tool call's
@@ -1326,7 +1338,7 @@ func TestJudgePromptsCarryTheBlindAndPostMergeRulesOnlyInTheirRounds(t *testing.
 	}
 	skillSays(t, []string{
 		"- `blind` (a `magnum eval` replay) and `post_merge` (GitHub merged the PR first): the prompt says what they change.",
-		"`former_logins`, earlier logins of this PR's reviews (usually empty; the prompt says how to treat them).",
+		"`former_logins`, earlier logins of this PR's reviews (the prompt says how to treat them).",
 		"`reviewer_login`: write only as this login.",
 	}, []string{"Blind evaluation", "Post-merge review (`post_merge: true`)", "`in a follow-up`", "never edit, dismiss or reply as a former login"})
 }
@@ -1539,13 +1551,16 @@ func TestAMissingTestIsNeverSpeculative(t *testing.T) {
 // fallback and the impact was unmeasured. A false claim is a finding unless
 // its impact is proved to be none, an order of calls is checked in the real
 // component, and a listed mechanism makes none of its unnamed consequences
-// deliberate (approved 2026-10-08).
+// deliberate (approved 2026-10-08). Since 2026-11-12 the last rule is part
+// of section 3's rule on a choice the PR states or copies (a default, a
+// fallback chain), which section 4's deliberate reason points to.
 func TestSkillCountsImpactNobodyMeasuredAsImpact(t *testing.T) {
 	skillSays(t, []string{
 		"never a ✓ line. Impact you did not measure is not \"no impact\": a false claim is a finding unless you proved it has none.",
 		"check the real component; for an order of calls (a call before async data arrives), find what sets it there (a library's load queue, the boot sequence) " +
 			"and read it or run it with a `notes_dir` probe.",
-		"that reason covers only the consequences it names: listing a mechanism (a fallback chain, a default) does not make its unnamed consequences deliberate.",
+		"that reason covers only the consequences it names (section 3).",
+		"A choice the PR states or copies (a predicate, a default, a fallback chain, a tool set, a sibling's guard) covers only what its text names",
 	}, nil)
 }
 
