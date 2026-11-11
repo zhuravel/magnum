@@ -7447,7 +7447,7 @@ when you run `magnum hooks install` or `uninstall` (magnum's own entries; see [A
 ## Development
 
 Work on magnum from a checkout, and run that checkout's build instead of a Homebrew one (one or the other
-runs the daemon; both use the same files in `~/.config`, `~/.local/share` and `~/.local/state`). Go 1.27.3
+runs the daemon; both use the same files in `~/.config`, `~/.local/share` and `~/.local/state`). Go 1.27.4
 (mise.toml pins it) is needed:
 
 ```bash
