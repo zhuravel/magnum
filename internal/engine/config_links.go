@@ -573,12 +573,13 @@ func coveredBy(covers map[string]string, f string) (string, bool) {
 // (.claude/rules -> ../shared/rules, shared/rules/api.md -> ../../x.txt:
 // x.txt is read as .claude/rules/api.md). A link that lies at or under
 // where it leads (.claude/rules/back -> .., a loop; a link to the root)
-// gives no path, nor does a link a path was already built with, or a
-// path longer than maxPathBytes: Claude Code's rules walk enters each
-// directory once, and opens nothing that long, so the paths end. Each
-// path built, each lookup that finds links and every linkBytesPerStep
-// bytes of the keys looked up count a step: a path of ordinary length
-// costs nothing where no link leads, and a deep one its hashing.
+// gives no path, nor does a link a path was already built with, or one
+// whose path would be longer than maxPathBytes (it is not built): Claude
+// Code's rules walk enters each directory once, and opens nothing that
+// long, so the paths end. Each new path, each lookup that finds links and
+// every linkBytesPerStep bytes of the keys looked up and of the paths built
+// count a step: a path of ordinary length costs nothing where no link
+// leads, a deep one its hashing, and a path built again its copies.
 func (r *linkResolver) dirsOf(f string) []string {
 	if len(r.via) == 0 {
 		return []string{linkDir(f)}
@@ -598,7 +599,7 @@ func (r *linkResolver) dirsOf(f string) []string {
 		return false
 	}
 	seen := map[string]bool{foldKey(f): true}
-	hashed := 0 // bytes of keys looked up that no step counted yet
+	hashed := 0 // bytes of keys looked up and paths built that no step counted yet
 	for i := 0; i < len(paths); i++ {
 		q := paths[i].path
 		t, k := q, agents.LooseFold(q) // a directory of q, with its key (LooseFold keeps each /)
@@ -619,11 +620,23 @@ func (r *linkResolver) dirsOf(f string) []string {
 				if k == "" || atOrUnder(v.key, k) || built(i, v.path) {
 					continue
 				}
+				n := len(v.path)
+				if rest != "" {
+					n += 1 + len(rest)
+				}
+				if n > maxPathBytes {
+					continue
+				}
 				a := v.path
 				if rest != "" {
 					a += "/" + rest
 				}
-				if fk := foldKey(a); len(a) <= maxPathBytes && !seen[fk] {
+				for hashed += n + 1; hashed >= linkBytesPerStep; hashed -= linkBytesPerStep {
+					if !r.step() {
+						return nil
+					}
+				}
+				if fk := foldKey(a); !seen[fk] {
 					if !r.step() {
 						return nil
 					}

@@ -665,6 +665,43 @@ func TestTheWalksLookupsCountByWhatTheyFindAndHash(t *testing.T) {
 	}
 }
 
+// A path the walk builds costs a copy of it and of its fold, which no step
+// counted where it added no path: a link whose path with the rest of the
+// file's passes maxPathBytes now builds nothing (a thousand such links at
+// a directory of 11,000 sources allocated 139 GB), and every path built
+// counts its bytes as hashed, so a thousand links whose names differ in
+// case only cost steps for the paths they build again.
+func TestTheWalksPathsCostTheBytesTheyCopy(t *testing.T) {
+	r := linkResolver{ctx: context.Background(), via: map[string][]viaLink{}}
+	for j := range 1000 {
+		l := fmt.Sprintf("%s/p%04d", strings.Repeat("x", 3900), j)
+		r.via["d"] = append(r.via["d"], viaLink{path: l, key: agents.LooseFold(l)})
+	}
+	f := "d/" + strings.Repeat("n", 330) + ".md"
+	if dirs := r.dirsOf(f); !slices.Equal(dirs, []string{"d"}) {
+		t.Fatalf("dirsOf = %q; want d alone", dirs)
+	}
+	if allocs := testing.AllocsPerRun(3, func() { r.dirsOf(f) }); allocs > 100 {
+		t.Errorf("dirsOf past a thousand links too long to build a path with allocated %.0f times; want none per link", allocs)
+	}
+	r = linkResolver{ctx: context.Background(), via: map[string][]viaLink{}}
+	for j := range 1000 {
+		l := []byte("abcdefghij")
+		for b := range l {
+			if j>>b&1 == 1 {
+				l[b] -= 'a' - 'A'
+			}
+		}
+		r.via["d"] = append(r.via["d"], viaLink{path: string(l), key: "abcdefghij"})
+	}
+	f = "d/" + strings.Repeat("n", 3000) + ".md"
+	built := len("abcdefghij/") + len(f) - len("d/") + 1
+	if dirs := r.dirsOf(f); len(dirs) != 2 || r.steps < 999*built/linkBytesPerStep {
+		t.Errorf("dirsOf = %q after %d steps; want d and one of the links, after one per %d bytes of the 999 paths built again, %d",
+			dirs, r.steps, linkBytesPerStep, 999*built/linkBytesPerStep)
+	}
+}
+
 // Claude Code loads no directory an import names, and nothing under it,
 // while ImportPaths reads code and prose wide: a regex in a code span
 // (`^.*@.*$`) gives the root, @config[:x] in a fenced block or "see @docs"
