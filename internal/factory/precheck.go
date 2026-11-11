@@ -553,15 +553,16 @@ func (p *precheckRun) run(key, what, cmd string) (ProofRun, bool) {
 	run := ProofRun{Command: cmd}
 	start := p.e.now() // the engine's clock, as the QA run's: its time sets the base run's bound (baseBound)
 	var res execx.Result
+	var waited time.Duration // for the copy's databases: no part of the run's own time
 	var err error
 	if dbKeys[key] { // the copy's databases: in turn with the local review's reviewers (db-lock)
-		res, err = p.e.dbScript(p.ctx, p.c, cmd, "precheck "+what, p.limit, func(h dblock.Holder) {
+		res, waited, err = p.e.dbScript(p.ctx, p.c, cmd, "precheck "+what, p.limit, func(h dblock.Holder) {
 			p.e.noteCheck(p.t.ID, "precheck: "+what+" waits for the copy's databases ("+h.String()+")")
 		})
 	} else {
 		res, err = p.e.script(p.ctx, p.c, cmd, "precheck "+what, p.limit)
 	}
-	run.Took = p.e.now().Sub(start).Round(time.Millisecond)
+	run.Took = (p.e.now().Sub(start) - waited).Round(time.Millisecond)
 	code, denied, err := ranTo(res, err)
 	run.Exit, run.Output = code, outputOf(res)
 	run.out, run.errOut = lastBytes(res.Stdout, precheckTailWindow), lastBytes(res.Stderr, precheckTailWindow)
@@ -709,15 +710,20 @@ var dbKeys = map[string]bool{"precheck.specs": true, "precheck.migrations": true
 // takes for the roles of a local round (Layout.DBLock of the copy): the
 // factory's spec and migration commands and the reviewers never use the
 // copy's databases at once. It waits for the lock within timeout, waiting
-// told who holds it; a lock that stays held is a command that did not
-// start, which the checks try again.
-func (e *Engine) dbScript(ctx context.Context, c Copy, script, label string, timeout time.Duration, waiting func(dblock.Holder)) (execx.Result, error) {
+// told who holds it, and waited is how long, on the engine's clock (no part
+// of the command's own time); a lock that stays held is a command that did
+// not start, which the checks try again.
+func (e *Engine) dbScript(ctx context.Context, c Copy, script, label string, timeout time.Duration,
+	waiting func(dblock.Holder)) (_ execx.Result, waited time.Duration, _ error) {
+	began := e.now()
 	lock, err := dblock.Acquire(ctx, e.d.Layout.DBLock(c.Path), dblock.Holder{Role: "factory", Command: label, PID: os.Getpid()}, timeout, waiting)
+	waited = e.now().Sub(began)
 	if err != nil {
-		return execx.Result{Code: -1}, fmt.Errorf("the copy's database lock: %w", err)
+		return execx.Result{Code: -1}, waited, fmt.Errorf("the copy's database lock: %w", err)
 	}
 	defer lock.Release()
-	return e.script(ctx, c, script, label, timeout)
+	res, err := e.script(ctx, c, script, label, timeout)
+	return res, waited, err
 }
 
 // offenseRe is a lint offense line: path:line[:column][:] message.
@@ -1000,11 +1006,11 @@ func (p *precheckRun) specs(cmd string, files []string) {
 // never ends, the base run bounded by baseBound (the cap grown from the red
 // files, or twice the head's run when that is longer). A base run that does
 // not end within it hangs, a failure for you that names the caps to raise
-// when it only runs long, unless rspec printed its result line with no
-// failure before the stop (greenResult): that run ran its examples to their
-// end, so it is green on the base. Where the base run gives no verdict (it
-// hangs, has a problem, or meets changes the factory keeps for you),
-// precheck.md names the head's red examples (unjudged).
+// when it only runs long, whatever it printed: at the stop rspec prints the
+// result line of the examples it finished, so no line tells a hang from a
+// run that ended. Where the base run gives no verdict (it hangs, has a
+// problem, or meets changes the factory keeps for you), precheck.md names
+// the head's red examples (unjudged).
 func (p *precheckRun) onBase(cmd string, run ProofRun, red []specFailure) (baseRed map[string]bool, judged bool) {
 	// On the caller's context from here: the cap neither cuts the lookup
 	// (a red example of a file it did not find would be the change's) nor
@@ -1027,7 +1033,7 @@ func (p *precheckRun) onBase(cmd string, run ProofRun, red []specFailure) (baseR
 	// The detach discards what differs from the branch: the precheck's
 	// own changes go back first, guarded; what it cannot vouch for stays.
 	if !p.restoreOwn() {
-		p.unjudged(red)
+		p.unjudged(red, atBase)
 		return nil, false
 	}
 	headRed := registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "unknown", Command: run.Command, Exit: run.Exit, Took: run.Took}
@@ -1037,13 +1043,9 @@ func (p *precheckRun) onBase(cmd string, run ProofRun, red []specFailure) (baseR
 	base, problem, err := p.e.baseRun(p.parent, p.t, p.c, p.started, p.base, p.head, nil, baseScript, bound)
 	if k, ok := errors.AsType[keptChanges](err); ok {
 		p.say("\n**Not run on the base: %s.**\n", k.why)
-		p.unjudged(red)
+		p.unjudged(red, atBase)
 		p.keep(k.why)
 		return nil, false
-	}
-	green := ""
-	if base.Hung {
-		green = greenResult(base)
 	}
 	switch {
 	case p.parent.Err() != nil:
@@ -1053,21 +1055,18 @@ func (p *precheckRun) onBase(cmd string, run ProofRun, red []specFailure) (baseR
 		return nil, false
 	case problem != "":
 		p.record(headRed)
-		p.unjudged(red)
+		p.unjudged(red, atBase)
 		p.failForYou("precheck.specs `" + baseScript + "` " + problem + problemFix("precheck.specs", baseScript, problem))
 		return nil, false
-	case base.Hung && green == "":
+	case base.Hung:
 		p.record(headRed)
 		p.say("\n`%s` did not end on the base within %s, and the factory stopped it.\n", baseScript, within)
 		p.sayTail("stdout", base.out, precheckCapTail)
 		p.sayTail("stderr", base.errOut, precheckErrTail)
-		p.unjudged(red)
+		p.unjudged(red, atBase)
 		p.failForYou("precheck.specs `" + textx.Clip(baseScript, 120) + "` did not end on the base within " + within +
 			": it hangs; " + hangFix + ", or raise precheck.cap or precheck.cap_max when it only runs long")
 		return nil, false
-	case base.Hung:
-		p.say("\nThe factory stopped `%s` on the base at its bound of %s, after its result line (`%s`): its examples ran to their end, "+
-			"so it is green on the base.\n", baseScript, within, green)
 	}
 	baseRed = map[string]bool{}
 	for _, f := range failures(base.Output) {
@@ -1080,44 +1079,38 @@ func (p *precheckRun) onBase(cmd string, run ProofRun, red []specFailure) (baseR
 // whose run of the change's spec files took took: the cap grown from the n
 // files (precheckCap), or twice took when that is longer, since the head's
 // run covered those files and more; within says it as the hang does
-// ("26m22s (twice the head's run of 13m11s)"). The head's run is bounded by
-// the precheck's cap, so twice it is at most twice cap_max.
+// ("26m22s (twice the head's run of 13m11s)"). took is rounded to the second
+// first (from a second on: capText's), so the bound and both times in the
+// text agree. The head's run is bounded by the precheck's cap, so twice it
+// is at most twice cap_max.
 func baseBound(repo config.FactoryRepo, n int, took time.Duration) (bound time.Duration, within string) {
 	bound, _ = precheckCap(repo, n) // as the precheck's grows from the change's files
+	if took >= time.Second {
+		took = took.Round(time.Second)
+	}
 	if twice := 2 * took; twice > bound {
 		return twice, capText(twice) + " (twice the head's run of " + capText(took) + ")"
 	}
 	return bound, capText(bound)
 }
 
-// resultRe is rspec's result line, which it prints once its examples ran
-// ("34 examples, 1 failure"); greenRe the one of a run with no failure and
-// no error outside of its examples ("34 examples, 0 failures, 2 pending").
-var (
-	resultRe = regexp.MustCompile(`(?m)^[ \t]*\d+ examples?, \d+ failures?\b.*$`)
-	greenRe  = regexp.MustCompile(`^\d+ examples?, 0 failures(?:, \d+ pending)?$`)
-)
-
-// greenResult is the result line with no failure of a spec run the factory
-// stopped (greenRe), read from the ends of what it printed on stdout and on
-// stderr without what a terminal acts on: "" when no result line is there,
-// or one names a failure or an error. rspec lists the failed examples after
-// that line, and the stop can cut the list, so a red result judges nothing.
-func greenResult(run ProofRun) string {
-	var green string
-	for _, line := range resultRe.FindAllString(textx.StripTerminal(string(run.out)+"\n"+string(run.errOut)), -1) {
-		if line = strings.TrimSpace(line); !greenRe.MatchString(line) {
-			return ""
+// unjudged names the head's red examples red in precheck.md where the base
+// run gave no verdict: those of the spec files the base has (atBase), which
+// no run judged, and apart from them those of a spec file the base lacks,
+// the change's with no base run.
+func (p *precheckRun) unjudged(red []specFailure, atBase []string) {
+	var open, lacks []specFailure
+	for _, f := range red {
+		if slices.Contains(atBase, f.file) {
+			open = append(open, f)
+		} else {
+			lacks = append(lacks, f)
 		}
-		green = line
 	}
-	return green
-}
-
-// unjudged names the head's red examples red in precheck.md, where the
-// base run gave no verdict on them.
-func (p *precheckRun) unjudged(red []specFailure) {
-	p.say("\nRed at the head, not judged on the base:\n\n```\n%s\n```\n", failureLines(red))
+	p.say("\nRed at the head, not judged on the base:\n\n```\n%s\n```\n", failureLines(open))
+	if len(lacks) > 0 {
+		p.say("\nRed at the head, of a spec file the base lacks (the change's):\n\n```\n%s\n```\n", failureLines(lacks))
+	}
 }
 
 // failureLines are the lines of the failing examples fs, as rspec lists

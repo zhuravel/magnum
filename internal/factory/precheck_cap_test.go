@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/dblock"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 )
@@ -618,69 +619,130 @@ func TestTheBaseRunsBoundIsTwiceTheHeadsRunWhenThatIsLonger(t *testing.T) {
 	}
 }
 
-// A base run its bound stopped after rspec printed its result line with no
-// failure ("34 examples, 0 failures", with pending examples, in colour) ran
-// its examples to their end: it is green on the base, so every red example
-// of its files at the head is the change's, as for a base run that ended,
-// and precheck.md says the factory stopped it after that line.
-func TestABaseRunStoppedAfterAResultLineWithNoFailureIsGreenOnTheBase(t *testing.T) {
-	for _, tc := range []struct{ name, line, says string }{
-		{"no failure", "34 examples, 0 failures", "34 examples, 0 failures"},
-		{"pending examples", "34 examples, 0 failures, 2 pending", "34 examples, 0 failures, 2 pending"},
-		{"in colour", "\x1b[32m1 example, 0 failures\x1b[0m", "1 example, 0 failures"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+// A base run its bound stopped hangs for you whatever its output says: at
+// the stop rspec prints the result line of the examples it finished (in
+// rspec-core 3.13.6 a run that hung on its third example printed "3
+// examples, 0 failures"), so a line with no failure is no verdict. The task
+// needs you, and the writer gets no fix turn.
+func TestABaseRunStoppedAtItsBoundHangsWhateverItsResultLineSays(t *testing.T) {
+	for _, line := range []string{"3 examples, 0 failures", "34 examples, 1 failure"} {
+		t.Run(line, func(t *testing.T) {
 			r := newCodingRig(t)
 			r.redOnMaster()
 			task := r.codingTask("PR-12482", "bug")
+			r.startStage(task)
 			head := r.fix(task)
 			r.smallCaps()
-			r.hangOnTheBase("..................................\n\nFinished in 10 minutes 0 seconds (files took 14.18 seconds to load)\n" +
-				tc.line + "\n\nCoverage report generated\n")
-			res, err := r.e.precheck(r.ctx, task, r.cp)
-			const why = "precheck: specs: 1 example red at the head and green on the base (spec/models/credit_spec.rb)"
-			if err != nil || res.Passed || res.ForYou || res.Why != why {
-				t.Fatalf("precheck %+v, %v; want the change's red example to fail it: %s", res, err, why)
+			r.hangOnTheBase("..\n\nFinished in 3.4 seconds (files took 0.30151 seconds to load)\n" + line + "\n")
+			r.endTurns(task, 1)
+			if ps := r.rt.promptsTo("fx-writer"); len(ps) != 1 {
+				t.Fatalf("the writer got %d prompts (%+v); want no fix turn for a base run that hangs", len(ps), ps)
 			}
-			if got := r.checksOf(task.ID, "spec"); !slices.Equal(got, []string{"fail/code"}) {
-				t.Fatalf("spec checks %q, want the head's red run, the change's", got)
+			got := r.reload(task.ID)
+			if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "did not end on the base within 600ms: it hangs") {
+				t.Fatalf("task %s waits %q; want it to need you for the base run that hangs", got.State, got.WaitsWhat)
+			}
+			if got := r.checksOf(task.ID, "spec"); !slices.Contains(got, "fail/unknown") || slices.Contains(got, "fail/code") {
+				t.Fatalf("spec checks %q, want the head's red run unjudged, never the change's", got)
 			}
 			report := r.readTask(task.ID, precheckFile)
-			for _, want := range []string{"after its result line (`" + tc.says + "`)", "the change's:\n\n```\n" + headsRedLine + "\n```"} {
-				if !strings.Contains(report, want) {
-					t.Fatalf("%s lacks %q:\n%s", precheckFile, want, report)
-				}
-			}
-			if strings.Contains(report, "hangs") {
-				t.Fatalf("%s says the base run hangs:\n%s", precheckFile, report)
+			if !strings.Contains(report, "Red at the head, not judged on the base:\n\n```\n"+headsRedLine+"\n```") ||
+				strings.Contains(report, "green on the base") {
+				t.Fatalf("%s does not leave the head's red example unjudged:\n%s", precheckFile, report)
 			}
 			r.onBranch(task.Branch, head)
 		})
 	}
 }
 
-// A base run its bound stopped after a result line that names a failure,
-// or an error outside of the examples, still hangs for you: rspec lists the
-// failed examples after that line, and the stop can cut the list, so no red
-// example is judged on it.
-func TestABaseRunStoppedAfterAResultLineWithAFailureStillHangsForYou(t *testing.T) {
-	for _, line := range []string{"34 examples, 1 failure", "34 examples, 0 failures, 1 error occurred outside of examples"} {
-		t.Run(line, func(t *testing.T) {
-			r := newCodingRig(t)
-			r.redOnMaster()
-			task := r.codingTask("PR-12483", "bug")
-			r.fix(task)
-			r.smallCaps()
-			r.hangOnTheBase("Finished in 10 minutes 0 seconds (files took 14.18 seconds to load)\n" + line + "\n\nFailed examples:\n\n")
-			res, err := r.e.precheck(r.ctx, task, r.cp)
-			const why = "precheck: precheck.specs `bin/specs spec/models/credit_spec.rb` did not end on the base within 600ms: it hangs; "
-			if err != nil || res.Passed || !res.ForYou || !strings.HasPrefix(res.Why, why) {
-				t.Fatalf("precheck %+v, %v; want a failure for you: %s…", res, err, why)
-			}
-			if got := r.checksOf(task.ID, "spec"); !slices.Equal(got, []string{"fail/unknown"}) {
-				t.Fatalf("spec checks %q, want the head's red run's row, unjudged", got)
-			}
-		})
+// The head's time is its run's own: a wait for the copy's databases (a
+// reviewer of the local review holds them) before the run is no part of
+// it, so the base run's bound is twice the run alone.
+func TestTheHeadsTimeLeavesOutItsWaitForTheCopysDatabases(t *testing.T) {
+	r := newCodingRig(t)
+	r.redOnMaster()
+	task := r.codingTask("PR-12486", "bug")
+	head := r.fix(task)
+	r.headRunTakes(5*time.Minute + 30*time.Second)
+	var mu sync.Mutex
+	var baseBounds []time.Duration
+	r.seenMise = func(c execx.Cmd) {
+		if s := scriptOf(c); strings.HasPrefix(s, "bin/specs ") && !strings.Contains(s, "app/credit.rb") {
+			mu.Lock()
+			baseBounds = append(baseBounds, c.Timeout)
+			mu.Unlock()
+		}
+	}
+	reviewer, err := dblock.Acquire(r.ctx, r.layout.DBLock(r.copyDir), dblock.Holder{Role: "claude-review", Command: "bin/rspec spec/models/credit_spec.rb"}, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan PrecheckResult, 1)
+	go func() {
+		res, err := r.e.precheck(r.ctx, task, r.cp)
+		if err != nil {
+			t.Errorf("precheck: %v", err)
+		}
+		done <- res
+	}()
+	waitFor(t, "the precheck's specs to wait for the copy's databases", func() bool {
+		return strings.Contains(r.e.checkNote(task.ID), "precheck: specs waits for the copy's databases")
+	})
+	r.clock.Add(8 * time.Minute) // the reviewer's command runs on
+	reviewer.Release()
+	if res := <-done; !res.Passed {
+		t.Fatalf("precheck %+v; want passed, its red example red on the base too", res)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(baseBounds, []time.Duration{11 * time.Minute}) {
+		t.Errorf("the base run is bounded by %v, want twice the head's run of 5m30s alone, 11m (not 27m with the wait)", baseBounds)
+	}
+	r.onBranch(task.Branch, head)
+}
+
+// The head's time is rounded to the second before it is doubled, so the
+// bound and both times in its text agree (a sub-second time, a test's,
+// keeps its milliseconds).
+func TestTheBaseRunsBoundDoublesTheHeadsTimeRoundedToTheSecond(t *testing.T) {
+	repo := config.FactoryRepo{Precheck: config.FactoryPrecheck{Cap: config.Duration{Duration: 10 * time.Minute}}}
+	for _, tc := range []struct {
+		took, want time.Duration
+		within     string
+	}{
+		{13*time.Minute + 11400*time.Millisecond, 26*time.Minute + 22*time.Second, "26m22s (twice the head's run of 13m11s)"},
+		{13*time.Minute + 11600*time.Millisecond, 26*time.Minute + 24*time.Second, "26m24s (twice the head's run of 13m12s)"},
+		{400 * time.Millisecond, 10*time.Minute + 15*time.Second, "10m15s"},
+	} {
+		if got, within := baseBound(repo, 1, tc.took); got != tc.want || within != tc.within {
+			t.Errorf("the bound after a head run of %s is %s (%s), want %s (%s)", tc.took, got, within, tc.want, tc.within)
+		}
+	}
+}
+
+// A red example of a spec file the base lacks is the change's, judged with
+// no base run: where the base run of the other red files gives no verdict,
+// precheck.md lists it under its own heading, never with the examples the
+// base did not judge.
+func TestARedExampleOfASpecFileTheBaseLacksIsNeverListedAsUnjudged(t *testing.T) {
+	r := newCodingRig(t)
+	r.redOnMaster()
+	task := r.codingTask("PR-12487", "bug")
+	r.fix(task)
+	r.commit("PR-12487 a red spec", map[string]string{"spec/models/credit_extra_spec.rb": "expect: def extra in app/credit.rb\n"})
+	r.smallCaps()
+	r.hangOnTheBase("1 example so far\n")
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil || res.Passed || !res.ForYou || !strings.Contains(res.Why, "did not end on the base within 600ms: it hangs") {
+		t.Fatalf("precheck %+v, %v; want the base run that hangs to fail it for you", res, err)
+	}
+	report := r.readTask(task.ID, precheckFile)
+	const extra = "rspec ./spec/models/credit_extra_spec.rb:1 # app/credit.rb expects def extra"
+	for _, want := range []string{"Red at the head, not judged on the base:\n\n```\n" + headsRedLine + "\n```",
+		"Red at the head, of a spec file the base lacks (the change's):\n\n```\n" + extra + "\n```"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("%s lacks %q:\n%s", precheckFile, want, report)
+		}
 	}
 }
 

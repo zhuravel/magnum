@@ -450,7 +450,7 @@ func (e *Engine) specRun(ctx context.Context, c Copy, cmd, rev string, timeout t
 		run.Tree = tree
 	}
 	start := time.Now()
-	res, err := e.dbScript(ctx, c, cmd, label, timeout, nil) // specs use the copy's databases: in turn with the reviewers
+	res, _, err := e.dbScript(ctx, c, cmd, label, timeout, nil) // specs use the copy's databases: in turn with the reviewers
 	run.Took = time.Since(start).Round(time.Millisecond)
 	code, denied, err := ranTo(res, err)
 	run.Exit, run.Output = code, outputOf(res)
