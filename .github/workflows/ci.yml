@@ -1,10 +1,14 @@
-# CI for magnum. Three jobs:
+# CI for magnum. Four jobs:
 #   - test:   on macOS (magnum is a macOS tool: launchd, AppleScript; its tests run where it runs), the gate
 #             `make test` under the race detector with shuffled order (GOFLAGS carries the flags into the
 #             gate, so the gate stays one definition; its tests run in the Makefile's TEST_TZ, and its
-#             complexity ratchet lints the whole tree with the golangci-lint the setup puts on PATH), the
-#             build, a smoke run of the built binary, an Intel cross-compile and the landing scripts'
-#             selftest. The weekly run adds Go "stable" (Homebrew builds the formula with its own, newest Go).
+#             complexity ratchet lints the whole tree with the golangci-lint the setup puts on PATH) on
+#             every package but internal/engine, the build, a smoke run of the built binary, an Intel
+#             cross-compile and the landing scripts' selftest. The weekly run adds Go "stable" (Homebrew
+#             builds the formula with its own, newest Go).
+#   - engine: internal/engine under the race detector, shuffled, in two halves on runners of their own
+#             (`make test-race` with -run ^TestA and -run ^Test[B-Z], the split the local gate uses), with
+#             the same Go legs as test.
 #   - stress: weekly and on demand, the scheduling-sensitive packages at GOMAXPROCS 1 and 3 (the runner has
 #             3 vCPUs; a 16-core workstation hides these failures).
 #   - static: on ubuntu (no macOS queue): modules verified and tidy, gofmt over every tracked .go file,
@@ -51,11 +55,17 @@ jobs:
         with:
           go-version: ${{ matrix.go == 'stable' && 'latest' || '' }}
 
-      - name: gate under the race detector (complexity ratchet, gofmt, modules, vet, tests; the private-name checks skip without local patterns and registry)
+      - name: gate under the race detector without internal/engine (complexity ratchet, gofmt, modules, vet, tests; the private-name checks skip without local patterns and registry)
         env:
-          # The engine package alone takes 15-20 minutes here under -race (about 5 locally), so 20m failed it.
-          GOFLAGS: -race -shuffle=on -timeout=35m
-        run: make test
+          # The engine, which took 34 minutes and more here under -race beside the other 54 test binaries
+          # (2100 s on 729bb7d5, past this step's 35m), runs in the engine job. -gcflags turns checkptr off for
+          # the SQLite driver alone (Makefile RACE_GCFLAGS). The slowest binary left, internal/factory, took
+          # 783 s beside the engine; 25m bounds one binary well before the job's 60 minutes, so a hang still
+          # fails here with its goroutines' stacks.
+          GOFLAGS: -race -gcflags=modernc.org/...=-d=checkptr=0 -shuffle=on -timeout=25m
+        run: |
+          pkgs="$(go list ./... | grep -v '/internal/engine$' | paste -sd ' ' -)"
+          make test TEST_PKGS="$pkgs"
 
       - name: build
         run: make build
@@ -68,6 +78,33 @@ jobs:
 
       - name: landing scripts selftest (throwaway repositories under $TMPDIR, fakes for go, mise and magnum)
         run: .claude/skills/magnum-improve/scripts/selftest.sh
+
+  engine:
+    name: Engine (Go ${{ matrix.go }}, -run ${{ matrix.run }})
+    runs-on: macos-latest
+    # A half takes about 3.5 minutes at GOMAXPROCS 3 on a workstation (209 s and 175 s). Under -race the runner
+    # was 2 to 3.3 times as slow (the engine's earlier times in the test job), so 7 to 12 minutes here;
+    # -timeout 20m is 1.7 times the slowest, and the job's 30 minutes leave the panic with the hung goroutines'
+    # stacks room after the setup and the race build.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ${{ fromJSON(github.event_name == 'schedule' && '["mise.toml","stable"]' || '["mise.toml"]') }}
+        run: ["^TestA", "^Test[B-Z]"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-environment
+        with:
+          go-version: ${{ matrix.go == 'stable' && 'latest' || '' }}
+
+      - name: internal/engine under the race detector, one half (TestEveryTestFallsInOneHalfOfTheRaceGatesSplit keeps every test in one)
+        env:
+          RUN: ${{ matrix.run }}
+        run: make test-race PKGS=./internal/engine TESTFLAGS="-run=$RUN -shuffle=on -timeout=20m"
 
   stress:
     # Tests whose fakes race the round's goroutines pass on 16 cores and fail at GOMAXPROCS 1-3.

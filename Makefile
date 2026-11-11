@@ -29,6 +29,14 @@ TEST_P_FLAG = $(if $(TEST_P),-p $(TEST_P))
 # reads it past the test log), so a pass cached by a run by hand in another zone would pass make test too: the gate adds
 # -skip TZ=$(TEST_TZ), which skips no test (no test name holds "=") and puts the zone into the cache's key
 TEST_TZ   ?= Asia/Kathmandu
+# TEST_PKGS: the packages the gate tests (default every one). CI's test job passes every package but internal/engine,
+# which its engine job tests under make test-race in two halves (-run ^TestA and -run ^Test[B-Z]), as you do here
+TEST_PKGS ?= ./...
+# RACE_GCFLAGS: test-race's -gcflags. -race turns on checkptr, which checks every unsafe.Pointer conversion, and
+# modernc.org/sqlite and modernc.org/libc (Go transpiled from C) make so many that the checks took about 30% of the
+# engine's CPU under -race. They go off only there: magnum's own packages keep them, and the race detector stays on
+# everywhere. CI's GOFLAGS carry the same flag into its race gate
+RACE_GCFLAGS ?= -gcflags=modernc.org/...=-d=checkptr=0
 gate_locked = if [ -n "$$MAGNUM_GATE_LOCKED" ]; then $(1); \
   elif command -v lockf >/dev/null 2>&1; then \
     lockf -k -s -t 0 "$(GATE_LOCK)" true || echo "make: waiting for $(GATE_LOCK): another checkout's gate runs"; \
@@ -57,21 +65,22 @@ test:
 	@$(call gate_locked,$(MAKE) --no-print-directory gate)
 
 ## gate: the private-name guard, the complexity ratchet (lint-ratchet), gofmt check (every tracked .go file, and new
-## ones git does not ignore), go.sum verified and go.mod tidy, vet, and the hermetic unit tests (TEST_P binaries at
-## once, in TEST_TZ); run it as make test, which holds the machine's gate lock
+## ones git does not ignore), go.sum verified and go.mod tidy, vet, and the hermetic unit tests of TEST_PKGS (TEST_P
+## binaries at once, in TEST_TZ); run it as make test, which holds the machine's gate lock
 gate: check-private lint-ratchet
 	@out="$$(git ls-files -z --cached --others --exclude-standard '*.go' | xargs -0 gofmt -l)"; if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	$(GO) mod verify
 	$(GO) mod tidy -diff
 	$(GO) vet ./...
-	TZ=$(TEST_TZ) $(GO) test $(TEST_P_FLAG) -skip 'TZ=$(TEST_TZ)' ./...
+	TZ=$(TEST_TZ) $(GO) test $(TEST_P_FLAG) -skip 'TZ=$(TEST_TZ)' $(TEST_PKGS)
 
-## test-race: go test -count=1 -race -timeout 30m on PKGS (the packages you touched; default ./...) in TEST_TZ under
-## GATE_LOCK, TEST_P binaries at once (the engine alone takes 8-10 minutes under -race on a busy laptop); TESTFLAGS
-## adds flags and overrides these (-run, -count=3 -cpu 1,3 -shuffle=on, -timeout 45m)
+## test-race: go test -count=1 -race -timeout 30m with RACE_GCFLAGS on PKGS (the packages you touched; default ./...)
+## in TEST_TZ under GATE_LOCK, TEST_P binaries at once (the engine, split in two with TESTFLAGS="-run ^TestA" and
+## "-run ^Test[B-Z]", takes about 3 minutes a half on a busy laptop); TESTFLAGS adds flags and overrides these (-run,
+## -count=3 -cpu 1,3 -shuffle=on, -timeout 45m)
 PKGS ?= ./...
 test-race:
-	@$(call gate_locked,env TZ=$(TEST_TZ) $(GO) test -count=1 -race -timeout 30m $(TEST_P_FLAG) $(TESTFLAGS) $(PKGS))
+	@$(call gate_locked,env TZ=$(TEST_TZ) $(GO) test -count=1 -race $(RACE_GCFLAGS) -timeout 30m $(TEST_P_FLAG) $(TESTFLAGS) $(PKGS))
 
 ## check-private: this repo is public; fail when a tracked file mentions a name listed in MAGNUM_PRIVATE_PATTERNS
 ## (a grep -E pattern set in the gitignored mise.local.toml, never in a tracked file), or a person's GitHub

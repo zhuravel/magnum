@@ -79,10 +79,11 @@ function your change pushes past a threshold fails the gate: split it, never add
 ratchet, whose names only shrink.
 
 Run `make test-race PKGS=…` on the packages you touched before `make test`. It passes `-timeout 30m`
-(a `-timeout` in `TESTFLAGS` overrides it), since go test's 10-minute default is not enough: under
-`-race`, with 4 binaries at once on a busy laptop, the engine alone takes 8 to 10 minutes. Without
-`-race` the whole suite takes about 40 seconds (a test binary skips the file syncs of
-`fsx.WriteFileAtomic`). Both run the tests in `TZ=Asia/Kathmandu` (UTC+5:45, the Makefile's `TEST_TZ`),
+(a `-timeout` in `TESTFLAGS` overrides it), since go test's 10-minute default is not enough, and turns
+`-race`'s checkptr off for the SQLite driver alone (`RACE_GCFLAGS`). Run the engine in two halves,
+`TESTFLAGS="-run ^TestA"` and `TESTFLAGS="-run ^Test[B-Z]"`, as CI's engine job does: under `-race` on a
+busy laptop each takes about 3 minutes. Without `-race` the whole suite takes about 40 seconds (a test
+binary skips the file syncs of `fsx.WriteFileAtomic`). Both run the tests in `TZ=Asia/Kathmandu` (UTC+5:45, the Makefile's `TEST_TZ`),
 on this machine and on CI alike: a test that checks a time the code shows in local time builds its
 expectation with the code's own formatter (`waitClock`) or from `.Local()`, never as a literal of the zone
 it was written in (go test's cache does not key on TZ: `make test` adds `-skip TZ=<zone>`, which skips no
