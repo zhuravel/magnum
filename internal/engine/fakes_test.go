@@ -2170,6 +2170,13 @@ func (f *fakeSlots) ResetFailed(_ context.Context, slot store.Slot, cause string
 	return f.resetFailures[slot.ID], nil
 }
 
+// RecreateDatabases records the recreation of the slot's databases (the
+// readiness plan's Recreate after MySQL's 3730).
+func (f *fakeSlots) RecreateDatabases(_ context.Context, slot store.Slot, pool config.Pool) error {
+	f.record("recreate_dbs:" + slot.Name + ":" + pool.Repo)
+	return nil
+}
+
 // setSchema records fp loaded from sha on slot id ("" = unknown).
 func (f *fakeSlots) setSchema(ctx context.Context, id int64, fp, sha string) error {
 	return f.st.UpdateSlotFields(ctx, id, func(u *store.SlotUpdate) {
@@ -2373,6 +2380,10 @@ func (fakeGit) RevParse(_ context.Context, _, ref string) (string, error) {
 }
 
 func (fakeGit) FetchCommit(context.Context, string, string, int) error { return nil }
+
+// FetchPR fetches nothing: every head is in the clone (Tree reads any),
+// unless a test's git (headGit) lacks it.
+func (fakeGit) FetchPR(context.Context, string, int) (string, error) { return "", nil }
 
 // ChangedNames cannot tell: a session that reloads its project config is
 // quit unless a test's git (projectGit) or the stored file list says the

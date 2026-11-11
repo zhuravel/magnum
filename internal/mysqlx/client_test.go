@@ -431,3 +431,67 @@ func TestDropAllEmpty(t *testing.T) {
 		t.Fatalf("want no results, got %v", res)
 	}
 }
+
+// Recreate drops a database and creates it again empty with the character
+// set and collation it had (a schema load that MySQL refuses with 3730: a
+// table schema.rb does not know refers to one it drops), through the same
+// guard as Drop: a refused name sends nothing.
+func TestRecreateKeepsTheCharsetAndCollation(t *testing.T) {
+	srv := &fakeServer{onQuery: func(string, []driver.NamedValue) ([]string, [][]driver.Value, error) {
+		return []string{"cs", "co"}, [][]driver.Value{{[]byte("utf8mb4"), []byte("utf8mb4_unicode_ci")}}, nil
+	}}
+	c := newFakeClient(t, srv)
+	if err := c.Recreate(context.Background(), "talkable_development__review3", reviewGuard); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"DROP DATABASE IF EXISTS `talkable_development__review3`",
+		"CREATE DATABASE IF NOT EXISTS `talkable_development__review3` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci",
+	}
+	if got := srv.execed(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("execs = %v, want %v", got, want)
+	}
+	if q := srv.queried(); len(q) != 1 || len(q[0].Args) != 1 || q[0].Args[0].Value != "talkable_development__review3" {
+		t.Fatalf("queries = %+v, want the schema's own row", q)
+	}
+}
+
+func TestRecreateOfADatabaseThatIsGoneCreatesItWithTheServersDefaults(t *testing.T) {
+	srv := &fakeServer{onQuery: func(string, []driver.NamedValue) ([]string, [][]driver.Value, error) {
+		return []string{"cs", "co"}, nil, nil
+	}}
+	c := newFakeClient(t, srv)
+	if err := c.Recreate(context.Background(), "talkable_test__review3", reviewGuard); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"DROP DATABASE IF EXISTS `talkable_test__review3`", "CREATE DATABASE IF NOT EXISTS `talkable_test__review3`"}
+	if got := srv.execed(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("execs = %v, want %v", got, want)
+	}
+}
+
+func TestRecreateRefusedNeverReachesServer(t *testing.T) {
+	srv := &fakeServer{}
+	c := newFakeClient(t, srv)
+	for _, name := range []string{"talkable_development", "talkable_development__repo3", "mysql", "talkable_x__review1`; --"} {
+		if err := c.Recreate(context.Background(), name, reviewGuard); !errors.Is(err, ErrGuard) {
+			t.Errorf("Recreate(%q) = %v, want ErrGuard", name, err)
+		}
+	}
+	if len(srv.execed())+len(srv.queried()) != 0 {
+		t.Fatalf("server saw statements for refused names: %v %v", srv.execed(), srv.queried())
+	}
+}
+
+func TestRecreateRefusesACharsetItCannotQuote(t *testing.T) {
+	srv := &fakeServer{onQuery: func(string, []driver.NamedValue) ([]string, [][]driver.Value, error) {
+		return []string{"cs", "co"}, [][]driver.Value{{[]byte("utf8mb4; DROP"), []byte("x")}}, nil
+	}}
+	c := newFakeClient(t, srv)
+	if err := c.Recreate(context.Background(), "talkable_test__review3", reviewGuard); err == nil {
+		t.Fatal("recreated with a charset that is no identifier")
+	}
+	if got := srv.execed(); len(got) != 0 {
+		t.Fatalf("server saw %v, want nothing dropped", got)
+	}
+}

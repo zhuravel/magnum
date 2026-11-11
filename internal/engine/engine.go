@@ -230,6 +230,9 @@ type Slots interface {
 	RecordSchema(ctx context.Context, slot store.Slot, c slots.SchemaCheck) error
 	ResetFailed(ctx context.Context, slot store.Slot, cause string) (int, error)
 	EnsureSchema(ctx context.Context, slot store.Slot, pool config.Pool) (string, error)
+	// RecreateDatabases empties the slot's databases when MySQL refused the
+	// round's reload with 3730 (the readiness plan's Recreate).
+	RecreateDatabases(ctx context.Context, slot store.Slot, pool config.Pool) error
 }
 
 // Git is the part of *gitx.Client the engine reads (round context, clone
@@ -267,6 +270,10 @@ type Git interface {
 	// (config_links.go).
 	Tree(ctx context.Context, dir, rev string, keep func(path string) bool) (gitx.Tree, error)
 	Blobs(ctx context.Context, dir, rev string, paths []string) (map[string]string, error)
+	// FetchPR brings the head of a trivial push that settles without a
+	// round into the PR's clone (refs/pull/N/head, as a round's checkout
+	// fetches it), so the gates read its tree (fetchTrivialHead).
+	FetchPR(ctx context.Context, mainClone string, number int) (string, error)
 }
 
 // Cleaner plans and applies storage cleanup (*cleanup.Planner). PlanFrom

@@ -2,8 +2,9 @@
 // Talkable's bin/worktree-setup creates (talkable_<env>[_<role>]__<slug>) on
 // the local DBngin server.
 //
-// Reads are unrestricted; the one destructive operation, Drop, is gated by a
-// Guard that refuses unsuffixed base databases, system schemas and any slug
+// Reads are unrestricted; the destructive operations, Drop and Recreate (a
+// drop, then an empty database of the same name), are gated by a Guard that
+// refuses unsuffixed base databases, system schemas and any slug
 // the caller has not explicitly allowed. SQL identifiers are validated against
 // ^[A-Za-z0-9_]+$ and back-quoted before they reach the server.
 //
@@ -281,6 +282,57 @@ func (c *Client) Drop(ctx context.Context, name string, g Guard) error {
 		return fmt.Errorf("mysqlx: drop %s: %w", name, err)
 	}
 	return nil
+}
+
+// Recreate empties one database the way a schema load cannot: a table the
+// load does not know (one a PR's schema added) that refers to a table it
+// drops makes MySQL refuse the DROP TABLE (3730), so the load fails until
+// the database starts empty. After g.Check approves name, as for Drop, it
+// reads the database's character set and collation, drops it (Drop's
+// statement and bound) and creates it again with them (CREATE DATABASE IF
+// NOT EXISTS, so a retry is harmless; the server's defaults when it was
+// gone). A refusal wraps ErrGuard and sends nothing to the server; a
+// character set or collation that is not an identifier drops nothing.
+func (c *Client) Recreate(ctx context.Context, name string, g Guard) error {
+	if err := g.Check(name); err != nil {
+		return err
+	}
+	q, err := quoteIdent(name)
+	if err != nil { // unreachable after Check
+		return fmt.Errorf("%w: %w", ErrGuard, err)
+	}
+	opts, err := c.createOptions(ctx, name)
+	if err != nil {
+		return err
+	}
+	if err := c.Drop(ctx, name, g); err != nil {
+		return err
+	}
+	ctx, cancel := bounded(ctx, callTimeout)
+	defer cancel()
+	if _, err := c.db.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS "+q+opts); err != nil {
+		return fmt.Errorf("mysqlx: create %s: %w", name, err)
+	}
+	return nil
+}
+
+// createOptions is the CHARACTER SET and COLLATE clause that creates name
+// as it is now, "" when it does not exist.
+func (c *Client) createOptions(ctx context.Context, name string) (string, error) {
+	ctx, cancel := bounded(ctx, callTimeout)
+	defer cancel()
+	var cs, co string
+	err := c.db.QueryRowContext(ctx, `SELECT default_character_set_name, default_collation_name
+		FROM information_schema.schemata WHERE schema_name = ?`, name).Scan(&cs, &co)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("mysqlx: character set of %s: %w", name, err)
+	case !identRe.MatchString(cs) || !identRe.MatchString(co):
+		return "", fmt.Errorf("mysqlx: %s has character set %q and collation %q, which are not identifiers", name, cs, co)
+	}
+	return " CHARACTER SET " + cs + " COLLATE " + co, nil
 }
 
 // DropResult is the outcome for one name in DropAll; Err is nil on success.

@@ -1095,7 +1095,9 @@ func (e *Engine) slotEnv(job *roundJob) map[string]string {
 // reset_db_on_schema_change off). The reset has the release's budget
 // (slots.ResetDBTimeout), apart from ready_timeout; the slot's schema is
 // unknown until it passed (ForgetSchema, then Loaded records the
-// checkout's). A continue runs no readiness step, so no check either.
+// checkout's); a reset MySQL refused with 3730 empties the slot's databases
+// (Recreate) and runs once more. A continue runs no readiness step, so no
+// check either.
 func (e *Engine) readinessPlan(ctx context.Context, job *roundJob, kind string) pipeline.ReadinessPlan {
 	r := e.cfg.ReadinessFor(job.repo.FullName())
 	plan := pipeline.ReadinessPlan{Prepare: r.Prepare, Ready: r.Ready, Timeout: r.Timeout, Env: e.slotEnv(job)}
@@ -1127,6 +1129,8 @@ func (e *Engine) readinessPlan(ctx context.Context, job *roundJob, kind string) 
 	}
 	pr := job.repo.FullName() + "#" + strconv.Itoa(job.pr.Number)
 	plan.ResetFailed = func(ctx context.Context, cause string) { e.resetFailed(ctx, slot, pr, cause) }
+	pool := *p
+	plan.Recreate = func(ctx context.Context) error { return e.d.Slots.RecreateDatabases(ctx, slot, pool) }
 	return plan
 }
 

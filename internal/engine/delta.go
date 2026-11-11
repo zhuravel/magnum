@@ -308,7 +308,8 @@ func (e *Engine) settlePush(ctx context.Context, repo store.Repo, w config.Watch
 
 // settleTrivial settles pr, whose head is a trivial push (dc) since its
 // reviewed commit from: reviewed at the head with the last verdict, nothing
-// queued, with the pr.trivial_delta event and the note for the card.
+// queued, with the pr.trivial_delta event and the note for the card, and
+// the head fetched into the PR's clone (fetchTrivialHead).
 func (e *Engine) settleTrivial(ctx context.Context, repo store.Repo, pr store.PR, from string, dc deltaCheck) error {
 	err := e.st.TransitionPR(ctx, pr.ID, []string{pr.State}, store.PRReviewed, func(u *store.PRUpdate) {
 		u.Where("head_sha", pr.HeadSHA)
@@ -327,7 +328,42 @@ func (e *Engine) settleTrivial(ctx context.Context, repo store.Repo, pr store.PR
 	e.recordTrivial(ctx, repo, pr, TrivialSkip{From: from, To: pr.HeadSHA, Classes: dc.classes, Files: dc.files, At: e.now()},
 		fmt.Sprintf("%s → reviewed: the push to %s %s since the review of %s; no re-review, the review stands",
 			pr.State, textx.ShortSHA(pr.HeadSHA), dc.change(), textx.ShortSHA(from)))
+	e.fetchTrivialHead(ctx, pr)
 	return nil
+}
+
+// trivialFetch bounds fetchTrivialHead's fetch, which runs in the tick: a
+// slow remote must not stall the poll and the dispatch.
+const trivialFetch = 30 * time.Second
+
+// fetchTrivialHead brings pr's head, a trivial push settleTrivial just took
+// as reviewed, into the clone the gates read its tree in (headClone), as a
+// round's checkout fetches a head (Git.FetchPR: refs/pull/N/head), and
+// counts it fetched (headFetched). Only a round's checkout fetched a head
+// before, and none follows a settled push: from 2026-11-10 every tick read
+// the tree of such a head from a clone that lacked it ("not a tree
+// object", 1,398 warnings), and two PRs' needs-you lines said for 18 hours
+// that magnum cannot tell which files they change. A fetch that fails is
+// one warning; the gates then fail on the head as before, until a fetch
+// brings it. A dry run, or a PR without a clone, fetches nothing.
+func (e *Engine) fetchTrivialHead(ctx context.Context, pr store.PR) {
+	if e.d.DryRun || e.d.Git == nil {
+		return
+	}
+	clone := e.headClone(ctx, pr)
+	if clone == "" {
+		return
+	}
+	fctx, cancel := context.WithTimeout(ctx, trivialFetch)
+	defer cancel()
+	if _, err := e.d.Git.FetchPR(fctx, clone, pr.Number); err != nil {
+		if ctx.Err() == nil {
+			e.log.Warn("trivial delta: cannot fetch the head into the PR's clone; the gates cannot read its tree until a fetch brings it",
+				"pr", pr.ID, "head", textx.ShortSHA(pr.HeadSHA), "err", err)
+		}
+		return
+	}
+	e.headFetched(pr.HeadSHA)
 }
 
 // settleSmallDelta is dispatch's second look at a re-review that waited for

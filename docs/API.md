@@ -11298,6 +11298,10 @@ type Git interface {
 	// (config_links.go).
 	Tree(ctx context.Context, dir, rev string, keep func(path string) bool) (gitx.Tree, error)
 	Blobs(ctx context.Context, dir, rev string, paths []string) (map[string]string, error)
+	// FetchPR brings the head of a trivial push that settles without a
+	// round into the PR's clone (refs/pull/N/head, as a round's checkout
+	// fetches it), so the gates read its tree (fetchTrivialHead).
+	FetchPR(ctx context.Context, mainClone string, number int) (string, error)
 }
     Git is the part of *gitx.Client the engine reads (round context, clone
     discovery for repos.clone_path).
@@ -12198,6 +12202,9 @@ type Slots interface {
 	RecordSchema(ctx context.Context, slot store.Slot, c slots.SchemaCheck) error
 	ResetFailed(ctx context.Context, slot store.Slot, cause string) (int, error)
 	EnsureSchema(ctx context.Context, slot store.Slot, pool config.Pool) (string, error)
+	// RecreateDatabases empties the slot's databases when MySQL refused the
+	// round's reload with 3730 (the readiness plan's Recreate).
+	RecreateDatabases(ctx context.Context, slot store.Slot, pool config.Pool) error
 }
     Slots is the part of *slots.Manager the engine drives.
 
@@ -18519,6 +18526,12 @@ func ReplaceFile(path string, data []byte, perm fs.FileMode) error
     uses WriteFileAtomic. The mode, the symlink and the temporary file follow
     WriteFileAtomic.
 
+func ReplaceFileIn(root *os.Root, name string, data []byte, perm fs.FileMode) error
+    ReplaceFileIn is ReplaceFile for name inside root, confined as
+    WriteFileAtomicIn is: for many files a later write puts back when they are
+    lost (copy_files' directory of generated fixtures), where a disk flush for
+    each one would hold the disk for seconds.
+
 func WriteFileAtomic(path string, data []byte, perm fs.FileMode) error
     WriteFileAtomic replaces path with data, mode exactly perm whatever the
     umask: a temporary file with a unique name in path's directory is written,
@@ -23460,10 +23473,11 @@ Package mysqlx inventories and drops the per-worktree MySQL databases that
 Talkable's bin/worktree-setup creates (talkable_<env>[_<role>]__<slug>) on the
 local DBngin server.
 
-Reads are unrestricted; the one destructive operation, Drop, is gated by a
-Guard that refuses unsuffixed base databases, system schemas and any slug
-the caller has not explicitly allowed. SQL identifiers are validated against
-^[A-Za-z0-9_]+$ and back-quoted before they reach the server.
+Reads are unrestricted; the destructive operations, Drop and Recreate (a drop,
+then an empty database of the same name), are gated by a Guard that refuses
+unsuffixed base databases, system schemas and any slug the caller has not
+explicitly allowed. SQL identifiers are validated against ^[A-Za-z0-9_]+$ and
+back-quoted before they reach the server.
 
 mysqlx talks to MySQL over the wire (database/sql + go-sql-driver/mysql),
 not through a subprocess, so it does not use execx; it never logs a DSN.
@@ -23557,6 +23571,17 @@ func (c *Client) ListSuffixed(ctx context.Context) ([]Database, error)
 
 func (c *Client) Ping(ctx context.Context) error
     Ping verifies that the server is reachable and the credentials work.
+
+func (c *Client) Recreate(ctx context.Context, name string, g Guard) error
+    Recreate empties one database the way a schema load cannot: a table the
+    load does not know (one a PR's schema added) that refers to a table it
+    drops makes MySQL refuse the DROP TABLE (3730), so the load fails until the
+    database starts empty. After g.Check approves name, as for Drop, it reads
+    the database's character set and collation, drops it (Drop's statement
+    and bound) and creates it again with them (CREATE DATABASE IF NOT EXISTS,
+    so a retry is harmless; the server's defaults when it was gone). A refusal
+    wraps ErrGuard and sends nothing to the server; a character set or collation
+    that is not an identifier drops nothing.
 
 func (c *Client) SchemaMigrationsMax(ctx context.Context, dbName string) (string, error)
     SchemaMigrationsMax returns MAX(version) from dbName's Rails
@@ -25530,6 +25555,13 @@ type ReadinessPlan struct {
 	// printed none): the engine counts the slot's rounds in a row whose
 	// reset failed (slots.Manager.ResetFailed). nil = nothing to count.
 	ResetFailed func(ctx context.Context, cause string)
+	// Recreate empties the slot's databases (slots.Manager.RecreateDatabases)
+	// when a ResetDB command failed on MySQL's 3730
+	// (slots.ForeignKeyDropRefused: a table the schema does not know refers
+	// to one the load drops); the ResetDB commands then run once more, within
+	// a budget of their own, and their checks stand for the reset. nil = no
+	// second run.
+	Recreate func(ctx context.Context) error
 	// SchemaNote is magnum's line about the schema for the readiness event
 	// and file: why ResetDB runs, or why it does not ("schema unchanged
 	// since abc1234: no reset").
@@ -27731,6 +27763,10 @@ const DefaultCloneRoot = "~/Projects"
 const MarkerFile = "tmp/.worktree-db-slug"
     MarkerFile is written by bin/worktree-setup with the slot's database slug.
 
+const Refused3730 = "MySQL error 3730 (a table the schema does not know refers to one the load drops)"
+    Refused3730 names MySQL's refusal in the errors and events of a reset that
+    hit it.
+
 const SchemaFile = "db/schema.rb"
     SchemaFile is read for the `define(version: …)` the slot's dev database must
     match after a release.
@@ -27846,6 +27882,12 @@ func DropGuard(pool config.Pool) mysqlx.Guard
     so only magnum's own slot slugs are ever droppable. A pool without database
     templates, with no common prefix or with a slot_name lacking {n} gets the
     zero Guard, which refuses everything.
+
+func ForeignKeyDropRefused(text string) bool
+    ForeignKeyDropRefused reports whether text, a failed reset_db's output
+    or error, is MySQL's 3730: a table the schema load does not know (a PR's
+    schema added it) refers to one the load drops, so every load fails until the
+    databases start empty (RecreateDatabases).
 
 func IsPRWorktree(dir string) bool
     IsPRWorktree reports whether dir is a per-PR worktree as PRWorktreePath
@@ -27970,6 +28012,13 @@ type DBLister interface {
 }
     DBLister is the listing half of *mysqlx.Client: the schemas whose names
     start with one of prefixes followed by a non-empty slug, ordered by name.
+
+type DBRecreator interface {
+	Recreate(ctx context.Context, name string, g mysqlx.Guard) error
+}
+    DBRecreator is the part of *mysqlx.Client that empties a database: it drops
+    it and creates it again (Recreate). A Deps.MySQL without it recreates
+    nothing.
 
 type Deps struct {
 	Store *store.Store
@@ -28124,13 +28173,15 @@ func (m *Manager) CreatePRWorktree(ctx context.Context, watch config.Watch, repo
     the same PR is reused (its old assignment closed) and its steps start over.
 
 func (m *Manager) EnsureSchema(ctx context.Context, slot store.Slot, pool config.Pool) (string, error)
-    EnsureSchema gives a pool slot handed to a person (magnum open) the
-    databases of its checkout, as a round's readiness step does: when
-    CheckSchema finds they carry another schema, the pool's reset_db runs
-    through mise exec (ResetDBTimeout, the slot's log) and the new schema is
-    recorded. It returns what it did for the person. A failed reload is an error
-    and leaves the schema unknown. A pool that is not LazySchema, or a per-PR
-    worktree, runs nothing: its released slots carry the base schema.
+    EnsureSchema gives a pool slot handed to a person (magnum open)
+    the databases of its checkout, as a round's readiness step does:
+    when CheckSchema finds they carry another schema, the pool's reset_db
+    runs through mise exec (ResetDBTimeout, the slot's log) and the new
+    schema is recorded. It returns what it did for the person. A reload that
+    MySQL refused with 3730 recreates the slot's databases and runs once more
+    (RecreateDatabases). A failed reload is an error and leaves the schema
+    unknown. A pool that is not LazySchema, or a per-PR worktree, runs nothing:
+    its released slots carry the base schema.
 
 func (m *Manager) Fetch(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool) (string, error)
     Fetch is Checkout's fetch alone, for a caller that reads the head before
@@ -28251,6 +28302,16 @@ func (m *Manager) RecordSchema(ctx context.Context, slot store.Slot, c SchemaChe
     RecordSchema stores c, CheckSchema's answer, as the schema the slot's
     databases carry, once its reload succeeded, and forgets the slot's failed
     resets (ResetFailed): the count is of rounds in a row.
+
+func (m *Manager) RecreateDatabases(ctx context.Context, slot store.Slot, pool config.Pool) error
+    RecreateDatabases empties the slot's databases for a reset_db that MySQL
+    refused with 3730 (ForeignKeyDropRefused): each database of the slot's own
+    list (the pool's databases for its slug, pool.DBNames), and none other,
+    is dropped and created again through the pool's drop guard (DropGuard),
+    as the step recreate_dbs of subject slot:<name>:recreate_dbs with its begin,
+    ok or fail event; the caller then runs the reset once more. A dry run,
+    a pool without databases or a guard, or a MySQL that cannot recreate
+    (DBRecreator) drops nothing and says why.
 
 func (m *Manager) Release(ctx context.Context, slot store.Slot, pool config.Pool, reason string) error
     Release hands a claimed or held pool slot back to the pool. Steps (subject

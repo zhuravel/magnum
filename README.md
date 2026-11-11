@@ -1611,7 +1611,12 @@ rewritten each time. The rendered file keeps the main clone's spelling, `mise.lo
 `.mise.local.toml` (the dotted one when both exist, as mise lets it override the other); a pool slot
 whose main clone has neither gets `mise.local.toml`. A file magnum rendered under the other spelling
 is removed, so renaming the main clone's file leaves none behind; a file magnum did not write is kept,
-and `copy_files` never copies either spelling. The guard that keeps a slot or worktree with a person's
+and `copy_files` never copies either spelling. A `copy_files` entry may name a directory of the main clone
+(generated fixtures git ignores, such as `app/javascript/__tests__/__mocks__`): its regular files are copied
+into the checkout under the same paths, each only when the checkout lacks it or holds an older copy (another
+size, or older than the main clone's), so a checkout does not rewrite them each round. A link in the tree is
+neither followed nor copied, a path that leads out of the main clone or the checkout fails the copy, and a
+missing directory is skipped as a missing file is. The guard that keeps a slot or worktree with a person's
 untracked files from removal does not count the file magnum rendered (its first line is magnum's
 marker), even where the PR's `.gitignore` names only the other spelling; a file of that name without the
 marker still counts. Its `no_findings_event` and `blocking_event` override the posting identity's

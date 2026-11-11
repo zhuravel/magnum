@@ -1,6 +1,7 @@
 package slots
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -34,6 +35,26 @@ type fakeMySQL struct {
 	drops     []string          // names actually dropped
 	guards    []mysqlx.Guard    // guard passed to each DropAll
 	listCalls int
+	recreated []string // names Recreate emptied, in order
+}
+
+// Recreate empties name, as *mysqlx.Client's does, after the guard.
+func (f *fakeMySQL) Recreate(_ context.Context, name string, g mysqlx.Guard) error {
+	if err := g.Check(name); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dbs[name] = true
+	delete(f.versions, name)
+	f.recreated = append(f.recreated, name)
+	return nil
+}
+
+func (f *fakeMySQL) recreates() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.recreated)
 }
 
 func newFakeMySQL() *fakeMySQL {
@@ -206,6 +227,8 @@ type harness struct {
 	mu         sync.Mutex
 	scripts    []miseCall     // every mise exec, in order
 	failScript map[string]int // script -> remaining failures
+	// failStderr is what a failing script prints ("boom" when unset).
+	failStderr string
 	setupSlug  func(slot string) string
 	freeDisk   uint64
 
@@ -347,11 +370,11 @@ func (h *harness) mise(c execx.Cmd) (execx.Result, error) {
 	if fail > 0 {
 		h.failScript[mc.Script] = fail - 1
 	}
-	slugFn := h.setupSlug
+	slugFn, stderr := h.setupSlug, cmp.Or(h.failStderr, "boom")
 	h.mu.Unlock()
 	if fail != 0 {
-		return execx.Result{Code: 1, Stderr: []byte("boom ghp_abcdefghijklmnopqrstuvwxyz0123456789")},
-			&execx.ExitError{Cmd: c, Code: 1, Stderr: "boom"}
+		return execx.Result{Code: 1, Stderr: []byte(stderr + " ghp_abcdefghijklmnopqrstuvwxyz0123456789")},
+			&execx.ExitError{Cmd: c, Code: 1, Stderr: stderr}
 	}
 	slot := mc.Env["WT_BRANCH"]
 	switch {

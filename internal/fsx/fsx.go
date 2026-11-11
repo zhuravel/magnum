@@ -64,6 +64,14 @@ func ReplaceFile(path string, data []byte, perm fs.FileMode) error {
 	return writeFile(root, filepath.Base(path), data, perm, false)
 }
 
+// ReplaceFileIn is ReplaceFile for name inside root, confined as
+// WriteFileAtomicIn is: for many files a later write puts back when they are
+// lost (copy_files' directory of generated fixtures), where a disk flush for
+// each one would hold the disk for seconds.
+func ReplaceFileIn(root *os.Root, name string, data []byte, perm fs.FileMode) error {
+	return writeFile(root, name, data, perm, false)
+}
+
 // writeFile is the one copy of the atomic write: durable says whether the file
 // and, after the rename, the directory are flushed to the disk.
 func writeFile(root *os.Root, name string, data []byte, perm fs.FileMode, durable bool) (err error) {

@@ -257,11 +257,19 @@ func withoutRenderedMiseLocal(checkout string, untracked []string) []string {
 }
 
 // copyIntoCheckout copies the copy_files entries files from the main clone
-// into checkout (CopyIntoCheckout), skipping both spellings of the local
-// mise file, which is rendered instead.
+// into checkout, skipping both spellings of the local mise file, which is
+// rendered instead: a file as it is (CopyIntoCheckout), a directory's tree
+// file by file (copyTreeIntoCheckout).
 func copyIntoCheckout(mainClone, checkout string, files []string) error {
 	for _, f := range files {
-		if c := filepath.Clean(f); c == MiseLocal || c == MiseLocalDotted {
+		c := filepath.Clean(f)
+		if c == MiseLocal || c == MiseLocalDotted {
+			continue
+		}
+		if fi, err := os.Stat(filepath.Join(mainClone, c)); err == nil && fi.IsDir() {
+			if err := copyTreeIntoCheckout(mainClone, checkout, c); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := CopyIntoCheckout(filepath.Join(mainClone, f), checkout, f); err != nil {

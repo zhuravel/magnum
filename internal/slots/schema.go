@@ -266,7 +266,9 @@ func setSchema(u *store.SlotUpdate, c SchemaCheck) {
 // databases of its checkout, as a round's readiness step does: when
 // CheckSchema finds they carry another schema, the pool's reset_db runs
 // through mise exec (ResetDBTimeout, the slot's log) and the new schema is
-// recorded. It returns what it did for the person. A failed reload is an
+// recorded. It returns what it did for the person. A reload that MySQL
+// refused with 3730 recreates the slot's databases and runs once more
+// (RecreateDatabases). A failed reload is an
 // error and leaves the schema unknown. A pool that is not LazySchema, or a
 // per-PR worktree, runs nothing: its released slots carry the base schema.
 func (m *Manager) EnsureSchema(ctx context.Context, slot store.Slot, pool config.Pool) (string, error) {
@@ -291,7 +293,13 @@ func (m *Manager) EnsureSchema(ctx context.Context, slot store.Slot, pool config
 	}
 	m.event(ctx, subject, "info", "slot.schema_reset", "reloading schema: "+c.Why)
 	if err := m.runScripts(ctx, slot, pool.SlotEnv(slot.Name), pool.ResetDB, "reset_db", "slot-"+slot.Name+".log", ResetDBTimeout); err != nil {
-		return "", err
+		fk, recreateErr := m.recreateAfter3730(ctx, slot, pool, err.Error())
+		if !fk {
+			return "", err
+		}
+		if err := m.runScripts(ctx, slot, pool.SlotEnv(slot.Name), pool.ResetDB, "reset_db", "slot-"+slot.Name+".log", ResetDBTimeout); err != nil {
+			return "", after3730(err, recreateErr)
+		}
 	}
 	if err := m.RecordSchema(ctx, slot, c); err != nil {
 		return "", err

@@ -825,6 +825,7 @@ func (rd *round) finalizeJudge(ctx context.Context, runIDs []string, v verdict) 
 		// them and a stale CHANGES_REQUESTED left standing blocks the merge.
 		// Each gh call stays bounded by execx's timeout.
 		fctx := context.WithoutCancel(ctx)
+		rd.keepReviewFile(fctx, runIDs[0])
 		rd.recordFindings(fctx, runIDs[0], v.result)
 		rd.handleDuplicates(fctx, v.review)
 		rd.checkLocalPaths(fctx, v.review)

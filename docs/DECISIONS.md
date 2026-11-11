@@ -18422,6 +18422,52 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (attentionEventMsg); last_error, the toast and the event's data are unchanged. Tests, failing first:
   TestALoopsNeedsYouEventSaysFixOnce, and TestTheLooksRaiseSaysHowItLifts for the raise.
 
+- **A trivial push that settles fetches its head** (2026-11-12). settleTrivial moved `reviewed_sha` to the new head
+  with no round, and only a round's checkout fetched a head: every tick, reviseNoApprovalReasons read the settled
+  head's tree (configLinks) from a clone that lacked it, and git said "not a tree object" (1,398 warnings in
+  daemon.log from 11-10 on, 95% of its warnings); the needs-you list said "magnum cannot tell which files the PR
+  changes" for 18 hours on two PRs. The settle now fetches the head into the clone configLinks reads
+  (fetchTrivialHead: headClone, `Git.FetchPR`, refs/pull/N/head → refs/magnum/pr/N as a round fetches it, within 30
+  s, since it runs in the tick) and counts it fetched (headFetched). A failed fetch is one warning, and the gates
+  fail on that head as before until a fetch brings it; a dry run or a PR without a clone fetches nothing. Test,
+  failing first: TestATrivialPushThatSettlesFetchesItsHeadForTheGates.
+
+- **Each posted run keeps its own review file** (2026-11-12). The report directory is per head, so a round on a head
+  an earlier round reviewed wrote its review over `review.json`: ten report directories held two or three posted
+  reviews (28), and only the last one's text stayed, so the improvement loop read 13 different reviews as the same.
+  A posted round now copies the file as `review-<run id>.json` beside it (keepReviewFile, the judge's run that
+  posted), and `review.json` stays the latest, so its readers (the fixer's prompt, whiteboards, evidence.sh) need no
+  change; the copy, not a rotation, keeps `review.json` in place while a round runs. Test, failing first:
+  TestEachPostedRunKeepsItsOwnReviewFile.
+
+- **A schema load MySQL refuses with 3730 recreates the slot's databases** (2026-11-12). A table a PR's schema added
+  and schema.rb does not know (ai_credentials) referred to one the load drops (accounts), so `db:schema:load` failed
+  with "3730: Cannot drop table 'accounts' referenced by a foreign key constraint … on table 'ai_credentials'" in
+  every round and release that reloaded the slot: five slot.schema_reset_failed events, and review14 stayed broken
+  from 11-04 10:21 for 32 hours. Now a reset that fails on 3730 (slots.ForeignKeyDropRefused, MySQL's message, which
+  every client prints) empties the slot's databases and runs once more: in a round's readiness step
+  (ReadinessPlan.Recreate, its second run's checks stand), at the release (before its second try) and at `magnum
+  open` (EnsureSchema). slots.RecreateDatabases drops and creates again, with the character set and collation they
+  had (mysqlx.Recreate), only the databases the pool lists for the slot's slug, through the pool's drop guard, as
+  the step recreate_dbs with its begin, ok or fail event; without a list, a guard or a MySQL that can, it drops
+  nothing. A second failure counts or breaks the slot as before, and its cause or error names "MySQL error 3730".
+  Tests, failing first: TestAResetMySQLRefusesWith3730RecreatesTheDatabasesAndRunsOnceMore,
+  TestAReleaseResetThatMySQLRefusesWith3730RecreatesTheSlotsDatabases,
+  TestRecreateDatabasesNeverDropsADatabaseOutsideTheSlotsList, TestRecreateKeepsTheCharsetAndCollation,
+  TestARoundThatReloadsTheSchemaCanRecreateItsSlotsDatabases.
+
+- **`copy_files` takes a directory** (2026-11-12). 24 round.environment events on 15 of 116 reviewed talkable PRs
+  said "Missing generated fixture app/javascript/__tests__/__mocks__/api/…": the main clone holds 884 such files
+  (7.4 MB, ignored by git), and the judges generated them again or ran a fixture-free config. An entry that names a
+  directory of the main clone now copies its tree into the checkout (copyTreeIntoCheckout), through an os.Root on
+  both ends: a path that leaves either (the directory linked out of the clone, a tracked link in the checkout) is
+  an error and nothing is written outside; only regular files are copied, with their modes, a link in the tree is
+  neither followed nor copied, a `.git` is skipped, and "." is refused. A file is written only when the checkout
+  lacks it or holds an older copy (another size, or older than the source), without a disk flush per file
+  (fsx.ReplaceFileIn), so a checkout does not rewrite 884 files each round. A missing directory is skipped as a
+  missing file is; a file entry is copied as before. Tests: TestCopyFilesCopiesADirectorysTreeAndSkipsFilesAlreadyCurrent
+  (failing first), TestCopyFilesSkipsAMissingSourceDirectory, TestCopyFilesRefusesADirectoryPathThatLeavesEitherRoot.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is

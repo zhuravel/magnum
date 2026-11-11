@@ -60,6 +60,13 @@ type ReadinessPlan struct {
 	// printed none): the engine counts the slot's rounds in a row whose
 	// reset failed (slots.Manager.ResetFailed). nil = nothing to count.
 	ResetFailed func(ctx context.Context, cause string)
+	// Recreate empties the slot's databases (slots.Manager.RecreateDatabases)
+	// when a ResetDB command failed on MySQL's 3730
+	// (slots.ForeignKeyDropRefused: a table the schema does not know refers
+	// to one the load drops); the ResetDB commands then run once more, within
+	// a budget of their own, and their checks stand for the reset. nil = no
+	// second run.
+	Recreate func(ctx context.Context) error
 	// SchemaNote is magnum's line about the schema for the readiness event
 	// and file: why ResetDB runs, or why it does not ("schema unchanged
 	// since abc1234: no reset").
@@ -158,9 +165,17 @@ func (rd *round) readiness(ctx context.Context) error {
 	start := rd.r.now()
 	checks := make([]agents.ReadinessCheck, 0, len(resets)+len(cmds))
 	// The reset runs within its own budget; ready_timeout starts after it.
-	checks = append(checks, rd.runPhase(ctx, resets, plan.Env, readinessBudget{"reset_db's budget", resetBudget}, pin)...)
+	resetPhase := readinessBudget{"reset_db's budget", resetBudget}
+	checks = append(checks, rd.runPhase(ctx, resets, plan.Env, resetPhase, pin)...)
+	schema := plan.SchemaNote
 	if len(resets) > 0 {
+		var note string
+		checks, note = rd.resetAfter3730(ctx, plan, resets, checks, resetPhase, pin)
+		schema = strings.Join(slices.DeleteFunc([]string{schema, note}, func(s string) bool { return s == "" }), "; ")
 		cause, failed := resetFailure(checks)
+		if failed && note != "" {
+			cause = note + ": " + cause
+		}
 		switch {
 		case failed && plan.ResetFailed != nil:
 			plan.ResetFailed(context.WithoutCancel(ctx), cause)
@@ -177,7 +192,7 @@ func (rd *round) readiness(ctx context.Context) error {
 	}
 	file := filepath.Join(rd.dir, ReadinessFile)
 	rf := readinessFile{HeadSHA: rd.in.TargetSHA, RanAt: start.UTC().Format(time.RFC3339), Timeout: budget.String(),
-		Schema: plan.SchemaNote, Checks: checks}
+		Schema: schema, Checks: checks}
 	if len(resets) > 0 {
 		rf.ResetDBTimeout = resetBudget.String()
 	}
@@ -193,7 +208,7 @@ func (rd *round) readiness(ctx context.Context) error {
 	rd.mu.Lock()
 	rd.ready = res
 	rd.mu.Unlock()
-	rd.readinessEvent(ctx, res, rd.r.now().Sub(start), plan.SchemaNote)
+	rd.readinessEvent(ctx, res, rd.r.now().Sub(start), schema)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -265,6 +280,29 @@ func (rd *round) runReadiness(ctx context.Context, c readinessCmd, env map[strin
 		check.Status, check.Detail = agents.ReadinessFailed, "could not run: "+oneLine(execx.Redact(errorCause(err)))
 	}
 	return check
+}
+
+// resetAfter3730 is the reset's second run when its first one (checks, the
+// reset's alone) failed on MySQL's 3730 (slots.ForeignKeyDropRefused) and
+// the plan can recreate the slot's databases (ReadinessPlan.Recreate): they
+// are recreated, then resets run again within a budget of their own, and
+// that run's checks replace the first's. note names 3730 and what came of
+// it, for the schema line and before the cause ResetFailed gets; checks
+// come back as they were, with no note, when nothing ran again.
+func (rd *round) resetAfter3730(ctx context.Context, plan ReadinessPlan, resets []readinessCmd, checks []agents.ReadinessCheck,
+	budget readinessBudget, pin rubyPinned) (_ []agents.ReadinessCheck, note string) {
+	cause, failed := resetFailure(checks)
+	if !failed || plan.Recreate == nil || ctx.Err() != nil || !slots.ForeignKeyDropRefused(cause) {
+		return checks, ""
+	}
+	if err := plan.Recreate(ctx); err != nil {
+		return checks, fmt.Sprintf("%s, and recreating the slot's databases failed (%s)", slots.Refused3730, oneLine(execx.Redact(err.Error())))
+	}
+	again := rd.runPhase(ctx, resets, plan.Env, budget, pin)
+	if _, failed := resetFailure(again); failed {
+		return again, slots.Refused3730 + " again after magnum recreated the slot's databases"
+	}
+	return again, slots.Refused3730 + ": magnum recreated the slot's databases and the reset passed"
 }
 
 // resetFailure is the cause of the first reset_db check that failed or ran

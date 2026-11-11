@@ -133,6 +133,7 @@ slot_path = "~/Projects/talkable.review{n}"
 min = 12
 max = 18
 idle_remove_after = "48h"
+# copy_files: files, or directories whose tree is copied (only what the slot lacks or holds older; links not followed)
 copy_files = ["mise.local.toml", "config/initializers/local.rb"]
 strip_env = ["GITHUB_PERSONAL_ACCESS_TOKEN"]
 setup = ["bin/worktree-setup"]

@@ -643,8 +643,11 @@ func (m *Manager) otherRepository(ctx context.Context, sl store.Slot, pr store.P
 // round reloads them only when its checkout needs another (CheckSchema).
 // Otherwise, and on a drift, it reloads them with the base schema when the
 // PR touched the schema or the dev database is not at db/schema.rb's
-// version, and records the base schema as theirs. Two failed reloads in a
-// row move the slot to broken (store.BreakSlot): an unpinned slot lets its
+// version, and records the base schema as theirs. A first reload that MySQL
+// refused with 3730 (ForeignKeyDropRefused) recreates the slot's databases
+// before the second (RecreateDatabases). Two failed reloads in a
+// row move the slot to broken (store.BreakSlot), its error naming 3730 when
+// the databases were recreated in between: an unpinned slot lets its
 // PR go, so the PR's next round takes another slot instead of waiting for a
 // repair, and a slot pinned meanwhile keeps it. So does a slot whose
 // readiness reset_db failed in BreakAfterResetFailures rounds in a row
@@ -704,8 +707,12 @@ func (m *Manager) resetSchema(ctx context.Context, slot store.Slot, pool config.
 		}
 	}
 	m.event(ctx, "slot:"+sl.Name+":release", "info", "slot.schema_reset", "reloading schema: "+why)
-	var runErr error
+	var runErr, recreateErr error
+	fk := false
 	for attempt := 1; attempt <= 2; attempt++ {
+		if attempt == 2 { // the first failed (runErr), else it returned
+			fk, recreateErr = m.recreateAfter3730(ctx, sl, pool, runErr.Error())
+		}
 		runErr = m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.ResetDB, "reset_db", "slot-"+sl.Name+".log", ResetDBTimeout)
 		if runErr == nil {
 			base := m.loadedSchema(ctx, sl, pool)
@@ -720,6 +727,9 @@ func (m *Manager) resetSchema(ctx context.Context, slot store.Slot, pool config.
 		if ctx.Err() != nil {
 			return runErr
 		}
+	}
+	if fk {
+		runErr = after3730(runErr, recreateErr)
 	}
 	return m.breakSchema(ctx, sl, []string{store.SlotDirtySchema},
 		fmt.Errorf("%w: %s schema reset failed twice: %w", ErrBroken, sl.Name, runErr))
