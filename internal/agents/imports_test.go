@@ -334,7 +334,9 @@ func TestImportPathsStartsAPathWhereACommentWasCut(t *testing.T) {
 // together (as Claude Code 2.1.322's lexer reads these texts). marked ends
 // a line at a carriage return too, and starts such a block after a block
 // quote's or a list item's marks (the code span's <!-- comes first, so the
-// read of the whole text pairs it with the block's first -->).
+// read of the whole text pairs it with the block's first -->), and right
+// after a processing instruction, a declaration or a CDATA section, which
+// end at their closing >, mid-line (one may hold a <!-- of its own).
 func TestImportPathsReadsEachCommentBlockOnItsOwn(t *testing.T) {
 	for _, c := range []struct {
 		text string
@@ -349,6 +351,12 @@ func TestImportPathsReadsEachCommentBlockOnItsOwn(t *testing.T) {
 		{"Use `<!--` to open a comment.\n\n1. <!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
 		{"Use `<!--` to open a comment.\n\n2) <!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
 		{"Use `<!--` to open a comment.\n\n-\t<!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"Use `<!--` to open a comment.\n\n<?x?><!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"Use `<!--` to open a comment.\n\n<!DOCTYPE html> <!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"Use `<!--` to open a comment.\n\n<![CDATA[x]]><!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"Use `<!--` to open a comment.\n\n- <?x?><!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"Use `<!--` to open a comment.\n\n<?x <!-- ?><!-->a<!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
+		{"<?x?><!--a-->@docs/ev<!--b-->il<!--x.md\n\nMore text.\n<!-- end -->\n", "docs/evil<!--x.md"},
 		{"x <!--\n\n<!--> T <!-->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
 		{"`<!--`\n\n<!---><!--->@docs/ev<!--z-->il.md\n", "docs/evil.md"},
 		{"- <!-->a<!-->@docs/ev<!--z-->il.md\n\n`<!--`\n", "docs/evil.md"},
@@ -369,6 +377,19 @@ func TestImportPathsReadsCommentBlocksThatEndAtOneCloseOnce(t *testing.T) {
 	text := "<!--\n" + strings.Repeat("<!-- x\n", 20_000) + "-->\n@docs/a.md\n"
 	if got, more := ImportPaths(text, 100); !slices.Contains(got, "docs/a.md") || more {
 		t.Fatalf("ImportPaths of %d open comments = %q, %v; want docs/a.md, not more", 20_001, got, more)
+	}
+}
+
+// A <!-- that starts no block does not end the scan of its line (a
+// processing instruction may hold one), yet a line of many of them after a
+// long run of blanks is scanned once: only its first <!-- has its text
+// before it trimmed.
+func TestImportPathsLooksForCommentBlocksOnALineInTimeLinearInIt(t *testing.T) {
+	text := strings.Repeat(" ", 1<<20) + "x" + strings.Repeat("<!--", 1<<18) + "\n@docs/a.md\n"
+	start := time.Now()
+	got, more := ImportPaths(text, 100)
+	if d := time.Since(start); !slices.Contains(got, "docs/a.md") || more || d > 10*time.Second {
+		t.Fatalf("ImportPaths of a line of %d comment marks = %q, %v after %s; want docs/a.md, at once", 1<<18, got, more, d)
 	}
 }
 

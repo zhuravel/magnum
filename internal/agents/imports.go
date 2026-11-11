@@ -101,8 +101,12 @@ func ImportPaths(text string, limit int) (paths []string, more bool) {
 // on its own, its comments taken out, as Claude Code does: marked (without
 // GFM) starts such a block at a <!-- that only blanks and a container's
 // marks (a block quote's >, a list item's - * + 1. 1)) precede on its
-// line (a line feed or a carriage return ends one), and ends it at the
-// end of the line its first comment ends on: at
+// line (a line feed or a carriage return ends one), or right after a
+// processing instruction, a declaration or a CDATA section, which marked
+// ends at its closing > mid-line (read here as any > and blanks before the
+// <!--; such a token may hold a <!-- of its own, so a <!-- that starts no
+// block does not end the scan of its line), and ends it at the end of the
+// line its first comment ends on: at
 // once for <!--> and <!--->, else at the first --> after the <!--. Claude
 // skips a block with no -->. The read of the whole text without comments
 // pairs a <!-- Claude takes for none (in a code span, a paragraph) with
@@ -119,18 +123,27 @@ func (r *importReader) readCommentBlocks(t string) {
 		}
 		return len(t)
 	}
-	shut := -1 // the first --> at or after the last search's start
-	last := -1 // the --> that ended the first comment of the last such block read
+	shut := -1        // the first --> at or after the last search's start
+	last := -1        // the --> that ended the first comment of the last such block read
+	line, no := 0, -1 // the start of the scan's line; the last <!-- on it that starts no block
 	for i := 0; i < len(t) && !r.more; {
 		k := strings.Index(t[i:], "<!--")
 		if k < 0 {
 			return
 		}
 		at := i + k
-		i = lineEnd(at) // a later <!-- on the line follows this one's <: no block starts there
-		if strings.Trim(t[strings.LastIndexAny(t[:at], "\n\r")+1:at], " \t>*+-.)0123456789") != "" {
+		if j := strings.LastIndexAny(t[i:at], "\n\r"); j >= 0 {
+			line = i + j + 1
+		}
+		// Only the line's first <!-- may have only marks before it: an
+		// earlier <! precedes any later one, whose text is not trimmed again.
+		if before := t[line:at]; (no >= line || strings.Trim(before, " \t>*+-.)0123456789") != "") &&
+			!strings.HasSuffix(strings.TrimRight(before, " \t"), ">") {
+			no, i = at, at+4
 			continue
 		}
+		i = lineEnd(at) // a block runs to its line's end at least: no other starts on the line
+		line = i
 		var block string
 		switch rest := t[at+4:]; {
 		case strings.HasPrefix(rest, ">") || strings.HasPrefix(rest, "->"):

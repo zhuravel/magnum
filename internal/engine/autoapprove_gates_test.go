@@ -555,6 +555,18 @@ func TestAutoApprovalRefusesAChangeToAFileTheInstructionsImport(t *testing.T) {
 		{name: "an import in a block a code span's comment mark precedes", files: map[string]string{
 			"AGENTS.md": "Use `<!--` to open a comment.\n\n<!-->a<!-->@docs/ev<!--z-->il.md\n"},
 			list: []string{"docs/evil.md"}, want: "(AGENTS.md)"},
+		// marked ends a processing instruction, a declaration and a CDATA
+		// section at their closing >, mid-line, and starts the comment's
+		// block right there.
+		{name: "an import in a block after a processing instruction", files: map[string]string{
+			"AGENTS.md": "Use `<!--` to open a comment.\n\n<?x?><!-->a<!-->@docs/ev<!--z-->il.md\n"},
+			list: []string{"docs/evil.md"}, want: "(AGENTS.md)"},
+		{name: "an import in a block after a declaration", files: map[string]string{
+			"AGENTS.md": "Use `<!--` to open a comment.\n\n<!DOCTYPE html> <!-->a<!-->@docs/ev<!--z-->il.md\n"},
+			list: []string{"docs/evil.md"}, want: "(AGENTS.md)"},
+		{name: "an import in a block after a processing instruction that holds a comment mark", files: map[string]string{
+			"AGENTS.md": "Use `<!--` to open a comment.\n\n<?x <!-- ?><!-->a<!-->@docs/ev<!--z-->il.md\n"},
+			list: []string{"docs/evil.md"}, want: "(AGENTS.md)"},
 		// Claude ends a path at a #fragment.
 		{name: "an import with a fragment", files: map[string]string{"CLAUDE.md": "Setup: @docs/guide.md#setup\n"},
 			list: []string{"docs/guide.md"}, want: "(CLAUDE.md)"},
