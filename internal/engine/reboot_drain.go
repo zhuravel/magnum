@@ -16,6 +16,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -35,22 +36,43 @@ import (
 const rebootDrainHold = "draining for a reboot (magnum drain; magnum resume ends it)"
 
 // rebootHeldRequests are the requests that would start work a reboot cuts
-// (refuseUnderRebootDrain): a staging deploy, an open's restore and the slot
-// work of a provision, a repair, an adoption, a cleanup or a release.
-var rebootHeldRequests = []string{ReqStagingDeploy, ReqOpen, ReqProvision, ReqRepair, ReqAdopt, ReqCleanup, ReqRelease}
+// (refuseUnderRebootDrain): a staging deploy and the slot work of a
+// provision, a repair, an adoption, a cleanup or a release. An open's
+// restore is refused where it would start one (requestOpen), past its answer
+// for a session that is live already.
+var rebootHeldRequests = []string{ReqStagingDeploy, ReqProvision, ReqRepair, ReqAdopt, ReqCleanup, ReqRelease}
 
 // errRebootDrainRefusal is their answer under the drain.
 var errRebootDrainRefusal = errors.New("the daemon drains for a reboot (`magnum drain`): ask again after the reboot, or after `magnum resume`")
 
 // refuseUnderRebootDrain refuses req while a drain for a reboot holds when it
 // would start work a reboot cuts (rebootHeldRequests), and reports whether
-// it did.
+// it did. A dry run starts nothing and goes on: the daemon's own, a staging
+// deploy's, a cleanup's plan.
 func (e *Engine) refuseUnderRebootDrain(ctx context.Context, req store.Request) bool {
-	if !slices.Contains(rebootHeldRequests, req.Kind) || !e.rebootDraining(ctx) {
+	if !slices.Contains(rebootHeldRequests, req.Kind) || e.d.DryRun || requestDry(req) || !e.rebootDraining(ctx) {
 		return false
 	}
 	e.complete(ctx, req.ID, errRebootDrainRefusal, "")
 	return true
+}
+
+// requestDry reports whether req asks for a dry run: a staging deploy's
+// dry_run, a cleanup's options or plan marked dry.
+func requestDry(req store.Request) bool {
+	var p struct {
+		DryRun  bool `json:"dry_run"`
+		Options struct {
+			DryRun bool `json:"dry_run"`
+		} `json:"options"`
+		Plan *struct {
+			DryRun bool `json:"dry_run"`
+		} `json:"plan"`
+	}
+	if json.Unmarshal(req.Payload, &p) != nil {
+		return false
+	}
+	return p.DryRun || p.Options.DryRun || (p.Plan != nil && p.Plan.DryRun)
 }
 
 // rebootDrainStarts is when a request queued or held behind a drain for a

@@ -61,6 +61,10 @@ func (e *Engine) requestOpen(ctx context.Context, id int64, p OpenPayload) {
 		e.complete(ctx, id, errors.New("the daemon has no agents or slots manager"), "")
 		return
 	}
+	if e.rebootDraining(ctx) { // reboot_drain.go: a restore starts work a reboot cuts
+		e.complete(ctx, id, errRebootDrainRefusal, "")
+		return
+	}
 	if e.yieldWhiteboard(pr.ID, id, "magnum open") { // whiteboard.go: the request goes on once the job let go of the PR
 		return
 	}

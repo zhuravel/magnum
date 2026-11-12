@@ -1420,6 +1420,9 @@ func (e *Engine) startup(ctx context.Context) {
 		e.warnUnlessStopped(ctx, err, "notes critic: end the critiques a stop cut short")
 	}
 	e.dropStaleGateBase(ctx)
+	if e.rebootDraining(ctx) { // reboot_drain.go: no slot work under it; the first tick after its lift reconciles
+		return
+	}
 	e.lastReconcile = e.now()
 	e.enqueueHeavy("reconcile", e.reconcile)
 }
