@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -88,6 +89,39 @@ func (r *Runtime) LiveAgents(ctx context.Context, t registry.Task) (bool, error)
 		}
 	}
 	return false, nil
+}
+
+// liaisonAtWork reports whether herdr shows the agent of the live liaison
+// session of row pr working or blocked (its status, as herdr says it): a
+// turn you started by typing into its pane has no run row. A herdr that
+// cannot say counts as at work; no live session, or an agent herdr does not
+// show, as not.
+func (r *Runtime) liaisonAtWork(ctx context.Context, pr store.PR) (string, bool) {
+	s, err := r.st.LiveSessionByPRRole(ctx, pr.ID, LiaisonRole)
+	if err != nil {
+		return "", false
+	}
+	snap, err := r.d.Herdr.Snapshot(ctx)
+	if err != nil {
+		return "unknown (herdr does not answer)", true
+	}
+	var a herdr.AgentInfo
+	ok := false
+	if n := store.Deref(s.AgentName); n != "" {
+		a, ok = snap.AgentByName(n)
+	}
+	if pane := store.Deref(s.HerdrPaneID); !ok && pane != "" {
+		for _, x := range snap.Agents {
+			if x.PaneID == pane {
+				a, ok = x, true
+				break
+			}
+		}
+	}
+	if ok && (a.AgentStatus == herdr.StatusWorking || a.AgentStatus == herdr.StatusBlocked) {
+		return string(a.AgentStatus), true
+	}
+	return "", false
 }
 
 // mayPrompt is the engine's hold of new prompts (Deps.MayPrompt: a drain

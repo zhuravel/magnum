@@ -1321,6 +1321,11 @@ func (r *Runtime) parkLiaison(ctx context.Context, t registry.Task, strict bool)
 		return "", err
 	}
 	if r.operatorOn(ctx, pr, LiaisonRole) {
+		if strict { // drain.go: what you typed runs a turn the reboot would cut
+			if status, busy := r.liaisonAtWork(ctx, pr); busy {
+				return "", fmt.Errorf("the liaison of %s is %s and you are in its pane: %w", taskKey(t), status, agents.ErrBusy)
+			}
+		}
 		return "you are in its pane", nil
 	}
 	err = r.mgr.Park(ctx, pr)
