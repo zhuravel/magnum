@@ -349,6 +349,10 @@ type Deps struct {
 	// A port of its own keeps the probe out of the commands a test scripts
 	// for Runner. nil = no memory sample.
 	MemoryRunner execx.Runner
+	// BootTime reads the Mac's boot time at the start, which ends a drain
+	// for a reboot begun on another boot (reboot_drain.go); nil reads it
+	// through MemoryRunner (ReadBootTime), and no runner leaves it unknown.
+	BootTime func(ctx context.Context) (time.Time, error)
 	// Classifier sets up the retro's classifier for one retro run ([learn],
 	// retro.go); nil = the candidates are stored unclassified.
 	Classifier func(ctx context.Context, run RetroRun) (Classifier, error)
@@ -587,6 +591,9 @@ type Engine struct {
 	// and whiteboard have reserved the PR (or found nothing to do), so an
 	// idle restart never falls into the gap between the two (restartBusy).
 	roundTails atomic.Int32
+	// reboot is the drain for a reboot as the health checks tend it
+	// (reboot_drain.go): the tick's own.
+	reboot rebootState
 
 	heavy     chan heavyJob
 	heavyMu   sync.Mutex
@@ -1383,6 +1390,7 @@ func (e *Engine) startup(ctx context.Context) {
 		e.delKV(ctx, KVDaemonDraining)
 		e.event(ctx, "info", "", "daemon.drain_ended", "drain ended: the daemon restarted", nil)
 	}
+	e.startRebootDrain(ctx) // reboot_drain.go: a drain for a reboot ends at the first start on another boot
 	e.noteRequestsSince(ctx)
 	e.noteRepliesSince(ctx)
 	e.warmIdentities(ctx, true)

@@ -55,6 +55,9 @@ func TestEveryKVKeyTheEngineWritesKeepsItsString(t *testing.T) {
 		{"agents.KVModelLimitedAt", agents.KVModelLimitedAt("claude", "fable"), "kind.claude.model_limited_at.fable"},
 		// The engine's own keys.
 		{"KVDaemonDraining", KVDaemonDraining, "daemon.draining"},
+		{"KVDaemonRebootDrain", KVDaemonRebootDrain, "daemon.reboot_drain"},
+		{"KVDaemonDrainAck", KVDaemonDrainAck, "daemon.reboot_drain_ack"},
+		{"KVDaemonControls", KVDaemonControls, "daemon.controls"},
 		{"KVInfraPausedUntil", KVInfraPausedUntil, "daemon.infra_paused_until"},
 		{"KVInfraPausedReason", KVInfraPausedReason, "daemon.infra_paused_reason"},
 		{"KVInfraPausedDetail", KVInfraPausedDetail, "daemon.infra_paused_detail"},

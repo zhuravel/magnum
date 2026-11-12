@@ -350,6 +350,9 @@ func (e *Engine) globalWait(ctx context.Context, ts tickState, now time.Time) *W
 	if v, ok := e.getKV(ctx, KVDaemonDraining); ok && v != "" {
 		return &Wait{Reason: WaitDraining, Detail: "the restart (magnum daemon-restart --drain), which follows the end of the rounds in flight"}
 	}
+	if e.rebootDraining(ctx) {
+		return &Wait{Reason: WaitDraining, Detail: "the end of the drain for a reboot (magnum drain): the first start after the reboot, or magnum resume"}
+	}
 	if why := e.panesMoving(); why != "" {
 		return &Wait{Reason: WaitDraining, Detail: "the restart after " + why + ", which follows the end of the rounds in flight"}
 	}

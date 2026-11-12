@@ -166,7 +166,7 @@ func WriteTabBarFile(path string, at time.Time, maxAge time.Duration, text strin
 // tabBar is the short status line herdr shows in its tab bar.
 func (e *Engine) tabBar(ctx context.Context) string {
 	parts := []string{"magnum"}
-	if v, _ := e.getKV(ctx, KVDaemonDraining); v != "" {
+	if v, _ := e.getKV(ctx, KVDaemonDraining); v != "" || e.rebootDraining(ctx) {
 		parts = append(parts, "draining")
 	}
 	if n := e.reviewRounds(); n > 0 {

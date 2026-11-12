@@ -283,6 +283,9 @@ func (w *resolveWork) take(ctx context.Context) error {
 		}
 		return errResolveWaits
 	}
+	if e.rebootDraining(ctx) { // reboot_drain.go: a job that took its slot runs to its end, no other starts
+		return wait("the daemon drains for a reboot")
+	}
 	role, err := e.resolveRole(job.Repo, resolveRunFor)
 	if err != nil {
 		return err
