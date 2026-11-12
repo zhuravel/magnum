@@ -71,3 +71,35 @@ func TestParkForRebootReportsALiaisonAtWorkWhileYouAreInItsPane(t *testing.T) {
 		t.Fatal("the park parked the liaison you are in")
 	}
 }
+
+// A park for a reboot whose own agents fail to park for another cause than
+// work (a quit herdr refuses) while you are in the idle liaison's pane
+// keeps both in its error: the drain retries the task's agents and still
+// sees the liaison left live, so it looks at that liaison again at every
+// tick.
+func TestParkForRebootKeepsTheLiaisonLeftLiveBesideAFailedPark(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	g.observe()
+	g.talk()
+	g.endLiaisonTurn()
+	g.clock.Add(2 * time.Minute) // past a start's grace: herdr showing the agent at work is you
+	g.h.focus(g.liaisonAgent())
+	g.h.setStatus(g.liaisonAgent(), herdr.StatusWorking)
+	g.observe()
+	g.h.setStatus(g.liaisonAgent(), herdr.StatusIdle) // your turn ended; you stay in its pane
+	g.h.mu.Lock()
+	g.h.closeErr = errors.New("herdr: the workspace does not close")
+	g.h.mu.Unlock()
+
+	err := g.r.ParkForReboot(g.ctx, g.task)
+	if err == nil || !errors.Is(err, ErrLiaisonLeftLive) || errors.Is(err, agents.ErrBusy) {
+		t.Fatalf("ParkForReboot with the task's park failing and you in the idle liaison's pane = %v, want both, the liaison left live", err)
+	}
+	if !strings.Contains(err.Error(), "does not close") {
+		t.Fatalf("ParkForReboot = %v, want the task's own failure kept beside the liaison", err)
+	}
+	if !g.liaisonLive() {
+		t.Fatal("the park parked the liaison you are in")
+	}
+}

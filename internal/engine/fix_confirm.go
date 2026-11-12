@@ -471,6 +471,11 @@ func (e *Engine) fixPushes(ctx context.Context, repo store.Repo) map[int64]fixPu
 		e.warnUnlessStopped(ctx, err, "read the fixers' pushes to confirm")
 		return nil
 	}
+	return e.pushRows(ctx, vals, repo)
+}
+
+// pushRows are the push records among the kv rows vals (fixPushes).
+func (e *Engine) pushRows(ctx context.Context, vals map[string]string, repo store.Repo) map[int64]fixPushRow {
 	out := map[int64]fixPushRow{}
 	for key, raw := range vals {
 		var id int64
@@ -508,8 +513,14 @@ func pushFirstStep(rec fixPush) string {
 // pushStarted reports whether the settle of rec's push began: its first
 // step is done, so it is resumed whatever the PR's head is now.
 func (e *Engine) pushStarted(ctx context.Context, rec fixPush) bool {
-	done, err := steps.Done(ctx, e.st, pushSubject(rec.Run), pushFirstStep(rec))
+	done, err := e.pushBegan(ctx, rec)
 	return err == nil && done
+}
+
+// pushBegan is pushStarted with the error of a read of the steps that
+// failed (the drain counts such a settle as work: reboot_drain_fix.go).
+func (e *Engine) pushBegan(ctx context.Context, rec fixPush) (bool, error) {
+	return steps.Done(ctx, e.st, pushSubject(rec.Run), pushFirstStep(rec))
 }
 
 // confirmingLoop reports whether pr's loop row is the loop whose settle

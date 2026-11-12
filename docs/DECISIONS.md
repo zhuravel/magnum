@@ -19208,7 +19208,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     longer wait gains nothing, and the drain never waits without end. A fix that failed as unconfirmed is left too,
     since the late settle needs no daemon to stay up. A settle of a confirmed push that stopped between its steps
     (the next poll resumes it) is work for up to the same 30 minutes from when the drain first saw it, and then it
-    is left: its steps resume after the reboot.
+    is left: its steps resume after the reboot. What the drain cannot read is work: the loops' rows and their push
+    records are read at once, and a settle whose steps cannot be read may have begun.
   - It ends at each daemon's first start on another boot: another `kern.bootsessionuuid`, which is unique per boot
     (`kern.boottime` moves when macOS steps the clock after a wake, so it decides only without a session, past two
     minutes); both read through the sysctl runner (`Deps.Boot` in tests). A crash, a new build or a restart by
@@ -26404,7 +26405,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   looked at again at every tick and named in `left` while it idles. A busy refusal is never left: an agent at work in herdr with no run row (you typed into its pane, a build
   in a shell) would be cut by the reboot, so the task is named as work and tried again at each tick. Any other
   failure three ticks in a row is left, said once and named in the acknowledgement's `left`, so it cannot hold the
-  drain for good.
+  drain for good. A liaison left live beside such a failure stays in the park's error (`ErrLiaisonLeftLive` joined
+  with the failure of the task's own park; the final review found it dropped), so the task is still looked at at
+  every tick once left while its liaison is left live: a message you send it then is work again.
   An hour quiet raises a NEEDS YOU blocker, with its one alert. work.json also names the build and the controls
   version, which the CLI checks before it writes either file; a stop whose wait for the work off the loop ran out
   keeps work.json, naming that work, so a drain after that exit is not certified. The daemon reads both files

@@ -157,10 +157,11 @@ func liftControl(path, value string) error {
 // controlState is what the engine keeps of the controls: the pause and the
 // drain for a reboot in force (read without a lock by the start gates), and
 // the loop's own record of the drain it tends: its generation, since when
-// the daemon is quiet under it, the tasks whose agents it parked, the last
-// warnings about files it could not read, and the Mac's boot time as the
-// start read it. ack is the acknowledgement work.json carries, under
-// workMu.
+// the daemon is quiet under it, the tasks whose agents it parked, whose
+// parks failed, which it left and whose liaison its last park left live
+// (looked at again even once left), the last warnings about files it could
+// not read, and the Mac's boot time as the start read it. ack is the
+// acknowledgement work.json carries, under workMu.
 type controlState struct {
 	pause  atomic.Pointer[Pause]
 	reboot atomic.Pointer[engine.RebootDrain]
@@ -168,14 +169,15 @@ type controlState struct {
 	// (stopBackground): closeWork keeps the record then.
 	workCut atomic.Bool
 
-	gen        int64
-	quietSince time.Time
-	parked     map[int64]bool
-	parkFails  map[int64]int
-	left       map[int64]string
-	done       bool
-	warned     map[string]string
-	boot       engine.BootID
+	gen         int64
+	quietSince  time.Time
+	parked      map[int64]bool
+	parkFails   map[int64]int
+	left        map[int64]string
+	liaisonLive map[int64]bool
+	done        bool
+	warned      map[string]string
+	boot        engine.BootID
 
 	ack *engine.DrainAck
 }
@@ -361,7 +363,7 @@ func (e *Engine) tendRebootDrain(ctx context.Context, tasks []registry.Task) {
 	d := st.reboot.Load()
 	if d == nil || d.Generation == 0 {
 		if st.gen != 0 {
-			st.gen, st.quietSince, st.parked, st.parkFails, st.left, st.done = 0, time.Time{}, nil, nil, nil, false
+			st.gen, st.quietSince, st.parked, st.parkFails, st.left, st.liaisonLive, st.done = 0, time.Time{}, nil, nil, nil, nil, false
 			e.clearBlocker(ctx, HoldReboot)
 		}
 		e.setDrainAck(nil)
@@ -369,7 +371,7 @@ func (e *Engine) tendRebootDrain(ctx context.Context, tasks []registry.Task) {
 	}
 	if st.gen != d.Generation {
 		st.gen, st.quietSince, st.done = d.Generation, time.Time{}, false
-		st.parked, st.parkFails, st.left = map[int64]bool{}, map[int64]int{}, map[int64]string{}
+		st.parked, st.parkFails, st.left, st.liaisonLive = map[int64]bool{}, map[int64]int{}, map[int64]string{}, map[int64]bool{}
 		e.clearBlocker(ctx, HoldReboot)
 	}
 	now := e.now()
@@ -509,17 +511,15 @@ func (e *Engine) rebootDrainWork(ctx context.Context, tasks []registry.Task) []s
 // parkForRebootDrain parks the idle agents of every task that has live
 // ones (parkable) once the daemon is quiet under the drain, each task once
 // per drain (one whose liaison it left live because you are in its pane,
-// runtime.ErrLiaisonLeftLive, at every tick: leftLive names it while it
-// idles), and returns the tasks whose park found an agent at work (an
-// agents.ErrBusy: you typed into its pane, a shell runs a build, its
-// liaison's turn is in flight), each as work ("PR-12360 at work in herdr
-// (…)"): such a task is tried again at every tick and never left, since
-// the reboot would cut that work. Any other failure is tried again at the
-// next tick; after parkTries of them in a row the drain leaves the task as
-// it is, says so once (the reboot closes its idle panes, and the factory
-// brings its agents back after it), names it in the acknowledgement's
-// Left, and goes on. parked reports whether every park went through or was
-// left.
+// runtime.ErrLiaisonLeftLive, at every tick, even once the task is left:
+// leftLive names it while it idles), and returns the tasks whose park found
+// an agent at work (an agents.ErrBusy: you typed into its pane, a shell
+// runs a build, its liaison's turn is in flight), each as work ("PR-12360
+// at work in herdr (…)"): such a task is tried again at every tick and
+// never left, since the reboot would cut that work. Any other failure of
+// the task's own park (parkFailed) is tried again at the next tick; after
+// parkTries of them in a row the drain leaves the task as it is. parked
+// reports whether every park went through or was left.
 func (e *Engine) parkForRebootDrain(ctx context.Context, tasks []registry.Task) (parked bool, busy, leftLive []string) {
 	if e.d.Runtime == nil {
 		return true, nil, nil
@@ -527,33 +527,81 @@ func (e *Engine) parkForRebootDrain(ctx context.Context, tasks []registry.Task) 
 	st := &e.ctl
 	all := true
 	for _, t := range tasks {
-		if st.parked[t.ID] || st.left[t.ID] != "" || !e.parkable(ctx, t) {
+		if st.parked[t.ID] || (st.left[t.ID] != "" && !st.liaisonLive[t.ID]) || !e.parkable(ctx, t) {
 			continue
 		}
 		err := e.parkForReboot(ctx, t)
-		if err == nil {
+		st.liaisonLive[t.ID] = errors.Is(err, runtime.ErrLiaisonLeftLive)
+		switch {
+		case err == nil:
 			st.parked[t.ID] = true
-			continue
-		}
-		if errors.Is(err, agents.ErrBusy) {
-			busy = append(busy, TaskKey(t)+" at work in herdr ("+textx.FirstLine(err.Error())+")")
+			delete(st.left, t.ID)
+		case errors.Is(err, agents.ErrBusy):
+			busy = append(busy, TaskKey(t)+" at work in herdr ("+textx.FirstLine(busyPart(err).Error())+")")
 			all = false
-			continue
+		default:
+			if st.liaisonLive[t.ID] { // never parked for good: looked at again at the next tick
+				leftLive = append(leftLive, TaskKey(t)+": your liaison pane, left live (you are in it; a message you send starts a turn)")
+			}
+			if !e.parkFailed(ctx, t, beyondLeftLive(err)) {
+				all = false
+			}
 		}
-		if errors.Is(err, runtime.ErrLiaisonLeftLive) { // never parked for good: looked at again at the next tick
-			leftLive = append(leftLive, TaskKey(t)+": your liaison pane, left live (you are in it; a message you send starts a turn)")
-			continue
-		}
-		st.parkFails[t.ID]++
-		e.log.Warn("park the agents of a task for the drain for a reboot", "task", t.ID, "try", st.parkFails[t.ID], "err", err)
-		if st.parkFails[t.ID] < parkTries {
-			all = false
-			continue
-		}
-		why := TaskKey(t) + ": its agents could not be parked (" + err.Error() + "): the reboot closes their idle panes, and the factory " +
-			"brings them back after it"
-		st.left[t.ID] = why
-		e.event(ctx, t.ID, "park", registry.PhaseFail, "left for the drain for a reboot: "+why)
 	}
 	return all, busy, leftLive
+}
+
+// parkFailed counts err, a failure of task t's own park under the drain
+// (nil: only its liaison was left live), and reports whether the drain goes
+// on without that park: nothing else failed, the task is left already, or
+// this is its parkTries-th failure in a row, which leaves it as it is, says
+// so once (the reboot closes its idle panes, and the factory brings its
+// agents back after it) and names it in the acknowledgement's Left.
+func (e *Engine) parkFailed(ctx context.Context, t registry.Task, err error) bool {
+	st := &e.ctl
+	if err == nil || st.left[t.ID] != "" {
+		return true
+	}
+	st.parkFails[t.ID]++
+	e.log.Warn("park the agents of a task for the drain for a reboot", "task", t.ID, "try", st.parkFails[t.ID], "err", err)
+	if st.parkFails[t.ID] < parkTries {
+		return false
+	}
+	why := TaskKey(t) + ": its agents could not be parked (" + err.Error() + "): the reboot closes their idle panes, and the factory " +
+		"brings them back after it"
+	st.left[t.ID] = why
+	e.event(ctx, t.ID, "park", registry.PhaseFail, "left for the drain for a reboot: "+why)
+	return true
+}
+
+// parkParts are the errors a park joined (runtime.Runtime.park: the task's
+// own park, then its liaison's), or err alone.
+func parkParts(err error) []error {
+	if j, ok := err.(interface{ Unwrap() []error }); ok {
+		return j.Unwrap()
+	}
+	return []error{err}
+}
+
+// beyondLeftLive is what a park's err says besides its liaison left live
+// (runtime.ErrLiaisonLeftLive): nil when that is all.
+func beyondLeftLive(err error) error {
+	var rest []error
+	for _, p := range parkParts(err) {
+		if !errors.Is(p, runtime.ErrLiaisonLeftLive) {
+			rest = append(rest, p)
+		}
+	}
+	return errors.Join(rest...)
+}
+
+// busyPart is the part of a park's err that found an agent at work
+// (agents.ErrBusy), for its words; err when none is.
+func busyPart(err error) error {
+	for _, p := range parkParts(err) {
+		if errors.Is(p, agents.ErrBusy) {
+			return p
+		}
+	}
+	return err
 }

@@ -91,10 +91,11 @@ func (r *Runtime) LiveAgents(ctx context.Context, t registry.Task) (bool, error)
 	return false, nil
 }
 
-// ErrLiaisonLeftLive is ParkForReboot's answer when it parked the task's own
-// agents but left its liaison live, idle, because you are in its pane: the
-// task is not parked for good, since your next message starts a turn with
-// no run row, so the drain looks at it again at every tick.
+// ErrLiaisonLeftLive is in ParkForReboot's answer when it left the task's
+// liaison live, idle, because you are in its pane: alone when the task's
+// own agents parked, joined with their park's failure when they did not.
+// The task is not parked for good, since your next message starts a turn
+// with no run row, so the drain looks at it again at every tick.
 var ErrLiaisonLeftLive = errors.New("your liaison pane, left live")
 
 // liaisonAtWork reports whether herdr shows the agent of the live liaison

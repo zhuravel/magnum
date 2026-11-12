@@ -131,7 +131,9 @@ while one holds keeps its start, its end and its reason unless a flag changes th
   reports a liaison at work as busy, you in its pane included; a liaison left live, idle, with you in its pane is
   never counted parked, but looked at again at every tick. A busy refusal (an agent at work in herdr with no run row: you typed into its
   pane, a shell runs a build) is never left: the task is named as work and tried again at each tick. Any other
-  failure, after three tries, leaves the task, said once and named in `left`.
+  failure, after three tries, leaves the task, said once and named in `left`. A liaison left live beside a
+  failure of the task's own park stays in the park's error (`ErrLiaisonLeftLive` joined with that failure), so a
+  task left after three tries is still looked at at every tick while its liaison is left live.
 - `parked` is true once the park is done: review, no restartable session is live and none shows a dialog;
   factory, every task's park went through or was left.
 - The command says quiet only once both acknowledgements are of its generation, from the running daemon's pid,

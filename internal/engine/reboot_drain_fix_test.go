@@ -151,6 +151,42 @@ func TestARebootDrainLeavesAConfirmingLoopPastItsCap(t *testing.T) {
 	}
 }
 
+// renamedAway runs fn with the registry's table renamed away, so every read
+// of it fails, and puts it back.
+func (h *harness) renamedAway(table string, fn func()) {
+	h.t.Helper()
+	if _, err := h.st.DB().ExecContext(h.ctx, "ALTER TABLE "+table+" RENAME TO "+table+"_gone"); err != nil {
+		h.t.Fatal(err)
+	}
+	defer func() {
+		if _, err := h.st.DB().ExecContext(h.ctx, "ALTER TABLE "+table+"_gone RENAME TO "+table); err != nil {
+			h.t.Fatal(err)
+		}
+	}()
+	fn()
+}
+
+// What the drain cannot read is never safe: the fix loops' rows and their
+// push records are read at once, and a read that fails is work; so is the
+// settle of a push whose steps cannot be read, which may have begun.
+func TestARebootDrainCountsTheFixRowsOrStepsItCannotReadAsWork(t *testing.T) {
+	h, _ := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	rec := fixPush{Kind: fixPushUnconfirmed, Run: "run-unread", Pushed: fixPushed, Since: h.clock.Now(), Failed: h.clock.Now()}
+	if err := writeKVJSON(h.ctx, h.e, kvPRFixPush(pr.ID), "fix push", rec); err != nil {
+		t.Fatal(err)
+	}
+	var work []string
+	h.renamedAway("kv", func() { work, _ = h.e.rebootFixWork(h.ctx, nil, &rebootState{}) })
+	if want := "the fix loops and their push records (unreadable)"; !slices.Equal(work, []string{want}) {
+		t.Errorf("work with the kv rows unreadable = %q, want %q", work, want)
+	}
+	h.renamedAway("events", func() { work, _ = h.e.rebootFixWork(h.ctx, nil, &rebootState{}) })
+	if want := "the settle of the push of b2b2b2b on talkable/talkable#2 (its steps cannot be read)"; !slices.Contains(work, want) {
+		t.Errorf("work with the steps unreadable = %q, want %q", work, want)
+	}
+}
+
 // The settle of a confirmed push that stopped between its steps (the next
 // poll resumes it) is the drain's work while GitHub does not answer, up to
 // 30 minutes from when the drain first saw it; then the drain leaves it to

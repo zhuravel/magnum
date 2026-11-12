@@ -1290,10 +1290,7 @@ func (r *Runtime) park(ctx context.Context, t registry.Task, strict bool) error 
 	if left != "" {
 		r.log.Info("left a task's liaison live: "+left, "task", t.ID)
 	}
-	switch {
-	case errors.Is(err, ErrLiaisonLeftLive) && len(errs) == 0:
-		return err // drain.go: the task's own agents parked; the liaison you are in stays, to be looked at again
-	case err != nil && !errors.Is(err, ErrLiaisonLeftLive):
+	if err != nil { // drain.go: ErrLiaisonLeftLive too, beside a failure of the task's own park, so the drain looks at the liaison again
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)

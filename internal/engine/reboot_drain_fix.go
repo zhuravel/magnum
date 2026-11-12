@@ -57,34 +57,17 @@ func (e *Engine) reservedWords(ctx context.Context, id int64, h *roundHandle) st
 //   - a held merge's push whose job is gone (a stop cut it, and the start's
 //     recovery did not end its row) is left: the start ends its loop
 //     (recoverHeldPush), and P asks the push again.
+//
+// What it cannot read is work, never safe: the loops' rows and their push
+// records, read at once, and a settle's steps (pushRecordsWork).
 func (e *Engine) rebootFixWork(ctx context.Context, held map[int64]*roundHandle, st *rebootState) (work, left []string) {
-	vals, err := e.st.KVValues(ctx, "pr.*.fix")
+	vals, err := e.st.KVValues(ctx, "pr.*.fix*") // the loops' rows and their push records, in one read
 	if err != nil {
-		return []string{"the fix loops (unreadable)"}, nil
+		return []string{"the fix loops and their push records (unreadable)"}, nil
 	}
-	pushes := e.fixPushes(ctx, store.Repo{})
+	pushes := e.pushRows(ctx, vals, store.Repo{})
 	now := e.now()
-	skip := map[int64]bool{}
-	for _, id := range slices.Sorted(maps.Keys(pushes)) {
-		rec := pushes[id].rec
-		if _, ok := held[id]; ok {
-			skip[id] = true
-			continue
-		}
-		push := textx.ShortSHA(rec.Pushed) + " on " + e.prWords(ctx, id)
-		switch {
-		case e.pushStarted(ctx, rec):
-			skip[id] = true
-			what := "the settle of the confirmed push of " + push
-			if now.Sub(st.firstSeen(rec.Run, now)) < fixConfirmCap {
-				work = append(work, what+" (its next steps run at the next poll)")
-			} else {
-				left = append(left, what+", stopped between its steps: the poll after the reboot resumes it")
-			}
-		case rec.Kind == fixPushUnconfirmed:
-			left = append(left, "the push of "+push+", which GitHub did not confirm: the late settle recovers it after the reboot")
-		}
-	}
+	work, left, skip := e.pushRecordsWork(ctx, pushes, held, st)
 	for _, id := range fixRowIDs(vals) {
 		if _, ok := held[id]; ok || skip[id] {
 			continue
@@ -111,6 +94,42 @@ func (e *Engine) rebootFixWork(ctx context.Context, held map[int64]*roundHandle,
 		}
 	}
 	return work, left
+}
+
+// pushRecordsWork is rebootFixWork's part of the push records (pushes) no
+// reservation holds: the settle of a confirmed push that began (work, then
+// left), one whose steps cannot be read (work: it may have begun), and an
+// unconfirmed fix (left). skip are the PRs it named, or a reservation
+// holds, which the loops' rows do not name again.
+func (e *Engine) pushRecordsWork(ctx context.Context, pushes map[int64]fixPushRow, held map[int64]*roundHandle,
+	st *rebootState) (work, left []string, skip map[int64]bool) {
+	now := e.now()
+	skip = map[int64]bool{}
+	for _, id := range slices.Sorted(maps.Keys(pushes)) {
+		rec := pushes[id].rec
+		if _, ok := held[id]; ok {
+			skip[id] = true
+			continue
+		}
+		push := textx.ShortSHA(rec.Pushed) + " on " + e.prWords(ctx, id)
+		began, err := e.pushBegan(ctx, rec)
+		switch {
+		case err != nil:
+			skip[id] = true
+			work = append(work, "the settle of the push of "+push+" (its steps cannot be read)")
+		case began:
+			skip[id] = true
+			what := "the settle of the confirmed push of " + push
+			if now.Sub(st.firstSeen(rec.Run, now)) < fixConfirmCap {
+				work = append(work, what+" (its next steps run at the next poll)")
+			} else {
+				left = append(left, what+", stopped between its steps: the poll after the reboot resumes it")
+			}
+		case rec.Kind == fixPushUnconfirmed:
+			left = append(left, "the push of "+push+", which GitHub did not confirm: the late settle recovers it after the reboot")
+		}
+	}
+	return work, left, skip
 }
 
 // fixRowIDs are the PR ids of the fix loops' rows (KVPRFix keys of vals),
