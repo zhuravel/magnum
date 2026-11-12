@@ -1437,6 +1437,7 @@ func TestAFixIsRefusedWhileAMergeIsHeld(t *testing.T) {
 // autofix refused so is never tried again. A fix now drops a stale held
 // merge, as P does, and goes on.
 func TestAFixDropsAStaleHeldMergeAndGoesOn(t *testing.T) {
+	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		stale func(*HeldMerge)
