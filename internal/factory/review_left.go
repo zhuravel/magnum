@@ -227,10 +227,21 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 	} else if who := e.yoursSince(ctx, t, cy); who != "" {
 		return e.askLeft(ctx, t, c, cy, round, left, typedCause(who), stops)
 	}
-	switch {
-	case left.moved != "" && decision == decideKeep:
-		return e.keepMoved(ctx, t, c, cy, round)
-	case left.moved != "":
+	if left.moved != "" { // your answer runs over the branch head its question counted, never a newer one
+		m, err := e.movedFacts(ctx, t, c, cy.HeadBefore)
+		if err != nil {
+			return "", err
+		}
+		if was := stops.leftBranchAt(cy, round); was != "" && was != m.branchAt {
+			newer, err := e.d.Git.CommitsAfter(ctx, c.Path, was, m.branchAt, false)
+			if err != nil {
+				return "", err
+			}
+			return e.askLeft(ctx, t, c, cy, round, left, movedSince(movedCause(m), t.Branch, was, newer), stops)
+		}
+		if decision == decideKeep {
+			return e.keepMoved(ctx, t, c, cy, round)
+		}
 		return e.restoreMoved(ctx, t, c, cy, round, left)
 	}
 	base := leftName(dir, cy.N)

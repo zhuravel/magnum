@@ -475,3 +475,31 @@ func TestAnAnswerIsNeverRunWhileTheFactoryCannotTellWhoChangedTheCopy(t *testing
 		t.Fatalf("README is %q after your answer to the cannot-tell question; want it restored", r.read("README"))
 	}
 }
+
+// Restore runs only over the branch head its question counted: a branch
+// that moved again after the question (a new commit on it) is asked about
+// again, naming the new commits, and nothing is reset.
+func TestARestoreOfAMovedBranchAsksAgainWhenTheBranchMovedSince(t *testing.T) {
+	var rig *reviewRig
+	rig = newReviewRig(t, func(c evalrun.LocalCase) evalrun.LocalResult {
+		rig.gitIn(c.Checkout, "commit", "--quiet", "--allow-empty", "-m", "a reviewer's commit")
+		return result()(c)
+	})
+	r := rig
+	task, _ := r.reviewTask("PR-12413")
+	r.run(5, func() bool { return !isLive(r.reload(task.ID)) })
+	got := r.reload(task.ID)
+	r.clock.Add(time.Minute)
+	newer := r.commit("PR-12413 one more commit", map[string]string{"app/points.rb": "class Points\n  # newer\nend\n"})
+	r.answerLeft(task.ID, optionRestoreCopy)
+	r.run(4, func() bool { return r.reload(task.ID).QuestionRev != got.QuestionRev })
+	after := r.reload(task.ID)
+	qs := r.newestQuestions(task.ID)
+	if after.State != registry.TaskNeedsYou || after.QuestionRev == got.QuestionRev || len(qs) != 1 || !strings.Contains(qs[0].Text, short(newer)) {
+		t.Fatalf("task %s waits %q with %+v; want the question again, naming the new commit %s", after.State, after.WaitsWhat, qs,
+			short(newer))
+	}
+	if now := r.git(r.copyDir, "rev-parse", task.Branch); now != newer {
+		t.Fatalf("the branch is at %s; want it left at %s, nothing reset", now, newer)
+	}
+}

@@ -33,6 +33,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -116,6 +117,9 @@ type stopAsk struct {
 	// could not tell who works in the copy: your answer to it runs though
 	// it still cannot; an answer to any other never does.
 	Blind bool `json:"blind,omitempty"`
+	// BranchAt is the task's branch head a question of a copy a round left
+	// off its head counted (movedFacts): a restore runs only over it.
+	BranchAt string `json:"branch_at,omitempty"`
 }
 
 // accepted is a check whose failure you accepted as known for the task:
@@ -543,6 +547,18 @@ func (rec stopsRecord) leftBlind(cy registry.Cycle, round int) bool {
 	return false
 }
 
+// leftBranchAt is the branch head the question your newest decision on
+// what review round round of cycle cy left answers counted ("" for none).
+func (rec stopsRecord) leftBranchAt(cy registry.Cycle, round int) string {
+	key := leftKey(cy, round)
+	for _, a := range slices.Backward(rec.Asks) {
+		if a.Kind == stopLeft && a.Key == key && a.Decision != decideRetry {
+			return a.BranchAt
+		}
+	}
+	return ""
+}
+
 // leftAskAgain are your words that fit none of the ways of the newest
 // question of what review round round of cycle cy left, when its answer
 // asks again (decideAskAgain); ok is false otherwise.
@@ -618,6 +634,19 @@ func blindCause(who string) leftCause {
 func movedCause(m movedFacts) leftCause {
 	return leftCause{words: "the factory moves no branch or HEAD by itself", context: "the factory moves no branch or HEAD by itself",
 		moved: &m}
+}
+
+// movedSince is cause c asked again because the task's branch moved from
+// was, the head the question you answered counted, by the commits newer:
+// your answer ran over none of them.
+func movedSince(c leftCause, branch, was string, newer []gitx.ListedCommit) leftCause {
+	var shas []string
+	for _, n := range newer {
+		shas = append(shas, short(n.SHA))
+	}
+	c.words += fmt.Sprintf("; %s moved since the question you answered, from %s: %s (%s) the answer did not count, so it ran "+
+		"no restore", branch, short(was), plural(len(newer), "new commit"), clipList(shas))
+	return c
 }
 
 // askedAgain is cause c asked again after your words fit none of its ways
@@ -722,9 +751,13 @@ func leftQuestion(t registry.Task, cy registry.Cycle, round int, left roundLefto
 	if saved != "" {
 		context += "; it saved the changes to " + saved
 	}
+	branchAt := ""
+	if cause.moved != nil {
+		branchAt = cause.moved.branchAt
+	}
 	return stopQuestion{
 		ask: stopAsk{Kind: stopLeft, Key: leftKey(cy, round), Why: fmt.Sprintf("%s of the local review left %s, and %s", name, left,
-			cause.words), NoKeep: !keepOffered, Blind: cause.blind},
+			cause.words), NoKeep: !keepOffered, Blind: cause.blind, BranchAt: branchAt},
 		q: registry.Question{
 			Text: fmt.Sprintf("%s of the local review left %s at %s, and %s: %s", strings.ToUpper(name[:1])+name[1:], left,
 				short(cy.HeadBefore), cause.words, ending),
