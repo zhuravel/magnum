@@ -216,6 +216,12 @@ type WaitsOn struct {
 
 	// Short and Long are What on a narrow and on a wide screen.
 	Short, Long string
+
+	// Since is when the step What names began, on a wait on the factory's
+	// own work (a check's command, a copy's preparation, a QA server's
+	// boot): the painter adds how long it has run after the text
+	// ("precheck: jest · 3m"), from each frame's clock. Zero: no time.
+	Since time.Time
 }
 
 // StagingCell is one staging server's column on a row. State is one of
@@ -522,6 +528,18 @@ type TaskCard struct {
 	Copy       string
 	Started    time.Time
 	WaitingFor string // starts with who it waits on ("rev-ann: review of #4527")
+	// WaitingStep is the part of WaitingFor that names a step of the
+	// factory's own work ("precheck: jest") and WaitingSince when it began
+	// (WaitsOn.Since): the painter adds how long it has run after that part.
+	// Zero WaitingSince: no time.
+	WaitingStep  string
+	WaitingSince time.Time
+	// Follow is the file o follows live (less +F) while no agent of the
+	// task works and the factory itself runs something for it: its checks'
+	// live.log, its copy's setup log, its QA server's log (absolute; "" for
+	// none, and o steps into the task's pane). The card names it on a line
+	// of its own.
+	Follow string
 	// Links are what the task waits on you for, as links (the threads and
 	// findings its PR's verdict says need you), drawn under WAITING FOR.
 	Links []string

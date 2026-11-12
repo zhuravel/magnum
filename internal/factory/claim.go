@@ -198,12 +198,16 @@ func (e *Engine) beginClaim(ctx context.Context, t registry.Task, w *claimWait) 
 	return e.preparing(ctx, t, run)
 }
 
+// preparingWhat starts the wait of a task whose first claim runs:
+// "preparing <copy> (setup <elapsed>)" (the screen shows its own clock).
+const preparingWhat = "preparing"
+
 // preparing is the wait of a task whose claim runs: a retry keeps the
 // reason the claim before it waited on, a first claim says it prepares.
 func (e *Engine) preparing(ctx context.Context, t registry.Task, run *claimRun) error {
 	what := run.waitWhat
 	if what == "" {
-		what = fmt.Sprintf("preparing %s (setup %s)", cmp.Or(t.Copy, "a copy"), setupAge(e.now().Sub(run.started)))
+		what = fmt.Sprintf("%s %s (setup %s)", preparingWhat, cmp.Or(t.Copy, "a copy"), setupAge(e.now().Sub(run.started)))
 	}
 	e.waitOn(ctx, t, waitCopy, what)
 	return heldError{who: waitCopy, what: what}

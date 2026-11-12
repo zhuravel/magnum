@@ -329,7 +329,8 @@ func (e *Engine) runProof(ctx context.Context, t registry.Task, c Copy) (Proof, 
 	}
 	if red {
 		e.noteCheck(t.ID, "proof: runs "+strings.Join(pf.Specs, ", ")+" on the base")
-		run, problem, err := e.baseRun(ctx, t, c, started, bh.Base, bh.Head, pf.Specs, cmd, timeout)
+		run, problem, err := e.baseRun(ctx, t, c, started, bh.Base, bh.Head, pf.Specs, cmd, timeout,
+			"proof runs "+strings.Join(pf.Specs, ", ")+" on the base")
 		proof.Base = run
 		if k, ok := errors.AsType[keptChanges](err); ok {
 			return forYou(k.why)
@@ -348,7 +349,7 @@ func (e *Engine) runProof(ctx context.Context, t registry.Task, c Copy) (Proof, 
 		}
 	}
 	e.noteCheck(t.ID, "proof: runs "+strings.Join(pf.Specs, ", ")+" at the head")
-	run, problem, err := e.specRun(ctx, c, cmd, bh.Head, timeout, "proof specs")
+	run, problem, err := e.specRun(ctx, c, cmd, bh.Head, timeout, "proof runs "+strings.Join(pf.Specs, ", ")+" at the head")
 	proof.Head = run
 	// What the spec run changed goes back, guarded, however the run ended
 	// (a drain too): the next check must find the tree as the branch has it.
@@ -536,13 +537,20 @@ func outputOf(res execx.Result) string {
 
 // script runs a command of the repository in copy c, as its pool scripts
 // run (`mise -C <copy> exec -- env <copy env> /bin/sh -c <script>`), without
-// the daemon's secrets, through the deny list.
+// the daemon's secrets, through the deny list. In a run of a task's checks
+// (ctx carries its live log) the command's begin line, its output as it
+// prints it and its end line go to the task's live.log, label naming its
+// step ("precheck jest").
 func (e *Engine) script(ctx context.Context, c Copy, script, label string, timeout time.Duration) (execx.Result, error) {
 	if e.run == nil {
 		return execx.Result{Code: -1}, heldError{who: "factory", what: "this build runs no commands"}
 	}
-	return e.run.Run(ctx, execx.Cmd{Name: "mise", Args: miseArgs(c, script), Dir: c.Path, Unset: unsetEnv(e.cfg),
-		Timeout: timeout, Mutates: true, Label: label + " in " + c.Name})
+	cmd := execx.Cmd{Name: "mise", Args: miseArgs(c, script), Dir: c.Path, Unset: unsetEnv(e.cfg),
+		Timeout: timeout, Mutates: true, Label: label + " in " + c.Name}
+	end := e.liveStream(ctx, &cmd, label, script)
+	res, err := e.run.Run(ctx, cmd)
+	end(res, err)
+	return res, err
 }
 
 // recordRun records a spec or other run as a check of task t on rev, by the
@@ -622,17 +630,17 @@ type keptChanges struct {
 
 func (k keptChanges) Error() string { return k.why }
 
-// baseRun is a run of cmd on the base: detachForBase, the run, then the
-// branch and the head's tree restored (restoreBranch), whatever ended the
-// run, with the begin event's ok or fail. The restore discards what the run
-// changed, so it is guarded as restoreOwn is: with somebody else at work in
-// the copy since the check began at since (othersIn), the copy stays
-// detached with its record, a fail event says why, and the error is a wait;
-// resumeDetached restores it once nobody works there, never over a change
-// the factory did not make. A detach the copy's changes refused is a
-// keptChanges.
+// baseRun is a run of cmd on the base, its step named label (live.log's):
+// detachForBase, the run, then the branch and the head's tree restored
+// (restoreBranch), whatever ended the run, with the begin event's ok or
+// fail. The restore discards what the run changed, so it is guarded as
+// restoreOwn is: with somebody else at work in the copy since the check
+// began at since (othersIn), the copy stays detached with its record, a
+// fail event says why, and the error is a wait; resumeDetached restores it
+// once nobody works there, never over a change the factory did not make. A
+// detach the copy's changes refused is a keptChanges.
 func (e *Engine) baseRun(ctx context.Context, t registry.Task, c Copy, since time.Time, base, head string, specs []string, cmd string,
-	timeout time.Duration) (ProofRun, string, error) {
+	timeout time.Duration, label string) (ProofRun, string, error) {
 	if err := e.detachForBase(ctx, t, c, base, head, specs); err != nil {
 		if _, kept := errors.AsType[keptChanges](err); !kept {
 			e.event(context.WithoutCancel(ctx), t.ID, "proof", registry.PhaseFail, "base run in "+c.Name+" did not start: "+
@@ -640,7 +648,7 @@ func (e *Engine) baseRun(ctx context.Context, t registry.Task, c Copy, since tim
 		}
 		return ProofRun{Command: cmd}, "", err
 	}
-	run, denied, err := e.specRun(ctx, c, cmd, base, timeout, "specs on the base")
+	run, denied, err := e.specRun(ctx, c, cmd, base, timeout, label)
 	rec := detachedRecord{Copy: c.Path, CopyName: c.Name, Branch: t.Branch, Base: base, Head: head, Specs: specs}
 	ectx := context.WithoutCancel(ctx) // the run's end is written whatever ended it
 	if who := e.othersIn(ectx, t, since); who != "" {

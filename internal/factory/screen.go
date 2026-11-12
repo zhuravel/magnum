@@ -267,6 +267,11 @@ type taskView struct {
 	// pr is what a published task waits on by its PR in magnum's registry
 	// (readPRs); nil without a read of it.
 	pr *prWait
+	// own is its wait on the factory's own work off the loop (ownWork),
+	// nil for another wait; follow the file o follows, set only while no
+	// agent of the task works.
+	own    *tui.WaitsOn
+	follow string
 }
 
 // read is what the screen shows of task t, nil for a task home leaves out
@@ -303,6 +308,12 @@ func (s *screen) read(t registry.Task) (*taskView, error) {
 	}
 	if err := s.readAgents(v); err != nil {
 		return nil, err
+	}
+	if w, follow, ok := s.ownWork(v); ok {
+		v.own = &w
+		if working(v.agents) == 0 { // an agent at work: o steps into its pane
+			v.follow = follow
+		}
 	}
 	if err := s.readQuestions(v); err != nil {
 		return nil, err
@@ -620,6 +631,8 @@ func (s *screen) blockers(v *taskView) []tui.WaitsOn {
 	switch {
 	case waitsOnYou(t):
 		first = s.onYouBlocker(v)
+	case v.own != nil:
+		first = *v.own
 	case t.WaitsWho != "":
 		first = tui.WaitsOn{Who: t.WaitsWho, What: t.WaitsWhat, Short: shortWhat(t.WaitsWho, t.WaitsWhat)}
 		if t.WaitsWho == waitCopy {
@@ -787,9 +800,12 @@ func (s *screen) help(v *taskView, row tui.FactoryRow) string {
 		}
 		return text
 	}
-	parts := make([]string, len(row.WaitsOn))
+	parts := make([]string, len(row.WaitsOn), len(row.WaitsOn)+1)
 	for i, w := range row.WaitsOn {
 		parts[i] = w.Who + ": " + cmp.Or(w.Long, w.What)
+	}
+	if v.follow != "" { // what the factory itself runs: o follows its output, and how to come back
+		parts = append(parts, followWords(v.follow))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -850,7 +866,11 @@ func (s *screen) taskCard(v *taskView, row tui.FactoryRow) tui.TaskCard {
 			what, c.Findings = stopHead, stopItems
 		}
 		parts = append(parts, w.Who+": "+what)
+		if !w.Since.IsZero() && c.WaitingSince.IsZero() { // the step of the factory's own work: the painter's clock after it
+			c.WaitingStep, c.WaitingSince = parts[len(parts)-1], w.Since
+		}
 	}
+	c.Follow = v.follow
 	// A prompt you let go of may not have reached its agent: its first line
 	// is on the WAITING FOR line, which the card always draws.
 	for _, role := range slices.Sorted(maps.Keys(v.letGo)) {

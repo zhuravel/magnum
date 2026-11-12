@@ -292,12 +292,12 @@ func (m *Manager) EnsureSchema(ctx context.Context, slot store.Slot, pool config
 		return "", err
 	}
 	m.event(ctx, subject, "info", "slot.schema_reset", "reloading schema: "+c.Why)
-	if err := m.runScripts(ctx, slot, pool.SlotEnv(slot.Name), pool.ResetDB, "reset_db", "slot-"+slot.Name+".log", ResetDBTimeout); err != nil {
+	if err := m.runScripts(ctx, slot, pool.SlotEnv(slot.Name), pool.ResetDB, "reset_db", SlotLog(slot.Name), ResetDBTimeout); err != nil {
 		fk, recreateErr := m.recreateAfter3730(ctx, slot, pool, err.Error())
 		if !fk {
 			return "", err
 		}
-		if err := m.runScripts(ctx, slot, pool.SlotEnv(slot.Name), pool.ResetDB, "reset_db", "slot-"+slot.Name+".log", ResetDBTimeout); err != nil {
+		if err := m.runScripts(ctx, slot, pool.SlotEnv(slot.Name), pool.ResetDB, "reset_db", SlotLog(slot.Name), ResetDBTimeout); err != nil {
 			return "", after3730(err, recreateErr)
 		}
 	}

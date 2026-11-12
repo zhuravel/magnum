@@ -859,7 +859,7 @@ func (p *precheckRun) heal(crash envCrash) (failed string) {
 	p.e.event(p.ctx, p.t.ID, "heal", registry.PhaseBegin, fmt.Sprintf("%s: %s crashed for lack of %s; runs the repository's installs",
 		p.c.Name, firstWord(crash.cmd), crash.sig.lacks))
 	for _, in := range p.repo.Installs {
-		if _, err := p.e.script(p.ctx, p.c, in.Run, "precheck heal "+in.Run, p.limit); err != nil {
+		if _, err := p.e.script(p.ctx, p.c, in.Run, "precheck heal", p.limit); err != nil {
 			why := textx.Clip(textx.FirstLine(scrub.Text(err.Error())), outputLineRunes)
 			if ee, ok := errors.AsType[*execx.ExitError](err); ok && firstLine(ee.Stderr) != "" { // its own words, not mise's command line
 				why = fmt.Sprintf("exited %d: %s", ee.Code, firstLine(ee.Stderr))
@@ -1044,7 +1044,8 @@ func (p *precheckRun) onBase(cmd string, run ProofRun, red []specFailure) (baseR
 	baseScript := renderCommand(cmd, atBase, p.base)
 	bound, within := baseBound(p.repo, len(atBase), run.Took)
 	p.e.noteCheck(p.t.ID, "precheck: specs on the base ("+plural(len(atBase), "spec file")+" red at the head)")
-	base, problem, err := p.e.baseRun(p.parent, p.t, p.c, p.started, p.base, p.head, nil, baseScript, bound)
+	base, problem, err := p.e.baseRun(p.parent, p.t, p.c, p.started, p.base, p.head, nil, baseScript, bound,
+		"precheck specs on the base")
 	if k, ok := errors.AsType[keptChanges](err); ok {
 		p.say("\n**Not run on the base: %s.**\n", k.why)
 		p.unjudged(red, atBase)

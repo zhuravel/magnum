@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -81,6 +82,11 @@ type codingRig struct {
 	// adds is what a script whose first word it names prints on stdout
 	// after its own output, and it then exits 1: a red run that says it.
 	adds map[string]string
+	// streams are what a script whose first word they name writes to its
+	// command's stream (execx.Cmd.Stream) as it starts, one write each,
+	// before it blocks or does its work; every script also writes its
+	// output to its streams as it returns, as execx would have while it ran.
+	streams map[string][]string
 }
 
 // scriptRun is one script the copy ran: the script, the copy's branch and
@@ -187,7 +193,9 @@ func (x rigRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) {
 			ctx, cancel = context.WithTimeout(ctx, c.Timeout)
 			defer cancel()
 		}
-		return x.r.script(ctx, c)
+		res, err := x.r.script(ctx, c)
+		streamResult(c, res)
+		return res, err
 	}
 	return execx.Result{Code: -1}, fmt.Errorf("the coding rig runs no %s", c.Name)
 }
@@ -214,6 +222,14 @@ func (r *codingRig) script(ctx context.Context, c execx.Cmd) (execx.Result, erro
 	}
 	if during != nil {
 		during(c.Dir, run)
+	}
+	r.mu.Lock()
+	chunks := r.streams[words[0]]
+	r.mu.Unlock()
+	for _, chunk := range chunks {
+		if c.Stream != nil {
+			_, _ = c.Stream.Write([]byte(chunk))
+		}
 	}
 	if hang != nil && hang(run) {
 		<-ctx.Done()
@@ -294,6 +310,17 @@ func (r *codingRig) script(ctx context.Context, c execx.Cmd) (execx.Result, erro
 		return res, &execx.ExitError{Cmd: c, Code: run.Exit}
 	}
 	return res, nil
+}
+
+// streamResult writes what a command returned to its streams, as execx
+// writes what a command prints while it runs.
+func streamResult(c execx.Cmd, res execx.Result) {
+	if c.Stream != nil && len(res.Stdout) > 0 {
+		_, _ = c.Stream.Write(res.Stdout)
+	}
+	if w := cmp.Or(c.StreamErr, c.Stream); w != nil && len(res.Stderr) > 0 {
+		_, _ = w.Write(res.Stderr)
+	}
 }
 
 func (r *codingRig) record(run scriptRun) {

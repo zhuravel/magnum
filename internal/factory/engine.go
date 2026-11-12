@@ -505,6 +505,9 @@ type Engine struct {
 	keptWrite func(path string, b []byte) error
 	lockPoll  time.Duration
 	after     func(d time.Duration) <-chan time.Time
+	// liveLimit bounds a run's output in live.log (0: liveMax), a seam of
+	// the tests.
+	liveLimit int
 
 	// The local review's rounds that run off the loop, one per task
 	// (launchRound), which reviewMu guards; roundCap ends a round that runs

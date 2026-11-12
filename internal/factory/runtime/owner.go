@@ -217,6 +217,18 @@ func TaskSessions(ctx context.Context, st *store.Store, id int64) ([]store.Sessi
 	return st.SessionsByPR(ctx, pr.ID)
 }
 
+// TaskSlot is the slot of the copy task id's owner row holds in the
+// factory's agents store st: the copy its claim reserved, before the task
+// notes it (store.ErrNotFound for none, and for a task never launched or
+// claimed).
+func TaskSlot(ctx context.Context, st *store.Store, id int64) (store.Slot, error) {
+	pr, err := ownerRowIn(ctx, st, id)
+	if err != nil {
+		return store.Slot{}, err
+	}
+	return st.SlotByPR(ctx, pr.ID)
+}
+
 // ownerRowIn is task id's owner row in st (ownerRow).
 func ownerRowIn(ctx context.Context, st *store.Store, id int64) (store.PR, error) {
 	repos, err := st.ListRepos(ctx)

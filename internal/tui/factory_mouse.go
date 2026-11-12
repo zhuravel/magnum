@@ -153,7 +153,7 @@ func (m factoryModel) menuItems() []menuItem {
 		}
 		return slices.Concat([]menuItem{
 			{"open its card", "enter", "enter", row}, {"oldest that needs you", "a", "a", decision},
-			{"step into its pane", "o", "o", row && acts && m.paneHint(sel) != ""},
+			m.oItem(sel, row, acts),
 			{"open its PR", "b", "b", row && acts && c.PRURL != ""}, {"open its Jira issue", "t", "t", row && acts && c.IssueURL != ""},
 			m.reportItem(sel.ID)}, fixKeys, []menuItem{{"new task", "n", "n", acts},
 			{"refresh", "ctrl+r", "ctrl+r", true}, {"action log", logKey, logKey, true}, {"help", "?", "?", true},

@@ -448,7 +448,7 @@ func (m *Manager) deps(ctx context.Context, slot store.Slot, pool config.Pool) e
 	if sl.LockSHA != nil && *sl.LockSHA == lock {
 		return nil
 	}
-	if err := m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.PostCheckout, "deps", "slot-"+sl.Name+".log", DepsTimeout); err != nil {
+	if err := m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.PostCheckout, "deps", SlotLog(sl.Name), DepsTimeout); err != nil {
 		return err
 	}
 	return m.d.Store.UpdateSlotFields(ctx, sl.ID, func(u *store.SlotUpdate) { u.Set("lock_sha", lock) })
@@ -713,7 +713,7 @@ func (m *Manager) resetSchema(ctx context.Context, slot store.Slot, pool config.
 		if attempt == 2 { // the first failed (runErr), else it returned
 			fk, recreateErr = m.recreateAfter3730(ctx, sl, pool, runErr.Error())
 		}
-		runErr = m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.ResetDB, "reset_db", "slot-"+sl.Name+".log", ResetDBTimeout)
+		runErr = m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.ResetDB, "reset_db", SlotLog(sl.Name), ResetDBTimeout)
 		if runErr == nil {
 			base := m.loadedSchema(ctx, sl, pool)
 			if err := m.clearResetFailures(ctx, sl.ID); err != nil {

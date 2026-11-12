@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -239,9 +240,29 @@ func (m *factoryModel) commonKey(k string) tea.Cmd {
 		if ok && magnumsPane(r) {
 			return m.openMagnum(r)
 		}
-		return m.stepIn(cmp.Or(r.ID, m.task))
+		id := cmp.Or(r.ID, m.task)
+		if file := m.followOf(id); file != "" {
+			return m.followOutput(id, file)
+		}
+		return m.stepIn(id)
 	}
 	return nil
+}
+
+// followOf is the file o follows on task id: what the factory itself runs
+// for it while no agent of it works (TaskCard.Follow); "" for none, and o
+// steps into its pane.
+func (m factoryModel) followOf(id int64) string {
+	if f := m.data.Cards[id].Task.Follow; filepath.IsAbs(f) {
+		return f
+	}
+	return ""
+}
+
+// followOutput follows file live in less (+F, as tail -f), asking nothing:
+// ctrl-c stops following, q quits, and the screen comes back.
+func (m *factoryModel) followOutput(id int64, file string) tea.Cmd {
+	return tea.ExecProcess(m.follow(m.ctx, file), func(err error) tea.Msg { return factoryPagerMsg{task: id, err: err} })
 }
 
 // openMagnum steps into magnum's pane of row r's PR (the judge's, or the

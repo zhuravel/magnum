@@ -368,7 +368,9 @@ func (e *Engine) checkHead(ctx context.Context, t registry.Task, c Copy, head, s
 			x.endedAt = e.now()
 			e.endCheckEvent(t, x)
 		}()
-		x.res = e.runChecks(cctx, t, c, proof)
+		live := e.openLive(t.ID, short(head)+": "+what) // the run's live.log, emptied
+		defer live.close()
+		x.res = e.runChecks(withLive(cctx, live), t, c, proof)
 	})
 	return checkResult{}, false
 }

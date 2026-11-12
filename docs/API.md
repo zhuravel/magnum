@@ -13989,6 +13989,14 @@ type Cmd struct {
 	// ends where it failed. A longer stdout sets Result.Truncated, with no
 	// TruncationMarker; stderr is captured as always.
 	KeepTail int
+	// Stream, when non-nil, gets what the process writes on stdout as it
+	// writes it, besides the capture (Result keeps the output as before),
+	// and stderr too unless StreamErr is set: a reader that cuts lines
+	// keeps the two streams apart with a writer for each. Each stream is
+	// written from its own goroutine, so one writer for both must be safe
+	// for concurrent use. A failed write is ignored: the capture and the
+	// process go on.
+	Stream, StreamErr io.Writer
 }
     Cmd describes one subprocess.
 
@@ -17377,6 +17385,11 @@ func TaskSessions(ctx context.Context, st *store.Store, id int64) ([]store.Sessi
     TaskSessions are the sessions of task id in the factory's agents store st,
     oldest first: every generation of every role the runtime launched for it.
     A task never launched has none.
+
+func TaskSlot(ctx context.Context, st *store.Store, id int64) (store.Slot, error)
+    TaskSlot is the slot of the copy task id's owner row holds in the factory's
+    agents store st: the copy its claim reserved, before the task notes it
+    (store.ErrNotFound for none, and for a task never launched or claimed).
 
 func TurnText(text string) string
     TurnText is the prompt of the turn a ledger entry's text (scrubbed) starts:
@@ -28042,6 +28055,10 @@ func PerPREnv(rc *config.Repo, number int, path, clone string) map[string]string
     PerPREnv is the environment of per-PR worktree number (path, main clone
     clone) for its hooks and its agents: WorktreeEnv under PRSlug(number).
 
+func ProvisionLog(name string) string
+    ProvisionLog is the name of slot name's provisioning log in layout.Logs(),
+    its setup and post_checkout scripts' (RunLogged).
+
 func ReadMarker(dir string) (string, error)
     ReadMarker returns dir's MarkerFile, the database slug its setup wrote,
     trimmed. The checkout's code writes it, so it is read with fsx.ReadRegular:
@@ -28070,6 +28087,10 @@ func SlotDBSlug(sl store.Slot) string
     the slug the setup's database.yml derives from WT_BRANCH and writes to
     MarkerFile. A row that stored a raw slot name resolves to it too. Slots,
     inventory and cleanup all use it.
+
+func SlotLog(name string) string
+    SlotLog is the name of slot name's log of its other pool scripts in
+    layout.Logs(): its deps, reset_db and teardown (RunLogged).
 
 func SlotSlugRegexp(slotName string) *regexp.Regexp
     SlotSlugRegexp matches the database slugs of the slots a slot_name
@@ -35155,6 +35176,18 @@ type TaskCard struct {
 	Copy       string
 	Started    time.Time
 	WaitingFor string // starts with who it waits on ("rev-ann: review of #4527")
+	// WaitingStep is the part of WaitingFor that names a step of the
+	// factory's own work ("precheck: jest") and WaitingSince when it began
+	// (WaitsOn.Since): the painter adds how long it has run after that part.
+	// Zero WaitingSince: no time.
+	WaitingStep  string
+	WaitingSince time.Time
+	// Follow is the file o follows live (less +F) while no agent of the
+	// task works and the factory itself runs something for it: its checks'
+	// live.log, its copy's setup log, its QA server's log (absolute; "" for
+	// none, and o steps into the task's pane). The card names it on a line
+	// of its own.
+	Follow string
 	// Links are what the task waits on you for, as links (the threads and
 	// findings its PR's verdict says need you), drawn under WAITING FOR.
 	Links []string
@@ -35250,6 +35283,12 @@ type WaitsOn struct {
 
 	// Short and Long are What on a narrow and on a wide screen.
 	Short, Long string
+
+	// Since is when the step What names began, on a wait on the factory's
+	// own work (a check's command, a copy's preparation, a QA server's
+	// boot): the painter adds how long it has run after the text
+	// ("precheck: jest · 3m"), from each frame's clock. Zero: no time.
+	Since time.Time
 }
     WaitsOn is one thing a task waits on. Who is "you" (WaitsOnYou), "agent",
     "CI", a login, "magnum", "memory", "usage", "copy" or "nothing"; What says

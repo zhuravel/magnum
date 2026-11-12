@@ -215,7 +215,7 @@ func (m *Manager) provisionSteps(ctx context.Context, subject string, sl store.S
 		return err
 	}
 	if err := m.step(ctx, subject, "setup", func(ctx context.Context) error {
-		return m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.Setup, "setup", "provision-"+sl.Name+".log", SetupTimeout)
+		return m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.Setup, "setup", ProvisionLog(sl.Name), SetupTimeout)
 	}); err != nil {
 		return err
 	}
@@ -241,7 +241,7 @@ func (m *Manager) provisionSteps(ctx context.Context, subject string, sl store.S
 		if err != nil {
 			return err
 		}
-		if err := m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.PostCheckout, "post_checkout", "provision-"+sl.Name+".log", DepsTimeout); err != nil {
+		if err := m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.PostCheckout, "post_checkout", ProvisionLog(sl.Name), DepsTimeout); err != nil {
 			return err
 		}
 		return m.d.Store.UpdateSlotFields(ctx, sl.ID, func(u *store.SlotUpdate) { u.Set("lock_sha", lock) })
@@ -585,7 +585,7 @@ func (m *Manager) removeSteps(ctx context.Context, subject string, sl store.Slot
 		if !fsx.Exists(sl.Path) {
 			return nil
 		}
-		return m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.Teardown, "teardown", "slot-"+sl.Name+".log", TeardownTimeout)
+		return m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.Teardown, "teardown", SlotLog(sl.Name), TeardownTimeout)
 	}); err != nil {
 		return err
 	}

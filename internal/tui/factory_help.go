@@ -95,7 +95,9 @@ var factoryKeyHelp = []struct {
 }{
 	{"Home", []hint{{"j k g G", "move"}, {"enter", "the row's card: its decision when it needs you, else its task card; your PR's card on its row"},
 		{"a", "the oldest card that needs you, then the next: a task's decision, a PR's card (a on a card goes on)"},
-		{"o", "step into the pane the row waits on (asks nothing); magnum's pane on your PR's row and while magnum fixes the PR (y/N to restore a parked one)"},
+		{"o", "step into the pane the row waits on (asks nothing); magnum's pane on your PR's row and while magnum fixes the PR (y/N to restore a parked one); " +
+			"while no agent of the task works and the factory runs something for it (its checks, a copy's setup, its QA server's boot), " +
+			"follow that output live in less +F (ctrl-c, then q, comes back)"},
 		{"b t", "the row's PR, its Jira issue in the browser (asks nothing)"},
 		{"f F K P", "on a row with a PR magnum read, yours or a task's: magnum fixes what is open, fix off (or on again), stop its fix loop, " +
 			"merge its parent as the fixer App's bot (the daemon's plan first; y/N)"},
@@ -130,7 +132,7 @@ var factoryKeyHelp = []struct {
 		{"d", "the diff"},
 		{"+ −", "on a published or a done task's card: rate the task, then a digit says why (1 the cause and the fix, 2 how much it changed, " +
 			"3 how it followed my words, 4 the tests, 5 the time it took me) and esc skips the reason; asks nothing: rating again stores a new rating"},
-		{"x", "drop: stop its agents, free its copy, keep the branch (y/N)"}, {"o", "step into its pane"},
+		{"x", "drop: stop its agents, free its copy, keep the branch (y/N)"}, {"o", "step into its pane, or follow what the factory runs for it (OUTPUT names it; ctrl-c, then q, comes back)"},
 		{"b t", "its PR, its Jira issue in the browser (asks nothing)"},
 		{reportKey, "the report of magnum's fixer, when its fix loop left you items, else QA's summary.md where A is offered (asks nothing)"},
 		{"f F K", "on a card with a PR: magnum fixes what is open, fix off (or on again), stop its fix loop (y/N)"},

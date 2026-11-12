@@ -40,7 +40,8 @@ func (p *cardPainter) task(c TaskCard, height, scroll int) (string, int) {
 		"",
 	}
 	if c.WaitingFor != "" {
-		head = append(head, p.waitingRows(c.WaitingFor)...)
+		head = append(head, p.waitingRows(p.waitingText(c))...)
+		head = append(head, p.followRows(c.Follow)...)
 		head = append(head, p.fixNeedRows(c.FixNeeds)...)
 		head = append(head, p.findingRows(c.Findings)...)
 		head = append(head, p.waitLinkRows(c.Links)...)
@@ -101,6 +102,30 @@ func (p *cardPainter) waitingRows(text string) []string {
 		}
 	}
 	return p.labelRowsAs(label, p.st.Section, x, cells)
+}
+
+// waitingText is WaitingFor with how long its step of the factory's own
+// work has run after that step's part (WaitingStep), on this frame's clock.
+func (p *cardPainter) waitingText(c TaskCard) string {
+	i := strings.Index(c.WaitingFor, c.WaitingStep)
+	if c.WaitingSince.IsZero() || c.WaitingStep == "" || i < 0 {
+		return c.WaitingFor
+	}
+	end := i + len(c.WaitingStep)
+	return c.WaitingFor[:end] + " · " + tookText(p.now.Sub(c.WaitingSince)) + c.WaitingFor[end:]
+}
+
+// followRows is the OUTPUT line under WAITING FOR: the file o follows live
+// while the factory itself runs something for the task, cut from the left
+// when it must be (its end names the file), and how to come back; none
+// without one.
+func (p *cardPainter) followRows(file string) []string {
+	if file == "" {
+		return nil
+	}
+	const x = 1 + len("WAITING FOR") + 2
+	c := cell{{file, p.st.Accent}, {" · o follows it (ctrl-c, then q, comes back)", p.st.Dim}}
+	return p.labelRowsAs("OUTPUT", p.st.Section, x, []cell{c.fitLeft(max(p.width-1-x, 1))})
 }
 
 // cardLinksShown bounds the links WAITING FOR lists; a last line counts the

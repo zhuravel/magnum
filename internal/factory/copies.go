@@ -411,7 +411,7 @@ func (c *copySet) markBroken(ctx context.Context, name, what string, cause error
 		return copyBroke{}, err
 	}
 	why := scrub.Text(what + ": " + brokenWhy(cause) + " (" + setupLogWords +
-		filepath.Join(c.cfg.Layout.Logs(), "provision-"+name+".log") + ")")
+		filepath.Join(c.cfg.Layout.Logs(), slots.ProvisionLog(name)) + ")")
 	stored := why
 	if sl.State != store.SlotProvisioning { // a verification failure: the slot code said why
 		stored = store.Deref(sl.LastError)

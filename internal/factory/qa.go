@@ -79,11 +79,13 @@ const (
 )
 
 // heavyQA is a QA run's use of the task's heavy slot, waitQA the task's
-// waits on its run (qaLockWhat, the boot, qaReadyWhat).
+// waits on its run (qaLockWhat, the boot: qaBootWhat and its bound,
+// qaReadyWhat).
 const (
 	heavyQA     = "qa"
 	waitQA      = "qa"
 	qaLockWhat  = "another QA runs on this Mac"
+	qaBootWhat  = "the copy's server boots"
 	qaReadyWhat = "ready for the walk"
 	// qaServerStopWhat is a QA run's wait on the stop of its copy's server
 	// that failed (retryServerStops tries it again after its backoff): no
@@ -1285,7 +1287,7 @@ func (e *Engine) startQASession(ctx context.Context, t registry.Task, c Copy, ru
 		ok = true
 		return e.qaBootFailed(ctx, t, c, sess)
 	}
-	e.waitOn(ctx, t, waitQA, fmt.Sprintf("the copy's server boots (up to %s)", boot))
+	e.waitOn(ctx, t, waitQA, fmt.Sprintf("%s (up to %s)", qaBootWhat, boot))
 	sess.booting = true
 	e.bg.Go(func() {
 		defer close(sess.done)

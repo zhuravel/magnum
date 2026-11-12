@@ -393,7 +393,7 @@ func cleanFactoryRow(r FactoryRow) FactoryRow {
 	r.WaitsOn = slices.Clone(r.WaitsOn)
 	for i, w := range r.WaitsOn {
 		r.WaitsOn[i] = WaitsOn{Who: cleanText(w.Who), What: cleanText(w.What), OnYou: w.OnYou,
-			Short: cleanText(w.Short), Long: cleanText(w.Long)}
+			Short: cleanText(w.Short), Long: cleanText(w.Long), Since: w.Since}
 	}
 	r.Stagings = slices.Clone(r.Stagings)
 	for i, c := range r.Stagings {
@@ -647,8 +647,20 @@ func (p *factoryPainter) waitsCell(r FactoryRow, l factoryLayout) cell {
 			}
 			c = append(c, seg{lead + t, p.tone(r, noStyle)})
 		}
+		if ran := p.ranFor(w); ran != "" {
+			c = append(c, seg{p.g.sep, p.st.Dim}, seg{ran, p.tone(r, noStyle)})
+		}
 	}
 	return c
+}
+
+// ranFor is how long the step a blocker names has run ("3m", "40s"), on
+// this frame's clock; "" for a blocker without a step's time.
+func (p *factoryPainter) ranFor(w WaitsOn) string {
+	if w.Since.IsZero() {
+		return ""
+	}
+	return tookText(p.now.Sub(w.Since))
 }
 
 // prMarks are the states of the row's PR that M and z set, before what it

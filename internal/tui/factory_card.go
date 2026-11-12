@@ -172,7 +172,7 @@ func cleanReadyCard(c ReadyCard) ReadyCard {
 func cleanTaskCard(c TaskCard) TaskCard {
 	c.Key, c.Kind, c.Title, c.Branch, c.Repo = cleanText(c.Key), cleanText(c.Kind), cleanText(c.Title), cleanText(c.Branch), cleanText(c.Repo)
 	c.Copy, c.WaitingFor, c.PR, c.AgentsNote = cleanText(c.Copy), cleanText(c.WaitingFor), cleanText(c.PR), cleanText(c.AgentsNote)
-	c.Ask, c.AcceptQA = cleanText(c.Ask), cleanText(c.AcceptQA)
+	c.Ask, c.AcceptQA, c.WaitingStep, c.Follow = cleanText(c.Ask), cleanText(c.AcceptQA), cleanText(c.WaitingStep), cleanText(c.Follow)
 	c.Report, c.Learned, c.Hints = cleanAll(c.Report), cleanAll(c.Learned), cleanHints(c.Hints)
 	c.Links, c.FixNeeds, c.Findings = cleanAll(c.Links), cleanAll(c.FixNeeds), cleanAll(c.Findings) // FixReport and QAReport are paths the pager opens, never drawn whole
 	if c.PRInfo != nil {

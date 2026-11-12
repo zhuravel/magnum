@@ -46,6 +46,7 @@ import (
 	"hash/fnv"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"sort"
@@ -536,6 +537,7 @@ type factoryModel struct {
 	editor   func(ctx context.Context, path string) *exec.Cmd // the editor ctrl+g runs on the new task's text
 	draftDir string                                           // where its file is written; "" = the system's temporary directory
 	pager    func(ctx context.Context, path string) *exec.Cmd // the pager e runs on the fixer's report
+	follow   func(ctx context.Context, path string) *exec.Cmd // the pager o follows the factory's own output in
 
 	cache *frameCache[factoryFrameKey] // shared by every copy of the model
 }
@@ -571,7 +573,7 @@ func newFactoryModel(ctx context.Context, src FactorySource, act FactoryActions,
 		g: newGlyphs(opts.Icons), loading: true, selIdx: 0,
 		walked: map[int64]bool{}, batches: map[int64]*factoryBatch{}, readies: map[int64]*factoryReady{}, cursors: map[int64]int{},
 		diffs: map[int64]diffState{},
-		input: in, filter: filter, form: factoryDraft{area: area}, editor: defaultEditor, pager: defaultPager, cache: &frameCache[factoryFrameKey]{},
+		input: in, filter: filter, form: factoryDraft{area: area}, editor: defaultEditor, pager: defaultPager, follow: defaultFollow, cache: &frameCache[factoryFrameKey]{},
 		owner: strings.TrimSpace(opts.DefaultOwner),
 	}
 	m.mouseOn = !opts.NoMouse
@@ -1439,7 +1441,9 @@ func (m factoryModel) homeHints() []hint {
 	if _, ok := m.nextDecision(); ok {
 		hs = append(hs, hint{"a", "oldest ask"})
 	}
-	if pane := m.paneHint(r); ok && m.act != nil && pane != "" {
+	if follow := m.followHint(r); ok && follow != "" {
+		hs = append(hs, hint{"o", follow})
+	} else if pane := m.paneHint(r); ok && m.act != nil && pane != "" {
 		hs = append(hs, hint{"o", pane})
 	}
 	if m.act != nil {
@@ -1455,6 +1459,17 @@ func (m factoryModel) homeHints() []hint {
 		hs = append(hs, hint{"E", "staging"})
 	}
 	return append(hs, hint{"?", "more"})
+}
+
+// followHint is what o follows on row r ("follow live.log"): the output
+// the factory runs for its task while no agent of it works; "" for none
+// (o steps into a pane), and on a row whose o is magnum's pane.
+func (m factoryModel) followHint(r FactoryRow) string {
+	f := m.followOf(r.ID)
+	if f == "" || magnumsPane(r) {
+		return ""
+	}
+	return "follow " + cleanText(filepath.Base(f))
 }
 
 // paneHint names the pane o steps into, in the approved frames' words: the

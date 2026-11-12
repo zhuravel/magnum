@@ -25699,6 +25699,74 @@ skill versions); people add theirs to the sections before it, at the end of the 
   factory repository's `copy_files` lists a directory only when its owner adds one: the operator's configuration
   lists the generated Jest API mocks for the talkable review pool, not for the factory's copies.
 
+- **The screen shows what the factory itself runs: live.log, the step's time, and `o` follows it** (2026-11-12).
+  Task 9's row said `precheck: precheck: jest` for about 20 minutes, and `o` opened the writer's pane, idle since
+  its turn ended. The factory runs the proof and the precheck itself, off its loop (`checkHead`), through
+  `script` and `dbScript`, and execx keeps a command's output in memory until it ends: `precheck.md` and
+  `factory-proof.json` got it then. The operator asked to always see what it does.
+  - *live.log.* Each run of a task's checks (the proof and the precheck of one head) writes `live.log` in the
+    task's directory from its start: the file is removed and made anew (`os.Root`, `O_EXCL`, mode 0600, so no
+    link another wrote there is followed) with a line naming the run; then each command of `script` gets a begin
+    line (`== <time> begin <step>: <command>`), what it prints as it prints it, and an end line
+    (`== <time> end <step>: exit 1 after 3m12s`, or `stopped at its bound`, `denied: …`). The run's context
+    carries the log (`withLive`), as `withDeployRecords` carries a frame's records, so the proof's, the base
+    run's and every precheck step's commands stream with no new parameter. The steps' labels say the step:
+    `proof runs <specs> on the base` and `at the head`, `precheck specs on the base` (`baseRun` takes its
+    caller's label), `precheck heal`.
+  - *execx.* `Cmd.Stream` gets stdout (and stderr, unless `StreamErr` is set) as the process writes it, besides
+    the capture; nil keeps the old behaviour, a failed write is ignored, and `Fake` writes a rule's output to
+    them. Two writers and not one: the factory cuts each stream into lines apart, so a secret a process wrote in
+    two writes of stdout is masked whole even when stderr wrote between them; one shared buffer would glue the
+    stderr line into the secret and show its tail. No line cutting or scrubbing is in execx (its regexps are
+    held to `scrub.py`).
+  - *The scrub.* Each complete line, stripped first of what a terminal acts on (`textx.StripTerminal`, so no
+    escape splits a secret), goes through `scrub.Secrets`, never `scrub.Text`: the hosts, emails and file names
+    a failure prints stay, as `outputOf` keeps them (its entry says why). A line longer than 64 KiB is cut there
+    and its rest dropped up to its newline, so no tail of a cut secret shows alone. An output line that starts
+    with `== ` is indented by a space, so no command forges a begin or an end line the screen reads.
+  - *The bound.* Past 8 MiB of output in one run, the output stops with one line that says so. The begin and end
+    lines go on past it (a few hundred bytes each, a few dozen per run): without them the screen would show the
+    step that ran at the bound for the rest of the run. That reads the brief's "stop writing" as the output.
+  - *Where the step's start time lives.* In live.log's begin line, for the checks: the goroutine that runs the
+    command writes it as the command starts. The registry's wait is the tick's, written from the in-memory note
+    up to `[factory] poll` (45 s) late, so a step's time from its span would be that much short and a short step
+    may never show; an event per command would add two audit rows per command to every run; and a column for
+    it is a migration of the factory registry. The screen reads the file's last begin or end line
+    (`readLiveStep`: its last 64 KiB, the whole file only when the step printed more since it began); a begin
+    line is the step that runs, since its time, and its words replace the registry's, which may still name the
+    step before. Between commands (a lock's wait, the start) the wait is the registry's, with no time. A
+    claim's start is its `claim` begin event, which `beginClaim` writes as it starts (its wait's span moves
+    when `<1m` becomes `1m`); a QA server's boot's is `qa-run.json`'s `Started`, which each boot resets. The
+    painter counts from `tui.WaitsOn.Since` (and the task card from `WaitingSince`) on each frame's clock, so
+    the time moves with no write of the daemon and no read of the factory: `precheck: jest · 3m`,
+    `proof: runs spec/models/credit_spec.rb on the base · 40s`, `copy: preparing factory3 · 2m` (the setup's
+    minutes of the daemon's words left out; `magnum factory list` keeps them), `qa: the copy's server boots
+    (up to 2m) · 40s`.
+  - *The step once.* The checks' waits keep who `precheck` in the registry (the engine's own tests of it stay),
+    and the screen shows the step's own word as who: `precheck: jest`, `proof: runs … on the base`, never
+    `precheck: precheck: jest`.
+  - *How the screen learns which file `o` opens.* From the registry's wait and the files: a wait of the checks
+    is the task's `live.log`; a copy's preparation (`preparing …`) is the newer of the copy's slot logs
+    (`slots.ProvisionLog`, `slots.SlotLog`, which `RunHeavy` writes), the copy read from the task, else, for a
+    first claim, from the slot its owner row holds in the agents store (`runtime.TaskSlot`); a QA server's boot
+    is the copy's server log (`serverLogIn`). The data sets `TaskCard.Follow` only while no agent of the task
+    works, so `o` follows it (`less +F`, with `-+F` after your `LESS`; ctrl-c stops following, then `q` comes
+    back) and steps into the pane as before otherwise; any other wait is today's. The card names the file on an
+    OUTPUT line with how to come back, the row's help line says it, the hint is `o follow live.log`, and the
+    menu's item `follow its output`. Never the daemon's memory.
+  - Not covered: the copies' own commands that run through `copySet.script` (the installs, `reset_db` in a
+    claim) write no log, so `o` during them shows the slot scripts' log as it stood; the backoff repair of a
+    broken copy is no task's wait.
+  Tests, each checked by mutation: `TestAPrecheckCommandsOutputReachesLiveLogWhileItRuns` (a secret written in
+  two writes masked, a host and an email kept), `TestLiveLogStartsEmptyAtANewRunOfChecks`,
+  `TestTheLiveLogsBoundStopsTheWritesAndAddsItsLine`, `TestReadLiveStepReadsTheLastBeginOrEndLine`,
+  `TestTheWaitOfARunningCheckShowsItsStepOnceWithItsTime`, `TestNoFileToFollowWhileAnAgentOfTheTaskWorks` and
+  `TestTheClaimAndTheBootShowTheirTimeAndTheirLogs` in internal/factory;
+  `TestTheWaitLineShowsTheStepOnceWithItsRunningTime`, `TestOOnATaskWhoseCheckRunsFollowsLiveLogInThePager`,
+  `TestOOnATaskWhoseAgentWorksStillStepsIntoItsPane` and `TestTheFollowIsLessPlusF` in internal/tui;
+  `TestStreamGetsTheOutputWhileTheCommandRuns`, `TestStreamTakesStderrWithoutStreamErrAndItsFailuresChangeNothing`
+  and `TestFakeWritesARulesOutputToTheStreams` in internal/execx.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

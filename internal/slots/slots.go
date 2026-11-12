@@ -302,6 +302,14 @@ func MiseExecArgs(dir string, env map[string]string, script string) []string {
 	return append(args, "/bin/sh", "-c", script)
 }
 
+// ProvisionLog is the name of slot name's provisioning log in
+// layout.Logs(), its setup and post_checkout scripts' (RunLogged).
+func ProvisionLog(name string) string { return "provision-" + name + ".log" }
+
+// SlotLog is the name of slot name's log of its other pool scripts in
+// layout.Logs(): its deps, reset_db and teardown (RunLogged).
+func SlotLog(name string) string { return "slot-" + name + ".log" }
+
 // RunHeavy runs one heavy script in dir (a slot) through mise exec with
 // env, a pool script's way, under timeout, through RunLogged: serialized
 // with every other heavy command, with a redacted transcript in

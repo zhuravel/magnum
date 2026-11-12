@@ -98,9 +98,11 @@ const (
 )
 
 // serverLog is the log a copy's server writes to, in the logs directory.
-func (c *copySet) serverLog(name string) string {
-	return filepath.Join(c.cfg.Layout.Logs(), "factory-server-"+name+".log")
-}
+func (c *copySet) serverLog(name string) string { return serverLogIn(c.cfg.Layout.Logs(), name) }
+
+// serverLogIn is the log copy name's server writes to, in the logs
+// directory logs (the screen's o follows it while the server boots).
+func serverLogIn(logs, name string) string { return filepath.Join(logs, "factory-server-"+name+".log") }
 
 // serverPidFile is the file a copy's server writes its pid to at its start
 // (spawnServer), beside its log.

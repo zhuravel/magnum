@@ -38,6 +38,16 @@ func defaultPager(ctx context.Context, path string) *exec.Cmd {
 	return cmd
 }
 
+// defaultFollow is less following path as it grows (+F, as tail -f: ctrl-c
+// stops following, then q quits), with -+F added to LESS (yours, else R),
+// as defaultPager, so less never quits at once on a file that fits the
+// screen. It is less whatever $PAGER is: following is less's.
+func defaultFollow(ctx context.Context, path string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "less", "+F", path)
+	cmd.Env = append(os.Environ(), "LESS="+cmp.Or(strings.TrimSpace(os.Getenv("LESS")), "R")+" -+F")
+	return cmd
+}
+
 // reportOf is the report e opens on the row or task id ("" for none) and
 // its name: on the ready card the QA run's (summary.md), elsewhere the
 // fixer's ("claude-fix.md"), else the QA run's of a stop on the writer's
@@ -103,6 +113,16 @@ func (m factoryModel) reportHints(hs []hint, id int64, after ...string) []hint {
 		}
 	}
 	return slices.Insert(slices.Clone(hs), i, hint{reportKey, name})
+}
+
+// oItem is the menu's item for o on home's row r (row: one is selected,
+// acts: the screen has actions): follow the output the factory runs for
+// its task, else step into its pane, dimmed without one.
+func (m factoryModel) oItem(r FactoryRow, row, acts bool) menuItem {
+	if row && m.followHint(r) != "" {
+		return menuItem{"follow its output", "o", "o", true}
+	}
+	return menuItem{"step into its pane", "o", "o", row && acts && m.paneHint(r) != ""}
 }
 
 // reportItem is the menu's item for e on task or row id: dimmed without a

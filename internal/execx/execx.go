@@ -10,9 +10,11 @@ package execx
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"os"
@@ -73,6 +75,14 @@ type Cmd struct {
 	// ends where it failed. A longer stdout sets Result.Truncated, with no
 	// TruncationMarker; stderr is captured as always.
 	KeepTail int
+	// Stream, when non-nil, gets what the process writes on stdout as it
+	// writes it, besides the capture (Result keeps the output as before),
+	// and stderr too unless StreamErr is set: a reader that cuts lines
+	// keeps the two streams apart with a writer for each. Each stream is
+	// written from its own goroutine, so one writer for both must be safe
+	// for concurrent use. A failed write is ignored: the capture and the
+	// process go on.
+	Stream, StreamErr io.Writer
 }
 
 // Result is the outcome of a finished subprocess.
@@ -365,8 +375,8 @@ func (r *Real) Run(ctx context.Context, c Cmd) (Result, error) {
 	if c.KeepTail > 0 {
 		stdout = &capWriter{limit: min(c.KeepTail, MaxOutput), tail: true}
 	}
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
+	cmd.Stdout = tee(stdout, c.Stream)
+	cmd.Stderr = tee(stderr, cmp.Or(c.StreamErr, c.Stream))
 
 	start := time.Now()
 	err := cmd.Run()
@@ -525,6 +535,26 @@ func (w *capWriter) bytes() []byte {
 	return w.buf.Bytes()
 }
 
+// tee is capture, and stream too when it is set (Cmd.Stream).
+func tee(capture *capWriter, stream io.Writer) io.Writer {
+	if stream == nil {
+		return capture
+	}
+	return teeWriter{capture, stream}
+}
+
+// teeWriter writes to the capture and to the stream; the stream's failure
+// is ignored, so the child never blocks on its pipe.
+type teeWriter struct {
+	capture *capWriter
+	stream  io.Writer
+}
+
+func (w teeWriter) Write(p []byte) (int, error) {
+	_, _ = w.stream.Write(p)
+	return w.capture.Write(p)
+}
+
 func (r *Real) baseEnv() []string {
 	if len(r.BaseEnv) > 0 {
 		return r.BaseEnv
@@ -632,6 +662,7 @@ func (f *Fake) Run(ctx context.Context, c Cmd) (Result, error) {
 			if rule.Fn != nil {
 				return rule.Fn(c)
 			}
+			streamOut(c, rule.Result)
 			if rule.Err != nil {
 				return rule.Result, rule.Err
 			}
@@ -642,6 +673,17 @@ func (f *Fake) Run(ctx context.Context, c Cmd) (Result, error) {
 		}
 	}
 	return Result{}, fmt.Errorf("execx.Fake: no rule for %s", c.String())
+}
+
+// streamOut writes a scripted result's output to c's streams, as Real
+// would have while the command ran (a rule's Fn writes its own).
+func streamOut(c Cmd, res Result) {
+	if c.Stream != nil && len(res.Stdout) > 0 {
+		_, _ = c.Stream.Write(res.Stdout)
+	}
+	if w := cmp.Or(c.StreamErr, c.Stream); w != nil && len(res.Stderr) > 0 {
+		_, _ = w.Write(res.Stderr)
+	}
 }
 
 // CallsWithPrefix returns the recorded calls whose argv starts with prefix.
