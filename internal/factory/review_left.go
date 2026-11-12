@@ -282,21 +282,22 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 // progress (its recoveries, then the lost pane's question), and nothing is
 // restored under a live turn. A runtime that cannot tell who works in the
 // copy holds it at most leftWaitBound, counted from that wait's first
-// pass, which stops.json keeps (Waits) across restarts: then it asks you
-// when no answer of yours (decision "") came, and your answer runs the
-// put-back though the runtime still cannot tell.
+// pass, which stops.json keeps (Waits) across restarts and forgets once the
+// runtime answers again (a later wait on the round counts from its own
+// start): then it asks you when no answer of yours (decision "") came, and
+// your answer runs the put-back though the runtime still cannot tell.
 func (e *Engine) leftHeld(ctx context.Context, t registry.Task, cy registry.Cycle, round int, decision string) (who string, ask bool,
 	err error) {
 	who, cannotTell := e.inFlight(ctx, t)
-	if who == "" || !cannotTell {
-		return who, false, nil
-	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	key := leftKey(cy, round)
+	if !cannotTell { // the wait for a runtime that cannot tell, if one ran, ended
+		return who, false, forgetLeftWait(dir, key)
+	}
 	rec, err := readStops(dir)
 	if err != nil {
 		return who, false, err
 	}
-	key := leftKey(cy, round)
 	since, ok := rec.Waits[key]
 	if !ok {
 		since = e.now()
@@ -552,6 +553,20 @@ func (e *Engine) keepMoved(ctx context.Context, t registry.Task, c Copy, cy regi
 		return "", errHeadTaken
 	}
 	return "", e.keepLeft(ctx, t, c, now)
+}
+
+// forgetLeftWait forgets the start of the wait of round key (leftKey) for
+// a runtime that cannot tell (stops.json Waits), when one is kept.
+func forgetLeftWait(dir, key string) error {
+	rec, err := readStops(dir)
+	if err != nil {
+		return err
+	}
+	if _, ok := rec.Waits[key]; !ok {
+		return nil
+	}
+	delete(rec.Waits, key)
+	return writeStops(dir, rec)
 }
 
 // inFlight says who keeps a put-back of what a round left in task t's copy

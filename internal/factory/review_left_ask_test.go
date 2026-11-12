@@ -195,3 +195,33 @@ func TestAnAnswerIsNeverRunOverATurnThatStartedAfterIt(t *testing.T) {
 			after.WaitsWhat, r.read("README"))
 	}
 }
+
+// The wait for a runtime that cannot tell counts from its own first pass:
+// one that ended (the runtime named who works in the copy) starts over, so
+// a later wait on the same round asks only after its own leftWaitBound.
+func TestAWaitThatEndedStartsItsBoundOver(t *testing.T) {
+	r := leavingRig(t, func(r *reviewRig, dir string) {
+		r.put(dir, "README", "a reviewer's mutant\n")
+		r.rt.setAtWorkErr(errors.New("herdr: socket gone"))
+	})
+	task, _ := r.reviewTask("PR-12405")
+	r.run(6, func() bool { return strings.Contains(r.reload(task.ID).WaitsWhat, "socket gone") })
+	r.clock.Add(20 * time.Minute)
+	r.run(2, nil)
+	r.rt.setAtWorkErr(nil)
+	r.rt.setAtWork("fx-writer") // the runtime answers again: the wait for it ended
+	r.run(2, nil)
+	r.rt.setAtWork("")
+	r.rt.setAtWorkErr(errors.New("herdr: socket gone again"))
+	r.run(2, nil) // a new wait begins
+	r.clock.Add(20 * time.Minute)
+	r.run(2, nil)
+	if got := r.reload(task.ID); got.State == registry.TaskNeedsYou {
+		t.Fatalf("task waits on you %q 20 minutes into a new wait; want its own bound", got.WaitsWhat)
+	}
+	r.clock.Add(11 * time.Minute)
+	r.run(4, func() bool { return r.reload(task.ID).State == registry.TaskNeedsYou })
+	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "waited 30m") {
+		t.Fatalf("task %s waits %q; want the question after the new wait's own bound", got.State, got.WaitsWhat)
+	}
+}
