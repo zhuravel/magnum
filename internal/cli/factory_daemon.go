@@ -283,8 +283,15 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 		}
 		return d.Engine.MayLaunch()
 	}
+	// A drain for a reboot holds every new prompt (factory/control.go).
+	mayPrompt := func() (who, what string, ok bool) {
+		if d.Engine == nil {
+			return "", "", true
+		}
+		return d.Engine.MayPrompt()
+	}
 	if d.Runtime, err = runtime.New(runtime.Deps{Config: cfg, Layout: l, Herdr: h, Store: d.Agents, Registry: d.Registry,
-		Runner: run, Memory: memory, MayStart: mayStart, Log: d.Log}); err != nil {
+		Runner: run, Memory: memory, MayStart: mayStart, MayPrompt: mayPrompt, Log: d.Log}); err != nil {
 		return nil, fmt.Errorf("factory: runtime: %w", err)
 	}
 	deps := factory.Deps{
@@ -295,6 +302,10 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 		Disk:     inspDiskFree,
 		HerdrUp:  d.Runtime.HerdrUp,
 		Reveal:   factoryReveal(cfg, run),
+		// The controls (factory/control.go): the build work.json names, and
+		// the Mac's boot time, which ends a drain for a reboot.
+		Build:    engine.CurrentBuild(c.Version, "").Label(),
+		BootTime: func(ctx context.Context) (time.Time, error) { return engine.ReadBootTime(ctx, quiet) },
 	}
 	// The tickets of intake: the [jira] site's client, reading with curl
 	// (the token on stdin, never in a pane).

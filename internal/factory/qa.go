@@ -1653,7 +1653,7 @@ func (e *Engine) sweepQA(ctx context.Context, tasks []registry.Task) {
 	e.qaMu.Lock()
 	sessions := maps.Clone(e.qaSessions)
 	e.qaMu.Unlock()
-	drain := e.startsHeld()
+	drain := e.drainsHeld() // a pause cuts nothing (control.go)
 	for _, id := range slices.Sorted(maps.Keys(sessions)) {
 		i := slices.IndexFunc(tasks, func(t registry.Task) bool { return t.ID == id })
 		switch {

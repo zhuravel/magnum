@@ -122,18 +122,21 @@ func (w *WaitError) Error() string { return w.Who + ": " + w.What }
 // MayStart is the engine's holds of a launch (a disk or memory hold, a drain
 // for an install: who and what, as a task's wait says them), which a start
 // outside a launch passes too (mayStart), called on the engine's loop; nil
-// holds nothing. Clock nil is time.Now; Log nil discards.
+// holds nothing. MayPrompt is the engine's hold of new prompts (a drain for
+// a reboot), which Send asks before anything else, called on the engine's
+// loop; nil holds none. Clock nil is time.Now; Log nil discards.
 type Deps struct {
-	Config   *config.Config
-	Layout   paths.Layout
-	Herdr    agents.Herdr
-	Store    *store.Store
-	Registry *registry.Registry
-	Runner   execx.Runner
-	Memory   func(ctx context.Context) engine.MemorySample
-	MayStart func() (who, what string, ok bool)
-	Clock    func() time.Time
-	Log      *slog.Logger
+	Config    *config.Config
+	Layout    paths.Layout
+	Herdr     agents.Herdr
+	Store     *store.Store
+	Registry  *registry.Registry
+	Runner    execx.Runner
+	Memory    func(ctx context.Context) engine.MemorySample
+	MayStart  func() (who, what string, ok bool)
+	MayPrompt func() (who, what string, ok bool)
+	Clock     func() time.Time
+	Log       *slog.Logger
 }
 
 // seams are what New takes from the machine and a test replaces: the sleep

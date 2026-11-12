@@ -65,11 +65,18 @@ type WorkItem struct {
 
 // WorkRecord is work.json (paths.Layout.FactoryWork): the pid of the
 // daemon that wrote it, the drain it holds (drain.json's value it took; ""
-// for none) and the work it runs that a restart would cut, oldest first.
+// for none) and the work it runs that a restart would cut, oldest first;
+// the controls its build knows (engine.ControlsVersion: pause.json and the
+// drain for a reboot; 0 for an older build) and the build itself, and its
+// acknowledgement of the drain for a reboot that holds (control.go; nil
+// for none).
 type WorkRecord struct {
-	PID   int        `json:"pid"`
-	Drain string     `json:"drain,omitempty"`
-	Work  []WorkItem `json:"work"`
+	PID         int              `json:"pid"`
+	Drain       string           `json:"drain,omitempty"`
+	Work        []WorkItem       `json:"work"`
+	Controls    int              `json:"controls,omitempty"`
+	Build       string           `json:"build,omitempty"`
+	RebootDrain *engine.DrainAck `json:"reboot_drain,omitempty"`
 }
 
 // Drain is a drain install asks for (drain.json): when it started, and the
@@ -195,7 +202,8 @@ func (e *Engine) saveWorkLocked() {
 	if e.workClosed {
 		return
 	}
-	rec := WorkRecord{PID: os.Getpid(), Drain: e.heldDrain(), Work: []WorkItem{}}
+	rec := WorkRecord{PID: os.Getpid(), Drain: e.heldDrain(), Work: []WorkItem{}, Controls: engine.ControlsVersion, Build: e.d.Build,
+		RebootDrain: e.ctl.ack}
 	for _, k := range slices.Sorted(maps.Keys(e.work)) {
 		rec.Work = append(rec.Work, e.work[k])
 	}
@@ -239,9 +247,11 @@ func (e *Engine) heldDrain() string {
 	return v
 }
 
-// startsHeld reports whether nothing new may start: the daemon stops (a
-// stop's drain) or holds the drain install asked for.
-func (e *Engine) startsHeld() bool { return e.draining.Load() || e.heldDrain() != "" }
+// startsHeld reports whether no new automatic work may start: nothing new
+// starts at all (drainsHeld: the daemon stops, holds the drain install asked
+// for, or drains for a reboot), or `magnum pause` holds the factory
+// (control.go): the rounds, the checks and the QA runs wait on it.
+func (e *Engine) startsHeld() bool { return e.drainsHeld() || e.ctl.pause.Load() != nil }
 
 // processStart is when process pid started (execx.ProcessStart, with the
 // real ps): Engine.procStart's default.

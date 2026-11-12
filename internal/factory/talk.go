@@ -42,7 +42,7 @@ func (e *Engine) talkRequest(ctx context.Context, q registry.Request) {
 		e.complete(ctx, q, err, "")
 		return
 	}
-	if e.startsHeld() || !e.beginTalk(p.TaskID) {
+	if e.drainsHeld() || !e.beginTalk(p.TaskID) { // a pause lets your talk run (control.go)
 		return
 	}
 	// The pending requests were read at the start of the tick: the talk of

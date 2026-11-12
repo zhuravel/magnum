@@ -36,7 +36,8 @@ const deliverySlack = 5 * time.Second
 // Send sends text to role's agent in attempt a of task t (role as it runs:
 // RunsAs) as a new run, and returns the run's id. The ledger entry, with
 // the text scrubbed and its hash, is written before the prompt leaves. It
-// refuses without sending: a pause of the role's kind (a *WaitError), an
+// refuses without sending: a drain for a reboot (Deps.MayPrompt) and a
+// pause of the role's kind (each a *WaitError), an
 // entry of the role whose delivery is unknown (ErrDeliveryUnknown), the
 // operator typing in the pane (ErrOperatorInPane), and a loop without
 // progress whose steps ran out (ErrNoProgress, with EventNoProgress at the
@@ -57,6 +58,9 @@ func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt,
 	}
 	if a.TaskID != t.ID {
 		return "", fmt.Errorf("send to %s: attempt %s is not %s's", role.Name, a.ID, taskKey(t))
+	}
+	if err := r.mayPrompt(); err != nil { // drain.go: a drain for a reboot holds every new prompt
+		return "", err
 	}
 	role, err := r.RunsAs(t, role)
 	if err != nil {

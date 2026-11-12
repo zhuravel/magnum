@@ -99,7 +99,7 @@ func (h heldError) Is(target error) bool { return target == ErrHeld }
 // (launch set it): a launch that goes through clears it.
 func heldWait(who string) bool {
 	switch who {
-	case HoldInfra, HoldHerdr, HoldDisk, HoldMemory, waitUsage, waitLogin, waitOverload:
+	case HoldInfra, HoldHerdr, HoldDisk, HoldMemory, HoldPause, waitUsage, waitLogin, waitOverload:
 		return true
 	}
 	return false
@@ -221,7 +221,7 @@ func (e *Engine) clearBlocker(ctx context.Context, key string) {
 
 // holdsOrder is the order the screen names the holds in: the ones that stop
 // every stage first.
-var holdsOrder = []string{HoldHerdr, HoldInfra, HoldDrain, HoldDisk, HoldMemory}
+var holdsOrder = []string{HoldHerdr, HoldInfra, HoldDrain, HoldReboot, HoldPause, HoldDisk, HoldMemory}
 
 // saveHolds writes the holds in force to holds.json (Layout.FactoryHolds),
 // in holdsOrder, the repositories' infrastructure holds after the
@@ -475,21 +475,32 @@ func (e *Engine) memoryPressure(ctx context.Context, now time.Time) string {
 	return reason + e.memoryCulprits(ctx, now)
 }
 
-// MayLaunch is mayLaunch for the runtime, which passes the same holds when
-// it starts a role outside a launch (runtime.Deps.MayStart). It reads the
-// engine's holds, so it is called on the engine's loop.
-func (e *Engine) MayLaunch() (who, what string, ok bool) { return e.mayLaunch() }
-
-// mayLaunch reports whether a launch may start now; who and what are the
-// hold that stops it, as the task's wait says it.
-func (e *Engine) mayLaunch() (who, what string, ok bool) {
-	if e.startsHeld() {
-		return holdRestart, drainWhat, false
+// MayLaunch is mayLaunch less the pause, for the runtime, which passes
+// these holds when it starts a role outside a launch (runtime.Deps.MayStart:
+// a prompt's bring-back, the liaison your talk starts): a pause holds no
+// work under way and nothing you ask for. It reads the engine's holds, so it
+// is called on the engine's loop.
+func (e *Engine) MayLaunch() (who, what string, ok bool) {
+	if e.drainsHeld() {
+		return holdRestart, e.heldWhat(), false
 	}
 	for _, kind := range []string{HoldHerdr, HoldInfra, HoldDisk, HoldMemory} {
 		if h := e.holds[kind]; h != nil {
 			return kind, h.Reason, false
 		}
+	}
+	return "", "", true
+}
+
+// mayLaunch reports whether a launch may start now; who and what are the
+// hold that stops it, as the task's wait says it: MayLaunch's, then
+// `magnum pause` (control.go).
+func (e *Engine) mayLaunch() (who, what string, ok bool) {
+	if who, what, ok := e.MayLaunch(); !ok {
+		return who, what, false
+	}
+	if p := e.ctl.pause.Load(); p != nil {
+		return HoldPause, p.Words(), false
 	}
 	return "", "", true
 }

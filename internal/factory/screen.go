@@ -1445,6 +1445,9 @@ func blockingLines(l paths.Layout) (short, long []string, err error) {
 		return nil, nil, err
 	}
 	for _, h := range hs {
+		if h.Kind == HoldPause || h.Kind == HoldReboot {
+			continue // the daemons' own lines say them (magnum's screen data: cli's controlLines)
+		}
 		line := cmp.Or(holdWords[h.Kind], h.Kind+": stages wait")
 		if h.Repo != "" { // a repository's copies: its tasks wait for one, the others go on
 			line = h.Kind + " down: " + h.Repo + "'s tasks wait for a copy"

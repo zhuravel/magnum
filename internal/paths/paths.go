@@ -304,6 +304,17 @@ func (l Layout) FactoryWork() string { return filepath.Join(l.factoryDir(), "wor
 // beside FactoryDB.
 func (l Layout) FactoryDrain() string { return filepath.Join(l.factoryDir(), "drain.json") }
 
+// FactoryPause is pause.json, the pause `magnum pause` asks of the factory
+// daemon (since when, until when, why), beside FactoryDrain.
+func (l Layout) FactoryPause() string { return filepath.Join(l.factoryDir(), "pause.json") }
+
+// FactoryRebootDrain is reboot-drain.json, the drain for a reboot `magnum
+// drain` asks of the factory daemon (engine.RebootDrain), beside
+// FactoryDrain.
+func (l Layout) FactoryRebootDrain() string {
+	return filepath.Join(l.factoryDir(), "reboot-drain.json")
+}
+
 // FactoryTasks is the root of the factory's task directories.
 func (l Layout) FactoryTasks() string { return filepath.Join(l.factoryDir(), "tasks") }
 

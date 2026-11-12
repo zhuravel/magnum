@@ -296,6 +296,12 @@ type Deps struct {
 	// [[factory.repo]] has staging entries); nil reads none, and no row has
 	// staging cells.
 	Staging Staging
+	// Build is the build the daemon runs (engine.Build.Label), which
+	// work.json names for the CLI's status; BootTime reads the Mac's boot
+	// time at the start, which ends a drain for a reboot begun on another
+	// boot (control.go); nil leaves it unknown.
+	Build    string
+	BootTime func(ctx context.Context) (time.Time, error)
 	// Clock returns the current time; nil means time.Now.
 	Clock func() time.Time
 	Log   *slog.Logger
@@ -580,6 +586,9 @@ type Engine struct {
 	workClosed  bool
 	drainHeld   atomic.Value
 	drainWarned string
+	// ctl is the pause and the drain for a reboot the daemon holds
+	// (control.go).
+	ctl controlState
 
 	// The work off the loop (claims, the overlap line, a prompt's search)
 	// runs on bgCtx, the engine's own: a drain cancels it and waits for bg
@@ -776,6 +785,7 @@ func (e *Engine) RunLocked(ctx context.Context) error {
 	// signal's, on a context of their own (it runs before stopBackground).
 	defer e.stopQASessions(context.WithoutCancel(ctx))
 	e.endDrainAtStart(ctx)
+	e.endRebootDrainAtStart(ctx) // control.go: a drain for a reboot ends at the first start on another boot
 
 	stop := make(chan struct{})
 	sigs := make(chan os.Signal, 4)
@@ -999,12 +1009,14 @@ func (e *Engine) Tick(ctx context.Context) error {
 	defer e.alive()
 	defer e.saveHolds() // the screen draws the holds in force
 	e.takeDrain(ctx)    // before anything starts in this tick
+	e.takeControls(ctx) // control.go: the pause and the drain for a reboot, before anything starts too
 	var errs []error
 
 	tasks, err := e.reg.Tasks(ctx)
 	if err != nil {
 		return fmt.Errorf("factory tick: %w", err)
 	}
+	e.tendRebootDrain(ctx, tasks) // control.go: what still runs from the ticks before, the park, the acknowledgement
 	e.sweepQA(ctx, tasks)
 	e.sweepHeavy(ctx, tasks)
 	e.sweepClaims(ctx, tasks)
@@ -1472,10 +1484,11 @@ func (e *Engine) launch(ctx context.Context, t registry.Task, a registry.Attempt
 }
 
 // beginEffect is how a stage begins an external effect (a push, a PR):
-// never while the daemon drains (a stop's drain, or install's).
+// never while the daemon drains (a stop's drain, install's, or one for a
+// reboot); a pause lets your push go out.
 func (e *Engine) beginEffect(ctx context.Context, key, kind string, taskID int64) (registry.Effect, bool, error) {
-	if e.startsHeld() {
-		return registry.Effect{}, false, heldError{who: holdRestart, what: drainWhat}
+	if e.drainsHeld() {
+		return registry.Effect{}, false, heldError{who: holdRestart, what: e.heldWhat()}
 	}
 	return e.reg.BeginEffect(ctx, key, kind, taskID)
 }
