@@ -139,15 +139,14 @@ func TestAPutBackThatCannotTellPastItsBoundAsksToRestoreOrKeep(t *testing.T) {
 			}
 			r.answerLeft(task.ID, tc.answer)
 			rounds := 1
-			if tc.answer == optionKeepChange { // the writer commits what you kept, and the next round reviews it
+			if tc.answer == optionKeepChange { // the writer commits what you kept; no round follows
 				r.rt.setAtWorkErr(nil)
 				r.commitsKept(task, 1, tc.readme)
-				rounds = 2
 			}
-			r.run(16, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
-			if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) || len(r.rv.calls()) < rounds {
-				t.Fatalf("task %s at %s waits %q after %d rounds; want pr_body after %d or more (a second opinion)", got.State,
-					got.Stage, got.WaitsWhat, len(r.rv.calls()), rounds)
+			r.run(10, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+			if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) || len(r.rv.calls()) != rounds {
+				t.Fatalf("task %s at %s waits %q after %d rounds; want pr_body after %d", got.State, got.Stage, got.WaitsWhat,
+					len(r.rv.calls()), rounds)
 			}
 			if got := r.read("README"); got != tc.readme {
 				t.Fatalf("README is %q after your answer, want %q", got, tc.readme)
@@ -318,22 +317,47 @@ func (r *reviewRig) commitsKept(task registry.Task, n int, readme string) {
 
 // A change you keep after a round that blocks nothing is committed by the
 // writer before the stage goes on, never left for the next stage to stop
-// on: the writer gets one short turn (review-<n>.json with no finding, the
-// kept change named), commits it, and the next round reviews it; nothing
-// waits on you.
+// on: the clean round's summary (its P3 left open) goes to
+// review-summary.json first, the writer gets one short turn
+// (review-<n>.json with no finding, the kept change named, no round to
+// follow), commits it, and once its proof and precheck pass the stage
+// passes at the commit, with no round more: a keep never costs a round,
+// even at the loop's cap of one.
 func TestAKeptChangeAfterACleanRoundIsCommittedByTheWriter(t *testing.T) {
-	r, got := leftAfterYouTyped(t, "PR-12408")
+	var r *reviewRig
+	r = newReviewRig(t, func(c evalrun.LocalCase) evalrun.LocalResult {
+		r.put(c.Checkout, "README", "your edit, or a reviewer's\n")
+		r.rt.setTouchedAt("you typed into a pane of PR-12408 at 10:00:00", r.clock.Now().Add(time.Second))
+		return result(nitFinding)(c)
+	})
+	r.cfg.Factory.LocalReview.Cycles = 1
+	task, _ := r.reviewTask("PR-12408")
+	r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
 	r.rt.setTouchedAt("", time.Time{})
-	r.answerLeft(got.ID, optionKeepChange)
-	r.commitsKept(got, 1, "your edit, or a reviewer's\n")
-	r.run(16, func() bool { return r.reload(got.ID).Stage != "local_review" || !isLive(r.reload(got.ID)) })
-	after := r.reload(got.ID)
-	if after.Stage != "pr_body" || !isLive(after) || len(r.rv.calls()) < 2 {
-		t.Fatalf("task %s at %s waits %q after %d rounds; want pr_body after the round that reviews the kept commit", after.State,
-			after.Stage, after.WaitsWhat, len(r.rv.calls()))
+	r.answerLeft(task.ID, optionKeepChange)
+	r.run(6, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
+	var sum ReviewSummary
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, reviewSummaryFile)), &sum); err != nil || len(sum.Leftovers) != 1 ||
+		sum.Leftovers[0].Title != nitFinding.Title {
+		t.Fatalf("%s before the commit turn: %+v (%v); want the clean round's P3 kept", reviewSummaryFile, sum, err)
+	}
+	if ps := r.rt.promptsTo("fx-writer"); len(ps) != 1 || !strings.Contains(ps[0].Text, "no review round follows") {
+		t.Fatalf("the writer's prompts %+v; want the short turn, saying no round follows", ps)
+	}
+	r.commitsKept(task, 1, "your edit, or a reviewer's\n")
+	r.run(10, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+	after := r.reload(task.ID)
+	if after.Stage != "pr_body" || !isLive(after) || len(r.rv.calls()) != 1 {
+		t.Fatalf("task %s at %s waits %q after %d rounds; want pr_body after the one round, no round for the kept commit",
+			after.State, after.Stage, after.WaitsWhat, len(r.rv.calls()))
 	}
 	if head := r.git(r.copyDir, "show", "HEAD:README"); head != "your edit, or a reviewer's" {
 		t.Fatalf("README at HEAD is %q; want your kept change committed", head)
+	}
+	sum = ReviewSummary{}
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, reviewSummaryFile)), &sum); err != nil || sum.Head != after.HeadSHA ||
+		sum.Exit != registry.ExitClean || len(sum.Leftovers) != 1 {
+		t.Fatalf("%s: %+v (%v); want it clean at the kept commit %s, its P3 kept", reviewSummaryFile, sum, err, after.HeadSHA)
 	}
 }
 

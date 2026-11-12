@@ -148,6 +148,11 @@ type PromptData struct {
 	// that the PR's review checks the result after publish. false in any
 	// other turn.
 	LastFix bool
+	// KeptOnly is set in the local review's fix turn that commits the
+	// changes the operator kept after a round that blocked nothing (its
+	// review file lists no finding): the prompt says so, and that no round
+	// follows. false in any other turn.
+	KeptOnly bool
 	// The QA walker's turn of a qa stage (factory-qa.md), each "" (0) in any
 	// other: QARun is the run's folder (qa/<n>-<sha7> in TaskDir), where the
 	// walker saves its pages and console logs; QAURL the copy's server
@@ -2293,6 +2298,9 @@ func (e *Engine) promptData(ctx context.Context, t registry.Task, st config.Fact
 	if st.Prompt == ReviewFixPrompt { // the local review's fix turn: its newest round's findings
 		if n := newestReview(dir); n > 0 {
 			d.Review, d.ReviewReply, d.LastFix = in(reviewFile(n)), in(reviewReplyFile(n)), lastFix(dir, n)
+			if rf, ok, err := readReviewFile(dir, n); err == nil && ok {
+				d.KeptOnly = keptOnly(rf)
+			}
 		}
 	}
 	if st.Prompt == QAFixPrompt { // QA's fix turn: its newest run's defects

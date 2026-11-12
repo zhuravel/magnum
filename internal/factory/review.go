@@ -345,6 +345,11 @@ func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.Facto
 	if last != nil && last.Ended.IsZero() {
 		return e.goOnCycle(ctx, t, st, c, *last, loop)
 	}
+	if last != nil { // the writer's commit of what you kept passed its checks: the stage passes there, no round more
+		if pass, err := e.passAfterKept(ctx, t, *last); err != nil || pass {
+			return pass, err
+		}
+	}
 	if last != nil && last.Exit == registry.ExitCap {
 		rf, due, err := e.capFix(ctx, t, st, *last, cycles)
 		if err != nil {
@@ -1165,7 +1170,9 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 	clean := !rr.blocks || len(live)+len(questions)+len(doubts) == 0 || rr.heldByLeft && e.atCap(dir, loop, round) &&
 		len(questions)+len(doubts) == 0 && !slices.ContainsFunc(live, func(i ReviewItem) bool { return blockingSeverity(i.Severity) })
 	if kept := e.keptPaths(ctx, t, c); clean && len(kept) > 0 { // what you kept is committed before the loop ends
-		return e.keptTurn(ctx, t, st, cy, round, kept)
+		kSum := sum
+		kSum.Exit, kSum.Leftovers = registry.ExitClean, slices.Concat(leftovers, live, questions)
+		return e.keptTurn(ctx, t, st, cy, round, kept, withSecond(dir, loop, kSum))
 	}
 	switch {
 	case !rr.blocks || len(live)+len(questions)+len(doubts) == 0:
@@ -1211,25 +1218,68 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 
 // keptTurn gives the writer one short turn to commit the changes you kept
 // in the copy (kept) after round `round` of cycle cy blocked nothing, before
-// the loop ends: review-<n>.json with no finding and the kept paths, and its
-// fix turn (fixPhase), whose prompt names them (keptNote); its checks run
-// at the commit, and the next round reviews it. Without it the clean
+// the loop ends: the clean round's summary (sum: its leftovers, its P3s,
+// its doubts) goes to review-summary.json first, so the ready card and the
+// PR body keep it, then review-<n>.json with no finding and the kept paths,
+// and its fix turn (fixPhase), whose prompt names them (keptNote) and says
+// that no round follows. Its checks run at the commit, and then the stage
+// passes there (passAfterKept), as the cap's last fix does: a keep never
+// costs a round, nor a round past the cap or a go-on. Without it the clean
 // round's next stage (QA, the ready card) found the copy dirty and stopped
 // for you.
 func (e *Engine) keptTurn(ctx context.Context, t registry.Task, st config.FactoryStage, cy registry.Cycle, round int,
-	kept []string) (bool, error) {
+	kept []string, sum ReviewSummary) (bool, error) {
+	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	if err := writeJSON(filepath.Join(dir, reviewSummaryFile), sum); err != nil {
+		return false, err
+	}
 	rf, err := e.writeReview(ctx, t, st, cy, nil)
 	if err != nil {
 		return false, err
 	}
 	rf.Kept = kept
-	if err := writeJSON(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), reviewFile(cy.N)), rf); err != nil {
+	if err := writeJSON(filepath.Join(dir, reviewFile(cy.N)), rf); err != nil {
 		return false, err
 	}
 	e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("round %d (cycle %d) blocks nothing, and you kept %s in the copy (%s): "+
-		"the writer commits it in a short turn first (%s), and the next round reviews it", round, cy.N, plural(len(kept), "change"),
-		clipList(kept), reviewFile(cy.N)))
+		"the writer commits it in a short turn first (%s); the stage passes once its checks pass, with no round more", round, cy.N,
+		plural(len(kept), "change"), clipList(kept), reviewFile(cy.N)))
 	return e.fixPhase(ctx, t, st, cy, rf)
+}
+
+// keptOnly reports whether review file rf is a kept turn's (keptTurn): the
+// changes you kept, no finding.
+func keptOnly(rf ReviewFile) bool { return len(rf.Kept) > 0 && len(rf.Findings) == 0 }
+
+// passAfterKept passes task t's review stage after the writer's commit of
+// the changes you kept, cycle cy's kept turn (keptTurn), once the factory's
+// checks passed it (closeFix ended the cycle at that head, the task's head
+// now): the clean round's summary keptTurn wrote goes to
+// review-summary.json at that head, and done is true. A head since (QA's
+// fix, a send back) is not passed: a fresh loop reviews it.
+func (e *Engine) passAfterKept(ctx context.Context, t registry.Task, cy registry.Cycle) (bool, error) {
+	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	rf, ok, err := readReviewFile(dir, cy.N)
+	if err != nil || !ok || !keptOnly(rf) || cy.Ended.IsZero() || cy.HeadAfter == "" || cy.HeadAfter != t.HeadSHA {
+		return false, err
+	}
+	var sum ReviewSummary
+	if b, err := os.ReadFile(filepath.Join(dir, reviewSummaryFile)); err != nil {
+		return false, err
+	} else if err := json.Unmarshal(b, &sum); err != nil {
+		return false, fmt.Errorf("%s: %w", reviewSummaryFile, err)
+	}
+	if sum.Head == t.HeadSHA { // passed already
+		return true, nil
+	}
+	sum.Exit, sum.Head = registry.ExitClean, t.HeadSHA
+	if err := writeJSON(filepath.Join(dir, reviewSummaryFile), sum); err != nil {
+		return false, err
+	}
+	e.event(ctx, t.ID, "review", registry.PhaseOK, fmt.Sprintf("the local review passes at %s after the writer's commit of the changes "+
+		"you kept (%s), checked and not reviewed again: %d left, %d declined, %d doubts", short(t.HeadSHA), clipList(rf.Kept),
+		len(sum.Leftovers), len(sum.Declined), len(sum.Doubts)))
+	return true, nil
 }
 
 // roundRead is a round's findings as decideRound reads them: sorted by
@@ -1540,7 +1590,15 @@ func (e *Engine) fixPhase(ctx context.Context, t registry.Task, st config.Factor
 			return false, err
 		}
 	}
-	return false, e.closeFix(ctx, t, cy, rf)
+	if err := e.closeFix(ctx, t, cy, rf); err != nil || !keptOnly(rf) {
+		return false, err
+	}
+	cur, err := e.reg.TaskByID(ctx, t.ID) // the kept commit's head, which the fix's checks passed
+	if err != nil {
+		return false, err
+	}
+	cy.Ended, cy.HeadAfter = e.now(), cur.HeadSHA
+	return e.passAfterKept(ctx, cur, cy)
 }
 
 // fixDone reports whether a fix turn of round rf passed: an attempt of the
