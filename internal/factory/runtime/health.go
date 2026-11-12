@@ -561,8 +561,8 @@ func (r *Runtime) waitToRecover(attempt, role string) {
 // prompt sent as its continuation. The run is settled so before the prompt
 // goes, so a stage rebuilt while that prompt's fate is unknown, or once it
 // is proven never to have arrived, sends the role its prompt to go on. A
-// continuation that never left (refused before it was sent, or no run for
-// it) comes back as EventPaused for that pause, which the stage takes as
+// continuation that never left (refused before it was sent, held by a drain
+// for a reboot, or no run for it) comes back as EventPaused for that pause, which the stage takes as
 // any pause: the role gets the prompt to go on once it may. One of unknown
 // delivery is the ledger's to settle (no event). false when the kind cannot
 // switch, no fallback is free, or the switch failed: the kind pauses as for
@@ -599,7 +599,10 @@ func (r *Runtime) modelFallback(ctx context.Context, t registry.Task, pr store.P
 	}
 	w := &WaitError{Who: pauseAgent, What: "its turn hit " + cmp.Or(limit.Model, "its model") + "'s limit; the session runs on " + model + " now"}
 	r.abandon(ctx, run.ID, PausedPrefix+w.Error())
-	id, err := r.send(ctx, t, a, role, pr, text, store.RunContinue)
+	id, err := "", r.mayPrompt() // drain.go: under a drain for a reboot the continuation never leaves; the stage's prompt to go on waits
+	if err == nil {
+		id, err = r.send(ctx, t, a, role, pr, text, store.RunContinue)
+	}
 	if id == "" {
 		r.log.Warn("the continuation on the fallback model never left: the role waits for its prompt to go on", "role", role.Name,
 			"model", model, "err", err)
@@ -710,7 +713,7 @@ func (r *Runtime) freshStarts(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		if err := r.mayRestart(ctx, t, st); err != nil {
+		if err := cmp.Or(r.mayRestart(ctx, t, st), r.mayPrompt()); err != nil { // mayPrompt: a drain for a reboot
 			r.forget(fmt.Sprintf("noprompt:%d", s.ID)) // look again once it may
 			continue
 		}

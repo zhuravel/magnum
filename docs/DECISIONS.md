@@ -26417,7 +26417,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   failure three ticks in a row is left, said once and named in the acknowledgement's `left`, so it cannot hold the
   drain for good. A liaison left live beside such a failure stays in the park's error (`ErrLiaisonLeftLive` joined
   with the failure of the task's own park; the final review found it dropped), so the task is still looked at at
-  every tick once left while its liaison is left live: a message you send it then is work again.
+  every tick once left while its liaison is left live: a message you send it then is work again. The runtime's
+  own recoveries ask the drain too (the engine owner's review, D12 and D17): a lost pane, the watchdog's recovery,
+  a stage's rebuild of a role a recovery left without a turn (`RecoverLost`), a fresh start of a Codex session
+  that took no prompt and the continuation on a fallback model start no agent and send no prompt under it. They
+  answer the drain's `*WaitError`, so the role stays due and the watchdog recovers it once the drain is lifted;
+  the fallback's continuation pauses the role, whose prompt to go on waits like any prompt.
   An hour quiet raises a NEEDS YOU blocker, with its one alert. work.json also names the build and the controls
   version, which the CLI checks before it writes either file; a stop whose wait for the work off the loop ran out
   keeps work.json, naming that work, so a drain after that exit is not certified. The daemon reads both files

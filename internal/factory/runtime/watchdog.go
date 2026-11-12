@@ -183,7 +183,9 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 		if spent, ok := errors.AsType[errRecoveriesSpent](err); ok {
 			return r.lostEvent(t, a, st.role, spent), true
 		}
-		if err != nil {
+		if _, wait := errors.AsType[*WaitError](err); wait {
+			r.waitToRecover(a.ID, st.role.Name) // a drain for a reboot: the role stays due
+		} else if err != nil {
 			r.log.Warn("the next recovery of a role", "attempt", a.ID, "role", st.role.Name, "err", err)
 		}
 		r.baseline(ctx, st, store.Run{})
@@ -405,7 +407,10 @@ func (r *Runtime) lostEvent(t registry.Task, a registry.Attempt, role config.Rol
 // recoverRole is RecoverLost's next step. A role that took no prompt yet in
 // the attempt has no first prompt to start afresh from: its fresh step is a
 // relaunch (relaunchRole), its stage sending that prompt next; one with a
-// conversation (you typed in it) is resumed first, as any role.
+// conversation (you typed in it) is resumed first, as any role. Under a
+// drain for a reboot (mayPrompt) it starts nothing and answers the drain's
+// *WaitError: the role stays due, and the watchdog recovers it once the
+// drain is lifted.
 func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, why string) error {
 	st, err := r.stateFor(ctx, a.ID, role.Name)
 	if err != nil {
@@ -413,6 +418,9 @@ func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.A
 	}
 	if err := r.mayRestart(ctx, t, st); err != nil {
 		return err // no step is spent
+	}
+	if err := r.mayPrompt(); err != nil {
+		return err // drain.go: no step is spent either
 	}
 	pr, err := r.owner(ctx, t, a.ID)
 	if err != nil {
