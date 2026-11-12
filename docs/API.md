@@ -17726,9 +17726,11 @@ var ErrOperatorInPane = errors.New("you're in that pane")
     ErrOperatorInPane is Send's answer while the operator types in the role's
     pane (agents.ErrHumanActive): the prompt waits; nothing was sent.
 
-var RecoveryWaits = [MaxRecoveries]time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute}
+var RecoveryWaits = [MaxRecoveries]time.Duration{0, time.Minute, 5 * time.Minute}
     RecoveryWaits are the waits before the first, the second and the third
-    recovery of a lost pane.
+    recovery of a lost pane: the first runs at once, as a lost pane's always
+    did, and the next give a cause of the moment (a herdr restart, the Mac's
+    memory) time to pass.
 
 
 FUNCTIONS
