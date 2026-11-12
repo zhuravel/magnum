@@ -786,6 +786,7 @@ func (e *Engine) RunLocked(ctx context.Context) error {
 	defer e.stopQASessions(context.WithoutCancel(ctx))
 	e.endDrainAtStart(ctx)
 	e.endRebootDrainAtStart(ctx) // control.go: a drain for a reboot ends at the first start on another boot
+	e.takeControls(ctx)          // control.go: one that stays holds from the start, before the startup's recovery
 
 	stop := make(chan struct{})
 	sigs := make(chan os.Signal, 4)
