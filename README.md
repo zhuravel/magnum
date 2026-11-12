@@ -5660,7 +5660,7 @@ that waited 30 minutes expires.
 An agent that fails is recovered before the task is yours. A turn past its role's timeout whose transcript and
 screen stay still for 10 minutes climbs three steps, 10 still minutes apart (the shell stopped and a nudge, the
 session quit and resumed, a fresh session from the attempt's first prompt), then the task needs you (`the <role>
-agent is stuck: <its last line>`). A lost pane gets 3 recoveries in an attempt, after waits of 1, 5 and 15 minutes:
+agent is stuck: <its last line>`). A lost pane gets 3 recoveries in an attempt, the first at once, the next after 1 and 5 minutes:
 resumed from its conversation, then the last started fresh from the attempt's first prompt and the task's files; a
 role whose pane is lost before its first prompt (its CLI exited at its start) is relaunched each time, and its stage
 sends that prompt; a recovery with no progress within 10 minutes takes the next step. Each recovery is a `recover`

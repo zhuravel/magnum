@@ -145,11 +145,11 @@ func TestShiftMovesTheTurnDeadlines(t *testing.T) {
 	}
 }
 
-// A lost pane is recovered MaxRecoveries times, each after its wait (1, 5
-// and 15 minutes from the loss): its conversation resumed twice, then a
-// fresh session from the attempt's first prompt; a loss after that is
-// EventLost, the stage's question for you. Each recovery is a recover event
-// and an alert.
+// A lost pane is recovered MaxRecoveries times: the first at once, the
+// second 1 minute and the third 5 minutes after its loss; its conversation
+// resumed twice, then a fresh session from the attempt's first prompt; a
+// loss after that is EventLost, the stage's question for you. Each recovery
+// is a recover event and an alert.
 func TestALostPaneIsRecoveredThreeTimesAfterItsWaitsTheLastInAFreshSession(t *testing.T) {
 	g := newRig(t)
 	g.launch("fx-repro")
@@ -158,18 +158,25 @@ func TestALostPaneIsRecoveredThreeTimesAfterItsWaitsTheLastInAFreshSession(t *te
 	g.send("fx-repro", first)
 	g.observeN(2)
 
+	waits := []time.Duration{0, time.Minute, 5 * time.Minute}
 	lose := func(n int) []Event {
 		t.Helper()
 		starts := len(g.h.startCalls())
 		g.h.losePane(g.agent("fx-repro"))
 		evs := g.observe()
-		g.clock.Add(RecoveryWaits[n-1] - 20*time.Second)
-		evs = append(evs, g.watchdog()...)
-		if len(g.h.startCalls()) != starts {
-			t.Fatalf("recovery %d ran before its wait of %s", n, RecoveryWaits[n-1])
+		if wait := waits[n-1]; wait > 0 {
+			g.clock.Add(wait - 20*time.Second)
+			evs = append(evs, g.watchdog()...)
+			if len(g.h.startCalls()) != starts {
+				t.Fatalf("recovery %d ran before its wait of %s", n, wait)
+			}
+			g.clock.Add(20 * time.Second) // past the wait
+			evs = append(evs, g.watchdog()...)
 		}
-		evs = append(evs, g.afterWait(1)...) // past the wait
-		g.observeN(2)                        // past the lost grace of the session that took its place
+		if len(g.h.startCalls()) != starts+1 {
+			t.Fatalf("recovery %d did not run after its wait of %s", n, waits[n-1])
+		}
+		g.observeN(2) // past the lost grace of the session that took its place
 		return evs
 	}
 	for n := 1; n < MaxRecoveries; n++ {
@@ -255,8 +262,7 @@ func TestARecoveryWithoutProgressMovesOnAfter10Minutes(t *testing.T) {
 	g.send("fx-repro", "reproduce the bug")
 	g.observeN(2)
 	g.h.losePane(g.agent("fx-repro"))
-	g.observe()
-	g.afterWait(1) // resume 1
+	g.observe() // resume 1
 	starts := len(g.h.startCalls())
 
 	g.clock.Add(NoProgressAfter - time.Minute)
@@ -386,7 +392,6 @@ func (g *rig) lostThenResumed(role, sid string) {
 	g.observeN(2)
 	g.h.losePane(g.agent(role))
 	g.observe()
-	g.afterWait(1)
 	if s := g.h.startCalls(); len(s) != 2 || !strings.Contains(strings.Join(s[1].Args, " "), sid) {
 		g.t.Fatalf("starts %+v, want the conversation resumed", s)
 	}
@@ -831,7 +836,6 @@ func TestRecoverLostLeavesARoleTheWatchdogHasAloneAndRecoversItAfterARestart(t *
 	if err := h.r.RecoverLost(h.ctx, h.task, h.attempt, h.role("fx-repro")); err != nil {
 		t.Fatal(err)
 	}
-	h.afterWait(1)
 	if s := h.h.startCalls(); len(s) != starts+1 || !strings.Contains(strings.Join(s[len(s)-1].Args, " "), "--resume sid-1") {
 		t.Fatalf("starts %+v after the restart, want the role's conversation resumed", s[starts:])
 	}
@@ -861,7 +865,6 @@ func TestRecoverLostStartsOverARoleWhoseStepsRanOutWithNothingAtWork(t *testing.
 	if err := g.r.RecoverLost(g.ctx, g.task, g.attempt, g.role("fx-repro")); err != nil {
 		t.Fatal(err)
 	}
-	g.afterWait(1)
 	if s := g.h.startCalls(); len(s) != starts+1 || !strings.Contains(strings.Join(s[len(s)-1].Args, " "), "--resume sid-1") {
 		t.Fatalf("starts %+v after your retry, want the role's conversation resumed", s[starts:])
 	}
@@ -904,7 +907,6 @@ func TestRecoverLostStartsOverARoleWhoseStepsRanOutWithNothingAtWork(t *testing.
 	if err := l.r.RecoverLost(l.ctx, l.task, l.attempt, l.role("fx-repro")); err != nil {
 		t.Fatal(err)
 	}
-	l.afterWait(1)
 	if s := l.h.startCalls(); len(s) != starts+1 {
 		t.Fatalf("starts %+v after your retry of a lost role, want its recoveries started over", s[starts:])
 	}
@@ -939,7 +941,6 @@ func TestARecoveryNeverResumesAConversationThatTookNoPrompt(t *testing.T) {
 	if err := g.r.RecoverLost(g.ctx, g.task, g.attempt, g.role("fx-repro")); err != nil {
 		t.Fatal(err)
 	}
-	g.afterWait(1)
 	s := g.h.startCalls()
 	if len(s) != starts+1 || !strings.Contains(strings.Join(s[len(s)-1].Args, " "), "--resume sid-1") {
 		t.Fatalf("starts %+v after your retry, want the role's own conversation, sid-1, resumed", s[starts:])
@@ -989,7 +990,6 @@ func TestARecoveryPromptThatNeverArrivedIsRecoveredAgain(t *testing.T) {
 	if err := g.r.RecoverLost(g.ctx, g.task, g.attempt, g.role("fx-repro")); err != nil {
 		t.Fatal(err)
 	}
-	g.afterWait(1)
 	if s := g.h.startCalls(); len(s) != starts+1 || !strings.Contains(strings.Join(s[len(s)-1].Args, " "), "--resume sid-1") {
 		t.Fatalf("starts %+v after the resume prompt never arrived, want the role recovered again", s[starts:])
 	}

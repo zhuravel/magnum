@@ -7,7 +7,7 @@ package runtime
 // stopped and a nudge, the session quit hard and resumed, a fresh session
 // from the attempt's first prompt; then EventStuck with the pane's last
 // line. A lost pane gets MaxRecoveries recoveries an attempt, each after
-// its wait (RecoveryWaits: 1, 5 and 15 minutes): resumed from its
+// its wait (RecoveryWaits: at once, then 1 and 5 minutes): resumed from its
 // conversation before the last, which starts fresh from the files; a role
 // whose pane is lost before its first prompt (its CLI exited at its start)
 // is relaunched, its stage sending that prompt next; a recovery that shows

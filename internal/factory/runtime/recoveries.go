@@ -1,8 +1,9 @@
 package runtime
 
 // The recoveries of a lost pane, counted where a restart finds them. A role
-// whose pane is lost gets MaxRecoveries recoveries in one attempt, each
-// after its wait (RecoveryWaits: 1, 5 and 15 minutes): its conversation
+// whose pane is lost gets MaxRecoveries recoveries in one attempt, the
+// first at once, the next after their waits (RecoveryWaits: 1 and 5
+// minutes): its conversation
 // resumed while it has one, and the last one a fresh session from the
 // attempt's first prompt and the task's files (its context); a role that
 // took no prompt yet is relaunched each time, its stage sending its first
@@ -32,8 +33,10 @@ import (
 const MaxRecoveries = 3
 
 // RecoveryWaits are the waits before the first, the second and the third
-// recovery of a lost pane.
-var RecoveryWaits = [MaxRecoveries]time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute}
+// recovery of a lost pane: the first runs at once, as a lost pane's always
+// did, and the next give a cause of the moment (a herdr restart, the Mac's
+// memory) time to pass.
+var RecoveryWaits = [MaxRecoveries]time.Duration{0, time.Minute, 5 * time.Minute}
 
 // recoverKind is the kind of the events that count a role's recoveries.
 const recoverKind = "recover"

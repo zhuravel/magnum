@@ -26551,10 +26551,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
     comes first, so nothing is lost, and the brief names only the turn in flight and the head. A turn in
     flight is a held wait, never NEEDS YOU, and the put-back runs once the turn ended. A failed save or
     put-back asks you with the steps, as before.
-  - *A lost pane* (`runtime/recoveries.go`). A lost pane gets 3 recoveries in an attempt, after waits of 1, 5
-    and 15 minutes. Each wait comes before its recovery. It counts from the loss, or from the pass that found
-    that the last recovery made no progress. So a transient cause (a herdr restart, the Mac's memory) gets
-    time. The recoveries before the last resume the role's conversation. The last starts a fresh session from
+  - *A lost pane* (`runtime/recoveries.go`). A lost pane gets 3 recoveries in an attempt. The first runs at
+    once, as a lost pane's recovery always did. The second waits 1 minute and the third 5 minutes. Each wait
+    counts from the loss, or from the pass that found that the last recovery made no progress. So a transient
+    cause (a herdr restart, the Mac's memory) gets time. No wait follows the third: the cap stays at 3
+    recoveries, and the question comes at the next loss. The recoveries before the last resume the role's conversation. The last starts a fresh session from
     the attempt's first prompt and the task's files. A role that took no prompt yet is relaunched each time.
     Before, a role with no conversation got one fresh session, then it was lost. Task 8 stopped so, with `no
     progress after 1 recoveries`. Each recovery is a `recover` event and an alert. The runtime counts the recoveries from

@@ -318,7 +318,6 @@ func TestAnUnknownDeliveryNeverStallsSilently(t *testing.T) {
 	f.observeN(2)
 	f.h.losePane(f.agent("fx-repro"))
 	f.observe()
-	f.afterWait(1)
 	if got := f.ledger()[0].Delivered; got != registry.DeliveredAbandoned {
 		t.Fatalf("the prompt of the run the fresh session gave up is %s, want abandoned", got)
 	}

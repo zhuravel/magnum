@@ -39,7 +39,6 @@ func TestYourRetryStartsTheRecoveriesOverAndSpendsNone(t *testing.T) {
 	if err := g.r.RecoverLost(g.ctx, g.task, g.attempt, g.role("fx-repro")); err != nil {
 		t.Fatal(err)
 	}
-	g.afterWait(1)
 	if s := g.h.startCalls(); len(s) != starts+1 || !strings.Contains(strings.Join(s[len(s)-1].Args, " "), "--resume sid-1") {
 		t.Fatalf("starts %+v after your retry, want the first recovery again: a resume", s[starts:])
 	}

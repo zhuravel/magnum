@@ -507,7 +507,7 @@ func lostQuestion(a registry.Attempt, role, why string) stopQuestion {
 		q: registry.Question{
 			Text: fmt.Sprintf("The %s agent's pane in %s (attempt %d) is lost again after the factory's recoveries (%s): "+
 				"how does the task go on?", role, stageWhat(a.Stage), a.N, cmp.Or(why, "they ran out")),
-			Context: fmt.Sprintf("the factory recovered the pane by itself %d times, after waits of 1, 5 and 15 minutes, the last "+
+			Context: fmt.Sprintf("the factory recovered the pane by itself %d times, the first at once and the next after 1 and 5 minutes, the last "+
 				"time in a fresh session, and it was lost again", runtime.MaxRecoveries),
 			Example: "the agent's CLI exits at its start, or herdr closes its pane",
 			Options: []registry.Option{

@@ -390,8 +390,6 @@ func TestATurnTypedAfterAResumeIsProvenInTheNewPane(t *testing.T) {
 			g.observe()                                                     // lost: its recovery waits while you are in the pane
 			g.clock.Add(g.cfg.Factory.HumanCooldown.Duration + time.Minute) // you left
 			g.watchdog()
-			g.observe()    // its recovery's wait begins
-			g.afterWait(1) // and ends: it is resumed
 			g.observe()
 			g.endRun("fx-repro") // the recovery's prompt to go on
 		}},

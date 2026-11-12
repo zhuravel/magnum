@@ -449,7 +449,7 @@ func TestAParkedRoleIsResumedOnEachAnswerOffTheLostPaneLadder(t *testing.T) {
 	g.observe()
 	g.h.losePane(g.agent("fx-repro"))
 	starts := len(g.h.startCalls())
-	if evs := append(g.observe(), g.afterWait(1)...); len(only(evs, EventLost)) != 0 {
+	if evs := g.observe(); len(only(evs, EventLost)) != 0 {
 		t.Fatalf("a real loss after the parks gave %+v", evs)
 	}
 	if s := g.h.startCalls(); len(s) != starts+1 || !strings.Contains(strings.Join(s[len(s)-1].Args, " "), "--resume sid-1") {
