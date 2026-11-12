@@ -998,7 +998,7 @@ func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head st
 	}
 	slices.Sort(left.tracked)
 	left.tracked = slices.Compact(left.tracked)
-	kept, err := e.keptUnchanged(ctx, t, c.Path, left.tracked) // yours to keep, by your answer, while it stays the same
+	kept, err := e.keptUnchanged(ctx, t, c, left.tracked) // yours to keep, by your answer, while it stays the same
 	if err != nil {
 		return left, err
 	}

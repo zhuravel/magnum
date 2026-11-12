@@ -2019,12 +2019,23 @@ func (e *Engine) unknownHeld(ctx context.Context, t registry.Task, es []registry
 }
 
 // promptText is the prompt role r of run (attempt a of task t's stage st,
-// in copy c) is due now, "" for none: its first (a fallback's after a
+// in copy c) is due now, "" for none, a writer's with the changes you kept
+// in the copy (keptNote): its first (a fallback's after a
 // Codex run of the role notes what that run left, and a coding stage's
 // names the answers that changed the plan this pass hands, run.change), its
 // nudge, a fix turn, the one to go on after a pause, the turn that hands it
 // those answers (nextChanged), or your answers.
 func (e *Engine) promptText(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt, c Copy, run *agentsRun,
+	r *stageRole, dir string) (string, error) {
+	text, err := e.duePrompt(ctx, t, st, a, c, run, r, dir)
+	if err != nil || text == "" || !slices.Contains(e.writerRoles(t), r.role.Name) {
+		return text, err
+	}
+	return text + e.keptNote(ctx, t, c), nil // the changes you kept: every writer prompt names them
+}
+
+// duePrompt is promptText's prompt before the note of the changes you kept.
+func (e *Engine) duePrompt(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt, c Copy, run *agentsRun,
 	r *stageRole, dir string) (string, error) {
 	switch next := r.next; {
 	case !r.prompted:

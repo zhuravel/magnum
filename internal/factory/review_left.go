@@ -368,62 +368,132 @@ func (e *Engine) askLeft(ctx context.Context, t registry.Task, c Copy, cy regist
 	return "", heldError{who: waitsYou, what: q.ask.Why}
 }
 
-// keptSum is the fingerprint of path p's change in the copy at copyDir
-// (root, an os.Root of it): the sha256 of its patch against HEAD
-// (gitx.DiffHead, which names HEAD's version of it) and of the file the
-// work tree has (none, for a file it lacks or that is no regular file): the
-// same while neither HEAD's version nor the copy's changed.
-func keptSum(ctx context.Context, git *gitx.Client, root *os.Root, copyDir, p string) (string, error) {
-	patch, err := git.DiffHead(ctx, copyDir, p)
-	if err != nil {
-		return "", err
-	}
+// keptSum is the fingerprint of path p in the copy (root, an os.Root of
+// it): the sha256 of the file the work tree has, or of nothing for a file it
+// lacks or that is no regular file. It is the file's alone, so an index
+// change (`git add`, `git add -p`) leaves it as it was.
+func keptSum(root *os.Root, p string) string {
 	h := sha256.New()
-	h.Write(patch)
 	if b, err := fsx.ReadRegularIn(root, p, leftFileLimit); err == nil {
 		h.Write([]byte{1})
 		h.Write(b)
 	} else {
 		h.Write([]byte{0})
 	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// headSum is keptSum of path p as HEAD has it in the copy at dir.
+func headSum(ctx context.Context, git *gitx.Client, dir, p string) (string, error) {
+	h := sha256.New()
+	has, err := git.HasFile(ctx, dir, "HEAD", p)
+	if err != nil {
+		return "", err
+	}
+	if !has {
+		h.Write([]byte{0})
+		return hex.EncodeToString(h.Sum(nil)), nil
+	}
+	text, err := git.FileAt(ctx, dir, "HEAD", p)
+	if err != nil {
+		return "", err
+	}
+	h.Write([]byte{1})
+	h.Write([]byte(text))
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// keptUnchanged are the paths of tracked, changed in task t's copy at
-// copyDir, whose change your answer kept and that still have the
-// fingerprint they had then (keptSum).
-func (e *Engine) keptUnchanged(ctx context.Context, t registry.Task, copyDir string, tracked []string) ([]string, error) {
-	rec, err := readStops(e.d.Layout.FactoryTaskDir(t.ID))
+// keptState reads the changes your answers kept in task t's copy c
+// (stops.json Kept): kept are those the copy still has as changes, by
+// path, and same the paths of them whose file is as it was when you kept it
+// (keptSum). A kept path whose file is as HEAD has it leaves the list: a
+// commit took it (HEAD has the kept file), or it is gone from the copy
+// without a commit, which an event says.
+func (e *Engine) keptState(ctx context.Context, t registry.Task, c Copy) (kept []keptChange, same map[string]bool, err error) {
+	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	rec, err := readStops(dir)
 	if err != nil || len(rec.Kept) == 0 {
-		return nil, err
+		return nil, nil, err
 	}
-	root, err := os.OpenRoot(copyDir)
+	root, err := os.OpenRoot(c.Path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer root.Close()
-	var out []string
-	for _, p := range tracked {
-		i := slices.IndexFunc(rec.Kept, func(k keptChange) bool { return k.Path == p })
-		if i < 0 {
-			continue
-		}
-		sum, err := keptSum(ctx, e.d.Git, root, copyDir, p)
+	same = map[string]bool{}
+	var gone []string
+	for _, k := range rec.Kept {
+		wt := keptSum(root, k.Path)
+		at, err := headSum(ctx, e.d.Git, c.Path, k.Path)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if sum == rec.Kept[i].Sum {
-			out = append(out, p)
+		switch {
+		case wt == at && at == k.Sum: // committed: the branch has it
+			e.event(ctx, t.ID, "review", registry.PhaseInfo, "the change you kept in "+k.Path+" is committed: the factory no longer names it")
+		case wt == at:
+			gone = append(gone, k.Path)
+		default:
+			kept = append(kept, k)
+			same[k.Path] = wt == k.Sum
 		}
 	}
-	return out, nil
+	if len(kept) == len(rec.Kept) {
+		return kept, same, nil
+	}
+	if len(gone) > 0 {
+		e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("the change you kept in %s is gone from the copy without a commit: "+
+			"the factory no longer names it to the writer", clipList(gone)))
+	}
+	rec.Kept = kept
+	return kept, same, writeStops(dir, rec)
+}
+
+// keptUnchanged are the paths of tracked, changed in task t's copy c, whose
+// change your answer kept and whose file is as it was then (keptState).
+func (e *Engine) keptUnchanged(ctx context.Context, t registry.Task, c Copy, tracked []string) ([]string, error) {
+	_, same, err := e.keptState(ctx, t, c)
+	if err != nil || len(same) == 0 {
+		return nil, err
+	}
+	return slices.DeleteFunc(slices.Clone(tracked), func(p string) bool { return !same[p] }), nil
+}
+
+// keptPaths are the paths of the changes your answers kept that task t's
+// copy c still has (keptState), whatever their file holds now.
+func (e *Engine) keptPaths(ctx context.Context, t registry.Task, c Copy) []string {
+	kept, _, err := e.keptState(ctx, t, c)
+	if err != nil {
+		e.log.Warn("read the changes you kept", "task", t.ID, "err", err)
+	}
+	var out []string
+	for _, k := range kept {
+		out = append(out, k.Path)
+	}
+	return out
+}
+
+// keptNoteLead starts the note of the changes you kept (keptNote).
+const keptNoteLead = "The operator kept these changes in the copy"
+
+// keptNote is the note every writer prompt of task t carries while your
+// answers keep changes in its copy c (keptPaths): commit them, never undo
+// them. "" for none.
+func (e *Engine) keptNote(ctx context.Context, t registry.Task, c Copy) string {
+	paths := e.keptPaths(ctx, t, c)
+	if len(paths) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\n\n%s (%s): commit them on `%s` with a message that says that the operator kept them, and never undo them.",
+		keptNoteLead, clipList(paths), t.Branch)
 }
 
 // keepLeft remembers the tracked changes of what a round left (left) in
-// task t's copy c as kept, on your answer: their fingerprints (keptSum) go
-// to stops.json (Kept), so no later look at the copy (roundLeft) counts
-// them as a round's while they stay the same, and the factory's checks ask
-// for them to be committed, never undone (dirtyWords).
+// task t's copy c as kept, on your answer: their paths and the
+// fingerprints of their files (keptSum) go to stops.json (Kept), so no
+// later look at the copy (roundLeft) counts them as a round's while they
+// stay the same, and the writer's prompts and the factory's checks name
+// them to be committed, never undone (keptNote, dirtyWords).
 func (e *Engine) keepLeft(ctx context.Context, t registry.Task, c Copy, left roundLeftovers) error {
 	if len(left.tracked) == 0 {
 		return nil
@@ -440,10 +510,7 @@ func (e *Engine) keepLeft(ctx context.Context, t registry.Task, c Copy, left rou
 	defer root.Close()
 	changed := false
 	for _, p := range left.tracked {
-		sum, err := keptSum(ctx, e.d.Git, root, c.Path, p)
-		if err != nil {
-			return err
-		}
+		sum := keptSum(root, p)
 		switch i := slices.IndexFunc(rec.Kept, func(k keptChange) bool { return k.Path == p }); {
 		case i < 0:
 			rec.Kept, changed = append(rec.Kept, keptChange{Path: p, Sum: sum}), true
@@ -455,7 +522,7 @@ func (e *Engine) keepLeft(ctx context.Context, t registry.Task, c Copy, left rou
 		return nil
 	}
 	e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("keeps %s in %s on your answer (%s): no round puts it back while it "+
-		"stays the same", plural(len(left.tracked), "tracked change"), c.Name, clipList(left.tracked)))
+		"stays the same, and the writer commits it", plural(len(left.tracked), "tracked change"), c.Name, clipList(left.tracked)))
 	return writeStops(dir, rec)
 }
 

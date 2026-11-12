@@ -35,11 +35,13 @@ func (r *reviewRig) putBackAlerts(id int64) int {
 }
 
 // "Keep the change" holds while the change stays the same: the factory
-// remembers the kept change by its fingerprint, so no later look at the
-// copy counts it as a round's (nothing puts it back, nothing asks again),
-// and its checks after the writer's fix ask the writer to commit it, never
-// to undo it; the next round then reviews it, and its result stands. A
-// kept change that changed since is a round's again.
+// remembers the kept change by its path and its file's content, so no later
+// look at the copy counts it as a round's (nothing puts it back, nothing
+// asks again), an index change (`git add`) leaves it kept, and every writer
+// prompt of the attempt, its first included, names it to commit, never to
+// undo, as do the checks after the writer's fix; the next round then
+// reviews it, and its result stands. A kept change that changed since is a
+// round's again.
 func TestAKeptChangeStaysThroughTheLaterRoundsWhileItIsTheSame(t *testing.T) {
 	var r *reviewRig
 	r = newReviewRig(t, func(c evalrun.LocalCase) evalrun.LocalResult {
@@ -52,11 +54,17 @@ func TestAKeptChangeStaysThroughTheLaterRoundsWhileItIsTheSame(t *testing.T) {
 	r.rt.setTouchedAt("", time.Time{})
 	r.answerLeft(task.ID, optionKeepChange)
 	r.run(6, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
+	if ps := r.rt.promptsTo("fx-writer"); len(ps) != 1 || !strings.Contains(ps[0].Text, keptNoteLead) ||
+		!strings.Contains(ps[0].Text, "(README)") || !strings.Contains(ps[0].Text, "never undo them") {
+		t.Fatalf("the writer's first prompt after your keep %+v; want the kept change named, to commit and never undo", ps)
+	}
 
 	cy := r.cycles(task.ID)[0]
+	r.git(r.copyDir, "add", "README") // an index change: the kept change is the same file
 	if left, err := r.e.roundLeft(r.ctx, r.reload(task.ID), r.cp, cy.HeadBefore, cy.N); err != nil || !left.none() {
 		t.Fatalf("a later look at the copy finds %s (%v); want none: the kept change is no round's", left, err)
 	}
+	r.git(r.copyDir, "reset", "--quiet", "--", "README")
 	r.write(r.copyDir, "README", "your edit, and a reviewer's more\n")
 	if left, err := r.e.roundLeft(r.ctx, r.reload(task.ID), r.cp, cy.HeadBefore, cy.N); err != nil ||
 		!slices.Equal(left.tracked, []string{"README"}) {
@@ -68,7 +76,7 @@ func TestAKeptChangeStaysThroughTheLaterRoundsWhileItIsTheSame(t *testing.T) {
 	r.run(6, func() bool { return len(r.rt.promptsTo("fx-writer")) > 1 })
 	ps := r.rt.promptsTo("fx-writer")
 	if len(ps) != 2 || !strings.Contains(ps[1].Text, "the operator kept 1 tracked change in the copy (README): commit it") ||
-		strings.Contains(ps[1].Text, "undo them") {
+		strings.Contains(ps[1].Text, "commit them or undo them") {
 		t.Fatalf("the writer's prompts %+v; want a turn that commits the kept change, never undoes it", ps)
 	}
 	if r.read("README") != "your edit, or a reviewer's\n" {
@@ -251,5 +259,30 @@ func TestABranchMovedBehindTheReviewedHeadOffersOnlyRestoreOrDrop(t *testing.T) 
 	if got := r.reload(task.ID); got.Stage != "pr_body" || r.git(r.copyDir, "rev-parse", task.Branch) != head {
 		t.Fatalf("task %s at %s waits %q, the branch at %s; want pr_body with the branch back at %s", got.State, got.Stage,
 			got.WaitsWhat, r.git(r.copyDir, "rev-parse", task.Branch), head)
+	}
+}
+
+// A kept change that leaves the copy without a commit (undone, put back by
+// hand) leaves the kept list with an event that says so, and the writer's
+// prompts no longer name it.
+func TestAKeptChangeGoneWithoutACommitIsSaidSo(t *testing.T) {
+	r, got := leftAfterYouTyped(t, "PR-12407")
+	r.rt.setTouchedAt("", time.Time{})
+	r.answerLeft(got.ID, optionKeepChange)
+	r.run(2, nil)
+	if rec, err := readStops(r.layout.FactoryTaskDir(got.ID)); err != nil || len(rec.Kept) != 1 {
+		t.Fatalf("stops.json keeps %+v (%v); want the one kept change", rec.Kept, err)
+	}
+	r.git(r.copyDir, "checkout", "--", "README")
+	if note := r.e.keptNote(r.ctx, r.reload(got.ID), r.cp); note != "" {
+		t.Fatalf("the kept note %q after the change is gone; want none", note)
+	}
+	if rec, _ := readStops(r.layout.FactoryTaskDir(got.ID)); len(rec.Kept) != 0 {
+		t.Fatalf("stops.json still keeps %+v", rec.Kept)
+	}
+	if !slices.ContainsFunc(r.events(got.ID, "review"), func(e registry.Event) bool {
+		return strings.Contains(e.Text, "README") && strings.Contains(e.Text, "without a commit")
+	}) {
+		t.Fatal("no event says the kept change is gone without a commit")
 	}
 }

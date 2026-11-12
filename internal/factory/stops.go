@@ -133,9 +133,11 @@ type stopsRecord struct {
 	// change's, and the PR body names it.
 	NoBase []string `json:"no_base,omitempty"`
 	// Kept are the tracked changes your answers kept in the copy ("Keep the
-	// change"): while a path's change has the fingerprint it had then
-	// (keptSum), no look at the copy counts it as a round's, and the
-	// factory's checks ask for it to be committed, never undone.
+	// change"), by path: while its file is as it was then (keptSum), no look
+	// at the copy counts it as a round's; while the copy has it as a change,
+	// every writer prompt and the factory's checks name it, to be committed,
+	// never undone (keptNote, dirtyWords). A commit of it, or its loss
+	// without one (an event), takes it off (keptState).
 	Kept []keptChange `json:"kept,omitempty"`
 	// Waits are when a put-back of what a round left first waited for a
 	// turn in flight in the copy, by the round's key (leftKey):
@@ -144,7 +146,7 @@ type stopsRecord struct {
 }
 
 // keptChange is a tracked path whose change your answer kept in the copy,
-// and the fingerprint of that change (keptSum).
+// and the fingerprint of its file then (keptSum).
 type keptChange struct {
 	Path string `json:"path"`
 	Sum  string `json:"sum"`
@@ -652,9 +654,9 @@ func leftQuestion(t registry.Task, cy registry.Cycle, round int, left roundLefto
 		q: registry.Question{
 			Text: fmt.Sprintf("%s of the local review left %s at %s, and %s: %s", strings.ToUpper(name[:1])+name[1:], left,
 				short(cy.HeadBefore), cause.words, ending),
-			Context: context,
-			Example: textx.Clip(diff, 1500),
-			Options: options,
+			Context:     context,
+			Example:     textx.Clip(diff, 1500),
+			Options:     options,
 			Recommended: -1, Evidence: cmp.Or(saved, "the factory's look at the copy")},
 	}
 }

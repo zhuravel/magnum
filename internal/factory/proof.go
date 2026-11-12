@@ -184,12 +184,11 @@ func nonEmpty(s string) []string {
 
 // dirtyWords says what the tracked changes dirty in task t's copy c keep
 // from the factory's checks: commit them or undo them, but a change your
-// answer kept (keptUnchanged) is to be committed, never undone.
+// answer kept (keptPaths, whatever its file holds now) is to be committed,
+// never undone.
 func (e *Engine) dirtyWords(ctx context.Context, t registry.Task, c Copy, dirty []string) string {
-	kept, err := e.keptUnchanged(ctx, t, c.Path, dirty)
-	if err != nil {
-		e.log.Warn("read the changes you kept", "task", t.ID, "err", err)
-	}
+	paths := e.keptPaths(ctx, t, c)
+	kept := slices.DeleteFunc(slices.Clone(dirty), func(p string) bool { return !slices.Contains(paths, p) })
 	others := slices.DeleteFunc(slices.Clone(dirty), func(p string) bool { return slices.Contains(kept, p) })
 	var parts []string
 	if len(others) > 0 {
