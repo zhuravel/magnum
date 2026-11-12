@@ -15556,6 +15556,8 @@ type Pause struct {
 	Since      time.Time `json:"since"`
 	Until      time.Time `json:"until,omitzero"`
 	Reason     string    `json:"reason,omitempty"`
+
+	// Has unexported fields.
 }
     Pause is a pause `magnum pause` asks of the factory (pause.json): the
     command's generation, since when, until when (zero: until `magnum resume`)
@@ -15569,7 +15571,8 @@ func (p Pause) Value() string
 
 func (p Pause) Words() string
     Words say the pause as the holds and the status lines do: "paused by you
-    until Nov 12 15:30 (lunch)".
+    until Nov 12 15:30 (lunch)", "paused (unreadable record): `magnum resume
+    --factory` removes it".
 
 type PostedFinding struct {
 	ID                 int64
