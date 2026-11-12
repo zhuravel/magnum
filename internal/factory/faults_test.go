@@ -267,3 +267,36 @@ func TestYourRetryOfACheckQuestionRunsTheCheckOnceAndSpendsNoStep(t *testing.T) 
 		t.Fatalf("task %s at revision %d waits %q, want the question asked again", got.State, got.QuestionRev, got.WaitsWhat)
 	}
 }
+
+// A jest run that exits non-zero naming no failing test, only a coverage
+// threshold it missed, is a check fault: it runs again, then asks you, and
+// never passes on its own; the writer gets no fix turn for it.
+func TestAJestRunThatNamesOnlyAMissedCoverageThresholdAsksAndNeverPasses(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12566", "bug")
+	r.startStage(task)
+	r.fix(task)
+	r.mu.Lock()
+	r.adds = map[string]string{"bin/jest": `Jest: "global" coverage threshold for lines (80%) not met: 75.3%`}
+	r.mu.Unlock()
+	r.endTurns(task, 3)
+	if n := len(r.ran("bin/jest")); n != 2 {
+		t.Fatalf("jest ran %d times, want its run and its run again", n)
+	}
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "precheck.jest exited 1 and named no failing test") ||
+		!strings.Contains(got.WaitsWhat, "skip this check for this task") {
+		t.Fatalf("task %s waits %q, want jest's question", got.State, got.WaitsWhat)
+	}
+	if rec := r.readPrecheckRecord(task.ID); rec.Passed || !rec.ForYou {
+		t.Fatalf("precheck.json %+v, want a failure for you, never a pass", rec)
+	}
+	if ps := r.rt.promptsTo("fx-writer"); len(ps) != 1 {
+		t.Fatalf("the writer got %d prompts, want no fix turn for a coverage threshold", len(ps))
+	}
+	for _, a := range r.attempts(task.ID) {
+		if a.Stage == "coding" && a.State == registry.AttemptVerified {
+			t.Fatal("the coding stage passed on a jest run that failed")
+		}
+	}
+}
