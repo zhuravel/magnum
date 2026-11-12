@@ -183,10 +183,20 @@ func TestADrainAfterAStopReleasesTheCopyOfTheRunningClaim(t *testing.T) {
 			}
 			return false, err
 		case helper.ID:
+			// SIGTERM lands in the tick that stops the claimer. A tick handles
+			// the requests before the tasks' passes, so that is the first pass
+			// of the helper that finds the claimer stopped: the tick that
+			// started the claim may still run, its requests read, when the stop
+			// is asked and term is sent, and a SIGTERM there would drain the
+			// daemon before any tick took the stop (under load, the claimer
+			// active at the end).
+			if cur, err := h.reg.TaskByID(ctx, claimer.ID); err != nil || cur.State != registry.TaskStopped {
+				return false, nil
+			}
 			select {
-			case sigs := <-term: // SIGTERM lands in the tick that stops the claimer
+			case sigs := <-term:
 				sigs <- syscall.SIGTERM
-				for i := 0; i < 2000 && !h.e.draining.Load(); i++ {
+				for i := 0; i < 2000 && !h.e.draining.Load(); i++ { // the signal's handler, not a time, ends the wait
 					time.Sleep(5 * time.Millisecond)
 				}
 			default:
