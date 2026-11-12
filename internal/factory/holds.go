@@ -523,9 +523,10 @@ const serverLeftWords = "a QA server may still be running in "
 const heavyServer = "server"
 
 // startServer starts a task's copy's server (Copies.StartServer): a heavy
-// stage, and a launch, so it waits for both.
-func (e *Engine) startServer(ctx context.Context, t registry.Task, c Copy) error {
-	if who, what, ok := e.mayLaunch(); !ok {
+// stage, and a launch, so it waits for both: the holds may names (mayLaunch,
+// or qaGoesOn for a boot more of a QA run that began).
+func (e *Engine) startServer(ctx context.Context, may func() (string, string, bool), t registry.Task, c Copy) error {
+	if who, what, ok := may(); !ok {
 		return heldError{who: who, what: what}
 	}
 	if e.d.Copies == nil {

@@ -1482,6 +1482,76 @@ func TestAPauseLetsAQASessionWhoseServerBootedWalk(t *testing.T) {
 	}
 }
 
+// A QA run whose first server boot fails during `magnum pause` boots again
+// under the pause and walks: its run began, so the boot more is its own
+// launch (qaGoesOn), and held it would wait for the resume while its cap,
+// counted from the first boot, ran out into a NEEDS YOU.
+func TestAPauseLetsAQARunWhoseFirstBootFailedBootAgain(t *testing.T) {
+	r := newQARig(t)
+	r.setProbe(func(up bool, _ int) (int, error) {
+		if !up || len(r.copies.log().started) < 2 {
+			return 0, errRefused
+		}
+		return 200, nil
+	})
+	task, _ := r.qaTask("PR-12449")
+	before := len(r.rt.promptsTo("fx-qa"))
+	r.run(8, func() bool { return len(r.copies.log().started) > 0 })
+	if len(r.copies.log().started) != 1 {
+		t.Fatalf("servers started %v, want the first boot", r.copies.log().started)
+	}
+	r.pause(time.Time{}, "lunch")
+
+	r.run(12, func() bool { return len(r.rt.promptsTo("fx-qa")) > before })
+
+	if l := r.copies.log(); len(l.started) != 2 {
+		got := r.reload(task.ID)
+		t.Fatalf("servers started %v under the pause, want the boot more; task waits %q: %q", l.started, got.WaitsWho, got.WaitsWhat)
+	}
+	if len(r.rt.promptsTo("fx-qa")) == before {
+		t.Fatal("the walker got no prompt under the pause after the boot more")
+	}
+	if got := r.reload(task.ID); got.State == registry.TaskNeedsYou {
+		t.Fatalf("the task needs you under the pause: %q", got.WaitsWhat)
+	}
+}
+
+// `magnum pause` holds a fresh QA run: no server boots and no walker
+// launches for a run that has none yet, though a session that booted goes
+// on (TestAPauseLetsAQASessionWhoseServerBootedWalk). Here the task holds
+// its copy and its run already (another QA held the Mac's lock until the
+// pause), so only the run's own start can hold it. After the resume the run
+// starts.
+func TestAPauseHoldsAFreshQARun(t *testing.T) {
+	r := newQARig(t)
+	unlock, held, err := engine.AcquireLock(r.layout.FactoryQALock())
+	if err != nil || held {
+		t.Fatalf("take the Mac's QA lock: held %v, %v", held, err)
+	}
+	task, _ := r.qaTask("PR-12450")
+	r.run(8, func() bool { return r.reload(task.ID).WaitsWhat == qaLockWhat })
+	if got := r.reload(task.ID); got.WaitsWhat != qaLockWhat || got.Copy == "" {
+		unlock()
+		t.Fatalf("task waits %q: %q with copy %q, want it on the QA lock with its copy", got.WaitsWho, got.WaitsWhat, got.Copy)
+	}
+	r.pause(time.Time{}, "lunch")
+	unlock()
+	r.run(6, nil)
+	if l := r.copies.log(); len(l.started) != 0 {
+		t.Fatalf("servers started %v under the pause, want none for a fresh run", l.started)
+	}
+	if n := len(r.rt.promptsTo("fx-qa")); n != 0 {
+		t.Fatalf("%d walker prompts under the pause, want none", n)
+	}
+	if err := LiftPause(r.layout, ""); err != nil {
+		t.Fatal(err)
+	}
+	r.toWalk(task)
+	if l := r.copies.log(); len(l.started) != 1 {
+		t.Fatalf("servers started %v after the resume, want the run's boot", l.started)
+	}
+}
+
 // Your retry after a walk that reached its pages but not every state walks
 // once more; a second such walk at the head goes on with those states
 // flagged: qa-summary.json clean with them, each run's result and failed

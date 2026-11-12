@@ -1187,7 +1187,8 @@ func (e *Engine) qaSession(ctx context.Context, t registry.Task, c Copy, run qaR
 }
 
 // startQASession starts task t's QA session of run in copy c, in this
-// order: no hold of the machine stops launches (mayLaunch), no server of
+// order: no hold of the machine stops launches (mayLaunch; qaGoesOn for a
+// run that began, whose boot more `magnum pause` does not hold), no server of
 // the task's whose stop failed is left (an earlier boot's: the task waits on
 // its stop, qaServerStopWhat), the task's heavy slot, the machine's QA lock (held by another: the task waits), the copy's
 // port answers nothing yet (else QA is unavailable: another server holds
@@ -1199,7 +1200,11 @@ func (e *Engine) qaSession(ctx context.Context, t registry.Task, c Copy, run qaR
 // takes that boot's failure). From then on the session is in the work
 // record (WorkQA) until its teardown.
 func (e *Engine) startQASession(ctx context.Context, t registry.Task, c Copy, run qaRun) error {
-	if who, what, ok := e.mayLaunch(); !ok {
+	may := e.mayLaunch
+	if !run.began().IsZero() {
+		may = e.qaGoesOn // a boot more of a run that began (its first boot failed, a restart cut it): the pause holds it not
+	}
+	if who, what, ok := may(); !ok {
 		if who != holdRestart {
 			e.waitOn(ctx, t, who, what)
 		}
@@ -1277,7 +1282,7 @@ func (e *Engine) startQASession(ctx context.Context, t registry.Task, c Copy, ru
 	e.qaMu.Unlock()
 	e.event(ctx, t.ID, "qa", registry.PhaseBegin, fmt.Sprintf("run %d at %s: starts %s's server, which has %s to answer %s",
 		run.N, textx.ShortSHA(run.Head), c.Name, boot, run.Ready))
-	if err := e.startServer(ctx, t, c); err != nil {
+	if err := e.startServer(ctx, may, t, c); err != nil {
 		if errors.Is(err, ErrHeld) {
 			return err // the deferred teardown ends the session
 		}

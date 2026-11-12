@@ -5,7 +5,8 @@ package engine
 // restart's drain closes is closed: automatic and forced rounds, fix
 // cycles and `magnum fix`, merges of the parent, whiteboards, the retro,
 // the curations, the skill edit and gate; the staging resolver takes no
-// slot for a queued job. Each health check acknowledges it
+// slot for a queued job unless its deploy is live (deployLive: the drain
+// waits for that deploy). Each health check acknowledges it
 // (tendRebootDrain): the work that still runs, quiet once none does, and
 // once quiet the idle sessions parked through restart-sessions' early park,
 // so the reboot closes no pane in the middle of a turn. A start on another

@@ -33,6 +33,45 @@ func TestTheRebootDrainLetsTheResolveOfALiveDeployGoOn(t *testing.T) {
 	}
 }
 
+// Under the drain a live deploy's resolve goes on, and nothing else of
+// staging starts: a new deploy you ask for is refused before it reaches
+// staging, and a resolve whose deploy is no longer live waits.
+func TestTheRebootDrainStartsNoNewDeployOnlyTheResolveOfALiveOne(t *testing.T) {
+	f := &fakeStaging{effects: map[string][]staging.Effect{"talkable/talkable": {
+		{ID: "dep-9", Repo: "talkable/talkable", Env: envVoid, PR: staging.PR{Repo: "talkable/talkable", Number: 2}, State: staging.EffectRunning},
+		{ID: "dep-10", Repo: "talkable/talkable", Env: envVoid, PR: staging.PR{Repo: "talkable/talkable", Number: 2}, State: staging.EffectDone},
+	}}}
+	h := deployHarness(t, f, func(h *harness) { h.d.stagingResolver = &stagingResolver{} })
+	h.rebootDrain(34, DrainUntilBoot)
+
+	r := h.stagingRequest(ReqStagingDeploy, StagingDeployPayload{PRTarget: PRTarget{Ref: "2"}, Envs: []string{"all"}})
+	if r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "drains for a reboot") {
+		t.Fatalf("a new deploy under the drain = %s %q, want refused for the drain", r.State, deref(r.Result))
+	}
+	f.mu.Lock()
+	plans, deploys := len(f.plans), len(f.deploys)
+	f.mu.Unlock()
+	if plans != 0 || deploys != 0 {
+		t.Fatalf("staging got %d plans and %d deploys under the drain, want none", plans, deploys)
+	}
+
+	for _, tc := range []struct {
+		effect string
+		waits  bool
+	}{{"dep-9", false}, {"dep-10", true}} {
+		job := resolveJob{ID: tc.effect + ".r1.0a0b0c10", Effect: tc.effect, Repo: "talkable/talkable", Number: 2, Target: "staging-void",
+			State: resolveQueued, Started: h.clock.Now()}
+		if err := h.e.saveResolveJob(h.ctx, job); err != nil {
+			t.Fatal(err)
+		}
+		w := &resolveWork{e: h.e, r: h.d.stagingResolver, job: &job}
+		err := w.take(h.ctx)
+		if waits := errors.Is(err, errResolveWaits) && strings.Contains(job.Why, "drains for a reboot"); waits != tc.waits {
+			t.Errorf("the resolve of %s: take = %v (%q), want it to wait for the drain: %v", tc.effect, err, job.Why, tc.waits)
+		}
+	}
+}
+
 // A stop or a yield that reached a whiteboard job between its reservation
 // and its drain's re-check is answered when the drain turns the job away:
 // the abort hears that nothing started, the yielded request goes back to the

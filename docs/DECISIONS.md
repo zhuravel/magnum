@@ -26426,7 +26426,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
   a start queues, an answer, a retry, a talk and a push run, and no QA run is cut. A QA session whose server
   booted goes on to its walk under the pause (`qaGoesOn`: its browser and its walker's launch pass `MayLaunch`;
   the engine owner's review, D14): held, it kept its server, its heavy slot and the Mac's QA lock, and its cap's
-  clock turned a lunch pause into a NEEDS YOU. The tick after its `until` lifts it. The drain holds what a restart drain holds and every new prompt (`runtime.Deps.MayPrompt`, asked
+  clock turned a lunch pause into a NEEDS YOU. A run that began boots again under the pause too, when its first
+  boot failed or a restart cut it (`startQASession` and `startServer` pass `qaGoesOn`; the engine owner's check,
+  F3): of the two ways out, letting the run go on was chosen over stopping its cap's clock, since a held run keeps
+  the Mac's QA lock and heavy slot for the whole pause. A fresh run, with no server booted yet, is still held. The
+  tick after its `until` lifts it. The drain holds what a restart drain holds and every new prompt (`runtime.Deps.MayPrompt`, asked
   first by `Send`); a restart drain still holds none (2026-11-07: those turns outlive a restart). Each tick
   acknowledges it in work.json's `reboot_drain`: the record's items (a backoff repair aside, as for a restart) and
   every run the agents store keeps pending, submitted or working, the liaisons' too (`Runtime.TurnsInFlight`; a

@@ -82,7 +82,8 @@ while one holds keeps its start, its end and its reason unless a flag changes th
 - Review: `draining()` includes the reboot drain, so everything a restart drain holds is held: automatic and
   forced rounds (`globalWait`, `stopping`), fix cycles and `magnum fix`, merges of the parent, whiteboards, the
   retro, curations, the skill edit and gate. The staging resolver takes no slot for a queued job (`take` waits,
-  "the daemon drains for a reboot"); a job that took its slot runs to its end.
+  "the daemon drains for a reboot") unless its deploy is queued or running, which the drain waits for; a job that
+  took its slot runs to its end.
 - Factory: `drainsHeld()` includes the reboot drain, so everything a restart drain holds is held (launches,
   effects, rounds, checks, claims, talks, QA runs). New prompts to agents that work already are held too: the
   runtime's `Send` asks `Deps.MayPrompt`, which the engine answers from the reboot drain. A restart drain still

@@ -853,7 +853,7 @@ const gb = 1 << 30
 func TestAServerStopThatFindsThePortHeldElsewhereFreesItsHeavyUse(t *testing.T) {
 	h := newHarness(t)
 	tk := h.task("PR-12330", registry.TaskActive, "investigate")
-	if err := h.e.startServer(h.ctx, h.reload(tk.ID), Copy{Name: "factory1"}); err != nil {
+	if err := h.e.startServer(h.ctx, h.e.mayLaunch, h.reload(tk.ID), Copy{Name: "factory1"}); err != nil {
 		t.Fatal(err)
 	}
 	h.copies.mu.Lock()
@@ -890,7 +890,7 @@ func TestLowDiskHoldsLaunchesAndParksIdleAgentsThatWaitOnYou(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.e.startServer(h.ctx, h.reload(waiting.ID), Copy{Name: "factory2"}); err != nil {
+	if err := h.e.startServer(h.ctx, h.e.mayLaunch, h.reload(waiting.ID), Copy{Name: "factory2"}); err != nil {
 		t.Fatal(err)
 	}
 	var launchErr error
