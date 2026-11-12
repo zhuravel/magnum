@@ -58,7 +58,8 @@ func (e *Engine) refuseUnderRebootDrain(ctx context.Context, req store.Request) 
 }
 
 // requestDry reports whether req asks for a dry run: a staging deploy's
-// dry_run, a cleanup's options or plan marked dry.
+// dry_run; a cleanup's plan marked dry when it carries one (cleanupAsync
+// applies the plan), else its options marked dry.
 func requestDry(req store.Request) bool {
 	var p struct {
 		DryRun  bool `json:"dry_run"`
@@ -72,7 +73,10 @@ func requestDry(req store.Request) bool {
 	if json.Unmarshal(req.Payload, &p) != nil {
 		return false
 	}
-	return p.DryRun || p.Options.DryRun || (p.Plan != nil && p.Plan.DryRun)
+	if p.Plan != nil {
+		return p.Plan.DryRun
+	}
+	return p.DryRun || p.Options.DryRun
 }
 
 // rebootDrainStarts is when a request queued or held behind a drain for a

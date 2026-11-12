@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -206,11 +207,20 @@ type daemonControl struct {
 	Build   string        `json:"build,omitempty"`
 	Pause   *controlPause `json:"pause,omitempty"`
 	Drain   *controlDrain `json:"drain,omitempty"`
-	// OldBuild: the daemon that runs is of a build that does not know the
-	// controls (no record of them for its pid), so it ignores the factory's
-	// pause and a drain for a reboot.
-	OldBuild bool `json:"old_build,omitempty"`
+	// Controls says what the running daemon knows of the controls when it is
+	// not known to hold them ("" when it does): controlsOlder, its build does
+	// not know them and ignores the factory's pause and a drain for a reboot;
+	// controlsStarting, it has not recorded yet what it knows (its pidfile
+	// comes first); controlsUnknown, its record cannot be read.
+	Controls string `json:"controls,omitempty"`
 }
+
+// The values of daemonControl.Controls.
+const (
+	controlsOlder    = "older"
+	controlsStarting = "starting"
+	controlsUnknown  = "unknown"
+)
 
 // controlPause is a pause in force: since when, until when (nil: until
 // `magnum resume`) and why.
@@ -271,7 +281,12 @@ func reviewControlOf(get func(key string) (string, bool), running bool, pid int)
 	reboot, _ := get(engine.KVDaemonRebootDrain)
 	ack, _ := get(engine.KVDaemonDrainAck)
 	controls, _ := get(engine.KVDaemonControls)
-	dc.OldBuild = running && pid > 0 && !engine.KnowsControls(controls, pid, engine.ControlsVersion)
+	if running && pid > 0 && !engine.KnowsControls(controls, pid, engine.ControlsVersion) {
+		dc.Controls = controlsOlder
+		if v, _ := get(store.KVDaemonPid); v != strconv.Itoa(pid) { // its start has not recorded its pid yet
+			dc.Controls = controlsStarting
+		}
+	}
 	if dr := rebootDrainOf(reboot, ack, pid); dr != nil {
 		dc.Drain = dr
 	} else if v, ok := get(engine.KVDaemonDraining); ok {
@@ -288,7 +303,13 @@ func factoryControlOf(l paths.Layout, pid int) daemonControl {
 	dc := daemonControl{Name: daemonFactory, Running: pid > 0, PID: pid}
 	rec, ok, err := factory.ReadWork(l)
 	known := err == nil && ok && rec.PID == pid
-	dc.OldBuild = pid > 0 && !(known && rec.Controls >= engine.ControlsVersion)
+	switch {
+	case pid <= 0:
+	case err != nil || (ok && rec.PID != pid):
+		dc.Controls = controlsUnknown // a record it cannot read, or another daemon's
+	case !ok || rec.Controls < engine.ControlsVersion:
+		dc.Controls = controlsOlder
+	}
 	if known {
 		dc.Build = rec.Build
 	}
@@ -377,17 +398,26 @@ func (dc daemonControl) holdText(now time.Time, long bool) string {
 		}
 		parts = append(parts, s+": magnum resume")
 	}
-	if dc.ignored() {
-		parts = append(parts, oldBuildText(dc.Name, dc.PID, "the pause and the drain for a reboot, so it holds neither"))
+	if dc.controlled() {
+		switch dc.Controls {
+		case controlsOlder:
+			parts = append(parts, oldBuildText(dc.Name, dc.PID, "the pause and the drain for a reboot, so it holds neither"))
+		case controlsStarting:
+			parts = append(parts, fmt.Sprintf("the %s daemon (pid %d) is starting: whether it holds this shows once it recorded what it knows",
+				dc.Name, dc.PID))
+		case controlsUnknown:
+			parts = append(parts, fmt.Sprintf("the build of the %s daemon (pid %d) cannot be read: whether it holds this is unknown", dc.Name, dc.PID))
+		}
 	}
 	return actClean(strings.Join(parts, " · "))
 }
 
-// ignored reports whether dc's daemon runs a build that ignores a hold the
-// line names: the factory's pause or a drain for a reboot on either daemon
-// (the review daemon's pause is older than the controls).
-func (dc daemonControl) ignored() bool {
-	if !dc.OldBuild {
+// controlled reports whether dc's line names a hold of the controls (the
+// factory's pause or a drain for a reboot on either daemon; the review
+// daemon's pause is older than the controls) while its daemon is not known
+// to hold them (Controls).
+func (dc daemonControl) controlled() bool {
+	if dc.Controls == "" {
 		return false
 	}
 	reboot := dc.Drain != nil && dc.Drain.For == drainForReboot
@@ -434,7 +464,8 @@ func storeKV(ctx context.Context, st *store.Store) func(string) (string, bool) {
 
 // controlKVKeys are the review daemon's kv rows reviewControlOf reads.
 var controlKVKeys = []string{engine.KVDaemonBuild, store.KVDaemonPaused, store.KVDaemonPausedReason, store.KVDaemonPausedUntil,
-	engine.KVDaemonPausedAt, engine.KVDaemonRebootDrain, engine.KVDaemonDrainAck, engine.KVDaemonDraining}
+	engine.KVDaemonPausedAt, engine.KVDaemonRebootDrain, engine.KVDaemonDrainAck, engine.KVDaemonDraining, engine.KVDaemonControls,
+	store.KVDaemonPid}
 
 // reviewControlRO is the review daemon's state read from its registry
 // opened read-only (the factory's status and screen, which open no
