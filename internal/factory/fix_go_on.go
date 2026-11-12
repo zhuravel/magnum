@@ -188,7 +188,7 @@ func (e *Engine) grant(ctx context.Context, t registry.Task, a registry.Attempt,
 		return err
 	}
 	e.event(ctx, t.ID, "fix", registry.PhaseInfo, why)
-	e.alert(ctx, t.ID, TaskKey(t)+": the factory goes on by itself: "+why)
+	e.alert(ctx, t.ID, TaskKey(t)+": "+goesOnAlert+why)
 	return nil
 }
 

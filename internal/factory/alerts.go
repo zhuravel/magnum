@@ -287,7 +287,8 @@ func (e *Engine) holdAlerts(ctx context.Context, cause, why string) {
 }
 
 // dropStale drops each pending alert whose task no longer waits on you for
-// its kind of wait: it never fires.
+// its kind of wait: it never fires. News (newsAlert), which never waited
+// on you, goes in silence once its task is no longer live.
 func (e *Engine) dropStale(ctx context.Context, tasks []registry.Task) {
 	byID := tasksByID(tasks)
 	var gone []string
@@ -297,9 +298,31 @@ func (e *Engine) dropStale(ctx context.Context, tasks []registry.Task) {
 		}
 		p.settled = true
 		gone = append(gone, p.key)
-		e.event(ctx, p.ev.TaskID, alertDropped, registry.PhaseInfo, p.line+": dropped, it no longer waits on you")
+		if !newsAlert(p.ev.Text) {
+			e.event(ctx, p.ev.TaskID, alertDropped, registry.PhaseInfo, p.line+": dropped, it no longer waits on you")
+		}
 	}
 	e.alerts.batch.Forget(gone...)
+}
+
+// The leads of the alerts of the steps the factory takes by itself, after
+// the task's key: a check it heals (faults.go), a go-on at the writer's fix
+// budget (fix_go_on.go), a round's leftovers it put back (review_left.go).
+const (
+	healsAlert   = "the factory heals a check by itself: "
+	goesOnAlert  = "the factory goes on by itself: "
+	putBackAlert = "the factory put back by itself "
+)
+
+// newsAlert reports whether text is news, an alert that waits on nobody: a
+// go-on at the local review's cap (goOnAlert), or a step the factory took
+// by itself.
+func newsAlert(text string) bool {
+	if goOnAlert(text) {
+		return true
+	}
+	_, what, _ := strings.Cut(text, ": ")
+	return strings.HasPrefix(what, healsAlert) || strings.HasPrefix(what, goesOnAlert) || strings.HasPrefix(what, putBackAlert)
 }
 
 // alertStands reports whether the alert ev still holds: the factory's own
@@ -309,8 +332,8 @@ func (e *Engine) dropStale(ctx context.Context, tasks []registry.Task) {
 // (its copy's release refused, what a base run left in its copy), while
 // they last; a server a QA teardown failed to stop, while it is left; a
 // question coding went on the recommended answer of (provisionalWhat),
-// while one is open; a go-on at the local review's cap (goOnAlert), while
-// its task is live. An alert's text is kept scrubbed (Engine.event), so
+// while one is open; news (newsAlert: a go-on at the local review's cap, a
+// step the factory took by itself), while its task is live. An alert's text is kept scrubbed (Engine.event), so
 // what it is compared with is too.
 func (e *Engine) alertStands(ctx context.Context, byID map[int64]registry.Task, ev registry.Event) bool {
 	line := alertLine(ev.Text)
@@ -327,7 +350,7 @@ func (e *Engine) alertStands(ctx context.Context, byID map[int64]registry.Task, 
 	if !ok {
 		return false
 	}
-	if goOnAlert(ev.Text) { // news of a task that went on without you: it stands while the task is at work
+	if newsAlert(ev.Text) { // news of a task that went on without you: it stands while the task is at work
 		return isLive(t)
 	}
 	key := TaskKey(t)
@@ -425,7 +448,8 @@ func (e *Engine) flushAlerts(ctx context.Context, now time.Time, tasks []registr
 
 // alertToastText is the toast of items, counting count: "factory: N need
 // you" ("factory: nothing needs you" for a toast of news alone: a go-on at
-// the cap) and the alerts' lines, each once.
+// the cap, a step the factory took by itself) and the alerts' lines, each
+// once.
 func alertToastText(count int, items []notify.Item) (title, body string) {
 	var lines []string
 	for _, it := range items {
@@ -447,8 +471,9 @@ func alertToastText(count int, items []notify.Item) (title, body string) {
 }
 
 // needYou counts what waits on you: every task that does, the tasks of
-// the alerts that stand (an ended task's leftovers; never a go-on at the
-// cap, which waits on nobody), and the factory's own blockers.
+// the alerts that stand (an ended task's leftovers; never news, a go-on at
+// the cap or a step the factory took by itself, which waits on nobody), and
+// the factory's own blockers.
 func (e *Engine) needYou(tasks []registry.Task, standing []*pendingAlert) int {
 	ids := map[int64]bool{}
 	for _, t := range tasks {
@@ -457,7 +482,7 @@ func (e *Engine) needYou(tasks []registry.Task, standing []*pendingAlert) int {
 		}
 	}
 	for _, p := range standing {
-		if p.ev.TaskID != 0 && !goOnAlert(p.ev.Text) {
+		if p.ev.TaskID != 0 && !newsAlert(p.ev.Text) {
 			ids[p.ev.TaskID] = true
 		}
 	}

@@ -179,7 +179,7 @@ func (p *precheckRun) spendFaultStep(key, step, what, ended string) {
 	ctx := context.WithoutCancel(p.parent)
 	text := fmt.Sprintf("%s at %s named no failure of the change: the factory %s, and %s", key, short(p.head), what, ended)
 	p.e.event(ctx, p.t.ID, "check", registry.PhaseInfo, text)
-	p.e.alert(ctx, p.t.ID, TaskKey(p.t)+": the factory heals a check by itself: "+text)
+	p.e.alert(ctx, p.t.ID, TaskKey(p.t)+": "+healsAlert+text)
 }
 
 // faultStepWords say fault step step in the factory's words, bound being the bound of its

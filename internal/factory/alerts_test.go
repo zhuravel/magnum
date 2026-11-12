@@ -870,3 +870,34 @@ func TestTheSidebarTokenFollowsTheTasksWorkspacesAndHerdrComingBack(t *testing.T
 		t.Errorf("the pass's reports have deadlines %v; want the pass's one, %s after it began", deadlines, sidebarPassTimeout)
 	}
 }
+
+// The alert of a step the factory took by itself (a check it heals, a
+// go-on at the writer's fix budget, a round's leftovers it put back) is
+// news, as a go-on's at the cap is: a toast that counts nobody as waiting
+// on you while its task is live, and never dropped as "no longer waits on
+// you", which it never did. A task that is no longer live drops its news
+// in silence.
+func TestAStepTheFactoryTookByItselfIsNewsNeverAWaitOnYou(t *testing.T) {
+	for _, what := range []string{
+		healsAlert + "lint runs again at abc1234 (it printed nothing)",
+		goesOnAlert + "the writer's fix turns made progress: 2 more fix turns (go-on 1 of 2)",
+		putBackAlert + "what round 1 of the local review left in the copy (1 tracked change in the copy (README)), saved to " +
+			"review-1-left.diff; the round's result stands",
+	} {
+		r := newAlertRig(t)
+		live := r.task("PR-12508", registry.TaskActive, "coding")
+		gone := r.task("PR-12509", registry.TaskStopped, "coding")
+		r.e.alert(r.ctx, live.ID, "PR-12508: "+what)
+		r.e.alert(r.ctx, gone.ID, "PR-12509: "+what)
+		r.tick()
+		r.after(2 * time.Minute)
+		shown := r.toasts.shown()
+		if len(shown) != 1 || shown[0].Title != "factory: nothing needs you" || !strings.HasPrefix(shown[0].Body, "PR-12508 the factory") ||
+			strings.Contains(shown[0].Body, "PR-12509") {
+			t.Errorf("%q: toasts %q; want one of news alone, of the live task", what, shown)
+		}
+		if got := slices.Concat(r.texts(live.ID, alertDropped), r.texts(gone.ID, alertDropped)); len(got) != 0 {
+			t.Errorf("%q: drop events %q; want none: news never waited on you", what, got)
+		}
+	}
+}
