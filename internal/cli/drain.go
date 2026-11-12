@@ -420,7 +420,7 @@ func drainWait(ctx context.Context, c *Context, d *actDeps, out controlOut, targ
 			fmt.Fprintln(c.Stdout, "the drain was lifted (`magnum resume`): new work starts again")
 			return 0
 		case lifted > 0 && partial:
-			return drainPartlyLifted(c, out, targets, resumed)
+			return drainPartlyLifted(out, targets, resumed)
 		case lifted > 0:
 			partial = true
 		case all:
@@ -476,7 +476,7 @@ func drainSafe(c *Context, out controlOut, targets []*drainTarget, states []drai
 
 // drainPartlyLifted ends a wait whose drain a resume lifted on some of the
 // daemons alone (resumed): it says which, and what still drains.
-func drainPartlyLifted(c *Context, out controlOut, targets []*drainTarget, resumed []bool) int {
+func drainPartlyLifted(out controlOut, targets []*drainTarget, resumed []bool) int {
 	for i, t := range targets {
 		if resumed[i] {
 			out.fail(t.name, "the drain was lifted (`magnum resume`): new work starts again there")
