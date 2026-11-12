@@ -181,11 +181,22 @@ func TestALintsOffensesAreReadFromItsWholeOutput(t *testing.T) {
 }
 
 // A command missing for a lint run through a script the change defines
-// (package.json's script, a Makefile's recipe) is the change's: those files
-// count as the crash's cause, as the lint's own script does.
+// (package.json's script, a Makefile's recipe, a rake task, a bin/ file of
+// its name) that names that command is the change's: those files count as
+// the crash's cause, as the lint's own script does.
 func TestAMissingCommandOfAScriptTheChangeDefinesIsTheChanges(t *testing.T) {
-	crash := envCrash{cmd: "make lint {files}", sig: envSignature{scriptOnly: true, lacks: "a command"}}
-	for _, f := range []string{"Makefile", "package.json", "lib/tasks/lint.rake", "bin/lint"} {
+	dir := t.TempDir()
+	for rel, text := range map[string]string{"Makefile": "lint:\n\teslnt app\n", "package.json": `{"scripts": {"lint": "eslnt ."}}`,
+		"lib/tasks/lint.rake": "task :lint do\n  sh 'eslnt app'\nend\n"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, rel), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	crash := envCrash{cmd: "make lint {files}", copy: dir, sig: envSignature{scriptOnly: true, lacks: "a command"}}
+	for _, f := range []string{"Makefile", "package.json", "lib/tasks/lint.rake", "bin/eslnt"} {
 		if got := branchCaused(crash, "/bin/sh: eslnt: command not found", []string{"app/x.rb", f}); !slices.Contains(got, f) {
 			t.Errorf("branchCaused with %s changed = %q; want it", f, got)
 		}

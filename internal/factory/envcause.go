@@ -193,12 +193,16 @@ var scriptDefRe = regexp.MustCompile(`(?:^|/)(?:package\.json|[Mm]akefile|GNUmak
 var missingRe = regexp.MustCompile(`([\w.+-]+): (?:command )?not found`)
 
 // definesMissing reports whether script file f (scriptDefRe) of the copy
-// defines or names the command crash c found missing: a bin/ file of its
+// defines or names the command crash c (its line, else stderr) found
+// missing: a bin/ file of its
 // name, or a file whose text names it (a package.json script, a Makefile's
 // recipe, a rake task). A missing command no changed file names is the
 // environment's.
-func definesMissing(c envCrash, f string) bool {
+func definesMissing(c envCrash, stderr, f string) bool {
 	m := missingRe.FindStringSubmatch(c.line)
+	if m == nil {
+		m = missingRe.FindStringSubmatch(stderr)
+	}
 	if m == nil {
 		return false
 	}
@@ -218,7 +222,7 @@ func definesMissing(c envCrash, f string) bool {
 func branchCaused(c envCrash, stderr string, files []string) []string {
 	var out []string
 	for _, f := range files {
-		if f == firstWord(c.cmd) || c.sig.scriptOnly && scriptDefRe.MatchString(f) && definesMissing(c, f) ||
+		if f == firstWord(c.cmd) || c.sig.scriptOnly && scriptDefRe.MatchString(f) && definesMissing(c, stderr, f) ||
 			!c.sig.scriptOnly && (lintInputRe.MatchString(f) || strings.Contains(stderr, f)) {
 			out = append(out, f)
 		}
