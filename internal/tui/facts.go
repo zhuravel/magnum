@@ -55,7 +55,15 @@ type DaemonFacts struct {
 	// LearnProposals counts the skill proposals the gate held for the
 	// operator (`magnum learn --review`).
 	LearnProposals int
+	// Controls are the daemons' pauses and drains for a reboot that are no
+	// fact above ("factory paused by you until 15:30: magnum resume",
+	// "review draining since 14:02: magnum resume ends it"), drawn first.
+	Controls []ControlFact
 }
+
+// ControlFact is a daemon's pause or drain as a title says it, whole and
+// short ("factory draining").
+type ControlFact struct{ Full, Short string }
 
 // CodexPace is the Codex budget used now and when, at the pace it has been
 // spent since its window began, it reaches Cap ([usage] codex_soft, or
@@ -98,6 +106,7 @@ func cleanWatchFailing(w *WatchFailing) { w.Watch, w.Error = cleanText(w.Watch),
 func cleanFacts(f DaemonFacts) DaemonFacts {
 	f.SkewOld, f.SkewNew = cleanText(f.SkewOld), cleanText(f.SkewNew)
 	f.PollsFailing = cleanEach(f.PollsFailing, cleanWatchFailing)
+	f.Controls = cleanEach(f.Controls, func(c *ControlFact) { c.Full, c.Short = cleanText(c.Full), cleanText(c.Short) })
 	return f
 }
 
@@ -111,6 +120,9 @@ type fact struct{ full, short string }
 // Codex pace, then the notes and the skill proposals waiting for review.
 func (f DaemonFacts) list(now time.Time) []fact {
 	var out []fact
+	for _, c := range f.Controls {
+		out = append(out, fact{cleanText(c.Full), cleanText(c.Short)})
+	}
 	if f.SkewOld != "" {
 		since := ""
 		if !f.SkewSince.IsZero() {

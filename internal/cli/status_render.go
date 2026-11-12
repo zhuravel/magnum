@@ -36,6 +36,7 @@ func statusSafe(s string, limit int) string {
 
 // statusRender prints the human view.
 func statusRender(w io.Writer, r statusReport) {
+	statusRenderDaemons(w, r) // status_daemons.go: one line per daemon, a pause or a drain on it
 	statusRenderHeader(w, r)
 	statusRenderSlots(w, r)
 	statusRenderManual(w, r)

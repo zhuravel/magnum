@@ -208,17 +208,17 @@ func (s *factoryScreenSource) lastSeen() time.Time {
 	return seen
 }
 
-// daemonDown reports whether no factory daemon runs: its pidfile names none
-// (or cannot be read), or kill -0 finds its process gone. It runs on every
-// frame, so it reads no process table: a pid reused by another process
-// reads as up, as status's ps would tell, and the daemon's own requests
-// then say it does not answer.
-func daemonDown(l paths.Layout) bool {
+// factoryAlive is the running factory daemon's pid, 0 when none runs: its
+// pidfile names none (or cannot be read), or kill -0 finds its process gone.
+// It runs on every frame, so it reads no process table: a pid reused by
+// another process reads as up, as status's ps would tell, and the daemon's
+// own requests then say it does not answer.
+func factoryAlive(l paths.Layout) int {
 	pid, err := daemonSys.factoryPID(l)
-	if err != nil || pid <= 0 {
-		return true
+	if err != nil || pid <= 0 || errors.Is(daemonSys.Kill(pid, 0), syscall.ESRCH) {
+		return 0
 	}
-	return errors.Is(daemonSys.Kill(pid, 0), syscall.ESRCH)
+	return pid
 }
 
 // readyCard is task id's ready card as the last frame drew it.
@@ -254,14 +254,18 @@ func (s *factoryScreenSource) Frame(ctx context.Context) (tui.FactoryData, error
 		own = &ownReadWatch{Magnum: s.magnum}
 		magnum = own
 	}
+	fpid := controlSys.FactoryAlive(s.c.Layout) // once per frame: one kill -0
 	d, err := factory.ScreenData(ctx, reg, agents, s.now(), s.lastSeen(), factory.ScreenOptions{Config: s.c.Config, Layout: s.c.Layout,
-		ReadyCards: func(id int64, c factory.ReadyCardFile) { cards[id] = c }, DaemonDown: daemonDown(s.c.Layout), Magnum: magnum})
+		ReadyCards: func(id int64, c factory.ReadyCardFile) { cards[id] = c }, DaemonDown: fpid == 0, Magnum: magnum})
 	if err != nil {
 		return d, err
 	}
 	d.OwnUnread = own != nil && own.failed
 	s.cards.Store(&cards)
 	s.prFacts(ctx, d.Rows)
+	if short, long := factoryScreenControlLines(ctx, s.c, fpid, s.now()); len(short) > 0 { // status_daemons.go: first, the most pressing
+		d.Blocking, d.BlockingLong = append(short, d.Blocking...), append(long, d.BlockingLong...)
+	}
 	if aerr != nil {
 		d.Blocking = append(slices.Clone(d.Blocking), "agents not read")
 		d.BlockingLong = append(slices.Clone(d.BlockingLong), "agents not read ("+textx.Clip(textx.FirstLine(aerr.Error()), 200)+")")

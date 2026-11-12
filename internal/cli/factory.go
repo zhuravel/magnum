@@ -205,8 +205,9 @@ func newFactoryStatusCmd(c *Context) *cobra.Command {
 
 // factoryStatusJSON is `magnum factory status --json`.
 type factoryStatusJSON struct {
-	Daemon factoryDaemonJSON `json:"daemon"`
-	Tasks  []factoryTaskJSON `json:"tasks"`
+	Daemon  factoryDaemonJSON `json:"daemon"`
+	Daemons []daemonControl   `json:"daemons"`
+	Tasks   []factoryTaskJSON `json:"tasks"`
 }
 
 type factoryDaemonJSON struct {
@@ -294,8 +295,9 @@ func runFactoryStatusCmd(c *Context, asJSON bool, pos []string) int {
 			return 1
 		}
 	}
+	daemons := factoryStatusDaemons(context.Background(), c, pid) // status_daemons.go
 	if asJSON {
-		out := factoryStatusJSON{Daemon: factoryDaemonJSON{Running: pid > 0, PID: pid}, Tasks: []factoryTaskJSON{}}
+		out := factoryStatusJSON{Daemon: factoryDaemonJSON{Running: pid > 0, PID: pid}, Daemons: daemons, Tasks: []factoryTaskJSON{}}
 		for _, h := range holds {
 			out.Daemon.Holds = append(out.Daemon.Holds, factoryHoldJSON{Kind: h.Kind, Repo: h.Repo, Reason: h.Reason, Since: h.Since})
 		}
@@ -313,11 +315,16 @@ func runFactoryStatusCmd(c *Context, asJSON bool, pos []string) int {
 		}
 		return 0
 	}
+	now := time.Now()
+	for _, dc := range daemons {
+		fmt.Fprintln(c.Stdout, statusSafe(dc.line(now), 0))
+	}
 	if pid > 0 {
 		fmt.Fprintf(c.Stdout, "factory daemon: running (pid %d)\n", pid)
-		now := time.Now()
 		for _, h := range holds {
-			fmt.Fprintf(c.Stdout, "held: %s: %s (since %s)\n", h.Kind, h.Reason, inspClock(now, h.Since))
+			if factoryHoldShown(h) {
+				fmt.Fprintf(c.Stdout, "held: %s: %s (since %s)\n", h.Kind, h.Reason, inspClock(now, h.Since))
+			}
 		}
 		for _, w := range work {
 			fmt.Fprintf(c.Stdout, "in flight: %s (since %s)\n", w.What, inspClock(now, w.Since))

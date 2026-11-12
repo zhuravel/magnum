@@ -11,35 +11,48 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/factory"
+	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
 const (
-	pauseUsage  = "pause [--for 2h | --until 15:30] [--reason text | reason…]"
-	resumeUsage = "resume [--tool <kind>|all] [--watch owner]"
+	pauseUsage  = "pause [--review] [--factory] [--for 2h | --until 15:30] [--reason text | reason…]"
+	resumeUsage = "resume [--review] [--factory] | resume [--tool <kind>|all] [--watch owner]"
 )
 
 type pauseOpts struct {
 	dur    time.Duration
 	until  string
 	reason string
+	scope  controlScope
 }
 
 func newPauseCmd(c *Context) *cobra.Command {
 	var o pauseOpts
-	cmd := newCommand(groupAct, pauseUsage, "pause automatic reviews (running rounds finish; reviews you ask for still run)",
-		"Pause automatic reviews: running rounds finish and no automatic round starts, while a review you ask for "+
+	cmd := newCommand(groupAct, pauseUsage, "pause new automatic work on both daemons (what runs finishes; what you ask for still runs)",
+		"Pause new automatic work on the review daemon and the factory daemon (the factory only while its launchd job is "+
+			"installed); --review or --factory narrows it to one. It waits for nothing: what runs finishes. "+
+			"Review: no automatic round starts, while a review you ask for "+
 			"(`magnum review`, the board's r/R/i, the picker) still runs. Under autofix = \"open\" it also holds the fix "+
 			"loops the look would start (a loop that runs goes on, and `magnum fix` or the board's f still starts one), and "+
-			"a review it holds is not late (magnum_late_after counts from its end). The pause lasts until `magnum resume`, "+
-			"for --for, or until --until (a local time like 15:30 or an RFC3339 timestamp); --reason, or the words "+
+			"a review it holds is not late (magnum_late_after counts from its end). "+
+			"Factory: no launch of a stage's roles, claim of a copy, local review round, check or QA run starts, while your "+
+			"`magnum factory start` queues its task and your answers, retries, talks and pushes run; the factory's pause is "+
+			"pause.json beside its drain.json, and its screen and `magnum factory status` show it. "+
+			"The pause lasts until `magnum resume`, "+
+			"for --for, or until --until (a local time like 15:30 or an RFC3339 timestamp), across restarts and reboots; "+
+			"--reason, or the words "+
 			"after `pause`, say why and show in `magnum status` (a word that reads as a duration is refused: use "+
-			"--for). It is recorded in the registry, so it applies even when no daemon runs yet.",
+			"--for). It is recorded in the review registry and the factory's file, so it applies even when no daemon runs "+
+			"yet. A factory daemon of an older build does not know its pause: the command says to restart it on this build "+
+			"first and pauses nothing. `magnum drain` also holds what you ask for and waits for the work in flight.",
 		func(pos []string) int { return runPause(c, o, pos) })
 	fs := cmd.Flags()
 	fs.DurationVar(&o.dur, "for", 0, "pause for this long (default: until magnum resume)")
 	fs.StringVar(&o.until, "until", "", "pause until this local time (15:30) or RFC3339 timestamp")
 	fs.StringVar(&o.reason, "reason", "", "why (shown in magnum status)")
+	addScopeFlags(cmd, &o.scope)
 	return cmd
 }
 
@@ -92,6 +105,81 @@ func pauseMain(ctx context.Context, c *Context, d *actDeps, o pauseOpts) int {
 		}
 		until = t
 	}
+	sc := o.scope.resolve(c)
+	if !sc.factory {
+		return pauseReview(ctx, c, d, o, now, until)
+	}
+	out := controlOut{c: c, cmd: "pause", both: sc.both()}
+	fpid, err := controlSys.FactoryPID(ctx, c.Layout)
+	if err != nil {
+		fmt.Fprintf(c.Stderr, "magnum pause: warning: %v\n", err)
+	}
+	if fpid > 0 && !factoryKnowsControls(c.Layout, fpid) {
+		out.fail(daemonFactory, oldBuildText(daemonFactory, fpid, "`magnum pause`"))
+		if sc.review {
+			out.fail(daemonReview, "left as it was: nothing is paused")
+		}
+		return 1
+	}
+	lift, code := pauseFactory(c, out, o, now, until, fpid)
+	if code != 0 || !sc.review {
+		if code != 0 && sc.review {
+			out.fail(daemonReview, "left as it was: nothing is paused")
+		}
+		return code
+	}
+	rc := *c
+	rc.Stdout, rc.Stderr = prefixLines(c.Stdout, daemonReview+": "), prefixLines(c.Stderr, daemonReview+": ")
+	if code := pauseReview(ctx, &rc, d, o, now, until); code != 0 {
+		if lift() {
+			out.fail(daemonFactory, "its pause is lifted again: the review daemon's failed")
+		}
+		return code
+	}
+	return 0
+}
+
+// pauseFactory writes the factory's pause (pause.json): a pause renewed
+// while it holds keeps its start. It wakes the running factory daemon
+// (fpid), which holds the pause at its next tick, and returns the lift of
+// what it wrote: only a pause it wrote where none was, and only while the
+// file still holds it (true when it lifted it).
+func pauseFactory(c *Context, out controlOut, o pauseOpts, now, until time.Time, fpid int) (lift func() bool, code int) {
+	none := func() bool { return false }
+	l := c.Layout
+	prev, err := factory.ReadPause(l)
+	if err != nil {
+		out.fail(daemonFactory, fmt.Sprintf("cannot read %s: %v", inspTilde(l.FactoryPause()), err))
+		return none, 1
+	}
+	p := factory.Pause{Generation: now.UnixNano(), Since: now, Until: until, Reason: actClean(o.reason)}
+	if old, ok := factory.ParsePause(prev); ok {
+		p.Since = old.Since
+	}
+	value := p.Value()
+	if err := factory.WritePause(l, value); err != nil {
+		out.fail(daemonFactory, fmt.Sprintf("cannot write %s: %v", inspTilde(l.FactoryPause()), err))
+		return none, 1
+	}
+	out.say(daemonFactory, p.Words()+": no launch, claim, local review round, check or QA run starts; your start, answer, retry, "+
+		"talk and push still run; `magnum resume` lifts it")
+	if fpid > 0 {
+		_, _ = controlSys.FactoryKick(l)
+	} else {
+		out.say(daemonFactory, "no factory daemon is running; the pause applies when it starts")
+	}
+	return func() bool {
+		if prev != "" {
+			return false
+		}
+		cur, err := factory.ReadPause(l)
+		return err == nil && cur == value && factory.LiftPause(l, value) == nil
+	}, 0
+}
+
+// pauseReview pauses the review daemon's automatic reviews: through its
+// request handler while it runs, else in the registry.
+func pauseReview(ctx context.Context, c *Context, d *actDeps, o pauseOpts, now, until time.Time) int {
 	msg := "paused automation"
 	if !until.IsZero() {
 		msg += " until " + until.Local().Format("Jan 2 15:04")
@@ -198,13 +286,19 @@ func pauseParseUntil(s string, now time.Time) (time.Time, error) {
 
 type resumeOpts struct {
 	tool, watch string
+	scope       controlScope
 }
 
 func newResumeCmd(c *Context) *cobra.Command {
 	var o resumeOpts
-	cmd := newCommand(groupAct, resumeUsage, "resume automation, or lift an agent kind's or a watch's pause",
-		"Resume automation after `magnum pause` (and lift an infrastructure pause, whose probe would otherwise "+
-			"lift it). --tool lifts a usage-limit, login, Codex-budget or hooks-review pause of an agent kind (codex, claude or "+
+	cmd := newCommand(groupAct, resumeUsage, "lift the pause and the drain on both daemons, or an agent kind's or a watch's pause",
+		"Resume new work on the review daemon and the factory daemon (the factory only while its launchd job is "+
+			"installed; --review or --factory narrows it): lift `magnum pause` and the drain for a reboot (`magnum drain`) "+
+			"on each, and on the review daemon the infrastructure pause too (whose probe would otherwise lift it). "+
+			"A `magnum drain` that still waits says the drain was lifted and exits 0. It never lifts a restart's drain, "+
+			"an agent kind's or a watch's pause, and never touches mutes, snoozes or pins: when one of them still holds "+
+			"work it says so, with its own remedy. "+
+			"--tool lifts a usage-limit, login, Codex-budget or hooks-review pause of an agent kind (codex, claude or "+
 			"any [kinds.<name>]; `magnum roles --kinds` lists them) or of all, and forgets the kind's per-model "+
 			"limits, so its sessions go back to their roles' models. For codex (or all), with Codex's last reading at "+
 			"either [usage] cap, a Codex-budget pause or not, it also overrules that reading, which is stale after a "+
@@ -218,6 +312,7 @@ func newResumeCmd(c *Context) *cobra.Command {
 	fs.StringVar(&o.watch, "watch", "", "lift the identity-leak pause of a watch owner")
 	_ = cmd.RegisterFlagCompletionFunc("tool", completeFlag(c.completeKinds))
 	_ = cmd.RegisterFlagCompletionFunc("watch", completeFlag(c.completeWatches))
+	addScopeFlags(cmd, &o.scope)
 	return cmd
 }
 
@@ -227,6 +322,9 @@ func runResume(c *Context, o resumeOpts, pos []string) int {
 	}
 	if o.tool != "" && o.watch != "" {
 		return actUsage(c, "resume", "use either --tool or --watch", resumeUsage)
+	}
+	if (o.tool != "" || o.watch != "") && o.scope.factory {
+		return actUsage(c, "resume", "--tool and --watch lift the review daemon's pauses: drop --factory", resumeUsage)
 	}
 	d, err := actNewDeps(c, actFull)
 	if err != nil {
@@ -252,6 +350,158 @@ func resumeToolRefusal(cfg *config.Config, tool string) string {
 }
 
 func resumeMain(ctx context.Context, c *Context, d *actDeps, o resumeOpts) int {
+	if o.tool != "" || o.watch != "" {
+		return resumeReview(ctx, c, d, o)
+	}
+	sc := o.scope.resolve(c)
+	out := controlOut{c: c, cmd: "resume", both: sc.both()}
+	code := 0
+	if sc.factory {
+		code = resumeFactory(ctx, c, out)
+	}
+	if sc.review {
+		rc := c
+		if sc.both() {
+			cp := *c
+			cp.Stdout, cp.Stderr = prefixLines(c.Stdout, daemonReview+": "), prefixLines(c.Stderr, daemonReview+": ")
+			rc = &cp
+		}
+		code = max(code, resumeReviewAll(ctx, rc, d))
+	}
+	return code
+}
+
+// resumeReviewAll lifts the review daemon's drain for a reboot and its
+// pause (resumeReview), and names the holds it leaves, each with its own
+// remedy.
+func resumeReviewAll(ctx context.Context, c *Context, d *actDeps) int {
+	lifted, err := liftReviewRebootDrain(ctx, d)
+	if err != nil {
+		return cmdFail(c, "resume", err)
+	}
+	offline := controlReviewPID(c, d) == 0
+	code := resumeReview(ctx, c, d, resumeOpts{})
+	if lifted {
+		fmt.Fprintln(c.Stdout, "lifted the drain for a reboot: new work starts again")
+	}
+	for _, s := range reviewStillHeld(ctx, d, offline) {
+		fmt.Fprintln(c.Stdout, "still held: "+s)
+	}
+	return code
+}
+
+// liftReviewRebootDrain deletes the review daemon's drain for a reboot and
+// its acknowledgement (the daemon says the lift in its event); false when
+// none held.
+func liftReviewRebootDrain(ctx context.Context, d *actDeps) (bool, error) {
+	v, ok, err := d.Store.GetKV(ctx, engine.KVDaemonRebootDrain)
+	if err != nil || !ok || v == "" {
+		return false, err
+	}
+	if _, err := d.Store.DeleteKVIf(ctx, engine.KVDaemonRebootDrain, v); err != nil {
+		return false, err
+	}
+	return true, d.Store.DeleteKV(ctx, engine.KVDaemonDrainAck)
+}
+
+// reviewStillHeld are the review daemon's holds a plain resume leaves, each
+// with its remedy: a restart's drain, a watch's identity-leak pause, and,
+// with no daemon to name them in its answer (offline), an agent kind's
+// pause.
+func reviewStillHeld(ctx context.Context, d *actDeps, offline bool) []string {
+	var out []string
+	if v, ok, err := d.Store.GetKV(ctx, engine.KVDaemonDraining); err == nil && ok && v != "" {
+		out = append(out, "a drain for a restart (`magnum daemon-restart --drain`): it ends with that restart, or ctrl+c in its terminal")
+	}
+	for _, w := range d.Cfg.Watches {
+		if v, ok, err := d.Store.GetKV(ctx, store.KVWatchPaused(w.Owner)); err == nil && ok && v != "" {
+			out = append(out, fmt.Sprintf("watch %s is paused (identity leak): `magnum resume --watch %s`", w.Owner, w.Owner))
+		}
+	}
+	if !offline {
+		return out
+	}
+	now := d.now()
+	for _, kind := range rolesAllKinds(d.Cfg) {
+		v, ok, err := d.Store.GetKV(ctx, store.KVToolPausedUntil(kind))
+		if err != nil || !ok {
+			continue
+		}
+		if until, err := store.ParseTime(v); err == nil && now.Before(until) {
+			reason, _, _ := d.Store.GetKV(ctx, store.KVToolPausedReason(kind))
+			out = append(out, fmt.Sprintf("%s is paused (%s) until %s: `magnum resume --tool %s`", kind, reason,
+				inspClock(now, until), kind))
+		}
+	}
+	return out
+}
+
+// resumeFactory lifts the factory's pause and its drain for a reboot (their
+// files), wakes the running factory daemon, and names the holds it leaves:
+// a restart's drain and the machine's holds the daemon keeps.
+func resumeFactory(ctx context.Context, c *Context, out controlOut) int {
+	l := c.Layout
+	var lifted []string
+	for _, f := range []struct {
+		what string
+		read func(paths.Layout) (string, error)
+		lift func(paths.Layout, string) error
+		path string
+	}{
+		{"the pause", factory.ReadPause, factory.LiftPause, l.FactoryPause()},
+		{"the drain for a reboot", factory.ReadRebootDrain, factory.LiftRebootDrain, l.FactoryRebootDrain()},
+	} {
+		v, err := f.read(l)
+		if err == nil && v != "" {
+			err = f.lift(l, "")
+			lifted = append(lifted, f.what)
+		}
+		if err != nil {
+			out.fail(daemonFactory, fmt.Sprintf("cannot lift %s (%s: %v)", f.what, inspTilde(f.path), err))
+			return 1
+		}
+	}
+	pid, _ := controlSys.FactoryPID(ctx, l)
+	if pid > 0 {
+		_, _ = controlSys.FactoryKick(l)
+	}
+	if len(lifted) == 0 {
+		out.say(daemonFactory, "was not paused or draining")
+	} else {
+		out.say(daemonFactory, "lifted "+strings.Join(lifted, " and ")+": new work starts again")
+	}
+	for _, s := range factoryStillHeld(l, pid) {
+		out.say(daemonFactory, "still held: "+s)
+	}
+	return 0
+}
+
+// factoryStillHeld are the factory's holds a resume leaves, with their
+// remedies: a restart's drain, and the holds of the machine the running
+// daemon pid keeps (holds.json).
+func factoryStillHeld(l paths.Layout, pid int) []string {
+	var out []string
+	if v, _ := factory.ReadDrain(l); v != "" {
+		out = append(out, "a drain for a restart (`magnum factory install --drain`): it ends with that restart, or ctrl+c in its terminal")
+	}
+	if pid <= 0 {
+		return out
+	}
+	hs, _ := factory.ReadHolds(l)
+	for _, h := range hs {
+		switch h.Kind {
+		case factory.HoldHerdr, factory.HoldInfra:
+			out = append(out, h.Kind+": "+h.Reason+": the factory tries again by itself")
+		case factory.HoldDisk, factory.HoldMemory:
+			out = append(out, h.Kind+": "+h.Reason+": it lifts once the Mac has room")
+		}
+	}
+	return out
+}
+
+// resumeReview is the review daemon's resume of o: an agent kind's pause
+// (--tool), a watch's (--watch), or its pause and its infrastructure pause.
+func resumeReview(ctx context.Context, c *Context, d *actDeps, o resumeOpts) int {
 	if pid := pauseDaemonPID(c, d); pid > 0 {
 		return pauseRequest(ctx, c, d, "resume", engine.ReqResume, engine.PausePayload{Tool: o.tool, Watch: o.watch}, "")
 	}

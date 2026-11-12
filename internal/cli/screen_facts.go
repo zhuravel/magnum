@@ -43,6 +43,8 @@ func screenFacts(ctx context.Context, d statusDeps) tui.DaemonFacts {
 	if r.Daemon.DrainingSince != nil {
 		f.Draining, f.DrainerPID = true, r.Daemon.DrainerPID
 	}
+	d.Factory = screenFactoryControl(d.Layout)      // its pidfile and a signal 0: no ps with every refresh
+	f.Controls = screenControlFacts(ctx, d, r, now) // status_daemons.go: a drain for a reboot, the factory's pause
 	f.PollsFailing = screenPollsFailing(r.Daemon.PollsFailing)
 	if v, _ := kv.get(store.KVDaemonPaused); v == "1" {
 		f.Paused, f.Held = true, store.Deref(kv.getInt(engine.KVDaemonPausedHeld))

@@ -74,6 +74,7 @@ func statusGather(ctx context.Context, d statusDeps, o statusOptions) (statusRep
 		return r, err
 	}
 	statusGatherPins(ctx, d, &r)
+	statusGatherControls(ctx, d, &r) // status_daemons.go: each daemon's line, the review's from the daemon block
 	if o.Ref != "" {
 		det, err := statusGatherDetail(ctx, d, r, o.Ref, now)
 		if err != nil {

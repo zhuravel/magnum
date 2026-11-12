@@ -130,7 +130,7 @@ func newStatusDeps(a *app.App, version string) statusDeps {
 		},
 		DaemonPID: func() (int, error) { return engine.DaemonPID(a.Layout) },
 		DiskFree:  inspDiskFree, DiskPath: inspHome(), Now: inspNow,
-		Version: version,
+		Version: version, Factory: statusFactoryControl(a.Layout),
 	}
 	if a.Yours != nil {
 		d.Yours = a.Yours
@@ -173,6 +173,9 @@ type statusDeps struct {
 	// DrainerAlive reports whether a drain's drainer still runs (nil =
 	// engine.DrainerAlive).
 	DrainerAlive func(pid int) bool
+	// Factory reads the factory daemon's line (status_daemons.go), false
+	// when it is not shown; nil shows none.
+	Factory func(ctx context.Context) (daemonControl, bool)
 }
 
 type statusOptions struct {
@@ -194,6 +197,9 @@ type statusReport struct {
 	Retro       *statusRetro      `json:"retro,omitempty"`
 	Learn       *statusLearn      `json:"learn,omitempty"`
 	Notes       *statusNotes      `json:"notes,omitempty"`
+	// Daemons are the review daemon's and the factory daemon's lines: pid,
+	// build, `magnum pause` and a drain (status_daemons.go).
+	Daemons []daemonControl `json:"daemons"`
 	// AutoApproved counts the approvals magnum posted as the operator
 	// ([[watch]] auto_approve); nil when no watch auto-approves and none
 	// stands or was posted today.

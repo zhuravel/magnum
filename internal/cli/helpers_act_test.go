@@ -218,8 +218,18 @@ func newActHarnessOn(t *testing.T, open func(testing.TB, string) *store.Store) *
 	}
 	old := actNewDeps
 	actNewDeps = func(*Context, actMode) (*actDeps, error) { return h.d, nil }
+	// No factory daemon is installed or runs (control.go), whatever the Mac
+	// that runs the test has.
+	oldControl := controlSys
+	controlSys = controlSeams{
+		FactoryInstalled: func(paths.Layout) bool { return false },
+		FactoryPID:       func(context.Context, paths.Layout) (int, error) { return 0, nil },
+		FactoryAlive:     func(paths.Layout) int { return 0 },
+		FactoryKick:      func(paths.Layout) (int, error) { return 0, nil },
+		BootTime:         func(context.Context) (time.Time, error) { return time.Time{}, errors.New("no boot time in a test") },
+	}
 	t.Cleanup(func() {
-		actNewDeps = old
+		actNewDeps, controlSys = old, oldControl
 		_ = st.Close()
 	})
 	return h
