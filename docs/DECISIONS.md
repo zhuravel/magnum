@@ -25913,3 +25913,18 @@ versions, newest last. People add their entries to the sections above, never her
   lines as unused that a reference search does not prove. The checks sit in the uncapped prompts, the
   priority rule in the skill. To make room the skill drops 'the worktree path', 'their', 'exactly', 'the
   wrong language version' and 'gem'; no rule was dropped.
+- **The judge runs the break-each-guard mutation on a tenant filter, a raising lookup and a recompute
+  after a create as it does on money guards, checks a paginated query's plan per filter shape and ORDER
+  BY column, and ranks a race that needs a deliberate double start of a one-off manual job P3**
+  (2026-11-12, the skill editor's proposal for m951, m950, m944, m943, m938, m937, m928, m926, m911,
+  m910, m896, m894, m885, m882, m860, m818, m817, m816, m812, m809, m801, m673, m672, m548, m546, m502,
+  m222, d1345, d1305, d1270, d1228, d1192, d1188, d1178, d1114, d161, d157). The reviewers and the
+  judge's own pass look for eight more shapes: a data-fix script that leaves a cache stale, a duck-typed
+  call that does not fit a new record type in a shared serializer, a privileged-mode guard on one site
+  flag, an unattended agent tool set pairing page fetch with saved skills, a prompt date in the wrong
+  time zone, an example that pins no row order or one layout of a shared guard, a broad rescue that
+  hides the app's own bugs from the tracker, and anonymous classes in a subclass list. They also rank
+  three declined shapes P3 or drop them. Why: the misses were guards no example pins and queries nobody
+  planned; an earlier proposal's prompt shapes moved no replay, so those rules sit in the skill. To make
+  room the skill drops 'or skipped and why', 'the reproduction above', 'in plain English', 'Read every
+  report.', 'a deadlock' and three cross-references; no rule was dropped.
