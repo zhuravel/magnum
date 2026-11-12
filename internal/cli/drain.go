@@ -12,7 +12,10 @@ package cli
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"strings"
 	"time"
 
@@ -20,7 +23,6 @@ import (
 
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/factory"
-	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -350,7 +352,7 @@ func (t *drainTarget) state(ctx context.Context, gen int64) (drainState, drainSt
 	if pid == 0 {
 		return t.downState(ctx), drainGoesOn
 	}
-	if pid != t.pid {
+	if pid != t.pid || !t.knows { // a daemon writes its pidfile before its record of the controls: ask again
 		t.pid, t.knows = pid, t.knowsPID(ctx, pid)
 	}
 	if !t.knows {
@@ -525,14 +527,40 @@ func reviewTurnsDown(ctx context.Context, st *store.Store) ([]string, error) {
 	return out, nil
 }
 
-// factoryTurnsDown are the factory daemon's agents' turns in flight, from
-// its agents store opened read-only, while the daemon is down: "fx-writer
-// turn of task 7" (a task's row and its liaison's are numbered by the task).
-// No agents store yet is none.
+// factoryTurnsDown are the factory daemon's agents' turns in flight while
+// the daemon is down: from its agents store opened read-only ("fx-writer
+// turn of task 7": a task's row and its liaison's are numbered by the task),
+// and the work its record still names (a daemon that stopped cleanly
+// removed it; one that crashed left the agents of that work in herdr, a
+// local review round's in a scratch registry no read here reaches). Only a
+// store that does not exist is none: one that cannot be stat'ed or read is
+// an error, never safe.
 func factoryTurnsDown(ctx context.Context, l paths.Layout) ([]string, error) {
-	path := l.FactoryAgentsDB()
-	if !fsx.Exists(path) {
+	out, err := factoryStoreTurns(ctx, l.FactoryAgentsDB())
+	if err != nil {
+		return nil, err
+	}
+	rec, ok, err := factory.ReadWork(l)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		for _, w := range rec.Work {
+			if w.Kind != factory.WorkRepair {
+				out = append(out, w.What+" (in flight when the daemon stopped; its agents may still run)")
+			}
+		}
+	}
+	return out, nil
+}
+
+// factoryStoreTurns are the runs pending, submitted or working in the
+// factory's agents store at path; none when it does not exist.
+func factoryStoreTurns(ctx context.Context, path string) ([]string, error) {
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
+	} else if err != nil {
+		return nil, err
 	}
 	db, err := sql.Open("sqlite", registryReadOnlyDSN(path))
 	if err != nil {
@@ -541,7 +569,7 @@ func factoryTurnsDown(ctx context.Context, l paths.Layout) ([]string, error) {
 	defer db.Close()
 	ctx, cancel := context.WithTimeout(ctx, completeTimeout)
 	defer cancel()
-	rows, err := db.QueryContext(ctx, `SELECT r.role, p.number FROM runs r JOIN prs p ON p.id = r.pr_id
+	rows, err := db.QueryContext(ctx, `SELECT r.role, p.number FROM runs r LEFT JOIN prs p ON p.id = r.pr_id
 		WHERE r.state IN (?, ?, ?) ORDER BY r.created_at`, store.RunPending, store.RunSubmitted, store.RunWorking)
 	if err != nil {
 		return nil, err
@@ -550,11 +578,15 @@ func factoryTurnsDown(ctx context.Context, l paths.Layout) ([]string, error) {
 	var out []string
 	for rows.Next() {
 		var role string
-		var n int
+		var n sql.NullInt64
 		if err := rows.Scan(&role, &n); err != nil {
 			return nil, err
 		}
-		out = append(out, fmt.Sprintf("%s turn of task %d", role, n))
+		task := "a task"
+		if n.Valid {
+			task = fmt.Sprintf("task %d", n.Int64)
+		}
+		out = append(out, role+" turn of "+task)
 	}
 	return out, rows.Err()
 }

@@ -206,6 +206,10 @@ type daemonControl struct {
 	Build   string        `json:"build,omitempty"`
 	Pause   *controlPause `json:"pause,omitempty"`
 	Drain   *controlDrain `json:"drain,omitempty"`
+	// OldBuild: the daemon that runs is of a build that does not know the
+	// controls (no record of them for its pid), so it ignores the factory's
+	// pause and a drain for a reboot.
+	OldBuild bool `json:"old_build,omitempty"`
 }
 
 // controlPause is a pause in force: since when, until when (nil: until
@@ -266,6 +270,8 @@ func reviewControlOf(get func(key string) (string, bool), running bool, pid int)
 	}
 	reboot, _ := get(engine.KVDaemonRebootDrain)
 	ack, _ := get(engine.KVDaemonDrainAck)
+	controls, _ := get(engine.KVDaemonControls)
+	dc.OldBuild = running && pid > 0 && !engine.KnowsControls(controls, pid, engine.ControlsVersion)
 	if dr := rebootDrainOf(reboot, ack, pid); dr != nil {
 		dc.Drain = dr
 	} else if v, ok := get(engine.KVDaemonDraining); ok {
@@ -282,6 +288,7 @@ func factoryControlOf(l paths.Layout, pid int) daemonControl {
 	dc := daemonControl{Name: daemonFactory, Running: pid > 0, PID: pid}
 	rec, ok, err := factory.ReadWork(l)
 	known := err == nil && ok && rec.PID == pid
+	dc.OldBuild = pid > 0 && !(known && rec.Controls >= engine.ControlsVersion)
 	if known {
 		dc.Build = rec.Build
 	}
@@ -370,7 +377,21 @@ func (dc daemonControl) holdText(now time.Time, long bool) string {
 		}
 		parts = append(parts, s+": magnum resume")
 	}
+	if dc.ignored() {
+		parts = append(parts, oldBuildText(dc.Name, dc.PID, "the pause and the drain for a reboot, so it holds neither"))
+	}
 	return actClean(strings.Join(parts, " · "))
+}
+
+// ignored reports whether dc's daemon runs a build that ignores a hold the
+// line names: the factory's pause or a drain for a reboot on either daemon
+// (the review daemon's pause is older than the controls).
+func (dc daemonControl) ignored() bool {
+	if !dc.OldBuild {
+		return false
+	}
+	reboot := dc.Drain != nil && dc.Drain.For == drainForReboot
+	return reboot || (dc.Name == daemonFactory && dc.Pause != nil)
 }
 
 // line is dc as `magnum status` and `magnum factory status` print it:
