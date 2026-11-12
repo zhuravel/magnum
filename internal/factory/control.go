@@ -36,11 +36,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // The holds of the controls (Hold.Kind): `magnum pause`'s and `magnum
@@ -376,7 +378,13 @@ func (e *Engine) tendRebootDrain(ctx context.Context, tasks []registry.Task) {
 	case st.quietSince.IsZero():
 		st.quietSince = now
 	}
-	parked := quiet && e.parkForRebootDrain(ctx, tasks)
+	parked := false
+	if quiet {
+		var busy []string
+		if parked, busy = e.parkForRebootDrain(ctx, tasks); len(busy) > 0 { // at work after all: a reboot cuts it
+			quiet, work, st.quietSince = false, busy, time.Time{}
+		}
+	}
 	if parked && !st.done {
 		st.done = true
 		e.event(ctx, 0, "drain", registry.PhaseInfo, "drained for a reboot: nothing runs and the idle agents are parked")
@@ -401,6 +409,21 @@ func (e *Engine) setDrainAck(a *engine.DrainAck) {
 	defer e.workMu.Unlock()
 	e.ctl.ack = a
 	e.saveWorkLocked()
+}
+
+// rebootParker parks a task for a drain for a reboot, a liaison at work
+// refusing it as busy (runtime.Runtime's ParkForReboot); a runtime without it
+// parks with Park.
+type rebootParker interface {
+	ParkForReboot(ctx context.Context, t registry.Task) error
+}
+
+// parkForReboot is the drain's park of task t (rebootParker, else Park).
+func (e *Engine) parkForReboot(ctx context.Context, t registry.Task) error {
+	if p, ok := e.d.Runtime.(rebootParker); ok {
+		return p.ParkForReboot(ctx, t)
+	}
+	return e.d.Runtime.Park(ctx, t)
 }
 
 // liveReader says whether a task has a live agent (runtime.Runtime's
@@ -480,14 +503,19 @@ func (e *Engine) rebootDrainWork(ctx context.Context, tasks []registry.Task) []s
 
 // parkForRebootDrain parks the idle agents of every task that has live
 // ones (parkable) once the daemon is quiet under the drain, each task once
-// per drain. A park that fails is tried again at the next tick; after
-// parkTries failures in a row the drain leaves the task as it is, says so
-// once (the reboot closes its idle panes, and the factory brings its agents
-// back after it), names it in the acknowledgement's Left, and goes on. It
-// reports whether every park went through or was left.
-func (e *Engine) parkForRebootDrain(ctx context.Context, tasks []registry.Task) bool {
+// per drain, and returns the tasks whose park found an agent at work (an
+// agents.ErrBusy: you typed into its pane, a shell runs a build, its
+// liaison's turn is in flight), each as work ("PR-12360 at work in herdr
+// (…)"): such a task is tried again at every tick and never left, since
+// the reboot would cut that work. Any other failure is tried again at the
+// next tick; after parkTries of them in a row the drain leaves the task as
+// it is, says so once (the reboot closes its idle panes, and the factory
+// brings its agents back after it), names it in the acknowledgement's
+// Left, and goes on. parked reports whether every park went through or was
+// left.
+func (e *Engine) parkForRebootDrain(ctx context.Context, tasks []registry.Task) (parked bool, busy []string) {
 	if e.d.Runtime == nil {
-		return true
+		return true, nil
 	}
 	st := &e.ctl
 	all := true
@@ -495,9 +523,14 @@ func (e *Engine) parkForRebootDrain(ctx context.Context, tasks []registry.Task) 
 		if st.parked[t.ID] || st.left[t.ID] != "" || !e.parkable(ctx, t) {
 			continue
 		}
-		err := e.d.Runtime.Park(ctx, t)
+		err := e.parkForReboot(ctx, t)
 		if err == nil {
 			st.parked[t.ID] = true
+			continue
+		}
+		if errors.Is(err, agents.ErrBusy) {
+			busy = append(busy, TaskKey(t)+" at work in herdr ("+textx.FirstLine(err.Error())+")")
+			all = false
 			continue
 		}
 		st.parkFails[t.ID]++
@@ -511,5 +544,5 @@ func (e *Engine) parkForRebootDrain(ctx context.Context, tasks []registry.Task) 
 		st.left[t.ID] = why
 		e.event(ctx, t.ID, "park", registry.PhaseFail, "left for the drain for a reboot: "+why)
 	}
-	return all
+	return all, busy
 }

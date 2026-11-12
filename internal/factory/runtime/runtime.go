@@ -1264,7 +1264,17 @@ func (r *Runtime) endFacts(ctx context.Context, rr *registry.RoleRun, run store.
 // (parkLiaison): their conversations stay resumable, their panes are
 // released. A run in flight or an agent at work on the task's row refuses
 // with agents.ErrBusy; the liaison never stops the task's own park.
-func (r *Runtime) Park(ctx context.Context, t registry.Task) error {
+func (r *Runtime) Park(ctx context.Context, t registry.Task) error { return r.park(ctx, t, false) }
+
+// ParkForReboot is Park for a drain for a reboot (drain.go): a liaison at
+// work refuses it with agents.ErrBusy too, since the reboot would cut its
+// turn, where Park leaves such a liaison live and goes through.
+func (r *Runtime) ParkForReboot(ctx context.Context, t registry.Task) error {
+	return r.park(ctx, t, true)
+}
+
+// park is Park; strict refuses a liaison at work (ParkForReboot).
+func (r *Runtime) park(ctx context.Context, t registry.Task, strict bool) error {
 	var errs []error
 	pr, err := r.ownerRow(ctx, t.ID)
 	switch {
@@ -1276,7 +1286,7 @@ func (r *Runtime) Park(ctx context.Context, t registry.Task) error {
 			errs = append(errs, err)
 		}
 	}
-	left, err := r.parkLiaison(ctx, t)
+	left, err := r.parkLiaison(ctx, t, strict)
 	if left != "" {
 		r.log.Info("left a task's liaison live: "+left, "task", t.ID)
 	}
@@ -1295,8 +1305,9 @@ func (r *Runtime) Park(ctx context.Context, t registry.Task) error {
 // task that ended, or that was published while it was live, is parked by
 // a later observe pass once it may be (parkLeftLiaisons), and any other
 // one by the next park, or you. A task you never talked about has no
-// liaison to park.
-func (r *Runtime) parkLiaison(ctx context.Context, t registry.Task) (left string, err error) {
+// liaison to park. strict (ParkForReboot) makes a liaison at work an
+// agents.ErrBusy, not one left.
+func (r *Runtime) parkLiaison(ctx context.Context, t registry.Task, strict bool) (left string, err error) {
 	tl := r.talkLock(t.ID)
 	if !tl.TryLock() {
 		return "a talk is starting it", nil
@@ -1314,6 +1325,9 @@ func (r *Runtime) parkLiaison(ctx context.Context, t registry.Task) (left string
 	}
 	err = r.mgr.Park(ctx, pr)
 	if errors.Is(err, agents.ErrBusy) {
+		if strict {
+			return "", fmt.Errorf("the liaison of %s: %w", taskKey(t), err)
+		}
 		return "it is at work (" + err.Error() + ")", nil
 	}
 	return "", err
@@ -1376,7 +1390,7 @@ func (r *Runtime) parkLeftLiaisons(ctx context.Context) {
 		if !owed || !idle || now.Before(r.cfg.Daemon.CooldownUntil(&since)) {
 			continue
 		}
-		switch left, err := r.parkLiaison(ctx, t); {
+		switch left, err := r.parkLiaison(ctx, t, false); {
 		case err != nil:
 			r.parkFailed(t, err)
 		case left == "":
