@@ -9,6 +9,9 @@ package factory
 
 import (
 	"fmt"
+	"os"
+	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode"
@@ -185,6 +188,28 @@ var lintInputRe = regexp.MustCompile(`(?i)(?:^|/)(?:Gemfile(?:\.lock)?|gems\.(?:
 // the change's.
 var scriptDefRe = regexp.MustCompile(`(?:^|/)(?:package\.json|[Mm]akefile|GNUmakefile|Rakefile|Justfile|Taskfile\.ya?ml)$|(?:^|/)lib/tasks/|(?:^|/)bin/`)
 
+// missingRe is the command a shell found missing ("/bin/sh: eslnt: command
+// not found", "sh: 1: eslnt: not found").
+var missingRe = regexp.MustCompile(`([\w.+-]+): (?:command )?not found`)
+
+// definesMissing reports whether script file f (scriptDefRe) of the copy
+// defines or names the command crash c found missing: a bin/ file of its
+// name, or a file whose text names it (a package.json script, a Makefile's
+// recipe, a rake task). A missing command no changed file names is the
+// environment's.
+func definesMissing(c envCrash, f string) bool {
+	m := missingRe.FindStringSubmatch(c.line)
+	if m == nil {
+		return false
+	}
+	name := m[1]
+	if path.Base(f) == name {
+		return true
+	}
+	b, err := os.ReadFile(filepath.Join(c.copy, filepath.FromSlash(f)))
+	return err == nil && regexp.MustCompile(`(?:^|[^\w.-])`+regexp.QuoteMeta(name)+`(?:$|[^\w.-])`).Match(b)
+}
+
 // branchCaused are the files of the change (files, as the copy names them)
 // that crash c of a lint can come from: the lint's own script (its
 // command's first word), and, unless c's signature is the script's alone
@@ -193,7 +218,7 @@ var scriptDefRe = regexp.MustCompile(`(?:^|/)(?:package\.json|[Mm]akefile|GNUmak
 func branchCaused(c envCrash, stderr string, files []string) []string {
 	var out []string
 	for _, f := range files {
-		if f == firstWord(c.cmd) || c.sig.scriptOnly && scriptDefRe.MatchString(f) ||
+		if f == firstWord(c.cmd) || c.sig.scriptOnly && scriptDefRe.MatchString(f) && definesMissing(c, f) ||
 			!c.sig.scriptOnly && (lintInputRe.MatchString(f) || strings.Contains(stderr, f)) {
 			out = append(out, f)
 		}

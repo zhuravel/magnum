@@ -2,6 +2,8 @@ package factory
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -203,5 +205,80 @@ func TestALintErrorNamingAFileTheChangeDeletedIsTheChanges(t *testing.T) {
 	res, err := r.e.precheck(r.ctx, task, r.cp)
 	if err != nil || res.Passed || res.ForYou || res.fault != nil || !strings.Contains(res.Why, "README") {
 		t.Fatalf("precheck %+v, %v; want the writer's failure naming the deleted README", res, err)
+	}
+}
+
+// A Ruby warning a gem prints ("/gems/foo/lib/foo.rb:5: warning: …") is
+// no offense, nor is any offense in a file outside the copy: a lint that
+// exits 2 with such lines and an error names no offense, and goes the
+// no-offense way, never passing as "none on a changed line".
+func TestARubyWarningOfAGemIsNoOffense(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12606", "bug")
+	r.fix(task)
+	r.lintCrash = func([]string) string {
+		return "/usr/lib/ruby/gems/3.4.0/gems/foo-1.2/lib/foo.rb:5: warning: ostruct was loaded from the standard library\n" +
+			"Error: cannot load such file -- rubocop-foo\n"
+	}
+	if res, err := r.e.precheck(r.ctx, task, r.cp); err != nil || res.Passed {
+		t.Fatalf("precheck %+v, %v; want the lint's failure, never a pass on a gem's warning", res, err)
+	}
+}
+
+// RuboCop's fatal row (F: Lint/Syntax, a missing `end` named at the file's
+// last line) in a file the change touched is the writer's, whatever its line.
+func TestARuboCopFatalRowOfAChangedFileIsTheWriters(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12607", "bug")
+	r.fix(task)
+	r.lint = func([]string) string {
+		return "spec/models/credit_points_spec.rb:40:1: F: Lint/Syntax: unexpected token $end\n"
+	}
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil || res.Passed || !strings.Contains(res.Why, "1 offense on the changed lines") {
+		t.Fatalf("precheck %+v, %v; want the writer's failure on the changed file", res, err)
+	}
+}
+
+// eslint's 0:0 warning of a changed file ("File ignored because no
+// matching configuration was supplied") is no fatal error: the lint passes
+// it as an offense on no changed line.
+func TestALintsZeroZeroWarningIsNoFatalError(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12608", "bug")
+	r.fix(task)
+	r.lint = func([]string) string {
+		return r.copyDir + "/spec/models/credit_points_spec.rb\n  0:0  warning  File ignored because no matching configuration was " +
+			"supplied\n\n\u2716 1 problem (0 errors, 1 warning)\n"
+	}
+	if res, err := r.e.precheck(r.ctx, task, r.cp); err != nil || !res.Passed {
+		t.Fatalf("precheck %+v, %v; want it passed: a warning is no fatal error", res, err)
+	}
+}
+
+// A script-defining file the change touched is a missing command's cause
+// only when it defines or names that command: a Makefile whose recipe runs
+// it, a bin/ file of its name; one that names it not is the environment's.
+func TestAScriptFileCausesOnlyTheMissingCommandItNames(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, text string) {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, rel), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("Makefile", "lint:\n\teslnt app\n")
+	write("lib/tasks/cleanup.rake", "task :cleanup do\nend\n")
+	crash := envCrash{cmd: "make lint {files}", copy: dir, line: "/bin/sh: eslnt: command not found",
+		sig: envSignature{scriptOnly: true, lacks: "a command"}}
+	if got := branchCaused(crash, crash.line, []string{"Makefile", "lib/tasks/cleanup.rake", "bin/eslnt"}); !slices.Equal(got,
+		[]string{"Makefile", "bin/eslnt"}) {
+		t.Fatalf("branchCaused = %q; want the Makefile that runs eslnt and bin/eslnt, never the rake task", got)
+	}
+	crash.line = "/bin/sh: shellcheck: command not found"
+	if got := branchCaused(crash, crash.line, []string{"Makefile", "lib/tasks/cleanup.rake"}); len(got) != 0 {
+		t.Fatalf("branchCaused = %q for a command no changed file names; want none", got)
 	}
 }

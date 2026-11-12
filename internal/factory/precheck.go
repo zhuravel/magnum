@@ -985,10 +985,13 @@ func (p *precheckRun) lintOnce(cmd, script string, files []string, changed map[s
 		if orphans { // rows of no file: an output the factory cannot read, the writer's whole, never filtered
 			break
 		}
-		r.named++
 		file := strings.TrimPrefix(strings.TrimPrefix(o.file, p.c.Path+"/"), "./")
+		if filepath.IsAbs(file) && !slices.Contains(files, file) { // outside the copy (a gem's line): no offense of the change's files
+			continue
+		}
+		r.named++
 		_, touched := changed[file]
-		if changed[file][o.line] || touched && (o.line == 0 || strings.Contains(o.text, "Parsing error")) { // a whole file's fatal error
+		if changed[file][o.line] || touched && fatalRow(o) { // a whole file's fatal error, whatever its line
 			r.mine = append(r.mine, scrub.Secrets(o.text)) // read from the whole output, which is no scrubbed copy
 		}
 	}
@@ -1012,6 +1015,10 @@ type namedOffense struct {
 	line int
 	text string
 }
+
+// rubyWarningRe is a warning Ruby prints for a file it loads
+// ("/gems/foo/lib/foo.rb:5: warning: ostruct was loaded …"), no offense.
+var rubyWarningRe = regexp.MustCompile(`^\S+:\d+: warning: `)
 
 // lintRowRe is a row of a lint's report under its file's line: eslint's
 // stylish and stylelint's "  1:3  ✖  Empty block  block-no-empty".
@@ -1038,6 +1045,9 @@ func namedOffenses(output string) (out []namedOffense, orphans bool) {
 			}
 			n, _ := strconv.Atoi(m[1])
 			out = append(out, namedOffense{file: file, line: n, text: file + ":" + trimmed})
+			continue
+		}
+		if rubyWarningRe.MatchString(trimmed) { // a Ruby warning a gem prints: noise, no offense
 			continue
 		}
 		if m := offenseRe.FindStringSubmatch(trimmed); m != nil && strings.Trim(m[1], "0123456789") != "" {
@@ -1861,4 +1871,25 @@ func signalExit(code int, sig syscall.Signal) int {
 		return 128 + int(sig)
 	}
 	return code
+}
+
+// rubocopFatalRe is RuboCop's fatal severity in an emacs row (" F: ").
+var rubocopFatalRe = regexp.MustCompile(`^\S+:\d+:\d+: F: `)
+
+// fatalRow reports whether offense o is a fatal error of its whole file,
+// whatever its line: eslint's "Parsing error" or fatal 0:0 error (never a
+// warning, never "File ignored …"), RuboCop's F severity or Lint/Syntax.
+func fatalRow(o namedOffense) bool {
+	switch {
+	case strings.Contains(o.text, "File ignored"):
+		return false
+	case strings.Contains(o.text, "Parsing error"), strings.Contains(o.text, "Lint/Syntax"), rubocopFatalRe.MatchString(o.text):
+		return true
+	}
+	if o.line != 0 {
+		return false
+	}
+	_, rest, _ := strings.Cut(o.text, ":")
+	fields := strings.Fields(rest)
+	return len(fields) > 1 && (fields[1] == "error" || fields[1] == "\u2716") // "0:0  error  …": a fatal error; a warning is none
 }
