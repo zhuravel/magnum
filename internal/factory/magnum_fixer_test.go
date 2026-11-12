@@ -186,7 +186,7 @@ func TestPRStatesNameAHeldMergesDiffFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v := views[refs[0]]; v.FixReport != diffOf(20) || v.FixNeeds != nil {
+	if v := views[refs[0]]; v.FixReport != diffOf(20) || v.HeldMerge != diffOf(20) || v.FixNeeds != nil {
 		t.Errorf("#20: report %q, needs %q, want %q alone", v.FixReport, v.FixNeeds, diffOf(20))
 	}
 	for _, ref := range refs[1:] {

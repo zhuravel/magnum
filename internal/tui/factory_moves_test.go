@@ -20,6 +20,7 @@ var factoryMoves = [][2]string{
 	{"b opens its CI", "b CI"},
 	{"b opens the threads", "b threads"},
 	{"e opens the report, b the PR", "e report · b PR"},
+	{"P pushes it, e the diff", "P push · e diff"},
 	{"r reviews it", "r review"},
 	{"f fixes, b opens it", "f fix · b PR"},
 	{"b opens it", "b PR"},

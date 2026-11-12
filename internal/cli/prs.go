@@ -403,7 +403,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 		required := map[string]store.RequiredChecks{} // per repository, for this load
 		ignored := map[string][]string{}              // per repository, for this load
 		trackers := map[string][]config.Tracker{}     // per repository, for this load
-		held := heldMergeDiffs(ctx, st, layout)       // held_merge.go: the merges magnum holds for your y
+		held := heldMergeIDs(ctx, st)                 // held_merge.go: the merges magnum holds for your y
 		out := make([]tui.PRBoardRow, 0, len(rows))
 		ids := make([]int64, 0, len(rows))
 		for _, r := range rows {
@@ -489,7 +489,9 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			}
 			row.Fixing, row.FixLoop, row.FixOff = boardFix(ctx, st, r.PRID)
 			row.Fixer = fixerLogin(cfg, full) // f's question names it
-			row.HeldMerge = held[r.PRID]      // e opens it, P pushes it
+			if held[r.PRID] {                 // e opens its diff, P pushes it
+				row.HeldMerge = heldMergeDiff(layout, r.Owner, r.Name, r.Number)
+			}
 			row.Whiteboard = boardWhiteboard(ctx, st, r.PRID)
 			if f, ok := codexFlagOf(ctx, st, r.PRID); ok { // codex_flag.go
 				row.CodexFlag, row.CodexFlagSentence = f.Short(), f.Sentence(actRefLabel(defaultRepo(cfg), full, r.Number))

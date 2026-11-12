@@ -271,7 +271,7 @@ func (e *Engine) pollRepo(ctx context.Context, w config.Watch, gh GitHub, rr git
 	// GitHub fields only from here on, and applyRadarPRs decides on the rows
 	// its upserts read.
 	awaited := e.awaitCIRuns(e.betweenCalls(ctx), w, full, rr.PRs, byNode, now) // fix_open_ci.go
-	held := e.heldMergesIn(ctx, full)                                           // fix_held_merge.go: their base's tip is in the Details alone
+	held := e.heldMergesIn(ctx, repo)                                           // fix_held_merge.go: their base's tip is in the Details alone
 	details, needed := e.fetchDetails(e.betweenCalls(ctx), gh, repo.ID, full, rr.PRs, byNode, withHeld(awaited, held))
 	errs, inRadar := e.applyRadarPRs(ctx, w, gh, repo, rr.PRs, byNode, details, needed, firstSync, now)
 

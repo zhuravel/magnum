@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -18,11 +20,12 @@ const (
 	heldMergeSHA = "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3"
 	// heldPlan is the daemon's plan of its push, and heldQuestion the
 	// y/N the command and the screens put.
-	heldPlan = "dry run: would merge the parent of talkable/talkable#5: magnum pushes claude-fix's merge of master at c0c0c0c into feature as " +
+	heldPlan = "dry run: would merge the parent of talkable/talkable#5: magnum pushes claude-fix's merge d3d3d3d of master at c0c0c0c into feature as " +
 		"fixer-app[bot] with the Workflows token; it changes .github/workflows/ci.yml and pronto.yml (held-merge.diff)"
-	heldQuestion = "Merge the parent of talkable/talkable#5: magnum pushes claude-fix's merge of master at c0c0c0c into feature as " +
+	heldQuestion = "Merge the parent of talkable/talkable#5: magnum pushes claude-fix's merge d3d3d3d of master at c0c0c0c into feature as " +
 		"fixer-app[bot] with the Workflows token; it changes .github/workflows/ci.yml and pronto.yml (held-merge.diff)?"
-	heldAnswer = "pushed claude-fix's merge of master at c0c0c0c into feature as fixer-app[bot] with the Workflows token: the head is d3d3d3d"
+	heldAnswer = "pushing claude-fix's merge d3d3d3d of master at c0c0c0c into feature as fixer-app[bot] with the Workflows token; " +
+		"`magnum abort talkable/talkable#5` stops it"
 )
 
 // heldAsked is what the plan of the held merge's push asks about: the
@@ -33,23 +36,24 @@ var heldAsked = engine.MergeAsked{Head: "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a
 // heldDaemon answers each pending request as the daemon does while it
 // holds a merge: a dry run with the plan of its push, the y's push with
 // heldAnswer.
-func (h *actHarness) heldDaemon() {
-	h.onSleep = func(h *actHarness) {
-		for _, r := range h.requests() {
-			if r.State != store.RequestPending {
-				continue
-			}
-			res := heldAnswer
-			if actDecode[engine.FixPayload](h.t, r.Payload).DryRun {
-				b, err := json.Marshal(engine.MergePlan{Ref: "talkable/talkable#5", Asked: heldAsked, Text: heldPlan})
-				if err != nil {
-					h.t.Fatal(err)
-				}
-				res = string(b) + "\n" + heldPlan
-			}
-			if err := h.st.CompleteRequest(h.ctx, r.ID, store.RequestDone, res); err != nil {
+func (h *actHarness) heldDaemon() { h.onSleep = (*actHarness).heldDaemonStep }
+
+// heldDaemonStep is heldDaemon's answer to the requests pending now.
+func (h *actHarness) heldDaemonStep() {
+	for _, r := range h.requests() {
+		if r.State != store.RequestPending {
+			continue
+		}
+		res := heldAnswer
+		if actDecode[engine.FixPayload](h.t, r.Payload).DryRun {
+			b, err := json.Marshal(engine.MergePlan{Ref: "talkable/talkable#5", Asked: heldAsked, Text: heldPlan})
+			if err != nil {
 				h.t.Fatal(err)
 			}
+			res = string(b) + "\n" + heldPlan
+		}
+		if err := h.st.CompleteRequest(h.ctx, r.ID, store.RequestDone, res); err != nil {
+			h.t.Fatal(err)
 		}
 	}
 }
@@ -112,18 +116,48 @@ func seedHeld(t *testing.T, h *actHarness, n int) store.PR {
 			t.Fatal(err)
 		}
 	}
+	writeHeldDiff(t, h.c.Layout, n)
 	return pr
+}
+
+// writeHeldDiff writes PR n's held-merge.diff, as the daemon does.
+func writeHeldDiff(t *testing.T, l paths.Layout, n int) {
+	t.Helper()
+	path := filepath.Join(l.PRReviews("talkable", "talkable", n), engine.HeldMergeFile)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("Held merge d3d3d3d…\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // The board's row of a PR whose merge magnum holds for your y names its
 // held-merge.diff in magnum's report directory of the PR (never the path
 // the registry's row names), which e opens, and its state cell says
-// "merge ready" on its one line; a PR without one names none.
+// "merge ready" on its one line; a PR without one names none, and neither
+// does one whose file is a link (e would follow it out of the reviews
+// directory).
 func TestTheBoardRowOfAHeldMergeSaysMergeReadyAndNamesItsDiff(t *testing.T) {
 	h := newActHarness(t)
 	seedHeld(t, h, 12510)
 	h.seedPR("talkable/talkable", 12511, store.PRReviewed)
+	seedHeld(t, h, 12512)
+	link := filepath.Join(h.c.Layout.PRReviews("talkable", "talkable", 12512), engine.HeldMergeFile)
+	outside := filepath.Join(t.TempDir(), "elsewhere.diff")
+	if err := os.WriteFile(outside, []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
 	rows := boardRowsOf(t, h)
+	if got := rows[12512].HeldMerge; got != "" {
+		t.Errorf("#12512: HeldMerge = %q, want none for a link", got)
+	}
 	want := filepath.Join(h.c.Layout.PRReviews("talkable", "talkable", 12510), engine.HeldMergeFile)
 	if got := rows[12510].HeldMerge; got != want {
 		t.Errorf("#12510: HeldMerge = %q, want %q", got, want)
@@ -154,6 +188,7 @@ func TestStatusDashDataCarriesTheHeldMerge(t *testing.T) {
 		if err := st.SetKV(ctx, engine.KVPRHeldMerge(pr.ID), string(b)); err != nil {
 			t.Fatal(err)
 		}
+		writeHeldDiff(t, d.Layout, n)
 	}
 	r, err := statusGather(ctx, d, statusOptions{All: true})
 	if err != nil {
@@ -171,4 +206,33 @@ func TestStatusDashDataCarriesTheHeldMerge(t *testing.T) {
 			t.Errorf("queue row %s: held merge %q, want %q", q.Ref, q.HeldMerge, want)
 		}
 	}
+}
+
+// The y of a held merge starts its push off the daemon's loop and answers
+// that it started; --wait follows it as it follows any merge of the
+// parent: the push's loop row, then the merge's fix.ended (exit 0).
+func TestMergeParentWaitFollowsAHeldMergesPush(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 4242
+	pr := h.seedPR("talkable/talkable", 5, store.PRNeedsAttention)
+	h.d.StdinTTY, h.d.StdoutTTY = true, true
+	step := 0
+	h.onSleep = func(h *actHarness) {
+		switch step++; step {
+		case 1, 2:
+			h.heldDaemonStep()
+			if step == 2 {
+				h.setFixRow(pr, engine.FixPhaseFixing, 1)
+			}
+		case 4:
+			h.fixLoopGone(pr)
+			h.fixEvent("fix.ended", "the merge of the parent ends: magnum pushed claude-fix's merge d3d3d3d of master at c0c0c0c into "+
+				"talkable/talkable#5 as fixer-app[bot] with Workflows after your y: the head is d3d3d3d", map[string]any{"held": true})
+		}
+	}
+	h.stdin("y\n")
+	if code := h.cmd("merge-parent", "5", "--wait"); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, h.out.String(), h.errb.String())
+	}
+	actContains(t, h.out.String(), heldQuestion, heldAnswer, "talkable#5: magnum pushed claude-fix's merge d3d3d3d")
 }

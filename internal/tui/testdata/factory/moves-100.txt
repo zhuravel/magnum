@@ -1,5 +1,5 @@
  magnum factory · all repos · talkable                                                      ↻ 14:09 
- ● 8 PRs need you
+ ● 9 PRs need you
 
  NEEDS YOU                    WAITS ON                                       YOUR MOVE        WAITED
 › ● #4600  Coupon rounding    you: 1 item needs you: 1 thread of a person    b re-run CI         25m
@@ -7,10 +7,10 @@
   ● #4602  Coupon rounding    you: 1 item needs you: 1 thread of a person    b CI                25m
   ● #4603  Coupon rounding    you: 1 item needs you: 1 thread of a person    b threads           25m
   ● #4604  Coupon rounding    you: 1 item needs you: 1 thread of a person    e report · b PR     25m
-  ● #4605  Coupon rounding    you: 1 item needs you: 1 thread of a person    r review            25m
-  ● #4606  Coupon rounding    you: 1 item needs you: 1 thread of a person    f fix · b PR        25m
-  ● #4607  Coupon rounding    you: 1 item needs you: 1 thread of a person    b PR                25m
-
+  ● #4605  Coupon rounding    you: 1 item needs you: 1 thread of a person    P push · e diff     25m
+  ● #4606  Coupon rounding    you: 1 item needs you: 1 thread of a person    r review            25m
+  ● #4607  Coupon rounding    you: 1 item needs you: 1 thread of a person    f fix · b PR        25m
+  ● #4608  Coupon rounding    you: 1 item needs you: 1 thread of a person    b PR                25m
 
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────

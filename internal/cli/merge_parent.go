@@ -29,12 +29,14 @@ func newMergeParentCmd(c *Context) *cobra.Command {
 			"Workflows permission it is refused (\"needs Workflows on the App\") and left to you. A head that has the base's "+
 			"tip already has nothing to merge. After the push magnum starts the repository's ci_dispatch workflow on it "+
 			"two minutes later.\n\n"+
-			"A merge the fixer resolved that keeps your PR's own workflow changes is held for your y instead (the PR needs you: "+
-			"\"merge ready\"): a ref under refs/magnum/held/ keeps it, and held-merge.diff in the PR's report directory shows "+
-			"how the fixer resolved the workflow files' conflicts and what the push changes in them (e opens it on the "+
-			"screens). Then the plan is its push, as the fixer App's bot with its Workflows token, and y pushes it, bound to "+
-			"the merge too: a head, base or tip that moved, another merge or a 10-minute-old question pushes nothing. --yes "+
-			"never pushes a held merge. A push to the PR, a base or a base tip that moves, a merge or a close drops it.\n\n"+
+			"A merge the fixer resolved that keeps your PR's own workflow changes is held for your y instead, when the App can "+
+			"mint its Workflows token (the PR needs you: \"merge ready\"): a ref refs/magnum/held/<PR id> keeps it, and "+
+			"held-merge.diff in the PR's report directory names it and shows how the fixer resolved the workflow files' "+
+			"conflicts and what the push changes in them (e opens it on the screens). Then the plan is its push, as the fixer "+
+			"App's bot with its Workflows token, naming the merge, and y starts the push off the daemon's loop (--wait follows "+
+			"it), bound to the merge too: a head, base or tip that moved, another merge, another fix identity or a "+
+			"10-minute-old question pushes nothing. --yes never pushes a held merge. A push to the PR, a base or a base tip "+
+			"that moves, a merge or a close drops it.\n\n"+
 			"A terminal asks y/N first, naming who merges which tip of which base into which branch and as which login, "+
 			"from the daemon's dry run, which fetches the base first. y sends the merge bound to that plan: the daemon "+
 			"refuses it, saying what moved and that nothing was merged, when the PR's head, its base, the base's tip or the "+

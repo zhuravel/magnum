@@ -32,6 +32,8 @@ const (
 	mvFixesShort    = "f fix · b PR"
 	mvOpens         = "b opens it"
 	mvOpensShort    = "b PR"
+	mvHeld          = "P pushes it, e the diff"
+	mvHeldShort     = "P push · e diff"
 )
 
 // verdictNeeds is a fresh verdict that needs you for why, with needs of the
@@ -103,6 +105,10 @@ func TestYourMoveFollowsTheReasonThePRNeedsYou(t *testing.T) {
 		"a fix attention of a cap, with its report": {func(v *PRState) {
 			v.State, v.Attention, v.AttentionMsg, v.FixReport = store.PRNeedsAttention, "fix", "fix: 2 fix cycles, 2 findings left", fixerReportPath
 		}, mvReport, mvReportShort},
+		"a merge of the parent held for your y": {func(v *PRState) {
+			v.State, v.Attention, v.AttentionMsg = store.PRNeedsAttention, "fix", "fix: merge ready: claude-fix merged master at c0c0c0c."
+			v.HeldMerge, v.FixReport = "/state/reviews/example/shop/4/held-merge.diff", "/state/reviews/example/shop/4/held-merge.diff"
+		}, mvHeld, mvHeldShort},
 		"an attention of another kind": {func(v *PRState) {
 			v.State, v.Attention, v.AttentionMsg = store.PRNeedsAttention, "blocked", "judge blocked: the slot's database is gone"
 		}, mvOpens, mvOpensShort},

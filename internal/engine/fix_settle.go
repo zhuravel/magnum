@@ -93,11 +93,13 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	case errors.As(headErr, &held): // fix_held_merge.go: the fixer's merge magnum holds for your y
 		e.finishFixRun(ctx, job.run, store.RunVerified, "needs_you", "")
 		e.endFixState(ctx, job)
-		e.event(ctx, "warn", subject, "fix.needs_you", held.msg, job.eventData())
-		e.fixAttention(ctx, job, held.msg)
+		e.settleHeld(ctx, job, held)
 		return
 	case errors.As(headErr, new(fixHandRefused)): // fix_parent.go: the fixer's merge the daemon would not push
-		msg := fmt.Sprintf("fix: magnum did not push %s's merge of the parent of %s: %s; %s", job.role.Name, job.label(), headErr, job.mergeByHand(headErr.Error()))
+		msg := "fix: " + job.handRefusedWords(headErr.Error())
+		if carried := carriedText(job); carried != "" { // fix_carry.go: the calls of the loop's earlier cycles stay the author's
+			msg += "; " + carried
+		}
 		e.finishFixRun(ctx, job.run, store.RunVerified, "needs_you", "")
 		e.endFixState(ctx, job)
 		e.event(ctx, "warn", subject, "fix.needs_you", msg, job.eventData())

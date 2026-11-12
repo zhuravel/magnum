@@ -26,7 +26,8 @@ type moveWords struct{ long, short string }
 
 // The moves, by reason. The keys are those of the PR's card and of home's
 // row (b the PR's page, c magnum's CI fix, e the fixer's report, f magnum's
-// fixer, r magnum's review, which the card's hint bar offers).
+// fixer, r magnum's review, P the push of a merge magnum holds for your y,
+// which the card's hint bar offers).
 var (
 	moveRerunCI  = moveWords{"b: re-run CI on GitHub, or push", "b re-run CI"}
 	moveFailedCI = moveWords{"b opens its CI", "b CI"}
@@ -36,6 +37,7 @@ var (
 	moveFixes    = moveWords{"f fixes, b opens it", "f fix · b PR"}
 	moveReview   = moveWords{"r reviews it", "r review"}
 	moveOpen     = moveWords{"b opens it", "b PR"}
+	moveHeld     = moveWords{"P pushes it, e the diff", "P push · e diff"}
 )
 
 // What a need of a verdict that needs you asks, as one move: a class of
@@ -131,6 +133,8 @@ func reasonMove(st PRState) moveWords {
 		return moveFailedCI
 	case class == needCIFix:
 		return moveCIFix
+	case attention && st.HeldMerge != "": // the merge magnum holds for your y: P pushes it
+		return moveHeld
 	case attention && st.FixReport != "":
 		return moveReport
 	case attention:

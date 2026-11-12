@@ -68,6 +68,43 @@ func MergeReadyNext(ref string) string {
 		"e on the screens opens held-merge.diff, what it does to the workflow files"
 }
 
+// mergeDroppedWords start, after its kind, the attention of a held merge
+// magnum dropped because it went stale (MergeDroppedText).
+const mergeDroppedWords = "merge dropped: "
+
+// MergeDroppedText is the attention of a held merge magnum dropped, what
+// its words (whose merge, and why): "fix: merge dropped: magnum dropped
+// claude-fix's held merge d3d3d3d of master at c0c0c0c: master moved on
+// GitHub from c0c0c0c to d1d1d1d; P merges the parent again". Its next step
+// is a new merge of the parent (MergeDroppedNext).
+func MergeDroppedText(what string) string {
+	return KindFix + ": " + mergeDroppedWords + what + "; P merges the parent again"
+}
+
+// MergeDropped reports whether msg, a PR's last_error (with its "fix: " or
+// without), is a dropped held merge's attention (MergeDroppedText).
+func MergeDropped(msg string) bool {
+	return strings.HasPrefix(strings.TrimPrefix(textx.FirstLine(msg), KindFix+": "), mergeDroppedWords)
+}
+
+// MergeDroppedNext is the next step of a dropped held merge's attention on
+// ref: a new merge of the parent.
+func MergeDroppedNext(ref string) string {
+	return "`magnum merge-parent " + ref + "` on a terminal (P on the screens) merges the parent again"
+}
+
+// heldNext is the next step of a held merge's attention, or of a dropped
+// one's, whose chain (without its "fix: ") msg is; "" for any other.
+func heldNext(chain, ref string) string {
+	switch {
+	case MergeReady(chain):
+		return MergeReadyNext(ref)
+	case MergeDropped(chain):
+		return MergeDroppedNext(ref)
+	}
+	return ""
+}
+
 // FixReport is the fixer's report that a fix job's message msg (a PR's
 // last_error under KindFix) names: the last absolute path to a .md file of
 // its first line, as the remedy names the report (fixRemedy); "" when that

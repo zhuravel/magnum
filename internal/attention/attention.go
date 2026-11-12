@@ -222,6 +222,9 @@ func Explain(kind, msg, ref string) Reason {
 	if prefix, calls, steps, ok := fixCalls(textx.FirstLine(chain)); ok && r.Kind == KindFix {
 		r.NeedsYou, r.Steps = calls, steps
 		r.Cause, r.Fix = fixCallsCause(prefix, calls, steps), strings.Join(steps, "; ")
+		if next := heldNext(chain, ref); next != "" { // a held merge's, or a dropped one's, with the calls the loop left
+			r.Fix = next + "; " + r.Fix
+		}
 	} else {
 		r.Cause, r.Fix = cause(r, chain, output, lines, ref)
 	}
@@ -462,10 +465,11 @@ func fixCause(line string) string {
 // author answered what it left, and `magnum abort` for a loop still
 // running. The look's raise (LookRaise) has neither a report nor a pane,
 // and only GitHub lifts it: its remedy is LookLift. A held merge's
-// (MergeReady) is its push's y/N (MergeReadyNext).
+// (MergeReady) is its push's y/N (MergeReadyNext), and a dropped one's
+// (MergeDropped) a new merge of the parent (MergeDroppedNext).
 func fixRemedy(chain, output, ref string) string {
-	if MergeReady(chain) {
-		return MergeReadyNext(ref)
+	if next := heldNext(chain, ref); next != "" {
+		return next
 	}
 	if LookRaise(chain) {
 		return LookLift + "; `magnum fix --done` does not apply to it"

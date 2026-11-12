@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
@@ -21,16 +23,34 @@ import (
 // heldGitFake is mergeGit's held merge (heldGit): the refs UpdateRef wrote
 // ("<dir> <ref>" to the commit) and UpdateRefDelete deleted, a commit's
 // parents (parents, by commit; else the handed merge's, else the head's
-// and the base's tip), and RemergeDiff's and PathsDiff's answers.
+// and the base's tip), RemergeDiff's and PathsDiff's answers, refErr, which
+// fails UpdateRef, and onRef, run inside UpdateRef with no lock held. As
+// git does, UpdateRef refuses a ref with a part that starts with a dot.
 type heldGitFake struct {
 	refs    map[string]string
 	deleted []string
 	parents map[string][]string
 	remerge string
 	diff    string
+	refErr  error
+	onRef   func()
 }
 
 func (g *mergeGit) UpdateRef(_ context.Context, dir, ref, sha string) error {
+	g.mu.Lock()
+	hook, err := g.held.onRef, g.held.refErr
+	g.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	for part := range strings.SplitSeq(ref, "/") {
+		if strings.HasPrefix(part, ".") {
+			return fmt.Errorf("fatal: update_ref failed for ref '%s': refusing to update ref with bad name", ref)
+		}
+	}
+	if err != nil {
+		return err
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.held.refs == nil {
@@ -87,9 +107,14 @@ const (
 		"-<<<<<<< a1a1a1a\n-jobs: pr\n-=======\n-jobs: base\n->>>>>>> c0c0c0c\n+jobs: resolved\n"
 	heldPlain = "diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\n-jobs: pr\n+jobs: resolved\n" +
 		"diff --git a/.github/workflows/pronto.yml b/.github/workflows/pronto.yml\n-on: push\n+on: pull_request\n"
+	// heldHeader is held-merge.diff's first line: the merge it shows.
+	heldHeader = "Held merge " + fixMergeHead + ": claude-fix's merge of master at c0c0c0c into the PR's head a1a1a1a.\n"
 	// heldAttention is PR #2's attention while claude-fix's merge is held.
 	heldAttention = "fix: merge ready: claude-fix merged master at c0c0c0c and resolved 5 conflicts. It changes .github/workflows/ci.yml and " +
 		"pronto.yml. " + fixerAppLogin + " pushes it only after your y: P asks (e shows held-merge.diff)."
+	// heldPushing is the answer to the y that pushes PR #2's held merge.
+	heldPushing = "pushing claude-fix's merge d3d3d3d of master at c0c0c0c into feature as " + fixerAppLogin +
+		" with the Workflows token; `magnum abort talkable/talkable#2` stops it"
 )
 
 // heldConflicts makes the fixer's merge resolve five conflicts, two in
@@ -123,17 +148,24 @@ func (h *harness) heldDiffPath() string {
 
 // heldRefKey is how mergeGit names PR #2's held ref in the slot's clone.
 func (h *harness) heldRefKey() string {
-	return h.slot("review1").MainClone + " " + HeldMergeRef("talkable", "talkable", 2)
+	return h.slot("review1").MainClone + " " + HeldMergeRef(h.pr(2).ID)
+}
+
+// heldRow is PR #2's held merge's row as stored ("" for none).
+func (h *harness) heldRow() string {
+	h.t.Helper()
+	raw, _, err := h.st.GetKV(h.ctx, KVPRHeldMerge(h.pr(2).ID))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return raw
 }
 
 // heldMergeOfPR is PR #2's held merge (ok false: none).
 func (h *harness) heldMergeOfPR() (HeldMerge, bool) {
 	h.t.Helper()
-	raw, ok, err := h.st.GetKV(h.ctx, KVPRHeldMerge(h.pr(2).ID))
-	if err != nil {
-		h.t.Fatal(err)
-	}
-	if !ok {
+	raw := h.heldRow()
+	if raw == "" {
 		return HeldMerge{}, false
 	}
 	held, ok := ParseHeldMerge(raw)
@@ -143,21 +175,56 @@ func (h *harness) heldMergeOfPR() (HeldMerge, bool) {
 	return held, true
 }
 
-// wantNothingPushed fails when magnum pushed anything or minted a push
-// token.
-func wantNothingPushed(t *testing.T, h *harness, mg *mergeGit) {
+// setHeld writes PR #2's held merge's row as edit changes it, as another
+// build or another hold would have written it.
+func (h *harness) setHeld(edit func(*HeldMerge)) string {
+	h.t.Helper()
+	held, ok := h.heldMergeOfPR()
+	if !ok {
+		h.t.Fatal("no held merge to change")
+	}
+	edit(&held)
+	b, err := json.Marshal(held)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if err := h.st.SetKV(h.ctx, KVPRHeldMerge(h.pr(2).ID), string(b)); err != nil {
+		h.t.Fatal(err)
+	}
+	return string(b)
+}
+
+// wantNoPush fails when magnum pushed anything.
+func wantNoPush(t *testing.T, mg *mergeGit) {
 	t.Helper()
 	if _, pushes := mg.made(); len(pushes) != 0 {
 		t.Errorf("pushes = %v, want none", pushes)
 	}
+}
+
+// wantNothingPushed fails when magnum pushed anything or minted a push
+// token.
+func wantNothingPushed(t *testing.T, h *harness, mg *mergeGit) {
+	t.Helper()
+	wantNoPush(t, mg)
 	if mints, _ := h.ids[fixerAppName].daemonPushes(); len(mints) != 0 {
 		t.Errorf("daemon push tokens minted: %v", mints)
 	}
 }
 
-// wantDropped fails unless PR #2's held merge is gone: its ref, its row
-// and its held-merge.diff, with a fix.held_dropped event that says why.
-func wantDropped(t *testing.T, h *harness, mg *mergeGit, why string) {
+// wantProbed fails unless the hold minted one Workflows token to see that
+// it can, and released it at once, and nothing was pushed.
+func wantProbed(t *testing.T, h *harness, mg *mergeGit) {
+	t.Helper()
+	wantNoPush(t, mg)
+	if mints, released := h.ids[fixerAppName].daemonPushes(); !slices.Equal(mints, []bool{true}) || released != 1 {
+		t.Errorf("daemon push tokens %v, released %d; want the hold's one, released", mints, released)
+	}
+}
+
+// wantNoHeld fails unless PR #2 has no held merge: no row, no ref, no
+// held-merge.diff.
+func wantNoHeld(t *testing.T, h *harness, mg *mergeGit) {
 	t.Helper()
 	if held, ok := h.heldMergeOfPR(); ok {
 		t.Errorf("the held merge stayed: %+v", held)
@@ -168,6 +235,13 @@ func wantDropped(t *testing.T, h *harness, mg *mergeGit, why string) {
 	if _, err := os.Stat(h.heldDiffPath()); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("held-merge.diff stayed: %v", err)
 	}
+}
+
+// wantDropped fails unless PR #2's held merge is gone (wantNoHeld) with a
+// fix.held_dropped event that says why.
+func wantDropped(t *testing.T, h *harness, mg *mergeGit, why string) {
+	t.Helper()
+	wantNoHeld(t, h, mg)
 	if ev, ok := h.fixEvent("fix.held_dropped"); !ok || !strings.Contains(ev.Message, why) {
 		t.Errorf("fix.held_dropped = %q, %v; want it to say %q", ev.Message, ok, why)
 	}
@@ -178,15 +252,16 @@ func wantDropped(t *testing.T, h *harness, mg *mergeGit, why string) {
 // resolved them and magnum push handed the merge to the daemon, which
 // refused it because it keeps the PR's own workflow changes and dropped it,
 // so the operator was told to merge the base by hand. Now the daemon holds
-// it for the operator's y: a ref under refs/magnum/held/ in the slot's
-// clone keeps it, the registry records it, held-merge.diff (0600, in the
-// PR's report directory) shows how the fixer resolved the workflow files'
-// conflicts and then what the push changes in them, nothing is pushed and
-// no token is minted, and the PR needs you with "merge ready", the files,
-// the bot and that P asks.
+// it for the operator's y: a ref under refs/magnum/held/<PR id> in the
+// slot's clone keeps it, the registry records it, held-merge.diff (0600,
+// in the PR's report directory) names the merge and shows how the fixer
+// resolved the workflow files' conflicts, then what the push changes in
+// them, nothing is pushed (the hold mints one Workflows token to see that
+// the App can, and releases it), and the PR needs you with "merge ready",
+// the files, the bot and that P asks.
 func TestAHandedMergeThatKeepsThePRsOwnWorkflowChangesIsHeldForYourY(t *testing.T) {
 	h, mg := holdMerged(t)
-	wantNothingPushed(t, h, mg)
+	wantProbed(t, h, mg)
 	if refs := mg.heldRefs(); refs[h.heldRefKey()] != fixMergeHead || len(refs) != 1 {
 		t.Errorf("held refs = %v, want %s at %s", refs, h.heldRefKey(), fixMergeHead)
 	}
@@ -199,15 +274,16 @@ func TestAHandedMergeThatKeepsThePRsOwnWorkflowChangesIsHeldForYourY(t *testing.
 	case !slices.Equal(held.Workflows, []string{".github/workflows/ci.yml", ".github/workflows/pronto.yml"}) || held.Findings:
 		t.Errorf("held = %+v, want ci.yml and pronto.yml and no findings", held)
 	case held.Repo != "talkable/talkable" || held.Number != 2 || held.Role != "claude-fix" || held.Login != fixerAppLogin ||
-		held.Clone != h.slot("review1").MainClone || held.Diff != h.heldDiffPath() || held.At.IsZero():
+		held.Identity != fixerAppName || held.Clone != h.slot("review1").MainClone || held.Diff != h.heldDiffPath() ||
+		held.Attention != heldAttention || held.At.IsZero():
 		t.Errorf("held = %+v", held)
 	}
 	b, err := os.ReadFile(h.heldDiffPath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := string(b); got != heldRemerge+heldPlain {
-		t.Errorf("held-merge.diff = %q, want the remerge diff, then the push's workflow diff", got)
+	if got := string(b); got != heldHeader+heldRemerge+heldPlain {
+		t.Errorf("held-merge.diff = %q, want the merge's line, the remerge diff, then the push's workflow diff", got)
 	}
 	if fi, err := os.Stat(h.heldDiffPath()); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Errorf("held-merge.diff's mode = %v, %v; want 0600", fi.Mode().Perm(), err)
@@ -226,6 +302,28 @@ func TestAHandedMergeThatKeepsThePRsOwnWorkflowChangesIsHeldForYourY(t *testing.
 	}
 }
 
+// The review's bug: an App without Workflows held a merge it could never
+// push, so the attention said "merge ready" and every y failed with "needs
+// Workflows on the App", while the advice to merge by hand or grant
+// Workflows was lost. The hold mints the Workflows token first; when GitHub
+// refuses it, nothing is held, and the PR needs you as before: merge by
+// hand, or grant Workflows on the App and ask again.
+func TestAnAppWithoutWorkflowsHoldsNoMergeItCannotPush(t *testing.T) {
+	h, mg := holdMerged(t, withoutWorkflows)
+	wantNoPush(t, mg)
+	wantNoHeld(t, h, mg)
+	got := deref(h.wantState(2, store.PRNeedsAttention).LastError)
+	for _, want := range []string{"fix: magnum did not push claude-fix's merge of the parent of talkable/talkable#2: ", "needs Workflows on the App",
+		"merge master into feature by hand", "or grant Workflows on the App and run `magnum merge-parent talkable/talkable#2` again"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("attention = %q, want it to say %q", got, want)
+		}
+	}
+	if attention.MergeReady(got) {
+		t.Errorf("attention = %q: merge ready for a merge the App cannot push", got)
+	}
+}
+
 // A fix run's fixer merges the base before it fixes the findings, and
 // magnum push hands that merge over alone: it is held the same way, and
 // its attention says the findings wait for the next fix after the push.
@@ -240,7 +338,7 @@ func TestAFixRunsHeldMergeSaysTheFindingsWaitForTheNextFix(t *testing.T) {
 	id := h.fix(FixPayload{})
 	h.handle()
 	h.wantDone(id)
-	wantNothingPushed(t, h, mg)
+	wantProbed(t, h, mg)
 	if held, ok := h.heldMergeOfPR(); !ok || !held.Findings || held.Merge != fixMergeHead {
 		t.Errorf("held = %+v, %v; want the merge, with findings waiting", held, ok)
 	}
@@ -249,10 +347,30 @@ func TestAFixRunsHeldMergeSaysTheFindingsWaitForTheNextFix(t *testing.T) {
 	}
 }
 
+// The review's bug: Findings was true for any job but a merge of the
+// parent, a CI fix's too, whose fixer merges the base as well. The
+// findings wait only after a fix of findings that did not start for the
+// merge alone.
+func TestOnlyAFixOfFindingsSaysTheFindingsWait(t *testing.T) {
+	for _, c := range []struct {
+		job  fixJob
+		want bool
+	}{
+		{fixJob{}, true},
+		{fixJob{forMerge: true}, false},
+		{fixJob{mode: FixModeMerge}, false},
+		{fixJob{mode: FixModeCI}, false},
+	} {
+		if got := heldFindings(&c.job); got != c.want {
+			t.Errorf("mode %q, for the merge %v: findings %v, want %v", c.job.mode, c.job.forMerge, got, c.want)
+		}
+	}
+}
+
 // The owner's note: a merge whose workflow files merged without a conflict
 // (git's own merge of them is what the fixer committed) has no remerge
-// diff there; held-merge.diff says so in one line, then shows the push's
-// plain workflow diff.
+// diff there; held-merge.diff says so in one line after the merge's, then
+// shows the push's plain workflow diff.
 func TestAHeldMergeWithNoConflictInAWorkflowFileWritesOneLineThenThePlainDiff(t *testing.T) {
 	h, mg := handedMerge(t)
 	heldConflicts(mg)
@@ -267,23 +385,48 @@ func TestAHeldMergeWithNoConflictInAWorkflowFileWritesOneLineThenThePlainDiff(t 
 		t.Fatal(err)
 	}
 	const line = "No conflict in a workflow file was resolved: the workflow changes come unchanged from master and the PR.\n"
-	if got := string(b); got != line+heldPlain {
-		t.Errorf("held-merge.diff = %q, want %q", got, line+heldPlain)
+	if got := string(b); got != heldHeader+line+heldPlain {
+		t.Errorf("held-merge.diff = %q, want %q", got, heldHeader+line+heldPlain)
 	}
 }
 
-// heldPlanWords are the plan of the push of PR #2's held merge.
-const heldPlanWords = "dry run: would merge the parent of talkable/talkable#2: magnum pushes claude-fix's merge of master at c0c0c0c into feature as " +
-	fixerAppLogin + " with the Workflows token; it changes .github/workflows/ci.yml and pronto.yml (held-merge.diff)"
+// Workflow content an agent wrote reaches the pager, which runs with
+// LESS=R: held-merge.diff escapes every control character but tab and
+// newline (a carriage return, an escape sequence, a DEL), so none hides a
+// line from the operator who reads it before the y.
+func TestHeldMergeDiffEscapesTheControlsThatCouldHideALine(t *testing.T) {
+	h, mg := handedMerge(t)
+	heldConflicts(mg)
+	mg.mu.Lock()
+	mg.held.remerge = "+run: deploy\x1b[2K\r+run: echo ok\x7f\t# tab\n"
+	mg.mu.Unlock()
+	id := h.fix(FixPayload{Mode: FixModeMerge})
+	h.handle()
+	h.wantDone(id)
+	b, err := os.ReadFile(h.heldDiffPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	if want := heldHeader + "+run: deploy\\x1b[2K\\x0d+run: echo ok\\x7f\t# tab\n" + heldPlain; got != want {
+		t.Errorf("held-merge.diff = %q, want %q", got, want)
+	}
+}
 
-// P on a held merge: the dry run plans its push, naming the bot, the token
-// and the workflow files, and binds it to the merge's SHA besides the
-// head and the tip; the y bound to that plan pushes the merge with the
-// fixer App's own Workflows token (released after) and a lease on the
-// head, from the clone that holds it, after a fetch of the base. Then the
-// ref, the record and held-merge.diff go, the PR's head is the merge, its
-// CI starts after the grace, and fix.parent_pushed and the merge's
-// fix.ended say so.
+// heldPlanWords are the plan of the push of PR #2's held merge: the merge
+// by its SHA, so a merge held again of the same tip asks another question.
+const heldPlanWords = "dry run: would merge the parent of talkable/talkable#2: magnum pushes claude-fix's merge d3d3d3d of master at c0c0c0c into " +
+	"feature as " + fixerAppLogin + " with the Workflows token; it changes .github/workflows/ci.yml and pronto.yml (held-merge.diff)"
+
+// P on a held merge: the dry run plans its push, naming the merge, the bot,
+// the token and the workflow files, and binds it to the merge's SHA besides
+// the head and the tip; the y bound to that plan starts the push off the
+// daemon's loop, under the PR's reservation, and answers so. The push goes
+// with the fixer App's own Workflows token (released after) and a lease on
+// the head, from the clone that holds the merge, after a fetch of the base.
+// Then the ref, the record and held-merge.diff go, the PR's head is the
+// merge, its CI starts after the grace, and fix.parent_pushed and the
+// merge's fix.ended say so.
 func TestPOnAHeldMergePushesItWithTheWorkflowsTokenAfterTheBoundY(t *testing.T) {
 	h, mg := holdMerged(t)
 	fetchesBefore, _ := mg.calls()
@@ -295,32 +438,26 @@ func TestPOnAHeldMergePushesItWithTheWorkflowsTokenAfterTheBoundY(t *testing.T) 
 	if a.Merge != fixMergeHead || a.Head != fixHead || a.Base != "master" || a.Tip != fixBaseTip || a.Conflicts != 5 || !a.At.Equal(h.clock.Now()) {
 		t.Errorf("the plan asks about %+v, want the held merge %s", a, fixMergeHead)
 	}
-	wantNothingPushed(t, h, mg)
+	wantProbed(t, h, mg)
 	h.advance(9 * time.Minute)
 	r := h.mergeBound(a)
-	const want = "pushed claude-fix's merge of master at c0c0c0c into feature as " + fixerAppLogin + " with the Workflows token: the head is d3d3d3d"
-	if r.State != store.RequestDone || deref(r.Result) != want {
-		t.Fatalf("%s %q, want done %q", r.State, deref(r.Result), want)
+	if r.State != store.RequestDone || deref(r.Result) != heldPushing {
+		t.Fatalf("%s %q, want done %q", r.State, deref(r.Result), heldPushing)
 	}
 	_, pushes := mg.made()
 	if push := fmt.Sprintf("talkable/talkable:%s:feature:%s:%s", fixMergeHead, fixHead, daemonPushAs); !slices.Equal(pushes, []string{push}) {
 		t.Errorf("pushes = %q, want %q", pushes, push)
 	}
-	if mints, released := h.ids[fixerAppName].daemonPushes(); !slices.Equal(mints, []bool{true}) || released != 1 {
-		t.Errorf("daemon push tokens %v, released %d; want one with Workflows, released", mints, released)
+	if dirs := mg.pushedFrom(); !slices.Equal(dirs, []string{h.slot("review1").MainClone}) {
+		t.Errorf("pushed from %q, want the clone that holds the merge", dirs)
+	}
+	if mints, released := h.ids[fixerAppName].daemonPushes(); !slices.Equal(mints, []bool{true, true}) || released != 2 {
+		t.Errorf("daemon push tokens %v, released %d; want the hold's and the push's, released", mints, released)
 	}
 	if fetches, _ := mg.calls(); len(fetches) != len(fetchesBefore)+1 || fetches[len(fetches)-1] != h.slot("review1").MainClone+":master" {
 		t.Errorf("fetches = %v, want one of master into the clone after %v", fetches, fetchesBefore)
 	}
-	if held, ok := h.heldMergeOfPR(); ok {
-		t.Errorf("the held merge stayed: %+v", held)
-	}
-	if refs := mg.heldRefs(); len(refs) != 0 {
-		t.Errorf("held refs = %v, want none", refs)
-	}
-	if _, err := os.Stat(h.heldDiffPath()); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("held-merge.diff stayed: %v", err)
-	}
+	wantNoHeld(t, h, mg)
 	if cur := h.pr(2); cur.HeadSHA != fixMergeHead {
 		t.Errorf("the PR's head = %s, want the merge", cur.HeadSHA)
 	}
@@ -328,7 +465,7 @@ func TestPOnAHeldMergePushesItWithTheWorkflowsTokenAfterTheBoundY(t *testing.T) 
 		t.Error("magnum's push is not recorded for its CI (ci_dispatch)")
 	}
 	ev, ok := h.fixEvent("fix.parent_pushed")
-	if !ok || !strings.Contains(ev.Message, "magnum pushed claude-fix's merge of master at c0c0c0c into talkable/talkable#2 as "+fixerAppLogin+
+	if !ok || !strings.Contains(ev.Message, "magnum pushed claude-fix's merge d3d3d3d of master at c0c0c0c into talkable/talkable#2 as "+fixerAppLogin+
 		" with Workflows after your y") || !strings.Contains(string(ev.Data), `"held":true`) {
 		t.Errorf("fix.parent_pushed = %q %s, %v", ev.Message, ev.Data, ok)
 	}
@@ -338,20 +475,24 @@ func TestPOnAHeldMergePushesItWithTheWorkflowsTokenAfterTheBoundY(t *testing.T) 
 	if _, ok := h.fixEvent("fix.held_dropped"); ok {
 		t.Error("a pushed merge was reported dropped")
 	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the push's loop row stayed")
+	}
 }
 
-// The y of a held merge's push is bound: it pushes nothing when the PR's
-// head moved on GitHub since (the merge is dropped), when magnum holds
-// another merge than the question named, when the base's tip moved so the
-// held tip is not on the base as GitHub has it (dropped), or when the
-// question is 10 minutes old, as for any merge of the parent.
+// The y of a held merge's push is bound. Before the push starts it is
+// refused, and the merge stays held, when magnum holds another merge than
+// the question named or the question is 10 minutes old, as for any merge
+// of the parent. The push, off the loop, pushes nothing when the PR's head
+// moved on GitHub, or the base's tip moved so the held tip is not on the
+// base as GitHub has it: the merge is dropped, and fix.failed says why.
 func TestAHeldMergesPushIsRefusedWhenWhatItsYAskedAboutMoved(t *testing.T) {
 	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name    string
 		move    func(h *harness, asked *MergeAsked)
-		want    string
-		dropped bool
+		want    string // the request's refusal, or, after the push started, fix.failed's words
+		started bool
 	}{
 		{"the head", func(h *harness, _ *MergeAsked) { h.gh.setHead("talkable/talkable", 2, fixPushed) },
 			"talkable/talkable#2: its head moved on GitHub from a1a1a1a to b2b2b2b since magnum held the merge; magnum dropped the held merge: nothing was pushed", true},
@@ -370,15 +511,52 @@ func TestAHeldMergesPushIsRefusedWhenWhatItsYAskedAboutMoved(t *testing.T) {
 			asked := h.planMerge().Asked
 			tc.move(h, &asked)
 			r := h.mergeBound(asked)
-			if r.State != store.RequestFailed || deref(r.Result) != tc.want {
-				t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), tc.want)
+			if !tc.started {
+				if r.State != store.RequestFailed || deref(r.Result) != tc.want {
+					t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), tc.want)
+				}
+			} else if r.State != store.RequestDone || deref(r.Result) != heldPushing {
+				t.Errorf("%s %q, want the push started", r.State, deref(r.Result))
+			} else if ev, ok := h.fixEvent("fix.failed"); !ok || ev.Message != tc.want {
+				t.Errorf("fix.failed = %q, %v; want %q", ev.Message, ok, tc.want)
 			}
-			wantNothingPushed(t, h, mg)
-			if _, held := h.heldMergeOfPR(); held == tc.dropped {
-				t.Errorf("held = %v, want %v", held, !tc.dropped)
+			wantNoPush(t, mg)
+			if _, held := h.heldMergeOfPR(); held == tc.started {
+				t.Errorf("held = %v, want %v", held, !tc.started)
+			}
+			if _, ok := h.fixStateOf(2); ok {
+				t.Error("the push's loop row stayed")
 			}
 		})
 	}
+}
+
+// The review's bug: the y could push as a bot the question did not name. A
+// held merge whose fix identity is not the fix role's now (the config
+// changed since the hold) is dropped when P plans: the plan is then a new
+// merge's, and a y bound to the held merge pushes nothing.
+func TestAHeldMergeIsNeverPushedAsAnotherBot(t *testing.T) {
+	h, mg := holdMerged(t)
+	asked := h.planMerge().Asked
+	h.setHeld(func(held *HeldMerge) { held.Identity = "other-app" })
+	if r := h.mergeBound(asked); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "magnum no longer holds") {
+		t.Errorf("%s %q, want the y refused", r.State, deref(r.Result))
+	}
+	wantNoPush(t, mg)
+	wantDropped(t, h, mg, "the fix identity is fixer-app now, not other-app")
+}
+
+// The review's bug: the paths of a held merge came from what its row named.
+// A row whose repository or number is not its PR's is dropped when P plans,
+// and the plan is a new merge's.
+func TestAHeldMergeWhoseRowNamesAnotherPRIsDropped(t *testing.T) {
+	h, mg := holdMerged(t)
+	h.setHeld(func(held *HeldMerge) { held.Number = 99 })
+	if plan := h.planMerge(); plan.Asked.Merge != "" {
+		t.Errorf("the plan = %+v, want a new merge's", plan)
+	}
+	wantNoPush(t, mg)
+	wantDropped(t, h, mg, "its row names talkable/talkable#99")
 }
 
 // A held merge needs your y on a terminal: --yes binds nothing and never
@@ -390,19 +568,19 @@ func TestYesAndAPlanThatNamesNoHeldMergeNeverPushIt(t *testing.T) {
 	runs := len(h.fixRuns(h.pr(2).ID))
 	id := h.fix(FixPayload{Mode: FixModeMerge})
 	h.handle()
-	const yes = "talkable/talkable#2: magnum holds claude-fix's merge of master at c0c0c0c for your y on a terminal: `magnum merge-parent " +
+	const yes = "talkable/talkable#2: magnum holds claude-fix's merge d3d3d3d of master at c0c0c0c for your y on a terminal: `magnum merge-parent " +
 		"talkable/talkable#2` asks it (P on the screens); --yes binds nothing and never pushes a held merge: nothing was pushed"
 	if r := h.request(id); r.State != store.RequestFailed || deref(r.Result) != yes {
 		t.Errorf("--yes: %s %q, want failed %q", r.State, deref(r.Result), yes)
 	}
 	asked := h.planMerge().Asked
 	asked.Merge = ""
-	const unnamed = "talkable/talkable#2: the question named no held merge, and magnum holds claude-fix's merge of master at c0c0c0c for your y: " +
-		"nothing was pushed; ask again (`magnum merge-parent talkable/talkable#2`)"
+	const unnamed = "talkable/talkable#2: the question named no held merge, and magnum holds claude-fix's merge d3d3d3d of master at c0c0c0c " +
+		"for your y: nothing was pushed; ask again (`magnum merge-parent talkable/talkable#2`)"
 	if r := h.mergeBound(asked); r.State != store.RequestFailed || deref(r.Result) != unnamed {
 		t.Errorf("a plan without the merge: %s %q, want failed %q", r.State, deref(r.Result), unnamed)
 	}
-	wantNothingPushed(t, h, mg)
+	wantProbed(t, h, mg)
 	if _, ok := h.heldMergeOfPR(); !ok {
 		t.Error("the held merge went")
 	}
@@ -413,6 +591,11 @@ func TestYesAndAPlanThatNamesNoHeldMergeNeverPushIt(t *testing.T) {
 		t.Error("a loop started")
 	}
 }
+
+// heldDroppedNote is PR #2's attention after the poll dropped its held merge
+// because master's tip moved.
+const heldDroppedNote = "fix: merge dropped: magnum dropped claude-fix's held merge d3d3d3d of master at c0c0c0c: master moved on GitHub " +
+	"from c0c0c0c to d1d1d1d; P merges the parent again"
 
 // A held merge that went stale goes, at the poll that sees it: the PR's
 // head moved (someone pushed), its base moved (a retarget), its base's tip
@@ -442,8 +625,7 @@ func TestAHeldMergeThatWentStaleIsDroppedAtThePoll(t *testing.T) {
 			h.gh.baseTip = fixMovedTip
 			h.gh.mu.Unlock()
 			h.tick()
-		}, attention: "fix: magnum dropped claude-fix's held merge of master at c0c0c0c: master moved on GitHub from c0c0c0c to d1d1d1d; " +
-			"P (`magnum merge-parent talkable/talkable#2`) merges the parent again"},
+		}, attention: heldDroppedNote},
 		{name: "a merge", why: "the PR merged", move: func(h *harness) { h.closeOnGitHub(2, "MERGED", other) }},
 		{name: "a close", why: "the PR closed", move: func(h *harness) { h.closeOnGitHub(2, "CLOSED", other) }},
 	} {
@@ -458,13 +640,304 @@ func TestAHeldMergeThatWentStaleIsDroppedAtThePoll(t *testing.T) {
 			if tc.attention == "" {
 				return
 			}
-			if got := deref(h.wantState(2, store.PRNeedsAttention).LastError); got != tc.attention {
-				t.Errorf("attention = %q, want %q", got, tc.attention)
+			got := h.wantState(2, store.PRNeedsAttention)
+			if deref(got.LastError) != tc.attention {
+				t.Errorf("attention = %q, want %q", deref(got.LastError), tc.attention)
+			}
+			if why := attention.Explain(attention.KindFix, deref(got.LastError), "talkable/talkable#2"); why.Fix != attention.MergeDroppedNext("talkable/talkable#2") {
+				t.Errorf("the next step = %q, want P", why.Fix)
 			}
 			if plan := h.planMerge(); plan.Asked.Merge != "" || strings.Contains(plan.Text, "magnum pushes") {
 				t.Errorf("a dropped merge was planned again: %+v", plan)
 			}
 		})
+	}
+}
+
+// heldRepo is talkable/talkable's registry row.
+func (h *harness) heldRepo() store.Repo {
+	h.t.Helper()
+	repo, err := h.st.RepoByFullName(h.ctx, "talkable/talkable")
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return repo
+}
+
+// The review's races: the poll reads the held merges before its GitHub
+// reads, which can serve a y (requestsMidPoll), and a settle can hold a new
+// merge meanwhile. Its drop deletes only the row it read (a compare), and
+// touches the ref and the file only then: (a) a merge pushed after the
+// poll's read is not reported dropped, and nothing of the PR's attention
+// changes; (b) a merge held again after the poll's read stays whole, its
+// ref and file too; (c) a hold writes its row only after the attention, so
+// a poll during the hold drops nothing, and "merge ready" never stands
+// without a row: the next poll drops the stale merge and its words.
+func TestThePollDropsOnlyTheHeldMergeItRead(t *testing.T) {
+	storetest.Parallel(t)
+	t.Run("a push after the poll's read", func(t *testing.T) {
+		h, mg := holdMerged(t)
+		read := h.e.heldMergesIn(h.ctx, h.heldRepo())
+		r := h.mergeBound(h.planMerge().Asked)
+		if r.State != store.RequestDone {
+			t.Fatalf("the push: %s %q", r.State, deref(r.Result))
+		}
+		before := deref(h.pr(2).LastError)
+		h.e.dropStaleHeldMerges(h.ctx, h.heldRepo(), read, nil)
+		if ev, ok := h.fixEvent("fix.held_dropped"); ok {
+			t.Errorf("fix.held_dropped = %q after magnum's own push", ev.Message)
+		}
+		if got := deref(h.pr(2).LastError); got != before {
+			t.Errorf("attention = %q, want %q kept", got, before)
+		}
+		wantNoHeld(t, h, mg)
+	})
+	t.Run("a merge held again after the poll's read", func(t *testing.T) {
+		h, mg := holdMerged(t)
+		read := h.e.heldMergesIn(h.ctx, h.heldRepo())
+		again := h.setHeld(func(held *HeldMerge) { held.At = held.At.Add(time.Minute) }) // a new hold of the same merge
+		h.execSQL(`UPDATE prs SET head_sha = ? WHERE id = ?`, fixPushed, h.pr(2).ID)
+		h.e.dropStaleHeldMerges(h.ctx, h.heldRepo(), read, nil)
+		if got := h.heldRow(); got != again {
+			t.Errorf("the row = %q, want the new hold's %q", got, again)
+		}
+		if refs := mg.heldRefs(); refs[h.heldRefKey()] != fixMergeHead {
+			t.Errorf("held refs = %v, want the new hold's", refs)
+		}
+		if _, err := os.Stat(h.heldDiffPath()); err != nil {
+			t.Errorf("held-merge.diff: %v", err)
+		}
+		if ev, ok := h.fixEvent("fix.held_dropped"); ok {
+			t.Errorf("fix.held_dropped = %q", ev.Message)
+		}
+	})
+	t.Run("a drop during the hold", func(t *testing.T) {
+		h, mg := handedMerge(t)
+		heldConflicts(mg)
+		var during map[int64]heldRow
+		mg.mu.Lock()
+		mg.held.onRef = func() { // the poll, while the settle holds the merge: GitHub's head moved
+			h.gh.setHead("talkable/talkable", 2, fixPushed)
+			during = h.e.heldMergesIn(context.WithoutCancel(h.ctx), h.heldRepo())
+		}
+		mg.mu.Unlock()
+		// what the PR's attention said when the held merge's row was written
+		h.execSQL(fmt.Sprintf(`CREATE TEMP TRIGGER held_seen AFTER INSERT ON kv WHEN NEW.key = '%s' BEGIN
+  INSERT INTO kv (key, value, updated_at) SELECT 'test.attention_at_hold', COALESCE(last_error, ''), NEW.updated_at FROM prs WHERE id = %d;
+END`, KVPRHeldMerge(h.pr(2).ID), h.pr(2).ID))
+		id := h.fix(FixPayload{Mode: FixModeMerge})
+		h.handle()
+		h.wantDone(id)
+		if len(during) != 0 {
+			t.Errorf("a poll during the hold read %v, want no row before the attention", during)
+		}
+		if seen, _, _ := h.st.GetKV(h.ctx, "test.attention_at_hold"); !attention.MergeReady(seen) {
+			t.Errorf("the attention when the row was written = %q, want merge ready: the row comes after it", seen)
+		}
+		if _, ok := h.heldMergeOfPR(); !ok || !attention.MergeReady(deref(h.pr(2).LastError)) {
+			t.Fatalf("after the hold: held %v, attention %q", ok, deref(h.pr(2).LastError))
+		}
+		h.tick() // the next poll sees the head GitHub has
+		wantDropped(t, h, mg, "its head moved")
+		if got := deref(h.pr(2).LastError); attention.MergeReady(got) {
+			t.Errorf("attention = %q: merge ready with no held merge", got)
+		}
+	})
+}
+
+// The review's bug: a fix loop's calls were lost when its merge was held,
+// though a loop's end asks them wherever it ends. Cycle 1's fixer left the
+// author a call; cycle 2's fixer merged the base, and its merge is held: the
+// attention says merge ready and asks the carried call. A drop keeps the
+// call and replaces the merge's words alone; a push says the findings wait
+// for the next fix (`magnum fix`, f on the screens) and keeps the call.
+func TestAHeldMergeKeepsTheCallsTheLoopCarried(t *testing.T) {
+	storetest.Parallel(t)
+	const call = "app/models/offer.rb:42"
+	carried := func(t *testing.T) (*harness, *mergeGit) {
+		t.Helper()
+		h, mg := mergeHarness(t, withFixerApp)
+		fixablePR(h, "zhuravel", map[string]int{"P1": 1, "P2": 1})
+		cycleFixer(h, mg.fixGit, leavesCall(fixPushed, 42), func(id string) (string, string) {
+			return fixMergeHead, fixReport(id, "d3d3d3d Merge c0c0c0c: not run: environment", "0 threads (0 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "none")
+		})
+		h.fix(FixPayload{})
+		h.handle()
+		reviewWith(h, byHead(map[string]map[string]int{fixPushed: {"P2": 1}}))
+		mg.behind, mg.lostPush = true, true // cycle 2's head lacks master's tip, and its merge conflicts
+		heldConflicts(mg)
+		mg.mu.Lock()
+		mg.held.parents = map[string][]string{fixMergeHead: {fixPushed, fixBaseTip}}
+		mg.mu.Unlock()
+		h.advance(time.Minute)
+		reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"}) // the re-review's new finding: cycle 2
+		held, ok := h.heldMergeOfPR()
+		if !ok || held.Head != fixPushed || !held.Findings {
+			t.Fatalf("held = %+v, %v; want cycle 2's merge into b2b2b2b, findings waiting", held, ok)
+		}
+		got := deref(h.wantState(2, store.PRNeedsAttention).LastError)
+		if !strings.HasPrefix(got, strings.TrimSuffix(held.Attention, ".")+"; ") || !strings.Contains(got, call) {
+			t.Fatalf("attention = %q, want merge ready, then the carried call on %s", got, call)
+		}
+		return h, mg
+	}
+	t.Run("dropped", func(t *testing.T) {
+		h, mg := carried(t)
+		h.gh.mu.Lock()
+		h.gh.baseTip = fixMovedTip
+		h.gh.mu.Unlock()
+		h.tick()
+		wantDropped(t, h, mg, "master moved on GitHub")
+		got := deref(h.wantState(2, store.PRNeedsAttention).LastError)
+		if !attention.MergeDropped(got) || !strings.Contains(got, call) {
+			t.Errorf("attention = %q, want the drop's words and the carried call on %s", got, call)
+		}
+	})
+	t.Run("pushed", func(t *testing.T) {
+		h, mg := carried(t)
+		if r := h.mergeBound(h.planMerge().Asked); r.State != store.RequestDone {
+			t.Fatalf("the push: %s %q", r.State, deref(r.Result))
+		}
+		if _, pushes := mg.made(); len(pushes) != 1 {
+			t.Fatalf("pushes = %v, want the held merge's", pushes)
+		}
+		// the merge is no trivial delta here: the push queued its re-review, which f needs on the head
+		h.wantState(2, store.PRRereviewPending)
+		ev, ok := h.fixEvent("fix.needs_you")
+		for _, want := range []string{"magnum pushed claude-fix's held merge d3d3d3d after your y", "the findings wait: the re-review of d3d3d3d runs first",
+			"`magnum fix talkable/talkable#2` (f on the screens) runs claude-fix again", call} {
+			if !ok || !strings.Contains(ev.Message, want) {
+				t.Errorf("fix.needs_you = %q, %v; want it to say %q", ev.Message, ok, want)
+			}
+		}
+		if toasts := toastsWith(h, "findings wait"); len(toasts) == 0 {
+			t.Errorf("toasts = %v, want one that says the findings wait", h.nh.shown())
+		}
+	})
+}
+
+// The review's bugs: a hold that failed left held-merge.diff behind and
+// failed the settle ("fix settle failed") instead of falling back to the
+// merge by hand, and the ref named the repository, which git refuses for
+// one named .github. The ref is the PR's registry id now, the file is
+// written last, and any failure of the hold leaves nothing and needs you
+// as before.
+func TestAHoldThatFailsLeavesNothingAndNeedsYouAsBefore(t *testing.T) {
+	storetest.Parallel(t)
+	for _, tc := range []struct {
+		name string
+		fail func(h *harness, mg *mergeGit)
+	}{
+		{"the ref", func(_ *harness, mg *mergeGit) { mg.held.refErr = errors.New("fatal: cannot lock ref") }},
+		{"the file", func(h *harness, _ *mergeGit) { // a directory where held-merge.diff goes
+			if err := os.MkdirAll(filepath.Join(h.heldDiffPath(), "x"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, mg := handedMerge(t)
+			heldConflicts(mg)
+			mg.mu.Lock()
+			tc.fail(h, mg)
+			mg.mu.Unlock()
+			id := h.fix(FixPayload{Mode: FixModeMerge})
+			h.handle()
+			h.wantDone(id)
+			wantNoPush(t, mg)
+			if held, ok := h.heldMergeOfPR(); ok {
+				t.Errorf("held: %+v", held)
+			}
+			if refs := mg.heldRefs(); len(refs) != 0 {
+				t.Errorf("held refs = %v", refs)
+			}
+			if fi, err := os.Stat(h.heldDiffPath()); err == nil && fi.Mode().IsRegular() {
+				t.Error("held-merge.diff stayed")
+			}
+			got := deref(h.wantState(2, store.PRNeedsAttention).LastError)
+			if !strings.HasPrefix(got, "fix: magnum did not push claude-fix's merge of the parent of talkable/talkable#2: ") ||
+				!strings.Contains(got, "keeps the PR's own workflow changes") || !strings.Contains(got, "merge master into feature by hand") {
+				t.Errorf("attention = %q, want the merge by hand", got)
+			}
+			if _, ok := h.fixEvent("fix.failed"); ok {
+				t.Error("the settle failed")
+			}
+		})
+	}
+	t.Run("a repository named .github", func(t *testing.T) {
+		h, mg := handedMerge(t)
+		heldConflicts(mg)
+		pr := h.pr(2)
+		role, ok := h.e.cfg.FixRoleFor(h.e.cfg.WatchFor("talkable/talkable"))
+		if !ok {
+			t.Fatal("no fix role")
+		}
+		job := &fixJob{repo: store.Repo{ID: pr.RepoID, Owner: "example", Name: ".github"}, pr: pr, slot: h.slot("review1"),
+			role: role, head: fixHead, mode: FixModeMerge}
+		id, _, _ := h.e.fixerSignature(job.role.Identity)
+		held, why := h.e.holdMerge(h.ctx, job, id, fixHead, fixMergeHead, fixConflict{base: "master", sha: fixBaseTip},
+			pushRefusal{why: "keeps the PR's own workflow changes", own: []string{".github/workflows/ci.yml"}, files: []string{".github/workflows/ci.yml"}})
+		if why != "" || held.Merge != fixMergeHead {
+			t.Fatalf("holdMerge = %+v, %q; want it held", held, why)
+		}
+		if refs := mg.heldRefs(); refs[job.slot.MainClone+" refs/magnum/held/"+fmt.Sprint(pr.ID)] != fixMergeHead {
+			t.Errorf("held refs = %v, want refs/magnum/held/%d", refs, pr.ID)
+		}
+		if _, err := os.Stat(filepath.Join(h.d.Layout.PRReviews("example", ".github", 2), HeldMergeFile)); err != nil {
+			t.Errorf("held-merge.diff: %v", err)
+		}
+	})
+}
+
+// A merge of the parent on a PR magnum never reviewed (a baseline) is held
+// all the same, but needs_attention is not its state to take: the PR would
+// then be queued for a review at its next push. An urgent toast says merge
+// ready instead, and its row's e and P act on it.
+func TestAHeldMergeOnAPRMagnumNeverReviewedToastsMergeReady(t *testing.T) {
+	h, mg := mergeHarness(t, withFixerApp)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: fixHead, author: "zhuravel"})
+	h.startup()
+	h.tick() // first sync: both baseline
+	h.wantState(2, store.PRBaseline)
+	mg.behind, mg.lostPush = true, true
+	heldConflicts(mg)
+	fixer(h, mg.fixGit, fixMergeHead, func(run store.Run) string {
+		return fixReport(run.ID, "d3d3d3d Merge c0c0c0c: not run: environment", "0 threads (0 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "none")
+	})
+	id := h.fix(FixPayload{Mode: FixModeMerge})
+	h.handle()
+	h.wantDone(id)
+	if _, ok := h.heldMergeOfPR(); !ok {
+		t.Fatal("no held merge")
+	}
+	h.wantState(2, store.PRBaseline)
+	if toasts := toastsWith(h, "merge ready"); len(toasts) == 0 {
+		t.Errorf("toasts = %v, want one that says merge ready", h.nh.shown())
+	}
+}
+
+// magnum never deletes a PR's row, but a held merge whose row is gone is
+// dropped at the poll all the same, its ref with it.
+func TestAHeldMergeOfAPRRowThatIsGoneIsDropped(t *testing.T) {
+	h, mg := holdMerged(t)
+	held, _ := h.heldMergeOfPR()
+	b, err := json.Marshal(held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const gone = 990
+	if err := h.st.SetKV(h.ctx, KVPRHeldMerge(gone), string(b)); err != nil {
+		t.Fatal(err)
+	}
+	if err := mg.UpdateRef(h.ctx, held.Clone, HeldMergeRef(gone), held.Merge); err != nil {
+		t.Fatal(err)
+	}
+	h.tick()
+	if raw, ok, _ := h.st.GetKV(h.ctx, KVPRHeldMerge(gone)); ok {
+		t.Errorf("the row of a PR that is gone stayed: %q", raw)
+	}
+	if refs := mg.heldRefs(); len(refs) != 1 || refs[h.heldRefKey()] != fixMergeHead {
+		t.Errorf("held refs = %v, want PR #2's alone", refs)
 	}
 }
 
@@ -505,18 +978,8 @@ func TestTheOtherRefusalsOfAHandedMergeStillNeedYouAsBefore(t *testing.T) {
 			id := h.fix(FixPayload{Mode: FixModeMerge})
 			h.handle()
 			h.wantDone(id)
-			if _, pushes := mg.made(); len(pushes) != 0 { // the App without Workflows tried to mint its token
-				t.Errorf("pushes = %v, want none", pushes)
-			}
-			if held, ok := h.heldMergeOfPR(); ok {
-				t.Errorf("held: %+v", held)
-			}
-			if refs := mg.heldRefs(); len(refs) != 0 {
-				t.Errorf("held refs = %v", refs)
-			}
-			if _, err := os.Stat(h.heldDiffPath()); !errors.Is(err, fs.ErrNotExist) {
-				t.Errorf("held-merge.diff: %v", err)
-			}
+			wantNoPush(t, mg) // the App without Workflows tried to mint its token
+			wantNoHeld(t, h, mg)
 			got := deref(h.wantState(2, store.PRNeedsAttention).LastError)
 			if !strings.HasPrefix(got, "fix: magnum did not push claude-fix's merge of the parent of talkable/talkable#2: ") || !strings.Contains(got, tc.want) ||
 				!strings.Contains(got, "merge master into feature by hand") {
@@ -542,15 +1005,7 @@ func TestAMergeIntoAPRThatIsNotYoursIsNeverHeld(t *testing.T) {
 	h.handle()
 	h.wantDone(id)
 	wantNothingPushed(t, h, mg)
-	if held, ok := h.heldMergeOfPR(); ok {
-		t.Errorf("held: %+v", held)
-	}
-	if refs := mg.heldRefs(); len(refs) != 0 {
-		t.Errorf("held refs = %v", refs)
-	}
-	if _, err := os.Stat(h.heldDiffPath()); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("held-merge.diff: %v", err)
-	}
+	wantNoHeld(t, h, mg)
 	const why = "keeps the PR's own workflow changes (.github/workflows/ci.yml), which " + fixerAppLogin + " never pushes"
 	if got := deref(h.wantState(2, store.PRNeedsAttention).LastError); !strings.Contains(got, why) || !strings.Contains(got, "by hand") {
 		t.Errorf("attention = %q, want the refusal %q and the merge by hand", got, why)

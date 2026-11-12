@@ -23,7 +23,7 @@ const (
 // heldPushAsk is the question of a held merge's push the daemon's plan
 // puts: the workflow files, the bot and the Workflows token.
 func heldPushAsk(ref string) string {
-	return "Merge the parent of " + ref + ": magnum pushes claude-fix's merge of master at c0c0c0c into feature as fixer-app[bot] with the " +
+	return "Merge the parent of " + ref + ": magnum pushes claude-fix's merge d3d3d3d of master at c0c0c0c into feature as fixer-app[bot] with the " +
 		"Workflows token; it changes .github/workflows/ci.yml and pronto.yml (held-merge.diff)?"
 }
 

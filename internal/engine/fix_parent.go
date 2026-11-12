@@ -437,12 +437,12 @@ func (e *Engine) pushHanded(ctx context.Context, job *fixJob, head string) (stri
 	switch {
 	case err != nil:
 		return "", err
-	case len(refused.own) > 0: // fix_held_merge.go: yours to read and push
-		msg, err := e.holdMerge(ctx, job, id, job.head, head, b, refused)
-		if err != nil || msg == "" {
-			return refused.why, err
+	case len(refused.own) > 0: // fix_held_merge.go: yours to read and push, or the merge by hand when it cannot be held
+		h, why := e.holdMerge(ctx, job, id, job.head, head, b, refused)
+		if why != "" {
+			return why, nil
 		}
-		return "", fixMergeHeld{msg: msg}
+		return "", fixMergeHeld{h: h, refused: refused.why}
 	case refused.why != "":
 		return refused.why, nil
 	}
@@ -634,8 +634,8 @@ func (e *Engine) requestMerge(ctx context.Context, pr store.PR, dry bool, asked 
 	if e.draining(ctx) {
 		return "", errors.New("the daemon drains for a restart: ask again after it")
 	}
-	if h, ok := e.heldMergeOf(ctx, pr.ID); ok { // fix_held_merge.go: the merge magnum holds for your y
-		if res, handled, err := e.requestHeld(ctx, pr, h, dry, asked); handled {
+	if row, ok := e.heldMergeOf(ctx, pr); ok { // fix_held_merge.go: the merge magnum holds for your y
+		if res, handled, err := e.requestHeld(ctx, pr, row, dry, asked); handled {
 			return res, err
 		}
 	}

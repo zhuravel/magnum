@@ -18784,81 +18784,109 @@ skill versions); people add theirs to the sections before it, at the end of the 
 - **A resolved merge that keeps the PR's own workflow changes is held for your y, then pushed with the
   Workflows token** (2026-11-12, approved by the operator; amends "A merge that carries the base's workflow
   files goes out with a Workflows token only the daemon mints"; the design is
-  docs/superpowers/specs/2026-11-12-held-workflow-merge-design.md). The operator pressed `P` on one of their
-  own PRs; the merge conflicted in 5 files, two of them workflow files both the base and the PR changed.
-  claude-fix resolved them, `magnum push` handed the merge to the daemon (exit 4), and `pushMerge` refused it
-  because it keeps the PR's own workflow changes; the settle dropped it and the PR needed you with "merge
-  master into <branch> by hand". The fixer App has the Workflows permission: the rule refuses because an
-  agent wrote workflow content nobody read. Now that refusal is typed (`pushRefusal.own`, with `files`, the
-  workflow files the push changes), and when it is a handed merge's only refusal (the merge merges the tip
-  GitHub names) and the PR is the operator's own (`ownPR`, read again from the registry), the settle holds
-  it (`holdMerge`, fix_held_merge.go): `refs/magnum/held/<owner>/<repo>/<number>` in
-  `cmp.Or(slot.MainClone, slot.Path)` keeps the commit from git gc (gitx's `UpdateRef`, refs/magnum/ only),
-  a `HeldMerge` row in the key-value table (`pr.<id>.held_merge`) records it (an existing persisted
-  structure: no migration, so no `daemon-restart --drain` before the CLI works again; not the loop's
-  `KVPRFix` row, which ends with the loop and whose presence every reader takes for a loop at work), and
-  `held-merge.diff` (0600, in `Layout.PRReviews`) holds `git show --remerge-diff --format= <merge> --
-  .github/workflows` (gitx `RemergeDiff`), or, when that is empty, the one line "No conflict in a workflow
-  file was resolved: the workflow changes come unchanged from <base> and the PR.", then `git diff <head>
-  <merge> -- .github/workflows` (gitx `PathsDiff`). The attention is `attention.MergeReadyText`: "fix: merge
-  ready: claude-fix merged master at c0c0c0c and resolved 5 conflicts. It changes .github/workflows/ci.yml and
-  pronto.yml. fixer-app[bot] pushes it only after your y: P asks (e shows held-merge.diff).", with the role's
-  and the identity's names from the job, and a fix run's merge (its fixer merges the base before the
-  findings) adds "The findings wait for the next fix after the push."; its next step
-  (`attention.MergeReadyNext`) is `magnum merge-parent`'s y/N, never `magnum fix --done`. Every other refusal
-  of `pushMerge` (an App without Workflows, a tip not on the base as GitHub has it, workflow files that differ
-  from a tip that moved, a refused branch) and a PR that is not yours end in Needs you as before; the daemon's
-  own clean merge that keeps the PR's workflow changes is still refused (no agent wrote anything, and GitHub's
-  Update branch merges it).
-  - The y: the dry run of a PR with a held merge plans its push (`requestHeld`), and `MergeAsked` gains
-    `merge` (its SHA), which the screens' `tui.MergeAsked.Merge` carries back. The plan's words keep the
-    first words of every dry run's ("dry run: would merge the parent of <PR>: "): the CLI's question cuts
-    them off and its check for a daemon from before the plan reads them. The y binds to the merge, the head
-    and the tip with the existing 10-minute rule (`askedRefusalOf`, which `askedRefusal` now calls;
-    `mergeMoved` compares the merge too). `pushHeld` fetches the base into the clone, reads GitHub's Details
-    once (the head, the base and its tip must be the held ones: `heldStale`), checks that the held ref is the
-    named merge and that its parents are the head and the tip, then `baseOnGitHub`, mints the Workflows token
-    (`workflowsToken`, split out of `pushMerge`, whose words it keeps) and pushes with a lease on the head,
-    within 2 minutes since it runs while the daemon answers the request. It skips only the check that the
-    workflow files equal the tip's. After it, the ref, the row and the file go, the PR row's head moves
-    (`parentOnRow`), `notePush` starts its CI after the grace, and `fix.parent_pushed` (`held: true`) and the
-    merge's `fix.ended` (which `--wait` reads) are written. `--yes` binds nothing and is refused ("…
+  docs/superpowers/specs/2026-11-12-held-workflow-merge-design.md, and a reviewer's round of the same day
+  shaped what follows). The operator pressed `P` on one of their own PRs; the merge conflicted in 5 files,
+  two of them workflow files both the base and the PR changed. claude-fix resolved them, `magnum push` handed
+  the merge to the daemon (exit 4), and `pushMerge` refused it because it keeps the PR's own workflow changes;
+  the settle dropped it and the PR needed you with "merge master into <branch> by hand". The fixer App has the
+  Workflows permission: the rule refuses because an agent wrote workflow content nobody read.
+  - The hold. `pushMerge`'s refusal is typed (`pushRefusal.own`, with `files`, the workflow files the push
+    changes). When it is a handed merge's only refusal (the merge merges the tip GitHub names), the PR is the
+    operator's own (`ownPR`, read again from the registry) and the App can mint its Workflows token (minted
+    and released at once: an App without Workflows held a merge no y could push, and lost the advice to
+    grant it), the settle holds it (`holdMerge`, fix_held_merge.go): `refs/magnum/held/<PR id>` in
+    `cmp.Or(slot.MainClone, slot.Path)` keeps the commit (by the registry id: a repository named `.github`
+    makes a ref name git refuses), then `held-merge.diff` (0600, in `Layout.PRReviews`), written last: a
+    line that names the merge, `git show --remerge-diff --format= <merge> -- .github/workflows` (gitx
+    `RemergeDiff`) or, when that is empty, the one line "No conflict in a workflow file was resolved: the
+    workflow changes come unchanged from <base> and the PR.", then `git diff <head> <merge> --
+    .github/workflows` (gitx `PathsDiff`), every control character but tab and newline escaped (`\x1b`,
+    `\x0d`, `\x7f`, C1 as `\u0085`): the pager runs with LESS=R, and agent-written content could hide a
+    line. Any failure of the hold removes what it wrote and falls back to the merge by hand, never "fix
+    settle failed". The attention is `attention.MergeReadyText` ("fix: merge ready: claude-fix merged master
+    at c0c0c0c and resolved 5 conflicts. It changes .github/workflows/ci.yml and pronto.yml. fixer-app[bot]
+    pushes it only after your y: P asks (e shows held-merge.diff)."), and a fix of findings that did not start
+    for the merge alone (`heldFindings`: not a merge of the parent, not a CI fix, which merge the base too)
+    adds "The findings wait for the next fix after the push."; the calls the loop carried follow it
+    (`carriedText`, and `keepDecisions` in `fixAttention`), as at every end of a loop (the hand-refusal's
+    end now carries them too); its next step (`attention.MergeReadyNext`) is `magnum merge-parent`'s y/N,
+    before any call's, and never `magnum fix --done`. The `HeldMerge` row (key-value, `pr.<id>.held_merge`:
+    an existing persisted structure, no migration, not the loop's `KVPRFix` row, which ends with the loop)
+    is written after the attention, so a poll during the hold drops nothing and "merge ready" never stands
+    without a row. A PR magnum never reviewed (a baseline) keeps its state, since needs attention would queue
+    its review at its next push; an urgent toast says merge ready instead. Every other refusal of
+    `pushMerge`, and a PR that is not yours, end in Needs you as before; the daemon's own clean merge that
+    keeps the PR's workflow changes is still refused (no agent wrote anything, and Update branch merges it).
+  - The y. The dry run of a PR with a held merge plans its push (`requestHeld`), in words that name the merge
+    ("magnum pushes claude-fix's merge d3d3d3d of master at c0c0c0c into feature as fixer-app[bot] with the
+    Workflows token; …"), so a merge held again of the same tip asks another question; they keep the first
+    words of every dry run's, which the CLI's question and its check for an older daemon read. `MergeAsked`
+    gains `merge`, which the screens' `tui.MergeAsked.Merge` carries back. The y binds to the merge, the head
+    and the tip with the existing 10-minute rule (`askedRefusalOf`; `mergeMoved` compares the merge too), and
+    starts the push off the daemon's loop as a merge of the parent runs (`startHeldPush`: the PR's
+    reservation, a loop row in FixModeMerge that `magnum abort` ends and `--wait` follows); the request
+    answers "pushing …". Before, a fetch of up to 30 s and a push of up to 2 minutes ran in the request
+    handler, sometimes inside the poll. `pushHeld` fetches the base, reads GitHub's Details once (the head,
+    the base and its tip must be the held ones; the tip being GitHub's base tip is how the second parent is
+    on the base, so `baseOnGitHub`, which read the Details a second time and could no longer refuse, is not
+    called), checks the held ref and the merge's parents, mints the Workflows token (`workflowsToken`, split
+    out of `pushMerge` with its words) and pushes with a lease on the head within 2 minutes; it skips only the
+    check that the workflow files equal the tip's. After it the row, the ref and the file go, the PR row's
+    head moves (`parentOnRow`), `notePush` starts its CI after the grace, and `fix.parent_pushed` (`held:
+    true`) and the merge's `fix.ended` are written; a fix of findings's merge, or one whose attention asked
+    calls, needs you again instead (`fix.needs_you`, the attention and an urgent toast: the findings wait
+    for `magnum fix`, f, with the calls kept). The push of a merge of the base queues a re-review unless the
+    watch counts it a trivial delta, and f needs a review on the head: then the words say the re-review runs
+    first, and the event and the toast carry them, since no attention is raised over a queued round. A push
+    that cannot go writes `fix.failed` and an urgent toast. `--yes` binds nothing and is refused ("…
     --yes binds nothing and never pushes a held merge: nothing was pushed"), and so is a binding without
-    `merge`, or one that names a held merge magnum no longer holds; an n leaves it held. The push runs in the
-    request, not in a job: no agent works, and a goroutine would leave the screen's request answered before
-    the push did.
-  - Stale: the poll drops a held merge whose PR merged or closed, is no longer yours, or whose head or base
-    moved on its row, or whose base's tip moved (or whose base branch is gone) on GitHub. Only the Details
-    name the tip, and the base moving does not move the PR's `updatedAt`, so a PR with a held merge has its
-    Details read on every poll (`withHeld`, as `awaitCIRuns`' PRs): one more PR in the repository's batch
-    while a merge waits for you. The check runs after `confirmMissing`, so a confirmed close drops it in the
-    same poll; the plan and the push check again. A drop writes `fix.held_dropped`, and a PR that still needs
-    you for it gets "fix: magnum dropped claude-fix's held merge of master at c0c0c0c: <why>; P (`magnum
-    merge-parent <ref>`) merges the parent again", so a stale merge never comes back as "merge ready".
-  - The screens: `e` opens `held-merge.diff` in the pager, asking nothing, on the board's and the
+    `merge`, or one that names a held merge magnum no longer holds; an n leaves it held.
+  - Stale. The poll, the plan and the push drop a held merge whose PR merged or closed, is no longer yours,
+    whose row names another PR (`Repo`, `Number`) or another fix identity than the fix role's now (so the y
+    never pushes as a bot the question did not name), whose head or base moved on its row, or whose base's
+    tip moved (or whose base branch is gone) on GitHub. Only the Details name the tip, and the base moving does
+    not move the PR's `updatedAt`, so a PR with a held merge has its Details read on every poll (`withHeld`,
+    as `awaitCIRuns`' PRs). The poll reads the rows before its GitHub reads, which can serve a y
+    (`requestsMidPoll`), and a settle can hold a new merge meanwhile: `dropHeldMerge` deletes the row with
+    `DeleteKVIf` on the row it read, and touches the ref and the file only after it deleted that row; a PR a
+    job holds is left to the job, and a drop after magnum's own push writes nothing. Paths come from the
+    PR's and the repository's rows, never from the row's `Repo` and `Number`. A drop writes
+    `fix.held_dropped` and puts `attention.MergeDroppedText` ("fix: merge dropped: magnum dropped
+    claude-fix's held merge d3d3d3d of master at c0c0c0c: <why>; P merges the parent again", next step a new
+    merge of the parent) in the place of the merge's words, the calls after them kept. A row whose PR's row
+    is gone (magnum deletes none) is dropped with its ref.
+  - The screens. `e` opens `held-merge.diff` in the pager, asking nothing, on the board's and the
     dashboard's rows, which had no `e`, and their hints offer it on such a row (`tui.PRBoardRow.HeldMerge`,
-    `SlotRow.PRHeldMerge`, `PRRow.HeldMerge`; the CLI names the file in its own layout, never the path the
-    row holds; `magnum tui --json`'s `held_merge`). On the factory screen `e` already opens the fixer's
-    report, and both can exist (the held attention is a fix job's). Decided: while a merge is held, `e` opens
-    `held-merge.diff` first there too (the factory's `PRState.FixReport` names it, through an os.Root of the
-    reviews directory, and the menu reads "read held-merge.diff"): one key on every screen for the thing the
-    PR waits on, which the attention text names, and the fixer's report of a merge run says no more than
-    the attention; the fixer's report comes back once the merge is pushed or dropped. The board's state cell
-    says "merge ready" as the attention's cause (`mergeReadyShown`: the row's held merge and its attention's
-    words), on its one line.
-  - Tests, failing first and each checked by mutation: in engine
-    TestAHandedMergeThatKeepsThePRsOwnWorkflowChangesIsHeldForYourY, TestAFixRunsHeldMergeSaysTheFindingsWaitForTheNextFix,
-    TestAHeldMergeWithNoConflictInAWorkflowFileWritesOneLineThenThePlainDiff,
-    TestPOnAHeldMergePushesItWithTheWorkflowsTokenAfterTheBoundY, TestAHeldMergesPushIsRefusedWhenWhatItsYAskedAboutMoved,
-    TestYesAndAPlanThatNamesNoHeldMergeNeverPushIt, TestAHeldMergeThatWentStaleIsDroppedAtThePoll,
-    TestTheOtherRefusalsOfAHandedMergeStillNeedYouAsBefore and TestAMergeIntoAPRThatIsNotYoursIsNeverHeld; in
-    gitx TestRemergeDiffShowsHowAMergeResolvedItsConflictsInThePathsAsked and
-    TestPathsDiffIsTheDiffOfTwoCommitsInThePathsAsked (real git); in attention
-    TestAHeldMergesAttentionNamesItsPushAsTheNextStep; in cli TestAHeldMergesQuestionNamesTheFilesTheBotAndTheToken,
-    TestTheBoardRowOfAHeldMergeSaysMergeReadyAndNamesItsDiff and TestStatusDashDataCarriesTheHeldMerge; in tui
-    TestEOnABoardRowWithAHeldMergeOpensItsDiffInThePager, TestPOnAHeldMergeAsksItsPushAndBindsTheMerge,
-    TestEOnTheDashboardOpensTheHeldMergeOfTheRowsPR, TestAHeldMergesPagerThatFailsSaysSo and
-    TestTheFactoryScreensEOpensAHeldMergesDiff; in factory TestPRStatesNameAHeldMergesDiffFirst.
+    `SlotRow.PRHeldMerge`, `PRRow.HeldMerge`; the CLI names the file by the rows and looks at it with Lstat
+    through an os.Root of the reviews directory, so a link is no file to open, as the factory screen looks;
+    `magnum tui --json`'s `held_merge`). On the factory screen `e` already opens the fixer's report, and both
+    can exist (the held attention is a fix job's). Decided: while a merge is held, `e` opens
+    `held-merge.diff` first there too (`PRState.FixReport` and `HeldMerge` name it, and the menu reads "read
+    held-merge.diff"): one key on every screen for the thing the PR waits on, which the attention text names,
+    and the fixer's report of a merge run says no more than the attention; the fixer's report comes back once
+    the merge is pushed or dropped. Its YOUR MOVE column says "P pushes it, e the diff". The board's state cell
+    says "merge ready" as the attention's cause (`mergeReadyShown`), on its one line.
+  - Tests, failing first and the fix round's checked by mutation: in engine
+    TestAHandedMergeThatKeepsThePRsOwnWorkflowChangesIsHeldForYourY, TestAnAppWithoutWorkflowsHoldsNoMergeItCannotPush,
+    TestAFixRunsHeldMergeSaysTheFindingsWaitForTheNextFix, TestOnlyAFixOfFindingsSaysTheFindingsWait,
+    TestAHeldMergeWithNoConflictInAWorkflowFileWritesOneLineThenThePlainDiff, TestHeldMergeDiffEscapesTheControlsThatCouldHideALine,
+    TestPOnAHeldMergePushesItWithTheWorkflowsTokenAfterTheBoundY (the push's directory too),
+    TestAHeldMergesPushIsRefusedWhenWhatItsYAskedAboutMoved, TestAHeldMergeIsNeverPushedAsAnotherBot,
+    TestAHeldMergeWhoseRowNamesAnotherPRIsDropped, TestYesAndAPlanThatNamesNoHeldMergeNeverPushIt,
+    TestAHeldMergeThatWentStaleIsDroppedAtThePoll, TestThePollDropsOnlyTheHeldMergeItRead (a push after the poll's
+    read, a merge held again after it, a drop during the hold, the row's order by a SQLite trigger),
+    TestAHeldMergeKeepsTheCallsTheLoopCarried, TestAHoldThatFailsLeavesNothingAndNeedsYouAsBefore (the ref, the file,
+    a repository named .github), TestAHeldMergeOnAPRMagnumNeverReviewedToastsMergeReady,
+    TestAHeldMergeOfAPRRowThatIsGoneIsDropped, TestTheOtherRefusalsOfAHandedMergeStillNeedYouAsBefore and
+    TestAMergeIntoAPRThatIsNotYoursIsNeverHeld; in gitx TestRemergeDiffShowsHowAMergeResolvedItsConflictsInThePathsAsked
+    and TestPathsDiffIsTheDiffOfTwoCommitsInThePathsAsked (real git); in attention
+    TestAHeldMergesAttentionNamesItsPushAsTheNextStep and TestAHeldOrDroppedMergesAttentionWithTheLoopsCallsNamesBoth; in
+    cli TestAHeldMergesQuestionNamesTheFilesTheBotAndTheToken, TestMergeParentWaitFollowsAHeldMergesPush,
+    TestTheBoardRowOfAHeldMergeSaysMergeReadyAndNamesItsDiff (a link too) and TestStatusDashDataCarriesTheHeldMerge;
+    in tui TestEOnABoardRowWithAHeldMergeOpensItsDiffInThePager, TestPOnAHeldMergeAsksItsPushAndBindsTheMerge,
+    TestEOnTheDashboardOpensTheHeldMergeOfTheRowsPR, TestAHeldMergesPagerThatFailsSaysSo,
+    TestTheFactoryScreensEOpensAHeldMergesDiff and the moves goldens; in factory TestPRStatesNameAHeldMergesDiffFirst
+    and TestYourMoveFollowsTheReasonThePRNeedsYou's held merge.
 
 ## The factory (2026-11-03)
 

@@ -201,7 +201,8 @@ type PRRef struct {
 // FixReport is the fixer's report a fix job's attention names (readable
 // under magnum's reviews directory; "" for any other attention), or the
 // held-merge.diff of a merge of the parent magnum holds for your y, which
-// e opens first while it is held (heldMergeDiff), and
+// e opens first while it is held (heldMergeDiff; HeldMerge names it too, and
+// the move is then P), and
 // FixNeeds its "## Needs you" entries in the fixer's words when the
 // attention asks for what the fixer left (fixerReport): data the screen
 // only draws, never instructions, never a log's or a message's.
@@ -257,6 +258,7 @@ type PRState struct {
 	Attention, AttentionMsg               string
 	FixReport                             string
 	FixNeeds                              []string
+	HeldMerge                             string
 
 	Autofix                   string
 	HeadRef, BaseRef          string
@@ -656,7 +658,7 @@ func (m *magnumRegistry) fillPR(ctx context.Context, st *store.Store, v *PRState
 			v.FixReport, v.FixNeeds = m.fixerReport(store.Deref(pr.LastError))
 		}
 		if held := m.heldMergeDiff(ctx, st, repo, pr); held != "" { // e opens it first while the merge is held
-			v.FixReport, v.FixNeeds = held, nil
+			v.HeldMerge, v.FixReport, v.FixNeeds = held, held, nil
 		}
 	}
 	return nil

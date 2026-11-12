@@ -269,6 +269,38 @@ func TestAHeldMergesAttentionNamesItsPushAsTheNextStep(t *testing.T) {
 	}
 }
 
+// A held merge's attention that also carries the calls the fix loop left
+// names the push's y/N first, then the calls; `magnum fix --done` takes
+// neither. A dropped held merge's attention names a new merge of the
+// parent as its next step, never the fixer's pane, with or without calls.
+func TestAHeldOrDroppedMergesAttentionWithTheLoopsCallsNamesBoth(t *testing.T) {
+	const call = "decide magnum's P2 on app/a.rb:7: the fixer declined it; reply won't fix at " +
+		"https://github.com/talkable/talkable/pull/2#discussion_r4100000001, or `magnum fix talkable#2` sends it back"
+	calls := FixCallsText([]FixCall{{Action: call}}, "", "/r/claude-fix.md")
+	held := MergeReadyText("claude-fix merged master at c0c0c0c. It changes .github/workflows/ci.yml. fixer-app[bot] pushes it only after "+
+		"your y: P asks (e shows held-merge.diff)") + "; " + calls
+	r := Explain(KindFix, held, "talkable#2")
+	if !strings.HasPrefix(r.Fix, MergeReadyNext("talkable#2")+"; ") || !strings.Contains(r.Fix, call) || len(r.NeedsYou) != 1 {
+		t.Errorf("held with calls: fix %q, calls %+v", r.Fix, r.NeedsYou)
+	}
+	if !strings.HasPrefix(r.Summary, "fix: merge ready: ") {
+		t.Errorf("held with calls: summary %q", r.Summary)
+	}
+	if fixDoneFits(held, "") {
+		t.Error("`magnum fix --done` would take a held merge's attention with calls")
+	}
+	dropped := MergeDroppedText("magnum dropped claude-fix's held merge d3d3d3d of master at c0c0c0c: master moved on GitHub from c0c0c0c to d1d1d1d")
+	if !strings.HasPrefix(dropped, "fix: merge dropped: ") || !strings.HasSuffix(dropped, "; P merges the parent again") || !MergeDropped(dropped) || MergeReady(dropped) {
+		t.Errorf("MergeDroppedText = %q", dropped)
+	}
+	for _, m := range []string{dropped, dropped + "; " + calls} {
+		r := Explain(KindFix, m, "talkable#2")
+		if !strings.HasPrefix(r.Fix, MergeDroppedNext("talkable#2")) || strings.Contains(r.Fix, "magnum open") {
+			t.Errorf("%q: fix %q, want a new merge of the parent first", m, r.Fix)
+		}
+	}
+}
+
 // A fix reason too long for the toast's one line keeps the counts, which come
 // first, and drops the report's path, which the next step names in full,
 // instead of cutting the path in the middle.

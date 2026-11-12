@@ -118,6 +118,7 @@ type mergeGit struct {
 	schema    []string
 	commits   []string
 	pushes    []string
+	pushDirs  []string    // the directory each push ran in
 	held      heldGitFake // fix_held_merge_test.go: the refs, parents and diffs of a held merge
 }
 
@@ -194,9 +195,10 @@ func (g *mergeGit) ChangedPaths(_ context.Context, _, base, head string, pathspe
 	return slices.Clone(g.schema), nil
 }
 
-func (g *mergeGit) PushLeaseGitHubAs(_ context.Context, _, owner, repo, sha, branch, expect string, env map[string]string) error {
+func (g *mergeGit) PushLeaseGitHubAs(_ context.Context, dir, owner, repo, sha, branch, expect string, env map[string]string) error {
 	g.mu.Lock()
 	g.pushes = append(g.pushes, fmt.Sprintf("%s/%s:%s:%s:%s:%s", owner, repo, sha, branch, expect, pushedAs(env)))
+	g.pushDirs = append(g.pushDirs, dir)
 	err := g.pushErr
 	g.mu.Unlock()
 	if err == nil {
@@ -213,6 +215,13 @@ func pushedAs(env map[string]string) string {
 		return env["GH_CONFIG_DIR"] + "+GH_TOKEN"
 	}
 	return env["GH_CONFIG_DIR"]
+}
+
+// pushedFrom are the directories the pushes so far ran in.
+func (g *mergeGit) pushedFrom() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.pushDirs)
 }
 
 // made are the merge commits and pushes the daemon made so far.

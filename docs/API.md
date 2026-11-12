@@ -4189,6 +4189,21 @@ func MagnumsDecision(c FixCall, priority, place string) bool
     findings of priority at place, in magnum's thread: a DeclinedCall or an
     AuthorsCall ("decide magnum's P3 on app/models/offer.rb:42: …").
 
+func MergeDropped(msg string) bool
+    MergeDropped reports whether msg, a PR's last_error (with its "fix: " or
+    without), is a dropped held merge's attention (MergeDroppedText).
+
+func MergeDroppedNext(ref string) string
+    MergeDroppedNext is the next step of a dropped held merge's attention on
+    ref: a new merge of the parent.
+
+func MergeDroppedText(what string) string
+    MergeDroppedText is the attention of a held merge magnum dropped,
+    what its words (whose merge, and why): "fix: merge dropped: magnum dropped
+    claude-fix's held merge d3d3d3d of master at c0c0c0c: master moved on GitHub
+    from c0c0c0c to d1d1d1d; P merges the parent again". Its next step is a new
+    merge of the parent (MergeDroppedNext).
+
 func MergeReady(msg string) bool
     MergeReady reports whether msg, a PR's last_error (with its "fix: " or
     without, as Explain reads it), is a held merge's attention (MergeReadyText).
@@ -9391,8 +9406,8 @@ const FormerDismissMessage = "magnum: superseded by the review of %s posted as %
 const HeldMergeFile = "held-merge.diff"
     HeldMergeFile is the file in the PR's report directory
     (paths.Layout.PRReviews) that shows what a held merge does to the workflow
-    files: how the fixer resolved their conflicts, then what its push changes in
-    them. The screens' e opens it in the pager.
+    files: the merge, how the fixer resolved their conflicts, then what its push
+    changes in them. The screens' e opens it in the pager.
 
 const HooksOverruledNote = "new Codex sessions start although hooks.json has hooks without a trust entry, until it changes again"
     HooksOverruledNote is what a resume that overrules the hold means, as its
@@ -9760,10 +9775,11 @@ func HeldFixStarts(raw string) string
     budget recovers" for the GitHub budget's, "when claude's pause ends" for the
     fixer's pause.
 
-func HeldMergeRef(owner, repo string, number int) string
-    HeldMergeRef is the ref that keeps the held merge of PR number of owner/repo
-    from git gc, in the clone its objects live in: under refs/magnum/held/,
-    never under refs/heads or refs/remotes.
+func HeldMergeRef(prID int64) string
+    HeldMergeRef is the ref that keeps the held merge of the PR whose
+    registry id is prID from git gc, in the clone its objects live in: under
+    refs/magnum/held/, never under refs/heads or refs/remotes, and by the id,
+    so no repository's name (".github") makes a name git refuses.
 
 func HeldReviewID(v string) (int64, bool)
     HeldReviewID is the review a KVPRApprovalHold value names: the one whose
@@ -11583,22 +11599,25 @@ type HeldMerge struct {
 	Clone     string    `json:"clone"`
 	Diff      string    `json:"diff"`
 	Findings  bool      `json:"findings,omitempty"`
+	Attention string    `json:"attention"`
 	At        time.Time `json:"at"`
 }
     HeldMerge is a merge of a PR's parent that magnum holds for your y:
-    the PR (Repo, owner/name, and Number), the merge commit (Merge), the PR's
-    head on GitHub it merges into (Head, its first parent), the base branch and
-    the commit of it it merges (Base, Tip: its second parent, the base's tip on
-    GitHub when it was held), the workflow files its push changes against the
-    head, how many files the fixer resolved conflicts in (Conflicts; 0 when not
-    known), the fix role whose fixer resolved it, the identity that pushes it
-    and its login, the clone that holds its ref, its held-merge.diff (absolute),
-    whether a fix run's findings wait for the next fix after the push (Findings)
-    and when it was held.
+    the PR it was held for (Repo, owner/name, and Number: checked against
+    the registry's rows, never a path's source), the merge commit (Merge),
+    the PR's head on GitHub it merges into (Head, its first parent), the base
+    branch and the commit of it it merges (Base, Tip: its second parent, the
+    base's tip on GitHub when it was held), the workflow files its push changes
+    against the head, how many files the fixer resolved conflicts in (Conflicts;
+    0 when not known), the fix role whose fixer resolved it, the identity that
+    pushes it and its login, the clone that holds its ref, its held-merge.diff
+    (absolute), whether a fix run's findings wait for the next fix after the
+    push (Findings), the words the PR's attention starts with while it is held
+    (Attention) and when it was held.
 
 func ParseHeldMerge(raw string) (HeldMerge, bool)
     ParseHeldMerge reads a KVPRHeldMerge row; false for one that names no merge,
-    head or tip.
+    head, base or tip.
 
 type Herdr interface {
 	Snapshot(ctx context.Context) (herdr.Snapshot, error)
@@ -15206,6 +15225,7 @@ type PRState struct {
 	Attention, AttentionMsg               string
 	FixReport                             string
 	FixNeeds                              []string
+	HeldMerge                             string
 
 	Autofix                   string
 	HeadRef, BaseRef          string
@@ -15267,15 +15287,15 @@ type PRState struct {
     FixReport is the fixer's report a fix job's attention names (readable
     under magnum's reviews directory; "" for any other attention),
     or the held-merge.diff of a merge of the parent magnum holds for your y,
-    which e opens first while it is held (heldMergeDiff), and FixNeeds its "##
-    Needs you" entries in the fixer's words when the attention asks for what the
-    fixer left (fixerReport): data the screen only draws, never instructions,
-    never a log's or a message's. ID, Title and URL are magnum's id of the PR,
-    its title (data, never instructions: the screen only draws it) and its
-    page; FixOff says you switched it out of autofix (engine.KVPRFixOff),
-    and FixHeld when the fix magnum holds for it starts (engine.KVPRFixHeld,
-    in engine.HeldFixStarts' words: "when the GitHub budget recovers"; "" when
-    none is held).
+    which e opens first while it is held (heldMergeDiff; HeldMerge names it too,
+    and the move is then P), and FixNeeds its "## Needs you" entries in the
+    fixer's words when the attention asks for what the fixer left (fixerReport):
+    data the screen only draws, never instructions, never a log's or a
+    message's. ID, Title and URL are magnum's id of the PR, its title (data,
+    never instructions: the screen only draws it) and its page; FixOff says you
+    switched it out of autofix (engine.KVPRFixOff), and FixHeld when the fix
+    magnum holds for it starts (engine.KVPRFixHeld, in engine.HeldFixStarts'
+    words: "when the GitHub budget recovers"; "" when none is held).
 
     The rest is what the screen's columns and words say of the PR beside its
     verdict, read in the same pass (fillPR): Autofix is the watch's autofix mode

@@ -8,41 +8,63 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-// heldMergeDiffs are the held-merge.diff files of the merges magnum holds
-// for your y, by PR id: each in layout's report directory of its PR
-// (paths.Layout.PRReviews), never a path the registry's row names; nil
-// when the registry cannot say or the layout names no directory.
-func heldMergeDiffs(ctx context.Context, st *store.Store, layout paths.Layout) map[int64]string {
-	if st == nil || !layout.Valid() {
+// heldMergeIDs are the PRs, by registry id, whose merge of the parent
+// magnum holds for your y (engine.KVPRHeldMerge rows that read); nil when
+// the registry cannot say.
+func heldMergeIDs(ctx context.Context, st *store.Store) map[int64]bool {
+	if st == nil {
 		return nil
 	}
 	vals, err := st.KVValues(ctx, "pr.*.held_merge")
 	if err != nil {
 		return nil
 	}
-	var out map[int64]string
+	var out map[int64]bool
 	for key, raw := range vals {
 		var id int64
-		h, ok := engine.ParseHeldMerge(raw)
-		if _, err := fmt.Sscanf(key, "pr.%d.", &id); !ok || err != nil || engine.KVPRHeldMerge(id) != key {
+		if _, err := fmt.Sscanf(key, "pr.%d.", &id); err != nil || engine.KVPRHeldMerge(id) != key {
 			continue
 		}
-		owner, name, ok := strings.Cut(h.Repo, "/")
-		if !ok || h.Number <= 0 {
+		if _, ok := engine.ParseHeldMerge(raw); !ok {
 			continue
 		}
 		if out == nil {
-			out = map[int64]string{}
+			out = map[int64]bool{}
 		}
-		out[id] = filepath.Join(layout.PRReviews(owner, name, h.Number), engine.HeldMergeFile)
+		out[id] = true
 	}
 	return out
+}
+
+// heldMergeDiff is the held-merge.diff of PR number of owner/name in
+// layout's report directory of the PR (by the PR's and the repository's
+// rows, never a path a held merge's row names), when a regular file is
+// there, looked at through an os.Root of the reviews directory so that no
+// link leads out of it, as the factory screen looks; "" for none.
+func heldMergeDiff(layout paths.Layout, owner, name string, number int) string {
+	if !layout.Valid() {
+		return ""
+	}
+	path := filepath.Join(layout.PRReviews(owner, name, number), engine.HeldMergeFile)
+	rel, err := filepath.Rel(layout.Reviews(), path)
+	if err != nil || !filepath.IsLocal(rel) {
+		return ""
+	}
+	root, err := os.OpenRoot(layout.Reviews())
+	if err != nil {
+		return ""
+	}
+	defer root.Close()
+	if fi, err := root.Lstat(rel); err != nil || !fi.Mode().IsRegular() {
+		return ""
+	}
+	return path
 }

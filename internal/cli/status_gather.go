@@ -28,6 +28,7 @@ import (
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/inventory"
 	"github.com/zhuravel/magnum/internal/launchd"
+	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/tui"
@@ -765,7 +766,7 @@ func statusGatherPRs(ctx context.Context, d statusDeps, now time.Time, r *status
 	statusQueueMarks(ctx, st, r.Queue, now)
 	statusSortQueue(r.Queue)
 	r.fixLoops, r.fixOffs = statusFixMarks(ctx, st)
-	r.heldMerges = heldMergeDiffs(ctx, st, d.Layout)
+	r.heldMerges = statusHeldMerges(ctx, st, d.Layout, prs, repoByID)
 	if cfg := d.Config; cfg != nil {
 		r.fixer = func(repo string) string { return fixerLogin(cfg, repo) }
 	}
@@ -1083,6 +1084,25 @@ func statusFixMarks(ctx context.Context, st *store.Store) (loops, offs map[int64
 		return out
 	}
 	return read("pr.*.fix", engine.KVPRFix), read("pr.*.fix_off", engine.KVPRFixOff)
+}
+
+// statusHeldMerges are the held-merge.diff files of prs' merges that magnum
+// holds for your y, by PR id (heldMergeIDs, heldMergeDiff by the PR's and
+// its repository's rows), for the dashboard's e.
+func statusHeldMerges(ctx context.Context, st *store.Store, layout paths.Layout, prs []store.PR, repos map[int64]store.Repo) map[int64]string {
+	held := heldMergeIDs(ctx, st)
+	if len(held) == 0 {
+		return nil
+	}
+	out := map[int64]string{}
+	for _, pr := range prs {
+		if repo, ok := repos[pr.RepoID]; ok && held[pr.ID] {
+			if path := heldMergeDiff(layout, repo.Owner, repo.Name, pr.Number); path != "" {
+				out[pr.ID] = path
+			}
+		}
+	}
+	return out
 }
 
 // statusSnooze is the PR's snooze when it holds at now.
