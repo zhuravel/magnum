@@ -902,7 +902,7 @@ fix_go_on = 2                     # how many times one stage gives a role whose 
                                   # progress (the same failure 3 turns in a row) the role gets one fresh session that
                                   # names the failure, its commits and the failing output; then the task asks you
                                   # (accept the failing check as known, give a direction, or drop the task)
-sensitive =["Gemfile.lock", ".github/workflows/**", "config/**"]   # the files whose change the ready card's FLAGS
+sensitive = ["Gemfile.lock", ".github/workflows/**", "config/**"]   # the files whose change the ready card's FLAGS
                                   # line names for a second look: path globs, "**" matches whole directories and
                                   # "*" never crosses "/"; your list replaces this one
 codex_fallback = { fx-cause = "fx-cause-claude", fx-critic = "fx-critic-claude", fx-critic-narrow = "fx-critic-claude", fx-points-codex = "fx-points" }
