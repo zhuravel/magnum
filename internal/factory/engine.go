@@ -1124,7 +1124,10 @@ func live(tasks []registry.Task) []registry.Task {
 // skipped, a stage event says so). The last stage's own effect ends the
 // task. A task that waits for Jira before its first stage tries Jira
 // instead (retryJira), and one whose key has no ticket.md yet (your answer
-// linked it) reads its ticket first (linkedTicket). A copy a base run left
+// linked it) reads its ticket first (linkedTicket). A task past its coding
+// stage whose answer changed the plan after coding went on the recommended
+// one goes back to coding once its stage has nothing in flight
+// (changePastCoding). A copy a base run left
 // detached is restored before anything else (resumeDetached), and what a
 // check left in the copy for you is settled (settleKept): put back under
 // its guard, or the task needs you again for it, never the writer.
@@ -1170,6 +1173,9 @@ func (e *Engine) advance(ctx context.Context, t registry.Task) error {
 		return nil
 	}
 	if ready, err := e.linkedTicket(ctx, &t); err != nil || !ready {
+		return err
+	}
+	if back, err := e.changePastCoding(ctx, t, st, i); err != nil || back {
 		return err
 	}
 	done, err := run(ctx, t, st)

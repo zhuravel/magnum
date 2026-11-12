@@ -134,6 +134,12 @@ type PromptData struct {
 	// configured ({files} and {base} in them): the writer's prompts name them
 	// for the writer to run before its turn ends; none without them.
 	Checks []string
+	// Changed names, in the judge's amend turn (AmendPrompt), the questions
+	// coding went on the recommended answer of and you answered otherwise
+	// ("question 1 of revision 2 (asked by fx-critic)", by their place in
+	// answers.md): coding began, and the writer follows the amended report
+	// next. "" in any other turn, and for an amend before coding.
+	Changed string
 	// The QA walker's turn of a qa stage (factory-qa.md), each "" (0) in any
 	// other: QARun is the run's folder (qa/<n>-<sha7> in TaskDir), where the
 	// walker saves its pages and console logs; QAURL the copy's server
@@ -182,6 +188,11 @@ type agentsRun struct {
 	// precheck passed (the coding stage's end fact), for the stage's pass.
 	copy   Copy
 	proven string
+	// change are the answers that changed the plan after coding began, the
+	// report amended for them, which this pass hands the coding stage's
+	// roles (changeInRun): a role's next turn, or its first prompt, names
+	// them. nil for none, and in any other stage.
+	change []answerChange
 }
 
 // agentsTurn is how runTurn runs an attempt: as an agents stage of the
@@ -278,12 +289,14 @@ type stageRole struct {
 // The prompts a role gets after its first (stageRole.next): its one nudge
 // for a file, a fix turn for a change the factory's checks refused (as many
 // as its cap of fix turns allows, StageFixTurns), the one to go on after a
-// pause, your answers.
+// pause, your answers, and your answer that changed the plan after coding
+// began on a recommended one (changedText).
 const (
 	nextNudge    = "nudge"
 	nextFix      = "fix"
 	nextContinue = "continue"
 	nextAnswers  = "answers"
+	nextChanged  = "changed"
 )
 
 // StageFixTurns is how many fix turns a role whose change the factory's
@@ -348,6 +361,10 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 	if !slices.Contains(agentsEnds, st.End) || e.d.Runtime == nil || (st.End == config.FactoryEndProof && e.d.Git == nil) {
 		return false, nil
 	}
+	changes, amending, err := e.codingChanges(ctx, t, st, turn)
+	if err != nil || amending {
+		return false, err
+	}
 	a, open, passed, err := e.stageAttempt(ctx, t, st, turn.gate || turn.review != nil || turn.qa != nil)
 	if err != nil || passed {
 		return passed, err
@@ -364,6 +381,9 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 		return false, err
 	}
 	if !open {
+		if waits, err := e.changeBeforeAttempt(ctx, t, changes); err != nil || waits {
+			return false, err
+		}
 		if st.End == config.FactoryEndProof && turn.review == nil { // a review's fix goes on from the reviewed head
 			if err := e.startCoding(ctx, &t, c); err != nil {
 				return false, e.stageFailed(ctx, t, err)
@@ -377,7 +397,7 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 	if err != nil {
 		return false, e.stageFailed(ctx, t, err)
 	}
-	run.copy = c
+	run.copy, run.change = c, nil // changeInRun sets the change this pass hands
 	if a.State == registry.AttemptLaunching {
 		var err error
 		if _, _, ok := e.mayLaunch(); ok { // under a hold the launch waits anyway: no read of the budget for it
@@ -409,6 +429,9 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 	}
 	if waits, err := e.suspended(ctx, &t, run); err != nil || waits {
 		e.setAsideBeforeYou(ctx, t, st, run)
+		return false, e.stageFailed(ctx, t, err)
+	}
+	if waits, err := e.changeInRun(ctx, t, changes, run); err != nil || waits {
 		return false, e.stageFailed(ctx, t, err)
 	}
 	held, err := e.promptRoles(ctx, t, st, a, c, run, dir)
@@ -610,7 +633,7 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 	}
 	var evs []runtime.Event
 	for _, r := range run.roles {
-		last := ""
+		last, lastText := "", ""
 		var lastSent time.Time
 		for _, en := range entries {
 			if en.AttemptID != a.ID || en.Role != r.runAs.Name || en.Delivered == registry.DeliveredNo {
@@ -630,12 +653,14 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 			case strings.HasPrefix(en.Text, nudgeLead):
 				r.nudged = true
 			}
-			last = en.RunID
+			last, lastText = en.RunID, en.Text
 		}
 		// A run of the role itself the runtime verified before a refusal did
 		// its work, as a run of its fallback does: the live pass relaunches
-		// no role that is ok (onAgentEvent).
-		r.ok = verified(r.runAs.Name) || verified(r.role.Name)
+		// no role that is ok (onAgentEvent). A role whose last prompt handed
+		// it your changed answer has a turn after its verification: that
+		// turn's run decides (lastRunEvent).
+		r.ok = (verified(r.runAs.Name) || verified(r.role.Name)) && !strings.Contains(lastText, changedLead)
 		if yielded[r.role.Name] {
 			// Its fallback runs in its place: relaunched unless the attempt
 			// proves it launched (a launch of a live agent adopts it), and
@@ -1477,24 +1502,12 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 			}
 			r.runAs, r.relaunch, r.refused = runAs, false, false // the fallback's files are its own from here on
 		}
-		text, next, first := "", r.next, !r.prompted
-		switch {
-		case !r.prompted:
-			if text, err = e.renderRole(ctx, t, st, r.role, r.runAs, c); err != nil {
-				return nil, err
-			}
-			if r.limited {
-				text += e.limitNote(t, st, r.role, run.since(a))
-			}
-		case next == nextNudge:
-			text = nudgeText(dir, r.problem)
-		case next == nextFix:
-			text = fixText(dir, r.problem)
-		case next == nextContinue:
-			text = continueText(r.pause, e.outputs(t, st, r.role))
-		case next == nextAnswers:
-			text = answersText(dir, e.outputs(t, st, r.role), st.End)
-		default:
+		next, first := r.next, !r.prompted
+		text, err := e.promptText(ctx, t, st, a, c, run, r, dir)
+		if err != nil {
+			return nil, err
+		}
+		if text == "" {
 			continue
 		}
 		sent := e.now()
@@ -1508,11 +1521,15 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 			switch next {
 			case nextNudge:
 				r.nudged = true
-			case nextAnswers: // a new turn, with a nudge of its own
+			case nextAnswers, nextChanged: // a new turn, with a nudge of its own
 				r.nudged = false
 				if rerr := e.resume(ctx, t); rerr != nil {
 					e.log.Warn("resume a suspended stage", "task", t.ID, "err", rerr)
 				}
+			}
+			if strings.Contains(text, changedLead) {
+				e.event(ctx, t.ID, "questions", registry.PhaseInfo, r.runAs.Name+" got the answer that changed the plan after coding "+
+					"began: "+changedWhich(run.change))
 			}
 			r.next, r.problem, r.pause = "", nil, ""
 		}
@@ -1825,6 +1842,41 @@ func (e *Engine) unknownHeld(ctx context.Context, t registry.Task, es []registry
 	return heldError{who: waitAgent, what: what}
 }
 
+// promptText is the prompt role r of run (attempt a of task t's stage st,
+// in copy c) is due now, "" for none: its first (a fallback's after a
+// Codex run of the role notes what that run left, and a coding stage's
+// names the answers that changed the plan this pass hands, run.change), its
+// nudge, a fix turn, the one to go on after a pause, the turn that hands it
+// those answers (nextChanged), or your answers.
+func (e *Engine) promptText(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt, c Copy, run *agentsRun,
+	r *stageRole, dir string) (string, error) {
+	switch next := r.next; {
+	case !r.prompted:
+		text, err := e.renderRole(ctx, t, st, r.role, r.runAs, c)
+		if err != nil {
+			return "", err
+		}
+		if r.limited {
+			text += e.limitNote(t, st, r.role, run.since(a))
+		}
+		if len(run.change) > 0 {
+			text += "\n\n" + changedNote(dir, run.change)
+		}
+		return text, nil
+	case next == nextChanged && len(run.change) > 0:
+		return changedText(dir, e.outputs(t, st, r.role), run.change), nil
+	case next == nextNudge:
+		return nudgeText(dir, r.problem), nil
+	case next == nextFix:
+		return fixText(dir, r.problem), nil
+	case next == nextContinue:
+		return continueText(r.pause, e.outputs(t, st, r.role)), nil
+	case next == nextAnswers || next == nextChanged: // a change no longer pending: your answers alone
+		return answersText(dir, e.outputs(t, st, r.role), st.End), nil
+	}
+	return "", nil
+}
+
 // nudgeText is a role's one nudge: its file at dir and what is wrong.
 func nudgeText(dir string, p *endProblem) string {
 	return nudgeLead + ": " + filepath.Join(dir, p.file) + ": " + p.why + ". Write it as your prompt asks, as the last step " +
@@ -2024,6 +2076,15 @@ func (e *Engine) promptData(ctx context.Context, t registry.Task, st config.Fact
 	d.MergeMethods = e.mergeMethods(ctx, t.Repo)
 	if st.End == config.FactoryEndReport {
 		d.SatOut = strings.Join(e.satOutFindings(ctx, t), " and ")
+	}
+	if st.Prompt == AmendPrompt {
+		cs, err := e.pendingChanges(ctx, t)
+		if err != nil {
+			e.log.Warn("read the answers that changed the plan after coding began", "task", t.ID, "err", err)
+		}
+		if len(cs) > 0 {
+			d.Changed = changedWhich(cs)
+		}
 	}
 	if st.End == config.FactoryEndFindings {
 		d.Findings = in(findingsFile(role.Name))
@@ -2294,5 +2355,5 @@ func checkData(role config.Role) PromptData {
 		MergeMethods: "squash", SatOut: dir + "/findings-fx-points-codex.md", QARun: qaRun, QAURL: "http://app.example.localhost:3000", QACDP: "http://127.0.0.1:9222",
 		QAProbe: qaRun + "/probe.js", QAVerdict: qaRun + "/verdict.json", QAChanged: qaRun + "/changed.txt", QARecheck: qaRun + "/recheck.json",
 		QASignIn: "/dev/sign-in?as=qa@example.com", QASkill: "example:qa", QASession: "magnum-qa-1-1", QAMaxPages: 12,
-		QAMaxShots: 30}
+		QAMaxShots: 30, Changed: "question 1 of revision 2 (asked by fx-critic)"}
 }

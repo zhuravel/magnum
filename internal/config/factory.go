@@ -70,6 +70,14 @@ type Factory struct {
 	// type into it.
 	HumanCooldown Duration `toml:"human_cooldown"`
 
+	// ProvisionalLoneAnswer lets the no_open_questions gate pass on the
+	// recommended option of a lone question (the only question of its batch,
+	// asked after you answered an earlier batch, with a recommended option,
+	// and neither the reproduction question nor intake's): coding starts on
+	// it while the question stays open for you, and another answer of yours
+	// goes to the writer. false: every question waits for your answer.
+	ProvisionalLoneAnswer bool `toml:"provisional_lone_answer"`
+
 	// Sensitive are the path globs (MatchPath's: "**" matches whole
 	// directories) of the files whose change the ready card's FLAGS line
 	// names for a second look: by default Gemfile.lock, the workflows and
@@ -584,6 +592,7 @@ func DefaultFactory() Factory {
 			"feature": {"add", "feature", "implement", "support", "new"},
 			"chore":   {"upgrade", "bump", "dependency", "gem", "rename", "cleanup", "refactor"},
 		},
+		ProvisionalLoneAnswer: true,
 	}
 }
 

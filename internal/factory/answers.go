@@ -523,7 +523,7 @@ func (e *Engine) askIssueAgain(ctx context.Context, t registry.Task, cause error
 	if err != nil {
 		return err
 	}
-	return e.waitForAnswers(ctx, t, open)
+	return e.waitForAnswers(ctx, t, e.holding(t, open))
 }
 
 // keyHeld refuses the link of a key that task holder holds.
@@ -570,6 +570,7 @@ func (e *Engine) afterAnswers(ctx context.Context, t registry.Task) error {
 	if err != nil {
 		return err
 	}
+	open = e.holding(cur, open)
 	state, who, what := registry.TaskActive, "", ""
 	because := "your answers"
 	if len(open) > 0 {
@@ -721,19 +722,31 @@ func (e *Engine) writeAsks(id int64, asks map[string]ask) error {
 }
 
 // writeAnswers writes answers.md, every answered question of task t and
-// your answer, oldest first, when it does not hold them yet: its time is
-// then the clock's (an amend's end fact must be newer), and it is recorded
-// as an artifact. A task you answered nothing has none.
+// your answer, oldest first, then each open question coding went on the
+// recommended answer of (provisionalMarkdown), when it does not hold them
+// yet: its time is then the clock's (an amend's end fact must be newer),
+// and it is recorded as an artifact. A task you answered nothing and coding
+// went on no answer of has none.
 func (e *Engine) writeAnswers(ctx context.Context, t registry.Task) error {
 	qs, err := e.reg.Questions(ctx, t.ID)
 	if err != nil {
 		return err
 	}
+	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	recs, err := readProvisional(dir)
+	if err != nil {
+		return err
+	}
 	text := answersMarkdown(qs)
+	if more := provisionalMarkdown(qs, recs); more != "" {
+		if text == "" {
+			text = answersHead
+		}
+		text += more
+	}
 	if text == "" {
 		return nil
 	}
-	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	path := filepath.Join(dir, answersFile)
 	if b, err := os.ReadFile(path); err == nil && string(b) == text {
 		return nil

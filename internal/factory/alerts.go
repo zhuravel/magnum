@@ -236,7 +236,7 @@ func (e *Engine) readAlerts(ctx context.Context, now time.Time, tasks []registry
 			a.read = ev.ID
 			p := &pendingAlert{ev: ev, key: fmt.Sprintf("factory-alert:%d:%d", ev.ID, ev.At.Unix()), line: alertLine(ev.Text)}
 			old := !a.history.IsZero() && ev.At.Before(a.history)
-			if p.settled = old && !e.alertStands(byID, ev); !p.settled {
+			if p.settled = old && !e.alertStands(ctx, byID, ev); !p.settled {
 				a.batch.Add(notify.Item{Key: p.key, Title: p.line, Line: p.line, Window: alertOnce})
 			}
 			a.pending = append(a.pending, p)
@@ -292,7 +292,7 @@ func (e *Engine) dropStale(ctx context.Context, tasks []registry.Task) {
 	byID := tasksByID(tasks)
 	var gone []string
 	for _, p := range e.alerts.pending {
-		if p.settled || e.alertStands(byID, p.ev) {
+		if p.settled || e.alertStands(ctx, byID, p.ev) {
 			continue
 		}
 		p.settled = true
@@ -307,10 +307,11 @@ func (e *Engine) dropStale(ctx context.Context, tasks []registry.Task) {
 // the same kind of wait the alert named (its line: what a wait's count or
 // card revision changed is the same), or, for an ended task's leftovers
 // (its copy's release refused, what a base run left in its copy), while
-// they last; a server a QA teardown failed to stop, while it is left. An
-// alert's text is kept scrubbed (Engine.event), so what it is compared with
-// is too.
-func (e *Engine) alertStands(byID map[int64]registry.Task, ev registry.Event) bool {
+// they last; a server a QA teardown failed to stop, while it is left; a
+// question coding went on the recommended answer of (provisionalWhat),
+// while one is open. An alert's text is kept scrubbed (Engine.event), so
+// what it is compared with is too.
+func (e *Engine) alertStands(ctx context.Context, byID map[int64]registry.Task, ev registry.Event) bool {
 	line := alertLine(ev.Text)
 	same := func(text string) bool { return line == alertLine(scrub.Text(text)) }
 	if _, left := e.servers[ev.TaskID]; left && ev.TaskID != 0 && strings.Contains(ev.Text, serverLeftWords) {
@@ -336,7 +337,17 @@ func (e *Engine) alertStands(byID map[int64]registry.Task, ev registry.Event) bo
 		return true
 	}
 	k, kept := e.keptCopies[t.ID]
-	return kept && same(key+": "+k.what)
+	if kept && same(key+": "+k.what) {
+		return true
+	}
+	if !same(key + ": " + waitsYou + ": " + provisionalWhat(1)) {
+		return false
+	}
+	open, err := e.provisionalOpen(ctx, t)
+	if err != nil {
+		e.log.Warn("read the questions coding went on", "task", t.ID, "err", err)
+	}
+	return len(open) > 0
 }
 
 // alertBackoff is the wait after fails toasts failed in a row: 1, 2, 4, 8,

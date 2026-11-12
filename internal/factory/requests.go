@@ -599,7 +599,9 @@ func (e *Engine) unchangedSince(ctx context.Context, t registry.Task) string {
 // why not: t does not wait on you, or its questions wait for your answers
 // (a retry would only ask them again; asks.json in t's directory of
 // layout l says which open questions wait on someone you asked instead). A
-// registry or a file that cannot be read is its error.
+// question coding went on the recommended answer of (provisional.json)
+// refuses no retry of another wait. A registry or a file that cannot be
+// read is its error.
 func retryRefusal(ctx context.Context, reg *registry.Registry, l paths.Layout, t registry.Task) error {
 	if t.State != registry.TaskNeedsYou {
 		return retryRefusalOf(t, nil, nil)
@@ -607,6 +609,13 @@ func retryRefusal(ctx context.Context, reg *registry.Registry, l paths.Layout, t
 	open, err := openQuestionsOf(ctx, reg, t)
 	if err != nil || len(open) == 0 {
 		return err
+	}
+	if !waitsOnQuestions(t) { // a question coding went on holds no other wait of yours
+		recs, err := readProvisional(l.FactoryTaskDir(t.ID))
+		if err != nil {
+			return err
+		}
+		open = withoutProvisional(open, recs)
 	}
 	asks, err := readAsksIn(l.FactoryTaskDir(t.ID)) // asks.json only says whom the open questions wait on
 	if err != nil {

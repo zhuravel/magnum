@@ -253,13 +253,16 @@ func sameCard(a, b ReadyCardFile) bool {
 }
 
 // The kinds of a coding turn back from the card (reworkRecord.Kind): your
-// send back, a merge of the base after a conflict, or a branch that moved
+// send back, a merge of the base after a conflict, a branch that moved
 // after the coding stage's checks passed (a commit the factory did not
-// make: yours, in the copy).
+// make: yours, in the copy), or your answer that changed the plan after
+// coding began on its recommended one (changePastCoding: the coding stage's
+// first prompt names it, changedNote).
 const (
 	reworkSendBack  = "send_back"
 	reworkMergeBase = "merge_base"
 	reworkHeadMoved = "head_moved"
+	reworkAnswer    = "answer"
 )
 
 // reworkRecord is rework.json: why the task is back at coding from its
@@ -530,7 +533,10 @@ type cardState struct {
 // branch at the task's head), a conflict with a fresh origin/<base> sends
 // the task back to merge it, and otherwise the card is drawn (a new
 // revision when what it shows changed) and the task waits on you. A task
-// whose card QA keeps goes back to its qa stage (qaBack).
+// whose card QA keeps goes back to its qa stage (qaBack). A question coding
+// went on the recommended answer of, still open, holds the card: the task
+// waits on you for its answer (provisionalWhat), and no push is offered
+// before it.
 func (e *Engine) runReady(ctx context.Context, t registry.Task, _ config.FactoryStage) (bool, error) {
 	if e.d.Git == nil {
 		return false, nil
@@ -541,6 +547,12 @@ func (e *Engine) runReady(ctx context.Context, t registry.Task, _ config.Factory
 	}
 	if why != "" {
 		return false, e.stageFailed(ctx, t, needsYou{"no ready card: " + why})
+	}
+	if open, err := e.provisionalOpen(ctx, t); err != nil || len(open) > 0 {
+		if err != nil {
+			return false, err
+		}
+		return false, e.waitForAnswers(ctx, t, open)
 	}
 	if _, err := e.prLogin(t); err != nil {
 		return false, e.stageFailed(ctx, t, err)
@@ -985,6 +997,12 @@ func (e *Engine) decide(ctx context.Context, p DecidePayload) error {
 		if _, why := e.readyProblem(t); why != "" {
 			e.redraw(ctx, t, why)
 			return errors.New("no ready card: " + why)
+		}
+		if open, err := e.provisionalOpen(ctx, t); err != nil {
+			return err
+		} else if len(open) > 0 {
+			return fmt.Errorf("no push before your answer: coding went on the recommended answer of %q, which is still open "+
+				"(`magnum factory answer %d` lists it)", open[0].Text, t.ID)
 		}
 	}
 	proof := ""

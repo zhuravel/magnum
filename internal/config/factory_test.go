@@ -658,6 +658,30 @@ left_blocks = true
 	}
 }
 
+// provisional_lone_answer is on by default, in the Go defaults and the
+// embedded file; a user's false turns it off, and any value but a boolean
+// is refused by the load, naming the key.
+func TestFactoryProvisionalLoneAnswerIsOnByDefaultAndTakesOnlyABoolean(t *testing.T) {
+	for _, f := range []Factory{Defaults().Factory, mustLoadDefaults(t).Factory} {
+		if !f.ProvisionalLoneAnswer {
+			t.Error("provisional_lone_answer = false by default, want on")
+		}
+	}
+	cfg, err := loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml+"\n[factory]\nprovisional_lone_answer = false\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Factory.ProvisionalLoneAnswer || cfg.Factory.MaxActive != 3 {
+		t.Errorf("factory = %+v, want provisional_lone_answer off and the built-in max_active", cfg.Factory)
+	}
+	for _, bad := range []string{`"no"`, `0`} {
+		_, err := loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml+"\n[factory]\nprovisional_lone_answer = "+bad+"\n")
+		if err == nil || !strings.Contains(err.Error(), "provisional_lone_answer") {
+			t.Errorf("provisional_lone_answer = %s: err = %v, want one naming the key", bad, err)
+		}
+	}
+}
+
 func mustLoadDefaults(t *testing.T) *Config {
 	t.Helper()
 	cfg, err := LoadWithOptions(paths.Layout{Home: repoRoot(t)}, "", LoadOptions{NoOverlay: true})

@@ -6421,6 +6421,14 @@ type Factory struct {
 	// type into it.
 	HumanCooldown Duration `toml:"human_cooldown"`
 
+	// ProvisionalLoneAnswer lets the no_open_questions gate pass on the
+	// recommended option of a lone question (the only question of its batch,
+	// asked after you answered an earlier batch, with a recommended option,
+	// and neither the reproduction question nor intake's): coding starts on
+	// it while the question stays open for you, and another answer of yours
+	// goes to the writer. false: every question waits for your answer.
+	ProvisionalLoneAnswer bool `toml:"provisional_lone_answer"`
+
 	// Sensitive are the path globs (MatchPath's: "**" matches whole
 	// directories) of the files whose change the ready card's FLAGS line
 	// names for a second look: by default Gemfile.lock, the workflows and
@@ -15312,6 +15320,12 @@ type PromptData struct {
 	// configured ({files} and {base} in them): the writer's prompts name them
 	// for the writer to run before its turn ends; none without them.
 	Checks []string
+	// Changed names, in the judge's amend turn (AmendPrompt), the questions
+	// coding went on the recommended answer of and you answered otherwise
+	// ("question 1 of revision 2 (asked by fx-critic)", by their place in
+	// answers.md): coding began, and the writer follows the amended report
+	// next. "" in any other turn, and for an amend before coding.
+	Changed string
 	// The QA walker's turn of a qa stage (factory-qa.md), each "" (0) in any
 	// other: QARun is the run's folder (qa/<n>-<sha7> in TaskDir), where the
 	// walker saves its pages and console logs; QAURL the copy's server

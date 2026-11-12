@@ -25548,6 +25548,55 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `spec/db/reporting_migrate`, one under `test/db/migrate`, `db/migrate/README.md`,
   `db/migrate/support/helper.rb` and two structure files).
 
+- **A lone question after the critic no longer holds coding: coding starts on its recommended answer**
+  (2026-11-12, the operator's approval). The second question batch of tasks 1, 3, 6 and 9 held one question each,
+  raised after the critic. The operator took the recommended answer all 4 times, after 2.2, 9.8, 10.6 and 78.6
+  minutes, and coding waited all that time: the `questions` stage spent 142 of its 146 minutes on the operator. The
+  recommended answers were taken 100% of the time for the critic (3 of 3), 80% for fx-judge and 89% for fx-points.
+  The `no_open_questions` gate now passes on the recommended option (`passOnRecommendation`, `provisional.go`)
+  when all of these hold: the newest revision holds exactly one question and it is open, an answer to another
+  question came before it was first asked (not the first batch), it has a recommended option, it is neither the
+  reproduction question (the judge's or the factory's own) nor intake's "which issue" question (an answer to that
+  one links a key: more than the plan), and it was not asked of someone. The question stays open. The pass is
+  `provisional.json` in the task's directory, keyed by the question's text as revisions carry it, so the registry
+  needs no migration and a restart neither asks it again nor loses it. `answers.md` names the question with the
+  option coding went on, and an alert says `1 question before the push (coding went on its recommended answer)`.
+  The alert stands while the question is open (`alertStands`). The screen keeps the task in NEEDS YOU while it
+  works ("you" first, the agent after it). The question card's recommendation carries the mark; that is the only
+  change to the screen's layout. A question coding went on holds no wait anywhere (`holding`): not the
+  reproduction gate, a role's suspension, the review's product questions, your answers' move or a retry of
+  another wait. The ready card is the exception, at the coordinator's request: a provisional answer never reaches
+  a PR unanswered. While the question is open, `runReady` draws no card and the task waits on you with the words
+  above, which `questionsBefore` gives at a decision stage, and `decide` refuses a push. Your recommended answer
+  closes the question and nothing else happens (at the ready stage, the card is drawn). Another option, or your own
+  words, changed the plan (`pendingChanges`: answered otherwise after the pass, and no prompt with
+  `changedLead` delivered since). In coding, the stage waits for the writer's turn in flight to end and neither
+  prompts nor passes meanwhile (`changeInRun`). Then the gate's own loop runs from the coding stage
+  (`settleAnswers`, under the gate's stage name): the judge's amend, with `factory-amend.md` told that coding began
+  (`PromptData.Changed`), and any question the amend asks. An amend still at work runs before the stage's pass
+  (`changeFirst`). Then the writer's next turn (`nextChanged`, an answers turn) names the answer by its place in
+  `answers.md`, never its words, or its first prompt does in a fresh attempt. A role whose last prompt handed the
+  change has its own run decide whether it is done, not its earlier verification: without that, a restart passed
+  the stage before the turn ended. Deviation from the spec's item 3, agreed with the coordinator: past coding, the
+  spec asked for a fix turn of that stage. The local review's fix turns are `review.go`'s, which this change may
+  not touch, and the ready stage has no writer turn at all. So the task goes back to coding the way a send back,
+  a moved head or a merge of the base does (`backToCoding`, rework kind `answer`, the writer's commits kept). It
+  goes at the first pass whose stage has nothing in flight (`changePastCoding`, `stageIdle`): no open attempt (a
+  turn, a fix turn, QA's walker), and in the local review no open cycle and no round off the loop. That is the
+  point where `startRound` already sends a moved head back. QA's session is ended first, and a task waiting at its
+  ready stage goes back once your answer makes it live. There the judge amends first, and the writer's first
+  prompt names the answer. The proof, a fresh local loop, QA, the body and a new card then run on the new head.
+  `[factory] provisional_lone_answer` (default true) turns it off, and every question waits as before.
+  Tests, each checked by mutation (with its behavior taken out of the code, it fails):
+  `TestALoneQuestionAfterABatchYouAnsweredStartsCodingOnItsRecommendation`,
+  `TestTheRecommendedAnswerToAProvisionalQuestionClosesItWithNoNewTurn`,
+  `TestADifferentAnswerInCodingAmendsTheReportThenReachesTheWriter` (a restart while the judge amends, and one
+  during the writer's turn), `TestADifferentAnswerPastCodingGoesBackToCoding`,
+  `TestTheReadyCardWaitsForTheAnswerOfAQuestionCodingWentOn`, `TestALoneQuestionWaitsAsBeforeOutsideItsCase` (no
+  recommendation, the first batch, two open questions, the reproduction question, the key off) and
+  `TestARestartAfterTheProvisionalPassAsksNothingTwiceAndLosesNothing` in internal/factory;
+  `TestFactoryProvisionalLoneAnswerIsOnByDefaultAndTakesOnlyABoolean` in internal/config.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

@@ -4302,6 +4302,7 @@ herdr_session = "factory"            # the herdr session of the factory's panes:
 observe = "5s"                       # how often it reads its panes (a turn's end there moves the task on at once)
 poll = "45s"                         # how often its main tick moves the tasks (a request kicks one at once)
 human_cooldown = "15m"               # it leaves a pane alone this long after you type into it
+provisional_lone_answer = true       # a lone question after a batch you answered: coding starts on its recommendation
 sensitive = ["Gemfile.lock", ".github/workflows/**", "config/**"]   # files the ready card flags for a second look
 
 [factory.local_review]
@@ -4360,7 +4361,8 @@ stages = [
   negative. `herdr_socket` is empty (the named session's own socket) or an absolute path.
   `[factory.local_review] second_judge` is `"wide"`, `"always"` or `"never"`; any other word is refused, naming them.
   `[factory.local_review] left_blocks` is `true` or `false` (default `false`); any other value is refused when the
-  config loads, naming the key.
+  config loads, naming the key. So is `provisional_lone_answer` (default `true`; `false` has every question wait
+  for your answer).
 - **Sensitive files.** `sensitive` lists the path globs (`**` matches whole directories, `*` never crosses
   `/`, as `skip_paths` reads them) of the files whose change the ready card's FLAGS line names for a second
   look; the built-in list is `Gemfile.lock`, the workflows (`.github/workflows/**`) and the config files
@@ -4977,7 +4979,21 @@ agents read it as data; no prompt carries an answer's words) and recorded as you
 takes another option than the recommended one, or is your own words, has the judge amend `report.md` first
 (`factory-amend.md`): the gate passes only on a report, `acceptance.json` and `questions.json` newer than
 `answers.md`, and asks the amended questions in turn. A role gets your answers once per batch: a turn after
-them that fails its end fact gets its one nudge, then needs you. An answer to "which Jira issue" that names a
+them that fails its end fact gets its one nudge, then needs you. A lone question does not hold coding back
+(`[factory] provisional_lone_answer`, on by default): when the gate's batch is one question, asked after you
+answered an earlier batch (the critic's after the judge's, say), with a recommended option, and it is neither the
+reproduction question nor "which Jira issue" nor asked of someone, the gate passes on that option and coding
+starts at once. The question stays open for you: `provisional.json` in the task's directory records it,
+`answers.md` says coding went on its recommended option, an alert says `1 question before the push (coding went
+on its recommended answer)`, and the screen keeps the task in NEEDS YOU while it works, the question card's
+recommendation marked. The ready card waits for its answer: until then the task waits on you with those words
+and no push is offered. Your recommended answer closes it and nothing else happens. Another answer changed the
+plan: in coding, once the writer's turn in flight ends (the stage neither prompts it nor passes meanwhile),
+the judge amends the report (`factory-amend.md`, told that coding began), then the writer's next turn names the
+answer by its place in `answers.md`; past coding, the task goes back to coding as a send back does
+(`rework.json` of kind `answer`, the writer's commits kept) once its stage has nothing in flight (no turn, no
+local round or its fix, and at once from the ready stage), the judge amends there, and the writer's first prompt
+names the answer, so the review, QA, the body and the card run again on the new head. An answer to "which Jira issue" that names a
 key (an option's label starts with it, or a key or a Jira link) links the task to it (the answer to "which Linear
 issue" that names a key of the repository's tracker, or its link, does the same, and the daemon reads no ticket
 of it: it needs no Jira, and there is no wait for one): a key another task

@@ -376,5 +376,7 @@ databases = [
 # browser = "/Applications/Chromium.app/Contents/MacOS/Chromium"   # the headless Chrome of QA (default: Google
 #                                          # Chrome, else Chromium, in /Applications)
 # sensitive = ["Gemfile.lock", ".github/workflows/**", "config/**", "db/schema.rb"]   # files the ready card flags
+# provisional_lone_answer = false          # every question waits for your answer (default true: coding starts on the
+#                                          # recommended answer of a lone question after a batch you answered)
 # [factory.local_review]
 # cycles = 3                               # at most this many local review rounds

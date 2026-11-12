@@ -248,6 +248,11 @@ type taskView struct {
 	asks   map[string]ask
 	onYou  int            // open questions that wait on you
 	card   *ReadyCardFile // its ready card, while it waits on you there
+	// prov are the open questions on you that coding went on the
+	// recommended answer of and that hold nothing yet (provisional.json, by
+	// key in provs): they put the task in NEEDS YOU while it works.
+	prov  int
+	provs map[string]provisional
 	// reporter is its ticket's reporter, whom its questions offer to ask
 	// ("" for none, and for a task of your words).
 	reporter string
@@ -302,12 +307,19 @@ func (s *screen) read(t registry.Task) (*taskView, error) {
 	if err := s.readQuestions(v); err != nil {
 		return nil, err
 	}
+	if v.group == tui.GroupWaits && v.prov > 0 { // a question coding went on waits for your answer while the task works
+		v.group = tui.GroupNeedsYou
+	}
 	if t.State == registry.TaskNeedsYou && strings.HasPrefix(t.WaitsWhat, readyWait) {
 		if c, err := ReadReadyCard(s.l, t.ID); err == nil {
 			v.card = &c
 		}
 	}
-	v.retry = retryRefusalOf(t, v.open, v.asks) == nil // the retry's own guard, on what this view read
+	retryOpen := v.open
+	if !waitsOnQuestions(t) {
+		retryOpen = withoutProvisional(v.open, v.provs)
+	}
+	v.retry = retryRefusalOf(t, retryOpen, v.asks) == nil // the retry's own guard, on what this view read
 	if t.JiraKey != "" {
 		v.reporter = readReporter(s.l.FactoryTaskDir(t.ID))
 	}
@@ -468,9 +480,21 @@ func (s *screen) readQuestions(v *taskView) error {
 	if v.asks, err = readAsksIn(s.l.FactoryTaskDir(v.t.ID)); err != nil {
 		return err
 	}
-	v.onYou, _, _ = questionsAsked(v.open, v.asks)
+	if v.provs, err = readProvisional(s.l.FactoryTaskDir(v.t.ID)); err != nil {
+		return err
+	}
+	held := holdingQuestions(s.cfg, v.t, v.open, v.provs)
+	v.onYou, _, _ = questionsAsked(held, v.asks)
+	if len(held) < len(v.open) && !waitsOnYou(v.t) {
+		all, _, _ := questionsAsked(v.open, v.asks)
+		v.prov = all - v.onYou
+	}
 	return nil
 }
+
+// owed is how many of task v's questions wait for your answer on its card:
+// those that hold it, else those coding went on.
+func owed(v *taskView) int { return cmp.Or(v.onYou, v.prov) }
 
 // task is task v's row on home, its cards and the decisions it owes you.
 func (s *screen) task(v *taskView) (tui.FactoryRow, tui.FactoryCards, int) {
@@ -489,7 +513,7 @@ func (s *screen) task(v *taskView) (tui.FactoryRow, tui.FactoryCards, int) {
 		row.Move, row.MoveShort = s.move(v)
 		decisions = 1
 		if s.onQuestions(v) {
-			decisions = v.onYou
+			decisions = owed(v)
 		}
 	default:
 		row.Mark = tui.MarkWaits
@@ -562,9 +586,19 @@ func jiraPlanOf(cfg *config.Config, plans []registry.JiraPlan, t registry.Task) 
 }
 
 // onQuestions reports whether task v waits on your answers to its
-// questions.
+// questions: they hold it, or coding went on the recommended answer of one
+// while it works.
 func (s *screen) onQuestions(v *taskView) bool {
-	return v.group == tui.GroupNeedsYou && v.onYou > 0
+	return v.group == tui.GroupNeedsYou && owed(v) > 0
+}
+
+// questionsWhat is the wait of task v's questions on its row: the task's
+// own, or for questions coding went on while it works, provisionalWhat.
+func questionsWhat(v *taskView) string {
+	if v.onYou == 0 && v.prov > 0 {
+		return provisionalWhat(v.prov)
+	}
+	return v.t.WaitsWhat
 }
 
 // blockers are what task v waits on, who first, one each: you, a person,
@@ -605,6 +639,12 @@ func (s *screen) blockers(v *taskView) []tui.WaitsOn {
 		if a, ok := s.agentBlocker(v, true); ok {
 			out = append(out, a)
 		}
+	}
+	if v.prov > 0 { // a question coding went on: yours first, the task at work after it
+		what := provisionalWhat(v.prov)
+		you := tui.WaitsOn{Who: waitsYou, What: what, Short: shortWhat(waitsYou, what), OnYou: true,
+			Long: fmt.Sprintf("%s · first: %q", what, firstOnYou(v).Text)}
+		out = append([]tui.WaitsOn{you}, out...)
 	}
 	return out
 }
@@ -711,10 +751,10 @@ func (s *screen) move(v *taskView) (long, short string) {
 	switch {
 	case v.pr != nil && v.pr.move != "":
 		return v.pr.move, v.pr.moveShort
-	case s.onQuestions(v) && v.onYou == 1:
+	case s.onQuestions(v) && owed(v) == 1:
 		return "answer 1 question", "answer it"
 	case s.onQuestions(v):
-		return fmt.Sprintf("answer %d questions", v.onYou), "answer them"
+		return fmt.Sprintf("answer %d questions", owed(v)), "answer them"
 	case v.card != nil:
 		return "read the diff, then push", "diff, then push"
 	case v.retry:
@@ -729,7 +769,7 @@ func (s *screen) help(v *taskView, row tui.FactoryRow) string {
 	case v.pr != nil && v.pr.help != "": // what the fixer left you, every item
 		return v.pr.help
 	case s.onQuestions(v):
-		return fmt.Sprintf("%s · first: %q", v.t.WaitsWhat, firstOnYou(v).Text)
+		return fmt.Sprintf("%s · first: %q", questionsWhat(v), firstOnYou(v).Text)
 	case v.card != nil:
 		_, _, notIn := fileCounts(v.card.Files)
 		text := readyWait + ": " + plural(len(v.card.Files), "file")
@@ -1067,6 +1107,9 @@ func (s *screen) questionCard(v *taskView) *tui.QuestionCard {
 			c.Asked = q.Asked
 		}
 		cq := tui.CardQuestion{Text: q.Text, Context: q.Context, Example: q.Example, Recommended: q.Recommended, Why: q.Why}
+		if _, went := v.provs[QuestionKey(q.Text)]; went && q.State == registry.QuestionOpen { // the mark of spec 08
+			cq.Why = strings.TrimSpace(q.Why + " (" + provisionalMark + "; another answer of yours goes to the writer)")
+		}
 		for _, o := range q.Options {
 			cq.Options = append(cq.Options, tui.CardOption{Label: o.Label, Means: o.Means})
 		}

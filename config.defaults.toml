@@ -889,6 +889,13 @@ poll = "45s"                      # how often its main tick runs: the holds, you
                                   # magnum's registry has them, then a step of each task (a request kicks a tick at
                                   # once); must be positive
 human_cooldown = "15m"            # after you type into a factory pane the factory leaves it alone this long
+provisional_lone_answer = true    # the questions gate passes on the recommended option of a lone question: the only
+                                  # question of its batch, asked after you answered an earlier batch, with a
+                                  # recommended option, neither the reproduction question nor intake's. Coding
+                                  # starts on it at once; the question stays open for you (the screen marks it,
+                                  # an alert says so) and the ready card waits for its answer. Your recommended
+                                  # answer closes it; another one has the judge amend the report, then reaches the
+                                  # writer (past coding, the task goes back to coding). false: every question waits
 sensitive = ["Gemfile.lock", ".github/workflows/**", "config/**"]   # the files whose change the ready card's FLAGS
                                   # line names for a second look: path globs, "**" matches whole directories and
                                   # "*" never crosses "/"; your list replaces this one

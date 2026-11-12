@@ -6,7 +6,10 @@ package factory
 // (the critic's, an investigator's, the writer's) that the task has not
 // asked yet become one new revision of the task's questions, with the
 // questions still open carried over, and the task waits for your answers.
-// no_open_questions holds when no question is open; before it passes, an
+// A lone question asked after a batch you answered, with a recommended
+// option, passes the gate on that option and stays open for you
+// (provisional.go). no_open_questions holds when no other question is open;
+// before it passes, an
 // answer that changed the plan (another option than the recommended one,
 // your own words) has one turn of the judge amend report.md, its checks and
 // its questions (factory-amend.md). reproduced holds on a report whose
@@ -58,13 +61,29 @@ func (e *Engine) runGate(ctx context.Context, t registry.Task, st config.Factory
 // gateQuestions is the no_open_questions gate: the questions the task's
 // files hold are asked (awaitAnswers), and once none is open, an amend of
 // the report that the answers made due runs first; the amended questions
-// are asked in turn.
+// are asked in turn. A lone question asked after a batch you answered may
+// pass on its recommended option (passOnRecommendation), and stays open.
 func (e *Engine) gateQuestions(ctx context.Context, t registry.Task, st config.FactoryStage) (bool, error) {
+	return e.settleAnswers(ctx, t, st, true)
+}
+
+// settleAnswers is the questions gate st's loop over task t: an amend in
+// flight first, then the questions asked and waited for, a drop, and an
+// amend the answers made due, until none is open and none is due (done).
+// atGate: it runs as the gate (a questions file that does not parse needs
+// you, and a lone question may pass on its recommendation); else it runs
+// for an answer that changed the plan after coding began (changeInRun), and
+// a questions file that does not parse is left to its role's end fact.
+func (e *Engine) settleAnswers(ctx context.Context, t registry.Task, st config.FactoryStage, atGate bool) (bool, error) {
 	if done, err := e.amendInFlight(ctx, t, st); err != nil || !done {
 		return false, err
 	}
+	var lone *config.FactoryStage
+	if atGate {
+		lone = &st
+	}
 	for range 2 { // once more after an amend that passed in this pass
-		if waits, err := e.awaitAnswers(ctx, t); err != nil || waits {
+		if waits, err := e.awaitAnswersOn(ctx, t, atGate, lone); err != nil || waits {
 			return false, err
 		}
 		if dropped, err := e.dropIfAnswered(ctx, t); err != nil || dropped {
@@ -247,17 +266,35 @@ func normLabel(s string) string { return registry.NormLabel(s) }
 // asked (askQuestions) and reports whether the task waits for answers: a
 // question of its newest revision is open, and the task waits on you or on
 // whom you asked (waitForAnswers). answers.md is written again first when
-// the registry holds answers it lacks (a restart between the two).
+// the registry holds answers it lacks (a restart between the two). A
+// question coding went on the recommended answer of holds nothing here
+// (holding).
 func (e *Engine) awaitAnswers(ctx context.Context, t registry.Task) (bool, error) {
+	return e.awaitAnswersOn(ctx, t, true, nil)
+}
+
+// awaitAnswersOn is awaitAnswers, with strict as askQuestions takes it;
+// at a questions gate (lone, the gate's stage), a lone question asked after
+// a batch you answered passes on its recommended option instead of waiting
+// (passOnRecommendation).
+func (e *Engine) awaitAnswersOn(ctx context.Context, t registry.Task, strict bool, lone *config.FactoryStage) (bool, error) {
 	if err := e.writeAnswers(ctx, t); err != nil {
 		return true, err
 	}
-	if _, err := e.askQuestions(ctx, t, true); err != nil {
+	if _, err := e.askQuestions(ctx, t, strict); err != nil {
 		return true, e.stageFailed(ctx, t, err)
 	}
 	open, err := e.openQuestions(ctx, t.ID)
-	if err != nil || len(open) == 0 {
-		return err != nil, err
+	if err != nil {
+		return true, err
+	}
+	if open = e.holding(t, open); len(open) == 0 {
+		return false, nil
+	}
+	if lone != nil {
+		if passed, err := e.passOnRecommendation(ctx, t, *lone, open); err != nil || passed {
+			return err != nil, err
+		}
 	}
 	return true, e.waitForAnswers(ctx, t, open)
 }
@@ -606,9 +643,13 @@ func questionsOnYou(open []registry.Question, asks map[string]ask) bool {
 // questionsBefore says what n questions of task t hold up: at a gate, the
 // next stage that is no gate ("2 questions before coding"); in a stage a
 // role's questions suspended, the stage ("1 question before coding goes
-// on").
+// on"); at a decision stage, where only a question coding went on the
+// recommended answer of holds the card, the push (provisionalWhat).
 func (e *Engine) questionsBefore(t registry.Task, n int) string {
 	kind := e.cfg.Factory.Kinds[t.Kind]
+	if i := stageIndex(kind, t.Stage); i >= 0 && kind.Stages[i].Type == config.FactoryStageDecision {
+		return provisionalWhat(n)
+	}
 	if i := stageIndex(kind, t.Stage); i >= 0 && kind.Stages[i].Type == config.FactoryStageGate {
 		for _, st := range kind.Stages[i+1:] {
 			if st.Type != config.FactoryStageGate {
@@ -844,7 +885,8 @@ func (e *Engine) suspend(ctx context.Context, t registry.Task, a registry.Attemp
 // (waitForAnswers) and no role is prompted; once none is, each such role is
 // due your answers as its next prompt (the prompt resumes the stage), and a
 // task still waiting (its wait on the person you asked was replaced while
-// your answer came) is back at work, on *t too.
+// your answer came) is back at work, on *t too. A question coding went on
+// the recommended answer of holds no role (holding).
 func (e *Engine) suspended(ctx context.Context, t *registry.Task, run *agentsRun) (bool, error) {
 	if !slices.ContainsFunc(run.roles, func(r *stageRole) bool { return r.asking }) {
 		return false, nil
@@ -853,7 +895,7 @@ func (e *Engine) suspended(ctx context.Context, t *registry.Task, run *agentsRun
 	if err != nil {
 		return true, err
 	}
-	if len(open) > 0 {
+	if open = e.holding(*t, open); len(open) > 0 {
 		return true, e.waitForAnswers(ctx, *t, open)
 	}
 	if t.State == registry.TaskWaiting {
