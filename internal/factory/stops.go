@@ -102,6 +102,9 @@ type stopAsk struct {
 	Decision string    `json:"decision,omitempty"`
 	Words    string    `json:"words,omitempty"`
 	Decided  time.Time `json:"decided,omitzero"`
+	// Answered is when you answered (the question's own time; Decided is
+	// the pass that read it): a turn after it is one your answer never saw.
+	Answered time.Time `json:"answered,omitzero"`
 }
 
 // accepted is a check whose failure you accepted as known for the task:
@@ -307,7 +310,7 @@ func (e *Engine) decideStops(ctx context.Context, t registry.Task) (ended bool, 
 			continue
 		}
 		a.Decision, a.Words = decideStop(*a, q.Answer)
-		a.Decided, changed = e.now(), true
+		a.Decided, a.Answered, changed = e.now(), q.Answered, true
 		rec.apply(*a)
 		e.event(ctx, t.ID, "stop", registry.PhaseInfo, "your answer to "+a.Why+": "+decisionWords(*a))
 		if a.Decision == decideDrop {
@@ -495,31 +498,50 @@ func (rec stopsRecord) leftDecision(cy registry.Cycle, round int) string {
 	return ""
 }
 
+// leftDecided is when you answered with your newest decision on what
+// review round round of cycle cy left (when the factory read it, for an
+// answer of an older build; zero while none is).
+func (rec stopsRecord) leftDecided(cy registry.Cycle, round int) time.Time {
+	key := leftKey(cy, round)
+	for _, a := range slices.Backward(rec.Asks) {
+		if a.Kind == stopLeft && a.Key == key && a.Decision != decideRetry {
+			if a.Answered.IsZero() {
+				return a.Decided
+			}
+			return a.Answered
+		}
+	}
+	return time.Time{}
+}
+
 // leftKey keys the question of what review round round of cycle cy left.
 func leftKey(cy registry.Cycle, round int) string {
 	return fmt.Sprintf("round %d of cycle %d at %s", round, cy.N, cy.HeadBefore)
 }
 
 // leftCause is why the factory asks you about what a round left rather
-// than put it back by itself: the cause in the question's words, and its
-// context.
-type leftCause struct{ words, context string }
+// than put it back by itself: the cause in the question's words, its
+// context, and what its restore does beyond the round's leftovers ("" for
+// nothing).
+type leftCause struct{ words, context, restore string }
 
 // typedCause: you typed into a pane of the task, or one of its agents got
 // a prompt, since the round began (who, yoursSince): it may be your edit.
 func typedCause(who string) leftCause {
-	return leftCause{who + " since the round began", "the change may be your own edit, so the factory put nothing back by itself"}
+	return leftCause{words: who + " since the round began", context: "the change may be your own edit, so the factory put nothing back by itself"}
 }
 
 // waitedCause: the put-back waited leftWaitBound for who (inFlight).
 func waitedCause(who string) leftCause {
-	return leftCause{fmt.Sprintf("the factory waited %s to put it back (%s)", capText(leftWaitBound), who),
-		"the factory cannot tell that the turn in the copy ended, so it put nothing back by itself"}
+	return leftCause{words: fmt.Sprintf("the factory waited %s to put it back (%s)", capText(leftWaitBound), who),
+		context: "the factory cannot tell whether a turn works in the copy, so it put nothing back by itself",
+		restore: "; a turn the factory cannot see that works in the copy has its edits in those paths go back too (saved first) and " +
+			"its new files leave the copy"}
 }
 
 // movedCause: the round left the copy off the task's branch or the branch
 // at another head than it reviewed.
-var movedCause = leftCause{"the factory moves no branch or HEAD by itself", "the factory moves no branch or HEAD by itself"}
+var movedCause = leftCause{words: "the factory moves no branch or HEAD by itself", context: "the factory moves no branch or HEAD by itself"}
 
 // leftQuestion is the question of what review round round of cycle cy left
 // in the copy of task t (left, its changes saved in the task's directory as
@@ -538,6 +560,7 @@ func leftQuestion(t registry.Task, cy registry.Cycle, round int, left roundLefto
 		keep = fmt.Sprintf("a copy off %s switches back to it with the changes, and the round's result stands; %s at a new head is "+
 			"the task's head, and its checks run again there", t.Branch, t.Branch)
 	}
+	restore += cause.restore
 	context := cause.context
 	if saved != "" {
 		context += "; it saved the changes to " + saved

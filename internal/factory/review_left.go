@@ -208,10 +208,12 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 	} else if who != "" {
 		return held(who, ask)
 	}
-	if decision == "" {
-		if who := e.yoursSince(ctx, t, cy); who != "" {
+	if decision != "" { // your answer, for the cause it was asked for: never run over a turn that started after it
+		if who := e.touchedAfter(ctx, t, stops.leftDecided(cy, round)); who != "" {
 			return e.askLeft(ctx, t, c, cy, round, left, typedCause(who), stops)
 		}
+	} else if who := e.yoursSince(ctx, t, cy); who != "" {
+		return e.askLeft(ctx, t, c, cy, round, left, typedCause(who), stops)
 	}
 	switch {
 	case left.moved != "" && decision == decideKeep:
@@ -274,17 +276,20 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 }
 
 // leftHeld says whether a put-back of what round `round` of cycle cy left
-// in task t's copy waits for who (inFlight: a turn in flight, you in a
-// pane, a runtime that cannot tell), or asks you (ask) because that wait
-// passed leftWaitBound with no answer of yours (decision ""). The wait
-// counts from its first pass, which stops.json keeps (Waits) across
-// restarts; once the bound passed, your answer runs the put-back whoever
-// the runtime still names.
+// in task t's copy waits for who (inFlight), or asks you (ask). A named
+// agent's turn in flight in the copy, or you in one of its panes, holds it
+// however long: the runtime's watchdog judges a turn that makes no
+// progress (its recoveries, then the lost pane's question), and nothing is
+// restored under a live turn. A runtime that cannot tell who works in the
+// copy holds it at most leftWaitBound, counted from that wait's first
+// pass, which stops.json keeps (Waits) across restarts: then it asks you
+// when no answer of yours (decision "") came, and your answer runs the
+// put-back though the runtime still cannot tell.
 func (e *Engine) leftHeld(ctx context.Context, t registry.Task, cy registry.Cycle, round int, decision string) (who string, ask bool,
 	err error) {
-	who = e.inFlight(ctx, t)
-	if who == "" {
-		return "", false, nil
+	who, cannotTell := e.inFlight(ctx, t)
+	if who == "" || !cannotTell {
+		return who, false, nil
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	rec, err := readStops(dir)
@@ -552,21 +557,36 @@ func (e *Engine) keepMoved(ctx context.Context, t registry.Task, c Copy, cy regi
 // inFlight says who keeps a put-back of what a round left in task t's copy
 // from running now ("" for nobody): a turn of an agent of the task in
 // flight in the copy (Runtime.AtWork), you in one of its panes, or a
-// runtime that cannot tell.
-func (e *Engine) inFlight(ctx context.Context, t registry.Task) string {
+// runtime that cannot tell (cannotTell).
+func (e *Engine) inFlight(ctx context.Context, t registry.Task) (who string, cannotTell bool) {
 	if e.d.Runtime == nil {
-		return ""
+		return "", false
 	}
 	role, you, err := e.d.Runtime.AtWork(ctx, t)
 	switch {
 	case err != nil:
-		return "the factory cannot tell who works in it (" + textx.Clip(textx.FirstLine(err.Error()), 200) + ")"
+		return "the factory cannot tell who works in it (" + textx.Clip(textx.FirstLine(err.Error()), 200) + ")", true
 	case role != "" && you:
-		return "you are in the " + role + " pane"
+		return "you are in the " + role + " pane", false
 	case role != "":
-		return "the " + role + " agent works in it"
+		return "the " + role + " agent works in it", false
 	}
-	return ""
+	return "", false
+}
+
+// touchedAfter names who could have changed task t's copy after at (your
+// answer's time: Runtime.TouchedSince), "" for nobody, for a zero at, or
+// for a runtime that cannot answer (your answer then stands).
+func (e *Engine) touchedAfter(ctx context.Context, t registry.Task, at time.Time) string {
+	if e.d.Runtime == nil || at.IsZero() {
+		return ""
+	}
+	who, err := e.d.Runtime.TouchedSince(ctx, t, at)
+	if err != nil {
+		e.log.Warn("who changed the copy since your answer", "task", t.ID, "err", err)
+		return ""
+	}
+	return who
 }
 
 // inFlightEnds says when a put-back that waits for who (inFlight) runs.

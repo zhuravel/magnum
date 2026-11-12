@@ -88,61 +88,110 @@ func TestAKeptChangeStaysThroughTheLaterRoundsWhileItIsTheSame(t *testing.T) {
 	}
 }
 
-// A put-back that waits for a turn in flight in the copy waits at most
-// leftWaitBound: an agent's run that never ends, or a runtime that cannot
-// tell who works in the copy, holds the task no longer, and the factory
-// asks you to restore the copy or keep the change, naming the wait.
-// Restore puts it back though the runtime still names the turn (your
-// answer), and keep leaves it; the round's result stands either way.
-func TestAPutBackThatWaitsPastItsBoundAsksToRestoreOrKeep(t *testing.T) {
-	for _, hold := range []struct {
-		name, waits string
-		set         func(r *reviewRig)
-	}{
-		{"a run that never ends", "the fx-writer agent works in it", func(r *reviewRig) { r.rt.setAtWork("fx-writer") }},
-		{"a runtime that cannot tell", "herdr: socket gone",
-			func(r *reviewRig) { r.rt.setAtWorkErr(errors.New("herdr: socket gone")) }},
+// A put-back waits for a runtime that cannot tell who works in the copy
+// at most leftWaitBound, counted from that wait's first pass: then the
+// factory asks you to restore the copy or keep the change, naming the wait.
+// Restore puts it back though the runtime still cannot tell (your answer),
+// and keep leaves it; the round's result stands either way.
+func TestAPutBackThatCannotTellPastItsBoundAsksToRestoreOrKeep(t *testing.T) {
+	for _, tc := range []struct{ answer, readme string }{
+		{optionRestoreCopy, "shop\n"},
+		{optionKeepChange, "a reviewer's mutant\n"},
 	} {
-		for _, tc := range []struct{ answer, readme string }{
-			{optionRestoreCopy, "shop\n"},
-			{optionKeepChange, "a reviewer's mutant\n"},
-		} {
-			t.Run(hold.name+"/"+tc.answer, func(t *testing.T) {
-				r := leavingRig(t, func(r *reviewRig, dir string) {
-					r.put(dir, "README", "a reviewer's mutant\n")
-					hold.set(r)
-				})
-				task, _ := r.reviewTask("PR-12402")
-				r.run(6, func() bool { return strings.Contains(r.reload(task.ID).WaitsWhat, hold.waits) })
-				if got := r.reload(task.ID); got.State == registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, hold.waits) {
-					t.Fatalf("task %s waits %q; want a held wait for the turn first", got.State, got.WaitsWhat)
-				}
-				r.clock.Add(leftWaitBound - time.Minute)
-				r.run(2, nil)
-				if got := r.reload(task.ID); got.State == registry.TaskNeedsYou {
-					t.Fatalf("task waits on you %q before the bound", got.WaitsWhat)
-				}
-				r.clock.Add(2 * time.Minute)
-				r.run(4, func() bool { return r.reload(task.ID).State == registry.TaskNeedsYou })
-				got := r.reload(task.ID)
-				if qs := r.newestQuestions(task.ID); !strings.Contains(got.WaitsWhat, "waited 30m") || len(qs) != 1 ||
-					!strings.Contains(qs[0].Text, "waited 30m") || !strings.Contains(qs[0].Text, hold.waits) {
-					t.Fatalf("task %s waits %q with questions %+v; want the restore-or-keep question naming the wait", got.State,
-						got.WaitsWhat, qs)
-				}
-				if r.read("README") != "a reviewer's mutant\n" || !r.saved(task.ID, "review-1-left.diff") {
-					t.Fatal("the factory put back the change before your answer, or did not save it")
-				}
-				r.answerLeft(task.ID, tc.answer)
-				r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
-				if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) || len(r.rv.calls()) != 1 {
-					t.Fatalf("task %s at %s waits %q after %d rounds; want pr_body on the round's result", got.State, got.Stage,
-						got.WaitsWhat, len(r.rv.calls()))
-				}
-				if got := r.read("README"); got != tc.readme {
-					t.Fatalf("README is %q after your answer, want %q", got, tc.readme)
-				}
+		t.Run(tc.answer, func(t *testing.T) {
+			r := leavingRig(t, func(r *reviewRig, dir string) {
+				r.put(dir, "README", "a reviewer's mutant\n")
+				r.rt.setAtWorkErr(errors.New("herdr: socket gone"))
 			})
+			task, _ := r.reviewTask("PR-12402")
+			r.run(6, func() bool { return strings.Contains(r.reload(task.ID).WaitsWhat, "socket gone") })
+			if got := r.reload(task.ID); got.State == registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "socket gone") {
+				t.Fatalf("task %s waits %q; want a held wait first", got.State, got.WaitsWhat)
+			}
+			r.clock.Add(leftWaitBound - time.Minute)
+			r.run(2, nil)
+			if got := r.reload(task.ID); got.State == registry.TaskNeedsYou {
+				t.Fatalf("task waits on you %q before the bound", got.WaitsWhat)
+			}
+			r.clock.Add(2 * time.Minute)
+			r.run(4, func() bool { return r.reload(task.ID).State == registry.TaskNeedsYou })
+			got := r.reload(task.ID)
+			if qs := r.newestQuestions(task.ID); !strings.Contains(got.WaitsWhat, "waited 30m") || len(qs) != 1 ||
+				!strings.Contains(qs[0].Text, "socket gone") {
+				t.Fatalf("task %s waits %q with questions %+v; want the restore-or-keep question naming the wait", got.State,
+					got.WaitsWhat, qs)
+			}
+			if r.read("README") != "a reviewer's mutant\n" || !r.saved(task.ID, "review-1-left.diff") {
+				t.Fatal("the factory put back the change before your answer, or did not save it")
+			}
+			r.answerLeft(task.ID, tc.answer)
+			r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+			if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) || len(r.rv.calls()) != 1 {
+				t.Fatalf("task %s at %s waits %q after %d rounds; want pr_body on the round's result", got.State, got.Stage,
+					got.WaitsWhat, len(r.rv.calls()))
+			}
+			if got := r.read("README"); got != tc.readme {
+				t.Fatalf("README is %q after your answer, want %q", got, tc.readme)
+			}
+		})
+	}
+}
+
+// A named agent's turn in flight in the copy holds the put-back however
+// long it runs: a turn of your own request in the writer's pane that runs
+// past leftWaitBound has nothing restored under it, and nothing is asked
+// while it runs (the runtime's watchdog judges a turn that makes no
+// progress). Once it ended, the change may be the turn's, so the factory
+// asks you, never restoring by itself.
+func TestATurnInFlightPastTheBoundHasNothingRestoredUnderIt(t *testing.T) {
+	r := leavingRig(t, func(r *reviewRig, dir string) {
+		r.put(dir, "README", "a reviewer's mutant, or the writer's\n")
+		r.rt.setAtWork("fx-writer") // your request to the writer, at work in its pane
+	})
+	task, _ := r.reviewTask("PR-12403")
+	r.run(6, func() bool { return strings.Contains(r.reload(task.ID).WaitsWhat, "fx-writer") })
+	for range 3 {
+		r.clock.Add(leftWaitBound)
+		r.run(2, nil)
+		if got := r.reload(task.ID); got.State == registry.TaskNeedsYou || r.read("README") != "a reviewer's mutant, or the writer's\n" {
+			t.Fatalf("task %s waits %q, README %q while the writer's turn runs; want a wait, nothing restored", got.State,
+				got.WaitsWhat, r.read("README"))
 		}
+	}
+	r.rt.setAtWork("")
+	r.rt.setTouchedAt("a prompt to the fx-writer agent at 10:05:00", r.clock.Now())
+	r.run(4, func() bool { return r.reload(task.ID).State == registry.TaskNeedsYou })
+	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "a prompt to the fx-writer agent") ||
+		r.read("README") != "a reviewer's mutant, or the writer's\n" {
+		t.Fatalf("task %s waits %q, README %q after the turn; want the question, nothing restored", got.State, got.WaitsWhat,
+			r.read("README"))
+	}
+}
+
+// Your answer is for the cause it was asked for: a turn that started after
+// it (a prompt to the writer, your input in a pane) is never run over.
+// Restore, held when you gave it (the runtime could not tell who works in
+// the copy), waits for that turn, then asks you again with the new cause.
+func TestAnAnswerIsNeverRunOverATurnThatStartedAfterIt(t *testing.T) {
+	r, got := leftAfterYouTyped(t, "PR-12404")
+	r.rt.setTouchedAt("", time.Time{})
+	r.rt.setAtWorkErr(errors.New("herdr: socket gone"))
+	r.answerLeft(got.ID, optionRestoreCopy)
+	r.run(2, nil)
+	r.clock.Add(time.Minute)
+	r.rt.setTouchedAt("a prompt to the fx-writer agent at 10:20:00", r.clock.Now())
+	r.rt.setAtWorkErr(nil)
+	r.rt.setAtWork("fx-writer")
+	r.run(3, nil)
+	if r.read("README") != "your edit, or a reviewer's\n" {
+		t.Fatal("the factory restored the copy under a turn that started after your answer")
+	}
+	r.rt.setAtWork("")
+	r.run(4, func() bool { return r.reload(got.ID).State == registry.TaskNeedsYou })
+	after := r.reload(got.ID)
+	if after.State != registry.TaskNeedsYou || !strings.Contains(after.WaitsWhat, "a prompt to the fx-writer agent at 10:20:00") ||
+		r.read("README") != "your edit, or a reviewer's\n" {
+		t.Fatalf("task %s waits %q, README %q; want the question again with the new cause, nothing restored", after.State,
+			after.WaitsWhat, r.read("README"))
 	}
 }
