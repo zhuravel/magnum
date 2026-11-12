@@ -15708,6 +15708,11 @@ type PromptData struct {
 	// that the PR's review checks the result after publish. false in any
 	// other turn.
 	LastFix bool
+	// KeptOnly is set in the local review's fix turn that commits the
+	// changes the operator kept after a round that blocked nothing (its
+	// review file lists no finding): the prompt says so, and that no round
+	// follows. false in any other turn.
+	KeptOnly bool
 	// The QA walker's turn of a qa stage (factory-qa.md), each "" (0) in any
 	// other: QARun is the run's folder (qa/<n>-<sha7> in TaskDir), where the
 	// walker saves its pages and console logs; QAURL the copy's server
@@ -16149,6 +16154,7 @@ type Runtime interface {
 	QuitRole(ctx context.Context, t registry.Task, role, why string) error
 	RunState(ctx context.Context, runID string) (state, why string, err error)
 	AtWork(ctx context.Context, t registry.Task) (role string, you bool, err error)
+	Judged(t registry.Task, role string) string
 	TouchedSince(ctx context.Context, t registry.Task, since time.Time) (who string, err error)
 	Recover(ctx context.Context, t registry.Task) (changed []string, err error)
 	SettleWorkspaces(ctx context.Context) ([]runtime.Orphan, error)
@@ -18000,6 +18006,13 @@ func (r *Runtime) Ended() <-chan struct{}
 func (r *Runtime) HerdrUp(ctx context.Context) error
     HerdrUp asks the factory's herdr session whether it answers (a snapshot):
     the engine's herdr hold.
+
+func (r *Runtime) Judged(t registry.Task, role string) string
+    Judged is the watchdog's judgment of role's run in task t, "" for none:
+    its turn hung through the watchdog's steps (stuck), or its pane is lost past
+    its recoveries. Such a run is in flight still (AtWork names it), but no live
+    turn: what waits for it ends, the factory's put-back of a round's leftovers
+    after its bound.
 
 func (r *Runtime) Launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error
     Launch starts the roles of attempt a of task t in copy c, the copy the
