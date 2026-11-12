@@ -63,35 +63,45 @@ var fixThreadsRe = regexp.MustCompile(`^(\d+)\s+threads?\b`)
 // replies or leaves calls, or there is no report to say. fix.replied,
 // or fix.failed for a settle that fails, says when the operator typed into
 // the fixer's pane during the run (operatorTyped). The events name counts,
-// SHAs, the role and the report, never what the fixer wrote.
-func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
-	ctx = github.WithOp(ctx, opFixSettle) // github_cost.go
-	subject, report := job.subject(), deref(job.run.ReportPath)
+// SHAs, the role and the report, never what the fixer wrote. stop is the
+// job's own context, which only the confirmation of the push reads
+// (confirmPush, fix_confirm.go): a shutdown cuts it at once and leaves the
+// loop to the next start, which fails it as unconfirmed. GitHub that does
+// not answer within its retries leaves the loop in its settle for the
+// ticks (awaitPush), and a push it does not confirm fails the fix as
+// unconfirmed (failUnconfirmed), which the poll may settle late.
+func (e *Engine) settleFix(ctx, stop context.Context, job *fixJob) {
+	ctx, stop = github.WithOp(ctx, opFixSettle), github.WithOp(stop, opFixSettle) // github_cost.go
+	report := deref(job.run.ReportPath)
 	rep, rerr := e.readFixReport(job)
 	typed := e.operatorTyped(ctx, job) // a run that failed too: one the operator drove without a report matters most
 	pushed := rerr == nil && len(rep.Pushed) > 0 && !rep.PushFailed
-	target := job.head
-	var headErr error
-	err := steps.Step(ctx, e.st, subject, "fix.settle", func(ctx context.Context) error {
-		if pushed {
-			if target, headErr = e.pushedHead(ctx, job, rep); headErr != nil {
-				target = job.head
-			}
-		}
-		return e.resyncFixSlot(ctx, job, target)
-	})
+	target, headErr, err := e.settleSlot(ctx, stop, job, rep, pushed, typed)
+	if headErr != nil && stop.Err() != nil && errors.Is(headErr, stop.Err()) {
+		e.log.Info("fix settle interrupted by a shutdown while it confirmed the push; the next start fails the fix as unconfirmed", "subject", job.subject())
+		return
+	}
 	read := e.threadsReader(ctx, job)           // fix_calls.go: one GitHub read for every look
 	threads, counted := fixThreads(rep.Replied) // not counted without a report: the run may have replied
 	if !counted || threads > 0 || len(rep.NeedsYou) > 0 {
 		e.nameUnmarkedReplies(ctx, job, read) // fix_external.go; a run that fails too, before it fails
 	}
 	var held fixMergeHeld
+	var unanswered pushUnanswered
+	var unconfirmed pushNotConfirmed
 	switch {
 	case err != nil:
 		if errors.As(headErr, &held) { // fix_held_merge.go: no row will name what the hold wrote
 			e.unholdFiles(ctx, job.repo, job.pr, held.h)
 		}
+		e.dropFixPush(ctx, job.pr.ID) // fix_confirm.go: a fix that failed otherwise is never settled late
 		e.failFixTyped(ctx, job, "fix settle failed: "+err.Error(), "", typed)
+		return
+	case errors.As(headErr, &unanswered): // fix_confirm.go: the ticks confirm the push
+		e.awaitPush(ctx, job, unanswered)
+		return
+	case errors.As(headErr, &unconfirmed): // fix_confirm.go: the typed kind, which the poll may settle late
+		e.failUnconfirmed(ctx, job, unconfirmed.head, "fix settle failed: "+headErr.Error(), typed)
 		return
 	case errors.As(headErr, &held): // fix_held_merge.go: the fixer's merge magnum holds for your y
 		e.finishFixRun(ctx, job.run, store.RunVerified, "needs_you", "")
@@ -105,7 +115,7 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		}
 		e.finishFixRun(ctx, job.run, store.RunVerified, "needs_you", "")
 		e.endFixState(ctx, job)
-		e.event(ctx, "warn", subject, "fix.needs_you", msg, job.eventData())
+		e.event(ctx, "warn", job.subject(), "fix.needs_you", msg, job.eventData())
 		e.fixAttention(ctx, job, msg)
 		return
 	case headErr != nil:
@@ -118,6 +128,44 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		e.failFixTyped(ctx, job, "fix run failed: the fixer's push failed: "+report, "", typed)
 		return
 	}
+	e.settleReport(ctx, job, rep, pushed, target, typed, read)
+}
+
+// settleSlot is the settle's step fix.settle: the slot back in order at
+// the head the fixer pushed (pushedHead) when the report lists commits,
+// else, or when that head cannot be confirmed, at the reviewed head; at
+// the push while GitHub does not answer, whose confirmation the ticks go
+// on with (pushUnanswered). It returns the head, pushedHead's error and
+// the step's. A confirmation a shutdown cut (stop ended) leaves the slot as
+// it is, for the next start's recovery.
+func (e *Engine) settleSlot(ctx, stop context.Context, job *fixJob, rep FixReport, pushed, typed bool) (target string, headErr, err error) {
+	target = job.head
+	err = steps.Step(ctx, e.st, job.subject(), "fix.settle", func(ctx context.Context) error {
+		if pushed {
+			var unanswered pushUnanswered
+			switch target, headErr = e.pushedHead(ctx, stop, job, rep, typed); {
+			case headErr != nil && stop.Err() != nil && errors.Is(headErr, stop.Err()):
+				return headErr
+			case errors.As(headErr, &unanswered):
+				target = unanswered.head
+			case headErr != nil:
+				target = job.head
+			}
+		}
+		return e.resyncFixSlot(ctx, job, target)
+	})
+	return target, headErr, err
+}
+
+// settleReport ends the cycle of a fixer whose settle read its report rep
+// (a run that failed never reaches it) and found target, the head it
+// pushed (pushed) and GitHub confirmed, or none: settleFix's decision, and
+// a later settle's of a push GitHub confirmed then (settleConfirmedPush,
+// fix_confirm.go). typed says the operator typed into the fixer's pane
+// during the run, read is the settle's one GitHub read of the threads.
+func (e *Engine) settleReport(ctx context.Context, job *fixJob, rep FixReport, pushed bool, target string, typed bool, read func() ([]github.Thread, error)) {
+	subject, report := job.subject(), deref(job.run.ReportPath)
+	threads, counted := fixThreads(rep.Replied)
 	data := job.eventData()
 	described := len(rep.Description) > 0 // rerr is nil here
 	if described {
@@ -323,7 +371,7 @@ func (e *Engine) fixReReview(ctx context.Context, job *fixJob, head string, need
 		return false
 	}
 	st := job.state
-	st.Phase, st.Head, st.NeedsYou, st.ForcedAt, st.Held = FixPhaseReviewing, head, needs, e.now().UTC(), false
+	st.Phase, st.Head, st.NeedsYou, st.ForcedAt, st.Held, st.Confirm = FixPhaseReviewing, head, needs, e.now().UTC(), false, nil
 	st.Answered = slices.Sorted(maps.Keys(answered))
 	if err == nil {
 		err = e.setFixState(ctx, pr.ID, st)
@@ -479,9 +527,13 @@ func (e *Engine) readFixReport(job *fixJob) (FixReport, error) {
 // pushedHead is the head the fixer pushed: the slot's HEAD, which `git push
 // origin HEAD:<branch>` sent, once it is one of the commits the report lists
 // (the report gives short shas; Resync needs the whole one) and GitHub shows
-// it as the PR's head (confirmPush): the fixer's word alone would record a
-// head GitHub lacks on the PR row and force a review of it.
-func (e *Engine) pushedHead(ctx context.Context, job *fixJob, rep FixReport) (string, error) {
+// it as the PR's head (confirmPush, on stop, the job's own context): the
+// fixer's word alone would record a head GitHub lacks on the PR row and
+// force a review of it. The push is recorded before its confirmation
+// (noteFixPush) and the record goes once GitHub confirms it; it stays for a
+// push GitHub does not confirm, or does not answer about, and for a
+// confirmation stop cut (fix_confirm.go).
+func (e *Engine) pushedHead(ctx, stop context.Context, job *fixJob, rep FixReport, typed bool) (string, error) {
 	if e.d.Git == nil {
 		return "", errors.New("no git to read the checkout's HEAD")
 	}
@@ -503,16 +555,18 @@ func (e *Engine) pushedHead(ctx context.Context, job *fixJob, rep FixReport) (st
 	} else if refused != "" {
 		return "", fixHandRefused{why: refused}
 	}
-	if err := e.confirmPush(ctx, job, head); err != nil {
+	e.noteFixPush(ctx, job, head, typed) // fix_confirm.go
+	if err := e.confirmPush(stop, job, head); err != nil {
 		return "", err
 	}
+	e.dropFixPush(ctx, job.pr.ID)
 	return head, nil
 }
 
 const (
-	// fixPushLooks bounds how often confirmPush looks at the PR's head on
-	// GitHub, fixPushWait apart: GitHub moves a PR's head a moment after
-	// the push to its branch.
+	// fixPushLooks bounds how often confirmPush looks at a PR's head that
+	// GitHub shows otherwise, fixPushWait apart: GitHub moves a PR's head a
+	// moment after the push to its branch.
 	fixPushLooks = 3
 	fixPushWait  = 5 * time.Second
 	// fixLsRemoteTimeout bounds the `git ls-remote` confirmPush falls back on.
@@ -525,40 +579,10 @@ type remoteLister interface {
 	LsRemote(ctx context.Context, dir string, timeout time.Duration, patterns ...string) (string, error)
 }
 
-// confirmPush checks that GitHub has head, the commit the fixer says it
-// pushed, as the head of the PR's branch: the PR's head as the poll
-// identity's client reads it (Details), else, when that client cannot say,
-// the branch on origin (`git ls-remote` in the slot). A head GitHub shows
-// otherwise is looked at again fixPushWait later, up to fixPushLooks times.
-// The error ("push not confirmed on GitHub: ...") names the shas, never the
-// fixer's words.
-func (e *Engine) confirmPush(ctx context.Context, job *fixJob, head string) error {
-	var last string
-	var lastErr error
-	for i := range fixPushLooks {
-		if i > 0 {
-			if err := e.d.Sleep(ctx, fixPushWait); err != nil {
-				return err
-			}
-		}
-		got, err := e.remoteHead(ctx, job)
-		switch {
-		case err != nil:
-			lastErr = err
-			continue
-		case got == head:
-			return nil
-		}
-		last, lastErr = got, nil
-	}
-	if lastErr != nil {
-		return fmt.Errorf("push not confirmed on GitHub: %w", lastErr)
-	}
-	return fmt.Errorf("push not confirmed on GitHub: the PR's head is %s, not the pushed %s", textx.ShortSHA(last), textx.ShortSHA(head))
-}
-
 // remoteHead is the head of the job's PR on GitHub: the poll identity's
-// client's answer, else the branch's tip on origin.
+// client's answer (Details), else, when that client cannot say, the
+// branch's tip on origin (`git ls-remote` in the slot), with both errors
+// when neither answers.
 func (e *Engine) remoteHead(ctx context.Context, job *fixJob) (string, error) {
 	var why error
 	if gh := e.gh(job.watch.PollIdentity); gh == nil {
@@ -630,6 +654,13 @@ func (e *Engine) failFix(ctx context.Context, job *fixJob, msg, report string) {
 // so, msg ends with typedSentence for the event and the attention alike,
 // and the event's data carries operator_typed.
 func (e *Engine) failFixTyped(ctx context.Context, job *fixJob, msg, report string, typed bool) {
+	e.failFixKind(ctx, job, msg, report, typed, "")
+}
+
+// failFixKind is failFixTyped with the failure's kind, which its fix.failed
+// event's data carries (kind; "" for none): fixPushUnconfirmed, the one the
+// poll may settle late (fix_confirm.go).
+func (e *Engine) failFixKind(ctx context.Context, job *fixJob, msg, report string, typed bool, kind string) {
 	if typed {
 		msg += typedSentence
 	}
@@ -644,6 +675,9 @@ func (e *Engine) failFixTyped(ctx context.Context, job *fixJob, msg, report stri
 	}
 	if typed {
 		data["operator_typed"] = true
+	}
+	if kind != "" {
+		data["kind"] = kind
 	}
 	e.event(ctx, "warn", job.subject(), "fix.failed", msg, data)
 	if carried := carriedText(job); carried != "" { // fix_carry.go: the calls of the loop's earlier cycles stay the author's

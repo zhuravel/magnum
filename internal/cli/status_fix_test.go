@@ -179,6 +179,55 @@ func TestTheStatusCardNamesTheFixersCompaction(t *testing.T) {
 	}
 }
 
+// A loop whose settle confirms its fixer's push while GitHub does not answer
+// is still at work on the board ("fixing 1/3 · confirming b2b2b2b") and says
+// so on the card's fix line, and `daemon-restart --drain` does not wait for
+// it: a restart fails it as unconfirmed, which the poll settles once GitHub
+// shows the push.
+func TestALoopThatConfirmsItsPushSaysSoAndHoldsNoDrain(t *testing.T) {
+	_, st, d, now := statusFixture(t)
+	ctx := context.Background()
+	repo, err := st.RepoByFullName(ctx, "talkable/talkable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, err := st.PRByRepoNumber(ctx, repo.ID, 11920)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const pushed = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+	b, err := json.Marshal(engine.FixState{Cycle: 1, Cap: 3, Phase: engine.FixPhaseFixing, By: "magnum fix", StartedAt: now.Add(-30 * time.Minute),
+		Role: "claude-fix", Confirm: &engine.FixConfirm{Head: pushed, Since: now.Add(-4 * time.Minute)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetKV(ctx, engine.KVPRFix(pr.ID), string(b)); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := prsSource(st, d.Config, store.BoardFilter{}, nil, d.Layout)(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i := slices.IndexFunc(rows, func(r tui.PRBoardRow) bool { return r.Number == 11920 }); i < 0 || rows[i].Fixing != "fixing 1/3 · confirming b2b2b2b" {
+		t.Errorf("the board's rows: %+v", rows)
+	}
+	r, err := statusGather(ctx, d, statusOptions{Ref: "11920"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	statusRender(&out, r)
+	if want := "  fix:       cycle 1 of 3 · claude-fix · confirming the push of b2b2b2b (GitHub does not answer) · started by magnum fix "; !strings.Contains(out.String(), want) {
+		t.Errorf("card lacks %q:\n%s", want, out.String())
+	}
+
+	c, _, _ := bareContext(t)
+	c.Layout = d.Layout
+	if running, err := c.activeRounds(ctx); err != nil || strings.Contains(running.String(), "fix of") {
+		t.Errorf("in flight %q, %v; want no fix a drain waits for", running, err)
+	}
+}
+
 // A fix loop that ended needing you because its fixer left findings says on
 // the card what to do about each, one per line under the fix line with its
 // thread's link, and the report last ("details: <path>"); `--json` gives the

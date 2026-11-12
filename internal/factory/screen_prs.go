@@ -814,12 +814,16 @@ func youWait(what, short, long string) prWait {
 }
 
 // fixingWait is magnum's fix loop at work on PR #n (st.Fix): an agent at
-// work, the moving mark.
+// work, the moving mark; one whose settle confirms the push while GitHub
+// does not answer says so ("magnum fixes #4530, confirming the push of
+// e6c1f37 (GitHub does not answer)").
 func fixingWait(st PRState, n int) prWait {
 	what := fmt.Sprintf("magnum fixes #%d", n)
 	switch {
 	case st.Fix.Phase == engine.FixPhaseReviewing:
 		what += " (re-review of " + textx.ShortSHA(st.Fix.Head) + ")"
+	case st.Fix.Confirm != nil:
+		what += ", " + st.Fix.Confirming()
 	case st.Fix.Cycle > 0:
 		what += fmt.Sprintf(" (cycle %d of %d)", st.Fix.Cycle, st.Fix.Cap)
 	}

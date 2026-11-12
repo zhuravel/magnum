@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // Phases of a fix loop (FixState.Phase).
@@ -84,27 +86,49 @@ func KVPRFixOff(prID int64) string { return fmt.Sprintf("pr.%d.fix_off", prID) }
 // refusal: "needs Workflows on the App", a branch it never pushes to),
 // which the cycle's fixer goes on without and the loop's end puts under
 // Needs you (parentRefusedNote); "" when it merged or had nothing to merge.
+// Confirm is the push the cycle's settle confirms on GitHub while GitHub
+// does not answer (fix_confirm.go): the loop is still at work, in phase
+// fixing, and the screens say so (Confirming); nil otherwise.
 type FixState struct {
-	Cycle         int        `json:"cycle"`
-	Cap           int        `json:"cap"`
-	Phase         string     `json:"phase"`
-	Since         string     `json:"since"`
-	Head          string     `json:"head"`
-	By            string     `json:"by"`
-	Report        string     `json:"report"`
-	StartedAt     time.Time  `json:"started_at"`
-	NeedsYou      []string   `json:"needs_you,omitempty"`
-	Answered      []string   `json:"answered,omitempty"`
-	Role          string     `json:"role,omitempty"`
-	ForcedAt      time.Time  `json:"forced_at,omitzero"`
-	Held          bool       `json:"held,omitempty"`
-	Context       string     `json:"context,omitempty"`
-	OthersUnread  string     `json:"others_unread,omitempty"`
-	Carried       []FixCarry `json:"carried,omitempty"`
-	Waits         []string   `json:"waits,omitempty"`
-	Mode          string     `json:"mode,omitempty"`
-	CIChecks      []string   `json:"ci_checks,omitempty"`
-	ParentRefused string     `json:"parent_refused,omitempty"`
+	Cycle         int         `json:"cycle"`
+	Cap           int         `json:"cap"`
+	Phase         string      `json:"phase"`
+	Since         string      `json:"since"`
+	Head          string      `json:"head"`
+	By            string      `json:"by"`
+	Report        string      `json:"report"`
+	StartedAt     time.Time   `json:"started_at"`
+	NeedsYou      []string    `json:"needs_you,omitempty"`
+	Answered      []string    `json:"answered,omitempty"`
+	Role          string      `json:"role,omitempty"`
+	ForcedAt      time.Time   `json:"forced_at,omitzero"`
+	Held          bool        `json:"held,omitempty"`
+	Context       string      `json:"context,omitempty"`
+	OthersUnread  string      `json:"others_unread,omitempty"`
+	Carried       []FixCarry  `json:"carried,omitempty"`
+	Waits         []string    `json:"waits,omitempty"`
+	Mode          string      `json:"mode,omitempty"`
+	CIChecks      []string    `json:"ci_checks,omitempty"`
+	ParentRefused string      `json:"parent_refused,omitempty"`
+	Confirm       *FixConfirm `json:"confirm,omitempty"`
+}
+
+// FixConfirm is the fixer's push a fix loop's settle confirms on GitHub
+// while GitHub does not answer: the pushed head and when GitHub first did
+// not answer.
+type FixConfirm struct {
+	Head  string    `json:"head"`
+	Since time.Time `json:"since"`
+}
+
+// Confirming says that the loop's settle confirms its fixer's push while
+// GitHub does not answer: "confirming the push of e6c1f37 (GitHub does not
+// answer)"; "" when it does not.
+func (s FixState) Confirming() string {
+	if s.Confirm == nil {
+		return ""
+	}
+	return "confirming the push of " + textx.ShortSHA(s.Confirm.Head) + " (GitHub does not answer)"
 }
 
 // answered is Answered as a set (nil for none), as needsYouCalls reads it.
@@ -137,9 +161,14 @@ func ParseFixState(s string) (FixState, bool) {
 }
 
 // Short is the loop while its fixer works, as the board's state cell shows
-// it: "fixing 1/3 · claude-fix" ("fixing 1/3" when the role is not known).
+// it: "fixing 1/3 · claude-fix" ("fixing 1/3" when the role is not known),
+// "fixing 1/3 · confirming e6c1f37" while its settle confirms the push
+// (Confirm).
 func (s FixState) Short() string {
 	short := fmt.Sprintf("fixing %d/%d", s.Cycle, s.Cap)
+	if s.Confirm != nil {
+		return short + " · confirming " + textx.ShortSHA(s.Confirm.Head)
+	}
 	if s.Role == "" {
 		return short
 	}

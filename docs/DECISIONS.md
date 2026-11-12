@@ -18954,6 +18954,83 @@ skill versions); people add theirs to the sections before it, at the end of the 
     TestGitxsGraftFileAddsNoAdviceToGitsOutput in gitx, TestAFixDropsAStaleHeldMergeAndGoesOn in
     engine.
 
+- **A GitHub blip never fails a fix whose push landed** (2026-11-12, amends "The settle confirms the fixer's push on
+  GitHub"). On talkable/talkable#12226 the fixer pushed e6c1f37 and the poll saw that head at 14:20:53. At 14:21:22 the
+  settle wrote `fix.failed`, "push not confirmed on GitHub: github details talkable/talkable (1): gh api graphql ...
+  exited 1: error connecting". The loop's row went, the factory screen stopped saying "magnum fixes #12226", and the
+  fixer's pane stayed live, for a fix that had landed. The daemon's logs show such connection errors on 11-08, 11-09,
+  11-10 and 11-12, one or two minutes each. `confirmPush` read the PR's head three times, five seconds apart, and any
+  read error after the third failed the fix.
+  - The classifier. `transientRead` (fix_confirm.go, with its own table test) decides alone. A connection error (no
+    connection, a reset, a DNS failure), a timeout or a GitHub 5xx is transient. It reads what the GitHub client
+    returns. That is a typed error: a `*github.APIError` with a 5xx status and no GraphQL error, or a `net.Error` (a
+    dial, a lookup, a timeout). Or it is the exit of gh or git and its output, read by `github.ConnectionCause`. Rate
+    limits are left out through the new `github.RateLimited`. A 401, 403 or 404 is not transient. Nor is a GraphQL
+    error in GitHub's answer, a rate limit, a stop or any other error. `remoteHead` joins the client's error and the
+    error of `git ls-remote`. Only when both parts are transient is that joined error transient. So a branch that
+    origin no longer has fails at once.
+  - The retry. `confirmPush` reads again after each wait of `fixConfirmBackoff`: 5, 10, 20, 40, 60 and 45 seconds,
+    3 minutes in all (`fixConfirmWindow`). Any error that is not transient fails at once. A head that GitHub shows
+    otherwise still gets three looks, five seconds apart.
+  - Its context. The settle ran on the job's context with its cancel removed. Now the confirmation alone runs on the
+    job's own context (`stop` in `settleFix`). Every wait and read ends the moment that context ends. A shutdown cuts
+    it at once, and `daemon-restart --drain` ends in a shutdown. The loop's row stays in phase fixing for the next
+    start. During its 3 minutes the retry holds what the fix job holds and nothing more. That is the PR's reservation:
+    an abort is told to try again shortly, as during any settle. And it is the slot, held for the PR. It takes no
+    lock. At its first transient failure it marks the loop's row (`FixState.Confirm`: the pushed head and its time).
+    The CLI's `fixesAtWork` does not count such a row. So `--drain` and `daemon-stop` do not wait for it.
+  - The ticks. After 3 minutes with no answer, the settle does not run failFix. It puts the slot at the pushed head,
+    whose commit is local. It writes `fix.push_confirming` and lets go of the PR. The loop's row stays in phase
+    fixing. So dispatch still holds the PR's rounds (`fixHolds`), and the slot stays held for the PR. The pool can
+    take that slot back. At each tick the poll tries the confirmation again (`settlePushes`). It reads the PR's head
+    as GitHub's radar lists it, once the rows took the radar's heads. The pushed head settles the fix as usual: first
+    `fix.push_confirmed`, then what any settle does after a push. Any other head fails it as unconfirmed.
+    At each tick, also after a failed poll, `capPushes` runs. Past `fixConfirmCap` it fails the fix as unconfirmed and
+    puts the slot back at the head the fixer started from. That cap is 30 minutes from the start of the record. A
+    `magnum abort` meanwhile ends the loop as it ends any loop without a reservation.
+  - The typed failure. Before the confirmation, `pushedHead` writes `pr.<id>.fix_push` (`fixPush`). It is a
+    key-value row, so there is no migration. It holds the kind `confirming`, the run, the pushed head, the operator's
+    typing and the job's fields that the registry's rows lack. It goes once GitHub confirms the push. Some failures
+    have one cause only: the push was not confirmed. That is another head, GitHub's own answer, the cap, or a restart
+    that cut the settle (`recoverConfirming` in `recoverFixes`). They turn the row into the kind `push_unconfirmed`
+    (`failUnconfirmed`). Their `fix.failed` event carries `kind: push_unconfirmed` and keeps the old words. Any other
+    failure drops the row. Nothing reads the words.
+  - The late settle. At the poll, magnum settles a `push_unconfirmed` row as pushed (`settleConfirmedPush`). The PR's
+    head on GitHub must be exactly the pushed SHA. The settle holds the PR's reservation. It runs three steps of the
+    package steps, under a subject of its own (`fix-push:<run>`). No round or loop resets that subject. So a restart
+    in the middle does none of the steps twice. The first step writes `fix.push_confirmed_late`. For a slot that is still
+    the PR's, the next step puts it at the push. The last moves the run from failed back to ended. It clears
+    the fix's attention: its kv row and its run's. Then it runs `settleReport`, what a settle does after a confirmed
+    push. `settleReport` is split out of `settleFix`, and both use it. It writes the description, `fix.pushed` and
+    `fix.replied`. It starts the push's CI (`notePush`) and reads the calls that the threads leave. It moves the PR
+    row's head and forces the re-review, or ends the loop for a merge of the parent. The row goes last. For a PR whose
+    head is another commit, the failure stays and the row goes. Four other things also drop the row: a new loop
+    (`claimFixRow`), a review of the push since, a PR that is not open, and 24 hours after the failure
+    (`fixPushKeep`). A PR in flight or paused waits for the next poll.
+  - The screens. While the confirmation retries, the loop stays in phase fixing, at work on every screen. The
+    board's cell says `fixing 1/3 · confirming e6c1f37`. The PR's status line (the look's verdict) says "fixing,
+    confirming the push of e6c1f37 (GitHub does not answer)". The factory screen says "magnum fixes #12226,
+    confirming the push of e6c1f37 (GitHub does not answer)". The fix line of `magnum status` puts the same words
+    after the role. The wait of dispatch names the fix's settle.
+  - Rejected: the job's goroutine, its reservation and the slot held for all 30 minutes. `magnum abort` is refused
+    during a settle, and an idle restart waits for it. A match on "push not confirmed" in a failure's words.
+    Another failure can contain those words, and the engine's owner allows the typed kind only. A Details read at
+    each tick for the retry of the ticks. The radar that the poll reads anyway names the head. A retry of a 403, a
+    GraphQL error or a rate limit. Those are GitHub's answers.
+  - Tests. They failed first, and mutations of the code fail them. In engine:
+    - TestOnlyConnectionErrorsTimeoutsAnd5xxAreTransient (the table);
+    - TestAConnectionErrorWhileThePushIsConfirmedIsRetriedAndTheFixSettlesAsUsual (five errors, then the answer);
+    - TestA403OrAGraphQLErrorWhileThePushIsConfirmedFailsAtOnce;
+    - TestAContextThatEndsDuringTheRetryStopsItAtOnce;
+    - TestAShutdownDuringTheConfirmationFailsTheFixAsUnconfirmedAtTheStart;
+    - TestALongOutageKeepsTheLoopInItsSettleAcrossTicks (an answer at a later tick, and none);
+    - TestAnUnconfirmedFixWhosePushThePollFindsIsSettledAsPushedOnce (a crash before the last step, then a restart);
+    - TestAnUnconfirmedFixWhosePRMovedToALaterCommitIsNotSettled;
+    - TestAFixThatFailedOtherwiseIsNeverSettledLate (words that say "push not confirmed", and a row of another kind);
+    - TestTheLoopSaysItConfirmsThePushWhileGitHubDoesNotAnswer.
+    In cli: TestALoopThatConfirmsItsPushSaysSoAndHoldsNoDrain. In factory: the new row of
+    TestAPublishedTaskShowsItsPRsFixLoop. `settleFix` leaves the gocyclo ratchet.
+
 ## The factory (2026-11-03)
 
 `magnum factory` and its first milestone (1a); the design is

@@ -1316,6 +1316,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	if err := e.poll(ctx); err != nil {
 		errs = append(errs, err)
 	}
+	e.capPushes(ctx) // fix_confirm.go: a fix whose push GitHub did not confirm in time fails, the poll failed or not
 	ts := e.observe(ctx)
 	e.health(ctx)
 	e.handleRequests(ctx)

@@ -285,6 +285,7 @@ func (e *Engine) pollRepo(ctx context.Context, w config.Watch, gh GitHub, rr git
 		errs = append(errs, err)
 	}
 	e.dropStaleHeldMerges(ctx, repo, held, details) // after the rows took the radar's heads and bases and the confirmed closes
+	e.settlePushes(ctx, repo, rr.PRs)               // fix_confirm.go: the fixers' pushes GitHub did not confirm, on the heads it lists now
 
 	if firstSync && len(errs) == 0 {
 		repoRow.FirstSyncedAt = new(now)

@@ -10,6 +10,10 @@ import (
 	"strings"
 )
 
+// RateLimited is the cause ConnectionCause names a rate limit by: GitHub's
+// own answer, which a retry does not get past before the limit resets.
+const RateLimited = "rate limited"
+
 // errPattern is an error text (lower case) and the cause it names.
 type errPattern struct{ match, cause string }
 
@@ -52,8 +56,8 @@ var githubPatterns = []errPattern{
 	{"deadline exceeded", "network timeout"},
 	{"broken pipe", "connection reset"},
 	{"network is down", "network unreachable"},
-	{"rate limit", "rate limited"}, // a secondary one too
-	{"too many requests", "rate limited"},
+	{"rate limit", RateLimited}, // a secondary one too
+	{"too many requests", RateLimited},
 	{"internal server error", "GitHub server error"},
 	{"bad gateway", "GitHub server error"},
 	{"service unavailable", "GitHub server error"},
@@ -131,7 +135,7 @@ func ConnectionCause(msg string) string {
 	case serverErrorRe.MatchString(msg):
 		return "GitHub server error"
 	case rateLimitRe.MatchString(msg):
-		return "rate limited"
+		return RateLimited
 	case eofRe.MatchString(msg):
 		return "connection closed"
 	}

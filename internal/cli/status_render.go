@@ -818,7 +818,9 @@ func inspDedupe(ss []string) []string {
 // statusRenderFix prints the card's fix line: the PR's fix loop ("cycle 1
 // of 3 · claude-fix · started by magnum fix 12:30 · report <path>", with
 // what the cycle did to the fixer's conversation after the role when it
-// compacted it or started it fresh: "claude-fix · compacted 82% → 31%"),
+// compacted it or started it fresh: "claude-fix · compacted 82% → 31%",
+// and that its settle confirms the push while GitHub does not answer:
+// "claude-fix · confirming the push of e6c1f37 (GitHub does not answer)"),
 // under it the calls of the findings its fixer left to the author when it
 // pushed, one per line, and its opt-out of autofix ("off since 12:30
 // (magnum fix --off)"), the opt-out on a line of its own when it has a loop
@@ -834,6 +836,9 @@ func statusRenderFix(w io.Writer, view *statusFixLoop, off *engine.FixOff, now t
 		}
 		if f.Context != "" {
 			s += " · " + f.Context
+		}
+		if c := f.Confirming(); c != "" {
+			s += " · " + c
 		}
 		if f.By != "" {
 			s += " · started by " + f.By

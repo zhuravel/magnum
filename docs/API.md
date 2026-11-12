@@ -11198,6 +11198,14 @@ type FixCommit struct {
 }
     FixCommit is a commit the fixer says it pushed.
 
+type FixConfirm struct {
+	Head  string    `json:"head"`
+	Since time.Time `json:"since"`
+}
+    FixConfirm is the fixer's push a fix loop's settle confirms on GitHub
+    while GitHub does not answer: the pushed head and when GitHub first did not
+    answer.
+
 type FixDecision struct {
 	Thread int64  `json:"thread"`
 	Text   string `json:"text"`
@@ -11284,26 +11292,27 @@ func ParseFixReport(text string, runID string) (FixReport, error)
     fit its section is an error that quotes the line (not a sentinel).
 
 type FixState struct {
-	Cycle         int        `json:"cycle"`
-	Cap           int        `json:"cap"`
-	Phase         string     `json:"phase"`
-	Since         string     `json:"since"`
-	Head          string     `json:"head"`
-	By            string     `json:"by"`
-	Report        string     `json:"report"`
-	StartedAt     time.Time  `json:"started_at"`
-	NeedsYou      []string   `json:"needs_you,omitempty"`
-	Answered      []string   `json:"answered,omitempty"`
-	Role          string     `json:"role,omitempty"`
-	ForcedAt      time.Time  `json:"forced_at,omitzero"`
-	Held          bool       `json:"held,omitempty"`
-	Context       string     `json:"context,omitempty"`
-	OthersUnread  string     `json:"others_unread,omitempty"`
-	Carried       []FixCarry `json:"carried,omitempty"`
-	Waits         []string   `json:"waits,omitempty"`
-	Mode          string     `json:"mode,omitempty"`
-	CIChecks      []string   `json:"ci_checks,omitempty"`
-	ParentRefused string     `json:"parent_refused,omitempty"`
+	Cycle         int         `json:"cycle"`
+	Cap           int         `json:"cap"`
+	Phase         string      `json:"phase"`
+	Since         string      `json:"since"`
+	Head          string      `json:"head"`
+	By            string      `json:"by"`
+	Report        string      `json:"report"`
+	StartedAt     time.Time   `json:"started_at"`
+	NeedsYou      []string    `json:"needs_you,omitempty"`
+	Answered      []string    `json:"answered,omitempty"`
+	Role          string      `json:"role,omitempty"`
+	ForcedAt      time.Time   `json:"forced_at,omitzero"`
+	Held          bool        `json:"held,omitempty"`
+	Context       string      `json:"context,omitempty"`
+	OthersUnread  string      `json:"others_unread,omitempty"`
+	Carried       []FixCarry  `json:"carried,omitempty"`
+	Waits         []string    `json:"waits,omitempty"`
+	Mode          string      `json:"mode,omitempty"`
+	CIChecks      []string    `json:"ci_checks,omitempty"`
+	ParentRefused string      `json:"parent_refused,omitempty"`
+	Confirm       *FixConfirm `json:"confirm,omitempty"`
 }
     FixState is where a PR's fix loop is: cycle Cycle of at most Cap, in Phase.
     Since is the head the loop started from and Head the head the current
@@ -11347,22 +11356,31 @@ type FixState struct {
     (pushbackKey) names a reviewer one of whose items waited, and marks their
     change requests made since. Mode is what the loop does: "" fixes findings,
     FixModeMerge merges the PR's parent alone (fix_parent.go), FixModeCI fixes
-    its failed required CI on the loop's first cycle (ci_fix.go; the next cycles
-    fix the re-review's findings, with Mode ""), the required entries that
-    failed in CIChecks (the [[repo]] list's or GitHub's rulesets', never a job's
-    name; the registry's alone). ParentRefused is why the daemon did not push
-    its merge of the parent on the loop's first cycle (mergeParent's refusal:
-    "needs Workflows on the App", a branch it never pushes to), which the
-    cycle's fixer goes on without and the loop's end puts under Needs you
-    (parentRefusedNote); "" when it merged or had nothing to merge.
+    its failed required CI on the loop's first cycle (ci_fix.go; the next
+    cycles fix the re-review's findings, with Mode ""), the required entries
+    that failed in CIChecks (the [[repo]] list's or GitHub's rulesets', never
+    a job's name; the registry's alone). ParentRefused is why the daemon did
+    not push its merge of the parent on the loop's first cycle (mergeParent's
+    refusal: "needs Workflows on the App", a branch it never pushes to),
+    which the cycle's fixer goes on without and the loop's end puts under
+    Needs you (parentRefusedNote); "" when it merged or had nothing to merge.
+    Confirm is the push the cycle's settle confirms on GitHub while GitHub does
+    not answer (fix_confirm.go): the loop is still at work, in phase fixing,
+    and the screens say so (Confirming); nil otherwise.
 
 func ParseFixState(s string) (FixState, bool)
     ParseFixState reads a KVPRFix value; ok is false for one that is not a fix
     loop.
 
+func (s FixState) Confirming() string
+    Confirming says that the loop's settle confirms its fixer's push while
+    GitHub does not answer: "confirming the push of e6c1f37 (GitHub does not
+    answer)"; "" when it does not.
+
 func (s FixState) Short() string
     Short is the loop while its fixer works, as the board's state cell shows it:
-    "fixing 1/3 · claude-fix" ("fixing 1/3" when the role is not known).
+    "fixing 1/3 · claude-fix" ("fixing 1/3" when the role is not known), "fixing
+    1/3 · confirming e6c1f37" while its settle confirms the push (Confirm).
 
 type GateCase struct {
 	learn.GateRow
@@ -18834,6 +18852,10 @@ const MaxReviews = reviewsPageSize * reviewsMaxPages
 const PullFilesMaxPages = 30
     PullFilesMaxPages is how many pages of 100 PullFiles reads: GitHub's own cap
     for the endpoint, 3000 files.
+
+const RateLimited = "rate limited"
+    RateLimited is the cause ConnectionCause names a rate limit by: GitHub's own
+    answer, which a retry does not get past before the limit resets.
 
 
 VARIABLES

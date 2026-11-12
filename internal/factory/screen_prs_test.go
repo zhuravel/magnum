@@ -78,6 +78,16 @@ func TestAPublishedTaskShowsItsPRsFixLoop(t *testing.T) {
 	if w := rowOf(t, r.data(time.Time{}), "PR-12320").WaitsOn[0]; w.What != "magnum fixes #4530 (re-review of b2c3d4e)" {
 		t.Errorf("the row of a loop's re-review: %+v", w)
 	}
+
+	r.pr(4530, func(v *PRState) { // its settle confirms the push while GitHub does not answer
+		v.HasOpen, v.Open = true, verdict(engine.OpenFixing, "fixing, confirming the push of b2c3d4e (GitHub does not answer)")
+		v.Fixing, v.Fix = true, engine.FixState{Cycle: 2, Cap: 5, Phase: engine.FixPhaseFixing, Head: prHead,
+			Confirm: &engine.FixConfirm{Head: "b2c3d4e" + strings.Repeat("0", 33)}}
+	})
+	row = rowOf(t, r.data(time.Time{}), "PR-12320")
+	if w := row.WaitsOn[0]; row.Mark != tui.MarkWorking || w.What != "magnum fixes #4530, confirming the push of b2c3d4e (GitHub does not answer)" {
+		t.Errorf("the row of a loop confirming its push: %+v, mark %v", w, row.Mark)
+	}
 }
 
 // A PR that needs you puts its task in NEEDS YOU, the verdict's words on

@@ -980,7 +980,11 @@ func (e *Engine) claimFixRow(ctx context.Context, job *fixJob, prev, st FixState
 	case prev.Cycle == 0 && ok:
 		return errors.New(fixRunningSentence(cur))
 	case prev.Cycle == 0:
-		return e.setFixState(ctx, job.pr.ID, st)
+		if err := e.setFixState(ctx, job.pr.ID, st); err != nil {
+			return err
+		}
+		e.dropFixPush(ctx, job.pr.ID) // fix_confirm.go: a new loop ends the wait of a push an earlier one did not confirm
+		return nil
 	case !ok || !sameWaitingLoop(cur, prev):
 		return fmt.Errorf("%s: %w", job.label(), errFixLoopGone)
 	}
@@ -1075,7 +1079,7 @@ func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 		}
 		e.failFix(fctx, job, msg, "")
 	default:
-		e.settleFix(fctx, job)
+		e.settleFix(fctx, ctx, job)
 	}
 }
 
@@ -1800,7 +1804,11 @@ func (e *Engine) fixWaitOf(ctx context.Context, prID int64) (Wait, bool) {
 	case !ok || st.Phase != FixPhaseFixing:
 		return Wait{}, false
 	}
-	return Wait{Reason: WaitFixing, Count: st.Cycle, Max: st.Cap, Detail: fmt.Sprintf("the fixer (fix cycle %d of %d)", st.Cycle, st.Cap)}, true
+	detail := fmt.Sprintf("the fixer (fix cycle %d of %d)", st.Cycle, st.Cap)
+	if c := st.Confirming(); c != "" { // fix_confirm.go
+		detail = fmt.Sprintf("the fix's settle (fix cycle %d of %d), %s", st.Cycle, st.Cap, c)
+	}
+	return Wait{Reason: WaitFixing, Count: st.Cycle, Max: st.Cap, Detail: detail}, true
 }
 
 // fixPanicked settles a fix job that panicked as a failed one; the abort
@@ -1871,6 +1879,9 @@ func (e *Engine) recoverFixes(ctx context.Context) {
 		job := e.loopJob(ctx, repo, pr, st)
 		if st.Phase == FixPhaseReviewing {
 			e.recoverReviewingLoop(ctx, job, raw, "while the daemon was stopped") // fix_loop.go
+			continue
+		}
+		if e.recoverConfirming(ctx, repo, pr, st) { // fix_confirm.go: a settle that confirmed its push
 			continue
 		}
 		if job.role.Name == "" {

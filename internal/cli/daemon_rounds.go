@@ -369,7 +369,10 @@ func whiteboardsAtWork(ctx context.Context, db *sql.DB, now time.Time) ([]string
 // 15:04)", since the loop's start. The fix job keeps the PR reviewed, so no
 // round state shows it, and a daemon stopped meanwhile ends the loop as
 // needs attention. A loop waiting for its re-review is not listed (its
-// round is, once it runs), and a row that cannot be read still counts.
+// round is, once it runs), nor is one whose settle confirms its push while
+// GitHub does not answer (engine.FixState.Confirm): its fixer is done, and a
+// restart fails it as unconfirmed, which the poll settles once GitHub shows
+// the push. A row that cannot be read still counts.
 func fixesAtWork(ctx context.Context, db *sql.DB, now time.Time) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `SELECT k.value, r.owner, r.name, p.number FROM kv k
 		JOIN prs p ON k.key = 'pr.' || p.id || '.fix' JOIN repos r ON r.id = p.repo_id
@@ -388,7 +391,7 @@ func fixesAtWork(ctx context.Context, db *sql.DB, now time.Time) ([]string, erro
 		what := fmt.Sprintf("fix of %s/%s#%d", owner, name, n)
 		var st engine.FixState
 		if json.Unmarshal([]byte(value), &st) == nil {
-			if st.Phase != engine.FixPhaseFixing {
+			if st.Phase != engine.FixPhaseFixing || st.Confirm != nil {
 				continue
 			}
 			what += fmt.Sprintf(" (cycle %d", st.Cycle)

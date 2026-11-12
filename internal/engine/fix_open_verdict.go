@@ -528,6 +528,8 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 		return say(OpenFixing, "fixing, re-review of "+textx.ShortSHA(f.fix.Head)+" (the CI fix's push)"), nil, needs
 	case f.fix != nil && f.fix.Phase == FixPhaseReviewing:
 		return say(OpenFixing, "fixing, re-review of "+textx.ShortSHA(f.fix.Head)), nil, needs
+	case f.fix != nil && f.fix.Confirm != nil: // fix_confirm.go: GitHub does not answer the settle
+		return say(OpenFixing, "fixing, "+f.fix.Confirming()), nil, needs
 	case f.fix != nil && f.fix.Mode == FixModeCI:
 		return say(OpenFixing, ciRunning(f)), nil, needs
 	case f.fix != nil:

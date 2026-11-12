@@ -106,6 +106,9 @@ type fakeGH struct {
 	dismissErr error                   // DismissReview fails
 	createErr  error                   // CreateReview fails
 	created    []string                // CreateReview calls: "<event>@<sha>:<body>"
+	// detailsErrs fail the next Details calls, one each, before
+	// detailsErr: a nil entry lets its call answer.
+	detailsErrs []error
 	// files answers CompareFiles by "base...head" (absent = ErrNotFound);
 	// filesErr fails it (and ComparePush) instead.
 	files    map[string][]github.FileDelta
@@ -820,7 +823,13 @@ func (g *fakeGH) Details(ctx context.Context, owner, repo string, numbers []int)
 	g.record(fmt.Sprintf("details:%s/%s:%v", owner, repo, numbers))
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.detailsErr != nil {
+	if len(g.detailsErrs) > 0 {
+		err := g.detailsErrs[0]
+		g.detailsErrs = g.detailsErrs[1:]
+		if err != nil {
+			return nil, nil, err
+		}
+	} else if g.detailsErr != nil {
 		return nil, nil, g.detailsErr
 	}
 	full := owner + "/" + repo

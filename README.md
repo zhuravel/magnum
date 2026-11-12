@@ -3643,7 +3643,13 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   report of another run, a failed push (yours, made while the fixer
   worked, makes its push fail, unless it only merged the base: `magnum fix-sync` above), a push GitHub does
   not show ("push not confirmed on GitHub"), a timeout, or a daemon restart in the middle of the run ("fix
-  run lost in a daemon restart"). When your own push came in
+  run lost in a daemon restart"). GitHub that does not answer while the settle confirms the push (a
+  connection error, a timeout, a 5xx) is no failure: the settle reads again for about 3 minutes, then the
+  loop stays at work ("fixing, confirming the push of e6c1f37 (GitHub does not answer)") and the next ticks'
+  polls look again, for 30 minutes in all. A fix that failed only because its push was not confirmed (that
+  cap, GitHub's own answer, a restart in the middle of the settle) is settled as pushed when a poll then
+  finds exactly that push as the PR's head (`fix.push_confirmed_late`), with its re-review and the
+  attention cleared; another head leaves the failure as it is. When your own push came in
   while the fixer worked, the PR keeps waiting for the re-review of your head: the urgent toast tells you
   about the fixer, and the PR does not go to needs attention. An urgent toast names the reason and the
   report's path, the attention key opens the fixer's pane, and `magnum status` and `magnum attention` list the
@@ -4079,9 +4085,12 @@ the `c` key of the board, the status dashboard and the factory screen start a CI
 - `magnum status <pr>` prints a `fix:` line with the cycle, the cap, who started the loop and the report's
   path, or `off since 12:30 (magnum fix --off)`. When the cycle compacted the fixer or started it fresh, the
   line says so after the role (`claude-fix · compacted 82% → 31%`, `claude-fix · fresh session (82% after
-  /compact)`), and `--json` has it as the loop's `context`. `magnum tui --json` has `fixing`, `fix_loop` (a loop in either phase), `fix_off`, `fixer` (the login the fixer pushes and replies as) and `held_merge` (the `held-merge.diff` of a merge of the parent magnum holds for your y).
+  /compact)`), and `--json` has it as the loop's `context`; one whose settle confirms the push while GitHub does
+  not answer says `confirming the push of e6c1f37 (GitHub does not answer)` there (`confirm` in the JSON), and
+  the board's cell `fixing 1/3 · confirming e6c1f37`. `magnum tui --json` has `fixing`, `fix_loop` (a loop in either phase), `fix_off`, `fixer` (the login the fixer pushes and replies as) and `held_merge` (the `held-merge.diff` of a merge of the parent magnum holds for your y).
 - `magnum logs <ref>` shows `fix.start`, `fix.conflict_unchecked`, `fix.compacted`, `fix.fresh_session`, `fix.context_unknown`,
-  `fix.pushed`, `fix.replied`, `fix.waiting`, `fix.round_ignored`, `fix.needs_you`, `fix.time_up`,
+  `fix.pushed`, `fix.push_confirming`, `fix.push_confirmed`, `fix.push_confirmed_late`, `fix.replied`, `fix.waiting`,
+  `fix.round_ignored`, `fix.needs_you`, `fix.time_up`,
   `fix.capped`, `fix.done`, `fix.failed`, `fix.stopped`, `fix.ended`, `fix.acknowledged` (`magnum fix --done`), `fix.decided`
   (`magnum fix --decide`), `fix.decisions`, `fix.decisions_built` and `fix.optional_lifted` (Your decisions),
   `fix.optional` (the optional calls), and under `autofix = "open"`

@@ -266,7 +266,7 @@ linters:
         text: "`\\(\\*Config\\)\\.validatePipeline`"
       - linters: [gocyclo]
         path: internal/engine/
-        text: "`(\\(\\*Engine\\)\\.(requestFix|prepareFix|settleFix|prepare|finish)|externalOf)`"
+        text: "`(\\(\\*Engine\\)\\.(requestFix|prepareFix|prepare|finish)|externalOf)`"
       - linters: [gocyclo]
         path: internal/notes/curate\.go
         text: "`Validate`"
