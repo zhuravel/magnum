@@ -26525,7 +26525,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
     "Randomized with seed N", so no turn failed the same way twice and every turn was progress, and your
     accept stored today's line and never matched again. Your accept of such a failure covers that stable
     line and stays unnamed (`stops.json` Unnamed): a new failure of the check still fails, as the option
-    says, never a later unnamed one or a named one (keyed on the check alone, it passed a load error).
+    says, never a later unnamed one or a named one (keyed on the check alone, it passed a load error). A
+    coverage miss's key reads its coverage now as any (`acceptKey`), so the accept holds while the
+    coverage stays under the same threshold, and the writer's progress still reads the raw line. jest's
+    "Jest: Uncovered count … exceeds global threshold" is such a line too, and only a table's rules and
+    rows (a name, then " | ", three cells) are skipped as noise.
     eslint's stylish report and stylelint's are read by the line that names the file above their rows of
     line:column (`namedOffenses`), so the changed-line filter holds for them; a row with no file's line
     above it (a tail cut at `outputKeep`) makes the whole output unreadable, the writer's. Every sign is read against the
@@ -26586,7 +26590,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     that moved, the branch's head now, and its context gives the steps. "Go on" only makes the factory look
     at the copy again, and a copy that still has the leftover asks again. The factory never moves a branch or
     HEAD, never puts back under a doubt, and never runs an answer over a turn. A failed save or put-back
-    asks you with the steps, as before.
+    asks the same question (`askLeftSaved`), with the failure as its doubt and the steps in its context; a
+    failed save is not tried again for it, and its steps name no file it did not keep. No wait of this case
+    ends in `magnum factory retry` any more.
     This case was narrowed after four review rounds. Those rounds built a keep of the change (remembered by
     its fingerprint, named in the writer's prompts, committed in a short turn of its own), a restore of a
     copy that moved (which reset the branch), answers given while the factory could not tell, and a

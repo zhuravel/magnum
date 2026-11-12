@@ -181,6 +181,17 @@ func TestADoubtThatComesDuringTheSaveAsksBeforeAnyPutBack(t *testing.T) {
 	}
 }
 
+// leftWords are the words of task id's wait on you over what a round left:
+// the wait, and its question's text and context (the steps).
+func (r *reviewRig) leftWords(id int64) string {
+	r.t.Helper()
+	words := r.reload(id).WaitsWhat
+	for _, q := range r.newestQuestions(id) {
+		words += "\n" + q.Text + "\n" + q.Context
+	}
+	return words
+}
+
 // What a round left that the factory cannot save first stays as it is,
 // and so does what it cannot put back: a symlink among the new files is
 // not saved (only regular files are), a patch git cannot write is none,
@@ -219,9 +230,12 @@ func TestARoundsLeftoversThatCannotBeSavedOrPutBackWaitForYou(t *testing.T) {
 			task, _ := r.reviewTask("PR-12393")
 			r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
 			got := r.reload(task.ID)
-			if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "round 1 of the local review left") ||
-				!strings.Contains(got.WaitsWhat, tc.why) || !strings.Contains(got.WaitsWhat, fmt.Sprintf("magnum factory retry %d", task.ID)) {
-				t.Fatalf("task %s waits %q; want you, naming %q", got.State, got.WaitsWhat, tc.why)
+			words := r.leftWords(task.ID)
+			if qs := r.newestQuestions(task.ID); got.State != registry.TaskNeedsYou || !strings.Contains(words, "Round 1 of the local review left") ||
+				!strings.Contains(words, tc.why) || strings.Contains(words, "magnum factory retry") || len(qs) != 1 ||
+				!slices.Equal(optionLabels(qs[0]), []string{optionPutBack, optionDrop}) || !strings.Contains(qs[0].Context, "git -C") {
+				t.Fatalf("task %s waits %q (%q); want the put-back-or-drop question, naming %q, its steps, never a retry", got.State,
+					got.WaitsWhat, words, tc.why)
 			}
 			if r.read("README") != "a reviewer's mutant\n" {
 				t.Fatal("the factory put back what it could not save")
@@ -229,8 +243,8 @@ func TestARoundsLeftoversThatCannotBeSavedOrPutBackWaitForYou(t *testing.T) {
 			if saved := r.saved(task.ID, "review-1-left.diff"); saved != tc.saved || r.saved(task.ID, "review-1-left") {
 				t.Fatalf("review-1-left.diff saved %v, want %v (or a directory of no new file)", saved, tc.saved)
 			}
-			if tc.saved && !strings.Contains(got.WaitsWhat, "review-1-left.diff") {
-				t.Fatalf("the wait %q does not name the saved patch", got.WaitsWhat)
+			if tc.saved && !strings.Contains(words, "review-1-left.diff") {
+				t.Fatalf("the question %q does not name the saved patch", words)
 			}
 		})
 	}
@@ -459,16 +473,17 @@ func TestTheWaitsStepsPutTheCopyBackAsTheyAreWritten(t *testing.T) {
 			tc.before(r)
 			r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
 			got := r.reload(task.ID)
-			if got.State != registry.TaskNeedsYou || strings.Contains(got.WaitsWhat, ":/") ||
-				tc.file != "" && !strings.Contains(got.WaitsWhat, filepath.Join(r.layout.FactoryTaskDir(task.ID), tc.file)) {
-				t.Fatalf("task %s waits %q; want steps over %q", got.State, got.WaitsWhat, tc.file)
+			words := r.leftWords(task.ID)
+			if got.State != registry.TaskNeedsYou || strings.Contains(words, ":/") ||
+				tc.file != "" && !strings.Contains(words, filepath.Join(r.layout.FactoryTaskDir(task.ID), tc.file)) {
+				t.Fatalf("task %s waits %q; want steps over %q", got.State, words, tc.file)
 			}
 			for _, ev := range r.events(task.ID, "review") {
 				if strings.Count(ev.Text, ".rb") > 10 {
 					t.Fatalf("an event lists them all: %q", ev.Text)
 				}
 			}
-			r.runSteps(got.WaitsWhat)
+			r.runSteps(words)
 			if st := r.git(r.copyDir, "status", "--porcelain"); st != tc.status {
 				t.Fatalf("status after the steps:\n%s\nwant:\n%s", st, tc.status)
 			}
@@ -506,10 +521,11 @@ func TestTheWaitsStepsNeverRemoveAFileNotProvenTheRounds(t *testing.T) {
 			r.write(r.copyDir, "tmp/cache.log", "yours, ignored\n")
 			r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
 			got := r.reload(task.ID)
-			if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, tc.says) || strings.Contains(got.WaitsWhat, "rm ") {
-				t.Fatalf("task %s waits %q; want no rm step and %q", got.State, got.WaitsWhat, tc.says)
+			words := r.leftWords(task.ID)
+			if got.State != registry.TaskNeedsYou || !strings.Contains(words, tc.says) || strings.Contains(words, "rm ") {
+				t.Fatalf("task %s waits %q; want no rm step and %q", got.State, words, tc.says)
 			}
-			r.runSteps(got.WaitsWhat)
+			r.runSteps(words)
 			if r.read("tmp/cache.log") != "yours, ignored\n" || r.read(".gitignore") != "tmp/\n" {
 				t.Fatal("the steps removed your ignored file or left the round's ignore rules")
 			}
@@ -606,9 +622,10 @@ func TestAFileTheRoundStagedAndDeletedKeepsItsIndexCopy(t *testing.T) {
 	r.write(r.copyDir, "probe/old.rb", "yours, from before the round\n")
 	r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
 	got := r.reload(task.ID)
-	if got.State != registry.TaskNeedsYou || strings.Contains(got.WaitsWhat, "restore --staged -- probe/old.rb") ||
-		!strings.Contains(got.WaitsWhat, "probe/old.rb") {
-		t.Fatalf("task %s waits %q; want you, with no step that drops probe/old.rb from the index", got.State, got.WaitsWhat)
+	words := r.leftWords(task.ID)
+	if got.State != registry.TaskNeedsYou || strings.Contains(words, "restore --staged -- probe/old.rb") ||
+		!strings.Contains(words, "probe/old.rb") {
+		t.Fatalf("task %s waits %q; want you, with no step that drops probe/old.rb from the index", got.State, words)
 	}
 	if got := r.git(r.copyDir, "show", ":probe/old.rb"); got != "yours, from before the round" {
 		t.Fatalf("the index holds %q", got)
@@ -699,9 +716,10 @@ func TestAFileTheRoundStagedAndEditedKeepsItsIndexCopy(t *testing.T) {
 	r.write(r.copyDir, "probe/old.rb", "yours, from before the round\n")
 	r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
 	got := r.reload(task.ID)
-	if got.State != registry.TaskNeedsYou || strings.Contains(got.WaitsWhat, "restore --staged -- probe/old.rb") ||
-		!strings.Contains(got.WaitsWhat, "probe/old.rb") {
-		t.Fatalf("task %s waits %q; want you, with no step that drops probe/old.rb from the index", got.State, got.WaitsWhat)
+	words := r.leftWords(task.ID)
+	if got.State != registry.TaskNeedsYou || strings.Contains(words, "restore --staged -- probe/old.rb") ||
+		!strings.Contains(words, "probe/old.rb") {
+		t.Fatalf("task %s waits %q; want you, with no step that drops probe/old.rb from the index", got.State, words)
 	}
 	if got := r.git(r.copyDir, "show", ":probe/old.rb"); got != "yours, from before the round" {
 		t.Fatalf("the index holds %q", got)
@@ -798,10 +816,11 @@ func TestTheWaitsRmStepNamesOnlyTheRoundsSavedFiles(t *testing.T) {
 			r.older("logs/app.log")
 			r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
 			got := r.reload(task.ID)
-			rm := regexp.MustCompile("`rm [^`]*`").FindString(got.WaitsWhat)
+			words := r.leftWords(task.ID)
+			rm := regexp.MustCompile("`rm [^`]*`").FindString(words)
 			if got.State != registry.TaskNeedsYou || strings.Contains(rm, "logs/app.log") ||
-				(tc.rm == "") != (rm == "") || !strings.Contains(rm, tc.rm) || !strings.Contains(got.WaitsWhat, tc.left) {
-				t.Fatalf("task %s waits %q; want an rm step of %q, and %q named as left out", got.State, got.WaitsWhat, tc.rm, tc.left)
+				(tc.rm == "") != (rm == "") || !strings.Contains(rm, tc.rm) || !strings.Contains(words, tc.left) {
+				t.Fatalf("task %s waits %q; want an rm step of %q, and %q named as left out", got.State, words, tc.rm, tc.left)
 			}
 		})
 	}

@@ -15,9 +15,9 @@ package factory
 // and the task goes on, or it stops. The factory never moves a branch,
 // never puts back under a doubt and never runs an answer over a turn. A
 // round stopped before its end has the same done before it runs again in
-// its cycle (startRound). A save or a put-back that fails needs you, with
-// why and the steps that put the copy back (leftWait). No step here
-// discards a change it did not save first.
+// its cycle (startRound). A save or a put-back that fails asks the same
+// question, with why and the steps that put the copy back (askLeftSaved).
+// No step here discards a change it did not save first.
 
 import (
 	"cmp"
@@ -160,9 +160,10 @@ func roundName(round, n int) string {
 // on, or it stops. The factory never moves a branch, never puts anything
 // back under a doubt, and never runs an answer over a turn: your "go on"
 // only makes it look at the copy again, and a copy that still has what
-// the round left asks again. A save or a put-back that fails needs you,
-// with why and the steps that put the copy back (leftWait). It runs
-// whatever ended the pass (ctx's end does not stop it).
+// the round left asks again. A save or a put-back that fails asks the same
+// question, with the failure as its doubt and the steps that put the copy
+// back (askLeftSaved). It runs whatever ended the pass (ctx's end does not
+// stop it).
 func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy registry.Cycle, round int, left roundLeftovers) (string,
 	error) {
 	ctx = context.WithoutCancel(ctx)
@@ -193,7 +194,7 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 	if err != nil {
 		line := clipEnd(textx.FirstLine(scrub.Text(err.Error())), 240)
 		e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("save what %s left in %s: %s", name, c.Name, line))
-		return e.leftWait(t, c, cy, round, left, "", "the factory could not save it, so it put none of it back: "+line)
+		return e.askLeftSaved(ctx, t, c, cy, round, left, "the factory could not save it, so it put none of it back: "+line, "", "")
 	}
 	if doubt := e.leftDoubt(ctx, t, cy, left); doubt != "" {
 		undo() // the question saves it again, under the next free name
@@ -208,14 +209,14 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 	now, err := e.roundLeft(ctx, t, c, cy.HeadBefore, cy.N)
 	switch {
 	case err != nil && perr != nil:
-		return e.leftWait(t, c, cy, round, left, base, "the factory saved it to "+saved+" but could not put it back: "+line)
+		return e.askLeftSaved(ctx, t, c, cy, round, left, "the factory could not put it back: "+line, base, saved)
 	case err != nil:
 		return "", err
 	case !now.none() && perr != nil:
-		return e.leftWait(t, c, cy, round, now, base, "the factory saved it to "+saved+" but could not put it back: "+line)
+		return e.askLeftSaved(ctx, t, c, cy, round, now, "the factory could not put it back: "+line, base, saved)
 	case !now.none():
 		e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("after the put-back of what %s left, %s still has %s", name, c.Name, now))
-		return e.leftWait(t, c, cy, round, now, base, "the factory saved what it found to "+saved+" and put it back, and the copy still has this")
+		return e.askLeftSaved(ctx, t, c, cy, round, now, "the factory put it back, and the copy still has this", base, saved)
 	}
 	e.event(ctx, t.ID, "review", registry.PhaseOK, fmt.Sprintf("put back what %s left in %s as the round found it, saved to %s", name,
 		c.Name, saved))
@@ -270,7 +271,7 @@ func (e *Engine) leftDoubt(ctx context.Context, t registry.Task, cy registry.Cyc
 // pass. A question that waits for your answer already waits on, nothing
 // saved again. After goOns answers "go on" that found the copy still not
 // as the round found it, the question is asked again. A save that fails
-// needs you with the steps, as before (leftWait).
+// asks it with the failure as its doubt (askLeftSaved).
 func (e *Engine) askLeft(ctx context.Context, t registry.Task, c Copy, cy registry.Cycle, round int, left roundLeftovers, doubt string,
 	stops stopsRecord, goOns int) (string, error) {
 	key := leftKey(cy, round)
@@ -282,61 +283,66 @@ func (e *Engine) askLeft(ctx context.Context, t registry.Task, c Copy, cy regist
 		return "", heldError{who: waitsYou, what: q.ask.Why}
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
-	base, saved := leftName(dir, cy.N), ""
-	if len(left.tracked)+len(left.added)+len(left.unindexed) > 0 {
-		if _, err := saveLeft(ctx, e.d.Git, c.Path, dir, base, left); err != nil {
-			line := clipEnd(textx.FirstLine(scrub.Text(err.Error())), 240)
-			return e.leftWait(t, c, cy, round, left, "", "the factory could not save it, so it put none of it back: "+line)
-		}
-		saved = savedAs(base, left)
+	base := leftName(dir, cy.N)
+	if len(left.tracked)+len(left.added)+len(left.unindexed) == 0 {
+		return e.askLeftAs(ctx, t, c, cy, round, left, leftAsk{doubt: doubt, goOns: goOns}, "")
 	}
-	branchAt := ""
+	if _, err := saveLeft(ctx, e.d.Git, c.Path, dir, base, left); err != nil {
+		line := clipEnd(textx.FirstLine(scrub.Text(err.Error())), 240)
+		return e.askLeftSaved(ctx, t, c, cy, round, left, "the factory could not save it, so it put none of it back: "+line, "", "")
+	}
+	return e.askLeftAs(ctx, t, c, cy, round, left, leftAsk{doubt: doubt, saved: savedAs(base, left), goOns: goOns}, base)
+}
+
+// askLeftSaved asks the question of what round `round` of cycle cy left in
+// task t's copy c (left) after a save or a put-back of it failed (doubt
+// says how), with what was saved before the failure (base, saved; "" for
+// nothing): nothing is saved again, and the steps name no file a failed
+// save did not keep.
+func (e *Engine) askLeftSaved(ctx context.Context, t registry.Task, c Copy, cy registry.Cycle, round int, left roundLeftovers, doubt,
+	base, saved string) (string, error) {
+	return e.askLeftAs(ctx, t, c, cy, round, left, leftAsk{doubt: doubt, saved: saved}, base)
+}
+
+// askLeftAs asks question a of what round `round` of cycle cy left in task
+// t's copy c (left), saved under base in the task's directory ("" for
+// nothing): with the saved diff, the branch's head now for a copy that
+// moved, and the steps that put it back (leftSteps); the task waits on
+// you, a held pass.
+func (e *Engine) askLeftAs(ctx context.Context, t registry.Task, c Copy, cy registry.Cycle, round int, left roundLeftovers, a leftAsk,
+	base string) (string, error) {
 	if left.moved != "" {
 		if at, err := e.d.Git.RevParse(ctx, c.Path, "refs/heads/"+t.Branch); err == nil {
-			branchAt = at
+			a.branchAt = at
 		}
 	}
-	diff, _ := os.ReadFile(filepath.Join(dir, base+leftDiffExt))
-	q := leftQuestion(t, cy, round, left, leftAsk{doubt: doubt, saved: saved, diff: scrub.Text(string(diff)), branchAt: branchAt,
-		steps: e.leftSteps(t, c, cy, left, base), goOns: goOns})
+	if base != "" {
+		diff, _ := os.ReadFile(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), base+leftDiffExt))
+		a.diff = scrub.Text(string(diff))
+	}
+	a.steps = e.leftSteps(t, c, cy, left, base)
+	q := leftQuestion(t, cy, round, left, a)
 	if err := e.askStop(ctx, t, q); err != nil {
 		return "", err
 	}
 	return "", heldError{who: waitsYou, what: q.ask.Why}
 }
 
-// leftWait is the wait for you over what round `round` (cycle cy) left in
-// task t's copy c (left) that the factory did not put back, and why not:
-// the steps that put the copy back (the tracked paths restored as HEAD has
-// them, the index only for a path HEAD lacks, and the new files removed),
-// then the retry. No step drops from the index a version the work tree
-// lacks (keepStaged), and the rm step names only the new files saved in
-// the task's directory under saved ("" for nothing saved) that are not
-// older than the round, and none after a round that changed an ignore file
-// (git's listing of new files is then the round's rules'); a file the round
-// staged is never in it (it may be yours, git may ignore it). The wait
-// names what it leaves out. A step over more than leftStepPaths paths takes
-// them from a file in the task's directory that lists exactly them
-// (round-<n>-<step>.paths, NUL-separated: git's --pathspec-from-file, xargs
-// -0); one that cannot be written names leftStepPaths of them and how many
-// more. A copy off the task's branch or at another head is yours to put back
-// as the round found it.
-func (e *Engine) leftWait(t registry.Task, c Copy, cy registry.Cycle, round int, left roundLeftovers, saved, why string) (string, error) {
-	if left.moved != "" {
-		return fmt.Sprintf("%s of the local review left %s, and %s. Put the copy back as the round found it (%s at %s, no tracked "+
-			"change, no new untracked file); then `magnum factory retry %d`", roundName(round, cy.N), left, why, t.Branch,
-			short(cy.HeadBefore), t.ID), nil
-	}
-	return fmt.Sprintf("%s of the local review left %s, and %s. Put the copy back as the round found it (%s at %s): %s; then "+
-		"`magnum factory retry %d`", roundName(round, cy.N), left, why, t.Branch, short(cy.HeadBefore), e.leftSteps(t, c, cy, left, saved),
-		t.ID), nil
-}
-
-// leftSteps are the steps that put back what a round of cycle cy left in
+// leftSteps are the steps that put back what a round of cycle cy left in// leftSteps are the steps that put back what a round of cycle cy left in
 // task t's copy c (left), the new files saved under saved in the task's
-// directory ("" for nothing saved), as leftWait and the question
-// (askLeft) give them; "" for a copy off the task's branch or at another
-// head, which only you can put back.
+// directory ("" for nothing saved), as the question's context gives them
+// (askLeftAs): the tracked paths restored as HEAD has them, the index only
+// for a path HEAD lacks, and the new files removed. No step drops from the
+// index a version the work tree lacks (keepStaged), and the rm step names
+// only the new files saved under saved that are not older than the round,
+// and none after a round that changed an ignore file (git's listing of new
+// files is then the round's rules'); a file the round staged is never in it
+// (it may be yours, git may ignore it). The steps name what they leave out.
+// A step over more than leftStepPaths paths takes them from a file in the
+// task's directory that lists exactly them (round-<n>-<step>.paths,
+// NUL-separated: git's --pathspec-from-file, xargs -0); one that cannot be
+// written names leftStepPaths of them and how many more. "" for a copy off
+// the task's branch or at another head, which only you can put back.
 func (e *Engine) leftSteps(t registry.Task, c Copy, cy registry.Cycle, left roundLeftovers, saved string) string {
 	if left.moved != "" {
 		return ""

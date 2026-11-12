@@ -929,13 +929,12 @@ func (e *Engine) goOnCycle(ctx context.Context, t registry.Task, st config.Facto
 	}
 	// What the round left in the copy is never the writer's, nor read past:
 	// the round's roles work in the copy, and its result is read only on a
-	// copy as the round found it (or with the change you chose to keep). It
-	// is saved and put back by the factory itself once no turn of an agent
-	// of the task is in flight there (a held wait until then); when you typed
-	// into a pane of the task since the round began, it may be yours, and the
-	// task asks you to restore the copy or keep the change; a save or a
-	// put-back that fails, or a copy off the reviewed head, needs you with
-	// the steps (putBackRound).
+	// copy as the round found it. The factory saves it and puts it back by
+	// itself only with no doubt that it is the round's alone; any doubt (the
+	// copy off the reviewed head, a turn in flight, you in a pane or at work
+	// since the round began, a runtime that cannot tell), and a save or a
+	// put-back that fails, saves it and asks you to put the copy back
+	// yourself and go on, or to drop the task (putBackRound).
 	if p, pending, err := e.keptFirst(ctx, &t); err != nil || pending {
 		return false, err
 	} else if p != nil {

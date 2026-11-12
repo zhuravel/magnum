@@ -603,3 +603,50 @@ func TestARisingCoverageIsProgress(t *testing.T) {
 		t.Fatal("rising coverage reads as no progress, or the same coverage as progress")
 	}
 }
+
+// Your accept of a coverage miss holds while the coverage stays under the
+// same threshold, whatever its percent now (75.3%, 75.4%): its key reads
+// the percent as any, never another threshold or metric. The writer's
+// progress reads the raw line, so a coverage that rises is still progress.
+func TestAnAcceptOfACoverageMissHoldsUnderTheSameThreshold(t *testing.T) {
+	line := func(metric, at string) string {
+		return `Jest: "global" coverage threshold for ` + metric + ` (80%) not met: ` + at + "%"
+	}
+	rec := stopsRecord{Accepted: []accepted{{Check: "precheck.jest", Failures: []string{line("lines", "75.3")}, Unnamed: true}}}
+	if !rec.accepts("precheck.jest", []string{line("lines", "75.4")}, true) || rec.accepts("precheck.jest", []string{line("branches", "75.3")}, true) {
+		t.Fatal("the accept of 75.3% misses 75.4% under the same threshold, or covers another metric's")
+	}
+	if sameFailure(turnFailure{Check: "precheck.jest", Failures: []string{line("lines", "75.3")}},
+		turnFailure{Check: "precheck.jest", Failures: []string{line("lines", "75.4")}}) {
+		t.Fatal("a rising coverage reads as the same failure: no progress")
+	}
+}
+
+// jest's negative threshold, "Jest: Uncovered count for <metric> (n)
+// exceeds global threshold (m)", is a run's failure line, as its percent
+// threshold is.
+func TestJestsUncoveredCountThresholdIsTheFailureLine(t *testing.T) {
+	out := strings.Replace(jestCoverageRun("75.3"), `Jest: "global" coverage threshold for lines (80%) not met: 75.3%`,
+		"Jest: Uncovered count for lines (12) exceeds global threshold (10)", 1)
+	if got := firstFailing(ProofRun{Exit: 1, out: []byte(out)}); len(got) != 1 ||
+		got[0] != "Jest: Uncovered count for lines (12) exceeds global threshold (10)" {
+		t.Fatalf("the failure read %q; want the uncovered count's threshold line", got)
+	}
+}
+
+// A table's rules and rows are no failure (jest's coverage table), but a
+// line with two pipes that is no table row is read as any other.
+func TestOnlyATablesRulesAndRowsAreSkipped(t *testing.T) {
+	for line, table := range map[string]bool{
+		"----------|---------|----------|":        true,
+		"File      | % Stmts | % Branch |":        true,
+		" credit.js |   75.3 |      50 |":         true,
+		"Error: expected 'a|b|c' to equal 'd'":    false,
+		"TypeError: x|y|z is not a function":      false,
+		"expected [1|2] to have length 3 | got 2": false,
+	} {
+		if tableRe.MatchString(line) != table {
+			t.Errorf("tableRe on %q = %v, want %v", line, !table, table)
+		}
+	}
+}

@@ -4744,7 +4744,7 @@ stages = [
   their file, are read by the changed lines as `path:line` offenses are. A failure no example or offense names is
   read the same on every run (the error's own line or a missed coverage threshold, past rspec's seed, its
   progress and timing and a coverage table; hex addresses as `0x?`), and your accept of it covers that line
-  alone, never a new failure of the check. A report row that no file's line names (a cut tail) makes the output
+  alone (a coverage miss under the same threshold whatever its percent), never a new failure of the check. A report row that no file's line names (a cut tail) makes the output
   unreadable, the writer's. A fault takes steps first: the precheck runs it again, then runs the repository's `installs` and
   runs it again, and runs one that hangs once more with its bound doubled (up to `cap_max`), each step once at a
   head (`check-faults.json` in the task's folder keeps them across restarts; each is a `check` event and an
@@ -5227,13 +5227,12 @@ and the round's result stands once it is as the round found it, else the questio
 stops it. The factory never moves a branch or HEAD, never puts anything back under a doubt, and never runs your
 answer over a turn. A round stopped before its end (a drain, an install) has the same done before it runs again
 in its cycle. When the save or the put-back fails (a symlink among the new files, too
-many of them, a git that refuses), the task needs you, naming what the round left, why the factory left it, and
-the steps that put it back and go on:
-`git -C <copy> --literal-pathspecs restore --staged --worktree -- <paths>` (`restore --staged` alone for the
-files the round staged), `rm -- <files>` and `magnum factory retry <task>`. No step removes a file the factory
-cannot prove the round's or did not save: the rm step names only new files saved in the task's directory (none
-when the save failed) that are not older than the round, none after
-the round changed an ignore file, and never a file the round staged; the wait names those for you to judge. Past ten paths a step reads exactly them from a file in the task's directory
+many of them, a git that refuses), the same question asks you, naming the failure and the steps that put the
+copy back: `git -C <copy> --literal-pathspecs restore --staged --worktree -- <paths>` (`restore --staged` alone
+for the files the round staged) and `rm -- <files>`. No step removes a file the factory cannot prove the round's
+or did not save: the rm step names only new files saved in the task's directory (none when the save failed)
+that are not older than the round, none after the round changed an ignore file, and never a file the round
+staged; the question names those for you to judge. Past ten paths a step reads exactly them from a file in the task's directory
 (`round-<n>-restore.paths`, `-unstage.paths`, `-remove.paths`, NUL-separated:
 `--pathspec-from-file=<file> --pathspec-file-nul`, `xargs -0 rm -- < <file>`). Your own put-back and `magnum
 factory retry <task>` still let the task go on. The factory reads the result itself: a
