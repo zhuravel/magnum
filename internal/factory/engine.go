@@ -1457,7 +1457,16 @@ func (e *Engine) takeEvents(id int64) []runtime.Event {
 // costs the task nothing; the task waits with the hold's reason). A
 // successful launch clears such a wait.
 func (e *Engine) launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error {
-	if who, what, ok := e.mayLaunch(); !ok {
+	return e.launchUnder(ctx, e.mayLaunch, t, a, c, roles)
+}
+
+// launchUnder is launch under the holds may names: mayLaunch for a stage's
+// roles, MayLaunch for the walker of a QA session that exists already,
+// which `magnum pause` lets go on, since its walk is no new QA run and the
+// pause cuts none (qaGoesOn).
+func (e *Engine) launchUnder(ctx context.Context, may func() (string, string, bool), t registry.Task, a registry.Attempt, c Copy,
+	roles []config.Role) error {
+	if who, what, ok := may(); !ok {
 		if who != holdRestart {
 			e.waitOn(ctx, t, who, what)
 		}

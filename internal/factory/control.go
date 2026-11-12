@@ -143,15 +143,42 @@ func writeControl(path, value string) error {
 	return fsx.WriteFileAtomic(path, []byte(value+"\n"), 0o600)
 }
 
+// liftControl removes the control file at path when it holds value ("":
+// whatever it holds): a read that finds another value, or none, leaves it,
+// and the remove itself is a compare-and-delete (removeControlIf).
 func liftControl(path, value string) error {
 	cur, err := readControl(path)
 	if err != nil || cur == "" || (value != "" && cur != value) {
 		return err
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	return removeControlIf(path, value)
+}
+
+// removeControlIf removes the control file at path when it holds value ("":
+// whatever it holds) as one compare-and-delete: the file moves aside under
+// a name of this call's own (a writer's rename then makes a new file, which
+// stays), and what moved is removed only when it holds value; otherwise it
+// goes back, unless a newer file took its place meanwhile (os.Link refuses
+// to replace one), which then holds.
+func removeControlIf(path, value string) error {
+	aside := fmt.Sprintf("%s.lift-%d-%d", path, os.Getpid(), time.Now().UnixNano())
+	if err := os.Rename(path, aside); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
 		return err
 	}
-	return nil
+	moved, err := readControl(aside)
+	if err == nil && moved != "" && (value == "" || moved == value) {
+		return os.Remove(aside)
+	}
+	if lerr := os.Link(aside, path); lerr != nil && !errors.Is(lerr, fs.ErrExist) {
+		return lerr // it stays aside: the error names it
+	}
+	if rerr := os.Remove(aside); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+		return rerr
+	}
+	return err
 }
 
 // controlState is what the engine keeps of the controls: the pause and the
@@ -212,9 +239,11 @@ func (e *Engine) heldWhat() string {
 // takeControls reads, at the start of a tick, the pause and the drain for a
 // reboot asked of the daemon and holds them as holds of the machine
 // (HoldPause, HoldReboot), saying so in an event when one begins or ends. A
-// pause past its end is lifted. A file it cannot read is said once and
-// holds as it did; a drain this build cannot parse holds, unacknowledged,
-// until `magnum resume` removes it.
+// pause past its end is lifted. A pause.json it cannot read is said once
+// and holds as it did; a reboot-drain.json it cannot read, or one this
+// build cannot parse, holds a drain, unacknowledged, until `magnum resume`
+// removes it: what the drain cannot read never opens its gates, at the
+// daemon's start included.
 func (e *Engine) takeControls(ctx context.Context) {
 	now := e.now()
 	l := e.d.Layout
@@ -237,6 +266,9 @@ func (e *Engine) takeControls(ctx context.Context) {
 	v, err := ReadRebootDrain(l)
 	if err != nil {
 		e.warnControl(ctx, "reboot", err.Error())
+		if e.ctl.reboot.Load() == nil { // one it held goes on as it was; none holds one now
+			e.holdReboot(ctx, engine.RebootDrain{Since: now}, true)
+		}
 		return
 	}
 	d, ok := engine.ParseRebootDrain(v)
@@ -248,9 +280,10 @@ func (e *Engine) takeControls(ctx context.Context) {
 }
 
 // warnControl says, once while it lasts, that a control's file cannot be
-// read (why), in the log and in a warn event with what to do: an unreadable
-// pause.json holds no pause, an unreadable reboot-drain.json holds until
-// `magnum resume` removes it (`magnum doctor` says it too).
+// read (why), in the log and in a warn event with what holds and what to do:
+// an unreadable pause.json holds the pause the daemon held (none, at its
+// start), an unreadable reboot-drain.json holds a drain; `magnum resume
+// --factory` removes either (`magnum doctor` says it too).
 func (e *Engine) warnControl(ctx context.Context, kind, why string) {
 	if e.ctl.warned == nil {
 		e.ctl.warned = map[string]string{}
@@ -260,10 +293,14 @@ func (e *Engine) warnControl(ctx context.Context, kind, why string) {
 	}
 	e.ctl.warned[kind] = why
 	e.log.Warn("a control's file cannot be read", "kind", kind, "why", why)
-	text := "pause.json cannot be read (" + why + "): no pause holds; `magnum pause` writes it again, `magnum resume` removes it"
+	holds := "no pause holds"
+	if e.ctl.pause.Load() != nil {
+		holds = "the pause holds as it was"
+	}
+	text := "pause.json cannot be read (" + why + "): " + holds + "; `magnum resume --factory` removes it"
 	evKind := "pause"
 	if kind == "reboot" {
-		text = "reboot-drain.json cannot be read (" + why + "): the drain holds until `magnum resume` removes it"
+		text = "reboot-drain.json cannot be read (" + why + "): the drain holds until `magnum resume --factory` removes it"
 		evKind = "drain"
 	}
 	e.event(ctx, 0, evKind, registry.PhaseFail, text)
@@ -439,18 +476,21 @@ type liveReader interface {
 	LiveAgents(ctx context.Context, t registry.Task) (bool, error)
 }
 
-// parkable reports whether the drain parks task t's agents: a task at work,
-// waiting, needing you or published (a queued one has none yet, an ended
-// one had them parked as it ended) with a live agent, the liaison's too.
+// parkable reports whether the drain parks task t's agents: a task with a
+// live agent, the liaison's too, whatever its state. A queued task can have
+// a liaison (a talk about it), and an ended one keeps the liaison its end's
+// park left live while you were in its pane, into which you can still type
+// a turn: its strict park (ParkForReboot) sees that turn. A runtime that
+// cannot say which agents live parks the tasks at work, waiting, needing
+// you or published.
 func (e *Engine) parkable(ctx context.Context, t registry.Task) bool {
-	switch t.State {
-	case registry.TaskActive, registry.TaskWaiting, registry.TaskNeedsYou, registry.TaskPublished:
-	default:
-		return false
-	}
 	lr, ok := e.d.Runtime.(liveReader)
 	if !ok {
-		return true
+		switch t.State {
+		case registry.TaskActive, registry.TaskWaiting, registry.TaskNeedsYou, registry.TaskPublished:
+			return true
+		}
+		return false
 	}
 	live, err := lr.LiveAgents(ctx, t)
 	return err != nil || live // one it cannot read is parked: the park says what holds it

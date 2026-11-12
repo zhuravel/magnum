@@ -26402,13 +26402,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   checks and QA runs wait, and `mayLaunch` holds the launches and the claims, recording the wait on the task
   (`pause: paused by you …`, cleared by a launch that goes through). Effects, talks and the QA sweep read the
   narrower `drainsHeld`, and the runtime's starts outside a launch pass `MayLaunch`, which leaves the pause out:
-  a start queues, an answer, a retry, a talk and a push run, and no QA run is cut. The tick after its `until`
-  lifts it. The drain holds what a restart drain holds and every new prompt (`runtime.Deps.MayPrompt`, asked
+  a start queues, an answer, a retry, a talk and a push run, and no QA run is cut. A QA session whose server
+  booted goes on to its walk under the pause (`qaGoesOn`: its browser and its walker's launch pass `MayLaunch`;
+  the engine owner's review, D14): held, it kept its server, its heavy slot and the Mac's QA lock, and its cap's
+  clock turned a lunch pause into a NEEDS YOU. The tick after its `until` lifts it. The drain holds what a restart drain holds and every new prompt (`runtime.Deps.MayPrompt`, asked
   first by `Send`); a restart drain still holds none (2026-11-07: those turns outlive a restart). Each tick
   acknowledges it in work.json's `reboot_drain`: the record's items (a backoff repair aside, as for a restart) and
   every run the agents store keeps pending, submitted or working, the liaisons' too (`Runtime.TurnsInFlight`; a
-  runtime that cannot list them counts as working). Once quiet it parks, once each, the tasks that are active,
-  waiting, need you or are published and have a live agent (`Runtime.LiveAgents`), through
+  runtime that cannot list them counts as working). Once quiet it parks, once each, every task that has a live
+  agent (`Runtime.LiveAgents`), whatever its state (a queued task can have a liaison, and an ended one keeps the
+  liaison its end left live while you were in its pane; the engine owner's review, D13), through
   `Runtime.ParkForReboot`, which reports a liaison at work as agents.ErrBusy where `Park` leaves it live and goes
   through, you in its pane included (herdr's status of its agent: a turn you typed starts no run row); one it
   leaves live, idle, because you are in its pane (runtime.ErrLiaisonLeftLive) is never counted parked: it is
@@ -26429,7 +26432,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   before its startup's recovery, so it holds them from its first second. The first start on another boot ends a drain until boot
   (`Deps.Boot`: kern.bootsessionuuid and kern.boottime through the quiet runner). Your retry and your answers under
   the pause say that the task's next launch, claim or check waits for `magnum resume`. An unreadable pause.json or
-  reboot-drain.json is a warn event, once, with what to do, and a `magnum doctor` line (controls). Tests, each
+  reboot-drain.json is a warn event, once, with what holds and what to do, and a `magnum doctor` line (controls).
+  An unreadable reboot-drain.json holds a drain, unacknowledged, from the daemon's first tick, as one it cannot
+  parse does; an unreadable pause.json keeps the pause the daemon held. `magnum resume --factory` removes either,
+  after it says that it cannot read it. A lift of either file (a pause past its end, a drain at the first start on
+  a new boot) is a compare-and-delete: the file moves aside under a name of its own and is removed only when it
+  holds what was read, so a pause or drain written meanwhile stays (D10, D15, D19, D20). Tests, each
   failing first: TestAFactoryPauseHoldsNewWorkAndLetsYourPushAndTalkRun,
   TestAFactoryPauseSurvivesARestartAndEndsAtItsUntil, TestTheFactoryDrainForARebootWaitsForAWritersTurnThenParks,
   TestTheFactoryDrainForARebootWaitsForTheLiaisonsTurn, TestTheFactoryDrainForARebootEndsAtTheFirstStartOnANewBoot,

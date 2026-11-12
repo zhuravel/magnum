@@ -408,11 +408,15 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 	run.copy, run.change = c, nil // changeInRun sets the change this pass hands
 	if a.State == registry.AttemptLaunching {
 		var err error
-		if _, _, ok := e.mayLaunch(); ok { // under a hold the launch waits anyway: no read of the budget for it
+		may := e.mayLaunch
+		if turn.qa != nil {
+			may = e.qaGoesOn // qa.go: the walker of a QA session that exists goes on under a pause
+		}
+		if _, _, ok := may(); ok { // under a hold the launch waits anyway: no read of the budget for it
 			err = e.yieldAtLaunch(ctx, t, st, a, run)
 		}
 		if err == nil {
-			err = e.launch(ctx, t, a, c, run.runAsRoles())
+			err = e.launchUnder(ctx, may, t, a, c, run.runAsRoles())
 		}
 		if err != nil {
 			if !errors.Is(err, ErrHeld) {

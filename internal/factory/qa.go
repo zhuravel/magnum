@@ -1353,6 +1353,14 @@ func (e *Engine) qaBootFailed(ctx context.Context, t registry.Task, c Copy, sess
 	return e.startQASession(ctx, t, c, run)
 }
 
+// qaGoesOn is the holds of a QA session's own launches once its server
+// booted (its browser, its walker): MayLaunch's, never `magnum pause`. The
+// pause starts no new QA run and cuts none (sweepQA), so a session that
+// exists goes on to its end: held, it would keep its server, its heavy slot
+// and the Mac's QA lock, and its cap's clock would turn a lunch pause into a
+// NEEDS YOU (qaBounded).
+func (e *Engine) qaGoesOn() (who, what string, ok bool) { return e.MayLaunch() }
+
 // qaBrowser starts the factory's headless Chrome for session sess in its
 // run's folder, once no hold stops launches, and records its DevTools
 // endpoint, to which the walker's copy attaches its browser tool (qaEnvCDP, in the
@@ -1361,7 +1369,7 @@ func (e *Engine) qaBootFailed(ctx context.Context, t registry.Task, c Copy, sess
 // pass (the session has no endpoint), and the teardown stops whatever it
 // started.
 func (e *Engine) qaBrowser(ctx context.Context, t registry.Task, sess *qaSession) error {
-	if who, what, ok := e.mayLaunch(); !ok {
+	if who, what, ok := e.qaGoesOn(); !ok {
 		if who != holdRestart {
 			e.waitOn(ctx, t, who, what)
 		}

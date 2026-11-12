@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -26,15 +27,16 @@ func (r *liveRuntime) LiveAgents(_ context.Context, t registry.Task) (bool, erro
 	return r.live[t.ID], nil
 }
 
-// The drain parks the agents of the tasks that can have them at work or
-// waiting (active, waiting, needs you, published) and that have a live
-// one: never a queued task or one that ended.
-func TestTheFactoryDrainParksOnlyTheTasksWithLiveAgents(t *testing.T) {
+// The drain parks the agents of every task that has a live one, whatever
+// its state: a queued task can have a liaison (a talk), and one that ended
+// keeps the liaison its end left live while you were in its pane, into which
+// you can type a turn. A task with no live agent is not parked.
+func TestTheFactoryDrainParksEveryTaskWithALiveAgent(t *testing.T) {
 	h := newHarness(t)
 	h.stage(config.FactoryStageAgents, idleStage)
 	byState := map[string]registry.Task{}
 	for i, state := range []string{registry.TaskActive, registry.TaskWaiting, registry.TaskNeedsYou, registry.TaskPublished,
-		registry.TaskDone, registry.TaskStopped, registry.TaskFailed} {
+		registry.TaskDone, registry.TaskStopped, registry.TaskFailed, registry.TaskQueued} {
 		byState[state] = h.task("PR-1250"+string(rune('0'+i)), state, "report")
 	}
 	idle := h.task("PR-12599", registry.TaskNeedsYou, "report")
@@ -48,9 +50,8 @@ func TestTheFactoryDrainParksOnlyTheTasksWithLiveAgents(t *testing.T) {
 
 	parks := h.rt.parkList()
 	for state, task := range byState {
-		want := state == registry.TaskActive || state == registry.TaskWaiting || state == registry.TaskNeedsYou || state == registry.TaskPublished
-		if slices.Contains(parks, task.ID) != want {
-			t.Errorf("a %s task's park: %v, want %v", state, slices.Contains(parks, task.ID), want)
+		if !slices.Contains(parks, task.ID) {
+			t.Errorf("a %s task with a live agent was not parked", state)
 		}
 	}
 	if slices.Contains(parks, idle.ID) {
@@ -221,5 +222,90 @@ func TestAnUnreadablePauseIsSaidOnce(t *testing.T) {
 	}
 	if h.e.startsHeld() {
 		t.Fatal("an unreadable pause holds")
+	}
+}
+
+// A reboot-drain.json the daemon cannot read (here a directory: EISDIR)
+// holds a drain from its first tick, as one it cannot parse does: nothing
+// new starts, no acknowledgement certifies it, and a warn event says the
+// drain holds until `magnum resume --factory` removes it.
+func TestAnUnreadableRebootDrainHolds(t *testing.T) {
+	h := newHarness(t)
+	h.stage(config.FactoryStageAgents, idleStage)
+	if err := os.MkdirAll(h.layout.FactoryRebootDrain(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	h.tickAndWait()
+	if !h.e.drainsHeld() {
+		t.Fatal("an unreadable reboot-drain.json holds no drain: new work starts")
+	}
+	if who, _, ok := h.e.MayPrompt(); ok || who == "" {
+		t.Fatal("an unreadable reboot-drain.json holds no prompt")
+	}
+	if ack := h.workRecord().RebootDrain; ack != nil {
+		t.Fatalf("acknowledgement %+v of a drain the daemon cannot read, want none", ack)
+	}
+	var said []string
+	for _, ev := range h.events(0, "drain") {
+		if ev.Phase == registry.PhaseFail {
+			said = append(said, ev.Text)
+		}
+	}
+	if len(said) != 1 || !strings.Contains(said[0], "the drain holds until `magnum resume --factory` removes it") {
+		t.Fatalf("drain events %q, want one warning that the drain holds", said)
+	}
+}
+
+// A pause the daemon held stays held when pause.json turns unreadable, and
+// its warning says so, never that no pause holds.
+func TestAPauseThatTurnsUnreadableHoldsAndSaysSo(t *testing.T) {
+	h := newHarness(t)
+	h.stage(config.FactoryStageAgents, idleStage)
+	h.pause(time.Time{}, "freeze")
+	h.tickAndWait()
+	if err := os.Remove(h.layout.FactoryPause()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(h.layout.FactoryPause(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	h.tickAndWait()
+	if !h.e.startsHeld() {
+		t.Fatal("the pause went when its file turned unreadable")
+	}
+	var said []string
+	for _, ev := range h.events(0, "pause") {
+		if ev.Phase == registry.PhaseFail {
+			said = append(said, ev.Text)
+		}
+	}
+	if len(said) != 1 || !strings.Contains(said[0], "the pause holds as it was") || strings.Contains(said[0], "no pause holds") {
+		t.Fatalf("pause events %q, want one warning that the pause holds", said)
+	}
+}
+
+// The lift of a control file is a compare-and-delete: a file that holds
+// another value than the one to lift (a pause `magnum pause` wrote between
+// the read and the remove) stays, and one that holds it goes.
+func TestTheLiftOfAControlRemovesOnlyTheValueItRead(t *testing.T) {
+	h := newHarness(t)
+	path := h.layout.FactoryPause()
+	if err := WritePause(h.layout, "new"); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeControlIf(path, "old"); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := ReadPause(h.layout); err != nil || v != "new" {
+		t.Fatalf("pause.json holds %q (%v) after a lift of another value, want the new pause kept", v, err)
+	}
+	if err := removeControlIf(path, "new"); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := ReadPause(h.layout); err != nil || v != "" {
+		t.Fatalf("pause.json holds %q (%v) after the lift of its value, want it gone", v, err)
+	}
+	if left, _ := filepath.Glob(path + ".lift-*"); len(left) != 0 {
+		t.Fatalf("the lift left %q aside", left)
 	}
 }

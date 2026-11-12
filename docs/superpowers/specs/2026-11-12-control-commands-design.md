@@ -53,7 +53,9 @@ Two independent reviews (Claude's and Codex's, 2026-11-12) hold the inventory wi
 - What it lets through: the operator's own actions. `start` queues a task, `answer`, `retry` and `talk` run, and
   `decide push` runs: effects and talks read the narrower `drainsHeld`, which a pause is not part of. A role the
   runtime starts again outside a launch (a prompt's bring-back, the liaison) passes `MayLaunch`, which a pause is
-  not part of either. A QA run whose walk has not begun is not cut by a pause.
+  not part of either. A QA run whose walk has not begun is not cut by a pause, and a session whose server booted
+  goes on to its walk: its browser and its walker's launch pass `MayLaunch` (`qaGoesOn`), so its cap's clock never
+  turns the pause into a NEEDS YOU.
 - A launch held by the pause records the wait on its task (`pause: paused by you …`); a launch that goes through
   clears it, as for the machine's other holds.
 - With no daemon running, the CLI writes both records directly and says that they apply at the daemon's start.

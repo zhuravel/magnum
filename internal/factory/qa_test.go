@@ -1457,6 +1457,31 @@ func TestADrainEndsAQASessionWhoseWalkerNeverLaunched(t *testing.T) {
 	r.qaFree(task.ID)
 }
 
+// `magnum pause` cuts no QA run: a session whose server booted goes on to
+// its walk under the pause (its browser starts, its walker launches and gets
+// its prompt), so its server, heavy slot and QA lock are not held for the
+// whole pause, and its cap does not turn a lunch pause into a NEEDS YOU.
+func TestAPauseLetsAQASessionWhoseServerBootedWalk(t *testing.T) {
+	r := newQARig(t)
+	task, _ := r.qaTask("PR-12446")
+	before := len(r.rt.promptsTo("fx-qa"))
+	r.run(8, func() bool { return r.e.qaSessionOf(task.ID) != nil })
+	if r.e.qaSessionOf(task.ID) == nil {
+		t.Fatal("no QA session started")
+	}
+	r.pause(time.Time{}, "lunch")
+
+	r.run(10, func() bool { return len(r.rt.promptsTo("fx-qa")) > before })
+
+	if len(r.rt.promptsTo("fx-qa")) == before {
+		got := r.reload(task.ID)
+		t.Fatalf("the walker got no prompt under the pause; task %s at %s waits %q: %q", got.State, got.Stage, got.WaitsWho, got.WaitsWhat)
+	}
+	if got := r.reload(task.ID); got.State == registry.TaskNeedsYou {
+		t.Fatalf("the task needs you under the pause: %q", got.WaitsWhat)
+	}
+}
+
 // Your retry after a walk that reached its pages but not every state walks
 // once more; a second such walk at the head goes on with those states
 // flagged: qa-summary.json clean with them, each run's result and failed
