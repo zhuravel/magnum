@@ -26519,12 +26519,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
     threshold it missed, and a lint output the factory cannot read by path:line (no longer a configuration
     question). A failure no example or offense names is read the same on every run (`firstFailing`): the
     error's own line (an exception's class and message, rspec's "An error occurred in …", "Failure/Error: …",
-    a crash's "[BUG] …"), past the noise a run prints anew (rspec's seed, run options, progress dots, timing),
-    hex addresses as 0x?. Read on its first line, rspec's error outside of examples gave "Randomized with seed
-    N", so no turn failed the same way twice and every turn was progress; your accept of such a failure now
-    holds for the check alone (`stops.json` Unnamed), where it stored today's line and never matched again.
+    a crash's "[BUG] …", a missed coverage threshold, whose rising percent is progress), past the noise a run
+    prints anew (rspec's seed, run options, progress dots, timing) and a table's rules and rows (jest's
+    coverage table), hex addresses as 0x?. Read on its first line, rspec's error outside of examples gave
+    "Randomized with seed N", so no turn failed the same way twice and every turn was progress, and your
+    accept stored today's line and never matched again. Your accept of such a failure covers that stable
+    line and stays unnamed (`stops.json` Unnamed): a new failure of the check still fails, as the option
+    says, never a later unnamed one or a named one (keyed on the check alone, it passed a load error).
     eslint's stylish report and stylelint's are read by the line that names the file above their rows of
-    line:column (`namedOffenses`), so the changed-line filter holds for them. Every sign is read against the
+    line:column (`namedOffenses`), so the changed-line filter holds for them; a row with no file's line
+    above it (a tail cut at `outputKeep`) makes the whole output unreadable, the writer's. Every sign is read against the
     change, not only a crash's (`branchCaused`, `runnerCaused`): a
     lint's sign on a change that touches what it loads, or whose output names a changed file, is the writer's
     after the fault steps; a test runner's segfault or abort (139, 134) or a heap that ran out, on a change of

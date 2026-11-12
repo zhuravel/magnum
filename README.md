@@ -4742,8 +4742,10 @@ stages = [
   a lint's sign on a change that touches what the lint loads (its configuration, its cops, the gems and
   packages). eslint's stylish report and stylelint's, whose rows of `line:column` sit under the line that names
   their file, are read by the changed lines as `path:line` offenses are. A failure no example or offense names is
-  read the same on every run (the error's own line, past rspec's seed, its progress and timing; hex addresses as
-  `0x?`), and your accept of it holds for the check alone while it fails so. A fault takes steps first: the precheck runs it again, then runs the repository's `installs` and
+  read the same on every run (the error's own line or a missed coverage threshold, past rspec's seed, its
+  progress and timing and a coverage table; hex addresses as `0x?`), and your accept of it covers that line
+  alone, never a new failure of the check. A report row that no file's line names (a cut tail) makes the output
+  unreadable, the writer's. A fault takes steps first: the precheck runs it again, then runs the repository's `installs` and
   runs it again, and runs one that hangs once more with its bound doubled (up to `cap_max`), each step once at a
   head (`check-faults.json` in the task's folder keeps them across restarts; each is a `check` event and an
   alert, news whose toast counts nobody as waiting on you). A fault never passes: one whose run again the cap stops fails the precheck, and a lint whose hang spent
