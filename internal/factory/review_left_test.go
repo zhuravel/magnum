@@ -39,7 +39,8 @@ func leftAfterYouTyped(t *testing.T, key string) (*reviewRig, registry.Task) {
 	})
 	task, _ := r.reviewTask(key)
 	r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
-	return r, r.reload(task.ID)
+	got := r.reload(task.ID)
+	return r, got
 }
 
 // A round's tracked change while you typed into a pane of the task since

@@ -159,7 +159,7 @@ func TestTheGoOnsStartTheLoopLadderOver(t *testing.T) {
 			}
 		}
 		_, before := g.ladderSteps()
-		for k := 0; k < goOns; k++ {
+		for k := range goOns {
 			g.r.MadeProgress(g.task, g.attempt, "fx-repro") // the go-on's grant
 			for j := 1; j <= 2; j++ {
 				if _, err := g.ladderSend(100*(k+1) + j); err != nil {

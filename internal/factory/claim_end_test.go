@@ -190,7 +190,11 @@ func TestADrainAfterAStopReleasesTheCopyOfTheRunningClaim(t *testing.T) {
 			// is asked and term is sent, and a SIGTERM there would drain the
 			// daemon before any tick took the stop (under load, the claimer
 			// active at the end).
-			if cur, err := h.reg.TaskByID(ctx, claimer.ID); err != nil || cur.State != registry.TaskStopped {
+			cur, err := h.reg.TaskByID(ctx, claimer.ID)
+			if err != nil {
+				return false, err
+			}
+			if cur.State != registry.TaskStopped {
 				return false, nil
 			}
 			select {

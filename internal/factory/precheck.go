@@ -1174,7 +1174,7 @@ func (p *precheckRun) specs(cmd string, files []string) {
 	switch {
 	case r.cutSign != "": // a fault whose run again the cap stopped never passes
 		p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "unknown", Command: script, Exit: run.Exit, Took: run.Took})
-		p.faultForYou(r.fault(key, "specs", script), fmt.Sprintf("specs: %s %s, and its run again did not end within the cap", firstWord(cmd),
+		p.faultForYou(r.fault(key), fmt.Sprintf("specs: %s %s, and its run again did not end within the cap", firstWord(cmd),
 			r.cutSign))
 		return
 	case !r.ok:
@@ -1192,7 +1192,7 @@ func (p *precheckRun) specs(cmd string, files []string) {
 		p.say("\n`%s` exited %d and names no failing spec:\n\n```\n%s\n```\n", script, run.Exit, run.Output)
 		p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "unknown", Command: script, Exit: run.Exit, Took: run.Took})
 		if r.sign != "" {
-			p.faultForYou(r.fault(key, "specs", script), fmt.Sprintf("specs: %s exited %d and %s", firstWord(cmd), run.Exit, r.sign))
+			p.faultForYou(r.fault(key), fmt.Sprintf("specs: %s exited %d and %s", firstWord(cmd), run.Exit, r.sign))
 			return
 		}
 		p.failCheck(key, firstFailing(run), fmt.Sprintf("specs: %s exited %d and names no failing spec", firstWord(cmd), run.Exit), script)
@@ -1214,9 +1214,9 @@ type runnerRun struct {
 	tried         []string
 }
 
-// fault is the check fault of r, check key's (what in its words, script
-// its command): what it did, its bound, its steps and its last lines.
-func (r runnerRun) fault(key, what, script string) checkFault {
+// fault is the check fault of r, check key's: what it did, its bound, its
+// steps and its last lines.
+func (r runnerRun) fault(key string) checkFault {
 	sign := cmp.Or(r.sign, r.cutSign)
 	stdout, stderr := runText(r.run)
 	return checkFault{key: key, skip: key, what: fmt.Sprintf("exited %d and %s", r.run.Exit, sign), bound: r.bound, tried: r.tried,
@@ -1536,7 +1536,7 @@ func (p *precheckRun) jest(cmd string, files []string) {
 	switch failed := named(run); {
 	case r.cutSign != "": // a fault whose run again the cap stopped never passes
 		check.Result, check.Cause = registry.CheckFail, "unknown"
-		p.faultForYou(r.fault(key, "jest", script), fmt.Sprintf("jest: %s %s, and its run again did not end within the cap", firstWord(cmd), r.cutSign))
+		p.faultForYou(r.fault(key), fmt.Sprintf("jest: %s %s, and its run again did not end within the cap", firstWord(cmd), r.cutSign))
 	case !r.ok && (p.ctx.Err() != nil || p.overCap):
 		return
 	case !r.ok:
@@ -1544,7 +1544,7 @@ func (p *precheckRun) jest(cmd string, files []string) {
 	case run.Exit != 0 && r.sign != "":
 		check.Result, check.Cause = registry.CheckFail, "unknown"
 		p.say("\n## Jest\n\n`%s` exited %d and %s:\n\n```\n%s\n```\n", script, run.Exit, r.sign, run.Output)
-		p.faultForYou(r.fault(key, "jest", script), fmt.Sprintf("jest: %s exited %d and %s", firstWord(cmd), run.Exit, r.sign))
+		p.faultForYou(r.fault(key), fmt.Sprintf("jest: %s exited %d and %s", firstWord(cmd), run.Exit, r.sign))
 	case run.Exit != 0:
 		check.Result, check.Cause = registry.CheckFail, "code"
 		p.say("\n## Jest\n\n`%s` exited %d:\n\n```\n%s\n```\n", script, run.Exit, run.Output)
