@@ -148,6 +148,9 @@ func (e *Engine) maybeReconcile(ctx context.Context) {
 	}
 	e.notePromptChanges(ctx)
 	e.noteBuild(ctx)
+	if e.rebootDraining(ctx) { // reboot_drain.go: no slot work starts; the reconcile runs once the drain is lifted
+		return
+	}
 	if e.enqueueHeavy("reconcile", e.reconcile) {
 		e.lastReconcile = now
 	}

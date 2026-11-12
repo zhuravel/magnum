@@ -108,25 +108,50 @@ func TestARebootDrainKeepsItsBootWhenTheBootTimeShifts(t *testing.T) {
 	}
 }
 
-// A round about to start as the drain begins does not start once the
-// daemon acknowledged it: the tick's dispatch reads the record the health
-// checks acknowledged, the acknowledgement says quiet with nothing to park,
-// and no later tick starts it either.
-func TestARoundAboutToStartAsTheRebootDrainBeginsNeverStartsAfterItsAcknowledgement(t *testing.T) {
+// A round that a tick's dispatch let through just before the drain began
+// (its gates passed, its checkout still on its way) is in the
+// acknowledgement's work, not missed: the acknowledgement is written once
+// every start path of a tick ran. No other round starts after it, and once
+// the round ended the daemon is quiet.
+func TestARoundAboutToStartAsTheRebootDrainBeginsIsCountedAndNoOtherStarts(t *testing.T) {
 	h := newHarness(t)
 	h.queuedPR(2, "b1")
-	h.advance(5 * time.Minute) // the round is due at this tick's dispatch
-	d := h.rebootDrain(7, DrainUntilBoot)
-
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1"}, prSpec{n: 3, head: "c1"})
 	h.tick()
-
-	h.wantState(2, store.PRQueued)
-	ack, ok := h.drainAck()
-	if !ok || !ack.Done(d.Generation, os.Getpid()) || len(ack.Work) != 0 {
-		t.Fatalf("acknowledgement %+v (%v), want generation 7 of this daemon, quiet and parked", ack, ok)
+	h.wantState(3, store.PRQueued)
+	h.advance(5 * time.Minute) // both rounds are due; the pool's one slot takes one
+	gate, started := make(chan struct{}), make(chan struct{}, 1)
+	h.sl.mu.Lock()
+	h.sl.checkoutGate, h.sl.checkoutStarted = gate, started
+	h.sl.mu.Unlock()
+	if err := h.e.Tick(h.ctx); err != nil { // dispatch lets #2 through: its checkout waits at the gate
+		t.Fatal(err)
 	}
-	if n := len(h.rd.all()); n != 0 {
-		t.Fatalf("%d rounds ran under the drain", n)
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the round never reached its checkout")
+	}
+	d := h.rebootDrain(7, DrainUntilBoot) // the drain begins while the round is between its gate and its start
+	if err := h.e.Tick(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	ack, ok := h.drainAck()
+	if !ok || ack.Quiet || !slices.Contains(ack.Work, "round of talkable/talkable#2") {
+		t.Fatalf("acknowledgement %+v (%v), want the round on its way named", ack, ok)
+	}
+	close(gate)
+	h.settle()
+	for range 3 { // the round's tail ends, its sessions are marked, then parked
+		h.advance(5 * time.Minute)
+		h.tick()
+	}
+	if ack, _ := h.drainAck(); !ack.Done(d.Generation, os.Getpid()) {
+		t.Fatalf("acknowledgement %+v once the round ended, want quiet and parked", ack)
+	}
+	h.wantState(3, store.PRQueued)
+	if n := len(h.rd.all()); n != 1 {
+		t.Fatalf("%d rounds ran, want the one let through before the drain", n)
 	}
 	if evs := h.events("daemon.reboot_drain_held"); len(evs) != 1 || !strings.Contains(evs[0].Message, "nothing new starts") {
 		t.Fatalf("held events %+v", evs)
@@ -134,36 +159,61 @@ func TestARoundAboutToStartAsTheRebootDrainBeginsNeverStartsAfterItsAcknowledgem
 	if bar := h.e.tabBar(h.ctx); !strings.Contains(bar, "draining") {
 		t.Fatalf("tab bar %q, want it draining", bar)
 	}
-	h.advance(10 * time.Minute)
-	h.tick()
-	h.wantState(2, store.PRQueued)
 }
 
-// The drain waits for a staging resolver's job that took its slot and for a
-// merge of the parent (a fix job in phase fixing, which reserves its PR): the
-// acknowledgement names both and is not quiet until they end.
+// gatedMergeGit is a merge of the parent whose push waits at gate, after it
+// says it reached it (entered).
+type gatedMergeGit struct {
+	*mergeGit
+	gate, entered chan struct{}
+}
+
+func (g *gatedMergeGit) PushLeaseGitHubAs(ctx context.Context, dir, owner, repo, sha, branch, expect string, env map[string]string) error {
+	g.entered <- struct{}{}
+	select {
+	case <-g.gate:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return g.mergeGit.PushLeaseGitHubAs(ctx, dir, owner, repo, sha, branch, expect, env)
+}
+
+// The drain waits for a merge of the parent that runs (`magnum
+// merge-parent`, its push on its way) and for a staging resolver's job that
+// took its slot: the acknowledgement names both and is not quiet until they
+// end.
 func TestTheRebootDrainWaitsForAStagingResolveAndAMergeOfTheParent(t *testing.T) {
-	h := newHarness(t, func(h *harness) { h.d.stagingResolver = &stagingResolver{} })
-	merging := h.queuedPR(3, "c1")
+	h, mg := mergeHarness(t, withFixerApp, func(h *harness) { h.d.stagingResolver = &stagingResolver{} })
+	fixablePR(h, "zhuravel", nil)
+	mg.behind = true
+	gated := &gatedMergeGit{mergeGit: mg, gate: make(chan struct{}), entered: make(chan struct{}, 1)}
+	h.e.d.Git = gated
+	h.fix(FixPayload{Mode: FixModeMerge})
+	h.e.handleRequests(h.ctx)
+	select {
+	case <-gated.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the merge never reached its push")
+	}
 	h.rebootDrain(8, DrainUntilBoot)
 	job := resolveJob{ID: "dep-1.r1.0a0b0c0d", Effect: "dep-1", Repo: "talkable/talkable", Number: 12, Target: "staging-void",
 		State: resolveRunning, Started: h.clock.Now()}
 	if err := h.e.saveResolveJob(h.ctx, job); err != nil {
 		t.Fatal(err)
 	}
-	if !h.e.reserve(merging.ID, &roundHandle{cancel: func() {}, fix: true}) {
-		t.Fatal("the merge could not reserve its PR")
+	if err := h.e.Tick(h.ctx); err != nil {
+		t.Fatal(err)
 	}
-
-	h.tick()
 
 	ack, _ := h.drainAck()
-	want := []string{"fix of talkable/talkable#3", "staging resolve of talkable/talkable#12 into staging-void"}
-	if ack.Quiet || !slices.Equal(ack.Work, want) {
-		t.Fatalf("acknowledgement %+v, want not quiet, naming %q", ack, want)
+	if ack.Quiet || !slices.Contains(ack.Work, "fix of talkable/talkable#2") ||
+		!slices.Contains(ack.Work, "staging resolve of talkable/talkable#12 into staging-void") {
+		t.Fatalf("acknowledgement %+v, want not quiet, naming the merge and the resolve", ack)
 	}
 
-	h.e.unreserve(merging.ID)
+	close(gated.gate)
+	h.settle()
+	wantParentMerged(t, h, mg, fixHead)
 	job.State = resolveDone
 	if err := h.e.saveResolveJob(h.ctx, job); err != nil {
 		t.Fatal(err)
@@ -216,9 +266,11 @@ func TestAQuietRebootDrainParksTheIdleSessionsThenSaysParked(t *testing.T) {
 	}
 	d := h.rebootDrain(10, DrainUntilBoot)
 
-	h.tick() // quiet: the sessions are marked and their park queued
+	h.tick() // quiet: the sessions are marked
 	h.advance(30 * time.Second)
-	h.tick()
+	h.tick() // their park is queued on the heavy worker, and runs
+	h.advance(30 * time.Second)
+	h.tick() // nothing in flight, nothing live: parked
 
 	if got := h.liveRoles(pr.ID); len(got) != 0 {
 		t.Fatalf("live sessions %q of the reviewed PR after a quiet drain, want parked", got)

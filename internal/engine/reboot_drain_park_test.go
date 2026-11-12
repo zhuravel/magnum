@@ -38,10 +38,10 @@ func TestARebootDrainParksASessionUnpinnedDuringIt(t *testing.T) {
 	if err := h.st.UpdatePR(h.ctx, pinnedPR.ID, func(u *store.PRUpdate) { u.Set("pinned", false) }); err != nil { // magnum unpin
 		t.Fatal(err)
 	}
-	h.advance(30 * time.Second)
-	h.tick()
-	h.advance(30 * time.Second)
-	h.tick()
+	for range 3 { // marked, its park queued and run, then parked
+		h.advance(30 * time.Second)
+		h.tick()
+	}
 	if st := h.sessionState(pinned.ID); st != store.SessionParked {
 		t.Fatalf("the session unpinned during the drain is %s, want parked", st)
 	}

@@ -16,6 +16,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -25,12 +26,32 @@ import (
 
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/notify"
+	"github.com/zhuravel/magnum/internal/staging"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
 // rebootDrainHold is why the daemon starts nothing new under a drain for a
 // reboot (stopping), as the holds and the waits say it.
 const rebootDrainHold = "draining for a reboot (magnum drain; magnum resume ends it)"
+
+// rebootHeldRequests are the requests that would start work a reboot cuts
+// (refuseUnderRebootDrain): a staging deploy, an open's restore and the slot
+// work of a provision, a repair, an adoption, a cleanup or a release.
+var rebootHeldRequests = []string{ReqStagingDeploy, ReqOpen, ReqProvision, ReqRepair, ReqAdopt, ReqCleanup, ReqRelease}
+
+// errRebootDrainRefusal is their answer under the drain.
+var errRebootDrainRefusal = errors.New("the daemon drains for a reboot (`magnum drain`): ask again after the reboot, or after `magnum resume`")
+
+// refuseUnderRebootDrain refuses req while a drain for a reboot holds when it
+// would start work a reboot cuts (rebootHeldRequests), and reports whether
+// it did.
+func (e *Engine) refuseUnderRebootDrain(ctx context.Context, req store.Request) bool {
+	if !slices.Contains(rebootHeldRequests, req.Kind) || !e.rebootDraining(ctx) {
+		return false
+	}
+	e.complete(ctx, req.ID, errRebootDrainRefusal, "")
+	return true
+}
 
 // drainParkWhy is the mark of the sessions a drain for a reboot parks once
 // the daemon is quiet (restartMark.Why).
@@ -114,8 +135,10 @@ func (e *Engine) startRebootDrain(ctx context.Context) {
 			d.Since.Local().Format("Jan 2 15:04")), map[string]any{"generation": d.Generation})
 }
 
-// tendRebootDrain is the health checks' part of the drain for a reboot.
-// While one holds it writes the acknowledgement (DrainAck: the work that
+// tendRebootDrain is the tick's last part of the drain for a reboot, once
+// every start path of the tick ran (the requests, the dispatch, the parks,
+// the reconcile), so what one of them started meanwhile is in the work it
+// names. While one holds it writes the acknowledgement (DrainAck: the work that
 // still runs, quiet once none does), parks the idle sessions once quiet
 // (parkForRebootDrain) and, an hour after the daemon went quiet, toasts
 // once that the drain still holds. With none it drops a stale
@@ -216,8 +239,10 @@ func (e *Engine) blockedSessions(ctx context.Context) []string {
 // parent, whiteboards), a round's tail before its fix cycle or whiteboard,
 // the background jobs (backgroundBusy), the heavy worker's jobs and the
 // GitHub writes as the operator (workInFlight), the rounds the registry
-// holds in flight (an unreadable registry counts as one), and the staging
-// resolver's jobs that took their slot or that its worker runs.
+// holds in flight (an unreadable registry counts as one), the requests
+// answered off the tick (a staging request, an open, an abort), the staging
+// deploys queued or running, and the staging resolver's jobs that took their
+// slot or that its worker runs.
 func (e *Engine) rebootDrainWork(ctx context.Context) []string {
 	var out []string
 	e.mu.Lock()
@@ -254,7 +279,32 @@ func (e *Engine) rebootDrainWork(ctx context.Context) []string {
 			out = append(out, "round of "+e.prWords(ctx, pr.ID)+" ("+pr.State+")")
 		}
 	}
+	e.mu.Lock()
+	answering := len(e.inflight)
+	e.mu.Unlock()
+	if answering > 0 {
+		out = append(out, fmt.Sprintf("%d request(s) answered off the tick", answering))
+	}
+	out = append(out, e.deploysInFlight()...)
 	return append(out, e.resolvesInFlight(ctx)...)
+}
+
+// deploysInFlight are the staging deploys queued or running, which the steps
+// take on: "staging deploy of talkable/talkable#12 to void".
+func (e *Engine) deploysInFlight() []string {
+	s := e.d.Staging
+	if s == nil {
+		return nil
+	}
+	var out []string
+	for _, repo := range StagingRepos(e.cfg) {
+		for _, f := range s.Effects(repo) {
+			if f.State == staging.EffectQueued || f.State == staging.EffectRunning {
+				out = append(out, fmt.Sprintf("staging deploy of %s#%d to %s", f.Repo, f.PR.Number, f.Env.Name))
+			}
+		}
+	}
+	return out
 }
 
 // resolvesInFlight are the staging resolver's jobs that took their slot

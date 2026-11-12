@@ -528,7 +528,6 @@ func (e *Engine) health(ctx context.Context) {
 		e.event(ctx, "info", "", "daemon.resumed", "automation pause ended", nil)
 	}
 	e.checkDrain(ctx)
-	e.tendRebootDrain(ctx) // reboot_drain.go: its acknowledgement, after the drains' own checks
 	e.continueAfterDrain(ctx)
 	e.continueSlowWhiteboards(ctx) // whiteboard_pending.go
 	e.probeInfra(ctx)

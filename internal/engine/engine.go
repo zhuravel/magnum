@@ -1359,6 +1359,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.noteGitHubBudget(ctx)  // github_cost.go: a run of low budget begins or ends
 	e.noteGitHubOutside(ctx) // github_cost.go: a window's spend outside magnum reached a fifth
 	e.flushGitHubCost(ctx, false)
+	e.tendRebootDrain(ctx) // reboot_drain.go: its acknowledgement, once every start path of the tick ran
 	e.surface(ctx)
 	return errors.Join(errs...)
 }

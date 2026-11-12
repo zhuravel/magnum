@@ -227,6 +227,9 @@ func (e *Engine) complete(ctx context.Context, id int64, err error, result strin
 }
 
 func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
+	if e.refuseUnderRebootDrain(ctx, req) { // reboot_drain.go: what would start work a reboot cuts
+		return
+	}
 	switch req.Kind {
 	case ReqKick:
 		e.complete(ctx, req.ID, nil, "ok")
