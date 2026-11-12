@@ -234,15 +234,12 @@ type roleState struct {
 	// whether the recoveries ran out; ranOut is when the steps ran out (lost,
 	// stuck, or a heal told to you), which your retry after it starts over;
 	// noPrompt counts the fresh starts of a Codex session that never took its
-	// first prompt. recoveries are the recoveries the role took in the
-	// attempt since the count last started over (recoveriesUsed: counted is
-	// false until the task's recover events were read), and dueAt is when the
-	// next one runs, after its wait (RecoveryWaits; zero: none is scheduled).
+	// first prompt. dueAt is when the next recovery runs, after its wait
+	// (RecoveryWaits; zero: none is scheduled); the recoveries taken are
+	// counted from the task's events (recoveriesUsed).
 	recovering bool
 	lost       bool
 	ranOut     time.Time
-	recoveries int
-	counted    bool
 	dueAt      time.Time
 	// pending: a recovery quit the role's session (or found it gone) and
 	// abandoned its runs, and no new run of it was sent yet (handOver): the

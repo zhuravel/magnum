@@ -69,6 +69,7 @@ type fakeRuntime struct {
 	verified      []verifyCall
 	voided        []verifyCall
 	recovered     []string // the RecoverLost calls, "<task key>/<role>"
+	progress      []string // the MadeProgress calls, "<task key>/<role>"
 	runs          int
 	sendErr       error
 	quits         []int64
@@ -286,8 +287,9 @@ type sentPrompt struct {
 	RunID               string
 	PromptFile          string
 	// Fresh: it started a fresh session (SendFresh), Text being the words
-	// after the attempt's first prompt.
-	Fresh bool
+	// after the attempt's first prompt; RecoveriesOver: its lost-pane
+	// recoveries start over (your answer's), never the fix budget's.
+	Fresh, RecoveriesOver bool
 }
 
 // verifyCall is a Verify the stage made.
@@ -387,14 +389,30 @@ func (f *fakeRuntime) Send(ctx context.Context, t registry.Task, a registry.Atte
 // SendFresh is Send of then in a fresh session: the prompt is recorded with
 // Fresh set, and its ledger entry holds then alone (runtime.TurnText reads
 // the same of the runtime's, which carries the first prompt before it).
-func (f *fakeRuntime) SendFresh(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, then string) (string, error) {
+func (f *fakeRuntime) SendFresh(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, then string,
+	recoveriesOver bool) (string, error) {
 	id, err := f.Send(ctx, t, a, role, then)
 	if id != "" {
 		f.mu.Lock()
 		f.sent[len(f.sent)-1].Fresh = true
+		f.sent[len(f.sent)-1].RecoveriesOver = recoveriesOver
 		f.mu.Unlock()
 	}
 	return id, err
+}
+
+// MadeProgress records the call, "<task key>/<role>": the go-on that starts
+// the role's loop ladder over.
+func (f *fakeRuntime) MadeProgress(t registry.Task, _ registry.Attempt, role string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.progress = append(f.progress, TaskKey(t)+"/"+role)
+}
+
+func (f *fakeRuntime) progressList() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.progress)
 }
 
 // RunsAs is the runtime's: a Codex role of a task Codex never works on runs

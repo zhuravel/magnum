@@ -42,10 +42,12 @@ var RecoveryWaits = [MaxRecoveries]time.Duration{0, time.Minute, 5 * time.Minute
 const recoverKind = "recover"
 
 // The words of a recover event after its lead (recoverLead): a recovery,
-// or the count starting over.
+// the count starting over, and the recoveries running out (after which
+// your retry starts the count over).
 const (
 	recoveryWord  = "recovery "
 	startOverWord = "starts over"
+	ranOutWord    = "ran out"
 )
 
 // recoverLead starts the recover events of role in attempt.
@@ -67,56 +69,57 @@ func recoveryStep(n int, resume string, unprompted bool) string {
 }
 
 // recoveriesUsed is how many recoveries role st took in its attempt since
-// the count last started over: read once from the task's recover events
-// (and your retries), then kept in st.
+// the count last started over, counted from the task's recover events and
+// your retries each time (countRecoveries), so the daemon in memory and
+// after a restart count alike.
 func (r *Runtime) recoveriesUsed(ctx context.Context, st *roleState) int {
-	r.mu.Lock()
-	counted, n := st.counted, st.recoveries
-	r.mu.Unlock()
-	if counted {
-		return n
-	}
-	n = r.countRecoveries(ctx, st.taskID, st.key.attempt, st.role.Name)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !st.counted {
-		st.recoveries, st.counted = n, true
-	}
-	return st.recoveries
+	return r.countRecoveries(ctx, st.taskID, st.key.attempt, st.role.Name)
 }
 
 // countRecoveries counts the recoveries of role in attempt of task id that
-// the task's recover events record since the count last started over: the
-// newest "starts over" event of the role, or your newest retry of the task.
-// A registry that cannot be read counts none: the recoveries then take the
-// steps they took before.
+// the task's recover events record since the count last started over: a
+// "starts over" event of the role (your answer's fresh start, your retry of
+// a role whose recoveries ran out), or your retry of the task after its
+// recoveries ran out (a "ran out" event). A retry while recoveries are left
+// starts nothing over. A registry that cannot be read counts none: the
+// recoveries then take the steps they took before.
 func (r *Runtime) countRecoveries(ctx context.Context, id int64, attempt, role string) int {
 	evs, err := r.reg.TaskEvents(ctx, id, recoverKind, 0)
 	if err != nil {
 		r.log.Warn("read a role's recoveries", "task", id, "role", role, "err", err)
 		return 0
 	}
-	var since time.Time
+	var retries []time.Time
 	if ins, err := r.reg.Inputs(ctx, id); err == nil {
 		for _, in := range ins {
-			if in.Kind == registry.InputRetry && in.Role == "" && in.At.After(since) {
-				since = in.At
+			if in.Kind == registry.InputRetry && in.Role == "" {
+				retries = append(retries, in.At)
 			}
 		}
 	}
 	lead := recoverLead(role, attempt)
-	n := 0
+	n, ranOut, next := 0, false, 0
 	for _, ev := range evs {
 		rest, ok := strings.CutPrefix(ev.Text, lead)
-		if !ok || ev.At.Before(since) {
+		if !ok {
 			continue
+		}
+		for ; next < len(retries) && retries[next].Before(ev.At); next++ {
+			if ranOut { // your retry after they ran out: they start over
+				n, ranOut = 0, false
+			}
 		}
 		switch {
 		case strings.HasPrefix(rest, startOverWord):
-			n = 0
+			n, ranOut = 0, false
+		case strings.HasPrefix(rest, ranOutWord):
+			ranOut = true
 		case strings.HasPrefix(rest, recoveryWord):
 			n++
 		}
+	}
+	if ranOut && next < len(retries) {
+		n = 0
 	}
 	return n
 }
@@ -155,7 +158,8 @@ func (r *Runtime) appendEvent(ctx context.Context, id int64, kind, text string) 
 // counted from its next prompt), so it spends no recovery. The
 // new run's id comes back; a role that may not restart now (a pause, you in
 // its pane) is that error.
-func (r *Runtime) SendFresh(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, then string) (string, error) {
+func (r *Runtime) SendFresh(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, then string,
+	recoveriesOver bool) (string, error) {
 	if a.TaskID != t.ID {
 		return "", fmt.Errorf("start %s afresh: attempt %s is not %s's", role.Name, a.ID, taskKey(t))
 	}
@@ -171,12 +175,33 @@ func (r *Runtime) SendFresh(ctx context.Context, t registry.Task, a registry.Att
 		return "", err
 	}
 	r.mu.Lock()
-	st.stuck, st.lost, st.pending, st.recovering = false, false, false, false
-	st.step, st.recoveries, st.counted, st.dueAt = 0, 0, true, time.Time{}
+	st.stuck, st.pending, st.step, st.dueAt = false, false, 0, time.Time{}
+	if recoveriesOver {
+		st.lost, st.recovering = false, false
+	}
 	if l := r.loops[loopKey{t.ID, a.Stage, role.Name}]; l != nil { // a fresh session: its loop's ladder starts over too
 		l.step, l.fails, l.reset = loopNone, nil, true
 	}
 	r.mu.Unlock()
-	r.noteStartOver(ctx, t, a, role.Name, "a fresh session the factory's stage asked for")
+	if recoveriesOver {
+		r.noteStartOver(ctx, t, a, role.Name, "a fresh session your answer asked for")
+	}
 	return r.fromFiles(ctx, t, a, st, "the factory's stage asked for a fresh session", then)
+}
+
+// MadeProgress starts the loop ladder of role in attempt a of task t over,
+// as a verified run's progress or your retry does: the writer's go-on at its
+// fix budget (the factory's stage found its turns making progress), whose
+// turns the ladder then counts from its next prompt, never as a loop.
+func (r *Runtime) MadeProgress(t registry.Task, a registry.Attempt, role string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	k := loopKey{t.ID, a.Stage, role}
+	l := r.loops[k]
+	if l == nil { // after a restart: the ladder counts from the next prompt, not from the stage's first
+		l = &loopState{}
+		r.loops[k] = l
+	}
+	l.step, l.fails, l.reset = loopNone, nil, true
+	delete(r.once, noProgressKey(k))
 }

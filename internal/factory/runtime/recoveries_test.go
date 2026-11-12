@@ -81,6 +81,98 @@ func TestAWaitedRecoveryOvertakenByATurnsEndRestartsNothing(t *testing.T) {
 	}
 }
 
+// The recoveries count the same in memory and after a restart: a retry of
+// yours for another cause while the role still has recoveries left starts
+// nothing over in either, so the next loss after two recoveries takes the
+// third (a fresh session), not a first one again.
+func TestTheRecoveriesCountTheSameInMemoryAndAfterARestart(t *testing.T) {
+	for _, restart := range []bool{false, true} {
+		g := newRig(t)
+		g.launch("fx-repro")
+		g.h.setSession(g.agent("fx-repro"), "sid-1")
+		g.send("fx-repro", "reproduce the bug")
+		g.observeN(2)
+		for n := 1; n <= 2; n++ {
+			g.h.losePane(g.agent("fx-repro"))
+			g.observe()
+			g.afterWait(n)
+			g.observeN(2)
+		}
+		g.retried() // your retry of a check's question, say
+		if restart {
+			g.restart()
+		}
+		starts := len(g.h.startCalls())
+		g.h.losePane(g.agent("fx-repro"))
+		g.observe()
+		g.afterWait(3)
+		if s := g.h.startCalls(); len(s) != starts+1 || strings.Contains(strings.Join(s[len(s)-1].Args, " "), "--resume") {
+			t.Fatalf("restart %v: starts %+v after two recoveries and an unrelated retry, want the third: a fresh session", restart, s[starts:])
+		}
+	}
+}
+
+// The writer's fresh session at its fix budget keeps its lost-pane budget
+// as it was: a loss after it takes the role's next recovery and then the
+// question, never three recoveries more. Your answer's fresh start does
+// start them over.
+func TestTheFixBudgetsFreshSessionKeepsThePanesRecoveries(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	g.h.setSession(g.agent("fx-repro"), "sid-1")
+	g.send("fx-repro", "reproduce the bug")
+	g.observeN(2)
+	for n := 1; n <= 2; n++ {
+		g.h.losePane(g.agent("fx-repro"))
+		g.observe()
+		g.afterWait(n)
+		g.observeN(2)
+	}
+	if _, err := g.r.SendFresh(g.ctx, g.task, g.attempt, g.role("fx-repro"), "fix it", false); err != nil {
+		t.Fatal(err)
+	}
+	g.observeN(2)
+	var evs []Event
+	g.h.losePane(g.agent("fx-repro"))
+	evs = append(evs, g.observe()...)
+	evs = append(evs, g.afterWait(3)...)
+	g.observeN(2)
+	g.h.losePane(g.agent("fx-repro"))
+	evs = append(evs, g.observe()...)
+	if lost := only(evs, EventLost); len(lost) != 1 || lost[0].Reason != "no progress after 3 recoveries" {
+		t.Fatalf("events %+v, want the third recovery, then lost: the fix budget's fresh session spends no pane budget", evs)
+	}
+}
+
+// The writer's go-ons at its fix budget start the runtime's loop ladder
+// over (MadeProgress), as your retry does: with fix_go_on at 2, 4 or 7, a
+// writer that makes progress is never compacted, started afresh by the
+// ladder, or stopped as making no progress.
+func TestTheGoOnsStartTheLoopLadderOver(t *testing.T) {
+	for _, goOns := range []int{2, 4, 7} {
+		g := newRig(t)
+		g.launch("fx-repro")
+		g.h.setSession(g.agent("fx-repro"), "sid-1")
+		for i := 1; i <= MaxStagePrompts; i++ { // the first prompt and the 5 fix turns of the cap
+			if _, err := g.ladderSend(i); err != nil {
+				t.Fatalf("prompt %d: %v", i, err)
+			}
+		}
+		_, before := g.ladderSteps()
+		for k := 0; k < goOns; k++ {
+			g.r.MadeProgress(g.task, g.attempt, "fx-repro") // the go-on's grant
+			for j := 1; j <= 2; j++ {
+				if _, err := g.ladderSend(100*(k+1) + j); err != nil {
+					t.Fatalf("fix_go_on %d, go-on %d, turn %d: %v", goOns, k+1, j, err)
+				}
+			}
+		}
+		if compacts, starts := g.ladderSteps(); compacts != 0 || starts != before {
+			t.Fatalf("fix_go_on %d: %d compactions and %d fresh starts during the go-ons, want none", goOns, compacts, starts-before)
+		}
+	}
+}
+
 // A fresh session the stage asks for (the writer's at its fix budget)
 // starts its loop's ladder over too: the prompts after it are counted from
 // it, so no compaction comes for the prompts before it.
@@ -94,7 +186,7 @@ func TestAFreshSessionStartsTheLoopsLadderOver(t *testing.T) {
 		}
 	}
 	g.h.setStatus(g.agent("fx-repro"), "idle")
-	if _, err := g.r.SendFresh(g.ctx, g.task, g.attempt, g.role("fx-repro"), "fix turn, fresh"); err != nil {
+	if _, err := g.r.SendFresh(g.ctx, g.task, g.attempt, g.role("fx-repro"), "fix turn, fresh", false); err != nil {
 		t.Fatal(err)
 	}
 	g.observeN(2)
@@ -120,7 +212,7 @@ func TestAFreshStartStartsTheRoleWithItsContextAndItsRecoveriesOver(t *testing.T
 	g.loseAll("fx-repro")
 	starts := len(g.h.startCalls())
 
-	id, err := g.r.SendFresh(g.ctx, g.task, g.attempt, g.role("fx-repro"), "look at the seed data first")
+	id, err := g.r.SendFresh(g.ctx, g.task, g.attempt, g.role("fx-repro"), "look at the seed data first", true)
 	if err != nil || id == "" {
 		t.Fatalf("SendFresh = %q, %v", id, err)
 	}

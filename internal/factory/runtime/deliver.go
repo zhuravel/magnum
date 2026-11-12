@@ -159,7 +159,7 @@ func (r *Runtime) bringBack(ctx context.Context, t registry.Task, a registry.Att
 		r.mu.Lock()
 		st.stuck, st.lost = false, false
 		st.step = 0
-		st.recoveries, st.counted, st.dueAt = 0, true, time.Time{}
+		st.dueAt = time.Time{}
 		r.mu.Unlock()
 		r.noteStartOver(ctx, t, a, st.role.Name, "your retry") // a restart counts from here too
 	}
@@ -188,7 +188,7 @@ func (r *Runtime) bringBack(ctx context.Context, t registry.Task, a registry.Att
 	}
 	n := used + 1
 	step := recoveryStep(n, resume, unprompted)
-	st.recoveries, st.dueAt = n, time.Time{}
+	st.dueAt = time.Time{}
 	r.mu.Unlock()
 	r.log.Warn("a role with no session is started again before its prompt", "task", t.ID, "role", st.role.Name, "step", step)
 	r.noteRecovery(ctx, t, a, st.role.Name, n, step, "it had no session when its prompt was due")

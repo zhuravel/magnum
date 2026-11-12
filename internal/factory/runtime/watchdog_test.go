@@ -213,10 +213,14 @@ func TestALostPaneIsRecoveredThreeTimesAfterItsWaitsTheLastInAFreshSession(t *te
 	}
 	var steps []string
 	for _, ev := range recs {
+		if strings.Contains(ev.Text, ": "+ranOutWord) {
+			steps = append(steps, ranOutWord)
+			continue
+		}
 		steps = append(steps, ev.Text[strings.Index(ev.Text, "(")+1:strings.Index(ev.Text, ")")])
 	}
-	if !slices.Equal(steps, []string{"resume", "resume", "fresh"}) {
-		t.Fatalf("recover events %+v, want resume, resume, fresh", recs)
+	if !slices.Equal(steps, []string{"resume", "resume", "fresh", ranOutWord}) {
+		t.Fatalf("recover events %+v, want resume, resume, fresh, then ran out", recs)
 	}
 	alerts, err := g.reg.TaskEvents(g.ctx, g.task.ID, "alert", 0)
 	if err != nil || len(alerts) != MaxRecoveries || !strings.Contains(alerts[0].Text, "recovers fx-repro's lost pane by itself") {

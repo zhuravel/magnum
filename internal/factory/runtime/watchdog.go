@@ -409,7 +409,7 @@ func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.A
 		r.mu.Lock()
 		st.stuck, st.lost, st.pending, st.recovering = false, false, false, false
 		st.step = 0
-		st.recoveries, st.counted, st.dueAt = 0, true, time.Time{}
+		st.dueAt = time.Time{}
 		r.mu.Unlock()
 		r.noteStartOver(ctx, t, a, role.Name, "your retry") // a restart counts from here too
 	case owned:
@@ -450,10 +450,15 @@ func (r *Runtime) turnAtWork(ctx context.Context, t registry.Task, role string) 
 // lostEvent is EventLost for a role whose recoveries ran out, once.
 func (r *Runtime) lostEvent(t registry.Task, a registry.Attempt, role config.Role, spent errRecoveriesSpent) Event {
 	r.mu.Lock()
-	if st := r.roles[roleKey{a.ID, role.Name}]; st != nil {
+	st := r.roles[roleKey{a.ID, role.Name}]
+	was := st != nil && st.lost
+	if st != nil {
 		st.lost, st.recovering, st.pending, st.ranOut = true, false, false, r.now()
 	}
 	r.mu.Unlock()
+	if !was { // your retry after it starts the count over (countRecoveries)
+		r.appendEvent(context.Background(), t.ID, recoverKind, recoverLead(role.Name, a.ID)+ranOutWord+": "+spent.Error())
+	}
 	return Event{TaskID: t.ID, Role: role.Name, Kind: EventLost, Reason: spent.Error()}
 }
 
@@ -515,7 +520,7 @@ func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.A
 		return nil
 	}
 	step := recoveryStep(n, resume, unprompted)
-	st.dueAt, st.recoveries, st.recovering = time.Time{}, n, true
+	st.dueAt, st.recovering = time.Time{}, true
 	r.mu.Unlock()
 	r.log.Warn("a role is recovered", "task", t.ID, "role", role.Name, "why", why, "step", step, "recovery", n)
 	r.noteRecovery(ctx, t, a, role.Name, n, step, why)

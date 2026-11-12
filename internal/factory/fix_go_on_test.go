@@ -74,6 +74,10 @@ func TestAtTheFixCapAWriterThatMakesProgressGoesOnAtMostFixGoOnTimes(t *testing.
 	if g := r.grantsOf(task.ID); g[grantGoOn] != r.cfg.Factory.FixGoOn || g[grantFresh] != 1 {
 		t.Fatalf("grants %v, want %d go-ons and one fresh session", g, r.cfg.Factory.FixGoOn)
 	}
+	if p := r.rt.progressList(); len(p) != r.cfg.Factory.FixGoOn {
+		t.Fatalf("MadeProgress calls %q, want one at each go-on: the runtime's loop ladder starts over", p)
+	}
+
 	var goOns, alerts int
 	for _, ev := range r.events(task.ID, "fix") {
 		if strings.Contains(ev.Text, "made progress") {
@@ -90,6 +94,34 @@ func TestAtTheFixCapAWriterThatMakesProgressGoesOnAtMostFixGoOnTimes(t *testing.
 	}
 	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "give a direction or drop the task?") {
 		t.Fatalf("task %s waits %q, want the question", got.State, got.WaitsWhat)
+	}
+}
+
+// The runtime keeps its loop ladder in memory: a restart after a go-on
+// starts the writer's ladder over again on the rebuilt run, so the go-on's
+// turns never count as a loop after the restart either.
+func TestARestartAfterAGoOnStartsTheLoopLadderOverAgain(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12578", "bug")
+	r.lintNewOffenseEachRun()
+	r.startStage(task)
+	r.fix(task)
+	turn := func(i int) {
+		r.commit(fmt.Sprintf("PR-12578 try %d", i), map[string]string{"README": fmt.Sprintf("shop, try %d\n", i)})
+		r.endTurns(task, 1)
+	}
+	i := 1
+	for ; i < 20 && r.writerPrompts() <= runtime.MaxStagePrompts && isLive(r.reload(task.ID)); i++ {
+		turn(i)
+	}
+	before := len(r.rt.progressList())
+	if before != 1 {
+		t.Fatalf("MadeProgress calls %q at the first go-on, want one", r.rt.progressList())
+	}
+	r.restart()
+	turn(i)
+	if n := len(r.rt.progressList()); n <= before {
+		t.Fatalf("no MadeProgress after a restart, whose rebuilt run has a go-on (%d calls)", n)
 	}
 }
 

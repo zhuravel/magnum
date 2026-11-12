@@ -86,7 +86,8 @@ type Runtime interface {
 	Owner(ctx context.Context, t registry.Task) (store.PR, error)
 	Launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error
 	Send(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (runID string, err error)
-	SendFresh(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, then string) (runID string, err error)
+	SendFresh(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, then string, recoveriesOver bool) (runID string, err error)
+	MadeProgress(t registry.Task, a registry.Attempt, role string)
 	Observe(ctx context.Context) ([]runtime.Event, error)
 	Verify(ctx context.Context, runID string, ok bool, why string) error
 	Void(ctx context.Context, runID, why string) error

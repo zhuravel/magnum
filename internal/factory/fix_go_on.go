@@ -215,6 +215,7 @@ func (e *Engine) atFixCap(ctx context.Context, t registry.Task, a registry.Attem
 	what := fmt.Sprintf("the %s agent's change does not pass after %s (%s)", r.runAs.Name, b, textx.Clip(p.why, 200))
 	switch {
 	case progressed(rec.turnsOf(a.ID, r.runAs.Name)) && goOns < e.cfg.Factory.FixGoOn:
+		e.d.Runtime.MadeProgress(t, a, r.runAs.Name) // its loop ladder counts the go-on's turns from here, as after your retry
 		return fixCapGoOn, e.grant(ctx, t, a, r, grantGoOn, fixGoOnTurns, fmt.Sprintf("%s, but its last turns made progress: %d more fix "+
 			"turns (go-on %d of %d)", what, fixGoOnTurns, goOns+1, e.cfg.Factory.FixGoOn))
 	case !fresh:

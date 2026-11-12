@@ -690,7 +690,7 @@ func (e *Engine) applyStops(ctx context.Context, t registry.Task, a registry.Att
 		if handed(entries, a.ID, r.runAs.Name, ask.Decided, answerLead) {
 			continue
 		}
-		r.next, r.fresh, r.problem, r.pause = nextFresh, freshAnswerText(ask), nil, ""
+		r.next, r.fresh, r.freshOver, r.problem, r.pause = nextFresh, freshAnswerText(ask), true, nil, ""
 		r.ok, r.failed, r.recover, r.letGo = false, "", false, false
 	}
 	return nil

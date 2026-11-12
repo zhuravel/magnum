@@ -262,8 +262,11 @@ type stageRole struct {
 	pause   string
 	nudged  bool
 	// fresh is the prompt after the attempt's first one that a fresh
-	// session of the role starts with (nextFresh).
-	fresh string
+	// session of the role starts with (nextFresh); freshOver: that session
+	// starts its lost-pane recoveries over (your answer's start, never the
+	// writer's fresh session at its fix budget).
+	fresh     string
+	freshOver bool
 	// relaunch: it runs again as its fallback after a Codex refusal or a
 	// usage limit (a launch, then its prompt); covered: its fallback is a
 	// role of the stage (coveredIn), so it leaves the run instead. refused:
@@ -736,8 +739,25 @@ func (e *Engine) agentsRunOf(ctx context.Context, t registry.Task, st config.Fac
 			e.recoverLost(ctx, t, a, r)
 		}
 	}
+	e.goOnLadders(t, a, run)
 	e.agentRuns[t.ID] = run
 	return run, evs, nil
+}
+
+// goOnLadders starts again, on a rebuilt run (a restart, your retry), the
+// loop ladder of each role of run that has a go-on in attempt a
+// (Runtime.MadeProgress): the runtime's ladder lives in memory, and a go-on
+// granted before must not count as a loop after it.
+func (e *Engine) goOnLadders(t registry.Task, a registry.Attempt, run *agentsRun) {
+	rec, err := readFixTurns(e.d.Layout.FactoryTaskDir(t.ID))
+	if err != nil {
+		return
+	}
+	for _, r := range run.roles {
+		if slices.ContainsFunc(rec.grantsOf(a.ID, r.runAs.Name), func(g fixGrant) bool { return g.Kind == grantGoOn }) {
+			e.d.Runtime.MadeProgress(t, a, r.runAs.Name)
+		}
+	}
 }
 
 // recoverLost has the runtime recover role r of attempt a (Runtime.RecoverLost),
@@ -1230,7 +1250,7 @@ func (e *Engine) fixOrWait(ctx context.Context, t registry.Task, a registry.Atte
 func (e *Engine) nextFixTurn(ctx context.Context, t registry.Task, a registry.Attempt, run *agentsRun, r *stageRole, p *endProblem) {
 	r.next, r.problem = nextFix, p
 	if e.freshDue(ctx, t, a, r) {
-		r.next, r.fresh = nextFresh, e.freshFixText(ctx, t, run.copy, e.d.Layout.FactoryTaskDir(t.ID), p)
+		r.next, r.fresh, r.freshOver = nextFresh, e.freshFixText(ctx, t, run.copy, e.d.Layout.FactoryTaskDir(t.ID), p), false
 	}
 }
 
@@ -1651,7 +1671,10 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 		sent := e.now()
 		send := e.d.Runtime.Send
 		if next == nextFresh {
-			send = e.d.Runtime.SendFresh
+			over := r.freshOver
+			send = func(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (string, error) {
+				return e.d.Runtime.SendFresh(ctx, t, a, role, text, over)
+			}
 		}
 		id, serr := send(ctx, t, a, r.runAs, text)
 		if id != "" {
@@ -1673,7 +1696,7 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 				e.event(ctx, t.ID, "questions", registry.PhaseInfo, r.runAs.Name+" got the answer that changed the plan after coding "+
 					"began: "+changedWhich(run.change))
 			}
-			r.next, r.problem, r.pause, r.fresh = "", nil, "", ""
+			r.next, r.problem, r.pause, r.fresh, r.freshOver = "", nil, "", "", false
 		}
 		if serr == nil {
 			continue
