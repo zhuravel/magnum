@@ -2,6 +2,7 @@ package factory
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -107,8 +108,9 @@ func TestALintInAFormatTheFactoryCannotReadIsTheWriters(t *testing.T) {
 }
 
 // stylelint's exit 2 is its report of offenses (stylelint 17 prints it on
-// stderr, in rows of line:column the factory does not read by path:line),
-// never a fault: the writer gets it, and nobody is asked.
+// stderr, in rows of line:column under the file's line), never a fault: its
+// offenses are read by the changed lines (none here: the change leaves
+// a.css), and nobody is asked.
 func TestStylelintsExit2WithItsReportIsNeverAFault(t *testing.T) {
 	r := newCodingRig(t)
 	r.cfg.Factory.Repos[0].Precheck.Lint = []string{"bin/lint stylelint {files}"}
@@ -119,8 +121,8 @@ func TestStylelintsExit2WithItsReportIsNeverAFault(t *testing.T) {
 			"  2:12  \u2716  Invalid hex color \"#zzz\"  color-no-invalid-hex\n\n\u2716 2 problems (2 errors, 0 warnings)\n\n"
 	}
 	res, err := r.e.precheck(r.ctx, task, r.cp)
-	if err != nil || res.Passed || res.ForYou || res.fault != nil || !strings.Contains(res.Why, "names no offense by path:line") {
-		t.Fatalf("precheck %+v, %v; want the writer's failure, never a fault and never a pass", res, err)
+	if err != nil || !res.Passed || res.ForYou || res.fault != nil {
+		t.Fatalf("precheck %+v, %v; want it passed: its offenses are on no changed line, never a fault", res, err)
 	}
 	if n := len(r.ran("bin/lint")); n != 1 {
 		t.Fatalf("the lint ran %d times, want once: no fault step", n)
@@ -492,5 +494,51 @@ func TestAnAcceptOfAFailureNoExampleNamesHoldsForItsCheck(t *testing.T) {
 	r.mu.Unlock()
 	if res, err := r.e.precheck(r.ctx, task, r.cp); err != nil || res.Passed {
 		t.Fatalf("precheck %+v, %v on a failing example; want it failed: the accept covers the unnamed failure only", res, err)
+	}
+}
+
+// eslint's stylish report and stylelint's name the file on a line of its
+// own and each offense on a row of line:column under it: the factory reads
+// the file from that line, so the changed-line filter holds for them as for
+// path:line offenses. An offense on a changed line fails the lint for the
+// writer; one only on lines the change left passes it.
+func TestALintsRowsUnderTheirFileAreReadByTheChangedLines(t *testing.T) {
+	const spec = "spec/models/credit_points_spec.rb" // the change adds it: its line 1 is a changed line
+	for _, tc := range []struct {
+		name   string
+		stderr bool // stylelint 17 prints its report on stderr, with exit 2
+		report func(copyDir string, line int) string
+	}{
+		{"eslint's stylish", false, func(copyDir string, line int) string {
+			return fmt.Sprintf("\n%s/%s\n  %d:5  error  'x' is assigned a value but never used  no-unused-vars\n\n"+
+				"\u2716 1 problem (1 error, 0 warnings)\n", copyDir, spec, line)
+		}},
+		{"stylelint's", true, func(_ string, line int) string {
+			return fmt.Sprintf("\n%s\n  %d:3   \u2716  Empty block  block-no-empty\n\n\u2716 1 problem (1 error, 0 warnings)\n\n", spec, line)
+		}},
+	} {
+		for _, at := range []struct {
+			line   int
+			passed bool
+		}{{1, false}, {40, true}} {
+			t.Run(fmt.Sprintf("%s at line %d", tc.name, at.line), func(t *testing.T) {
+				r := newCodingRig(t)
+				task := r.codingTask("PR-12596", "bug")
+				r.fix(task)
+				report := tc.report(r.copyDir, at.line)
+				if tc.stderr {
+					r.lintCrash = func([]string) string { return report }
+				} else {
+					r.lint = func([]string) string { return report }
+				}
+				res, err := r.e.precheck(r.ctx, task, r.cp)
+				if err != nil || res.Passed != at.passed || res.ForYou || res.fault != nil {
+					t.Fatalf("precheck %+v, %v; want passed %v, never for you or a fault", res, err, at.passed)
+				}
+				if !at.passed && (!strings.Contains(res.Why, "1 offense on the changed lines") || res.unnamed) {
+					t.Fatalf("the failure %q (unnamed %v); want the offense on the changed line, named", res.Why, res.unnamed)
+				}
+			})
+		}
 	}
 }

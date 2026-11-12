@@ -960,16 +960,11 @@ func (p *precheckRun) lintOnce(cmd, script string, files []string, changed map[s
 	if !r.ran {
 		return r
 	}
-	for line := range strings.SplitSeq(r.run.Output, "\n") {
-		m := offenseRe.FindStringSubmatch(strings.TrimSpace(line))
-		if m == nil || strings.Trim(m[1], "0123456789") == "" { // a row of line:column under its file (stylelint's): no path of its own
-			continue
-		}
+	for _, o := range namedOffenses(r.run.Output) {
 		r.named++
-		file := strings.TrimPrefix(strings.TrimPrefix(m[1], p.c.Path+"/"), "./")
-		n, _ := strconv.Atoi(m[2])
-		if changed[file][n] {
-			r.mine = append(r.mine, strings.TrimSpace(line))
+		file := strings.TrimPrefix(strings.TrimPrefix(o.file, p.c.Path+"/"), "./")
+		if changed[file][o.line] {
+			r.mine = append(r.mine, o.text)
 		}
 	}
 	if r.run.Exit != 0 && r.named == 0 {
@@ -983,6 +978,53 @@ func (p *precheckRun) lintOnce(cmd, script string, files []string, changed map[s
 		}
 	}
 	return r
+}
+
+// namedOffense is an offense a lint names: its file as the lint printed it,
+// its line, and its words (path:line and the rest).
+type namedOffense struct {
+	file string
+	line int
+	text string
+}
+
+// lintRowRe is a row of a lint's report under its file's line: eslint's
+// stylish and stylelint's "  1:3  ✖  Empty block  block-no-empty".
+var lintRowRe = regexp.MustCompile(`^\s+(\d+):\d+\s+\S`)
+
+// lintFileRe is the line of a report that names the file its rows are of:
+// a path alone, not indented.
+var lintFileRe = regexp.MustCompile(`^[^\s:]+\.[\w.]+$`)
+
+// namedOffenses are the offenses output names: each path:line line
+// (offenseRe), and each row of line:column under the line that names its
+// file (lintFileRe, lintRowRe: eslint's stylish, stylelint's report), whose
+// file is that line's. A row with no such line above it names no file.
+func namedOffenses(output string) []namedOffense {
+	var out []namedOffense
+	file := ""
+	for line := range strings.SplitSeq(textx.StripTerminal(output), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if m := lintRowRe.FindStringSubmatch(line); m != nil {
+			if file != "" {
+				n, _ := strconv.Atoi(m[1])
+				out = append(out, namedOffense{file: file, line: n, text: file + ":" + trimmed})
+			}
+			continue
+		}
+		if m := offenseRe.FindStringSubmatch(trimmed); m != nil && strings.Trim(m[1], "0123456789") != "" {
+			n, _ := strconv.Atoi(m[2])
+			out = append(out, namedOffense{file: m[1], line: n, text: trimmed})
+			continue
+		}
+		switch {
+		case lintFileRe.MatchString(line):
+			file = trimmed
+		case trimmed == "": // a blank line ends a file's rows
+			file = ""
+		}
+	}
+	return out
 }
 
 // onOwnBound runs fn on a context of the caller's that its own timer ends
