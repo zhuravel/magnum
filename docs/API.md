@@ -20492,9 +20492,12 @@ func (c *Client) Isolated(ctx context.Context, dir string, fn func(iso string) e
     dir's (isolate) and that has none of dir's config, attributes, hooks,
     refs or index: a read there runs no merge driver, diff driver or attribute
     of the clone's, which an agent's pane can write, and reads no commit-graph
-    (noCommitGraph), the clone's included. Every Client method takes iso as its
-    dir; only a full commit id names a commit there. The repository goes when fn
-    returns.
+    (noCommitGraph), the clone's included. Every Client method takes iso
+    as its dir; only a full commit id names a commit there. The repository
+    goes when fn returns. Isolated assumes that dir is not a partial clone,
+    so that cat-file never needs a promisor fetch: slots are full clones, and
+    only staging's mirrors use --filter. If a slot ever becomes a partial clone,
+    Isolated's reads fail.
 
 func (c *Client) LsRemote(ctx context.Context, dir string, timeout time.Duration, patterns ...string) (string, error)
     LsRemote runs `git ls-remote <origin> patterns...` in dir, reaching origin
