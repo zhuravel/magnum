@@ -17994,6 +17994,11 @@ func (r *Runtime) Park(ctx context.Context, t registry.Task) error
     A run in flight or an agent at work on the task's row refuses with
     agents.ErrBusy; the liaison never stops the task's own park.
 
+func (r *Runtime) ParkForReboot(ctx context.Context, t registry.Task) error
+    ParkForReboot is Park for a drain for a reboot (drain.go): a liaison at work
+    refuses it with agents.ErrBusy too, since the reboot would cut its turn,
+    where Park leaves such a liaison live and goes through.
+
 func (r *Runtime) Paused(kind string) *WaitError
     Paused is the wait of agent kind's pause in force (a usage limit's,
     a logout's, an overload's: Who says which), nil for none: while Codex is

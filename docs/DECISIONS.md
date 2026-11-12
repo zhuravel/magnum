@@ -18798,8 +18798,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     daemon). `draining()` includes it, so every gate of a restart drain holds; the staging resolver takes no slot
     for a queued job under it. The start paths that read no drain are closed under it: a staging deploy, an open's
     restore, a provision, a repair, an adoption, a cleanup and a release are refused with why and how to go on (a
-    staging cancel goes on), the reconcile queues no slot work, and a whiteboard checks the drain again once it
-    holds its PR. The tick acknowledges it at its end, once every start path ran (`daemon.reboot_drain_ack`:
+    staging cancel, a dry run, a cleanup's plan and an open of a live session go on), the reconcile queues no slot
+    work (the start's own included), and a whiteboard checks the drain again once it holds its PR. The tick acknowledges it at its end, once every start path ran (`daemon.reboot_drain_ack`:
     generation, pid, quiet, parked, the work: the reservations, a round's tail, the background jobs, the heavy
     worker's jobs and GitHub writes as the operator, the registry's rounds, the requests answered off the tick, the
     staging deploys queued or running and the resolver's jobs that took their slot), written again whenever its row
@@ -18810,7 +18810,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     one unpinned later is marked then); a session a dialog holds is named with its remedy. The command says
     "quiet: safe to reboot" only once both acknowledgements are of its generation, from the running pids, quiet and
     parked; a daemon that is down is done only once its own store shows no agent's turn in flight (they outlive it
-    in herdr), and one it cannot read, or whose pidfile it cannot read, is never certified. It wakes the daemons at
+    in herdr) and, for the factory, no record a crash left names work (a local review round's agents are in a
+    scratch registry), and one it cannot stat or read, or whose pidfile it cannot read, is never certified. It wakes the daemons at
     most once a minute, since the review tick polls GitHub.
   - It ends at each daemon's first start on another boot: another `kern.bootsessionuuid`, which is unique per boot
     (`kern.boottime` moves when macOS steps the clock after a wake, so it decides only without a session, past two
@@ -18827,7 +18828,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     with its remedy.
   - Safety: each daemon of this build records the controls it knows (`daemon.controls` `{version, pid}`,
     work.json's `controls`); for a running daemon without it the CLI says "restart it on this build first" and
-    claims no hold, and a daemon that starts while the command waits is checked again. A write that fails on one
+    claims no hold, and a daemon that starts while the command waits is checked again at each poll while it says
+    no (its pidfile comes before its record of the controls); the status lines name a running daemon whose build
+    ignores a hold it is under. A write that fails on one
     daemon undoes only what this command wrote, while it is still its own: it lifts a record written where none was
     and puts back one it overwrote. resume says a drain lifted only when its compared delete took it. A record the
     daemons cannot read shows as "draining (unreadable record): magnum resume ends it".
@@ -26304,8 +26307,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   acknowledges it in work.json's `reboot_drain`: the record's items (a backoff repair aside, as for a restart) and
   every run the agents store keeps pending, submitted or working, the liaisons' too (`Runtime.TurnsInFlight`; a
   runtime that cannot list them counts as working). Once quiet it parks, once each, the tasks that are active,
-  waiting, need you or are published and have a live agent (`Runtime.LiveAgents`); a park that fails three ticks
-  in a row is left, said once and named in the acknowledgement's `left`, so it cannot hold the drain for good.
+  waiting, need you or are published and have a live agent (`Runtime.LiveAgents`), through
+  `Runtime.ParkForReboot`, which reports a liaison at work as agents.ErrBusy where `Park` leaves it live and goes
+  through. A busy refusal is never left: an agent at work in herdr with no run row (you typed into its pane, a build
+  in a shell) would be cut by the reboot, so the task is named as work and tried again at each tick. Any other
+  failure three ticks in a row is left, said once and named in the acknowledgement's `left`, so it cannot hold the
+  drain for good.
   An hour quiet raises a NEEDS YOU blocker, with its one alert. work.json also names the build and the controls
   version, which the CLI checks before it writes either file. The daemon reads both files before its startup's
   recovery, so it holds them from its first second. The first start on another boot ends a drain until boot

@@ -86,8 +86,9 @@ while one holds keeps its start, its end and its reason unless a flag changes th
   runtime's `Send` asks `Deps.MayPrompt`, which the engine answers from the reboot drain. A restart drain still
   holds no prompt (DECISIONS 2026-11-07: those turns outlive a restart).
 - Review, the start paths that did not read the drain: a staging deploy, an open's restore, a provision, a repair, an
-  adoption, a cleanup and a release are refused with why and how to go on; the reconcile queues no slot work. A
-  whiteboard checks the drain again once it holds its PR.
+  adoption, a cleanup and a release are refused with why and how to go on (a dry run, a cleanup's plan and an open of
+  a session that is live already go on); the reconcile, the start's included, queues no slot work. A whiteboard
+  checks the drain again once it holds its PR.
 - Each daemon then writes an acknowledgement of that generation: review, the kv row `daemon.reboot_drain_ack`;
   factory, the `reboot_drain` field of work.json. It holds `{generation, pid, quiet, quiet_since, parked, work,
   left}`. The review daemon writes it at the end of each tick, once every start path of the tick ran, so what one
@@ -117,15 +118,18 @@ while one holds keeps its start, its end and its reason unless a flag changes th
   Review: each quiet check marks the live sessions `magnum restart-sessions --tool all` would restart now (one
   that becomes restartable later, an unpin, is marked then) and parks them through the same early park (pinned
   PRs left alone; a human typing in a pane waits out the cooldown). Factory: `Runtime.Park` of every task that is
-  active, waiting, needs you or published with a live agent, once per generation; after three failed tries the
-  task is left, said once and named in `left`.
+  active, waiting, needs you or published with a live agent, once per generation, through `ParkForReboot`, which
+  reports a liaison at work as busy. A busy refusal (an agent at work in herdr with no run row: you typed into its
+  pane, a shell runs a build) is never left: the task is named as work and tried again at each tick. Any other
+  failure, after three tries, leaves the task, said once and named in `left`.
 - `parked` is true once the park is done: review, no restartable session is live and none shows a dialog;
   factory, every task's park went through or was left.
 - The command says quiet only once both acknowledgements are of its generation, from the running daemon's pid,
   quiet and parked. A daemon that does not run is done only once its own store (the review registry's runs, the
-  factory's agents store, read-only) shows no agent's turn in flight, since those turns outlive it in herdr; one it
-  cannot read, and a daemon whose pidfile it cannot read, are never certified. A daemon that starts while the
-  command waits has its build checked again.
+  factory's agents store, read-only) shows no agent's turn in flight, since those turns outlive it in herdr, and,
+  for the factory, once no record a crash left (work.json) names work, whose agents (a local review round's) no
+  read reaches; a store it cannot stat or read, and a daemon whose pidfile it cannot read, are never certified. A
+  daemon that starts while the command waits has its build checked again, at each poll while it says no.
 - While it waits it prints one line per daemon every 15 seconds naming what still runs, and wakes each daemon at
   most once a minute (the review daemon's tick polls GitHub).
 - At the end it prints `quiet: safe to reboot. After the reboot, the daemons' first start ends the drain. magnum
