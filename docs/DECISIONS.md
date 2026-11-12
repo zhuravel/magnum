@@ -26510,14 +26510,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - *A check that crashed or hung* (`faults.go`). A check failure is a fault only with a positive sign of a
     broken environment (`faultSign`): it printed nothing at all, a signal ended it, its stderr tells a missing
     gem, Ruby library, Node module or command (the heal's list), a lint exited 2 with an error line that names
-    no offense, or it did not end within its bound (a lint, a run on the base). Anything the change could have
-    caused, or that the factory cannot read, goes to the writer, as before this change: an rspec run that fails
-    to load a changed file or names errors outside of examples, a jest run's failures (read through its colors,
-    from its `Tests: N failed` summary and from 64 KiB of its output) or a coverage threshold it missed. A lint
-    whose offenses come in a format the factory cannot read is your configuration's question, as before (the
-    `--format emacs` fix). The fault's question has a fourth way, "Hand it to the writer", which it recommends
-    when the output names a file the branch changed. A crash of the machine's environment stays the
-    infrastructure hold's.
+    no offense, or it did not end within its bound (a lint, a run on the base). stylelint's exit 2 is its
+    report, never a sign (stylelint 17 prints it on stderr, in rows of line:column, read from a real run on a
+    scratch file), and its rows no longer read as offenses of a file named "1", which passed the lint. Anything
+    the change could have caused, or that the factory cannot read, goes to the writer, as before this change:
+    an rspec run that fails to load a changed file or names errors outside of examples, a jest run's failures
+    (read through its colors, from its `Tests: N failed` summary and from 64 KiB of its output), a coverage
+    threshold it missed, and a lint output the factory cannot read by path:line (no longer a configuration
+    question). Every sign is read against the change, not only a crash's (`branchCaused`, `runnerCaused`): a
+    lint's sign on a change that touches what it loads, or whose output names a changed file, is the writer's
+    after the fault steps; a test runner's segfault or abort (139, 134) or a heap that ran out, on a change of
+    the code it tests, or any sign whose output names a changed file, is the writer's at once. The fault's
+    question has a fourth way, "Hand it to the writer", which it recommends when the output names a file the
+    branch changed. A crash of the machine's environment stays the infrastructure hold's, and so does a run
+    again that did not start for a reason of the moment: it is no cut of the cap, which made the fault's
+    question win over that hold.
     Before the writer or you hear of such a failure, the precheck runs the check again. Then it runs the
     repository's installs (the heal) and runs the check again. The heal is now a step of every fault, not only
     of a missing gem. A run that hangs runs once more with its bound doubled, up to `precheck.cap_max`. The
@@ -26530,8 +26537,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
     still names no failure asks: skip it for this task, run it with a longer bound, drop the task, or hand it
     to the writer. A bound comes only from the option's field or from "bound <d>" in your words, and one no
     longer than the check's last bound, or none, is twice the last; the specs' and jest's runs read it too. A
-    hang recommends the longer bound, and a crash the skip. The factory never edits your configuration: the bound is the task's,
-    in `stops.json`. Your retry runs the check once more at the same head. As before, its answer tells you
+    hang recommends the longer bound, and a crash the skip. The specs' run on the base that hangs asks other
+    ways (`baseQuestion`): the writer cannot fix a hang on the base, and that answer did nothing there, so the
+    same question came back. It offers a longer bound for the base run (recommended), the red specs judged at
+    the head without it, as the change's (`stops.json` NoBase; the PR body names it), or the drop. The factory
+    never edits your configuration: the bound is the task's, in `stops.json`. Your retry runs the check once more at the same head. As before, its answer tells you
     that nothing changed since the failure (`asksOnCheckAt`).
   - *The writer's fix turns* (`fix_go_on.go`). At its cap of fix turns, a role whose last 3 turns did not fail
     the same way gets 2 more fix turns by itself. Fewer failing examples or offenses, another failure, or
@@ -26558,27 +26568,43 @@ skill versions); people add theirs to the sections before it, at the end of the 
     agent of the task has a turn in flight in the copy, and you are in no pane of it (`inFlight`). The factory
     asks this before the save and again before the put-back. Second, the copy is on the branch at the
     head that the round reviewed.
-    A turn in flight is a held wait, never NEEDS YOU, and the put-back runs once the turn ended. That wait
-    lasts at most 30 minutes (`leftWaitBound`), counted from its first pass, which `stops.json` keeps
-    across restarts: a run that never leaves its state, or an `AtWork` that keeps failing, held the task
-    for good before. After it, the factory asks the question below, and your answer to restore runs the
-    put-back whoever the runtime still names. When you typed into a pane of the task since the round began
+    A turn in flight is a held wait, never NEEDS YOU, and the put-back runs once the turn ended. A named
+    agent's turn, or you in a pane, holds it however long it runs: nothing is restored under a live turn,
+    and the runtime's watchdog judges a turn that makes no progress (its recoveries, then the lost pane's
+    question). A runtime that cannot tell who works in the copy (`AtWork` failing) holds it at most 30
+    minutes (`leftWaitBound`), counted from that wait's first pass, which `stops.json` keeps across
+    restarts and forgets once the runtime answers again, so a later wait counts from its own start. After
+    it, the factory asks the question below, and your answer to restore runs the put-back though the
+    runtime still cannot tell; its restore says that a turn the factory cannot see has its edits in those
+    paths go back too and its new files leave the copy. An answer is for the cause it was asked for: a turn
+    that started after it (`TouchedSince` from the answer's own time) is never run over, and once it ended
+    the factory asks again with the new cause. When you typed into a pane of the task since the round began
     (`TouchedSince`, as before), or the factory cannot tell, the change may be your own edit. Then the
     factory saves it and puts nothing back by itself: it asks you, with the saved diff, "Restore the copy
     to the reviewed head" or "Keep the change" (`leftQuestion`). The round's result stands either way. A
-    kept change stays in the copy, remembered by its fingerprint in `stops.json` (`keptSum`: the sha256 of
-    its patch against HEAD and of its file). While it stays the same, no look at the copy (`roundLeft`)
-    counts it as a round's, so nothing puts it back or asks again, and the factory's checks name it as the
-    operator's to commit, never to undo (`dirtyWords`): before, the next check told the writer to "commit
-    them or undo them", and a writer that undid it threw your kept change away. A failed save or put-back
-    asks you with the steps, as before. A copy that a round left off the task's branch, or with the branch
+    kept change stays in the copy, remembered in `stops.json` by its path and its file's content
+    (`keptSum`, never its diff against HEAD, whose blob ids and offsets an index change or `git add -p`
+    changes). While it stays the same, no look at the copy (`roundLeft`) counts it as a round's, so nothing
+    puts it back or asks again. While its path is still a change, every writer prompt of the attempt, the
+    first one included, names it to commit, never to undo (`keptNote`), and so do the factory's checks
+    (`dirtyWords`): before, the next check told the writer to "commit them or undo them", and a writer that
+    undid it threw your kept change away. A commit takes it off the list; a loss without one does too, with
+    an event (`keptState`). After a round that blocks nothing, the writer gets one short turn to commit it
+    (`keptTurn`: `review-<n>.json` with no finding and the kept paths), its checks run at the commit, and
+    the next round reviews it: before, the clean round's next stage found the copy dirty and stopped for
+    you. A failed save or put-back asks you with the steps, as before. A copy that a round left off the task's branch, or with the branch
     at another head, asks the same question, where it said only to put the copy back and let the task go
     on (a bare retry). Restore saves what the round left, puts it back, switches the copy back to the
     branch (`gitx.Switch`) and moves a branch at another head back to the reviewed head
     (`gitx.ResetKeep`, `git reset --keep`), an event naming the head it was at; the commits stay in the
-    repository. Keep switches a copy off the branch back to it with its changes, or takes a branch at a new
-    head as the task's head (`headMoved`), whose checks run again there. The factory still moves no branch
-    or HEAD by itself. Your answer moves it, and your own put-back and retry still work.
+    repository. Restore's words name what moves: "<branch> is reset from <now> to <head>; its N commits after
+    <head> leave the branch (git's reflog keeps them; they are not in the saved diff)", and the commits of a
+    copy off the branch that leave it (`movedWords`). Keep switches a copy off the branch back to it with its
+    changes, or takes a branch at a new head as the task's head (`headMoved`), whose checks run again there.
+    Keep is never offered when it would drop the task's commits (a branch moved back behind the reviewed
+    head, or beside it): the question offers restore or drop then (`stops.json` NoKeep), and `keepMoved`
+    refuses such a keep too. The factory still moves no branch or HEAD by itself. Your answer moves it, and
+    your own put-back and retry still work.
   - *A lost pane* (`runtime/recoveries.go`). A lost pane gets 3 recoveries in an attempt. The first runs at
     once, as a lost pane's recovery always did. The second waits 1 minute and the third 5 minutes. Each wait
     counts from the loss, or from the pass that found that the last recovery made no progress. So a transient
@@ -26607,7 +26633,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
     fix, because a rerun of a migration that ran part-way is no heal. The cap's go-on at the local review
     (the entry above) is its own change: its alert is news that stands while the task is live. The
     automatic steps here write news too (`newsAlert`: a check healed, a go-on at the fix budget, a round's
-    leftovers put back), which stands while the task is live and counts nobody as waiting on you. Before,
+    leftovers put back, the runtime's recovery of a lost pane, `runtime.RecoveryAlert`), which stands while the task is live and counts nobody as waiting on you. Before,
     their alerts never stood, so each was dropped at once with the event "dropped, it no longer waits on
     you", which it never did. News that no longer stands goes in silence. The stop questions alert as any
     wait on you.
@@ -26625,14 +26651,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestYourRetryOfALostPanesQuestionClosesItAndRecoversTheRole`,
   `TestAnRspecRunThatFailsOutsideOfExamplesIsTheWriters`,
   `TestAJestFailureIsAFaultOnlyWithASignOfABrokenEnvironment`,
-  `TestALintInAFormatTheFactoryCannotReadAsksForTheFormatNotAFault`,
   `TestAFaultThatNamesAChangedFileRecommendsHandingItToTheWriter`, `TestAFaultWhoseRunAgainTheCapStopsNeverPasses`,
   `TestALintThatSpentTheCapAndThenPassesLeavesTheSpecsTheirCap`, `TestALongerBoundReachesTheSpecRunsFault`,
   `TestTheHealOfALintThatSpentTheCapIsRecorded`, `TestALongerBoundIsTakenOnlyWhereItIsNamedAndIsLonger`,
   `TestAKeptChangeStaysThroughTheLaterRoundsWhileItIsTheSame`,
-  `TestAPutBackThatWaitsPastItsBoundAsksToRestoreOrKeep`,
-  `TestARoundThatLeavesTheCopyOffItsHeadAsksToRestoreOrKeepIt` and
-  `TestAStepTheFactoryTookByItselfIsNewsNeverAWaitOnYou` in internal/factory.
+    `TestARoundThatLeavesTheCopyOffItsHeadAsksToRestoreOrKeepIt` and
+  `TestAStepTheFactoryTookByItselfIsNewsNeverAWaitOnYou`, `TestAFaultsRunAgainThatDidNotStartIsTheMachines`,
+  `TestALintInAFormatTheFactoryCannotReadIsTheWriters`, `TestStylelintsExit2WithItsReportIsNeverAFault`,
+  `TestALintsErrorExitIsTheWritersWhenTheBranchChangedWhatItLoads`,
+  `TestATestRunnersSegfaultOrHeapAbortOnChangedCodeIsTheWriters`,
+  `TestAPutBackThatCannotTellPastItsBoundAsksToRestoreOrKeep`,
+  `TestATurnInFlightPastTheBoundHasNothingRestoredUnderIt`, `TestAnAnswerIsNeverRunOverATurnThatStartedAfterIt`,
+  `TestAWaitThatEndedStartsItsBoundOver`, `TestABranchMovedBehindTheReviewedHeadOffersOnlyRestoreOrDrop`,
+  `TestAKeptChangeGoneWithoutACommitIsSaidSo` and `TestAKeptChangeAfterACleanRoundIsCommittedByTheWriter` in
+  internal/factory.
   In internal/factory/runtime: `TestALostPaneIsRecoveredThreeTimesAfterItsWaitsTheLastInAFreshSession`,
   `TestARestartBetweenTheRecoveriesNeitherDoublesNorLosesOne`, `TestYourRetryStartsTheRecoveriesOverAndSpendsNone`,
   `TestAFreshStartStartsTheRoleWithItsContextAndItsRecoveriesOver`, `TestAFreshSessionStartsTheLoopsLadderOver`,
