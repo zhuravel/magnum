@@ -173,3 +173,36 @@ func TestAFileStagedAndEditedAgainKeepsItsStagedVersion(t *testing.T) {
 		t.Fatalf("the index holds %q; want the staged version kept", staged)
 	}
 }
+
+// A go-on over a stopped round's leftover, asked when the round runs again
+// in its cycle, settles its question there too: the copy found clean
+// before the run again, that run's own leftover is a new one, put back by
+// itself with no doubt, never asked about as "still there after your
+// go-on".
+func TestAGoOnAtAStoppedRoundsRunAgainSettlesItsQuestion(t *testing.T) {
+	var r *reviewRig
+	r = newReviewRig(t, result(), func(c evalrun.LocalCase) evalrun.LocalResult {
+		r.put(c.Checkout, "README", "a reviewer's mutant, again\n")
+		return result()(c)
+	})
+	r.rv.block = make(chan struct{})
+	task, _ := r.reviewTask("PR-12424")
+	r.startBlockedRound()
+	r.e.stopBackground() // the drain cancels the round
+	r.rv.mu.Lock()
+	r.rv.block = nil
+	r.rv.mu.Unlock()
+	r.write(r.copyDir, "README", "a stopped reviewer's mutant\n")
+	r.restart()
+	r.rt.setTouchedAt("you typed into a pane of PR-12424 at 10:00:00", r.clock.Now().Add(time.Second)) // a doubt: the run again asks
+	r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
+	r.rt.setTouchedAt("", time.Time{})
+	r.git(r.copyDir, "checkout", "--", "README") // you put the copy back
+	r.answerLeft(task.ID, optionPutBack)
+	r.run(10, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+	if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) || len(r.rv.calls()) != 2 || r.read("README") != "shop\n" ||
+		r.putBackAlerts(task.ID) != 1 {
+		t.Fatalf("task %s at %s waits %q after %d rounds, README %q, %d put-backs; want the run again's leftover put back by itself",
+			got.State, got.Stage, got.WaitsWhat, len(r.rv.calls()), r.read("README"), r.putBackAlerts(task.ID))
+	}
+}

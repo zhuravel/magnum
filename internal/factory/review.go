@@ -509,7 +509,12 @@ func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *re
 		if err != nil {
 			return err
 		}
-		if !left.none() && left.moved == "" {
+		switch {
+		case left.none(): // a go-on's look found the copy clean: the run again's own leftover is a new one
+			if err := e.leftClean(t, *cy, round); err != nil {
+				return err
+			}
+		case left.moved == "":
 			if why, err := e.putBackRound(ctx, t, c, *cy, round, left); err != nil {
 				return err
 			} else if why != "" {
