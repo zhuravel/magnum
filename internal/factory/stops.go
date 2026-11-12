@@ -755,7 +755,7 @@ func (e *Engine) applyStops(ctx context.Context, t registry.Task, a registry.Att
 			continue
 		}
 		r := run.byName(ask.Role)
-		if r == nil || r.next == nextFresh {
+		if r == nil || r.next == nextFresh || !r.prompted && r.firstNote != "" {
 			continue
 		}
 		if entries == nil {
@@ -764,6 +764,14 @@ func (e *Engine) applyStops(ctx context.Context, t registry.Task, a registry.Att
 			}
 		}
 		if handed(entries, a.ID, r.runAs.Name, ask.Decided, answerLead) {
+			continue
+		}
+		if !r.prompted { // no prompt yet: a fresh launch, its recoveries over, with the stage's first prompt and your answer after it
+			if r.firstNote == "" {
+				e.d.Runtime.StartOver(ctx, t, a, r.runAs, "your answer to its lost pane's question")
+			}
+			r.next, r.firstNote, r.problem, r.pause = "", freshAnswerText(ask), nil, ""
+			r.ok, r.failed, r.recover, r.letGo = false, "", false, false
 			continue
 		}
 		r.next, r.fresh, r.freshOver, r.problem, r.pause = nextFresh, freshAnswerText(ask), true, nil, ""

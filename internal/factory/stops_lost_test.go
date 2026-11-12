@@ -1,9 +1,11 @@
 package factory
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
@@ -131,5 +133,84 @@ func TestYourRetryOfALostPanesQuestionClosesItAndRecoversTheRole(t *testing.T) {
 	}
 	if rec := h.rt.recoveries(); !slices.Contains(rec, TaskKey(task)+"/fx-repro") {
 		t.Fatalf("recoveries %q after your retry, want fx-repro's", rec)
+	}
+}
+
+// Two roles whose recoveries run out in one pass both ask you: neither
+// question is dropped, so no role sits lost with nothing to ask.
+func TestEveryLostRoleOfAPassAsksItsQuestion(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12546", "bug", "investigate")
+	h.startStage(task)
+	for _, role := range []string{"fx-repro", "fx-cause"} {
+		h.observeEvents(runtime.Event{TaskID: task.ID, Role: role, RunID: h.lastRun(role), Kind: runtime.EventLost,
+			Reason: "no progress after 3 recoveries"})
+	}
+	h.tick()
+	got := h.reload(task.ID)
+	var asked []string
+	for _, q := range h.newestQuestions(task.ID) {
+		if q.State == registry.QuestionOpen {
+			asked = append(asked, q.Text)
+		}
+	}
+	if got.State != registry.TaskNeedsYou || len(asked) != 2 || !strings.Contains(strings.Join(asked, "\n"), "fx-cause") {
+		t.Fatalf("task %s waits %q with questions %q; want both lost roles asked", got.State, got.WaitsWhat, asked)
+	}
+}
+
+// After a restart, a stage rebuilt for your "start the role again" asks
+// the runtime to recover nothing: your answer's fresh start takes the
+// role, and no stale "lost" asks the same question again.
+func TestARebuildForYourStartAnswerRecoversNothing(t *testing.T) {
+	h := newHarness(t)
+	task := h.lostAfterRecoveries("PR-12547")
+	h.rt.abandonRun(h.lastRun("fx-repro"), runtime.RecoveryPrefix+"its recoveries ran out")
+	h.restart()
+	recovered := len(h.rt.recoveries())
+	h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: task.QuestionRev, Answers: map[int]string{0: optionStart}})
+	h.tick()
+	if n := len(h.rt.recoveries()); n != recovered {
+		t.Fatalf("%d recoveries asked of the runtime after your start answer, want none: the fresh start takes the role", n-recovered)
+	}
+}
+
+// A role lost before its first prompt (its CLI exits at its start) starts
+// on your answer as a fresh launch: its recoveries start over (StartOver)
+// and the stage's first prompt goes to it, your answer's words after it,
+// never a fresh session of a prompt it never had.
+func TestYourAnswerForARoleLostBeforeItsFirstPromptStartsItWithItsFirstPrompt(t *testing.T) {
+	for _, tc := range []struct{ name, answer, words string }{
+		{"start it again", optionStart, ""},
+		{"a direction", optionDirection + ": the seeds need the staging locale", "the seeds need the staging locale"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			task := h.kindTask("PR-12548", "bug", "investigate")
+			h.rt.mu.Lock()
+			h.rt.sendErr = errors.New("agent: no session")
+			h.rt.mu.Unlock()
+			h.startStage(task)
+			h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventLost, Reason: "no progress after 3 recoveries"})
+			h.clock.Add(time.Minute) // past the failed sends' wait
+			h.tick()
+			got := h.reload(task.ID)
+			if got.State != registry.TaskNeedsYou {
+				t.Fatalf("task %s waits %q; want the lost question", got.State, got.WaitsWhat)
+			}
+			h.rt.mu.Lock()
+			h.rt.sendErr = nil
+			h.rt.mu.Unlock()
+			h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: got.QuestionRev, Answers: map[int]string{0: tc.answer}})
+			h.clock.Add(time.Minute)
+			h.tick()
+			ps := h.rt.promptsTo("fx-repro")
+			if len(ps) != 1 || ps[0].Fresh || !strings.Contains(ps[0].Text, answerLead) || !strings.Contains(ps[0].Text, tc.words) {
+				t.Fatalf("prompts to fx-repro %+v; want its first prompt, your answer after it, no fresh session", ps)
+			}
+			if over := h.rt.startOvers(); !slices.Contains(over, TaskKey(task)+"/fx-repro") {
+				t.Fatalf("start-overs %q; want fx-repro's", over)
+			}
+		})
 	}
 }

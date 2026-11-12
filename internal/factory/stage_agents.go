@@ -267,6 +267,10 @@ type stageRole struct {
 	// writer's fresh session at its fix budget).
 	fresh     string
 	freshOver bool
+	// firstNote is your answer to the lost question of a role that took no
+	// prompt yet, which its first prompt carries after the stage's
+	// (applyStops); "" for none.
+	firstNote string
 	// relaunch: it runs again as its fallback after a Codex refusal or a
 	// usage limit (a launch, then its prompt); covered: its fallback is a
 	// role of the stage (coveredIn), so it leaves the run instead. refused:
@@ -444,10 +448,16 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 	if err := e.applyStops(ctx, t, a, run); err != nil {
 		return false, e.stageFailed(ctx, t, err)
 	}
-	if you, ask := e.youOf(ctx, &t, st, a, run, rebuilt, dir); you != "" {
+	if you, asks := e.youOf(ctx, &t, st, a, run, rebuilt, dir); you != "" {
 		e.setAsideBeforeYou(ctx, t, st, run)
-		if ask != nil { // a stop past its budget: its question
-			return false, e.stageFailed(ctx, t, asksYou{*ask})
+		for i, ask := range asks { // stops past their budgets: each its question, the last one's wait the task's
+			if i < len(asks)-1 {
+				if err := e.askStop(ctx, t, ask); err != nil {
+					return false, err
+				}
+				continue
+			}
+			return false, e.stageFailed(ctx, t, asksYou{ask})
 		}
 		return false, e.stageFailed(ctx, t, needsYou{you})
 	}
@@ -480,19 +490,26 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 // (recheckFailed), and the question a stop past its budget asks in its
 // place (run.ask; nil for none). "" for nothing.
 func (e *Engine) youOf(ctx context.Context, tp *registry.Task, st config.FactoryStage, a registry.Attempt, run *agentsRun,
-	rebuilt []runtime.Event, dir string) (string, *stopQuestion) {
-	you, ask := "", (*stopQuestion)(nil)
+	rebuilt []runtime.Event, dir string) (string, []stopQuestion) {
+	you := ""
+	var asks []stopQuestion
 	for _, ev := range append(rebuilt, e.takeEvents(tp.ID)...) { // the first event that needs you is what the task waits on you for
 		run.ask = nil
-		if what := e.onAgentEvent(ctx, tp, st, a, run, ev, dir); what != "" && you == "" {
-			you, ask = what, run.ask
+		what := e.onAgentEvent(ctx, tp, st, a, run, ev, dir)
+		if what != "" && you == "" {
+			you = what
+		}
+		if what != "" && run.ask != nil { // every stop's question of the pass is asked: one taken here is never asked again
+			asks = append(asks, *run.ask)
 		}
 	}
 	if you == "" {
 		run.ask = nil
-		you, ask = e.recheckFailed(ctx, tp, st, a, run, dir), run.ask
+		if you = e.recheckFailed(ctx, tp, st, a, run, dir); run.ask != nil {
+			asks = append(asks, *run.ask)
+		}
 	}
-	return you, ask
+	return you, asks
 }
 
 // needsYou is what an agents stage waits on you for (an agent that needs
@@ -766,6 +783,9 @@ func (e *Engine) goOnLadders(t registry.Task, a registry.Attempt, run *agentsRun
 // that ran out come back as EventLost; one that cannot run now is the
 // watchdog's to take later, so a failure is only logged.
 func (e *Engine) recoverLost(ctx context.Context, t registry.Task, a registry.Attempt, r *stageRole) {
+	if e.lostAnswered(ctx, t, a, r) {
+		return // your answer's start takes the role, or its question waits for you: no recovery, and no stale "lost" again
+	}
 	if err := e.d.Runtime.RecoverLost(ctx, t, a, r.runAs); err != nil {
 		e.log.Warn("recover a role a recovery left without a turn", "task", t.ID, "role", r.runAs.Name, "err", err)
 	}
@@ -1696,7 +1716,7 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 				e.event(ctx, t.ID, "questions", registry.PhaseInfo, r.runAs.Name+" got the answer that changed the plan after coding "+
 					"began: "+changedWhich(run.change))
 			}
-			r.next, r.problem, r.pause, r.fresh, r.freshOver = "", nil, "", "", false
+			r.next, r.problem, r.pause, r.fresh, r.freshOver, r.firstNote = "", nil, "", "", false, ""
 		}
 		if serr == nil {
 			continue
@@ -2031,6 +2051,9 @@ func (e *Engine) promptText(ctx context.Context, t registry.Task, st config.Fact
 		text, err := e.renderRole(ctx, t, st, r.role, r.runAs, c)
 		if err != nil {
 			return "", err
+		}
+		if r.firstNote != "" { // your answer to its lost question, after the stage's first prompt
+			text += "\n\n" + r.firstNote
 		}
 		if r.limited {
 			text += e.limitNote(t, st, r.role, run.since(a))
@@ -2534,4 +2557,35 @@ func checkData(role config.Role) PromptData {
 		QAProbe: qaRun + "/probe.js", QAVerdict: qaRun + "/verdict.json", QAChanged: qaRun + "/changed.txt", QARecheck: qaRun + "/recheck.json",
 		QASignIn: "/dev/sign-in?as=qa@example.com", QASkill: "example:qa", QASession: "magnum-qa-1-1", QAMaxPages: 12,
 		QAMaxShots: 30, Changed: "question 1 of revision 2 (asked by fx-critic)", LastFix: true}
+}
+
+// lostAnswered reports whether role r of attempt a has a lost or a loop
+// stop whose question waits for your answer, or whose answer (start it, a
+// direction) applyStops has not handed yet: the rebuild then recovers
+// nothing for it.
+func (e *Engine) lostAnswered(ctx context.Context, t registry.Task, a registry.Attempt, r *stageRole) bool {
+	rec, err := readStops(e.d.Layout.FactoryTaskDir(t.ID))
+	if err != nil {
+		return false
+	}
+	var entries []registry.LedgerEntry
+	for _, ask := range rec.Asks {
+		if (ask.Kind != stopLost && ask.Kind != stopLoop) || ask.Attempt != a.ID || ask.Role != r.runAs.Name {
+			continue
+		}
+		switch ask.Decision {
+		case "":
+			return true
+		case decideStart, decideDirection:
+			if entries == nil {
+				if entries, err = e.reg.LedgerOf(ctx, t.ID); err != nil {
+					return false
+				}
+			}
+			if !handed(entries, a.ID, r.runAs.Name, ask.Decided, answerLead) {
+				return true
+			}
+		}
+	}
+	return false
 }

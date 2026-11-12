@@ -48,6 +48,7 @@ const (
 	recoveryWord  = "recovery "
 	startOverWord = "starts over"
 	ranOutWord    = "ran out"
+	dueWord       = "due " // a recovery that waits: "due 2 at <time>"
 )
 
 // recoverLead starts the recover events of role in attempt.
@@ -218,4 +219,50 @@ func (r *Runtime) MadeProgress(t registry.Task, a registry.Attempt, role string)
 	}
 	l.step, l.fails, l.reset = loopNone, nil, true
 	delete(r.once, noProgressKey(k))
+}
+
+// dueOf is the due time of the recovery of role in attempt of task id that
+// waited when the daemon stopped: the newest recover event of the role says
+// it ("due n at <time>"), with no recovery, start over or running out after
+// it.
+func (r *Runtime) dueOf(ctx context.Context, id int64, attempt, role string) (time.Time, bool) {
+	evs, err := r.reg.TaskEvents(ctx, id, recoverKind, 0)
+	if err != nil {
+		return time.Time{}, false
+	}
+	lead := recoverLead(role, attempt)
+	var due time.Time
+	for _, ev := range evs { // oldest first, as countRecoveries reads them
+		rest, ok := strings.CutPrefix(ev.Text, lead)
+		if !ok {
+			continue
+		}
+		due = time.Time{}
+		if w, ok := strings.CutPrefix(rest, dueWord); ok {
+			if _, at, ok := strings.Cut(w, " at "); ok {
+				due, _ = time.Parse(time.RFC3339, at)
+			}
+		}
+	}
+	return due, !due.IsZero()
+}
+
+// StartOver starts the recoveries and the ladders of role in attempt a of
+// task t over (why: your answer to its lost pane's question, for a role
+// that took no prompt yet): it is lost and stuck no more, and a "starts
+// over" event counts its recoveries from here; the stage's first prompt
+// then brings it back as a launch would.
+func (r *Runtime) StartOver(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, why string) {
+	role, err := r.RunsAs(t, role)
+	if err != nil {
+		return
+	}
+	st, err := r.stateFor(ctx, a.ID, role.Name)
+	if err != nil {
+		return
+	}
+	r.mu.Lock()
+	st.stuck, st.lost, st.pending, st.recovering, st.step, st.dueAt = false, false, false, false, 0, time.Time{}
+	r.mu.Unlock()
+	r.noteStartOver(ctx, t, a, role.Name, why)
 }

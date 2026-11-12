@@ -241,6 +241,10 @@ type roleState struct {
 	lost       bool
 	ranOut     time.Time
 	dueAt      time.Time
+	// dueQuiet: the waited recovery came of a no-progress finding, whose
+	// screen and transcript were sig; a session that moves since voids it.
+	// dueSaid: a "due" recover event says the wait (dueOf reads it back).
+	dueQuiet, dueSaid bool
 	// pending: a recovery quit the role's session (or found it gone) and
 	// abandoned its runs, and no new run of it was sent yet (handOver): the
 	// watchdog keeps the role due its next step.
@@ -1083,6 +1087,9 @@ func (r *Runtime) stateFor(ctx context.Context, attempt, role string) (*roleStat
 		return nil, fmt.Errorf("attempt %s: no factory role %q", attempt, role)
 	}
 	st = &roleState{key: k, taskID: a.TaskID, stage: a.Stage, role: spec}
+	if due, ok := r.dueOf(ctx, a.TaskID, attempt, role); ok { // a recovery that waited when the daemon stopped
+		st.dueAt, st.recovering, st.dueSaid = due, true, true
+	}
 	if pr, err := r.ownerRow(ctx, a.TaskID); err == nil {
 		if ss, err := r.st.SessionsByPR(ctx, pr.ID); err == nil {
 			for _, s := range ss {

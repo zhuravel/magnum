@@ -217,6 +217,9 @@ func TestALostPaneIsRecoveredThreeTimesAfterItsWaitsTheLastInAFreshSession(t *te
 			steps = append(steps, ranOutWord)
 			continue
 		}
+		if strings.Contains(ev.Text, ": "+dueWord) { // a waited recovery's due time, which a restart reads back
+			continue
+		}
 		steps = append(steps, ev.Text[strings.Index(ev.Text, "(")+1:strings.Index(ev.Text, ")")])
 	}
 	if !slices.Equal(steps, []string{"resume", "resume", "fresh", ranOutWord}) {

@@ -70,6 +70,7 @@ type fakeRuntime struct {
 	voided        []verifyCall
 	recovered     []string // the RecoverLost calls, "<task key>/<role>"
 	progress      []string // the MadeProgress calls, "<task key>/<role>"
+	startedOver   []string // the StartOver calls, "<task key>/<role>"
 	runs          int
 	sendErr       error
 	quits         []int64
@@ -402,6 +403,20 @@ func (f *fakeRuntime) SendFresh(ctx context.Context, t registry.Task, a registry
 		f.mu.Unlock()
 	}
 	return id, err
+}
+
+// StartOver records the call, "<task key>/<role>": your answer's start of a
+// role that took no prompt yet.
+func (f *fakeRuntime) StartOver(_ context.Context, t registry.Task, _ registry.Attempt, role config.Role, _ string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.startedOver = append(f.startedOver, TaskKey(t)+"/"+role.Name)
+}
+
+func (f *fakeRuntime) startOvers() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.startedOver)
 }
 
 // MadeProgress records the call, "<task key>/<role>": the go-on that starts

@@ -140,7 +140,18 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 	if done {
 		return Event{}, false
 	}
-	if !due.IsZero() && recovering { // a recovery that waits: it runs once its wait is over, whatever the screen shows
+	if !due.IsZero() && recovering { // a recovery that waits: it runs once its wait is over
+		r.mu.Lock()
+		quiet, was := st.dueQuiet, st.sig
+		r.mu.Unlock()
+		if quiet { // after a no-progress finding: a session that moves again voids it
+			if sig := r.signature(ctx, st, run); sig != was {
+				r.mu.Lock()
+				st.dueAt, st.dueQuiet, st.sig, st.since = time.Time{}, false, sig, now
+				r.mu.Unlock()
+				return Event{}, false
+			}
+		}
 		if now.Before(due) {
 			return Event{}, false
 		}
@@ -197,7 +208,15 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 		} else if err != nil {
 			r.log.Warn("the next recovery of a role", "attempt", a.ID, "role", st.role.Name, "err", err)
 		}
-		r.baseline(ctx, st, store.Run{})
+		r.mu.Lock()
+		waits := !st.dueAt.IsZero()
+		if waits { // the recovery waits: what the session shows now is what a move of it is told against
+			st.dueQuiet, st.sig = true, sig
+		}
+		r.mu.Unlock()
+		if !waits {
+			r.baseline(ctx, st, store.Run{})
+		}
 		return Event{}, false
 	}
 	if run.ID == "" { // drain.go: no turn in flight, so the climb's next step starts one (a fresh agent, a prompt)
@@ -215,9 +234,15 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 // pause, you in its pane), and EventLost once the recoveries ran out.
 func (r *Runtime) recoverDue(ctx context.Context, st *roleState) (Event, bool) {
 	r.mu.Lock()
-	still := st.recovering && !st.dueAt.IsZero()
+	still, quiet := st.recovering && !st.dueAt.IsZero(), st.dueQuiet
 	r.mu.Unlock()
 	if !still { // the role moved since the wait began (its turn ended, a new run went): no recovery is due
+		return Event{}, false
+	}
+	if _, live := r.liveSession(ctx, st); live && !quiet { // a wait for a lost pane whose role has a session again (read back after a restart): none is due
+		r.mu.Lock()
+		st.dueAt, st.recovering, st.dueSaid = time.Time{}, false, false
+		r.mu.Unlock()
 		return Event{}, false
 	}
 	t, err := r.reg.TaskByID(ctx, st.taskID)
@@ -228,12 +253,14 @@ func (r *Runtime) recoverDue(ctx context.Context, st *roleState) (Event, bool) {
 	if err != nil {
 		return Event{}, false
 	}
-	if (t.State != registry.TaskActive && t.State != registry.TaskWaiting) ||
-		(a.State != registry.AttemptLaunching && a.State != registry.AttemptRunning) {
+	if a.State != registry.AttemptLaunching && a.State != registry.AttemptRunning { // the stage moved on: none is due
 		r.mu.Lock()
 		st.dueAt, st.recovering = time.Time{}, false
 		r.mu.Unlock()
 		return Event{}, false
+	}
+	if t.State != registry.TaskActive && t.State != registry.TaskWaiting {
+		return Event{}, false // a task that waits on you: the recovery stays due, for when it is at work again
 	}
 	err = r.recoverRole(ctx, t, a, st.role, "its pane was lost", false)
 	if spent, ok := errors.AsType[errRecoveriesSpent](err); ok {
@@ -457,7 +484,13 @@ func (r *Runtime) lostEvent(t registry.Task, a registry.Attempt, role config.Rol
 	}
 	r.mu.Unlock()
 	if !was { // your retry after it starts the count over (countRecoveries)
-		r.appendEvent(context.Background(), t.ID, recoverKind, recoverLead(role.Name, a.ID)+ranOutWord+": "+spent.Error())
+		ctx := context.Background()
+		r.appendEvent(ctx, t.ID, recoverKind, recoverLead(role.Name, a.ID)+ranOutWord+": "+spent.Error())
+		if pr, err := r.ownerRow(ctx, t.ID); err == nil { // its run on the lost session: handed over, so a rebuilt stage recovers it
+			for _, id := range r.runsInFlight(ctx, pr, role.Name) {
+				r.abandon(ctx, id, RecoveryPrefix+"its recoveries ran out: "+spent.Error())
+			}
+		}
 	}
 	return Event{TaskID: t.ID, Role: role.Name, Kind: EventLost, Reason: spent.Error()}
 }
@@ -513,14 +546,18 @@ func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.A
 		st.dueAt = now.Add(RecoveryWaits[n-1])
 	}
 	if now.Before(st.dueAt) {
-		st.recovering = true // the watchdog takes it once its wait is over
+		fresh := !st.recovering || !st.dueSaid
+		st.recovering, st.dueQuiet, st.dueSaid = true, false, true // the watchdog takes it once its wait is over
 		due := st.dueAt
 		r.mu.Unlock()
+		if fresh { // a restart reads it back (dueOf), so the wait outlives the daemon
+			r.appendEvent(ctx, t.ID, recoverKind, fmt.Sprintf("%s%s%d at %s", recoverLead(role.Name, a.ID), dueWord, n, due.UTC().Format(time.RFC3339)))
+		}
 		r.log.Info("a role's recovery waits", "task", t.ID, "role", role.Name, "recovery", n, "due", due)
 		return nil
 	}
 	step := recoveryStep(n, resume, unprompted)
-	st.dueAt, st.recovering = time.Time{}, true
+	st.dueAt, st.recovering, st.dueQuiet, st.dueSaid = time.Time{}, true, false, false
 	r.mu.Unlock()
 	r.log.Warn("a role is recovered", "task", t.ID, "role", role.Name, "why", why, "step", step, "recovery", n)
 	r.noteRecovery(ctx, t, a, role.Name, n, step, why)
