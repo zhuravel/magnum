@@ -135,6 +135,19 @@ func (e *Engine) drainErr(ctx context.Context) error {
 	return errFixDraining
 }
 
+// drainedAgain refuses, under a drain, a request it does not hold: what to
+// run again after the drain (again), then the rest of the refusal. "the
+// daemon drains for a restart: ask again after it; a CI fix is never held",
+// or, under a drain for a reboot alone, "the daemon drains for a reboot
+// (`magnum drain`): ask again after the reboot, or after `magnum resume`;
+// …".
+func (e *Engine) drainedAgain(ctx context.Context, again, rest string) error {
+	if e.onlyRebootDrain(ctx) {
+		return fmt.Errorf("the daemon drains for a reboot (`magnum drain`): %s after the reboot, or after `magnum resume`; %s", again, rest)
+	}
+	return fmt.Errorf("the daemon drains for a restart: %s after it; %s", again, rest)
+}
+
 // drainSince is since when the drain that holds the daemon holds it: a
 // restart's (its record's start, either format), else a reboot's.
 func (e *Engine) drainSince(ctx context.Context) (time.Time, bool) {

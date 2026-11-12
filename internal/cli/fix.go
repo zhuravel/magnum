@@ -84,8 +84,9 @@ func newFixCmd(c *Context) *cobra.Command {
 			"GitHub cannot list), a PR that is not yours or lives in a fork, a round in "+
 			"flight, a snooze, a loop already running and a watch without a fix role. A pinned PR (magnum open, magnum pin) is unpinned by the fix, as "+
 			"by a review; its slot's guards still keep a person's changes or agent safe, and the refusal names the guard. "+
-			"While the daemon drains for a restart (daemon-restart --drain) a fix it would start is held instead: it "+
-			"starts after the restart, or once the drain is lifted without one, if the review still stands at the same "+
+			"While the daemon drains for a restart (daemon-restart --drain) or a reboot (magnum drain) a fix it would start "+
+			"is held instead: it starts after the restart or the reboot, or once the drain is lifted without one, if the "+
+			"review still stands at the same "+
 			"head, and is dropped otherwise (the fix.dropped event and a toast say why; `magnum abort` takes it back). "+
 			"While the GitHub budget of the identity the fix reads as is below [github] budget_floor, the fix is held the "+
 			"same way and starts once the budget recovers, if the review still stands; so is a fix whose read of the other "+

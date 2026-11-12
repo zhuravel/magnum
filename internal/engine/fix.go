@@ -482,7 +482,7 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 	}
 	switch {
 	case e.draining(ctx) && plan != nil: // a drain began since decideCheck asked
-		return "", errors.New("the daemon drains for a restart: run `magnum fix --decide` again after it; nothing was posted")
+		return "", e.drainedAgain(ctx, "run `magnum fix --decide` again", "nothing was posted")
 	case e.draining(ctx): // held for the restart (fix_held.go), which would end a fixer started now
 		return e.holdFix(ctx, pr, dry, fixBy, fixHold{})
 	case dry:

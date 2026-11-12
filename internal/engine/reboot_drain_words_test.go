@@ -5,11 +5,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
+// rebootAgain is the refusal of a request under a drain for a reboot alone
+// that you ask again (again) after it, with the rest of its words.
+func rebootAgain(again, rest string) string {
+	return "the daemon drains for a reboot (`magnum drain`): " + again + " after the reboot, or after `magnum resume`; " + rest
+}
+
 // Under a drain for a reboot the answers name it, never a restart that does
-// not come: a `magnum fix` held, a merge of the parent refused, a retro and
+// not come: a `magnum fix` held, a merge of the parent, a CI fix and a
+// `magnum fix --decide` refused (before or as the drain began), a retro and
 // a curation queued.
 func TestTheAnswersUnderARebootDrainNameIt(t *testing.T) {
 	storetest.Parallel(t)
@@ -32,6 +41,40 @@ func TestTheAnswersUnderARebootDrainNameIt(t *testing.T) {
 		h.handle()
 		if r := h.request(id); !strings.Contains(deref(r.Result), "drains for a reboot") || strings.Contains(deref(r.Result), "restart") {
 			t.Fatalf("merge-parent under the drain = %s %q, want refused for the drain for a reboot", r.State, deref(r.Result))
+		}
+	})
+	t.Run("CI fix", func(t *testing.T) {
+		h, _ := ciFixHarness(t, github.CheckPassed)
+		h.rebootDrain(75, DrainUntilBoot)
+		h.wantCIFixRefused(rebootAgain("ask again", "a CI fix is never held"))
+	})
+	t.Run("fix --decide", func(t *testing.T) {
+		h, _ := fixLeftADecision(t, nil)
+		h.rebootDrain(76, DrainUntilBoot)
+		id := h.fix(FixPayload{Decide: []FixDecision{{Thread: decideThread, Text: "Keep it."}}})
+		h.handle()
+		want := rebootAgain("run `magnum fix --decide` on talkable/talkable#2 again", "nothing was posted")
+		if r := h.request(id); r.State != store.RequestFailed || deref(r.Result) != want {
+			t.Fatalf("--decide under the drain = %s %q, want refused with %q", r.State, deref(r.Result), want)
+		}
+	})
+	t.Run("fix --decide as the drain begins", func(t *testing.T) {
+		h, _ := fixLeftADecision(t, nil)
+		h.gh.mu.Lock()
+		h.gh.onThreads = func() { // decideCheck read no drain; the start after it does
+			if err := h.st.SetKV(h.ctx, KVDaemonRebootDrain, RebootDrain{Generation: 77, Since: h.clock.Now(), Until: DrainUntilBoot, Boot: bootOne}.Value()); err != nil {
+				t.Error(err)
+			}
+		}
+		h.gh.mu.Unlock()
+		id := h.fix(FixPayload{Decide: []FixDecision{{Thread: decideThread, Text: "Keep it."}}})
+		h.handle()
+		want := rebootAgain("run `magnum fix --decide` again", "nothing was posted")
+		if r := h.request(id); r.State != store.RequestFailed || deref(r.Result) != want {
+			t.Fatalf("--decide as the drain begins = %s %q, want refused with %q", r.State, deref(r.Result), want)
+		}
+		if n := h.gh.count("reply:"); n != 0 {
+			t.Errorf("a refused --decide posted %d replies", n)
 		}
 	})
 	t.Run("retro", func(t *testing.T) {

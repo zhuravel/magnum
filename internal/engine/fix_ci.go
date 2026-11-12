@@ -14,7 +14,7 @@ package engine
 // still runs waits), a failure red or never run on the base, a PR that
 // changes its own CI config, a check that is no Actions job, the cap, a
 // head magnum has not reviewed or whose review leaves work (f fixes it
-// first), a drain for a restart and a GitHub budget below the floor (ask
+// first), a drain (for a restart or a reboot) and a GitHub budget below the floor (ask
 // again after: a CI fix is never held), and every refusal of prepareFix. It
 // reads the base and the failed jobs itself when the PR's record lacks them
 // for the head, its dry run too: the plan its y/N asks (CIFixPlan) starts
@@ -128,7 +128,7 @@ func (e *Engine) ciFactsNow(ctx context.Context, repo store.Repo, w config.Watch
 // bound to asked (nil: nothing was asked, `magnum fix --ci --yes`).
 func (e *Engine) requestCIFix(ctx context.Context, pr store.PR, dry bool, asked *CIFixAsked) (string, error) {
 	if e.draining(ctx) {
-		return "", errors.New("the daemon drains for a restart: ask again after it; a CI fix is never held")
+		return "", e.drainedAgain(ctx, "ask again", "a CI fix is never held")
 	}
 	repo, err := e.st.RepoByID(ctx, pr.RepoID)
 	if err != nil {
@@ -238,7 +238,7 @@ func (e *Engine) requestCIFix(ctx context.Context, pr store.PR, dry bool, asked 
 		case errors.As(err, &budget):
 			return "", fmt.Errorf("%s; ask again once it recovers: a CI fix is never held", budget.low.text())
 		case errors.Is(err, errFixDraining):
-			return "", errors.New("the daemon drains for a restart: ask again after it; a CI fix is never held")
+			return "", e.drainedAgain(ctx, "ask again", "a CI fix is never held")
 		}
 		return "", err
 	}

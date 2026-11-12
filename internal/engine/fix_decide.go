@@ -583,7 +583,7 @@ func checkDecisions(decide []FixDecision) error {
 // decideCheck answers `magnum fix --decide` on pr before anything is
 // posted: the replies are refused as checkDecisions refuses them, and so is
 // a PR that is not yours (the reply goes out as you), a loop that runs, a
-// fix held for later, a drain for a restart (the reply would wait with the
+// fix held for later, a drain for a restart or a reboot (the reply would wait with the
 // fix), a GitHub budget below the floor, and a thread in which the fixer
 // left you no call that is still open (another reviewer's or magnum's own,
 // read now: fixerCalls through readExternal). The reply goes out as your
@@ -610,7 +610,7 @@ func (e *Engine) decideCheck(ctx context.Context, repo store.Repo, pr store.PR, 
 		return decidePlan{}, fmt.Errorf("a fix of PR #%d is held to start later: `magnum abort %s` takes it back first; nothing was posted", pr.Number, ref)
 	}
 	if e.draining(ctx) {
-		return decidePlan{}, fmt.Errorf("the daemon drains for a restart: run `magnum fix --decide` on %s again after it; nothing was posted", ref)
+		return decidePlan{}, e.drainedAgain(ctx, "run `magnum fix --decide` on "+ref+" again", "nothing was posted")
 	}
 	w := e.cfg.WatchFor(repo.FullName())
 	if w == nil {
