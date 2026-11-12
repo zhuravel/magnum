@@ -177,7 +177,7 @@ func withControlLock(path string, fn func() error) error {
 	}
 	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errControlLock, err)
 	}
 	defer lock.Close()
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
@@ -187,13 +187,26 @@ func withControlLock(path string, fn func() error) error {
 	return fn()
 }
 
+// errControlLock is a control file's lock that cannot be opened.
+var errControlLock = errors.New("the control file's lock cannot be opened")
+
+// removeControl removes the control file at path whatever it holds, under
+// its lock, or without it when this user may not open the lock (another
+// owner, a first write under sudo): the remove deletes whatever is there,
+// and the daemon's read takes no lock, so `magnum resume --factory`, the
+// remedy of a file the daemon cannot read, never depends on the lock.
 func removeControl(path string) error {
-	return withControlLock(path, func() error {
+	remove := func() error {
 		if err := os.RemoveAll(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 		return nil
-	})
+	}
+	err := withControlLock(path, remove)
+	if errors.Is(err, errControlLock) && errors.Is(err, fs.ErrPermission) {
+		return remove()
+	}
+	return err
 }
 
 func readControl(path string) (string, error) {

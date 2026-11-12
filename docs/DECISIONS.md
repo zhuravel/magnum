@@ -26472,7 +26472,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   engine owner's check, F4, F7). The writes of either file take turns on a lock of its own (`pause.json.lock`,
   `reboot-drain.json.lock`): a lift (a pause past its end, a drain at the first start on a new boot) and a
   command's put-back read, compare and write under it, so a pause or drain written meanwhile stays, and the file is
-  never absent, which the daemon's read would take for a lift (D10, D15, D19, D20, F8). Tests, each
+  never absent, which the daemon's read would take for a lift (D10, D15, D19, D20, F8). The remedy never depends
+  on that lock (H1): `magnum resume --factory` removes a file without it when this user may not open the lock
+  (another owner, a first write under sudo), since its remove deletes whatever is there and the daemon's read
+  takes no lock, and a file it cannot lift keeps it from neither the other file nor its report (exit 1). Tests, each
   failing first: TestAFactoryPauseHoldsNewWorkAndLetsYourPushAndTalkRun,
   TestAFactoryPauseSurvivesARestartAndEndsAtItsUntil, TestTheFactoryDrainForARebootWaitsForAWritersTurnThenParks,
   TestTheFactoryDrainForARebootWaitsForTheLiaisonsTurn, TestTheFactoryDrainForARebootEndsAtTheFirstStartOnANewBoot,

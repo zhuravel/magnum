@@ -473,10 +473,12 @@ func reviewStillHeld(ctx context.Context, d *actDeps, offline bool) []string {
 // and names the holds it leaves: a restart's drain, a kept drain for a
 // reboot and the machine's holds the daemon keeps. A file it cannot read is
 // said, then removed all the same: the daemon holds what it cannot read, and
-// only this removes it.
+// only this removes it. A file it cannot lift keeps it from neither the
+// other file nor its lines: it says each result and returns 1.
 func resumeFactory(ctx context.Context, c *Context, out controlOut, keepDrain bool) int {
 	l := c.Layout
 	var lifted, kept []string
+	failed := false
 	for _, f := range []struct {
 		what   string
 		read   func(paths.Layout) (string, error)
@@ -498,25 +500,28 @@ func resumeFactory(ctx context.Context, c *Context, out controlOut, keepDrain bo
 		case err != nil:
 			out.say(daemonFactory, fmt.Sprintf("cannot read %s (%v): it is removed, since the daemon holds what it cannot read", inspTilde(f.path), err))
 			err = f.remove(l)
-			lifted = append(lifted, f.what)
 		case v != "":
 			err = f.lift(l, "")
-			lifted = append(lifted, f.what)
+		default:
+			continue
 		}
-		if err != nil {
+		if err != nil { // the next record is lifted all the same, and both results are said
 			out.fail(daemonFactory, fmt.Sprintf("cannot lift %s (%s: %v)", f.what, inspTilde(f.path), err))
-			return 1
+			failed = true
+			continue
 		}
+		lifted = append(lifted, f.what)
 	}
 	pid, _ := controlSys.FactoryPID(ctx, l)
 	if pid > 0 {
 		_, _ = controlSys.FactoryKick(l)
 	}
 	switch {
-	case len(lifted) > 0 && len(kept) > 0:
+	case len(lifted) > 0 && (len(kept) > 0 || failed):
 		out.say(daemonFactory, "lifted "+strings.Join(lifted, " and "))
 	case len(lifted) > 0:
 		out.say(daemonFactory, "lifted "+strings.Join(lifted, " and ")+": new work starts again")
+	case failed:
 	case keepDrain:
 		out.say(daemonFactory, "was not paused")
 	default:
@@ -524,6 +529,9 @@ func resumeFactory(ctx context.Context, c *Context, out controlOut, keepDrain bo
 	}
 	for _, s := range append(kept, factoryStillHeld(l, pid)...) {
 		out.say(daemonFactory, "still held: "+s)
+	}
+	if failed {
+		return 1
 	}
 	return 0
 }

@@ -223,3 +223,53 @@ func TestADrainRefusesAFactoryWithNoWorkRecordAsAnOlderBuild(t *testing.T) {
 		t.Fatalf("drain with a factory that is starting: exit %d: %s", code, h.errb.String())
 	}
 }
+
+// `magnum resume --factory` removes a pause.json the daemon cannot read
+// even when the file's lock cannot be opened (another owner, a first write
+// under sudo): the remove deletes whatever is there, and the daemon's read
+// takes no lock, so the remedy never depends on the lock.
+func TestResumeRemovesAnUnreadablePauseWhoseLockItCannotOpen(t *testing.T) {
+	h, _ := newControlHarness(t)
+	if err := os.MkdirAll(h.c.Layout.FactoryPause(), 0o700); err != nil { // EISDIR on its read
+		t.Fatal(err)
+	}
+	lock := h.c.Layout.FactoryPause() + ".lock"
+	if err := os.WriteFile(lock, nil, 0o000); err != nil { // EACCES on its open
+		t.Fatal(err)
+	}
+	if code := h.cmd("resume", "--factory"); code != 0 {
+		t.Fatalf("resume --factory with a lock it cannot open: exit %d: %s", code, h.errb.String())
+	}
+	if _, err := os.Stat(h.c.Layout.FactoryPause()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pause.json stays after resume --factory: %v", err)
+	}
+}
+
+// A pause.json that `magnum resume --factory` cannot remove does not keep
+// it from lifting the drain for a reboot: it reports both, and exits 1.
+func TestResumeLiftsTheDrainWhenThePauseCannotBeRemoved(t *testing.T) {
+	h, _ := newControlHarness(t)
+	stuck := filepath.Join(h.c.Layout.FactoryPause(), "sub")
+	if err := os.MkdirAll(stuck, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stuck, "f"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stuck, 0o000); err != nil { // its contents cannot be listed, so the remove fails
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stuck, 0o700) })
+	drain := engine.RebootDrain{Generation: 7, Since: h.now, Until: engine.DrainUntilBoot, Boot: controlBoot}.Value()
+	if err := factory.WriteRebootDrain(h.c.Layout, drain); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.cmd("resume", "--factory"); code != 1 {
+		t.Fatalf("resume --factory with a pause it cannot remove: exit %d, want 1", code)
+	}
+	if v, err := factory.ReadRebootDrain(h.c.Layout); err != nil || v != "" {
+		t.Fatalf("the drain for a reboot is %q (%v) after the resume, want it lifted", v, err)
+	}
+	actContains(t, h.errb.String(), "cannot lift the pause")
+	actContains(t, h.out.String(), "lifted the drain for a reboot")
+}
