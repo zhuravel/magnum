@@ -17669,6 +17669,12 @@ var ErrDraining = errors.New("factory runtime: the daemon drains: no new launch"
     ErrDraining is a launch the daemon's drain stopped while it waited for the
     stagger (BeginDrain): no agent started.
 
+var ErrLiaisonLeftLive = errors.New("your liaison pane, left live")
+    ErrLiaisonLeftLive is ParkForReboot's answer when it parked the task's
+    own agents but left its liaison live, idle, because you are in its pane:
+    the task is not parked for good, since your next message starts a turn with
+    no run row, so the drain looks at it again at every tick.
+
 var ErrNoProgress = errors.New("the agent makes no progress")
     ErrNoProgress is Send's answer once a loop without progress outlived
     its compaction and its fresh session: the task needs the operator

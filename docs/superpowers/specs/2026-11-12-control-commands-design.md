@@ -104,7 +104,8 @@ while one holds keeps its start, its end and its reason unless a flag changes th
   round's tail before its fix cycle or whiteboard, the notes curation and critique, the retro, the skill edit and
   gate, the heavy worker's jobs and the GitHub writes as the operator, the rounds the registry holds in flight,
   the requests answered off the tick, the staging deploys queued or running, and the staging resolver's jobs that
-  took their slot or that its worker runs. A merge of the parent is a fix job in phase fixing, so it is a
+  took their slot or that its worker runs, and every live session herdr shows working that none of these holds (a
+  pinned PR's you type into). A merge of the parent is a fix job in phase fixing, so it is a
   reservation; both reviews named it as uncovered, and a test holds a real one at its push. A session a dialog
   holds (herdr shows it blocked) is named with its remedy.
 - Factory (`rebootDrainWork`): work.json's items (local review rounds, checks, claims, talks, QA runs; a backoff
@@ -119,7 +120,8 @@ while one holds keeps its start, its end and its reason unless a flag changes th
   that becomes restartable later, an unpin, is marked then) and parks them through the same early park (pinned
   PRs left alone; a human typing in a pane waits out the cooldown). Factory: `Runtime.Park` of every task that is
   active, waiting, needs you or published with a live agent, once per generation, through `ParkForReboot`, which
-  reports a liaison at work as busy, you in its pane included. A busy refusal (an agent at work in herdr with no run row: you typed into its
+  reports a liaison at work as busy, you in its pane included; a liaison left live, idle, with you in its pane is
+  never counted parked, but looked at again at every tick. A busy refusal (an agent at work in herdr with no run row: you typed into its
   pane, a shell runs a build) is never left: the task is named as work and tried again at each tick. Any other
   failure, after three tries, leaves the task, said once and named in `left`.
 - `parked` is true once the park is done: review, no restartable session is live and none shows a dialog;

@@ -18807,7 +18807,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     drain: the resolver's are listed now, and a merge of the parent is a fix job in phase fixing, a reservation,
     already counted (a test holds a real one at its push). Once quiet each check marks the sessions
     `restart-sessions --tool all` would restart now and parks them through the early park (pinned PRs left alone;
-    one unpinned later is marked then); a session a dialog holds is named with its remedy. The command says
+    one unpinned later is marked then); a session a dialog holds is named with its remedy, and a live session herdr
+    shows working that no round holds (a pinned PR's you type into) is work. The command says
     "quiet: safe to reboot" only once both acknowledgements are of its generation, from the running pids, quiet and
     parked; a daemon that is down is done only once its own store shows no agent's turn in flight (they outlive it
     in herdr) and, for the factory, no record a crash left names work (a local review round's agents are in a
@@ -26309,7 +26310,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   runtime that cannot list them counts as working). Once quiet it parks, once each, the tasks that are active,
   waiting, need you or are published and have a live agent (`Runtime.LiveAgents`), through
   `Runtime.ParkForReboot`, which reports a liaison at work as agents.ErrBusy where `Park` leaves it live and goes
-  through, you in its pane included (herdr's status of its agent: a turn you typed starts no run row). A busy refusal is never left: an agent at work in herdr with no run row (you typed into its pane, a build
+  through, you in its pane included (herdr's status of its agent: a turn you typed starts no run row); one it
+  leaves live, idle, because you are in its pane (runtime.ErrLiaisonLeftLive) is never counted parked: it is
+  looked at again at every tick and named in `left` while it idles. A busy refusal is never left: an agent at work in herdr with no run row (you typed into its pane, a build
   in a shell) would be cut by the reboot, so the task is named as work and tried again at each tick. Any other
   failure three ticks in a row is left, said once and named in the acknowledgement's `left`, so it cannot hold the
   drain for good.
