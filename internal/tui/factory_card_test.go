@@ -267,6 +267,35 @@ func TestReadyCardShowsTheLocalReviewLeftovers(t *testing.T) {
 	}
 }
 
+// The FIXED AFTER row names the findings the writer fixed after the local
+// review's last round, which no round reviewed, each its priority, place and
+// title; a card without them draws no row. On a short pane the row gives way
+// to a count that says where they are listed.
+func TestReadyCardNamesTheFindingsFixedAfterTheLastRound(t *testing.T) {
+	c := fixtureReadyCard()
+	c.FixedAfter = []string{"P2 app/models/merger.rb:10: The merger maps winner 1 wrong", "P2 app/models/merger.rb:20: The merger maps winner 2 wrong"}
+	for _, w := range []int{100, 140} {
+		lines := cardLines(drawReady(c)(w, 0, true, IconsUnicode))
+		fixed, shots := labelAt(lines, "FIXED AFTER"), labelAt(lines, "SCREENSHOTS")
+		if fixed < 0 || shots < fixed {
+			t.Fatalf("%d: no FIXED AFTER row before SCREENSHOTS:\n%s", w, strings.Join(lines, "\n"))
+		}
+		squashed := cardSquash(strings.Join(lines[fixed:shots], "\n"))
+		for _, want := range append([]string{"FIXED AFTER the local review's last round, not reviewed again"}, c.FixedAfter...) {
+			if !strings.Contains(squashed, want) {
+				t.Errorf("%d: the FIXED AFTER row lacks %q:\n%s", w, want, strings.Join(lines, "\n"))
+			}
+		}
+	}
+	if frame := plainCard(drawReady(fixtureReadyCard()), 100); strings.Contains(frame, "FIXED AFTER") {
+		t.Errorf("a card with nothing fixed after the last round draws the row:\n%s", frame)
+	}
+	short := ansi.Strip(drawReady(c)(100, 24, true, IconsUnicode))
+	if !strings.Contains(cardSquash(short), "2 findings, listed in the PR body") {
+		t.Errorf("a short pane's FIXED AFTER row does not count what it leaves out:\n%s", short)
+	}
+}
+
 // The files a FLAGS line names, and those outside the plan, come first, in
 // their order; the others follow.
 func TestReadyCardListsFlaggedFilesFirst(t *testing.T) {

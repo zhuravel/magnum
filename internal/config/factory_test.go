@@ -597,6 +597,45 @@ func TestFactoryLocalReviewExtraCyclesDefaultToTwo(t *testing.T) {
 	}
 }
 
+// A safe stop at the local review's cap goes on by itself twice per task by
+// default (cap_go_on); 0 turns it off, and only an integer from 0 to
+// MaxFactoryCapGoOn is taken, naming the key otherwise. A user's lone key
+// merges into the built-in table.
+func TestFactoryLocalReviewCapGoOnDefaultsToTwoAndTakesZeroToFive(t *testing.T) {
+	for _, lr := range []FactoryLocalReview{Defaults().Factory.LocalReview, mustLoadDefaults(t).Factory.LocalReview} {
+		if lr.CapGoOn != 2 {
+			t.Errorf("local_review = %+v, want cap_go_on 2", lr)
+		}
+	}
+	if MaxFactoryCapGoOn != 5 {
+		t.Errorf("MaxFactoryCapGoOn = %d, want 5", MaxFactoryCapGoOn)
+	}
+	cfg := validFactoryConfig()
+	for _, ok := range []int{0, 2, MaxFactoryCapGoOn} {
+		cfg.Factory.LocalReview.CapGoOn = ok
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("cap_go_on = %d: %v", ok, err)
+		}
+	}
+	for _, bad := range []int{-1, MaxFactoryCapGoOn + 1} {
+		cfg.Factory.LocalReview.CapGoOn = bad
+		wantError(t, cfg.Validate(), "factory.local_review.cap_go_on", fmt.Sprint(bad))
+	}
+	loaded, err := loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml+"\n[factory.local_review]\ncap_go_on = 0\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lr := loaded.Factory.LocalReview; lr.CapGoOn != 0 || lr.Cycles != 3 || lr.ExtraCycles != 2 {
+		t.Errorf("local_review = %+v, want cap_go_on 0 and the built-in cycles", lr)
+	}
+	for _, bad := range []string{`"two"`, `1.5`, `true`, `9`} {
+		_, err := loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml+"\n[factory.local_review]\ncap_go_on = "+bad+"\n")
+		if err == nil || !strings.Contains(err.Error(), "cap_go_on") {
+			t.Errorf("cap_go_on = %s: err = %v, want one naming the key", bad, err)
+		}
+	}
+}
+
 // The second-opinion round of the local review runs on wide changes by
 // default; second_judge takes "wide", "always" or "never" and refuses any
 // other word, naming the three; a user's lone key merges into the built-in

@@ -606,10 +606,11 @@ func (e *Engine) runReady(ctx context.Context, t registry.Task, _ config.Factory
 
 // readyProblem is why task t has no ready card ("" when it may have one)
 // and the local review's end: the review ended clean or on an oscillation
-// (review-summary.json), at the task's head, where the factory's proof
-// holds and the precheck passed, QA passed when the task has QA
-// (qaProblem), and the report and the PR body are there. A review that did
-// not finish or stopped at its cap never has a card.
+// (review-summary.json), or passed at its cap after the writer's fix
+// (passAfterCap: exitCapFixed), at the task's head, where the
+// factory's proof holds and the precheck passed, QA passed when the task
+// has QA (qaProblem), and the report and the PR body are there. A review
+// that did not finish, or stopped at its cap for you, never has a card.
 func (e *Engine) readyProblem(t registry.Task) (ReviewSummary, string) {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	var sum ReviewSummary
@@ -621,7 +622,7 @@ func (e *Engine) readyProblem(t registry.Task) (ReviewSummary, string) {
 		return sum, reviewSummaryFile + " is not valid JSON: " + err.Error()
 	}
 	switch sum.Exit {
-	case registry.ExitClean, registry.ExitOscillation:
+	case registry.ExitClean, registry.ExitOscillation, exitCapFixed:
 	case registry.ExitUnavailable:
 		return sum, "review unavailable: the local review did not finish"
 	case registry.ExitCap:
@@ -1245,27 +1246,58 @@ func notRunSentence(paths []string) string {
 // reviewers a round went without. The heading stands outside and the rest
 // is folded in <details> with a one-line count, as the team's PR
 // description layout folds every section but Key changes, Demo and Related
-// Stories.
+// Stories. The findings the writer fixed after the loop's last round, at
+// its cap, which no round reviewed (FixedAfter), follow under their own
+// heading, and the one-line count names them too.
 func knownList(sum ReviewSummary) string {
 	var b strings.Builder
 	b.WriteString("## Known\n\n<details>\n")
-	lines := knownLines(sum, true)
+	lines, fixed := knownLines(sum, true), fixedAfterLines(sum, true)
+	open := "nothing the local review left open"
+	if len(lines) > 0 {
+		note := "notes"
+		if len(lines) == 1 {
+			note = "note"
+		}
+		open = fmt.Sprintf("%d %s the local review left open", len(lines), note)
+	}
+	if len(fixed) > 0 {
+		open += ", " + plural(len(fixed), "finding") + " fixed after its last round"
+	}
+	fmt.Fprintf(&b, "<summary>%s</summary>\n\n", open)
 	if len(lines) == 0 {
-		b.WriteString("<summary>nothing the local review left open</summary>\n\n")
-		b.WriteString("magnum's review of this change before the PR left nothing open.\n\n</details>\n")
-		return b.String()
+		b.WriteString("magnum's review of this change before the PR left nothing open.\n\n")
+	} else {
+		b.WriteString("What magnum's review of this change before the PR left open; none of it blocks.\n\n")
+		for _, l := range lines {
+			fmt.Fprintf(&b, "- %s\n", l)
+		}
+		b.WriteString("\n")
 	}
-	note := "notes"
-	if len(lines) == 1 {
-		note = "note"
+	if len(fixed) > 0 {
+		b.WriteString("**" + fixedAfterHeading + "**\n\n")
+		for _, l := range fixed {
+			fmt.Fprintf(&b, "- %s\n", l)
+		}
+		b.WriteString("\n")
 	}
-	fmt.Fprintf(&b, "<summary>%d %s the local review left open</summary>\n\n", len(lines), note)
-	b.WriteString("What magnum's review of this change before the PR left open; none of it blocks.\n\n")
-	for _, l := range lines {
-		fmt.Fprintf(&b, "- %s\n", l)
-	}
-	b.WriteString("\n</details>\n")
+	b.WriteString("</details>\n")
 	return b.String()
+}
+
+// fixedAfterHeading is the heading of the findings the writer fixed after
+// the local review's last round (ReviewSummary.FixedAfter) in the PR body.
+const fixedAfterHeading = "Fixed after the local review's last round, not reviewed again"
+
+// fixedAfterLines are the findings the writer fixed after the local
+// review's last round, at its cap (sum's FixedAfter), one line each, as
+// knownItem writes them.
+func fixedAfterLines(sum ReviewSummary, code bool) []string {
+	var out []string
+	for _, i := range sum.FixedAfter {
+		out = append(out, knownItem(i, code))
+	}
+	return out
 }
 
 // knownLines are the items of the "Known" list of sum, one line each: the

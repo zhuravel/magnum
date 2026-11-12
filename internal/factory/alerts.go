@@ -309,7 +309,8 @@ func (e *Engine) dropStale(ctx context.Context, tasks []registry.Task) {
 // (its copy's release refused, what a base run left in its copy), while
 // they last; a server a QA teardown failed to stop, while it is left; a
 // question coding went on the recommended answer of (provisionalWhat),
-// while one is open. An alert's text is kept scrubbed (Engine.event), so
+// while one is open; a go-on at the local review's cap (goOnAlert), while
+// its task is live. An alert's text is kept scrubbed (Engine.event), so
 // what it is compared with is too.
 func (e *Engine) alertStands(ctx context.Context, byID map[int64]registry.Task, ev registry.Event) bool {
 	line := alertLine(ev.Text)
@@ -325,6 +326,9 @@ func (e *Engine) alertStands(ctx context.Context, byID map[int64]registry.Task, 
 	t, ok := byID[ev.TaskID]
 	if !ok {
 		return false
+	}
+	if goOnAlert(ev.Text) { // news of a task that went on without you: it stands while the task is at work
+		return isLive(t)
 	}
 	key := TaskKey(t)
 	if waitsOnYou(t) && same(key+": "+waitsYou+": "+t.WaitsWhat) {
@@ -420,7 +424,8 @@ func (e *Engine) flushAlerts(ctx context.Context, now time.Time, tasks []registr
 }
 
 // alertToastText is the toast of items, counting count: "factory: N need
-// you" and the alerts' lines, each once.
+// you" ("factory: nothing needs you" for a toast of news alone: a go-on at
+// the cap) and the alerts' lines, each once.
 func alertToastText(count int, items []notify.Item) (title, body string) {
 	var lines []string
 	for _, it := range items {
@@ -432,15 +437,18 @@ func alertToastText(count int, items []notify.Item) (title, body string) {
 		lines = append(lines[:alertLines], fmt.Sprintf("+%d more", len(lines)-alertLines))
 	}
 	title = fmt.Sprintf("factory: %d need you", count)
-	if count == 1 {
+	switch count {
+	case 0:
+		title = "factory: nothing needs you"
+	case 1:
 		title = "factory: 1 needs you"
 	}
 	return title, strings.Join(lines, " · ")
 }
 
 // needYou counts what waits on you: every task that does, the tasks of
-// the alerts that stand (an ended task's leftovers), and the factory's own
-// blockers.
+// the alerts that stand (an ended task's leftovers; never a go-on at the
+// cap, which waits on nobody), and the factory's own blockers.
 func (e *Engine) needYou(tasks []registry.Task, standing []*pendingAlert) int {
 	ids := map[int64]bool{}
 	for _, t := range tasks {
@@ -449,7 +457,7 @@ func (e *Engine) needYou(tasks []registry.Task, standing []*pendingAlert) int {
 		}
 	}
 	for _, p := range standing {
-		if p.ev.TaskID != 0 {
+		if p.ev.TaskID != 0 && !goOnAlert(p.ev.Text) {
 			ids[p.ev.TaskID] = true
 		}
 	}

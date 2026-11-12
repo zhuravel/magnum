@@ -243,9 +243,10 @@ func TestAConvergingRoundAtTheCapGoesOn(t *testing.T) {
 	}
 }
 
-// A round at the cap stops for you, as before, when the loop does not
-// converge: a P1 among its findings, as many blocking findings as the round
-// before, or a judge's verdict that blocks.
+// A round at the cap stops the loop when the loop does not converge: a P1
+// among its findings, as many blocking findings as the round before, or a
+// judge's verdict that blocks. With cap_go_on off, every such stop is for
+// you, as before (a safe stop's go-on: TestASafeStopAtTheCapGoesOnByItself).
 func TestARoundAtTheCapThatDoesNotConvergeStops(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -257,6 +258,7 @@ func TestARoundAtTheCapThatDoesNotConvergeStops(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newReviewRig(t, result(capFindings(1, 4, 1)...), result(capFindings(5, 7)...), tc.third, result())
+			r.cfg.Factory.LocalReview.CapGoOn = 0
 			task, _ := r.reviewTask("PR-12398")
 			r.toCap(task, 3)
 			if cs := r.cycles(task.ID); len(cs) != 3 || cs[2].Exit != registry.ExitCap || len(r.rv.calls()) != 3 {
@@ -267,8 +269,8 @@ func TestARoundAtTheCapThatDoesNotConvergeStops(t *testing.T) {
 }
 
 // The extra rounds stop at [factory.local_review] extra_cycles: a loop that
-// keeps converging stops for you after cycles + extra_cycles rounds, and 0
-// turns them off.
+// keeps converging stops after cycles + extra_cycles rounds (for you, with
+// cap_go_on off), and 0 turns them off.
 func TestTheExtraRoundsStopAtExtraCycles(t *testing.T) {
 	for _, tc := range []struct{ extra, rounds int }{{2, 5}, {0, 3}} {
 		t.Run(fmt.Sprint(tc.extra), func(t *testing.T) {
@@ -279,7 +281,7 @@ func TestTheExtraRoundsStopAtExtraCycles(t *testing.T) {
 				from += n
 			}
 			r := newReviewRig(t, answers...)
-			r.cfg.Factory.LocalReview.ExtraCycles = tc.extra
+			r.cfg.Factory.LocalReview.ExtraCycles, r.cfg.Factory.LocalReview.CapGoOn = tc.extra, 0
 			task, _ := r.reviewTask("PR-12399")
 			r.toCap(task, tc.rounds)
 			cs := r.cycles(task.ID)

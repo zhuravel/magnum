@@ -4357,7 +4357,7 @@ stages = [
   kind of task and keeps the others, `[factory.local_review]` and the `codex_fallback`, `kind_by_jira_type`
   and `kind_words` tables merge entry by entry, and `[[factory.repo]]` blocks are appended.
 - **Limits and intervals.** `max_active`, `heavy_stages` and `[factory.local_review] cycles` (1 to 10) are
-  at least 1; `[factory.local_review] extra_cycles` is 0 to 10 (default 2, 0 turns the extra rounds off); `memory_gate_swap` is 0 to 100; `observe` and `poll` are positive and `human_cooldown` is not
+  at least 1; `[factory.local_review] extra_cycles` is 0 to 10 (default 2, 0 turns the extra rounds off); `[factory.local_review] cap_go_on` is an integer from 0 to 5 (default 2, 0 turns the go-on at the cap off); `memory_gate_swap` is 0 to 100; `observe` and `poll` are positive and `human_cooldown` is not
   negative. `herdr_socket` is empty (the named session's own socket) or an absolute path.
   `[factory.local_review] second_judge` is `"wide"`, `"always"` or `"never"`; any other word is refused, naming them.
   `[factory.local_review] left_blocks` is `true` or `false` (default `false`); any other value is refused when the
@@ -5145,7 +5145,19 @@ their fingerprints: one that comes back twice after its fix is a doubt, and when
 ends on the oscillation. A round at the cap that still blocks goes on by itself while the loop converges: no P0
 or P1 among its findings, fewer findings for the writer than the round before, and a verdict that is not
 `blocking`. Its findings go to the writer, and one more round runs, at most `extra_cycles` (2) times in a loop and
-never past 10 counted rounds; an event says `extra round 1 of 2`. Otherwise the task needs you: `you: <n> blocking
+never past 10 counted rounds; an event says `extra round 1 of 2`. Otherwise the loop stops at the cap. A safe stop
+goes on by itself, as your retry would: the cap round has no P0 or P1 (new or still open), the judge's verdict is
+not `blocking`, and the writer declined no finding in the loop's fix turns. The cap round's findings go to the
+writer at the next pass, and a fresh loop reviews its head. An event and an alert say it (`PR-12345: went on by itself
+at the cap (1 of 2): 3 P2 findings to the writer`); the alert's toast counts nobody as waiting on you, and the task
+stays at work, never in NEEDS YOU. `[factory.local_review] cap_go_on` (2) bounds these go-ons over the task's life,
+counted in the task's `review-go-on.json`, so a restart neither counts one twice nor loses one; your own retry spends
+none, and 0 turns them off. A safe stop after them does not wait for you either: the writer fixes the cap round's
+findings, the factory's proof and precheck run on the fix (a refused fix gets the stage's fix turns and stops, as
+any), and the stage passes with no round more (`passes the cap after its fix (2 go-ons spent)`). The ready card's
+FIXED AFTER row and the PR body's Known list (`Fixed after the local review's last round, not reviewed again`) name
+those findings, each with its priority, place and title; magnum's review of the published PR reads the fix. Any other
+stop needs you: `you: <n> blocking
 findings after 3 review rounds (blocking 11 → 8 → 5, P1 5 → 3 → 0; verdict non_blocking): P2 <title> (<path>); …`,
 the trend of what each round gave the writer, the judge's verdict and the first 3 findings. The task card lists
 the findings under WAITING FOR, one a line (8 at most, and a count). A daemon that stops between ending that round's cycle and telling you tells you at

@@ -4,7 +4,8 @@ package tui
 // revision 1): a finished task for the operator's decision. The FLAGS line
 // comes first, then the cause, the fix and the proof, what visual QA found
 // (QA), the files (the flagged ones first), the doubts, what the local
-// review and QA left open (KNOWN) and the screenshots; then the three
+// review and QA left open (KNOWN), what the writer fixed after the local
+// review's last round (FIXED AFTER) and the screenshots; then the three
 // options, numbered, and the files not read in the diff. The
 // recommendation shows only once the diff was opened.
 //
@@ -118,23 +119,25 @@ func (p *cardPainter) ready(c ReadyCard, height int) string {
 }
 
 // readyFit says how much of the ready card's lists is drawn: the items of
-// FLAGS, FILES and KNOWN (the rest counted on a line of their own), and
-// which lists draw each item on one line, cut, instead of wrapped.
+// FLAGS, FILES, KNOWN and FIXED AFTER (the rest counted on a line of their
+// own), and which lists draw each item on one line, cut, instead of
+// wrapped (KNOWN's knownOne takes FIXED AFTER with it).
 type readyFit struct {
-	flags, files, known                     int
+	flags, files, known, fixed              int
 	flagsOne, proofOne, doubtsOne, knownOne bool
 }
 
 // fitReady are the ready card's lists, the rows above its options, in at
 // most room lines (room < 0: all of them, whole). They give way in this
-// order, the least needed first: KNOWN goes to one line an item, then to a
-// count ("listed under Known in the PR body"); FLAGS to one line a flag;
-// PROOF to one line; FILES to a count ("d shows the diff"), the flagged files
-// staying longest; DOUBTS to one line a doubt; FLAGS to its first flag and a
-// count. When that is still too tall, the lists are cut, their last line
-// counting the lines not shown.
+// order, the least needed first: KNOWN and FIXED AFTER go to one line an
+// item, then KNOWN to a count ("listed under Known in the PR body"); FLAGS
+// to one line a flag; PROOF to one line; FILES to a count ("d shows the
+// diff"), the flagged files staying longest; FIXED AFTER to a count; DOUBTS
+// to one line a doubt; FLAGS to its first flag and a count. When that is
+// still too tall, the lists are cut, their last line counting the lines not
+// shown.
 func (p *cardPainter) fitReady(c ReadyCard, room int) []string {
-	f := readyFit{flags: len(c.Flags), files: len(c.Files), known: len(c.Leftovers)}
+	f := readyFit{flags: len(c.Flags), files: len(c.Files), known: len(c.Leftovers), fixed: len(c.FixedAfter)}
 	lines := p.readyLists(c, f)
 	if room < 0 || len(lines) <= room {
 		return lines
@@ -154,7 +157,7 @@ func (p *cardPainter) fitReady(c ReadyCard, room int) []string {
 	}
 	for _, step := range []func() bool{
 		once(&f.knownOne), fewer(&f.known, 0), once(&f.flagsOne), once(&f.proofOne),
-		fewer(&f.files, 0), once(&f.doubtsOne), fewer(&f.flags, 1),
+		fewer(&f.files, 0), fewer(&f.fixed, 0), once(&f.doubtsOne), fewer(&f.flags, 1),
 	} {
 		for !fits() {
 			if !step() {
@@ -244,6 +247,9 @@ func (p *cardPainter) readyLists(c ReadyCard, f readyFit) []string {
 		}
 		return "+" + strconv.Itoa(n) + " more, " + where
 	})
+	if len(c.FixedAfter) > 0 {
+		body = append(body, p.fixedAfterRows(c.FixedAfter, f.fixed, f.knownOne, wrapW)...)
+	}
 	shots := cell{{"none", p.st.Dim}}
 	if c.Screenshots > 0 {
 		text := strconv.Itoa(c.Screenshots)
@@ -253,6 +259,31 @@ func (p *cardPainter) readyLists(c ReadyCard, f readyFit) []string {
 		shots = cell{{text, noStyle}}
 	}
 	return append(body, p.labelRows("SCREENSHOTS", cardReadyX, []cell{shots})...)
+}
+
+// fixedAfterRows is the FIXED AFTER row: what the writer fixed after the
+// local review's last round, which no round reviewed, a second look before
+// the push (yellow, as FLAGS). Its first line says so behind the label,
+// then come the first keep findings (each on one line, cut, when one is
+// set) and a count of the rest; with none kept, one line counts them.
+func (p *cardPainter) fixedAfterRows(items []string, keep int, one bool, wrapW int) []string {
+	const label = "FIXED AFTER"
+	count := factoryPlural(len(items), "finding", "findings")
+	if keep = min(max(keep, 0), len(items)); keep == 0 {
+		return p.labelRows(label, cardReadyX, []cell{{{"the last round, not reviewed again: " + count + ", listed in the PR body", p.st.Warn}}})
+	}
+	cells := []cell{{{"the local review's last round, not reviewed again", p.st.Warn}}}
+	for _, it := range items[:keep] {
+		if one {
+			cells = append(cells, cell{{it, noStyle}})
+			continue
+		}
+		cells = append(cells, p.hangingCells([]string{it}, wrapW, noStyle)...)
+	}
+	if n := len(items) - keep; n > 0 {
+		cells = append(cells, cell{{"+" + strconv.Itoa(n) + " more, listed in the PR body", p.st.Dim}})
+	}
+	return p.labelRows(label, cardReadyX, cells)
 }
 
 // readyHints are the ready card's own key hints: e for the QA run's shots

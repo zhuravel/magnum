@@ -157,7 +157,7 @@ func cleanReadyCard(c ReadyCard) ReadyCard {
 	c.TaskKey, c.Title, c.Branch, c.Kind = cleanText(c.TaskKey), cleanText(c.Title), cleanText(c.Branch), cleanText(c.Kind)
 	c.Cause, c.Fix, c.Proof, c.Why = cleanText(c.Cause), cleanText(c.Fix), cleanText(c.Proof), cleanText(c.Why)
 	c.ScreenshotsNote, c.Ask, c.Frees = cleanText(c.ScreenshotsNote), cleanText(c.Ask), cleanText(c.Frees)
-	c.Doubts, c.Flags, c.Leftovers = cleanAll(c.Doubts), cleanAll(c.Flags), cleanAll(c.Leftovers)
+	c.Doubts, c.Flags, c.Leftovers, c.FixedAfter = cleanAll(c.Doubts), cleanAll(c.Flags), cleanAll(c.Leftovers), cleanAll(c.FixedAfter)
 	c.Unread, c.Reasons, c.Hints = cleanAll(c.Unread), cleanAll(c.Reasons), cleanHints(c.Hints)
 	c.Copy, c.NoPush, c.Failed = cleanText(c.Copy), cleanText(c.NoPush), cleanAll(c.Failed)
 	c.QA = cleanText(c.QA) // QAReport is a path the pager opens, never drawn

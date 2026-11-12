@@ -25853,6 +25853,70 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestStreamGetsTheOutputWhileTheCommandRuns`, `TestStreamTakesStderrWithoutStreamErrAndItsFailuresChangeNothing`
   and `TestFakeWritesARulesOutputToTheStreams` in internal/execx.
 
+- **A safe stop at the local review's cap goes on by itself, twice per task, and then passes after the writer's fix**
+  (2026-11-12, asked by the operator). This amends "the task needs you" at the cap above. Task 9 (a large feature)
+  stopped at the cap three times that day. Each time the writer fixed every finding it got (5 of 5, 4 of 4, 2 of 2),
+  and each fresh loop found new P2 edge cases. No round found a P0 or P1, and the judge said `non_blocking` each time.
+  The counts went 1 → 4 → 3 → 4, then 5 → 2 → 3, so the extra rounds above never applied: the count did not fall.
+  The task waited hours for your retry each time, and your retry did nothing the factory could not do.
+  - *Safe.* A stop at the cap (`capStops`, after `extraRound` declines) is safe when all of these hold
+    (`capSafe`): the cap round has no P0 or P1, new or still open (`highPriority`); its verdict is not `blocking`;
+    and the writer declined no finding in the loop that stops, the cycles since the last fresh loop began (each
+    one's `review-reply-<n>.json`, a decline with a risk or without; a reply that does not parse counts as a
+    decline). Any other stop is for you, as before, and so is every stop with `cap_go_on = 0`.
+  - *Go on.* A safe stop goes on as your retry does: `capFix` hands the cap round's findings to the writer, and a
+    fresh loop reviews its head. `[factory.local_review] cap_go_on` (default 2, an integer from 0 to 5) bounds
+    these go-ons over the task's life. An event and an alert say each one (`PR-12345: went on by itself at the cap
+    (1 of 2): 3 P2 findings to the writer`). The task never moves to NEEDS YOU: its row shows the writer at work.
+    The alert stands while its task is live (`goOnAlert`), so its toast fires and nothing drops it as "no longer
+    waits on you"; it counts nobody among those who need you, and a toast of such alerts alone says `factory:
+    nothing needs you`.
+  - *The next tick.* The tick that reads the cap round decides, and the writer's turn starts at the next one. The
+    deciding tick records the go-on in the task's `review-go-on.json` (by cycle, its number and the budget then),
+    ends the cycle at the cap, writes `review-<n>.json` and `review-stop.json`, then says it. The next pass finds
+    the ended cycle with its record. `toldOfStop` writes the event and the alert if a restart came before them
+    (`sayGoOn`: once, then marked `said` in the record; an alert of its line since the cycle began stands for a
+    mark that a stop lost, and the mark spares a pass long after, back from QA or the ready card, a read of the
+    newest 200 events that no longer holds the alert), and `capFix` hands the findings over as for your retry. That is restart-safe at every step. A daemon that stops before the cycle ends reads the round
+    again and decides alike: `recordGoOn` returns the go-on that the cycle has, never a second. One that stops
+    after it finds the record: no move to you, and no second count. A missing `review-<n>.json` is written by
+    `capReview`. Rejected: the writer's turn in the same tick. It runs `fixPhase` on a cycle the tick ended only
+    in memory, a second path beside the one that a restart and your retry take.
+  - *The count.* Only `goOnAtCap` writes the file, so your own retry at an unsafe stop spends none. Rejected: a
+    migration (a column or a table) for a count that a file in the task's directory keeps; and a count of the
+    registry's events, which would parse their text, through a read that is bounded (the newest 200).
+  - *Past the budget.* A safe stop after `cap_go_on` go-ons does not stop for you. It is recorded with the loop's
+    summary as its round left it (`capGoOn.Pass`), `capFix` hands the findings to the writer, and the fix turn's end
+    fact is the stage's own: the factory's proof and precheck at the new head. A refused fix gets the stage's fix
+    turns and stops, as any fix does. Once `closeFix` closes the fix (`review-stop.json`'s `Fixed`, and now
+    `FixedAt`, the head the checks passed at), `passAfterCap` writes `review-summary.json` at that head and the stage
+    passes with no round more. The findings the writer replied `fixed` are `FixedAfter`. One declined with its risk
+    is among the declined findings. One declined without a risk, or with no reply, joins the leftovers. A head
+    since the fix (QA's fix, a send back, the base merged) gets a fresh loop instead.
+  - *The summary's exit* is `cap_fixed` (`exitCapFixed`), a word of the file only: the cycle's exit in the registry
+    stays `cap`, whose CHECK takes no new word without a migration. A summary of exit `cap` still never has a card
+    (`TestNoCardOrPushWithoutACleanReviewOfTheHead`). The ready card takes `cap_fixed`, and its head is the fix's,
+    which no round reviewed. The card draws a FIXED AFTER row after KNOWN: `the local review's last round, not
+    reviewed again`, then each finding's priority, place and title (yellow, a second look as FLAGS is; on a short
+    pane it gives way after FILES, to a count). The card recommends push, saying that no round reviewed the fix.
+    The PR body's Known list adds `**Fixed after the local review's last round, not reviewed again**` and the
+    findings, and its one-line count names them. magnum's review of the published PR reads the fix. The PR's status
+    file reads the exit as `findings`.
+  - The review's fix prompt is unchanged. It tells the writer that the next round reviews its commit, which is not
+    so after the budget. Its other words hold.
+  Tests (each checked by mutation): `TestASafeStopAtTheCapGoesOnByItself`,
+  `TestAfterItsGoOnsASafeStopHasTheWriterFixThenPasses` (the summary, the PR body and `readyProblem`),
+  `TestAnUnsafeStopAtTheCapStillStopsForYou` (a P1, a blocking verdict, a declined finding),
+  `TestCapGoOnZeroStopsForYouAsBefore`, `TestARestartBetweenASafeStopAndItsGoOnGoesOnOnce`,
+  `TestAGoOnIsSaidOnceHoweverLongAfter`, `TestYourRetryAtAnUnsafeStopSpendsNoGoOn`,
+  `TestTheReadyCardNamesTheFindingsFixedAfterTheLastRound`,
+  `TestThePRBodyNamesTheFindingsFixedAfterTheLastRound` and `TestAGoOnsAlertIsAToastThatCountsNobodyAsWaitingOnYou`
+  in internal/factory; `TestReadyCardNamesTheFindingsFixedAfterTheLastRound` in internal/tui;
+  `TestFactoryLocalReviewCapGoOnDefaultsToTwoAndTakesZeroToFive` in internal/config.
+  `TestARoundAtTheCapThatDoesNotConvergeStops`, `TestTheExtraRoundsStopAtExtraCycles` and the second half of
+  `TestTheSecondOpinionRunsPastTheLastRoundCyclesAllows` set `cap_go_on = 0`. They pin the stop for you, and their
+  stops are safe ones now.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

@@ -4915,6 +4915,8 @@ const (
 	DefaultFactoryBase   = "master"
 	DefaultFactoryCopies = "factory{n}"
 	MaxFactoryCycles     = 10
+	// MaxFactoryCapGoOn is the most [factory.local_review] cap_go_on takes.
+	MaxFactoryCapGoOn = 5
 	// DefaultPrecheckCapPerFile and DefaultPrecheckCapMax are how much a
 	// precheck's cap grows per file of the change, and its most.
 	DefaultPrecheckCapPerFile = 15 * time.Second
@@ -6549,6 +6551,14 @@ type FactoryLocalReview struct {
 	// a round leaves none. Off by default: they are then listed under
 	// KNOWN on the ready card, which sends them to the writer in one key.
 	LeftBlocks bool `toml:"left_blocks"`
+	// CapGoOn is how many times over a task's life a safe stop at the cap
+	// goes on by itself, as your retry would (0 to MaxFactoryCapGoOn; 0
+	// turns it off): the cap round has no P0 or P1, its verdict does not
+	// block, and the writer declined nothing in the loop. Its findings go
+	// to the writer and a fresh loop starts. A safe stop after them has the
+	// writer fix the findings, and the stage passes once the factory's
+	// checks pass on the fix, the ready card and the PR body naming them.
+	CapGoOn int `toml:"cap_go_on"`
 }
     FactoryLocalReview is [factory.local_review]. Round 1 runs the review roles
     of the repository's [[watch]]; later rounds run without LaterWithout.
@@ -15740,17 +15750,22 @@ type ReviewSummary struct {
 	// second opinion (review-second.json), "" and 0 for a loop without one.
 	SecondJudge string `json:"second_judge,omitempty"`
 	SecondRound int    `json:"second_round,omitempty"`
+	// FixedAfter are the findings of the last round, at the cap, that the
+	// writer fixed after it with no round reviewing the fix (exit
+	// cap_fixed): the ready card and the PR body name them.
+	FixedAfter []ReviewItem `json:"fixed_after,omitempty"`
 }
-    ReviewSummary is review-summary.json: how the local review ended (exit
-    clean or oscillation), after how many rounds, at which head (the one its
-    last round reviewed), and what it left that does not block, for the ready
-    card and the PR body's "Known": the leftovers of its last round (P3s,
-    simplifications, product questions you answered, and on a clean exit the
-    findings at a blocking priority that the round's counts and verdict left
-    out), the findings the writer declined with their risks (whichever round
-    raised them), the doubts (findings that came back twice after their fix,
-    each told there only) and the reviewers a round of the loop went without
-    (Missing).
+    ReviewSummary is review-summary.json: how the local review ended (exit clean
+    or oscillation, or cap_fixed for a loop that passed at its cap after the
+    writer's fix: passAfterCap), after how many rounds, at which head (the one
+    its last round reviewed; for cap_fixed, the head of that fix, which no round
+    reviewed), and what it left that does not block, for the ready card and the
+    PR body's "Known": the leftovers of its last round (P3s, simplifications,
+    product questions you answered, and on a clean exit the findings at a
+    blocking priority that the round's counts and verdict left out), the
+    findings the writer declined with their risks (whichever round raised them),
+    the doubts (findings that came back twice after their fix, each told there
+    only) and the reviewers a round of the loop went without (Missing).
 
 type Runtime interface {
 	Owner(ctx context.Context, t registry.Task) (store.PR, error)
@@ -34566,6 +34581,10 @@ type ReadyCard struct {
 	// findings the writer declined with their risks, the doubts, and the
 	// reviewers a round went without.
 	Leftovers []string
+	// FixedAfter are the FIXED AFTER row, the findings the writer fixed after
+	// the local review's last round, at its cap, which no round reviewed
+	// (the PR body lists them under Known too), one each; none: no row.
+	FixedAfter []string
 	// Known is how many of the local review's leftovers are defects that w
 	// sends back to the writer, in one key (not the simplifications, the
 	// doubts or the declined findings, which the KNOWN row also lists). The

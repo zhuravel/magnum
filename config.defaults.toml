@@ -920,6 +920,13 @@ extra_cycles = 2                  # rounds past cycles that a converging loop ru
                                   # round at the cap that blocks goes on, its findings to the writer, when it has no
                                   # P0 or P1 finding, fewer blocking findings than the round before and a judge's
                                   # verdict that does not block; else the loop stops for you. Never past 10 rounds
+cap_go_on = 2                     # times over a task's life a safe stop at the cap goes on by itself, as your retry
+                                  # would (0 to 5; 0 = never): the cap round has no P0 or P1, its verdict does not
+                                  # block, and the writer declined no finding in the loop. Its findings go to the
+                                  # writer, a fresh loop reviews the fix, and an event and an alert say so (`1 of 2`).
+                                  # A safe stop after them has the writer fix its findings, the proof and the precheck
+                                  # run, and the stage passes: the ready card and the PR body name those findings as
+                                  # fixed after the last round, not reviewed again. Any other stop waits for you
 later_without = ["claude-simplify"]   # the review roles that run in round 1 only
 second_judge = "wide"             # a second opinion: after a clean round whose judge runs on Codex, one more round
                                   # of the same roles with the watch's judge_fallback (a judge of another kind) in

@@ -461,6 +461,10 @@ type ReadyCard struct {
 	// findings the writer declined with their risks, the doubts, and the
 	// reviewers a round went without.
 	Leftovers []string
+	// FixedAfter are the FIXED AFTER row, the findings the writer fixed after
+	// the local review's last round, at its cap, which no round reviewed
+	// (the PR body lists them under Known too), one each; none: no row.
+	FixedAfter []string
 	// Known is how many of the local review's leftovers are defects that w
 	// sends back to the writer, in one key (not the simplifications, the
 	// doubts or the declined findings, which the KNOWN row also lists). The

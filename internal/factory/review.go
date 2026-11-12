@@ -196,9 +196,11 @@ func (rep ReviewReply) declinedWithRisk() map[string]string {
 }
 
 // ReviewSummary is review-summary.json: how the local review ended (exit
-// clean or oscillation), after how many rounds, at which head (the one its
-// last round reviewed), and what it left that does not block, for the
-// ready card and the PR body's "Known": the leftovers of its last round
+// clean or oscillation, or cap_fixed for a loop that passed at its cap
+// after the writer's fix: passAfterCap), after how many rounds, at which
+// head (the one its last round reviewed; for cap_fixed, the head of that
+// fix, which no round reviewed), and what it left that does not block, for
+// the ready card and the PR body's "Known": the leftovers of its last round
 // (P3s, simplifications, product questions you answered, and on a clean
 // exit the findings at a blocking priority that the round's counts and
 // verdict left out), the findings the writer declined with their risks
@@ -217,6 +219,10 @@ type ReviewSummary struct {
 	// second opinion (review-second.json), "" and 0 for a loop without one.
 	SecondJudge string `json:"second_judge,omitempty"`
 	SecondRound int    `json:"second_round,omitempty"`
+	// FixedAfter are the findings of the last round, at the cap, that the
+	// writer fixed after it with no round reviewing the fix (exit
+	// cap_fixed): the ready card and the PR body name them.
+	FixedAfter []ReviewItem `json:"fixed_after,omitempty"`
 }
 
 // localRound is a round that runs off the loop: its cycle (id and number),
@@ -295,10 +301,12 @@ func (e *Engine) sweepRounds(tasks []registry.Task) {
 // after it starts a loop afresh, or clean or on an oscillation, and a head
 // the loop did not review (a send back's commits, the base merged after a
 // conflict at the ready card) starts a fresh loop of up to cycles rounds.
-// Your "go on" after a stop at the cap, at the head its round reviewed,
-// first hands that round's findings to the writer (capFix), and the fresh
-// loop reviews the writer's head. A build without the local reviewer,
-// agents or git leaves the task where it is.
+// Your "go on" after a stop at the cap, at the head its round reviewed, or
+// the factory's own after a safe one (goOnAtCap), first hands that round's
+// findings to the writer (capFix), and the fresh loop reviews the writer's
+// head; past the task's go-ons the writer's fix passes the stage instead
+// (passAfterCap). A build without the local reviewer, agents or git leaves
+// the task where it is.
 func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.FactoryStage) (bool, error) {
 	if e.d.Review == nil || e.d.Runtime == nil || e.d.Git == nil {
 		return false, nil
@@ -341,6 +349,9 @@ func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.Facto
 		if due {
 			return e.fixPhase(ctx, t, st, *last, rf)
 		}
+		if pass, err := e.passAfterCap(ctx, t, *last); err != nil || pass {
+			return pass, err
+		}
 	}
 	return false, e.startRound(ctx, t, c, nil, len(loop)+1)
 }
@@ -351,16 +362,18 @@ func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.Facto
 const reviewStopFile = "review-stop.json"
 
 // reviewStop is review-stop.json: the cycle that stopped the loop, why (the
-// NEEDS YOU line), and for a stop at the cap the line's head (the count, the
-// trend and the verdict), the cap round's findings for the writer, which the
-// task card lists, and whether the fix turn of your "go on" at its head is
-// over (Fixed: capFix).
+// NEEDS YOU line; a go-on's line for one that went on by itself), and for a
+// stop at the cap the line's head (the count, the trend and the verdict),
+// the cap round's findings for the writer, which the task card lists, and
+// whether the fix turn of your "go on" at its head is over (Fixed: capFix),
+// at which head the factory's checks passed it (FixedAt).
 type reviewStop struct {
 	Cycle    int64        `json:"cycle"`
 	Why      string       `json:"why"`
 	Head     string       `json:"head,omitempty"`
 	Findings []ReviewItem `json:"findings,omitempty"`
 	Fixed    bool         `json:"fixed,omitempty"`
+	FixedAt  string       `json:"fixed_at,omitempty"`
 }
 
 // readReviewStop reads review-stop.json in dir; ok is false when there is
@@ -403,8 +416,15 @@ func (e *Engine) stopWith(ctx context.Context, t registry.Task, cy registry.Cycl
 // toldOfStop reports whether you were told of the loop's stop on cycle cy
 // (an alert since the cycle ended): a live task told so is one you let go
 // on, and a fresh loop starts. One not told is moved to you now, with the
-// stop's reason (review-stop.json).
+// stop's reason (review-stop.json). A stop at the cap that went on by
+// itself (goOnAtCap) waits on nobody: its event and alert are written now
+// if a restart came before them (sayGoOn), and it goes on.
 func (e *Engine) toldOfStop(ctx context.Context, t registry.Task, cy registry.Cycle) (bool, error) {
+	if g, auto, err := goOnOf(e.d.Layout.FactoryTaskDir(t.ID), cy.ID); err != nil {
+		return false, err
+	} else if auto {
+		return true, e.sayGoOn(ctx, t, cy, g)
+	}
 	evs, err := e.reg.Events(ctx, t.ID, 200)
 	if err != nil {
 		return false, err
@@ -1101,10 +1121,11 @@ func roundTries(dir string, n int, why string) int {
 //     the loop clean, unless the task's second opinion runs first
 //     (decideSecond), only doubts on an oscillation (the stage passes for
 //     both, with the summary for the ready card), anything else at the cap
-//     (cycles rounds besides the second opinion) needs you with its
-//     findings (stopAtCap) unless the loop converges (extraRound), and
-//     before it the writer gets the findings (fixPhase), the product
-//     questions among them asked first.
+//     (cycles rounds besides the second opinion) stops the loop (capStops:
+//     a safe stop goes on by itself, any other needs you with its
+//     findings) unless the loop converges (extraRound), and before it the
+//     writer gets the findings (fixPhase), the product questions among
+//     them asked first.
 func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.FactoryStage, c Copy, cy registry.Cycle, loop []registry.Cycle,
 	res evalrun.LocalResult) (bool, error) {
 	round := len(loop)
@@ -1145,7 +1166,7 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 	case e.atCap(dir, loop, round):
 		next, extra, ok := e.extraRound(dir, loop, round, res, len(live)+len(questions))
 		if !ok {
-			return false, e.stopAtCap(ctx, t, st, cy, loop, res, live, questions, doubts)
+			return false, e.capStops(ctx, t, st, cy, loop, res, rr, sum)
 		}
 		e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("round %d (cycle %d) is at the cap, and the loop converges (%s, no P0 or P1, "+
 			"verdict %s): it goes on, extra round %d of %d", round, cy.N, plural(len(live)+len(questions), "blocking finding"), res.Verdict, next, extra))
@@ -1559,12 +1580,12 @@ func (e *Engine) closeFix(ctx context.Context, t registry.Task, cy registry.Cycl
 	if err := e.endCycle(ctx, cy, head, ""); err != nil {
 		return err
 	}
-	if cy.Exit == registry.ExitCap { // the fix of your "go on" at the cap's head: the fresh loop starts next (capFix)
+	if cy.Exit == registry.ExitCap { // the fix of a "go on" at the cap's head: the fresh loop starts next (capFix), or the stage passes (passAfterCap)
 		s, ok := readReviewStop(dir)
 		if !ok || s.Cycle != cy.ID {
 			s = reviewStop{Cycle: cy.ID, Why: "the local review's cap"}
 		}
-		s.Fixed = true
+		s.Fixed, s.FixedAt = true, head
 		if err := writeJSON(filepath.Join(dir, reviewStopFile), s); err != nil {
 			return err
 		}

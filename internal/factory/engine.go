@@ -548,9 +548,9 @@ type Engine struct {
 	ciSeen map[int64]string
 	ciErr  string
 	// beforeStop runs between the end of a loop's cycle that needs you
-	// (unavailable, the cap) and the task's move to you; an error stops
-	// there (a test's seam: the daemon stopping in between). nil in a
-	// daemon.
+	// (unavailable, the cap) and the task's move to you, or the go-on's
+	// word of one that goes on by itself (goOnAtCap); an error stops there
+	// (a test's seam: the daemon stopping in between). nil in a daemon.
 	beforeStop func() error
 	// beforeSecond runs after the write of a second opinion
 	// (secondOpinionFile) before its step: "event" (the decision's event)

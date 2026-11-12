@@ -274,7 +274,7 @@ func verdictOf(exit string) prstatus.Verdict {
 	switch exit {
 	case registry.ExitClean:
 		return prstatus.VerdictClean
-	case registry.ExitOscillation, registry.ExitCap, registry.ExitOperator:
+	case registry.ExitOscillation, registry.ExitCap, registry.ExitOperator, exitCapFixed:
 		return prstatus.VerdictFindings
 	case registry.ExitUnavailable:
 		return prstatus.VerdictFailed

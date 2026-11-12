@@ -1178,7 +1178,8 @@ func (s *screen) comment(t registry.Task, q registry.Question, a ask) string {
 func (s *screen) readyCard(v *taskView) *tui.ReadyCard {
 	t, card := v.t, v.card
 	c := &tui.ReadyCard{TaskKey: TaskKey(t), Title: cmp.Or(card.Title, t.Title), Kind: t.Kind, Branch: cmp.Or(card.Remote, card.Branch, t.Branch),
-		Waited: max(s.now.Sub(v.since), 0), Flags: card.Flags, Leftovers: knownLines(card.Review, false), Copy: card.Copy}
+		Waited: max(s.now.Sub(v.since), 0), Flags: card.Flags, Leftovers: knownLines(card.Review, false), Copy: card.Copy,
+		FixedAfter: fixedAfterLines(card.Review, false)}
 	if known, err := knownDefectsOf(s.ctx, s.reg, t.ID, card.Review); err == nil { // unread: the key is not offered
 		c.Known = len(known)
 	}
@@ -1243,6 +1244,10 @@ func readyRecommendation(card ReadyCardFile, failed []string) (choice, why strin
 		return ChoiceSendBack, "a check failed at this head: send it back to fix it"
 	case rev.Exit == registry.ExitOscillation:
 		return ChoicePush, fmt.Sprintf("the local review went back and forth after %s: read KNOWN, then push", reviewRounds(rev))
+	case rev.Exit == exitCapFixed:
+		return ChoicePush, fmt.Sprintf("the local review reached its cap after %s; the writer fixed %s of its last round, which no round "+
+			"reviewed (FIXED AFTER), and the factory's proof holds at %s%s", reviewRounds(rev), plural(len(rev.FixedAfter), "finding"),
+			short(card.Head), qaWhy(card.QA))
 	}
 	return ChoicePush, fmt.Sprintf("the local review ended clean after %s and the factory's proof holds at %s%s",
 		reviewRounds(rev), short(card.Head), qaWhy(card.QA))

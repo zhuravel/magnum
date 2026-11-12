@@ -183,6 +183,7 @@ func TestTheSecondOpinionRunsPastTheLastRoundCyclesAllows(t *testing.T) {
 
 	r = newReviewRig(t, result(), result(unitFinding))
 	r.cfg.Factory.LocalReview.Cycles = 1
+	r.cfg.Factory.LocalReview.CapGoOn = 0 // the stop for you; a safe one's go-on is TestASafeStopAtTheCapGoesOnByItself's
 	task, _ = r.wideReviewTask("PR-12394")
 	r.run(10, func() bool { return !isLive(r.reload(task.ID)) })
 	got := r.reload(task.ID)
