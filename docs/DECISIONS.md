@@ -26572,57 +26572,25 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - *A tracked change that a review round left* (`review_left.go`). The factory saves it to
     `review-<n>-left.diff` (mode 0600). New files go under `review-<n>-left/`. These replace
     `round-<n>-left.patch` and `round-<n>-left/`. Then it puts the change back by itself with `git restore
-    --source=HEAD --staged --worktree`, and the round's result stands. Two conditions must hold. First, no
-    agent of the task has a turn in flight in the copy, and you are in no pane of it (`inFlight`). The factory
-    asks this before the save and again before the put-back. Second, the copy is on the branch at the
-    head that the round reviewed.
-    A turn in flight is a held wait, never NEEDS YOU, and the put-back runs once the turn ended. A named
-    agent's turn, or you in a pane, holds it however long it runs: nothing is restored under a live turn,
-    and the runtime's watchdog judges a turn that makes no progress (its recoveries, then the lost pane's
-    question). A runtime that cannot tell who works in the copy (`AtWork` failing) holds it at most 30
-    minutes (`leftWaitBound`), and so does a named run the watchdog judged stuck or lost (`Runtime.Judged`),
-    which held it forever before; the restore then names that turn. The bound counts from that wait's first
-    pass, which `stops.json` keeps across
-    restarts and forgets once the runtime answers again, so a later wait counts from its own start. After
-    it, the factory asks the question below, and your answer to restore runs the put-back though the
-    runtime still cannot tell; its restore says that a turn the factory cannot see has its edits in those
-    paths go back too and its new files leave the copy. An answer is for the cause it was asked for: a turn
-    that started after it (`TouchedSince` from the answer's own time) is never run over, and once it ended
-    the factory asks again with the new cause. A `TouchedSince` that fails is "cannot tell", never "nobody":
-    an answer given while the factory could tell asks again with that warning, and only an answer to a
-    question asked blind (`stops.json` Blind) runs blind. When you typed into a pane of the task since the round began
-    (`TouchedSince`, as before), or the factory cannot tell, the change may be your own edit. Then the
-    factory saves it and puts nothing back by itself: it asks you, with the saved diff, "Restore the copy
-    to the reviewed head" or "Keep the change" (`leftQuestion`). The round's result stands either way. A
-    kept change stays in the copy, remembered in `stops.json` by its path and its file's content
-    (`keptSum`, never its diff against HEAD, whose blob ids and offsets an index change or `git add -p`
-    changes). While it stays the same, no look at the copy (`roundLeft`) counts it as a round's, so nothing
-    puts it back or asks again. While its path is still a change, every writer prompt of the attempt, the
-    first one included, names it to commit, never to undo (`keptNote`), and so do the factory's checks
-    (`dirtyWords`): before, the next check told the writer to "commit them or undo them", and a writer that
-    undid it threw your kept change away. `keepLeft` saves the kept diff first and records HEAD's file then
-    (Base, Saved): a commit takes it off the list, with more edits of it too, and a loss without one takes it
-    off with an event and an alert (news), each naming the saved diff. Only the loop settles the list
-    (`keptState`'s settle): the checks' read off the loop (`dirtyWords`) writes nothing. After a round that
-    blocks nothing, the writer gets one short turn to commit it (`keptTurn`: the clean round's summary goes
-    to `review-summary.json` first, then `review-<n>.json` with no finding and the kept paths); once its
-    commit's checks pass the stage passes there (`passAfterKept`), as the cap's last fix does, with no
-    round counted, so a keep never costs a round past the cap or a go-on. Before, the clean round's next
-    stage found the copy dirty and stopped for you. A failed save or put-back asks you with the steps, as before. A copy that a round left off the task's branch, or with the branch
-    at another head, asks the same question, where it said only to put the copy back and let the task go
-    on (a bare retry). Restore saves what the round left, puts it back, switches the copy back to the
-    branch (`gitx.Switch`) and moves a branch at another head back to the reviewed head
-    (`gitx.ResetKeep`, `git reset --keep`), an event naming the head it was at; the commits stay in the
-    repository. Restore's words name what moves: "<branch> is reset from <now> to <head>; its N commits after
-    <head> leave the branch (git's reflog keeps them; they are not in the saved diff)", and the commits of a
-    copy off the branch that leave it (`movedWords`). Keep switches a copy off the branch back to it with its
-    changes, or takes a branch at a new head as the task's head (`headMoved`), whose checks run again there.
-    Keep is never offered when it would drop the task's commits (a branch moved back behind the reviewed
-    head, or beside it): the question offers restore or drop then (`stops.json` NoKeep), your own words there
-    ask again rather than take the restore, which resets a branch, and `keepMoved` refuses such a keep too. A
-    restore runs only over the branch head its question counted (BranchAt): a branch that moved since is
-    asked about again, naming its new commits. The factory still moves no branch or HEAD by itself. Your answer moves it, and
-    your own put-back and retry still work.
+    --source=HEAD --staged --worktree`, and the round's result stands, but only with no doubt that the
+    change is the round's alone (`leftDoubt`), asked before the save and again before the put-back: the copy
+    on the task's branch at the head the round reviewed, `AtWork` answering with nobody at work in the copy
+    and nobody in its panes, and `TouchedSince` answering that no prompt and no input of yours reached the
+    task's panes since the round began. In every other case, a runtime that cannot tell too, the factory
+    saves the same and asks one question with two ways (`leftQuestion`): "I put the copy back myself — go
+    on" and "Drop the task". The question names the saved diff, the paths, the reviewed head and, for a copy
+    that moved, the branch's head now, and its context gives the steps. "Go on" only makes the factory look
+    at the copy again, and a copy that still has the leftover asks again. The factory never moves a branch or
+    HEAD, never puts back under a doubt, and never runs an answer over a turn. A failed save or put-back
+    asks you with the steps, as before.
+    This case was narrowed after four review rounds. Those rounds built a keep of the change (remembered by
+    its fingerprint, named in the writer's prompts, committed in a short turn of its own), a restore of a
+    copy that moved (which reset the branch), answers given while the factory could not tell, and a
+    30-minute bound on the wait for a turn in flight. Each round of review found new holes in that
+    machinery: a keep that the writer could discard, a restore over a turn that started later, a keep that
+    dropped the writer's commits, a hold that never ended. The leftover itself occurred once in the
+    factory's history. So the factory now does the one safe thing by itself and asks you for the rest, in
+    one question that cannot move a branch.
   - *A lost pane* (`runtime/recoveries.go`). A lost pane gets 3 recoveries in an attempt. The first runs at
     once, as a lost pane's recovery always did. The second waits 1 minute and the third 5 minutes. Each wait
     counts from the loss, or from the pass that found that the last recovery made no progress. So a transient
@@ -26664,7 +26632,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestYourAnswerToTheFixQuestionGivesADirectionOrAcceptsTheCheck`,
   `TestACheckFaultNeverCountsAsAWritersTurnWithoutProgress`,
   `TestARestartAtTheFixCapNeitherDoublesNorLosesTheFreshSession`, `TestYourRetryAtTheFixQuestionSpendsNoGrant`,
-  `TestARoundsTrackedChangeIsRestoredOnceNoTurnIsInFlight`, `TestALostPaneAfterItsRecoveriesAsksAQuestionNeverRetry`,
+  `TestALostPaneAfterItsRecoveriesAsksAQuestionNeverRetry`,
   `TestYourAnswerToALostPanesQuestionStartsTheRoleAfresh`, `TestYourDropOfALostPanesQuestionStopsTheTask`,
   `TestYourRetryOfALostPanesQuestionClosesItAndRecoversTheRole`,
   `TestAnRspecRunThatFailsOutsideOfExamplesIsTheWriters`,
@@ -26672,28 +26640,22 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestAFaultThatNamesAChangedFileRecommendsHandingItToTheWriter`, `TestAFaultWhoseRunAgainTheCapStopsNeverPasses`,
   `TestALintThatSpentTheCapAndThenPassesLeavesTheSpecsTheirCap`, `TestALongerBoundReachesTheSpecRunsFault`,
   `TestTheHealOfALintThatSpentTheCapIsRecorded`, `TestALongerBoundIsTakenOnlyWhereItIsNamedAndIsLonger`,
-  `TestAKeptChangeStaysThroughTheLaterRoundsWhileItIsTheSame`,
-    `TestARoundThatLeavesTheCopyOffItsHeadAsksToRestoreOrKeepIt` and
   `TestAStepTheFactoryTookByItselfIsNewsNeverAWaitOnYou`, `TestAFaultsRunAgainThatDidNotStartIsTheMachines`,
   `TestALintInAFormatTheFactoryCannotReadIsTheWriters`, `TestStylelintsExit2WithItsReportIsNeverAFault`,
   `TestALintsErrorExitIsTheWritersWhenTheBranchChangedWhatItLoads`,
   `TestATestRunnersSegfaultOrHeapAbortOnChangedCodeIsTheWriters`,
-  `TestAPutBackThatCannotTellPastItsBoundAsksToRestoreOrKeep`,
-  `TestATurnInFlightPastTheBoundHasNothingRestoredUnderIt`, `TestAnAnswerIsNeverRunOverATurnThatStartedAfterIt`,
-  `TestAWaitThatEndedStartsItsBoundOver`, `TestABranchMovedBehindTheReviewedHeadOffersOnlyRestoreOrDrop`,
-  `TestAKeptChangeGoneWithoutACommitIsSaidSo`, `TestAKeptChangeAfterACleanRoundIsCommittedByTheWriter`,
   `TestAFailureNoExampleNamesReadsTheSameOnEveryRun`, `TestAnAcceptOfAFailureNoExampleNamesHoldsForItsCheck`,
-  `TestYourWordsOnARestoreOrDropQuestionAskAgain`, `TestARunTheWatchdogJudgedStuckHoldsThePutBackAtMostTheBound`,
-  `TestAnAnswerIsNeverRunWhileTheFactoryCannotTellWhoChangedTheCopy`,
-  `TestALintsRowsUnderTheirFileAreReadByTheChangedLines`, `TestAKeptChangeCommittedWithMoreEditsIsNoLoss` and
-  `TestARestoreOfAMovedBranchAsksAgainWhenTheBranchMovedSince` in internal/factory.
+  `TestALintsRowsUnderTheirFileAreReadByTheChangedLines`, `TestALintReportWithRowsOfNoFileIsTheWriters`,
+  `TestARisingCoverageIsProgress`, `TestARoundsTrackedChangeIsSavedAndPutBackWhenNoTurnIsInFlight`,
+  `TestARoundsLeftoverInDoubtAsksYouToPutItBackOrDrop`, `TestAGoOnOverACopyThatStillHasTheLeftoverAsksAgain`,
+  `TestADoubtThatComesDuringTheSaveAsksBeforeAnyPutBack` and
+  `TestARoundThatLeavesTheCopyOffItsHeadAsksYouToPutItBackOrDrop` in internal/factory.
   In internal/factory/runtime: `TestALostPaneIsRecoveredThreeTimesAfterItsWaitsTheLastInAFreshSession`,
   `TestARestartBetweenTheRecoveriesNeitherDoublesNorLosesOne`, `TestYourRetryStartsTheRecoveriesOverAndSpendsNone`,
   `TestAFreshStartStartsTheRoleWithItsContextAndItsRecoveriesOver`, `TestAFreshSessionStartsTheLoopsLadderOver`,
   `TestAWaitedRecoveryOvertakenByATurnsEndRestartsNothing`,
   `TestTheRecoveriesCountTheSameInMemoryAndAfterARestart`,
   `TestTheFixBudgetsFreshSessionKeepsThePanesRecoveries` and `TestTheGoOnsStartTheLoopLadderOver`.
-  In internal/gitx: `TestResetKeepMovesTheBranchBackAndKeepsTheChanges`.
   In internal/config: `TestFactoryFixGoOnIsTwoByDefaultAndBounded`.
 
 ## Learned rules

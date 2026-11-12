@@ -5214,25 +5214,16 @@ goes back out of the index only, and leaves the copy only when git lists it as a
 and the round's new ignore files are gone, and it is not older than the round, so a file of yours stays, ignored
 or not (without the listing nothing leaves); one the round staged and then changed or deleted stays staged, as
 the index holds the only copy of what was staged, and the task needs you. A directory the removal empties goes
-too. It does so while no turn of an agent of the task is in flight in the copy and you are in none of its
-panes, asked before the save and again before the put-back; while one is, the task waits for it (never on you)
-and the put-back runs once the turn ended, however long it runs: nothing is restored under a live turn, and the
-runtime's watchdog judges a turn that makes no progress. A runtime that cannot tell who works in the copy, or a
-run the watchdog judged stuck or lost (its restore then names that turn, whose edits in those paths go back too),
-holds it at most 30 minutes (`stops.json` keeps when that wait began, across restarts, and forgets it once the runtime
-answers again), then asks you the question below, and your answer to restore runs the put-back though the runtime
-still cannot tell. When you typed into a pane of the task (or one of its agents got a prompt) since the round
-began, the change may be your own edit: the factory saves it and puts nothing back by itself, and asks you (`…
-restore the copy to the reviewed head or keep the change?`, the saved diff on the card); the round's result stands
-either way. Your answer is for the cause it was asked for: a turn that started after it is never run over, and
-once it ended the factory asks again with the new cause; an answer given while the factory could tell never runs
-while it cannot, and it asks again with that warning. A kept change stays in the copy, remembered by its path
-and its file's content (an index change keeps it kept): while it stays the same, no later round counts it as its
-own and nothing puts it back. Every writer prompt of the attempt, the first one included, names it to commit,
-never to undo, as do the factory's checks; after a round that blocks nothing the writer gets one short turn to
-commit it (the clean round's summary is written first), and once that commit's checks pass the stage passes, with
-no round more, so a keep never costs a round. A commit takes it off the list (with more edits of it too), and a
-loss without a commit takes it off with an event and an alert, each naming the diff saved when you kept it. A round stopped before its end (a drain, an install) has the same done before it runs again
+too. It does so by itself only with no doubt that what the round left is the round's alone: the copy on the
+task's branch at the head the round reviewed, no turn of an agent of the task in flight in the copy, you in none
+of its panes, and no prompt to its agents and no input of yours in its panes since the round began, asked
+before the save and again before the put-back. In every other case, a runtime that cannot tell too, the
+factory saves the same and asks you one question (`… put the copy back yourself and go on, or drop the
+task?`), naming the saved diff, the paths, the reviewed head and, for a copy that moved, the branch's head now,
+with the steps that put it back: `I put the copy back myself — go on` makes the factory look at the copy again,
+and the round's result stands once it is as the round found it, else the question comes again; `Drop the task`
+stops it. The factory never moves a branch or HEAD, never puts anything back under a doubt, and never runs your
+answer over a turn. A round stopped before its end (a drain, an install) has the same done before it runs again
 in its cycle. When the save or the put-back fails (a symlink among the new files, too
 many of them, a git that refuses), the task needs you, naming what the round left, why the factory left it, and
 the steps that put it back and go on:
@@ -5242,18 +5233,8 @@ cannot prove the round's or did not save: the rm step names only new files saved
 when the save failed) that are not older than the round, none after
 the round changed an ignore file, and never a file the round staged; the wait names those for you to judge. Past ten paths a step reads exactly them from a file in the task's directory
 (`round-<n>-restore.paths`, `-unstage.paths`, `-remove.paths`, NUL-separated:
-`--pathspec-from-file=<file> --pathspec-file-nul`, `xargs -0 rm -- < <file>`). A copy a round left off the branch
-or with the branch at another head, which the factory never moves by itself, asks you the same question: restore
-saves what the round left, puts it back, switches the copy back to the branch and moves a branch at another head
-back to the head the round reviewed (`git reset --keep`), and the result stands. Its words name what moves:
-`<branch> is reset from <now> to <head>; its N commits after <head> leave the branch (git's reflog keeps them;
-they are not in the saved diff)`, and the commits of a copy off the branch that leave it. Keep switches a copy off
-the branch back to it with its changes, and the result stands, or takes a branch at a new head as the task's head,
-whose checks run again there. Keep is never offered when it would drop the task's commits (a branch moved back
-behind the reviewed head, or beside it): the question then offers restore or drop, and your own words there ask
-again, never restore. A restore runs only over the branch head its question counted: a branch that moved since is
-asked about again, naming its new commits. Your own
-put-back and `magnum factory retry <task>` still let the task go on. The factory reads the result itself: a
+`--pathspec-from-file=<file> --pathspec-file-nul`, `xargs -0 rm -- < <file>`). Your own put-back and `magnum
+factory retry <task>` still let the task go on. The factory reads the result itself: a
 P0, P1 or P2, new or still open, or the verdict `blocking` blocks, whatever the planned event says. A round that
 ended `needs_attention`, `blocked`, `error`, `timeout` or refused, or whose result does not parse, is "review
 unavailable" and never clean: the task needs you (`you: review unavailable (<outcome>): <the round's error>`),
