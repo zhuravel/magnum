@@ -124,14 +124,28 @@ func (r *Runtime) countRecoveries(ctx context.Context, id int64, attempt, role s
 	return n
 }
 
+// recoveryAlertLead and recoveryAlertWords frame the alert of a recovery
+// (noteRecovery) after the task's key and before and after the role.
+const (
+	recoveryAlertLead  = "the factory recovers "
+	recoveryAlertWords = "'s lost pane by itself: "
+)
+
+// RecoveryAlert reports whether what, an alert's text after its task's key,
+// is the alert of a lost pane's recovery (noteRecovery): news of a step the
+// factory took by itself, which waits on nobody.
+func RecoveryAlert(what string) bool {
+	return strings.HasPrefix(what, recoveryAlertLead) && strings.Contains(what, recoveryAlertWords)
+}
+
 // noteRecovery records recovery n of role in attempt a of task t, the step
 // it takes and why, as a recover event (the count a restart reads) and as
 // an alert, so the screen shows what the factory did by itself.
 func (r *Runtime) noteRecovery(ctx context.Context, t registry.Task, a registry.Attempt, role string, n int, step, why string) {
 	text := fmt.Sprintf("%s%s%d of %d (%s): %s", recoverLead(role, a.ID), recoveryWord, n, MaxRecoveries, step, why)
 	r.appendEvent(ctx, t.ID, recoverKind, text)
-	r.appendEvent(ctx, t.ID, "alert", fmt.Sprintf("%s: the factory recovers %s's lost pane by itself: recovery %d of %d (%s)",
-		taskKey(t), role, n, MaxRecoveries, step))
+	r.appendEvent(ctx, t.ID, "alert", fmt.Sprintf("%s: %s%s%srecovery %d of %d (%s)", taskKey(t), recoveryAlertLead, role,
+		recoveryAlertWords, n, MaxRecoveries, step))
 }
 
 // noteStartOver records that the recoveries of role in attempt a of task t

@@ -872,17 +872,18 @@ func TestTheSidebarTokenFollowsTheTasksWorkspacesAndHerdrComingBack(t *testing.T
 }
 
 // The alert of a step the factory took by itself (a check it heals, a
-// go-on at the writer's fix budget, a round's leftovers it put back) is
-// news, as a go-on's at the cap is: a toast that counts nobody as waiting
-// on you while its task is live, and never dropped as "no longer waits on
-// you", which it never did. A task that is no longer live drops its news
-// in silence.
+// go-on at the writer's fix budget, a round's leftovers it put back, the
+// runtime's recovery of a lost pane) is news, as a go-on's at the cap is:
+// one toast that counts nobody as waiting on you while its task is live,
+// and never dropped as "no longer waits on you", which it never did. A task
+// that is no longer live drops its news in silence.
 func TestAStepTheFactoryTookByItselfIsNewsNeverAWaitOnYou(t *testing.T) {
 	for _, what := range []string{
 		healsAlert + "lint runs again at abc1234 (it printed nothing)",
 		goesOnAlert + "the writer's fix turns made progress: 2 more fix turns (go-on 1 of 2)",
 		putBackAlert + "what round 1 of the local review left in the copy (1 tracked change in the copy (README)), saved to " +
 			"review-1-left.diff; the round's result stands",
+		"the factory recovers fx-writer's lost pane by itself: recovery 1 of 3 (resume)",
 	} {
 		r := newAlertRig(t)
 		live := r.task("PR-12508", registry.TaskActive, "coding")
@@ -898,6 +899,11 @@ func TestAStepTheFactoryTookByItselfIsNewsNeverAWaitOnYou(t *testing.T) {
 		}
 		if got := slices.Concat(r.texts(live.ID, alertDropped), r.texts(gone.ID, alertDropped)); len(got) != 0 {
 			t.Errorf("%q: drop events %q; want none: news never waited on you", what, got)
+		}
+		r.tick()
+		r.after(10 * time.Minute)
+		if again := r.toasts.shown(); len(again) != 1 {
+			t.Errorf("%q: toasts %q after 10 more minutes; want the one toast only", what, again)
 		}
 	}
 }

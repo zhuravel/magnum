@@ -48,6 +48,7 @@ import (
 	"github.com/zhuravel/magnum/internal/eligibility"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/paths"
@@ -316,13 +317,14 @@ const (
 
 // newsAlert reports whether text is news, an alert that waits on nobody: a
 // go-on at the local review's cap (goOnAlert), or a step the factory took
-// by itself.
+// by itself (the runtime's recovery of a lost pane among them).
 func newsAlert(text string) bool {
 	if goOnAlert(text) {
 		return true
 	}
 	_, what, _ := strings.Cut(text, ": ")
-	return strings.HasPrefix(what, healsAlert) || strings.HasPrefix(what, goesOnAlert) || strings.HasPrefix(what, putBackAlert)
+	return strings.HasPrefix(what, healsAlert) || strings.HasPrefix(what, goesOnAlert) || strings.HasPrefix(what, putBackAlert) ||
+		runtime.RecoveryAlert(what)
 }
 
 // alertStands reports whether the alert ev still holds: the factory's own

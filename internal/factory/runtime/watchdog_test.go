@@ -226,6 +226,11 @@ func TestALostPaneIsRecoveredThreeTimesAfterItsWaitsTheLastInAFreshSession(t *te
 	if err != nil || len(alerts) != MaxRecoveries || !strings.Contains(alerts[0].Text, "recovers fx-repro's lost pane by itself") {
 		t.Fatalf("alerts %+v (%v), want one for each recovery", alerts, err)
 	}
+	for _, a := range alerts { // news the factory's delivery reads as such
+		if _, what, _ := strings.Cut(a.Text, ": "); !RecoveryAlert(what) {
+			t.Errorf("alert %q is no recovery alert as RecoveryAlert reads it", a.Text)
+		}
+	}
 }
 
 // The count of a role's recoveries lives in the task's recover events: a
