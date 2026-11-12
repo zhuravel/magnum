@@ -960,7 +960,11 @@ func (p *precheckRun) lintOnce(cmd, script string, files []string, changed map[s
 	if !r.ran {
 		return r
 	}
-	for _, o := range namedOffenses(r.run.Output) {
+	offenses, orphans := namedOffenses(r.run.Output)
+	for _, o := range offenses {
+		if orphans { // rows of no file: an output the factory cannot read, the writer's whole, never filtered
+			break
+		}
 		r.named++
 		file := strings.TrimPrefix(strings.TrimPrefix(o.file, p.c.Path+"/"), "./")
 		if changed[file][o.line] {
@@ -999,17 +1003,20 @@ var lintFileRe = regexp.MustCompile(`^[^\s:]+\.[\w.]+$`)
 // namedOffenses are the offenses output names: each path:line line
 // (offenseRe), and each row of line:column under the line that names its
 // file (lintFileRe, lintRowRe: eslint's stylish, stylelint's report), whose
-// file is that line's. A row with no such line above it names no file.
-func namedOffenses(output string) []namedOffense {
-	var out []namedOffense
+// file is that line's. A row with no such line above it names no file
+// (orphans: a tail cut at outputKeep lost its file's line), which makes
+// the whole output one the factory cannot read.
+func namedOffenses(output string) (out []namedOffense, orphans bool) {
 	file := ""
 	for line := range strings.SplitSeq(textx.StripTerminal(output), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if m := lintRowRe.FindStringSubmatch(line); m != nil {
-			if file != "" {
-				n, _ := strconv.Atoi(m[1])
-				out = append(out, namedOffense{file: file, line: n, text: file + ":" + trimmed})
+			if file == "" {
+				orphans = true
+				continue
 			}
+			n, _ := strconv.Atoi(m[1])
+			out = append(out, namedOffense{file: file, line: n, text: file + ":" + trimmed})
 			continue
 		}
 		if m := offenseRe.FindStringSubmatch(trimmed); m != nil && strings.Trim(m[1], "0123456789") != "" {
@@ -1024,7 +1031,7 @@ func namedOffenses(output string) []namedOffense {
 			file = ""
 		}
 	}
-	return out
+	return out, orphans
 }
 
 // onOwnBound runs fn on a context of the caller's that its own timer ends

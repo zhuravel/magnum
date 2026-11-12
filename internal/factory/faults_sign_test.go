@@ -551,3 +551,26 @@ func TestALintsRowsUnderTheirFileAreReadByTheChangedLines(t *testing.T) {
 		}
 	}
 }
+
+// A report whose rows have no file's line above them (its tail, cut at
+// outputKeep, lost the first file's line) is one the factory cannot read:
+// the writer's, with its output, never read as named offenses, whose
+// changed-line filter would drop the orphan rows and pass the lint.
+func TestALintReportWithRowsOfNoFileIsTheWriters(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12597", "bug")
+	r.fix(task)
+	r.lint = func([]string) string {
+		return "  3:5  error  'x' is assigned a value but never used  no-unused-vars\n" + // the first file's line was cut off
+			"  7:1  error  Unexpected console statement  no-console\n\n" +
+			"app/javascript/other.js\n  40:2  warning  Missing semicolon  semi\n\n\u2716 3 problems (2 errors, 1 warning)\n"
+	}
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil || res.Passed || res.ForYou || res.fault != nil || !res.unnamed ||
+		!strings.Contains(res.Why, "names no offense by path:line") {
+		t.Fatalf("precheck %+v, %v; want the writer's failure of an output it cannot read", res, err)
+	}
+	if offenses, orphans := namedOffenses(r.lint(nil)); !orphans || len(offenses) != 1 {
+		t.Fatalf("namedOffenses = %+v, %v; want the one row under its file and the orphan rows told", offenses, orphans)
+	}
+}
