@@ -26545,7 +26545,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     and the proof's red examples). Without them it compares the first failing line. `fix-turns.json` keeps
     them per run, with the grants. A check that named no failure of the code records no turn. `fixBudgetOf`
     adds the grants and your answer's turns to the cap in force, by time. So your retry still gives its 2
-    turns and spends no grant. A fresh session goes through `Runtime.SendFresh`, which also starts the role's
+    turns and spends no grant. A go-on starts the runtime's loop ladder over (`Runtime.MadeProgress`, again on
+    a rebuilt run after a restart), so with any `fix_go_on` the go-on's turns are never compacted, started
+    afresh or stopped as making no progress. A fresh session goes through `Runtime.SendFresh`, which also starts the role's
     loop ladder over. It is the next fix turn until a prompt that carries `freshFixLead` went, so a restart
     neither doubles nor loses it. A change that `recheckFailed` checks again after your answer gets its fix
     turn there.
@@ -26571,7 +26573,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
     Before, a role with no conversation got one fresh session, then it was lost. Task 8 stopped so, with `no
     progress after 1 recoveries`. Each recovery is a `recover` event and an alert. The runtime counts the recoveries from
     those events, since your newest retry or the role's last `starts over` event. So a restart neither doubles
-    nor loses one. The watchdog runs a recovery whose wait is over (`recoverDue`). Then the stage asks: start
+    nor loses one. The count is read from those events each time, in memory and after a restart alike: a
+    "ran out" event marks the recoveries spent, and only your retry after it, or a "starts over" event, starts
+    them over (a retry for another cause while recoveries are left starts nothing over). The writer's fresh
+    session at its fix budget is another budget: it starts the loop ladder over, never the pane's
+    recoveries (`SendFresh`'s recoveriesOver). A recovery that waits for its due time is void once the role
+    moves (its turn ends, a run goes). The watchdog runs a recovery whose wait is over (`recoverDue`). Then the stage asks: start
     the role again, give it a direction, or drop the task. The first two start a fresh session with its
     context through `SendFresh`, and its recoveries count again. The stage hands that start once: the ledger
     keeps the prompt that starts with `answerLead`.
