@@ -91,6 +91,9 @@ type PrecheckResult struct {
 	fault    *checkFault
 	check    string
 	failures []string
+	// unnamed: the failures are firstFailing's, the run having named no
+	// failing example or offense; your accept of them is the check's alone.
+	unnamed bool
 }
 
 // errOverCap is the cause of a precheck's context its cap ended.
@@ -498,12 +501,24 @@ func (p *precheckRun) readDecisions() {
 // first failing line) for the fix turns' progress (fix_go_on.go); a failure
 // of a check your answer accepted as known for the task is a note instead.
 func (p *precheckRun) failCheck(key string, failures []string, why, cmd string) {
-	if p.stops.accepts(key, failures) {
+	p.failChecked(key, failures, false, why, cmd)
+}
+
+// failUnnamed is failCheck of a run that named no failing example or
+// offense: its failure is the line firstFailing reads, and your accept of
+// it holds for the check alone (unnamed).
+func (p *precheckRun) failUnnamed(key string, run ProofRun, why, cmd string) {
+	p.failChecked(key, firstFailing(run), true, why, cmd)
+}
+
+// failChecked is failCheck, unnamed for a failure read by firstFailing.
+func (p *precheckRun) failChecked(key string, failures []string, unnamed bool, why, cmd string) {
+	if p.stops.accepts(key, failures, unnamed) {
 		p.say("\nAccepted as known for this task, on your answer to its question: %s.\n", why)
 		return
 	}
 	if p.res.Passed {
-		p.res.check, p.res.failures = key, failures
+		p.res.check, p.res.failures, p.res.unnamed = key, failures, unnamed
 	}
 	p.fail(why, cmd)
 }
@@ -1071,9 +1086,8 @@ func (p *precheckRun) lintNoOffense(cmd, script string, r lintRun, tried []strin
 	key := lintKey(cmd)
 	switch {
 	case r.sign == "": // an output the factory cannot read: the writer's, with it, as any failure the change could have caused
-		failing := firstFailing(r.run)
-		p.failCheck(key, failing, fmt.Sprintf("lint: `%s` exited %d and names no offense by path:line: %s", firstWord(cmd), r.run.Exit,
-			cmp.Or(strings.Join(failing, "; "), "it printed nothing the factory reads")), script)
+		p.failUnnamed(key, r.run, fmt.Sprintf("lint: `%s` exited %d and names no offense by path:line: %s", firstWord(cmd), r.run.Exit,
+			strings.Join(firstFailing(r.run), "; ")), script)
 		return "code"
 	case p.toWriter(key): // your answer handed its faults to the writer
 		line := cmp.Or(lastLine(p.stderr), r.sign)
@@ -1207,7 +1221,7 @@ func (p *precheckRun) specs(cmd string, files []string) {
 			p.faultForYou(r.fault(key), fmt.Sprintf("specs: %s exited %d and %s", firstWord(cmd), run.Exit, r.sign))
 			return
 		}
-		p.failCheck(key, firstFailing(run), fmt.Sprintf("specs: %s exited %d and names no failing spec", firstWord(cmd), run.Exit), script)
+		p.failUnnamed(key, run, fmt.Sprintf("specs: %s exited %d and names no failing spec", firstWord(cmd), run.Exit), script)
 		return
 	}
 	p.judgeRed(cmd, script, run, red)
@@ -1571,7 +1585,11 @@ func (p *precheckRun) jest(cmd string, files []string) {
 	case run.Exit != 0:
 		check.Result, check.Cause = registry.CheckFail, "code"
 		p.say("\n## Jest\n\n`%s` exited %d:\n\n```\n%s\n```\n", script, run.Exit, run.Output)
-		p.failCheck(key, orFailing(failed, run), fmt.Sprintf("jest: %s exited %d", firstWord(cmd), run.Exit), script)
+		if len(failed) == 0 {
+			p.failUnnamed(key, run, fmt.Sprintf("jest: %s exited %d", firstWord(cmd), run.Exit), script)
+		} else {
+			p.failCheck(key, failed, fmt.Sprintf("jest: %s exited %d", firstWord(cmd), run.Exit), script)
+		}
 	default:
 		p.say("\n## Jest\n\n`%s`: passed\n", script)
 	}

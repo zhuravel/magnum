@@ -455,21 +455,22 @@ func (r checkResult) why() string {
 
 // failedCheck is the check whose failure why says, and its failures: the
 // factory's proof and the failing examples of its head run (else its why),
-// or the precheck's failing check and its failures (failCheck).
-func (r checkResult) failedCheck() (check string, failed []string) {
+// or the precheck's failing check and its failures (failCheck); unnamed
+// when they are no example's or offense's (firstFailing, the why's line).
+func (r checkResult) failedCheck() (check string, failed []string, unnamed bool) {
 	switch {
 	case r.Proof != nil && !r.Proof.Passed:
 		for _, f := range failures(r.Proof.Head.Output) {
 			failed = append(failed, f.key)
 		}
 		if len(failed) == 0 {
-			failed = []string{textx.FirstLine(r.Proof.Why)}
+			return "the factory's proof", []string{textx.FirstLine(r.Proof.Why)}, true
 		}
-		return "the factory's proof", failed
+		return "the factory's proof", failed, false
 	case r.Precheck != nil && !r.Precheck.Passed:
-		return r.Precheck.check, r.Precheck.failures
+		return r.Precheck.check, r.Precheck.failures, r.Precheck.unnamed
 	}
-	return "", nil
+	return "", nil, false
 }
 
 // failedCommand is the command of the failure why says, as it ran, for the
@@ -601,8 +602,9 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 		if res.forYou() {
 			return forYouProblem(*t, file, res), "", false, nil
 		}
-		check, failed := res.failedCheck()
-		return &endProblem{file: file, why: res.why(), change: true, command: res.failedCommand(), check: check, failures: failed}, "",
+		check, failed, unnamed := res.failedCheck()
+		return &endProblem{file: file, why: res.why(), change: true, command: res.failedCommand(), check: check, failures: failed,
+				unnamed: unnamed}, "",
 			false, nil
 	}
 	return nil, bh.Head, false, nil

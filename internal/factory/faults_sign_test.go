@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 )
@@ -394,5 +395,102 @@ func TestAFaultsRunAgainThatDidNotStartIsTheMachines(t *testing.T) {
 	res, err := r.e.precheck(r.ctx, task, r.cp)
 	if err == nil || !errors.Is(err, syscall.EAGAIN) || res.ForYou || res.fault != nil {
 		t.Fatalf("precheck %+v, %v; want the machine's error, no question for you", res, err)
+	}
+}
+
+// rspec 3.13's output of a run whose error is outside of examples, as it
+// printed it on scratch files with --order random (an after(:suite) and a
+// before(:suite) hook that raise), with its seed for a run; and the start of
+// Ruby 4.0's stderr of a spec that segfaults (exit 139), with its address.
+func afterSuiteRun(seed string) string {
+	return "\nRandomized with seed " + seed + "\n..\nAn error occurred in an `after(:suite)` hook.\n" +
+		"Failure/Error: RSpec.configure { |c| c.after(:suite) { raise \"the suite left a file behind\" } }\n\n" +
+		"RuntimeError:\n  the suite left a file behind\n# ./spec/credit_spec.rb:1:in 'block (2 levels) in <top (required)>'\n\n\n" +
+		"Finished in 0.0218 seconds (files took 0.43136 seconds to load)\n2 examples, 0 failures, 1 error occurred outside of examples\n\n" +
+		"Randomized with seed " + seed + "\n\n"
+}
+
+func beforeSuiteRun(seed string) string {
+	return "\nRandomized with seed " + seed + "\n\nAn error occurred in a `before(:suite)` hook.\n" +
+		"Failure/Error: RSpec.configure { |c| c.before(:suite) { raise ArgumentError, \"FactoryBot.lint found 2 invalid factories\" } }\n\n" +
+		"ArgumentError:\n  FactoryBot.lint found 2 invalid factories\n# ./spec/credit_spec.rb:1:in 'block (2 levels) in <top (required)>'\n\n\n" +
+		"Finished in 0.00522 seconds (files took 0.08076 seconds to load)\n0 examples, 0 failures, 1 error occurred outside of examples\n\n" +
+		"Randomized with seed " + seed + "\n\n"
+}
+
+func segfaultRun(addr string) string {
+	return "/copy/spec/credit_spec.rb:2: [BUG] Segmentation fault at " + addr + "\n" +
+		"ruby 4.0.9 (2026-10-23 revision 3e93b23afc) +PRISM [arm64-darwin27]\n\n" +
+		"-- Crash Report log information --------------------------------------------\n"
+}
+
+// A failure no example names reads the same on every run: the error's own
+// line (the exception's class and message, else "An error occurred in …",
+// else "Failure/Error: …", else a [BUG] line), past the noise of a run
+// (rspec's seed, its run options, progress dots, its timing), hex addresses
+// read as 0x?. Read on its first line, an error outside of examples gave
+// "Randomized with seed N", new each run, so no turn ever failed the same
+// way twice.
+func TestAFailureNoExampleNamesReadsTheSameOnEveryRun(t *testing.T) {
+	read := func(stdout, stderr string) []string {
+		return firstFailing(ProofRun{Exit: 1, out: []byte(stdout), errOut: []byte(stderr)})
+	}
+	for _, tc := range []struct {
+		name     string
+		one, two []string
+		want     string
+	}{
+		{"an after(:suite) error", read(afterSuiteRun("11866"), ""), read(afterSuiteRun("4242"), ""),
+			"RuntimeError: the suite left a file behind"},
+		{"a before(:suite) error", read(beforeSuiteRun("33502"), ""), read(beforeSuiteRun("7"), ""),
+			"ArgumentError: FactoryBot.lint found 2 invalid factories"},
+		{"a segfault", read("", segfaultRun("0x0000000000000000")), read("", segfaultRun("0x00007ff8a1b2c3d4")),
+			"/copy/spec/credit_spec.rb:2: [BUG] Segmentation fault at 0x?"},
+		{"progress and options alone", read("Run options: include {:focus=>true}\n....F..\nsomething went sideways\n", ""),
+			read("Run options: include {:focus=>true}\n.......\nsomething went sideways\n", ""), "something went sideways"},
+	} {
+		if !slices.Equal(tc.one, tc.two) || len(tc.one) != 1 || tc.one[0] != tc.want {
+			t.Errorf("%s: read %q and %q; want %q both times", tc.name, tc.one, tc.two, tc.want)
+		}
+	}
+}
+
+// Your accept of a failure no example names holds for its check while that
+// check fails so again, whatever its run prints anew (its seed, a scratch
+// directory's name in its message): the accept is the check's alone, never
+// today's line, so the question never comes back for it.
+func TestAnAcceptOfAFailureNoExampleNamesHoldsForItsCheck(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12595", "bug")
+	r.fix(task)
+	r.mu.Lock()
+	r.adds = map[string]string{"bin/specs": afterSuiteRun("11866")}
+	r.mu.Unlock()
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil || res.Passed || !res.unnamed {
+		t.Fatalf("precheck %+v, %v; want the writer's failure, read with no example named", res, err)
+	}
+	p := &endProblem{check: res.check, failures: res.failures, unnamed: res.unnamed, why: res.Why}
+	q := fixQuestion(registry.Attempt{ID: "t1-coding-1", Stage: "coding", N: 1}, &stageRole{runAs: config.Role{Name: "fx-writer"}}, p,
+		fixBudget{})
+	a := q.ask
+	a.Decision = decideAccept
+	dir := r.layout.FactoryTaskDir(task.ID)
+	rec, _ := readStops(dir)
+	rec.apply(a)
+	if err := writeStops(dir, rec); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.adds = map[string]string{"bin/specs": strings.ReplaceAll(afterSuiteRun("4242"), "a file behind", "/tmp/rspec-4242 behind")}
+	r.mu.Unlock()
+	if res, err := r.e.precheck(r.ctx, task, r.cp); err != nil || !res.Passed {
+		t.Fatalf("precheck %+v, %v after your accept, on a new seed; want it passed", res, err)
+	}
+	r.mu.Lock()
+	r.adds = map[string]string{"bin/specs": "Failures:\n\n  1) Credit counts\nrspec ./spec/models/credit_points_spec.rb:3 # Credit counts\n"}
+	r.mu.Unlock()
+	if res, err := r.e.precheck(r.ctx, task, r.cp); err != nil || res.Passed {
+		t.Fatalf("precheck %+v, %v on a failing example; want it failed: the accept covers the unnamed failure only", res, err)
 	}
 }

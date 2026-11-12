@@ -309,25 +309,53 @@ func runText(run ProofRun) (stdout, stderr string) {
 	return textx.StripTerminal(string(run.out)), textx.StripTerminal(string(run.errOut))
 }
 
-// orFailing is failed, the failures a run named, else its first failing
-// line (firstFailing).
-func orFailing(failed []string, run ProofRun) []string {
-	if len(failed) > 0 {
-		return failed
-	}
-	return firstFailing(run)
-}
-
-// firstFailing is the first line of run's output that may say why it
-// failed (meaningfulLines), else its exit: the failure a check that names
-// none gives the writer's progress (fix_go_on.go).
+// firstFailing is the line of run's output that says why it failed when it
+// names no failing example or offense, read the same on every run: the
+// error's own (an exception's class and message, else rspec's "An error
+// occurred in …", else its "Failure/Error: …", else a crash's "[BUG] …"),
+// else the first line that may say why (meaningfulLines), past the noise a
+// run prints anew each time (runNoiseRe), its hex addresses read as 0x?; else
+// its exit. It is the failure the writer's progress compares
+// (fix_go_on.go), and its check alone is what your accept of it holds for
+// (unnamed).
 func firstFailing(run ProofRun) []string {
 	stdout, stderr := runText(run)
-	if line := firstLine(stdout + "\n" + stderr); line != "" {
+	var lines []string
+	for l := range strings.SplitSeq(stdout+"\n"+stderr, "\n") {
+		if l = strings.TrimSpace(l); l != "" && !runNoiseRe.MatchString(l) {
+			lines = append(lines, hexRe.ReplaceAllString(l, "0x?"))
+		}
+	}
+	for i, l := range lines[:max(len(lines)-1, 0)] {
+		if exceptionRe.MatchString(l) && l != "Failures:" && l != "Pending:" {
+			return []string{l + " " + lines[i+1]}
+		}
+	}
+	for _, lead := range []string{"An error occurred ", "Failure/Error: "} {
+		if i := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, lead) }); i >= 0 {
+			return []string{lines[i]}
+		}
+	}
+	if i := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(l, "[BUG] ") }); i >= 0 {
+		return []string{lines[i]}
+	}
+	if line := firstLine(strings.Join(lines, "\n")); line != "" {
 		return []string{line}
 	}
 	return []string{fmt.Sprintf("exited %d", run.Exit)}
 }
+
+// runNoiseRe matches a line of a run that says nothing of its failure and
+// changes from run to run: rspec's seed and run options, progress dots, its
+// timing and its slowest examples.
+var runNoiseRe = regexp.MustCompile(`^(?:Randomized with seed \d+|Run options:.*|[.*FEP]+|Finished in .*|Top \d+ slowest .*|\(files took .*\))$`)
+
+// hexRe is a hex address, which a crash prints anew each run.
+var hexRe = regexp.MustCompile(`0x[0-9a-fA-F]+`)
+
+// exceptionRe is an exception's class on a line of its own, as rspec prints
+// it above its message ("RuntimeError:", "FactoryBot::InvalidFactoryError:").
+var exceptionRe = regexp.MustCompile(`^(?:[A-Z]\w*::)*[A-Z]\w*:$`)
 
 // faultQuestion is the question of check fault f (the stage that checked
 // its role's change asks it): skip the check for the task, run it with a

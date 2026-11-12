@@ -314,7 +314,9 @@ func fixQuestion(a registry.Attempt, r *stageRole, p *endProblem, b fixBudget) s
 			"the seeded locale`: they go to " + role + " with " + fmt.Sprint(RetryFixTurns) + " more fix turns"},
 		registry.Option{Label: optionDrop, Means: "the task stops"})
 	ask := stopAsk{Kind: stopFix, Key: a.ID + "/" + role, Role: role, Attempt: a.ID, Why: why}
-	if accept {
+	if accept && p.unnamed { // a failure no example names: your accept holds for the check, whatever its run prints anew
+		ask.Check, ask.Unnamed = p.check, true
+	} else if accept {
 		ask.Check, ask.Failures = p.check, p.failures
 	}
 	return stopQuestion{ask: ask, q: registry.Question{

@@ -108,6 +108,9 @@ type stopAsk struct {
 	// NoKeep marks a question of what a round left that offered no keep
 	// (it would drop the task's commits): its ways are restore and drop.
 	NoKeep bool `json:"no_keep,omitempty"`
+	// Unnamed: the fix stop's failure is no example's or offense's
+	// (firstFailing): an accept of it is the check's alone.
+	Unnamed bool `json:"unnamed,omitempty"`
 }
 
 // accepted is a check whose failure you accepted as known for the task:
@@ -115,6 +118,9 @@ type stopAsk struct {
 type accepted struct {
 	Check    string   `json:"check"`
 	Failures []string `json:"failures,omitempty"`
+	// Unnamed: a failure no example or offense names (firstFailing), whose
+	// accept holds for the check while it fails so, never for a named one.
+	Unnamed bool `json:"unnamed,omitempty"`
 }
 
 // stopsRecord is stops.json: the stop questions, and what your answers
@@ -195,10 +201,13 @@ func (rec stopsRecord) bound(key string) time.Duration {
 // accepts reports whether your answer accepted the failure of check key,
 // whose failures are failures, as known for the task: an acceptance of it
 // with no failures named, or one that names each of them.
-func (rec stopsRecord) accepts(key string, failures []string) bool {
+func (rec stopsRecord) accepts(key string, failures []string, unnamed bool) bool {
 	return slices.ContainsFunc(rec.Accepted, func(a accepted) bool {
-		if a.Check != key {
+		switch {
+		case a.Check != key:
 			return false
+		case a.Unnamed:
+			return unnamed
 		}
 		return len(a.Failures) == 0 || !slices.ContainsFunc(failures, func(f string) bool { return !slices.Contains(a.Failures, f) })
 	})
@@ -462,7 +471,7 @@ func (rec *stopsRecord) apply(a stopAsk) {
 			rec.NoBase = append(rec.NoBase, a.Check)
 		}
 	case decideAccept:
-		rec.Accepted = append(rec.Accepted, accepted{Check: a.Check, Failures: a.Failures})
+		rec.Accepted = append(rec.Accepted, accepted{Check: a.Check, Failures: a.Failures, Unnamed: a.Unnamed})
 	}
 }
 

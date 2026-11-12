@@ -121,6 +121,7 @@ type endProblem struct {
 	ask      *stopQuestion
 	check    string
 	failures []string
+	unnamed  bool // the failures are firstFailing's: your accept is the check's alone
 }
 
 func (p *endProblem) String() string { return p.file + ": " + p.why }
