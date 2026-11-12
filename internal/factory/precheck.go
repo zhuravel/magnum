@@ -38,6 +38,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
@@ -180,8 +181,9 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 	if err != nil {
 		return PrecheckResult{}, err
 	}
-	var files, added []string
+	var files, added, touched []string
 	for _, f := range diff {
+		touched = append(touched, f.Path)
 		if f.Status == 'D' {
 			continue
 		}
@@ -223,7 +225,7 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 	p := &precheckRun{e: e, t: t, c: c, repo: repo, head: bh.Head, base: bh.Base, ctx: cctx, parent: ctx, limit: limit, started: started,
 		res: PrecheckResult{Passed: true}}
 	p.readDecisions()
-	p.files = files
+	p.files, p.touched = files, touched
 	defer func() {
 		for _, cancel := range p.renewed {
 			cancel(nil)
@@ -479,9 +481,13 @@ type precheckRun struct {
 	// skipped, accepted, their bounds), faults the fault steps spent at each
 	// head (check-faults.json); files the paths the branch changed; renewed
 	// the cancels of the caps renewCap gave the steps after a fault.
-	stops   stopsRecord
-	faults  faultsRecord
-	files   []string
+	stops  stopsRecord
+	faults faultsRecord
+	files  []string
+	// touched are the files the change touched, the deleted ones too: what a
+	// crash, a sign or a fault's output is read against (branchCaused,
+	// runnerCaused, namesChanged), never a command's {files}.
+	touched []string
 	renewed []context.CancelCauseFunc
 }
 
@@ -658,7 +664,8 @@ func (p *precheckRun) run(key, what, cmd string) (ProofRun, bool) {
 	}
 	run.Took = (p.e.now().Sub(start) - waited).Round(time.Millisecond)
 	code, denied, err := ranTo(res, err)
-	run.Exit, run.Output = code, outputOf(res)
+	run.Exit, run.Output = signalExit(code, res.Signal), outputOf(res)
+	run.whole, run.cut = string(res.Stdout)+"\n"+string(res.Stderr), res.Truncated
 	run.out, run.errOut = lastBytes(res.Stdout, precheckTailWindow), lastBytes(res.Stderr, precheckTailWindow)
 	p.stderr, p.exit = string(res.Stderr), code
 	switch {
@@ -984,25 +991,27 @@ func (p *precheckRun) lintOnce(cmd, script string, files []string, changed map[s
 	if !r.ran {
 		return r
 	}
-	offenses, orphans := namedOffenses(r.run.Output)
+	offenses, orphans := namedOffenses(r.run.whole) // its whole output: the kept 8 KiB may have lost the writer's line
+	orphans = orphans || r.run.cut                  // an output cut at execx's limit is one the factory cannot read whole
 	for _, o := range offenses {
 		if orphans { // rows of no file: an output the factory cannot read, the writer's whole, never filtered
 			break
 		}
 		r.named++
 		file := strings.TrimPrefix(strings.TrimPrefix(o.file, p.c.Path+"/"), "./")
-		if changed[file][o.line] {
-			r.mine = append(r.mine, o.text)
+		_, touched := changed[file]
+		if changed[file][o.line] || touched && (o.line == 0 || strings.Contains(o.text, "Parsing error")) { // a whole file's fatal error
+			r.mine = append(r.mine, scrub.Secrets(o.text)) // read from the whole output, which is no scrubbed copy
 		}
 	}
 	if r.run.Exit != 0 && r.named == 0 {
 		stdout, _ := runText(r.run)
 		if r.crash, r.isCrash = crashOf("precheck.lint", cmd, p.c.Path, p.stderr); r.isCrash {
-			r.theirs = branchCaused(r.crash, p.stderr, files)
+			r.theirs = branchCaused(r.crash, p.stderr, p.touchedOr(files))
 		}
 		r.sign = faultSign(r.run.Exit, stdout, p.stderr, r.crash, r.isCrash, cmd)
 		if r.sign != "" && !r.isCrash { // any other sign is the branch's too when it touched what the lint loads, or its output names the change
-			r.theirs = branchCaused(envCrash{cmd: cmd}, stdout+"\n"+p.stderr, files)
+			r.theirs = branchCaused(envCrash{cmd: cmd}, stdout+"\n"+p.stderr, p.touchedOr(files))
 		}
 	}
 	return r
@@ -1343,10 +1352,10 @@ func (p *precheckRun) runNaming(key, what, script, failing string, files []strin
 		if r.ok && r.run.Exit != 0 && !names(r.run) && !p.toWriter(key) {
 			stdout, stderr := runText(r.run)
 			crash, isCrash := crashOf(key, script, p.c.Path, stderr)
-			if !isCrash || len(branchCaused(crash, stderr, files)) == 0 {
+			if !isCrash || len(branchCaused(crash, stderr, p.touchedOr(files))) == 0 {
 				r.sign = faultSign(r.run.Exit, stdout, stderr, crash, isCrash, "")
 			}
-			if r.sign != "" && runnerCaused(r.run.Exit, stdout+"\n"+stderr, files) { // a crash on the change's code: the writer's
+			if r.sign != "" && runnerCaused(r.run.Exit, stdout+"\n"+stderr, p.touchedOr(files)) { // a crash on the change's code: the writer's
 				r.sign = ""
 			}
 		}
@@ -1847,3 +1856,21 @@ func sha256Hex(b []byte) string {
 
 // writeFile writes text to path atomically, private.
 func writeFile(path, text string) error { return fsx.WriteFileAtomic(path, []byte(text), 0o600) }
+
+// touchedOr are the files the change touched (deletions too), else files.
+func (p *precheckRun) touchedOr(files []string) []string {
+	if len(p.touched) > 0 {
+		return p.touched
+	}
+	return files
+}
+
+// signalExit is the exit of a run a signal ended, as a shell tells it: 128
+// plus the signal (139 for SIGSEGV, 134 for SIGABRT), which execx reports as
+// -1 with the signal; code itself for a run that exited.
+func signalExit(code int, sig syscall.Signal) int {
+	if sig > 0 {
+		return 128 + int(sig)
+	}
+	return code
+}

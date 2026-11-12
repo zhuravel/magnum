@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -291,5 +292,17 @@ func TestAQuietCommandLogsEveryFailureAtDebug(t *testing.T) {
 				t.Errorf("%s quiet=%v: levels %v, want [%v]", tc.name, quiet, got, want)
 			}
 		}
+	}
+}
+
+// A process a signal ended reports the signal (Result.Signal), as the wait
+// status tells it: its exit code is -1 then, never 128 plus the signal.
+func TestARunASignalEndedReportsTheSignal(t *testing.T) {
+	res, err := (&Real{}).Run(context.Background(), Cmd{Name: "sh", Args: []string{"-c", "kill -SEGV $$"}})
+	if err == nil || res.Signal != syscall.SIGSEGV || res.Code != -1 {
+		t.Fatalf("Run = %+v, %v; want the SIGSEGV that ended it, its code -1", res, err)
+	}
+	if res, _ := (&Real{}).Run(context.Background(), Cmd{Name: "sh", Args: []string{"-c", "exit 3"}}); res.Signal != 0 || res.Code != 3 {
+		t.Fatalf("Run = %+v; want exit 3 and no signal", res)
 	}
 }

@@ -267,7 +267,7 @@ func (p *precheckRun) healFault(key string) (failed string) {
 // retry, and the result carries f for the stage's question (faultQuestion).
 func (p *precheckRun) faultForYou(f checkFault, why string) {
 	f.head = p.head
-	f.namesChanged = f.namesChanged || namesChanged(f.tail, p.files)
+	f.namesChanged = f.namesChanged || namesChanged(f.tail, p.touchedOr(p.files))
 	if len(f.tried) > 0 {
 		why += "; the factory " + andList(f.tried)
 	}

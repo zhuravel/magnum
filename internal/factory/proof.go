@@ -92,6 +92,10 @@ type ProofRun struct {
 	// stderr, raw (precheckTailWindow bytes each, never kept in a file as
 	// they are): a precheck's tails of a run its cap or bound stopped.
 	out, errOut []byte
+	// whole is all it printed, stdout then stderr, never kept in a file: a
+	// lint's offenses are read from it; cut, execx cut it at its limit.
+	whole string
+	cut   bool
 }
 
 // Holds reports whether p passed at head: another head voids it.

@@ -1,8 +1,10 @@
 package factory
 
 import (
+	"fmt"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/config"
@@ -153,5 +155,82 @@ func TestASimpleCovAcceptKeepsItsMinimum(t *testing.T) {
 	if acceptKey(line("82.35", "90.00")) != acceptKey(line("80.10", "90.00")) || acceptKey(line("82.35", "90.00")) == acceptKey(line("82.35", "95.00")) {
 		t.Fatalf("acceptKey reads %q and %q; want the coverage as any and the minimum kept", acceptKey(line("82.35", "90.00")),
 			acceptKey(line("82.35", "95.00")))
+	}
+}
+
+// eslint's fatal error of a file (a parse error, no line: "0:0") is an
+// offense of the whole file: a file the change touched fails the lint for
+// the writer, never passes as "none on a changed line".
+func TestALintsFatalErrorOfAChangedFileIsTheWriters(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12603", "bug")
+	r.fix(task)
+	r.lint = func([]string) string {
+		return r.copyDir + "/spec/models/credit_points_spec.rb\n  0:0  error  Parsing error: ESLint was configured to run on " +
+			"this file, but that TSConfig does not include this file\n\n\u2716 1 problem (1 error, 0 warnings)\n"
+	}
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil || res.Passed || res.ForYou || !strings.Contains(res.Why, "1 offense on the changed lines") {
+		t.Fatalf("precheck %+v, %v; want the writer's failure on the changed file", res, err)
+	}
+}
+
+// A signal's death is told by the signal, not by an exit code: execx
+// reports -1 with the signal, and the precheck reads it as 128 plus it
+// (139 for SIGSEGV), the exit a segfault's rule and the signal's sign read.
+func TestASignalsDeathReadsAsItsExit(t *testing.T) {
+	if got := signalExit(-1, syscall.SIGSEGV); got != 139 {
+		t.Fatalf("signalExit(-1, SIGSEGV) = %d, want 139", got)
+	}
+	if got := signalExit(2, 0); got != 2 {
+		t.Fatalf("signalExit(2, none) = %d, want 2", got)
+	}
+}
+
+// The lint's offenses are read from its whole output, never the 8 KiB the
+// factory keeps: an offense on a changed line ahead of 10 KiB of others
+// fails the lint for the writer.
+func TestALintsOffensesAreReadFromItsWholeOutput(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12604", "bug")
+	r.fix(task)
+	r.lint = func([]string) string {
+		out := "spec/models/credit_points_spec.rb:1:1: C: Style: the writer's own\n"
+		for i := range 200 {
+			out += fmt.Sprintf("app/legacy.rb:%d:1: C: Layout: an offense of the code the change left alone\n", i+10)
+		}
+		return out
+	}
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil || res.Passed || !strings.Contains(res.Why, "1 offense on the changed lines") {
+		t.Fatalf("precheck %+v, %v; want the writer's offense on the changed line, past the kept tail", res, err)
+	}
+}
+
+// A command missing for a lint run through a script the change defines
+// (package.json's script, a Makefile's recipe) is the change's: those files
+// count as the crash's cause, as the lint's own script does.
+func TestAMissingCommandOfAScriptTheChangeDefinesIsTheChanges(t *testing.T) {
+	crash := envCrash{cmd: "make lint {files}", sig: envSignature{scriptOnly: true, lacks: "a command"}}
+	for _, f := range []string{"Makefile", "package.json", "lib/tasks/lint.rake", "bin/lint"} {
+		if got := branchCaused(crash, "/bin/sh: eslnt: command not found", []string{"app/x.rb", f}); !slices.Contains(got, f) {
+			t.Errorf("branchCaused with %s changed = %q; want it", f, got)
+		}
+	}
+}
+
+// A file the change deleted counts among the files it touched: a lint whose
+// error names a configuration the change deleted is the change's, never the
+// environment's.
+func TestALintErrorNamingAFileTheChangeDeletedIsTheChanges(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12605", "bug")
+	r.fix(task)
+	r.git(r.copyDir, "rm", "--quiet", "README")
+	r.git(r.copyDir, "commit", "--quiet", "-m", "PR-12605 drops the README")
+	r.lintCrash = func([]string) string { return "Error: Configuration file not found: " + r.copyDir + "/README\n" }
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil || res.Passed || res.ForYou || res.fault != nil || !strings.Contains(res.Why, "README") {
+		t.Fatalf("precheck %+v, %v; want the writer's failure naming the deleted README", res, err)
 	}
 }

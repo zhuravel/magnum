@@ -179,6 +179,12 @@ func crashOf(key, cmd, dir, stderr string) (envCrash, bool) {
 var lintInputRe = regexp.MustCompile(`(?i)(?:^|/)(?:Gemfile(?:\.lock)?|gems\.(?:rb|locked)|package(?:-lock)?\.json|yarn\.lock|` +
 	`pnpm-lock\.yaml|\.tool-versions|\.ruby-version|\.?mise\.toml)$|rubocop|eslint|stylelint|prettier|(?:^|/)cops?/`)
 
+// scriptDefRe matches a changed file that defines the scripts a command runs
+// (package.json's scripts, a Makefile's recipes, a Rakefile's and
+// lib/tasks' tasks, bin's scripts): a command it names that is missing is
+// the change's.
+var scriptDefRe = regexp.MustCompile(`(?:^|/)(?:package\.json|[Mm]akefile|GNUmakefile|Rakefile|Justfile|Taskfile\.ya?ml)$|(?:^|/)lib/tasks/|(?:^|/)bin/`)
+
 // branchCaused are the files of the change (files, as the copy names them)
 // that crash c of a lint can come from: the lint's own script (its
 // command's first word), and, unless c's signature is the script's alone
@@ -187,7 +193,8 @@ var lintInputRe = regexp.MustCompile(`(?i)(?:^|/)(?:Gemfile(?:\.lock)?|gems\.(?:
 func branchCaused(c envCrash, stderr string, files []string) []string {
 	var out []string
 	for _, f := range files {
-		if f == firstWord(c.cmd) || !c.sig.scriptOnly && (lintInputRe.MatchString(f) || strings.Contains(stderr, f)) {
+		if f == firstWord(c.cmd) || c.sig.scriptOnly && scriptDefRe.MatchString(f) ||
+			!c.sig.scriptOnly && (lintInputRe.MatchString(f) || strings.Contains(stderr, f)) {
 			out = append(out, f)
 		}
 	}

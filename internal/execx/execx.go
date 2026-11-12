@@ -94,6 +94,9 @@ type Result struct {
 	// Truncated reports that a stream exceeded MaxOutput: the kept prefix is
 	// followed by TruncationMarker and the rest was discarded.
 	Truncated bool
+	// Signal is the signal that ended the process, as its wait status tells
+	// it (0 for an exit): Code is -1 then, never 128 plus the signal.
+	Signal syscall.Signal
 }
 
 // Out returns trimmed stdout.
@@ -387,6 +390,9 @@ func (r *Real) Run(ctx context.Context, c Cmd) (Result, error) {
 	res.Code = -1 // the process never started
 	if cmd.ProcessState != nil {
 		res.Code = cmd.ProcessState.ExitCode()
+		if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+			res.Signal = ws.Signal()
+		}
 	}
 	if r.Log != nil {
 		trunc := ""
