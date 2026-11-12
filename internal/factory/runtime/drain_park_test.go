@@ -63,8 +63,9 @@ func TestParkForRebootReportsALiaisonAtWorkWhileYouAreInItsPane(t *testing.T) {
 	}
 
 	g.h.setStatus(g.liaisonAgent(), herdr.StatusIdle)
-	if err := g.r.ParkForReboot(g.ctx, g.task); err != nil {
-		t.Fatalf("ParkForReboot with you in the idle liaison's pane = %v, want it to go through", err)
+	err = g.r.ParkForReboot(g.ctx, g.task)
+	if !errors.Is(err, ErrLiaisonLeftLive) || errors.Is(err, agents.ErrBusy) {
+		t.Fatalf("ParkForReboot with you in the idle liaison's pane = %v, want it left live (never parked: the next message starts a turn)", err)
 	}
 	if !g.liaisonLive() {
 		t.Fatal("the park parked the liaison you are in")

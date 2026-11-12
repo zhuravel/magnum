@@ -1290,7 +1290,10 @@ func (r *Runtime) park(ctx context.Context, t registry.Task, strict bool) error 
 	if left != "" {
 		r.log.Info("left a task's liaison live: "+left, "task", t.ID)
 	}
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrLiaisonLeftLive) && len(errs) == 0:
+		return err // drain.go: the task's own agents parked; the liaison you are in stays, to be looked at again
+	case err != nil && !errors.Is(err, ErrLiaisonLeftLive):
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
@@ -1321,10 +1324,11 @@ func (r *Runtime) parkLiaison(ctx context.Context, t registry.Task, strict bool)
 		return "", err
 	}
 	if r.operatorOn(ctx, pr, LiaisonRole) {
-		if strict { // drain.go: what you typed runs a turn the reboot would cut
+		if strict { // drain.go: what you typed runs a turn the reboot would cut, and your next message would
 			if status, busy := r.liaisonAtWork(ctx, pr); busy {
 				return "", fmt.Errorf("the liaison of %s is %s and you are in its pane: %w", taskKey(t), status, agents.ErrBusy)
 			}
+			return "", fmt.Errorf("the liaison of %s: %w", taskKey(t), ErrLiaisonLeftLive)
 		}
 		return "you are in its pane", nil
 	}

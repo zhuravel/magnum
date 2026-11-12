@@ -382,9 +382,10 @@ func (e *Engine) tendRebootDrain(ctx context.Context, tasks []registry.Task) {
 		st.quietSince = now
 	}
 	parked := false
+	var leftLive []string
 	if quiet {
 		var busy []string
-		if parked, busy = e.parkForRebootDrain(ctx, tasks); len(busy) > 0 { // at work after all: a reboot cuts it
+		if parked, busy, leftLive = e.parkForRebootDrain(ctx, tasks); len(busy) > 0 { // at work after all: a reboot cuts it
 			quiet, work, st.quietSince = false, busy, time.Time{}
 		}
 	}
@@ -396,6 +397,7 @@ func (e *Engine) tendRebootDrain(ctx context.Context, tasks []registry.Task) {
 	for _, id := range slices.Sorted(maps.Keys(st.left)) {
 		left = append(left, st.left[id])
 	}
+	left = append(left, leftLive...)
 	e.setDrainAck(&engine.DrainAck{Generation: d.Generation, PID: os.Getpid(), Quiet: quiet, QuietSince: st.quietSince,
 		Parked: parked, Work: work, Left: left})
 	if quiet && now.Sub(st.quietSince) >= engine.DrainQuietToastAfter {
@@ -506,7 +508,9 @@ func (e *Engine) rebootDrainWork(ctx context.Context, tasks []registry.Task) []s
 
 // parkForRebootDrain parks the idle agents of every task that has live
 // ones (parkable) once the daemon is quiet under the drain, each task once
-// per drain, and returns the tasks whose park found an agent at work (an
+// per drain (one whose liaison it left live because you are in its pane,
+// runtime.ErrLiaisonLeftLive, at every tick: leftLive names it while it
+// idles), and returns the tasks whose park found an agent at work (an
 // agents.ErrBusy: you typed into its pane, a shell runs a build, its
 // liaison's turn is in flight), each as work ("PR-12360 at work in herdr
 // (…)"): such a task is tried again at every tick and never left, since
@@ -516,9 +520,9 @@ func (e *Engine) rebootDrainWork(ctx context.Context, tasks []registry.Task) []s
 // brings its agents back after it), names it in the acknowledgement's
 // Left, and goes on. parked reports whether every park went through or was
 // left.
-func (e *Engine) parkForRebootDrain(ctx context.Context, tasks []registry.Task) (parked bool, busy []string) {
+func (e *Engine) parkForRebootDrain(ctx context.Context, tasks []registry.Task) (parked bool, busy, leftLive []string) {
 	if e.d.Runtime == nil {
-		return true, nil
+		return true, nil, nil
 	}
 	st := &e.ctl
 	all := true
@@ -536,6 +540,10 @@ func (e *Engine) parkForRebootDrain(ctx context.Context, tasks []registry.Task) 
 			all = false
 			continue
 		}
+		if errors.Is(err, runtime.ErrLiaisonLeftLive) { // never parked for good: looked at again at the next tick
+			leftLive = append(leftLive, TaskKey(t)+": your liaison pane, left live (you are in it; a message you send starts a turn)")
+			continue
+		}
 		st.parkFails[t.ID]++
 		e.log.Warn("park the agents of a task for the drain for a reboot", "task", t.ID, "try", st.parkFails[t.ID], "err", err)
 		if st.parkFails[t.ID] < parkTries {
@@ -547,5 +555,5 @@ func (e *Engine) parkForRebootDrain(ctx context.Context, tasks []registry.Task) 
 		st.left[t.ID] = why
 		e.event(ctx, t.ID, "park", registry.PhaseFail, "left for the drain for a reboot: "+why)
 	}
-	return all, busy
+	return all, busy, leftLive
 }

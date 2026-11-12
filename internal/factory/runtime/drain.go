@@ -91,15 +91,24 @@ func (r *Runtime) LiveAgents(ctx context.Context, t registry.Task) (bool, error)
 	return false, nil
 }
 
+// ErrLiaisonLeftLive is ParkForReboot's answer when it parked the task's own
+// agents but left its liaison live, idle, because you are in its pane: the
+// task is not parked for good, since your next message starts a turn with
+// no run row, so the drain looks at it again at every tick.
+var ErrLiaisonLeftLive = errors.New("your liaison pane, left live")
+
 // liaisonAtWork reports whether herdr shows the agent of the live liaison
 // session of row pr working or blocked (its status, as herdr says it): a
 // turn you started by typing into its pane has no run row. A herdr that
-// cannot say counts as at work; no live session, or an agent herdr does not
-// show, as not.
+// cannot say, or a session that cannot be read, counts as at work; no live
+// session, or an agent herdr does not show, as not.
 func (r *Runtime) liaisonAtWork(ctx context.Context, pr store.PR) (string, bool) {
 	s, err := r.st.LiveSessionByPRRole(ctx, pr.ID, LiaisonRole)
-	if err != nil {
-		return "", false
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return "", false // no live session: nothing of it at work
+	case err != nil:
+		return "unknown (its session cannot be read: " + err.Error() + ")", true
 	}
 	snap, err := r.d.Herdr.Snapshot(ctx)
 	if err != nil {
