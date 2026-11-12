@@ -291,13 +291,22 @@ func (p *precheckRun) skipCheck(kind, key, cmd string) {
 var jestFailRe = regexp.MustCompile(`(?m)^\s*(?:FAIL\s+\S+|[✕×]\s+.+|●\s+.+?|Tests:\s+\d+ failed.*|Test Suites:\s+\d+ failed.*)\s*$`)
 
 // jestFailures are the failing tests jest's output names (stdout and
-// stderr, where jest writes them), each once, read through its colors.
+// stderr, where jest writes them), each once, read through its colors and
+// with no timing ("(12 ms)"), so the same test failing again is the same
+// failure; its summary lines only when they are all it names.
 func jestFailures(out string) []string {
-	var fs []string
+	var fs, sums []string
 	for _, m := range jestFailRe.FindAllString(textx.StripTerminal(out), -1) {
-		if m = strings.TrimSpace(m); !slices.Contains(fs, m) {
+		m = timingRe.ReplaceAllString(strings.TrimSpace(m), "")
+		switch {
+		case strings.HasPrefix(m, "Tests:") || strings.HasPrefix(m, "Test Suites:"):
+			sums = append(sums, m)
+		case !slices.Contains(fs, m):
 			fs = append(fs, m)
 		}
+	}
+	if len(fs) == 0 {
+		return sums
 	}
 	return fs
 }
@@ -321,21 +330,19 @@ func runText(run ProofRun) (stdout, stderr string) {
 // (fix_go_on.go), and its check alone is what your accept of it holds for
 // (unnamed).
 func firstFailing(run ProofRun) []string {
-	stdout, stderr := runText(run)
-	var lines []string
-	for l := range strings.SplitSeq(stdout+"\n"+stderr, "\n") {
-		if l = strings.TrimSpace(l); l != "" && !runNoiseRe.MatchString(l) && !tableRe.MatchString(l) {
-			lines = append(lines, hexRe.ReplaceAllString(l, "0x?"))
+	lines := failingLines(run)
+	var exceptions []string // every error of the run, each its class and message: the whole failure, never its first error alone
+	for i, l := range lines[:max(len(lines)-1, 0)] {
+		if exceptionRe.MatchString(l) && l != "Failures:" && l != "Pending:" && !slices.Contains(exceptions, l+" "+lines[i+1]) {
+			exceptions = append(exceptions, l+" "+lines[i+1])
 		}
 	}
-	for i, l := range lines[:max(len(lines)-1, 0)] {
-		if exceptionRe.MatchString(l) && l != "Failures:" && l != "Pending:" {
-			return []string{l + " " + lines[i+1]}
-		}
+	if len(exceptions) > 0 {
+		return exceptions
 	}
 	for _, lead := range []string{"An error occurred ", "Failure/Error: "} {
-		if i := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, lead) }); i >= 0 {
-			return []string{lines[i]}
+		if all := slices.DeleteFunc(slices.Clone(lines), func(l string) bool { return !strings.HasPrefix(l, lead) }); len(all) > 0 {
+			return slices.Compact(all)
 		}
 	}
 	if i := slices.IndexFunc(lines, func(l string) bool {
@@ -350,10 +357,49 @@ func firstFailing(run ProofRun) []string {
 	return []string{fmt.Sprintf("exited %d", run.Exit)}
 }
 
-// runNoiseRe matches a line of a run that says nothing of its failure and
-// changes from run to run: rspec's seed and run options, progress dots, its
-// timing and its slowest examples.
-var runNoiseRe = regexp.MustCompile(`^(?:Randomized with seed \d+|Run options:.*|[.*FEP]+|Finished in .*|Top \d+ slowest .*|\(files took .*\))$`)
+// failingLines are the lines of run's output that may say why it failed:
+// past the noise a run prints anew (runNoiseRe: its seed, its progress, its
+// timing, a tool's banner and version) and a table's rules and rows, with
+// hex addresses read as 0x? and timings stripped.
+func failingLines(run ProofRun) []string {
+	stdout, stderr := runText(run)
+	var lines []string
+	for l := range strings.SplitSeq(stdout+"\n"+stderr, "\n") {
+		if l = strings.TrimSpace(l); l != "" && !runNoiseRe.MatchString(l) && !tableRe.MatchString(l) {
+			lines = append(lines, timingRe.ReplaceAllString(hexRe.ReplaceAllString(l, "0x?"), ""))
+		}
+	}
+	return lines
+}
+
+// unreadableRun reports whether run printed nothing that may say why it failed
+// (failingLines: noise alone, a banner, nothing): its failure is the
+// writer's, with no accept offered.
+func unreadableRun(run ProofRun) bool { return firstLine(strings.Join(failingLines(run), "\n")) == "" }
+
+// blindRun reports whether a spec run ran no example or could not load a
+// spec file: nothing it would have found shows, so your accept of its
+// failure would hide every failure the change makes after it.
+func blindRun(run ProofRun) bool {
+	stdout, stderr := runText(run)
+	return zeroExamplesRe.MatchString(stdout+"\n"+stderr) || strings.Contains(stdout+stderr, "An error occurred while loading ")
+}
+
+// zeroExamplesRe is rspec's summary of a run of no example.
+var zeroExamplesRe = regexp.MustCompile(`(?m)^0 examples, `)
+
+// timingRe is a duration a run prints after a test or a step ("(12 ms)",
+// "(1.4 s)"), new each run.
+var timingRe = regexp.MustCompile(`\s*\(\d+(?:\.\d+)?\s*m?s\)$`)
+
+// runNoiseRe matches a line of a run that says nothing of its failure, or
+// that every run of its command prints: rspec's seed and run options,
+// progress dots, its timing and its slowest examples, a tool's banner
+// ("yarn run v1.22.19", "$ prettier …", "> pkg@1.0.0 lint", a step's
+// "Checking formatting...", "Done in 0.42s.") and its version line.
+var runNoiseRe = regexp.MustCompile(`^(?:Randomized with seed \d+|Run options:.*|[.*FEP]+|Finished in .*|Top \d+ slowest .*|` +
+	`\(files took .*\)|(?:yarn|pnpm|npm|npx|bun) (?:run )?v?\d+(?:\.\d+)+|\$ .+|> .+|Done in [\d.]+m?s\.?|.*(?:\.\.\.|…)|` +
+	`[\w.-]+ v?\d+\.\d+(?:\.\d+)?(?: .*)?)$`)
 
 // tableRe matches a line of a table a run prints (jest's coverage table): a
 // rule of dashes and pipes, or a row that starts with a name then " | ",

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -463,8 +464,8 @@ func (r checkResult) failedCheck() (check string, failed []string, unnamed bool)
 		for _, f := range failures(r.Proof.Head.Output) {
 			failed = append(failed, f.key)
 		}
-		if len(failed) == 0 {
-			return "the factory's proof", []string{textx.FirstLine(r.Proof.Why)}, true
+		if len(failed) == 0 { // its why, its head's sha read as any: a commit that fails the same way is no progress
+			return "the factory's proof", []string{shaRe.ReplaceAllString(textx.FirstLine(r.Proof.Why), "<sha>")}, true
 		}
 		return "the factory's proof", failed, false
 	case r.Precheck != nil && !r.Precheck.Passed:
@@ -603,9 +604,12 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 			return forYouProblem(*t, file, res), "", false, nil
 		}
 		check, failed, unnamed := res.failedCheck()
-		return &endProblem{file: file, why: res.why(), change: true, command: res.failedCommand(), check: check, failures: failed,
-				unnamed: unnamed}, "",
-			false, nil
+		p := &endProblem{file: file, why: res.why(), change: true, command: res.failedCommand(), check: check, failures: failed,
+			unnamed: unnamed}
+		if res.Precheck != nil && (res.Proof == nil || res.Proof.Passed) {
+			p.noAccept, p.all = res.Precheck.noAccept, res.Precheck.all
+		}
+		return p, "", false, nil
 	}
 	return nil, bh.Head, false, nil
 }
@@ -797,3 +801,6 @@ func (e *Engine) stopCheck(id int64) {
 		x.cancel()
 	}
 }
+
+// shaRe is a commit's sha in a line, short or whole.
+var shaRe = regexp.MustCompile(`\b[0-9a-f]{7,40}\b`)

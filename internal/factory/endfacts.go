@@ -121,7 +121,9 @@ type endProblem struct {
 	ask      *stopQuestion
 	check    string
 	failures []string
-	unnamed  bool // the failures are firstFailing's: your accept is the check's alone
+	unnamed  bool     // the failures are firstFailing's
+	noAccept bool     // a failure your accept must not hide: the question offers none
+	all      []string // every failing check's failures, which the writer's progress compares
 }
 
 func (p *endProblem) String() string { return p.file + ": " + p.why }

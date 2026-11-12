@@ -92,8 +92,12 @@ type PrecheckResult struct {
 	check    string
 	failures []string
 	// unnamed: the failures are firstFailing's, the run having named no
-	// failing example or offense; your accept of them is the check's alone.
-	unnamed bool
+	// failing example or offense. noAccept: a failure your accept must not
+	// hide (a run that showed nothing readable, ran no example or could not
+	// load a spec file). all are every failing check's failures, "key:
+	// failure", which the writer's progress compares.
+	unnamed, noAccept bool
+	all               []string
 }
 
 // errOverCap is the cause of a precheck's context its cap ended.
@@ -508,7 +512,26 @@ func (p *precheckRun) failCheck(key string, failures []string, why, cmd string) 
 // offense: its failure is the line firstFailing reads, and your accept of
 // it holds for the check alone (unnamed).
 func (p *precheckRun) failUnnamed(key string, run ProofRun, why, cmd string) {
+	if unreadableRun(run) || blindRun(run) { // no accept: it would hide what the run never showed
+		if p.res.Passed {
+			p.res.noAccept = true
+		}
+		p.fail(why, cmd)
+		p.noteFailures(key, firstFailing(run))
+		if len(p.res.failures) == 0 {
+			p.res.check, p.res.failures, p.res.unnamed = key, firstFailing(run), true
+		}
+		return
+	}
 	p.failChecked(key, firstFailing(run), true, why, cmd)
+}
+
+// noteFailures records failures of check key among every failing check's
+// (PrecheckResult.all), which the writer's progress compares.
+func (p *precheckRun) noteFailures(key string, failures []string) {
+	for _, f := range failures {
+		p.res.all = append(p.res.all, key+": "+f)
+	}
 }
 
 // failChecked is failCheck, unnamed for a failure read by firstFailing.
@@ -520,6 +543,7 @@ func (p *precheckRun) failChecked(key string, failures []string, unnamed bool, w
 	if p.res.Passed {
 		p.res.check, p.res.failures, p.res.unnamed = key, failures, unnamed
 	}
+	p.noteFailures(key, failures)
 	p.fail(why, cmd)
 }
 

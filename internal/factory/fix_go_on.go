@@ -144,6 +144,9 @@ func progressed(turns []turnFailure) bool {
 // file at fault and its words.
 func turnOf(a registry.Attempt, r *stageRole, runID string, p *endProblem, at time.Time) turnFailure {
 	f := turnFailure{Attempt: a.ID, Role: r.runAs.Name, Run: runID, Check: p.check, Failures: p.failures, At: at}
+	if len(p.all) > 0 { // every failing check's: fewer failures of any check is progress
+		f.Failures = p.all
+	}
 	if f.Check == "" {
 		f.Check = p.file
 	}
@@ -304,7 +307,7 @@ func fixQuestion(a registry.Attempt, r *stageRole, p *endProblem, b fixBudget) s
 	role := r.runAs.Name
 	why := changeWait(r, p, b)
 	var opts []registry.Option
-	accept := p.check != "" && strings.HasPrefix(p.check, "precheck.")
+	accept := p.check != "" && strings.HasPrefix(p.check, "precheck.") && !p.noAccept
 	if accept {
 		opts = append(opts, registry.Option{Label: optionAccept, Means: "the precheck treats this failure of " + p.check +
 			" as known for this task (a new failure of it still fails), and the PR body names it"})

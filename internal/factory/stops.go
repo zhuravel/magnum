@@ -192,7 +192,7 @@ func (rec stopsRecord) accepts(key string, failures []string, unnamed bool) bool
 // coverageNowRe is the coverage a run reports against its threshold:
 // jest's "not met: 75.3%" and "Uncovered count for lines (12)", SimpleCov's
 // "Line coverage (82.35%)".
-var coverageNowRe = regexp.MustCompile(`(not met: )\d+(?:\.\d+)?%|(Uncovered count for \w+ \()\d+(\))|(coverage \()\d+(?:\.\d+)?(%\))`)
+var coverageNowRe = regexp.MustCompile(`(not met: )\d+(?:\.\d+)?%|(Uncovered count for \w+ \()\d+(\))|^(\w+ coverage \()\d+(?:\.\d+)?(%\) is below)`)
 
 // acceptKey is failure f as your accept of it holds: a coverage miss with
 // its coverage now read as any, so it holds while the coverage stays under
