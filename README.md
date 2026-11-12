@@ -5198,7 +5198,10 @@ or not (without the listing nothing leaves); one the round staged and then chang
 the index holds the only copy of what was staged, and the task needs you. A directory the removal empties goes
 too. It does so while no turn of an agent of the task is in flight in the copy and you are in none of its
 panes, asked before the save and again before the put-back; while one is, the task waits for it (never on you)
-and the put-back runs once the turn ended. A round stopped before its end (a drain, an install) has the same
+and the put-back runs once the turn ended. When you typed into a pane of the task (or one of its agents got a
+prompt) since the round began, the change may be your own edit: the factory saves it and puts nothing back by
+itself, and asks you (`… restore the copy to the reviewed head or keep the change?`, the saved diff on the card);
+the round's result stands either way, and a kept change stays in the copy. A round stopped before its end (a drain, an install) has the same
 done before it runs again in its cycle. When the save or the put-back fails (a symlink among the new files, too
 many of them, a git that refuses), the task needs you, naming what the round left, why the factory left it, and
 the steps that put it back and go on:

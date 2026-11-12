@@ -46,6 +46,7 @@ const (
 	stopFix   = "fix"   // the writer's change still fails at its fix budget, its fresh session spent
 	stopLost  = "lost"  // a role's pane lost after its recoveries
 	stopLoop  = "loop"  // a role the runtime's loop guard found making no progress
+	stopLeft  = "left"  // a review round's leftovers when you typed into a pane of the task since it began
 )
 
 // The decisions an answer to a stop question makes.
@@ -58,6 +59,8 @@ const (
 	decideAgain     = "again"     // your own words on a check: it runs again
 	decideDrop      = "drop"      // the task stops
 	decideRetry     = "retry"     // your retry closed the question
+	decideRestore   = "restore"   // what a review round left goes back as the reviewed head has it
+	decideKeep      = "keep"      // what a review round left stays in the copy
 )
 
 // The options' labels of the stop questions.
@@ -69,6 +72,9 @@ const (
 	optionStart     = "Start the role again"
 	optionFresh     = "Start the role in a fresh session"
 	optionDrop      = "Drop the task"
+	// a review round's leftovers that may be yours
+	optionRestoreCopy = "Restore the copy to the reviewed head"
+	optionKeepChange  = "Keep the change"
 )
 
 // stopAsk is one question the factory asked for a stop: its kind, what
@@ -335,6 +341,10 @@ func decideStop(a stopAsk, answer string) (decision, words string) {
 		return ""
 	}
 	switch {
+	case a.Kind == stopLeft && is(optionRestoreCopy, "restore"):
+		return decideRestore, ""
+	case a.Kind == stopLeft: // keep the change, or your own words: nothing of yours is put back
+		return decideKeep, strings.TrimSpace(answer)
 	case is(optionDrop, "drop"):
 		return decideDrop, ""
 	case a.Kind == stopCheck && is(optionSkip, "skip"):
@@ -399,8 +409,55 @@ func decisionWords(a stopAsk) string {
 		return "run " + a.Check + " again, with your words"
 	case decideDrop:
 		return "drop the task"
+	case decideRestore:
+		return "restore the copy to the reviewed head"
+	case decideKeep:
+		return "keep the change in the copy"
 	}
 	return a.Decision
+}
+
+// leftDecision is your decision on what review round round of cycle cy
+// left (restore, keep), "" while none is made.
+func (rec stopsRecord) leftDecision(cy registry.Cycle, round int) string {
+	key := leftKey(cy, round)
+	for _, a := range slices.Backward(rec.Asks) {
+		if a.Kind == stopLeft && a.Key == key && a.Decision != decideRetry {
+			return a.Decision
+		}
+	}
+	return ""
+}
+
+// leftKey keys the question of what review round round of cycle cy left.
+func leftKey(cy registry.Cycle, round int) string {
+	return fmt.Sprintf("round %d of cycle %d at %s", round, cy.N, cy.HeadBefore)
+}
+
+// leftQuestion is the question of what review round round of cycle cy left
+// in the copy (left, its diff in the task's directory as saved) while you
+// typed into a pane of the task since the round began (who): it may be your
+// own edit, so the factory restores nothing by itself. Restore the copy to
+// the reviewed head, or keep the change; the round's result stands either
+// way.
+func leftQuestion(cy registry.Cycle, round int, left roundLeftovers, who, saved, diff string) stopQuestion {
+	name := roundName(round, cy.N)
+	return stopQuestion{
+		ask: stopAsk{Kind: stopLeft, Key: leftKey(cy, round), Why: fmt.Sprintf("%s of the local review left %s, and %s since it began",
+			name, left, who)},
+		q: registry.Question{
+			Text: fmt.Sprintf("%s of the local review left %s at %s, and %s since the round began: restore the copy or keep "+
+				"the change?", strings.ToUpper(name[:1])+name[1:], left, short(cy.HeadBefore), who),
+			Context: "the change may be your own edit, so the factory put nothing back by itself; it saved it to " + saved,
+			Example: textx.Clip(diff, 1500),
+			Options: []registry.Option{
+				{Label: optionRestoreCopy, Means: "the tracked paths go back as the reviewed head has them and the round's new files " +
+					"go (all saved first), and the round's result stands"},
+				{Label: optionKeepChange, Means: "the copy keeps it as it is, and the round's result stands; the writer's next commit " +
+					"may take it"},
+			},
+			Recommended: -1, Evidence: saved},
+	}
 }
 
 // closeStops closes task t's stop questions that wait for your answer when

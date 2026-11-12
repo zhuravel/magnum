@@ -170,6 +170,18 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 		return "", waitFor(who)
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	stops, err := readStops(dir)
+	if err != nil {
+		return "", err
+	}
+	switch stops.leftDecision(cy, round) {
+	case decideKeep: // your answer: the change stays, and the round's result stands
+		return "", nil
+	case "":
+		if who := e.yoursSince(ctx, t, cy); who != "" {
+			return e.askLeft(ctx, t, c, cy, round, left, who, stops)
+		}
+	}
 	base := leftName(dir, cy.N)
 	saved := savedAs(base, left)
 	var counts []string
@@ -216,6 +228,50 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 	e.alert(ctx, t.ID, fmt.Sprintf("%s: the factory put back by itself what %s of the local review left in the copy (%s), "+
 		"saved to %s; the round's result stands", TaskKey(t), name, left, saved))
 	return "", nil
+}
+
+// yoursSince says how what a round of cycle cy left in task t's copy may be
+// yours ("" when it cannot): you typed into a pane of the task, or one of
+// its agents got a prompt, since the round's cycle began
+// (Runtime.TouchedSince), or the factory cannot tell (a cycle with no start,
+// a runtime that cannot answer).
+func (e *Engine) yoursSince(ctx context.Context, t registry.Task, cy registry.Cycle) string {
+	if e.d.Runtime == nil {
+		return ""
+	}
+	if cy.Started.IsZero() {
+		return "the factory does not know when the round began"
+	}
+	who, err := e.d.Runtime.TouchedSince(ctx, t, cy.Started)
+	if err != nil {
+		return "the factory cannot tell who changed it (" + textx.Clip(textx.FirstLine(err.Error()), 200) + ")"
+	}
+	return who
+}
+
+// askLeft saves what round `round` of cycle cy left in task t's copy c
+// (left) and asks you whether to restore the copy to the reviewed head or
+// keep the change (leftQuestion), as it may be your own edit (who says why):
+// the task waits on you, a held pass. A question asked already waits for
+// your answer with nothing saved again; a save that fails needs you with
+// the steps, as before (leftWait).
+func (e *Engine) askLeft(ctx context.Context, t registry.Task, c Copy, cy registry.Cycle, round int, left roundLeftovers, who string,
+	stops stopsRecord) (string, error) {
+	q := leftQuestion(cy, round, left, who, "", "")
+	if i := stops.pending(stopLeft, q.ask.Key); i < 0 {
+		dir := e.d.Layout.FactoryTaskDir(t.ID)
+		base := leftName(dir, cy.N)
+		if _, err := saveLeft(ctx, e.d.Git, c.Path, dir, base, left); err != nil {
+			line := clipEnd(textx.FirstLine(scrub.Text(err.Error())), 240)
+			return e.leftWait(t, c, cy, round, left, "", "the factory could not save it, so it put none of it back: "+line)
+		}
+		diff, _ := os.ReadFile(filepath.Join(dir, base+leftDiffExt))
+		q = leftQuestion(cy, round, left, who, savedAs(base, left), scrub.Text(string(diff)))
+	}
+	if err := e.askStop(ctx, t, q); err != nil {
+		return "", err
+	}
+	return "", heldError{who: waitsYou, what: q.ask.Why}
 }
 
 // inFlight says who keeps a put-back of what a round left in task t's copy

@@ -26547,10 +26547,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
     agent of the task has a turn in flight in the copy, and you are in no pane of it (`inFlight`). The factory
     asks this before the save and again before the put-back. Second, the copy is on the branch at the
     head that the round reviewed.
-    Your input in a pane since the round began no longer holds it, as it did through `TouchedSince`. The save
-    comes first, so nothing is lost, and the brief names only the turn in flight and the head. A turn in
-    flight is a held wait, never NEEDS YOU, and the put-back runs once the turn ended. A failed save or
-    put-back asks you with the steps, as before.
+    A turn in flight is a held wait, never NEEDS YOU, and the put-back runs once the turn ended. When you
+    typed into a pane of the task since the round began (`TouchedSince`, as before), or the factory cannot
+    tell, the change may be your own edit. Then the factory saves it and puts nothing back by itself: it asks
+    you, with the saved diff, "Restore the copy to the reviewed head" or "Keep the change" (`leftQuestion`).
+    The round's result stands either way. A kept change stays in the copy, and the writer's next commit may
+    take it. A failed save or put-back asks you with the steps, as before.
   - *A lost pane* (`runtime/recoveries.go`). A lost pane gets 3 recoveries in an attempt. The first runs at
     once, as a lost pane's recovery always did. The second waits 1 minute and the third 5 minutes. Each wait
     counts from the loss, or from the pass that found that the last recovery made no progress. So a transient
