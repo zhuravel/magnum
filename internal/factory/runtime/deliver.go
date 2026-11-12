@@ -296,6 +296,7 @@ func (r *Runtime) sent(attempt, role string) {
 	defer r.mu.Unlock()
 	if st := r.roles[roleKey{attempt, role}]; st != nil {
 		st.sig, st.since, st.pending = "", time.Time{}, false
+		st.dueAt = time.Time{} // a run went: a recovery that waited for its due time is void
 	}
 }
 

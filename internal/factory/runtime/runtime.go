@@ -546,6 +546,7 @@ func (r *Runtime) calm(attempt, role string, taskID int64, kind string, refused 
 	defer r.mu.Unlock()
 	if st := r.roles[roleKey{attempt, role}]; st != nil {
 		st.recovering, st.pending, st.step, st.sig, st.since = false, false, 0, "", time.Time{}
+		st.dueAt = time.Time{}
 		st.refused = st.refused || refused
 	}
 	if refused && kind == agents.KindCodex {
@@ -1194,10 +1195,11 @@ func (r *Runtime) settleRun(ctx context.Context, runID, outcome, why string) err
 		l = &loopState{}
 		r.loops[lk] = l
 	}
-	if ok { // progress: the ladder starts over from here
+	if ok { // progress: the ladder starts over from here, and a recovery that waited is void
 		l.fails, l.step = nil, 0
 		l.reset = true
 		delete(r.once, noProgressKey(lk))
+		st.dueAt, st.recovering = time.Time{}, false
 	} else {
 		l.fails = append(l.fails, why)
 		if len(l.fails) > SameFailures {

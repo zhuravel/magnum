@@ -140,7 +140,7 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 	if done {
 		return Event{}, false
 	}
-	if !due.IsZero() { // a recovery that waits: it runs once its wait is over, whatever the screen shows
+	if !due.IsZero() && recovering { // a recovery that waits: it runs once its wait is over, whatever the screen shows
 		if now.Before(due) {
 			return Event{}, false
 		}
@@ -214,6 +214,12 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 // stopped or a stage that moved on, none while it may not restart (a
 // pause, you in its pane), and EventLost once the recoveries ran out.
 func (r *Runtime) recoverDue(ctx context.Context, st *roleState) (Event, bool) {
+	r.mu.Lock()
+	still := st.recovering && !st.dueAt.IsZero()
+	r.mu.Unlock()
+	if !still { // the role moved since the wait began (its turn ended, a new run went): no recovery is due
+		return Event{}, false
+	}
 	t, err := r.reg.TaskByID(ctx, st.taskID)
 	if err != nil {
 		return Event{}, false

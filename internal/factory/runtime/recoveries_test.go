@@ -3,6 +3,9 @@ package runtime
 import (
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/herdr"
 )
 
 // loseAll runs role name's lost pane through its MaxRecoveries recoveries,
@@ -53,6 +56,28 @@ func TestYourRetryStartsTheRecoveriesOverAndSpendsNone(t *testing.T) {
 	if lost := only(evs, EventLost); len(lost) != 0 || len(g.h.startCalls()) != starts+MaxRecoveries {
 		t.Fatalf("events %+v and %d starts after your retry, want all %d recoveries again", evs, len(g.h.startCalls())-starts,
 			MaxRecoveries)
+	}
+}
+
+// A recovery that waits for its due time and is overtaken by the role's
+// own progress (its turn ends, the next turn works) never runs later: the
+// turn's end clears the wait, and the watchdog restarts no healthy session.
+func TestAWaitedRecoveryOvertakenByATurnsEndRestartsNothing(t *testing.T) {
+	g := newRig(t)
+	g.lostThenResumed("fx-repro", "sid-1")
+	g.h.setStatus(g.agent("fx-repro"), herdr.StatusWorking)
+	g.watchdog()
+	g.clock.Add(NoProgressAfter)
+	g.watchdog() // the resumed session shows no progress: the next recovery waits for its due time
+	starts := len(g.h.startCalls())
+	g.endRun("fx-repro")
+	g.send("fx-repro", "the next turn")
+	g.h.setStatus(g.agent("fx-repro"), herdr.StatusWorking)
+	g.observe()
+	g.clock.Add(2 * time.Minute)
+	g.watchdog()
+	if n := len(g.h.startCalls()); n != starts {
+		t.Fatalf("%d starts after the turn ended and the next one works, want none: a stale recovery restarted a healthy session", n-starts)
 	}
 }
 
