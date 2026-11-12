@@ -5688,7 +5688,10 @@ session quit and resumed, a fresh session from the attempt's first prompt), then
 agent is stuck: <its last line>`). A lost pane gets 3 recoveries in an attempt, the first at once, the next after 1 and 5 minutes:
 resumed from its conversation, then the last started fresh from the attempt's first prompt and the task's files; a
 role whose pane is lost before its first prompt (its CLI exited at its start) is relaunched each time, and its stage
-sends that prompt; a recovery with no progress within 10 minutes takes the next step. Each recovery is a `recover`
+sends that prompt; a recovery with no progress within 10 minutes takes the next step, unless the session moves
+again during its wait. A waited recovery's due time is a `recover` event too, so a restart keeps it, and a task
+that waits on you keeps it due. A role lost before its first prompt starts on your answer with the stage's first
+prompt, your answer after it. Each recovery is a `recover`
 event, so a restart counts them, and an alert, news whose toast counts nobody as waiting on you. When they run out the task asks you (`the <role> agent's pane was
 lost: no progress after 3 recoveries: start the role again, give a direction or drop the task?`): starting it again,
 or your direction, starts a fresh session of the role with its context and counts its recoveries again.

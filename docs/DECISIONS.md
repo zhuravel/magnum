@@ -26634,6 +26634,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
     their alerts never stood, so each was dropped at once with the event "dropped, it no longer waits on
     you", which it never did. News that no longer stands goes in silence. The stop questions alert as any
     wait on you.
+  - *The engine owner's review of 132da8d2* (23 findings, 3 of them P1). An unnamed failure is every error
+    of its run (each exception's class and message), never its first alone, so an accept of it holds only
+    while the whole failure stays the same; a run that ran no example, could not load a spec file, or
+    printed only noise (a tool's banner and version lines are noise now) offers no accept. Keys carry no
+    timing (jest's "(12 ms)") and no sha (the proof's why), a turn records every failing check's failures,
+    and SimpleCov's key keeps its minimum. The lint is read from its whole output (an output execx cut is
+    unreadable), eslint's 0:0 fatal error of a touched file is the writer's, a signal's death is read from
+    the wait status (`execx.Result.Signal`) as 128 plus the signal, a missing command of a script the change
+    defines is the change's, and a deleted file counts among the files the change touched. A go-on whose
+    look found the copy clean settles its question, so a run again's own leftover is put back with no
+    doubt; a staged version edited again stays staged. A waited recovery writes its due time and a restart
+    reads it back; a due recovery waits for a task that waits on you; a session that moves voids a wait
+    after a no-progress finding; the recoveries running out hand the run over, so your retry recovers the
+    role; every stop question of a pass is asked; a rebuild recovers no role your answer takes; a role lost
+    before its first prompt starts on your answer as a fresh launch (`Runtime.StartOver`); a recorded drop
+    whose end failed is applied at the next pass. Refuted and left: S12 (the rm step under a doubt names
+    only saved files, by design) and S22 (no path reaches an answered ask that a retry closes).
   Tests, failing first and each checked by a mutation: `TestALintThatNamesNoOffenseRunsAgainThenAfterTheInstalls`,
   `TestABaseRunThatHangsGetsADoubledBoundThenAQuestion`, `TestYourAnswerToACheckQuestionSkipsItOrGivesItYourBound`,
   `TestARestartInTheMiddleOfTheFaultStepsNeitherDoublesNorLosesOne`,
@@ -26660,13 +26677,27 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestARisingCoverageIsProgress`, `TestARoundsTrackedChangeIsSavedAndPutBackWhenNoTurnIsInFlight`,
   `TestARoundsLeftoverInDoubtAsksYouToPutItBackOrDrop`, `TestAGoOnOverACopyThatStillHasTheLeftoverAsksAgain`,
   `TestADoubtThatComesDuringTheSaveAsksBeforeAnyPutBack` and
-  `TestARoundThatLeavesTheCopyOffItsHeadAsksYouToPutItBackOrDrop` in internal/factory.
+  `TestARoundThatLeavesTheCopyOffItsHeadAsksYouToPutItBackOrDrop`,
+  `TestAnAcceptHoldsOnlyWhileTheWholeUnnamedFailureStaysTheSame`, `TestABannerIsNoFailureLine`,
+  `TestJestsFailureKeysCarryNoTiming`, `TestTheProofsUnnamedFailureReadsNoSha`,
+  `TestATurnRecordsEveryFailingChecksFailures`, `TestASimpleCovAcceptKeepsItsMinimum`,
+  `TestALintsFatalErrorOfAChangedFileIsTheWriters`, `TestASignalsDeathReadsAsItsExit`,
+  `TestALintsOffensesAreReadFromItsWholeOutput`, `TestAMissingCommandOfAScriptTheChangeDefinesIsTheChanges`,
+  `TestALintErrorNamingAFileTheChangeDeletedIsTheChanges`,
+  `TestARoundThatRunsAgainAfterAGoOnPutsBackItsOwnLeftoverByItself`,
+  `TestAFileStagedAndEditedAgainKeepsItsStagedVersion`, `TestEveryLostRoleOfAPassAsksItsQuestion`,
+  `TestARebuildForYourStartAnswerRecoversNothing`,
+  `TestYourAnswerForARoleLostBeforeItsFirstPromptStartsItWithItsFirstPrompt` and
+  `TestADropThatDidNotApplyIsAppliedAtTheNextPass` in internal/factory.
   In internal/factory/runtime: `TestALostPaneIsRecoveredThreeTimesAfterItsWaitsTheLastInAFreshSession`,
   `TestARestartBetweenTheRecoveriesNeitherDoublesNorLosesOne`, `TestYourRetryStartsTheRecoveriesOverAndSpendsNone`,
   `TestAFreshStartStartsTheRoleWithItsContextAndItsRecoveriesOver`, `TestAFreshSessionStartsTheLoopsLadderOver`,
   `TestAWaitedRecoveryOvertakenByATurnsEndRestartsNothing`,
   `TestTheRecoveriesCountTheSameInMemoryAndAfterARestart`,
-  `TestTheFixBudgetsFreshSessionKeepsThePanesRecoveries` and `TestTheGoOnsStartTheLoopLadderOver`.
+  `TestTheFixBudgetsFreshSessionKeepsThePanesRecoveries`, `TestTheGoOnsStartTheLoopLadderOver`,
+  `TestAWaitedRecoveryOutlivesARestart`, `TestADueRecoveryWaitsForATaskThatWaitsOnYou`,
+  `TestAWaitedRecoveryOfASessionThatMovesAgainIsVoid`, `TestTheRecoveriesRunningOutHandTheRunOver` and
+  `TestStartOverStartsALostRolesRecoveriesOver`. In internal/execx: `TestARunASignalEndedReportsTheSignal`.
   In internal/config: `TestFactoryFixGoOnIsTwoByDefaultAndBounded`.
 
 ## Learned rules

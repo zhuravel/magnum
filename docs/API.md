@@ -14395,6 +14395,9 @@ type Result struct {
 	// Truncated reports that a stream exceeded MaxOutput: the kept prefix is
 	// followed by TruncationMarker and the rest was discarded.
 	Truncated bool
+	// Signal is the signal that ended the process, as its wait status tells
+	// it (0 for an exit): Code is -1 then, never 128 plus the signal.
+	Signal syscall.Signal
 }
     Result is the outcome of a finished subprocess.
 
@@ -16129,6 +16132,7 @@ type Runtime interface {
 	Send(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (runID string, err error)
 	SendFresh(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, then string, recoveriesOver bool) (runID string, err error)
 	MadeProgress(t registry.Task, a registry.Attempt, role string)
+	StartOver(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, why string)
 	Observe(ctx context.Context) ([]runtime.Event, error)
 	Verify(ctx context.Context, runID string, ok bool, why string) error
 	Void(ctx context.Context, runID, why string) error
@@ -18202,6 +18206,13 @@ func (r *Runtime) SettleWorkspaces(ctx context.Context) ([]Orphan, error)
 func (r *Runtime) Shift(gap time.Duration)
     Shift moves every turn deadline and progress window by gap, the time the Mac
     slept (the engine's wake): no run counts as hung for a sleep.
+
+func (r *Runtime) StartOver(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, why string)
+    StartOver starts the recoveries and the ladders of role in attempt a of
+    task t over (why: your answer to its lost pane's question, for a role that
+    took no prompt yet): it is lost and stuck no more, and a "starts over" event
+    counts its recoveries from here; the stage's first prompt then brings it
+    back as a launch would.
 
 func (r *Runtime) Talk(ctx context.Context, t registry.Task, prompt string) (string, error)
     Talk starts or finds task t's liaison (LiaisonRole, on a row of its own:
