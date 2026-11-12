@@ -25902,10 +25902,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
     The PR body's Known list adds `**Fixed after the local review's last round, not reviewed again**` and the
     findings, and its one-line count names them. magnum's review of the published PR reads the fix. The PR's status
     file reads the exit as `findings`.
-  - The review's fix prompt is unchanged. It tells the writer that the next round reviews its commit, which is not
-    so after the budget. Its other words hold.
+  - *The last fix's prompt.* The review's fix prompt told the writer that the next round reviews its commit, which
+    is not so after the budget. `PromptData.LastFix` is set in the fix turn of a stop past the go-ons (`lastFix`:
+    its go-on's record, by the cycle's number, `round`, has `Pass`), and `factory-review-fix.md` renders a variant
+    from it, no second prompt file: no review round follows this fix, so the writer runs the specs of every file
+    it changes and checks each fix itself before it replies `fixed`, and the PR's review checks the result after it
+    is published. A decline without a risk is listed on the ready card, never "found again by the next round".
+    Every other fix turn reads as before. The factory prompts have no rendered goldens; the tests pin the words.
   Tests (each checked by mutation): `TestASafeStopAtTheCapGoesOnByItself`,
-  `TestAfterItsGoOnsASafeStopHasTheWriterFixThenPasses` (the summary, the PR body and `readyProblem`),
+  `TestAfterItsGoOnsASafeStopHasTheWriterFixThenPasses` (the summary, the PR body, `readyProblem`, and the last
+  fix turn's prompt), `TestTheLastFixTurnSaysNoRoundReviewsIt`,
   `TestAnUnsafeStopAtTheCapStillStopsForYou` (a P1, a blocking verdict, a declined finding),
   `TestCapGoOnZeroStopsForYouAsBefore`, `TestARestartBetweenASafeStopAndItsGoOnGoesOnOnce`,
   `TestAGoOnIsSaidOnceHoweverLongAfter`, `TestYourRetryAtAnUnsafeStopSpendsNoGoOn`,

@@ -15352,6 +15352,14 @@ type PromptData struct {
 	// answers.md): coding began, and the writer follows the amended report
 	// next. "" in any other turn, and for an amend before coding.
 	Changed string
+	// LastFix is set in the local review's fix turn (factory-review-fix.md)
+	// whose fix passes the stage with no review round after it: a stop at
+	// the cap past [factory.local_review] cap_go_on (passAfterCap). The
+	// prompt then says that no round follows, asks the writer to run the
+	// specs of every file it changes and to check each fix itself, and says
+	// that the PR's review checks the result after publish. false in any
+	// other turn.
+	LastFix bool
 	// The QA walker's turn of a qa stage (factory-qa.md), each "" (0) in any
 	// other: QARun is the run's folder (qa/<n>-<sha7> in TaskDir), where the
 	// walker saves its pages and console logs; QAURL the copy's server

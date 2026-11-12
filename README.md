@@ -5153,7 +5153,8 @@ at the cap (1 of 2): 3 P2 findings to the writer`); the alert's toast counts nob
 stays at work, never in NEEDS YOU. `[factory.local_review] cap_go_on` (2) bounds these go-ons over the task's life,
 counted in the task's `review-go-on.json`, so a restart neither counts one twice nor loses one; your own retry spends
 none, and 0 turns them off. A safe stop after them does not wait for you either: the writer fixes the cap round's
-findings, the factory's proof and precheck run on the fix (a refused fix gets the stage's fix turns and stops, as
+findings (its prompt says that no review round follows this fix, so it runs the specs of every file it changes and
+checks each fix itself), the factory's proof and precheck run on the fix (a refused fix gets the stage's fix turns and stops, as
 any), and the stage passes with no round more (`passes the cap after its fix (2 go-ons spent)`). The ready card's
 FIXED AFTER row and the PR body's Known list (`Fixed after the local review's last round, not reviewed again`) name
 those findings, each with its priority, place and title; magnum's review of the published PR reads the fix. Any other

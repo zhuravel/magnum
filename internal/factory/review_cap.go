@@ -154,15 +154,17 @@ const (
 	passWords = "passes the cap after its fix"
 )
 
-// capGoOn is a stop at the cap that went on without you: its cycle, its
-// number among the task's go-ons (N, from 1; 0 for a stop past them) out
-// of the budget then (Of: [factory.local_review] cap_go_on), the line its
-// event and alert say and whether they were said (Said), and for a stop
-// past the go-ons the loop's summary as its last round left it (Pass): the
-// writer's fix of the round's findings passes the stage (passAfterCap),
-// and no fresh loop starts.
+// capGoOn is a stop at the cap that went on without you: its cycle (its
+// id, and its number Round, review-<n>.json's), its number among the
+// task's go-ons (N, from 1; 0 for a stop past them) out of the budget then
+// (Of: [factory.local_review] cap_go_on), the line its event and alert say
+// and whether they were said (Said), and for a stop past the go-ons the
+// loop's summary as its last round left it (Pass): the writer's fix of the
+// round's findings passes the stage (passAfterCap), and no fresh loop
+// starts.
 type capGoOn struct {
 	Cycle int64          `json:"cycle"`
+	Round int            `json:"round"`
 	N     int            `json:"n,omitempty"`
 	Of    int            `json:"of"`
 	Line  string         `json:"line"`
@@ -199,6 +201,15 @@ func goOnOf(dir string, id int64) (capGoOn, bool, error) {
 		return capGoOn{}, false, nil
 	}
 	return gs[i], true, nil
+}
+
+// lastFix reports whether the fix of cycle number n's findings
+// (review-<n>.json in task directory dir) passes the stage with no round
+// after it: its stop at the cap went on past the task's go-ons
+// (PromptData.LastFix). A record that cannot be read says no.
+func lastFix(dir string, n int) bool {
+	gs, _ := readGoOns(dir)
+	return slices.ContainsFunc(gs, func(g capGoOn) bool { return g.Round == n && g.Pass != nil })
 }
 
 // goOnAtCap goes on from the safe stop at the cap on cycle cy, the last of
@@ -257,7 +268,7 @@ func (e *Engine) recordGoOn(dir string, cy registry.Cycle, items []ReviewItem, s
 			used++
 		}
 	}
-	g := capGoOn{Cycle: cy.ID, Of: e.cfg.Factory.LocalReview.CapGoOn}
+	g := capGoOn{Cycle: cy.ID, Round: cy.N, Of: e.cfg.Factory.LocalReview.CapGoOn}
 	if used < g.Of {
 		g.N = used + 1
 		g.Line = fmt.Sprintf(goOnLine+": %s to the writer", g.N, g.Of, severityCount(items))

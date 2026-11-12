@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/store"
@@ -121,6 +122,13 @@ func TestAfterItsGoOnsASafeStopHasTheWriterFixThenPasses(t *testing.T) {
 	if got := r.eventTexts(task.ID, "alert"); !slices.Equal(got, wantAlerts) {
 		t.Fatalf("alerts %q, want %q", got, wantAlerts)
 	}
+	ps := r.rt.promptsTo("fx-writer")
+	if !strings.Contains(ps[0].Text, "the next round reviews it") || strings.Contains(ps[0].Text, "No review round follows this fix") {
+		t.Errorf("the go-on's fix turn should say the next round reviews it:\n%s", ps[0].Text)
+	}
+	if strings.Contains(ps[1].Text, "the next round reviews it") || !strings.Contains(ps[1].Text, "No review round follows this fix") {
+		t.Errorf("the fix turn that passes the stage should say no review round follows it:\n%s", ps[1].Text)
+	}
 	r.writerFixes(task, last.N, fixedCredit(2), nil)
 	fixed := r.git(r.copyDir, "rev-parse", "HEAD")
 	r.run(10, func() bool { return r.reload(task.ID).Stage != "local_review" })
@@ -155,6 +163,38 @@ func TestAfterItsGoOnsASafeStopHasTheWriterFixThenPasses(t *testing.T) {
 	}
 	if _, why := r.e.readyProblem(got); why != "" {
 		t.Errorf("the ready card is refused: %s", why)
+	}
+}
+
+// The writer's fix turn that passes the stage (LastFix) never says that the
+// next round reviews its commit: no round does. It says so, asks the writer
+// to run the specs of every file it changes and to check each fix itself,
+// and says that the PR's review checks the result after publish; a decline
+// without a risk is left for the ready card. Every other fix turn reads as
+// before.
+func TestTheLastFixTurnSaysNoRoundReviewsIt(t *testing.T) {
+	d := fullPromptData()
+	text := renderFactory(t, config.Defaults(), ReviewFixPrompt, d)
+	for _, want := range []string{"the next round reviews it", "the next round of the review finds it again"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("a fix turn before the cap lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "no review round follows") {
+		t.Errorf("a fix turn before the cap says no round follows:\n%s", text)
+	}
+	d.LastFix = true
+	text = renderFactory(t, config.Defaults(), ReviewFixPrompt, d)
+	for _, want := range []string{"No review round follows this fix", "run the specs of every file you change", "check each fix yourself",
+		"the PR's review checks the result after it is published", "the ready card lists it as left open"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the last fix turn lacks %q:\n%s", want, text)
+		}
+	}
+	for _, never := range []string{"the next round reviews it", "the next round of the review"} {
+		if strings.Contains(text, never) {
+			t.Errorf("the last fix turn says %q:\n%s", never, text)
+		}
 	}
 }
 
