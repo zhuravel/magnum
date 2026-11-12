@@ -79,10 +79,15 @@ fi
 # The running binary pauses; a config key only the new build knows can make it
 # refuse, and then the wait below still holds the build until rounds end. It
 # pauses the review daemon alone (--review, on a binary that knows it): the
-# factory and its pause are no part of this restart.
+# factory and its pause are no part of this restart. The help is captured, not
+# piped into grep, which pipefail would fail when grep stops reading early;
+# the empty array expands so that bash 3.2's set -u takes it.
 scope=()
-bin/magnum pause --help 2>/dev/null | grep -q -- '--review' && scope=(--review)
-bin/magnum pause "${scope[@]}" --for "$((max_secs / 60 + 30))m" --reason "restart onto a build with a migration" 2>&1 | tail -1 || true
+pause_help=$(bin/magnum pause --help 2>/dev/null || true)
+if [[ $pause_help == *--review* ]]; then
+    scope=(--review)
+fi
+bin/magnum pause ${scope[@]+"${scope[@]}"} --for "$((max_secs / 60 + 30))m" --reason "restart onto a build with a migration" 2>&1 | tail -1 || true
 start=$SECONDS
 next=$((SECONDS + 300))
 while :; do

@@ -19233,7 +19233,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
     drain` waits for a daemon that is starting (its pidfile written before its record of the controls), where it
     refused it as an older build. A drain whose command cannot read the Mac's boot leaves its boot unknown (it
     lasts until resume, as the warning says): it took the boot of a drain that held, which can be an earlier
-    boot's, so the next start ended the new drain as after a reboot.
+    boot's, so the next start ended the new drain as after a reboot. The engine owner's check of these fixes found
+    more (F5, F6, D20's undo). A running factory with no work.json is a build from before the record, which pause
+    and status call older, so `magnum drain` refuses it too; only a work.json that names another pid is a daemon
+    that is starting. A drain whose write fails undoes every daemon it changed, the one whose write failed
+    included, since a write can fail once it landed; each undo compares, so a write that did not land and a newer
+    drain stay as they are. magnum-improve's restart probes `--review` from the captured help (a grep that stops
+    reading early fails the pipe under pipefail) and expands an empty scope so that the Mac's bash 3.2 takes it
+    under set -u.
   - It ends at each daemon's first start on another boot: another `kern.bootsessionuuid`, which is unique per boot
     (`kern.boottime` moves when macOS steps the clock after a wake, so it decides only without a session, past two
     minutes); both read through the sysctl runner (`Deps.Boot` in tests). A crash, a new build or a restart by

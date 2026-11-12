@@ -155,8 +155,11 @@ func drainTargets(ctx context.Context, c *Context, d *actDeps, sc controlScope) 
 			alive:    func(ctx context.Context) (int, error) { return controlSys.FactoryPID(ctx, l) },
 			knowsPID: func(_ context.Context, pid int) bool { return factoryKnowsControls(l, pid) },
 			starting: func(_ context.Context, pid int) bool {
+				// A record that names another pid is the former daemon's: this one has not written its own yet.
+				// No record at all is a build from before it (it never writes one), which pause and status call
+				// older too: the drain refuses it.
 				rec, ok, err := factory.ReadWork(l)
-				return err == nil && (!ok || rec.PID != pid) // no record of its own yet
+				return err == nil && ok && rec.PID != pid
 			},
 			down: func(ctx context.Context) ([]string, error) { return factoryTurnsDown(ctx, l) },
 			kick: func() { _, _ = controlSys.FactoryKick(l) },
@@ -262,20 +265,8 @@ func drainMain(ctx context.Context, c *Context, d *actDeps, o drainOpts) int {
 	}
 	rec := drainRecord(ctx, c, targets, d.now(), o)
 	value := rec.Value()
-	for i, t := range targets {
-		prev, err := t.read(ctx)
-		if err == nil {
-			err = t.write(ctx, value)
-		}
-		if err != nil {
-			out.fail(t.name, "cannot start the drain: "+err.Error())
-			drainUndo(ctx, out, targets[:i], value)
-			return 1
-		}
-		t.prev = prev
-		if t.pid > 0 {
-			t.kick()
-		}
+	if !drainWrite(ctx, out, targets, value) {
+		return 1
 	}
 	for _, t := range targets {
 		if t.pid > 0 {
@@ -314,12 +305,42 @@ func drainBuildsKnow(ctx context.Context, out controlOut, targets []*drainTarget
 	return ok
 }
 
+// drainWrite writes the drain value to each target, the factory first, and
+// wakes each running daemon. A read or a write that fails ends it: what it
+// changed is undone on every daemon (drainUndo), the one whose write failed
+// included, since a write can fail once it landed (a sync after the rename,
+// a commit that answers an error); the undo compares, so a write that did
+// not land is left as it is. false when it failed.
+func drainWrite(ctx context.Context, out controlOut, targets []*drainTarget, value string) bool {
+	for i, t := range targets {
+		prev, err := t.read(ctx)
+		if err != nil {
+			out.fail(t.name, "cannot start the drain: "+err.Error())
+			drainUndo(ctx, out, targets[:i], value)
+			return false
+		}
+		t.prev = prev
+		if err := t.write(ctx, value); err != nil {
+			out.fail(t.name, "cannot start the drain: "+err.Error())
+			drainUndo(ctx, out, targets[:i+1], value)
+			return false
+		}
+		if t.pid > 0 {
+			t.kick()
+		}
+	}
+	return true
+}
+
 // drainUndo undoes, on the daemons set before one failed, what this command
 // wrote, while its record is still this command's: it lifts a drain it
 // wrote where none was, and puts back the one it overwrote, each as one
 // compare-and-set (lift, swap), so a drain written meanwhile stays.
 func drainUndo(ctx context.Context, out controlOut, set []*drainTarget, value string) {
 	for _, t := range set {
+		if cur, err := t.read(ctx); err == nil && cur != value {
+			continue // nothing of this command's there: a write that did not land, or a newer drain, which stays
+		}
 		var err error
 		if t.prev == "" {
 			if err = t.lift(ctx, value); err == nil {
