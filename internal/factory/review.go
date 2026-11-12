@@ -153,6 +153,10 @@ type ReviewFile struct {
 	Head           string       `json:"head"`
 	AttemptsBefore int          `json:"attempts_before"`
 	Findings       []ReviewItem `json:"findings"`
+	// Kept are the changes the operator kept in the copy that the writer
+	// commits in this turn: a round that blocked nothing gives the writer
+	// a short turn for them alone (keptTurn), with no finding.
+	Kept []string `json:"kept,omitempty"`
 }
 
 // ReviewReply is review-reply-<n>.json, the writer's: per finding, fixed,
@@ -1158,6 +1162,11 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 	// raised it: the ready card and the PR body's "Known" name them.
 	all := slices.SortedFunc(maps.Values(readDeclined(dir)), func(a, b ReviewItem) int { return strings.Compare(a.Fingerprint, b.Fingerprint) })
 	sum := ReviewSummary{Rounds: round, Head: cy.HeadBefore, Leftovers: leftovers, Declined: all, Doubts: doubts, Missing: loopMissing(dir, loop)}
+	clean := !rr.blocks || len(live)+len(questions)+len(doubts) == 0 || rr.heldByLeft && e.atCap(dir, loop, round) &&
+		len(questions)+len(doubts) == 0 && !slices.ContainsFunc(live, func(i ReviewItem) bool { return blockingSeverity(i.Severity) })
+	if kept := e.keptPaths(ctx, t, c); clean && len(kept) > 0 { // what you kept is committed before the loop ends
+		return e.keptTurn(ctx, t, st, cy, round, kept)
+	}
 	switch {
 	case !rr.blocks || len(live)+len(questions)+len(doubts) == 0:
 		// A finding posted at a blocking priority that the counts left out
@@ -1197,6 +1206,29 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 	}
 	e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("round %d (cycle %d) blocks: %s for the writer (%s)%s", round, cy.N,
 		plural(len(live), "finding"), reviewFile(cy.N), map[bool]string{true: fmt.Sprintf(", %s for you first", plural(len(questions), "question")), false: ""}[len(questions) > 0]))
+	return e.fixPhase(ctx, t, st, cy, rf)
+}
+
+// keptTurn gives the writer one short turn to commit the changes you kept
+// in the copy (kept) after round `round` of cycle cy blocked nothing, before
+// the loop ends: review-<n>.json with no finding and the kept paths, and its
+// fix turn (fixPhase), whose prompt names them (keptNote); its checks run
+// at the commit, and the next round reviews it. Without it the clean
+// round's next stage (QA, the ready card) found the copy dirty and stopped
+// for you.
+func (e *Engine) keptTurn(ctx context.Context, t registry.Task, st config.FactoryStage, cy registry.Cycle, round int,
+	kept []string) (bool, error) {
+	rf, err := e.writeReview(ctx, t, st, cy, nil)
+	if err != nil {
+		return false, err
+	}
+	rf.Kept = kept
+	if err := writeJSON(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), reviewFile(cy.N)), rf); err != nil {
+		return false, err
+	}
+	e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("round %d (cycle %d) blocks nothing, and you kept %s in the copy (%s): "+
+		"the writer commits it in a short turn first (%s), and the next round reviews it", round, cy.N, plural(len(kept), "change"),
+		clipList(kept), reviewFile(cy.N)))
 	return e.fixPhase(ctx, t, st, cy, rf)
 }
 

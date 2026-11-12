@@ -72,10 +72,15 @@ func TestARoundsChangeAfterYouTypedAsksToRestoreOrKeepIt(t *testing.T) {
 			}
 			r.rt.setTouchedAt("", time.Time{})
 			r.mustAnswer(AnswerPayload{TaskID: got.ID, Revision: got.QuestionRev, Answers: map[int]string{0: tc.answer}})
-			r.run(6, func() bool { return r.reload(got.ID).Stage != "local_review" || !isLive(r.reload(got.ID)) })
-			if after := r.reload(got.ID); after.Stage != "pr_body" || !isLive(after) || len(r.rv.calls()) != 1 {
-				t.Fatalf("task %s at %s waits %q after %d rounds; want pr_body on the one round's result", after.State, after.Stage,
-					after.WaitsWhat, len(r.rv.calls()))
+			rounds := 1
+			if tc.answer == optionKeepChange { // the writer commits what you kept, and the next round reviews it
+				r.commitsKept(got, 1, tc.readme)
+				rounds = 2
+			}
+			r.run(16, func() bool { return r.reload(got.ID).Stage != "local_review" || !isLive(r.reload(got.ID)) })
+			if after := r.reload(got.ID); after.Stage != "pr_body" || !isLive(after) || len(r.rv.calls()) < rounds {
+				t.Fatalf("task %s at %s waits %q after %d rounds; want pr_body after %d or more (a second opinion)", after.State,
+					after.Stage, after.WaitsWhat, len(r.rv.calls()), rounds)
 			}
 			if r.read("README") != tc.readme {
 				t.Fatalf("README is %q after your answer, want %q", r.read("README"), tc.readme)

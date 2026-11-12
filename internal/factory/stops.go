@@ -632,7 +632,8 @@ func leftQuestion(t registry.Task, cy registry.Cycle, round int, left roundLefto
 	name := roundName(round, cy.N)
 	restore := "the tracked paths go back as the reviewed head has them and the round's new files go (all saved first), and the " +
 		"round's result stands"
-	keep := "the copy keeps it as it is, and the round's result stands; the factory's checks then ask for it to be committed, never undone"
+	keep := "the copy keeps it as it is, and the round's result stands; the writer commits it on the task's branch (with its next fix, " +
+		"or in a short turn of its own), never undoing it"
 	keepOffered := true
 	if cause.moved != nil {
 		restore, keep, keepOffered = movedWords(t, cy.HeadBefore, *cause.moved)

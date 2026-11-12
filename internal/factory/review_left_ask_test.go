@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -107,9 +108,13 @@ func TestAPutBackThatCannotTellPastItsBoundAsksToRestoreOrKeep(t *testing.T) {
 		{optionKeepChange, "a reviewer's mutant\n"},
 	} {
 		t.Run(tc.answer, func(t *testing.T) {
+			first := true
 			r := leavingRig(t, func(r *reviewRig, dir string) {
-				r.put(dir, "README", "a reviewer's mutant\n")
-				r.rt.setAtWorkErr(errors.New("herdr: socket gone"))
+				if first { // the first round alone: a later one finds the runtime answering again
+					first = false
+					r.put(dir, "README", "a reviewer's mutant\n")
+					r.rt.setAtWorkErr(errors.New("herdr: socket gone"))
+				}
 			})
 			task, _ := r.reviewTask("PR-12402")
 			r.run(6, func() bool { return strings.Contains(r.reload(task.ID).WaitsWhat, "socket gone") })
@@ -133,10 +138,16 @@ func TestAPutBackThatCannotTellPastItsBoundAsksToRestoreOrKeep(t *testing.T) {
 				t.Fatal("the factory put back the change before your answer, or did not save it")
 			}
 			r.answerLeft(task.ID, tc.answer)
-			r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
-			if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) || len(r.rv.calls()) != 1 {
-				t.Fatalf("task %s at %s waits %q after %d rounds; want pr_body on the round's result", got.State, got.Stage,
-					got.WaitsWhat, len(r.rv.calls()))
+			rounds := 1
+			if tc.answer == optionKeepChange { // the writer commits what you kept, and the next round reviews it
+				r.rt.setAtWorkErr(nil)
+				r.commitsKept(task, 1, tc.readme)
+				rounds = 2
+			}
+			r.run(16, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+			if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) || len(r.rv.calls()) < rounds {
+				t.Fatalf("task %s at %s waits %q after %d rounds; want pr_body after %d or more (a second opinion)", got.State,
+					got.Stage, got.WaitsWhat, len(r.rv.calls()), rounds)
 			}
 			if got := r.read("README"); got != tc.readme {
 				t.Fatalf("README is %q after your answer, want %q", got, tc.readme)
@@ -284,5 +295,44 @@ func TestAKeptChangeGoneWithoutACommitIsSaidSo(t *testing.T) {
 		return strings.Contains(e.Text, "README") && strings.Contains(e.Text, "without a commit")
 	}) {
 		t.Fatal("no event says the kept change is gone without a commit")
+	}
+}
+
+// commitsKept is the writer's short turn after a keep: review-<n>.json lists
+// no finding, the prompt names the kept change; the writer commits it
+// (readme, README's text) and replies.
+func (r *reviewRig) commitsKept(task registry.Task, n int, readme string) {
+	r.t.Helper()
+	r.run(6, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
+	ps := r.rt.promptsTo("fx-writer")
+	if len(ps) != 1 || !strings.Contains(ps[0].Text, keptNoteLead) || !strings.Contains(ps[0].Text, "(README)") {
+		r.t.Fatalf("the writer's prompts %+v; want one short turn naming the kept change", ps)
+	}
+	var rf ReviewFile
+	if err := json.Unmarshal([]byte(r.readTask(task.ID, reviewFile(n))), &rf); err != nil || len(rf.Findings) != 0 ||
+		!slices.Equal(rf.Kept, []string{"README"}) {
+		r.t.Fatalf("%s: %+v (%v); want no finding and the kept change", reviewFile(n), rf, err)
+	}
+	r.writerFixes(task, n, map[string]string{"README": readme}, nil)
+}
+
+// A change you keep after a round that blocks nothing is committed by the
+// writer before the stage goes on, never left for the next stage to stop
+// on: the writer gets one short turn (review-<n>.json with no finding, the
+// kept change named), commits it, and the next round reviews it; nothing
+// waits on you.
+func TestAKeptChangeAfterACleanRoundIsCommittedByTheWriter(t *testing.T) {
+	r, got := leftAfterYouTyped(t, "PR-12408")
+	r.rt.setTouchedAt("", time.Time{})
+	r.answerLeft(got.ID, optionKeepChange)
+	r.commitsKept(got, 1, "your edit, or a reviewer's\n")
+	r.run(16, func() bool { return r.reload(got.ID).Stage != "local_review" || !isLive(r.reload(got.ID)) })
+	after := r.reload(got.ID)
+	if after.Stage != "pr_body" || !isLive(after) || len(r.rv.calls()) < 2 {
+		t.Fatalf("task %s at %s waits %q after %d rounds; want pr_body after the round that reviews the kept commit", after.State,
+			after.Stage, after.WaitsWhat, len(r.rv.calls()))
+	}
+	if head := r.git(r.copyDir, "show", "HEAD:README"); head != "your edit, or a reviewer's" {
+		t.Fatalf("README at HEAD is %q; want your kept change committed", head)
 	}
 }
