@@ -464,7 +464,17 @@ func (r checkResult) failedCheck() (check string, failed []string, unnamed bool)
 		for _, f := range failures(r.Proof.Head.Output) {
 			failed = append(failed, f.key)
 		}
-		if len(failed) == 0 { // its why, its head's sha read as any: a commit that fails the same way is no progress
+		if len(failed) == 0 { // a jest proof's failing tests, named; else what its head run says, or its why with no sha
+			if jest := jestFailures(r.Proof.Head.Output); len(jest) > 0 {
+				return "the factory's proof", jest, false
+			}
+			head := r.Proof.Head
+			if len(head.out)+len(head.errOut) == 0 {
+				head.out = []byte(head.Output)
+			}
+			if f := firstFailing(head); len(f) > 0 && !strings.HasPrefix(f[0], "exited ") {
+				return "the factory's proof", f, true
+			}
 			return "the factory's proof", []string{shaRe.ReplaceAllString(textx.FirstLine(r.Proof.Why), "<sha>")}, true
 		}
 		return "the factory's proof", failed, false

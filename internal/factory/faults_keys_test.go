@@ -282,3 +282,20 @@ func TestAScriptFileCausesOnlyTheMissingCommandItNames(t *testing.T) {
 		t.Fatalf("branchCaused = %q for a command no changed file names; want none", got)
 	}
 }
+
+// A jest proof's failure is its failing tests (jestFailures of its head
+// run), named, so the writer's progress from one failing test to another
+// shows; the why line, its sha read as any, is the key only when the run
+// names nothing.
+func TestAJestProofsFailureIsItsFailingTests(t *testing.T) {
+	failed := func(out string) ([]string, bool) {
+		_, f, unnamed := checkResult{Proof: &Proof{Why: "app/javascript/credit.test.js fails at the head (3f2a1bc)",
+			Head: ProofRun{Exit: 1, Output: out}}}.failedCheck()
+		return f, unnamed
+	}
+	a, au := failed("FAIL app/javascript/credit.test.js\n  \u2715 renders the points (12 ms)\n")
+	b, _ := failed("FAIL app/javascript/credit.test.js\n  \u2715 sums the points (3 ms)\n")
+	if au || slices.Equal(a, b) || !slices.Contains(a, "\u2715 renders the points") {
+		t.Fatalf("the proof's failures %q (unnamed %v) and %q; want its failing tests, named, told apart", a, au, b)
+	}
+}
