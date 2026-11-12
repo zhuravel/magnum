@@ -677,8 +677,9 @@ func TestAMissingGemTheHealCannotFixNeedsYouWithoutAHold(t *testing.T) {
 }
 
 // Words of a crash that the lint prints on stdout are the branch's text
-// (a script's echo, a source line), never a crash of the environment, and
-// never in the ask: only stderr, matched whole, tells one.
+// (a script's echo, a source line), never a crash of the environment: only
+// stderr, matched whole, tells one. An output the factory cannot read by
+// path:line is the writer's, with it.
 func TestAnEnvironmentSignatureOnStdoutIsNoCrash(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.codingTask("PR-12392", "bug")
@@ -690,11 +691,8 @@ func TestAnEnvironmentSignatureOnStdoutIsNoCrash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("precheck error %v; want no crash of the environment", err)
 	}
-	if !res.ForYou || strings.Contains(res.Why, "yarn") || strings.Contains(res.Why, "US-ASCII") {
-		t.Fatalf("precheck %+v; want the ask, naming none of the lint's stdout", res)
-	}
-	if !strings.Contains(res.Why, "rubocop --format emacs") {
-		t.Fatalf("the ask %q; want the format hint, its stderr having said nothing", res.Why)
+	if res.Passed || res.ForYou || res.fault != nil || !strings.Contains(res.Why, "names no offense by path:line") {
+		t.Fatalf("precheck %+v; want the writer's failure, no crash and no question", res)
 	}
 }
 

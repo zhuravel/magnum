@@ -86,10 +86,10 @@ func TestAJestFailureIsAFaultOnlyWithASignOfABrokenEnvironment(t *testing.T) {
 }
 
 // A lint whose offenses come in a format the factory cannot read (rubocop's
-// --format json) is a configuration question, no fault: it runs once, and
-// the precheck fails for you with the format's fix, as before the fault
-// steps, no question with a skip.
-func TestALintInAFormatTheFactoryCannotReadAsksForTheFormatNotAFault(t *testing.T) {
+// --format json) shows no sign of a broken environment: it is the
+// writer's, with its output, as any failure the factory cannot read; it
+// runs once, and nobody is asked.
+func TestALintInAFormatTheFactoryCannotReadIsTheWriters(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.codingTask("PR-12582", "bug")
 	r.fix(task)
@@ -97,34 +97,126 @@ func TestALintInAFormatTheFactoryCannotReadAsksForTheFormatNotAFault(t *testing.
 		return `{"files":[{"path":"app/credit.rb","offenses":[{"message":"Style/NumericLiterals","location":{"line":3}}]}]}` + "\n"
 	}
 	res, err := r.e.precheck(r.ctx, task, r.cp)
-	if err != nil || res.Passed || !res.ForYou || res.fault != nil || !strings.Contains(res.Why, "rubocop --format emacs") {
-		t.Fatalf("precheck %+v, %v; want the format's fix for you, no fault", res, err)
+	if err != nil || res.Passed || res.ForYou || res.fault != nil || !strings.Contains(res.Why, "names no offense by path:line") {
+		t.Fatalf("precheck %+v, %v; want the writer's failure, no question and no fault", res, err)
 	}
 	if n := len(r.ran("bin/lint")); n != 1 {
 		t.Fatalf("the lint ran %d times, want once", n)
 	}
 }
 
-// A fault's question offers a fourth way, "hand it to the writer", and
-// recommends it when what the check printed names a file the branch
-// changed; the answer gives the writer a fix turn that names the failure.
+// stylelint's exit 2 is its report of offenses (stylelint 17 prints it on
+// stderr, in rows of line:column the factory does not read by path:line),
+// never a fault: the writer gets it, and nobody is asked.
+func TestStylelintsExit2WithItsReportIsNeverAFault(t *testing.T) {
+	r := newCodingRig(t)
+	r.cfg.Factory.Repos[0].Precheck.Lint = []string{"bin/lint stylelint {files}"}
+	task := r.codingTask("PR-12591", "bug")
+	r.fix(task)
+	r.lintCrash = func([]string) string {
+		return "\napp/assets/stylesheets/a.css\n  1:3   \u2716  Empty block               block-no-empty\n" +
+			"  2:12  \u2716  Invalid hex color \"#zzz\"  color-no-invalid-hex\n\n\u2716 2 problems (2 errors, 0 warnings)\n\n"
+	}
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil || res.Passed || res.ForYou || res.fault != nil || !strings.Contains(res.Why, "names no offense by path:line") {
+		t.Fatalf("precheck %+v, %v; want the writer's failure, never a fault and never a pass", res, err)
+	}
+	if n := len(r.ran("bin/lint")); n != 1 {
+		t.Fatalf("the lint ran %d times, want once: no fault step", n)
+	}
+	if got := faultSign(2, "", "a.css\n  1:3  \u2716  Empty block  block-no-empty\n", envCrash{}, false, "npx stylelint {files}"); got != "" {
+		t.Fatalf("stylelint's exit 2 reads as the sign %q", got)
+	}
+}
+
+// A lint's exit 2 with an error line is a fault's sign, but the branch's
+// when the change touches what the lint loads (its configuration, its
+// cops, its gems): after the fault steps, it is the writer's, never a
+// question.
+func TestALintsErrorExitIsTheWritersWhenTheBranchChangedWhatItLoads(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12592", "bug")
+	r.fix(task)
+	r.commit("PR-12592 the lint's own change", map[string]string{".rubocop.yml": "Style/Gone:\n  Enabled: true\n"})
+	r.lintCrash = func([]string) string {
+		return "Error: unrecognized cop or department Style/Gone found in .rubocop.yml\n"
+	}
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil || res.Passed || res.ForYou || res.fault != nil || !strings.Contains(res.Why, ".rubocop.yml") {
+		t.Fatalf("precheck %+v, %v; want the writer's failure naming .rubocop.yml, no question", res, err)
+	}
+}
+
+// A test runner that a segfault or an abort ended (139, 134), or that ran
+// out of heap, while the change touches the code it tests, crashed on the
+// change: the writer's, at once, with no fault step. A kill of the
+// machine's (137) is still a fault.
+func TestATestRunnersSegfaultOrHeapAbortOnChangedCodeIsTheWriters(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		crash fakeCrash
+		fault bool
+	}{
+		{"a segfault", fakeCrash{139, "/gems/ffi/lib/ffi.rb:12: [BUG] Segmentation fault at 0x0000000000000000\n"}, false},
+		{"a heap's abort", fakeCrash{134, "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\n"}, false},
+		{"a kill", fakeCrash{137, "Killed\n"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newCodingRig(t)
+			task := r.codingTask("PR-12593", "bug")
+			r.fix(task)
+			r.mu.Lock()
+			r.crashes = map[string][]fakeCrash{"bin/specs": {tc.crash, tc.crash, tc.crash}}
+			r.mu.Unlock()
+			res, err := r.e.precheck(r.ctx, task, r.cp)
+			if err != nil || res.Passed || (res.fault != nil) != tc.fault {
+				t.Fatalf("precheck %+v, %v; want a fault %v", res, err, tc.fault)
+			}
+			if !tc.fault && (res.ForYou || len(r.ran("bin/specs")) != 1) {
+				t.Fatalf("precheck %+v after %d runs; want the writer's failure after one run", res, len(r.ran("bin/specs")))
+			}
+		})
+	}
+}
+
+// A fault's question offers a fourth way, "hand it to the writer", and the
+// answer gives the writer a fix turn that names the failure. A fault whose
+// output names a file the branch changed is the branch's: the writer gets
+// it after the fault steps, and nobody is asked (a question about one
+// would recommend the writer).
 func TestAFaultThatNamesAChangedFileRecommendsHandingItToTheWriter(t *testing.T) {
+	if q := faultQuestion(checkFault{key: "precheck.specs", what: "did not end", namesChanged: true}); q.q.Recommended != 3 {
+		t.Fatalf("a fault naming a changed file recommends option %d, want the writer's", q.q.Recommended)
+	}
+	named := newCodingRig(t)
+	named.cfg.Factory.Repos[0].Precheck.Jest = ""
+	ntask := named.codingTask("PR-12594", "bug")
+	named.startStage(ntask)
+	named.fix(ntask)
+	named.setLintCrash("Error: unexpected token in app/credit.rb\n")
+	named.endTurns(ntask, 1)
+	named.passes(ntask, func() bool { return named.writerPrompts() > 1 || !isLive(named.reload(ntask.ID)) })
+	if ps := named.rt.promptsTo("fx-writer"); len(ps) != 2 || !strings.Contains(ps[1].Text, "unexpected token in app/credit.rb") ||
+		len(named.newestQuestions(ntask.ID)) != 0 {
+		t.Fatalf("the writer's prompts %+v; want a fix turn naming the error in the changed file, no question", ps)
+	}
+
 	r := newCodingRig(t)
 	task := r.codingTask("PR-12583", "bug")
 	r.startStage(task)
 	r.fix(task)
-	r.setLintCrash("Error: unexpected token in app/credit.rb\n")
+	r.setLintCrash("Error: rubocop's server went away\n")
 	r.endTurns(task, 1)
 	got := r.reload(task.ID)
 	qs := r.newestQuestions(task.ID)
 	if got.State != registry.TaskNeedsYou || len(qs) != 1 ||
-		!slices.Equal(optionLabels(qs[0]), []string{optionSkip, optionLonger, optionDrop, optionWriter}) || qs[0].Recommended != 3 {
-		t.Fatalf("task %s waits %q, questions %+v; want the four ways, the writer's recommended", got.State, got.WaitsWhat, qs)
+		!slices.Equal(optionLabels(qs[0]), []string{optionSkip, optionLonger, optionDrop, optionWriter}) {
+		t.Fatalf("task %s waits %q, questions %+v; want the four ways", got.State, got.WaitsWhat, qs)
 	}
 	r.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: got.QuestionRev, Answers: map[int]string{0: optionWriter}})
 	r.passes(task, func() bool { return r.writerPrompts() > 1 })
 	ps := r.rt.promptsTo("fx-writer")
-	if len(ps) != 2 || !strings.HasPrefix(ps[1].Text, fixLead) || !strings.Contains(ps[1].Text, "unexpected token in app/credit.rb") {
+	if len(ps) != 2 || !strings.HasPrefix(ps[1].Text, fixLead) || !strings.Contains(ps[1].Text, "rubocop's server went away") {
 		t.Fatalf("the writer's prompts %+v; want a fix turn naming the lint's error", ps)
 	}
 }

@@ -86,6 +86,10 @@ type codingRig struct {
 	// they name, one a run, each printing nothing at all (0: the run does
 	// its work as it would): a crash with no output, a signal's 137.
 	exits map[string][]int
+	// crashes are the next runs of a script whose first word they name, one
+	// a run, each ending with its exit and printing its stderr alone (a
+	// segfault's 139, a heap's abort), before exits are read.
+	crashes map[string][]fakeCrash
 	// streams are what a script whose first word they name writes to its
 	// command's stream (execx.Cmd.Stream) as it starts, one write each,
 	// before it blocks or does its work; every script also writes its
@@ -305,10 +309,18 @@ func (r *codingRig) script(ctx context.Context, c execx.Cmd) (execx.Result, erro
 	r.mu.Lock()
 	add := r.adds[words[0]]
 	code := 0
-	if q := r.exits[words[0]]; len(q) > 0 {
+	var crash *fakeCrash
+	if q := r.crashes[words[0]]; len(q) > 0 {
+		crash, r.crashes[words[0]] = &q[0], q[1:]
+	} else if q := r.exits[words[0]]; len(q) > 0 {
 		code, r.exits[words[0]] = q[0], q[1:]
 	}
 	r.mu.Unlock()
+	if crash != nil {
+		run.Out, run.Exit = "", crash.code
+		r.record(run)
+		return execx.Result{Code: crash.code, Stderr: []byte(crash.stderr)}, &execx.ExitError{Cmd: c, Code: crash.code, Stderr: crash.stderr}
+	}
 	if code != 0 { // it printed nothing at all
 		run.Out, run.Exit = "", code
 		r.record(run)
@@ -742,4 +754,10 @@ func (h *harness) readTask(id int64, name string) string {
 		h.t.Fatal(err)
 	}
 	return string(b)
+}
+
+// fakeCrash is a run of the coding rig's crashes: its exit and its stderr.
+type fakeCrash struct {
+	code   int
+	stderr string
 }

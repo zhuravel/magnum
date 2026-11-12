@@ -947,7 +947,7 @@ func (p *precheckRun) lintOnce(cmd, script string, files []string, changed map[s
 	}
 	for line := range strings.SplitSeq(r.run.Output, "\n") {
 		m := offenseRe.FindStringSubmatch(strings.TrimSpace(line))
-		if m == nil {
+		if m == nil || strings.Trim(m[1], "0123456789") == "" { // a row of line:column under its file (stylelint's): no path of its own
 			continue
 		}
 		r.named++
@@ -958,11 +958,14 @@ func (p *precheckRun) lintOnce(cmd, script string, files []string, changed map[s
 		}
 	}
 	if r.run.Exit != 0 && r.named == 0 {
+		stdout, _ := runText(r.run)
 		if r.crash, r.isCrash = crashOf("precheck.lint", cmd, p.c.Path, p.stderr); r.isCrash {
 			r.theirs = branchCaused(r.crash, p.stderr, files)
 		}
-		stdout, _ := runText(r.run)
-		r.sign = faultSign(r.run.Exit, stdout, p.stderr, r.crash, r.isCrash, true)
+		r.sign = faultSign(r.run.Exit, stdout, p.stderr, r.crash, r.isCrash, cmd)
+		if r.sign != "" && !r.isCrash { // any other sign is the branch's too when it touched what the lint loads, or its output names the change
+			r.theirs = branchCaused(envCrash{cmd: cmd}, stdout+"\n"+p.stderr, files)
+		}
 	}
 	return r
 }
@@ -1057,12 +1060,21 @@ func (p *precheckRun) lintNoOffense(cmd, script string, r lintRun, tried []strin
 			firstWord(crash.cmd), crash.sig.lacks, crash.line, clipList(r.theirs))
 		p.failCheck(lintKey(cmd), []string{crash.line}, why, script)
 		return "code"
+	case len(r.theirs) > 0: // any other sign, on a change that touches what the lint loads or that its output names
+		line := cmp.Or(lastLine(p.stderr), r.sign)
+		p.say("\nIt %s, and the change touches %s, which the lint loads or its output names: the writer's to fix.\n", r.sign,
+			clipList(r.theirs))
+		p.failCheck(lintKey(cmd), []string{line}, fmt.Sprintf("lint: `%s` %s (%s), and the change touches %s, which the lint loads",
+			firstWord(cmd), r.sign, line, clipList(r.theirs)), script)
+		return "code"
 	}
 	key := lintKey(cmd)
 	switch {
-	case r.sign == "": // an output the factory cannot read: its format is your question, as before the fault steps
-		p.failForYou(p.lintCrashWhy(cmd))
-		return "unknown"
+	case r.sign == "": // an output the factory cannot read: the writer's, with it, as any failure the change could have caused
+		failing := firstFailing(r.run)
+		p.failCheck(key, failing, fmt.Sprintf("lint: `%s` exited %d and names no offense by path:line: %s", firstWord(cmd), r.run.Exit,
+			cmp.Or(strings.Join(failing, "; "), "it printed nothing the factory reads")), script)
+		return "code"
 	case p.toWriter(key): // your answer handed its faults to the writer
 		line := cmp.Or(lastLine(p.stderr), r.sign)
 		p.failCheck(key, []string{line}, fmt.Sprintf("lint: `%s` exited %d and named no offense: %s", firstWord(cmd), r.run.Exit, line), script)
@@ -1245,7 +1257,10 @@ func (p *precheckRun) runNaming(key, what, script, failing string, files []strin
 			stdout, stderr := runText(r.run)
 			crash, isCrash := crashOf(key, script, p.c.Path, stderr)
 			if !isCrash || len(branchCaused(crash, stderr, files)) == 0 {
-				r.sign = faultSign(r.run.Exit, stdout, stderr, crash, isCrash, false)
+				r.sign = faultSign(r.run.Exit, stdout, stderr, crash, isCrash, "")
+			}
+			if r.sign != "" && runnerCaused(r.run.Exit, stdout+"\n"+stderr, files) { // a crash on the change's code: the writer's
+				r.sign = ""
 			}
 		}
 	}

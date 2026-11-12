@@ -81,12 +81,16 @@ type checkFault struct {
 // environment and no failure of the code: it printed nothing at all, a
 // signal ended it, its stderr tells a crash the repository's installs bring
 // back (a missing gem, library or module) or a missing command, or, for a
-// lint, it exited 2 with an error line on stderr (rubocop's and eslint's
-// exit for an error, never for an offense). "" for none: the run is the
-// writer's, as any failure the change could have caused or the factory
-// cannot read. A crash of the machine's (a locale) is the infrastructure
-// hold's, no fault here.
-func faultSign(exit int, stdout, stderr string, crash envCrash, isCrash, lint bool) string {
+// lint (lintCmd, its command; "" for a test runner), it exited 2 with an
+// error line on stderr (rubocop's and eslint's exit for an error, never for
+// an offense), but never with a report of offenses in rows of line:column
+// (lintReportRe) and never for a lint whose exit 2 is its offenses' exit
+// (stylelint). "" for none: the run is the writer's, as any failure the
+// change could have caused or the factory cannot read. A crash of the
+// machine's (a locale) is the infrastructure hold's, no fault here. Whether
+// the change caused a sign is its callers' to read (branchCaused,
+// runnerCaused).
+func faultSign(exit int, stdout, stderr string, crash envCrash, isCrash bool, lintCmd string) string {
 	switch {
 	case isCrash && crash.sig.machine: // the infrastructure hold's
 		return ""
@@ -96,10 +100,40 @@ func faultSign(exit int, stdout, stderr string, crash envCrash, isCrash, lint bo
 		return fmt.Sprintf("was ended by a signal (exit %d)", exit)
 	case isCrash && !crash.sig.machine && (crash.sig.heal || crash.sig.scriptOnly):
 		return "crashed for lack of " + crash.sig.lacks
-	case lint && exit == 2 && lastLine(stderr) != "":
+	case lintCmd != "" && exit == 2 && !offensesExit2(lintCmd) && lastLine(stderr) != "" &&
+		!lintReportRe.MatchString(textx.StripTerminal(stdout+"\n"+stderr)):
 		return "exited 2 with an error and named no offense"
 	}
 	return ""
+}
+
+// lintReportRe matches a row of a lint's report in a format the factory
+// does not read by path:line: stylelint's and eslint's stylish rows,
+// "  1:3  ✖  Empty block  block-no-empty" under the file's name.
+var lintReportRe = regexp.MustCompile(`(?m)^\s+\d+:\d+\s+\S`)
+
+// offensesExit2 reports whether lint command cmd exits 2 for its offenses
+// (stylelint: 1 is its own error, 2 the problems it found).
+func offensesExit2(cmd string) bool { return strings.Contains(cmd, "stylelint") }
+
+// heapRe matches a test runner's stderr that ran out of heap (node's abort,
+// Ruby's NoMemoryError).
+var heapRe = regexp.MustCompile(`JavaScript heap out of memory|Reached heap limit|failed to allocate memory \(NoMemoryError\)`)
+
+// docRe matches a changed file no test runs: prose and the repository's
+// notes.
+var docRe = regexp.MustCompile(`(?i)\.(?:md|markdown|txt|rst|adoc)$`)
+
+// runnerCaused reports whether a test runner's sign (its exit, its output
+// out) is the change's: a segfault or an abort (139, 134) or a heap that ran
+// out while the change touches code the runner tests (files, a file other
+// than prose), or an output that names a changed file.
+func runnerCaused(exit int, out string, files []string) bool {
+	if namesChanged(out, files) {
+		return true
+	}
+	code := slices.ContainsFunc(files, func(f string) bool { return f != "" && !docRe.MatchString(f) })
+	return code && (exit == 134 || exit == 139 || heapRe.MatchString(out))
 }
 
 // namesChanged reports whether text names one of files, the paths the
