@@ -26309,13 +26309,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   runtime that cannot list them counts as working). Once quiet it parks, once each, the tasks that are active,
   waiting, need you or are published and have a live agent (`Runtime.LiveAgents`), through
   `Runtime.ParkForReboot`, which reports a liaison at work as agents.ErrBusy where `Park` leaves it live and goes
-  through. A busy refusal is never left: an agent at work in herdr with no run row (you typed into its pane, a build
+  through, you in its pane included (herdr's status of its agent: a turn you typed starts no run row). A busy refusal is never left: an agent at work in herdr with no run row (you typed into its pane, a build
   in a shell) would be cut by the reboot, so the task is named as work and tried again at each tick. Any other
   failure three ticks in a row is left, said once and named in the acknowledgement's `left`, so it cannot hold the
   drain for good.
   An hour quiet raises a NEEDS YOU blocker, with its one alert. work.json also names the build and the controls
-  version, which the CLI checks before it writes either file. The daemon reads both files before its startup's
-  recovery, so it holds them from its first second. The first start on another boot ends a drain until boot
+  version, which the CLI checks before it writes either file; a stop whose wait for the work off the loop ran out
+  keeps work.json, naming that work, so a drain after that exit is not certified. The daemon reads both files
+  before its startup's recovery, so it holds them from its first second. The first start on another boot ends a drain until boot
   (`Deps.Boot`: kern.bootsessionuuid and kern.boottime through the quiet runner). Your retry and your answers under
   the pause say that the task's next launch, claim or check waits for `magnum resume`. An unreadable pause.json or
   reboot-drain.json is a warn event, once, with what to do, and a `magnum doctor` line (controls). Tests, each

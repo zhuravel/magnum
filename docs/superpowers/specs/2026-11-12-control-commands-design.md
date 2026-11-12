@@ -119,7 +119,7 @@ while one holds keeps its start, its end and its reason unless a flag changes th
   that becomes restartable later, an unpin, is marked then) and parks them through the same early park (pinned
   PRs left alone; a human typing in a pane waits out the cooldown). Factory: `Runtime.Park` of every task that is
   active, waiting, needs you or published with a live agent, once per generation, through `ParkForReboot`, which
-  reports a liaison at work as busy. A busy refusal (an agent at work in herdr with no run row: you typed into its
+  reports a liaison at work as busy, you in its pane included. A busy refusal (an agent at work in herdr with no run row: you typed into its
   pane, a shell runs a build) is never left: the task is named as work and tried again at each tick. Any other
   failure, after three tries, leaves the task, said once and named in `left`.
 - `parked` is true once the park is done: review, no restartable session is live and none shows a dialog;
@@ -127,8 +127,8 @@ while one holds keeps its start, its end and its reason unless a flag changes th
 - The command says quiet only once both acknowledgements are of its generation, from the running daemon's pid,
   quiet and parked. A daemon that does not run is done only once its own store (the review registry's runs, the
   factory's agents store, read-only) shows no agent's turn in flight, since those turns outlive it in herdr, and,
-  for the factory, once no record a crash left (work.json) names work, whose agents (a local review round's) no
-  read reaches; a store it cannot stat or read, and a daemon whose pidfile it cannot read, are never certified. A
+  for the factory, once no record a crash, or a stop whose wait for its work ran out, left (work.json) names work,
+  whose agents (a local review round's) no read reaches; a store it cannot stat or read, and a daemon whose pidfile it cannot read, are never certified. A
   daemon that starts while the command waits has its build checked again, at each poll while it says no.
 - While it waits it prints one line per daemon every 15 seconds naming what still runs, and wakes each daemon at
   most once a minute (the review daemon's tick polls GitHub).
