@@ -574,3 +574,32 @@ func TestALintReportWithRowsOfNoFileIsTheWriters(t *testing.T) {
 		t.Fatalf("namedOffenses = %+v, %v; want the one row under its file and the orphan rows told", offenses, orphans)
 	}
 }
+
+// jestCoverageRun is a jest run with --coverage whose tests pass and whose
+// coverage misses its global threshold, at lines percent.
+func jestCoverageRun(lines string) string {
+	rule := "----------|---------|----------|---------|---------|-------------------\n"
+	return "PASS app/javascript/credit.test.js\n  \u2713 renders the points (12 ms)\n\n" + rule +
+		"File      | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s \n" + rule +
+		"All files |   " + lines + " |      50 |     100 |   " + lines + " |                   \n" +
+		" credit.js |   " + lines + " |      50 |     100 |   " + lines + " | 12-14             \n" + rule +
+		"Jest: \"global\" coverage threshold for lines (80%) not met: " + lines + "%\n" +
+		"Test Suites: 1 passed, 1 total\nTests:       1 passed, 1 total\nSnapshots:   0 total\nTime:        1.234 s\n"
+}
+
+// A jest run that misses its coverage threshold reads as its threshold's
+// line, never as its table's rules, its header or a passing test's line,
+// so coverage that rises is progress: the writer's next turns are not
+// three of one failure.
+func TestARisingCoverageIsProgress(t *testing.T) {
+	read := func(lines string) []string {
+		return firstFailing(ProofRun{Exit: 1, out: []byte(jestCoverageRun(lines))})
+	}
+	if got := read("75.3"); len(got) != 1 || got[0] != `Jest: "global" coverage threshold for lines (80%) not met: 75.3%` {
+		t.Fatalf("the failure read %q; want the threshold's line", got)
+	}
+	turn := func(lines string) turnFailure { return turnFailure{Check: "precheck.jest", Failures: read(lines)} }
+	if !progressed([]turnFailure{turn("70.1"), turn("75.3"), turn("78.9")}) || progressed([]turnFailure{turn("75.3"), turn("75.3"), turn("75.3")}) {
+		t.Fatal("rising coverage reads as no progress, or the same coverage as progress")
+	}
+}

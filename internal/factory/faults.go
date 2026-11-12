@@ -312,17 +312,19 @@ func runText(run ProofRun) (stdout, stderr string) {
 // firstFailing is the line of run's output that says why it failed when it
 // names no failing example or offense, read the same on every run: the
 // error's own (an exception's class and message, else rspec's "An error
-// occurred in …", else its "Failure/Error: …", else a crash's "[BUG] …"),
-// else the first line that may say why (meaningfulLines), past the noise a
-// run prints anew each time (runNoiseRe), its hex addresses read as 0x?; else
-// its exit. It is the failure the writer's progress compares
+// occurred in …", else its "Failure/Error: …", else a crash's "[BUG] …",
+// else a coverage threshold missed, jest's or SimpleCov's, whose percent
+// rising is progress), else the first line that may say why
+// (meaningfulLines), past the noise a run prints anew each time
+// (runNoiseRe) and a table's rules and rows (tableRe: jest's coverage
+// table), its hex addresses read as 0x?; else its exit. It is the failure the writer's progress compares
 // (fix_go_on.go), and its check alone is what your accept of it holds for
 // (unnamed).
 func firstFailing(run ProofRun) []string {
 	stdout, stderr := runText(run)
 	var lines []string
 	for l := range strings.SplitSeq(stdout+"\n"+stderr, "\n") {
-		if l = strings.TrimSpace(l); l != "" && !runNoiseRe.MatchString(l) {
+		if l = strings.TrimSpace(l); l != "" && !runNoiseRe.MatchString(l) && !tableRe.MatchString(l) {
 			lines = append(lines, hexRe.ReplaceAllString(l, "0x?"))
 		}
 	}
@@ -336,8 +338,10 @@ func firstFailing(run ProofRun) []string {
 			return []string{lines[i]}
 		}
 	}
-	if i := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(l, "[BUG] ") }); i >= 0 {
-		return []string{lines[i]}
+	for _, word := range []string{"[BUG] ", "coverage threshold", "minimum coverage"} {
+		if i := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(l, word) }); i >= 0 {
+			return []string{lines[i]}
+		}
 	}
 	if line := firstLine(strings.Join(lines, "\n")); line != "" {
 		return []string{line}
@@ -349,6 +353,10 @@ func firstFailing(run ProofRun) []string {
 // changes from run to run: rspec's seed and run options, progress dots, its
 // timing and its slowest examples.
 var runNoiseRe = regexp.MustCompile(`^(?:Randomized with seed \d+|Run options:.*|[.*FEP]+|Finished in .*|Top \d+ slowest .*|\(files took .*\))$`)
+
+// tableRe matches a line of a table a run prints (jest's coverage table): a
+// rule of dashes and pipes, or a row of two cells or more.
+var tableRe = regexp.MustCompile(`^[-=+| ]*\|[-=+| ]*$|\|.*\|`)
 
 // hexRe is a hex address, which a crash prints anew each run.
 var hexRe = regexp.MustCompile(`0x[0-9a-fA-F]+`)
