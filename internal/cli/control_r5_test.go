@@ -156,7 +156,7 @@ func TestAnUnreadableFactoryControlFileIsShownAndResumeRemovesIt(t *testing.T) {
 	dc := factoryControlOf(h.c.Layout, 0)
 	got := dc.holdText(h.now, false)
 	for _, want := range []string{"draining (unreadable record): magnum resume --factory ends it",
-		"paused (unreadable pause.json): magnum resume --factory removes it"} {
+		"paused (unreadable record): magnum resume --factory removes it"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the factory's status says %q, want %q", got, want)
 		}

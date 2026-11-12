@@ -202,7 +202,7 @@ func TestTheFactoryHoldsADrainAndAPauseFromItsStart(t *testing.T) {
 }
 
 // A pause.json the daemon cannot read is said: a warn event, once, naming
-// what to do, and no pause holds.
+// what to do, and it holds a pause (TestAPauseFileTheDaemonCannotUseHoldsAPause).
 func TestAnUnreadablePauseIsSaidOnce(t *testing.T) {
 	h := newHarness(t)
 	h.stage(config.FactoryStageAgents, idleStage)
@@ -220,8 +220,8 @@ func TestAnUnreadablePauseIsSaidOnce(t *testing.T) {
 	if len(said) != 1 || !strings.Contains(said[0], "pause.json") || !strings.Contains(said[0], "magnum resume") {
 		t.Fatalf("pause events %q, want one warning naming the file and what to do", said)
 	}
-	if h.e.startsHeld() {
-		t.Fatal("an unreadable pause holds")
+	if !h.e.startsHeld() {
+		t.Fatal("an unreadable pause holds nothing")
 	}
 }
 
@@ -279,7 +279,7 @@ func TestAPauseThatTurnsUnreadableHoldsAndSaysSo(t *testing.T) {
 			said = append(said, ev.Text)
 		}
 	}
-	if len(said) != 1 || !strings.Contains(said[0], "the pause holds as it was") || strings.Contains(said[0], "no pause holds") {
+	if len(said) != 1 || !strings.Contains(said[0], "the pause holds until `magnum resume --factory` removes it") || strings.Contains(said[0], "no pause holds") {
 		t.Fatalf("pause events %q, want one warning that the pause holds", said)
 	}
 }

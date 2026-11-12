@@ -26448,10 +26448,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the pause say that the task's next launch, claim or check waits for `magnum resume`. An unreadable pause.json or
   reboot-drain.json is a warn event, once, with what holds and what to do, and a `magnum doctor` line (controls).
   An unreadable reboot-drain.json holds a drain, unacknowledged, from the daemon's first tick, as one it cannot
-  parse does; an unreadable pause.json keeps the pause the daemon held. `magnum resume --factory` removes either,
-  after it says that it cannot read it. A lift of either file (a pause past its end, a drain at the first start on
-  a new boot) is a compare-and-delete: the file moves aside under a name of its own and is removed only when it
-  holds what was read, so a pause or drain written meanwhile stays (D10, D15, D19, D20). Tests, each
+  parse does. A pause.json the daemon cannot read or parse holds a pause too, at its start and during its run (a
+  pause it held goes on as it was, and with none it holds "paused (unreadable record)"): a pause is your explicit
+  stop, and `magnum resume --factory` is the way out, since it removes either file after it says that it cannot
+  read it. The status lines say "paused (unreadable record)" for such a pause.json, as the daemon holds it (the
+  engine owner's check, F4, F7). The writes of either file take turns on a lock of its own (`pause.json.lock`,
+  `reboot-drain.json.lock`): a lift (a pause past its end, a drain at the first start on a new boot) and a
+  command's put-back read, compare and write under it, so a pause or drain written meanwhile stays, and the file is
+  never absent, which the daemon's read would take for a lift (D10, D15, D19, D20, F8). Tests, each
   failing first: TestAFactoryPauseHoldsNewWorkAndLetsYourPushAndTalkRun,
   TestAFactoryPauseSurvivesARestartAndEndsAtItsUntil, TestTheFactoryDrainForARebootWaitsForAWritersTurnThenParks,
   TestTheFactoryDrainForARebootWaitsForTheLiaisonsTurn, TestTheFactoryDrainForARebootEndsAtTheFirstStartOnANewBoot,

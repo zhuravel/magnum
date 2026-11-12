@@ -224,7 +224,7 @@ const (
 
 // controlPause is a pause in force: since when, until when (nil: until
 // `magnum resume`) and why; Unreadable, a factory pause.json the CLI cannot
-// read (the daemon keeps the pause it held).
+// read or parse (the daemon holds a pause for it).
 type controlPause struct {
 	Since      *time.Time `json:"since,omitempty"`
 	Until      *time.Time `json:"until,omitempty"`
@@ -316,13 +316,15 @@ func factoryControlOf(l paths.Layout, pid int) daemonControl {
 		dc.Build = rec.Build
 	}
 	if v, err := factory.ReadPause(l); err != nil {
-		dc.Pause = &controlPause{Unreadable: true} // the daemon keeps the pause it held: it is shown, with its remedy
+		dc.Pause = &controlPause{Unreadable: true} // the daemon holds a pause for it, as it says: shown, with its remedy
 	} else if p, ok := factory.ParsePause(v); ok {
 		cp := &controlPause{Since: &p.Since, Reason: p.Reason}
 		if !p.Until.IsZero() {
 			cp.Until = &p.Until
 		}
 		dc.Pause = cp
+	} else if v != "" {
+		dc.Pause = &controlPause{Unreadable: true} // content it cannot parse holds a pause too
 	}
 	ack := ""
 	if known && rec.RebootDrain != nil {
@@ -397,7 +399,7 @@ func (dc daemonControl) holdText(now time.Time, long bool) string {
 		}
 	}
 	if p := dc.Pause; p != nil && p.Unreadable {
-		parts = append(parts, "paused (unreadable pause.json): "+resume+" removes it")
+		parts = append(parts, "paused (unreadable record): "+resume+" removes it")
 	} else if p != nil {
 		s := "paused by you"
 		if p.Until != nil {

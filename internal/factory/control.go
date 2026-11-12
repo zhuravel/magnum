@@ -34,6 +34,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
@@ -70,7 +71,16 @@ type Pause struct {
 	Since      time.Time `json:"since"`
 	Until      time.Time `json:"until,omitzero"`
 	Reason     string    `json:"reason,omitempty"`
+	// unreadable marks the pause the daemon holds for a pause.json it cannot
+	// read or parse (unreadablePause): never in the file.
+	unreadable bool
 }
+
+// unreadablePause is the pause the daemon holds, from now, for a pause.json
+// it cannot read or parse while it holds none: a pause is your explicit
+// stop, so what the daemon cannot read of it stops, as a drain does, until
+// `magnum resume --factory` removes the file.
+func unreadablePause(now time.Time) Pause { return Pause{Since: now, unreadable: true} }
 
 // Value is p as pause.json holds it.
 func (p Pause) Value() string {
@@ -88,8 +98,12 @@ func ParsePause(v string) (Pause, bool) {
 }
 
 // Words say the pause as the holds and the status lines do: "paused by you
-// until Nov 12 15:30 (lunch)".
+// until Nov 12 15:30 (lunch)", "paused (unreadable record): `magnum resume
+// --factory` removes it".
 func (p Pause) Words() string {
+	if p.unreadable {
+		return "paused (unreadable record): `magnum resume --factory` removes it"
+	}
 	s := "paused by you"
 	if !p.Until.IsZero() {
 		s += " until " + p.Until.Local().Format("Jan 2 15:04")
@@ -148,11 +162,38 @@ func RemovePause(l paths.Layout) error { return removeControl(l.FactoryPause()) 
 // RemoveRebootDrain removes reboot-drain.json as RemovePause does pause.json.
 func RemoveRebootDrain(l paths.Layout) error { return removeControl(l.FactoryRebootDrain()) }
 
-func removeControl(path string) error {
-	if err := os.RemoveAll(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+// The control files' writes take turns on a lock of the file's own
+// (path+".lock", as seen.json's): a write, a lift and a put-back each read,
+// compare and write under it, so none loses another's write. The file is
+// never absent in between: a write renames over it (fsx.WriteFileAtomic),
+// so the daemon's read, which takes no lock, sees the old value or the new
+// one, never none.
+
+// withControlLock runs fn while it holds the lock of the control file at
+// path.
+func withControlLock(path string, fn func() error) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return nil
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("lock %s: %w", filepath.Base(path), err)
+	}
+	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
+	return fn()
+}
+
+func removeControl(path string) error {
+	return withControlLock(path, func() error {
+		if err := os.RemoveAll(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return nil
+	})
 }
 
 func readControl(path string) (string, error) {
@@ -164,9 +205,11 @@ func readControl(path string) (string, error) {
 }
 
 func writeControl(path, value string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
+	return withControlLock(path, func() error { return putControl(path, value) })
+}
+
+// putControl writes value at path; the caller holds its lock.
+func putControl(path, value string) error {
 	return fsx.WriteFileAtomic(path, []byte(value+"\n"), 0o600)
 }
 
@@ -182,69 +225,32 @@ func liftControl(path, value string) error {
 }
 
 // removeControlIf removes the control file at path when it holds value ("":
-// whatever it holds) as one compare-and-delete: the file moves aside under
-// a name of this call's own (a writer's rename then makes a new file, which
-// stays), and what moved is removed only when it holds value; otherwise it
-// goes back, unless a newer file took its place meanwhile (os.Link refuses
-// to replace one), which then holds.
+// whatever it holds), as one compare-and-delete under the file's lock: a
+// value a writer put there first stays.
 func removeControlIf(path, value string) error {
-	aside := fmt.Sprintf("%s.lift-%d-%d", path, os.Getpid(), time.Now().UnixNano())
-	if err := os.Rename(path, aside); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
+	return withControlLock(path, func() error {
+		cur, err := readControl(path)
+		if err != nil || cur == "" || (value != "" && cur != value) {
+			return err
 		}
-		return err
-	}
-	moved, err := readControl(aside)
-	if err == nil && moved != "" && (value == "" || moved == value) {
-		return os.Remove(aside)
-	}
-	if lerr := os.Link(aside, path); lerr != nil && !errors.Is(lerr, fs.ErrExist) {
-		return lerr // it stays aside: the error names it
-	}
-	if rerr := os.Remove(aside); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
-		return rerr
-	}
-	return err
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return nil
+	})
 }
 
 // replaceControlIf writes to at path while the file holds from, as one
-// compare-and-swap: the file moves aside under a name of this call's own;
-// what moved is replaced by to only when it holds from, else it goes back;
-// either way a file a writer put at path meanwhile stays (os.Link refuses
-// to replace it).
+// compare-and-swap under the file's lock: a value a writer put there first
+// stays, and a file lifted meanwhile is not made again.
 func replaceControlIf(path, from, to string) error {
-	aside := fmt.Sprintf("%s.swap-%d-%d", path, os.Getpid(), time.Now().UnixNano())
-	if err := os.Rename(path, aside); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil // lifted meanwhile: nothing of this command's to put back
+	return withControlLock(path, func() error {
+		cur, err := readControl(path)
+		if err != nil || cur != from || cur == "" {
+			return err
 		}
-		return err
-	}
-	src := aside
-	moved, err := readControl(aside)
-	if err == nil && moved == from {
-		tmp := aside + ".new"
-		if err = os.WriteFile(tmp, []byte(to+"\n"), 0o600); err == nil {
-			src = tmp
-		}
-	}
-	if lerr := linkBack(src, path); lerr != nil {
-		return errors.Join(err, lerr) // what moved stays aside: the error names it
-	}
-	_ = os.Remove(aside)
-	if src != aside {
-		_ = os.Remove(src)
-	}
-	return err
-}
-
-// linkBack puts src at path unless a file is there already (a newer write).
-func linkBack(src, path string) error {
-	if err := os.Link(src, path); err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
-	}
-	return nil
+		return putControl(path, to)
+	})
 }
 
 // controlState is what the engine keeps of the controls: the pause and the
@@ -305,22 +311,30 @@ func (e *Engine) heldWhat() string {
 // takeControls reads, at the start of a tick, the pause and the drain for a
 // reboot asked of the daemon and holds them as holds of the machine
 // (HoldPause, HoldReboot), saying so in an event when one begins or ends. A
-// pause past its end is lifted. A pause.json it cannot read is said once
-// and holds as it did; a reboot-drain.json it cannot read, or one this
-// build cannot parse, holds a drain, unacknowledged, until `magnum resume`
-// removes it: what the drain cannot read never opens its gates, at the
-// daemon's start included.
+// pause past its end is lifted. A file it cannot read, or one this build
+// cannot parse, is said once and holds, until `magnum resume --factory`
+// removes it, at the daemon's start included: a pause or a drain it held
+// goes on as it was, and with none it holds one (unreadablePause; a drain
+// unacknowledged). What the controls cannot read never opens their gates.
 func (e *Engine) takeControls(ctx context.Context) {
 	now := e.now()
 	l := e.d.Layout
+	held := func() Pause { // the pause held on, or one for the file it cannot use
+		if p := e.ctl.pause.Load(); p != nil {
+			return *p
+		}
+		return unreadablePause(now)
+	}
 	if v, err := ReadPause(l); err != nil {
 		e.warnControl(ctx, "pause", err.Error())
+		e.holdPause(ctx, held(), true, "")
 	} else {
 		p, ok := ParsePause(v)
 		why := "the pause was lifted: work starts again"
 		switch {
 		case v != "" && !ok:
 			e.warnControl(ctx, "pause", "not a pause `magnum pause` writes")
+			p, ok = held(), true
 		case ok && !p.Until.IsZero() && !now.Before(p.Until):
 			if err := LiftPause(l, v); err != nil {
 				e.log.Warn("lift a pause past its end", "err", err)
@@ -346,10 +360,9 @@ func (e *Engine) takeControls(ctx context.Context) {
 }
 
 // warnControl says, once while it lasts, that a control's file cannot be
-// read (why), in the log and in a warn event with what holds and what to do:
-// an unreadable pause.json holds the pause the daemon held (none, at its
-// start), an unreadable reboot-drain.json holds a drain; `magnum resume
-// --factory` removes either (`magnum doctor` says it too).
+// read or parsed (why), in the log and in a warn event with what holds and
+// what to do: either file holds (a pause, a drain) until `magnum resume
+// --factory` removes it (`magnum doctor` says it too).
 func (e *Engine) warnControl(ctx context.Context, kind, why string) {
 	if e.ctl.warned == nil {
 		e.ctl.warned = map[string]string{}
@@ -359,11 +372,7 @@ func (e *Engine) warnControl(ctx context.Context, kind, why string) {
 	}
 	e.ctl.warned[kind] = why
 	e.log.Warn("a control's file cannot be read", "kind", kind, "why", why)
-	holds := "no pause holds"
-	if e.ctl.pause.Load() != nil {
-		holds = "the pause holds as it was"
-	}
-	text := "pause.json cannot be read (" + why + "): " + holds + "; `magnum resume --factory` removes it"
+	text := "pause.json cannot be read (" + why + "): the pause holds until `magnum resume --factory` removes it"
 	evKind := "pause"
 	if kind == "reboot" {
 		text = "reboot-drain.json cannot be read (" + why + "): the drain holds until `magnum resume --factory` removes it"
