@@ -174,12 +174,15 @@ var kindDrainHolds = notify.Kind{One: "drain for a reboot still holds", Many: "d
 
 // rebootState is what the health checks keep of the drain for a reboot they
 // tend: its generation, since when the daemon is quiet under it, the
-// acknowledgement last written and whether its toast went.
+// acknowledgement last written, whether its toast went, and when it first
+// saw each settle of a confirmed push stopped between its steps (by the
+// fixer's run: rebootFixWork).
 type rebootState struct {
 	gen        int64
 	quietSince time.Time
 	ack        string
 	toasted    bool
+	settles    map[string]time.Time
 	// boot is the Mac's boot as the start read it.
 	boot BootID
 }
@@ -285,7 +288,7 @@ func (e *Engine) tendRebootDrain(ctx context.Context) {
 			fmt.Sprintf("a drain for a reboot holds since %s: nothing new starts, the work in flight ends, then the idle sessions park; it lasts %s",
 				d.Since.Local().Format("15:04"), d.Words()), map[string]any{"generation": d.Generation})
 	}
-	work := e.rebootDrainWork(ctx)
+	work, left := e.rebootDrainWork(ctx, st)
 	quiet := len(work) == 0
 	switch {
 	case !quiet:
@@ -300,7 +303,7 @@ func (e *Engine) tendRebootDrain(ctx context.Context) {
 			parked, work = false, blocked
 		}
 	}
-	ack := DrainAck{Generation: d.Generation, PID: os.Getpid(), Quiet: quiet, QuietSince: st.quietSince, Parked: parked, Work: work}
+	ack := DrainAck{Generation: d.Generation, PID: os.Getpid(), Quiet: quiet, QuietSince: st.quietSince, Parked: parked, Work: work, Left: left}
 	e.writeDrainAck(ctx, st, ack)
 	if quiet && !st.toasted && now.Sub(st.quietSince) >= DrainQuietToastAfter {
 		st.toasted = true
@@ -373,16 +376,17 @@ func (e *Engine) sessionsAtWork(ctx context.Context, counted func(prID int64) bo
 // rebootDrainWork is what the review daemon still runs that a reboot would
 // cut, in words: its reservations (rounds, opens, fix jobs, merges of the
 // parent, a held merge's push, whiteboards: reservedWords), a round's tail
-// before its fix cycle or whiteboard, the background jobs (backgroundBusy),
-// the heavy worker's jobs and the GitHub writes as the operator
-// (workInFlight), the rounds the registry holds in flight (an unreadable
-// registry counts as one), the live sessions at work that none of these
-// holds (sessionsAtWork: a pinned PR's you type into), the requests answered
-// off the tick (a staging request, an open, an abort), the staging deploys
-// queued or running, and the staging resolver's jobs that took their slot or
-// that its worker runs.
-func (e *Engine) rebootDrainWork(ctx context.Context) []string {
-	var out []string
+// before its fix cycle or whiteboard, the fix loops' pushes no job holds
+// (rebootFixWork: a push the settle still confirms, a settle between its
+// steps), the background jobs (backgroundBusy), the heavy worker's jobs and
+// the GitHub writes as the operator (workInFlight), the rounds the registry
+// holds in flight (an unreadable registry counts as one), the live sessions
+// at work that none of these holds (sessionsAtWork: a pinned PR's you type
+// into), the requests answered off the tick (a staging request, an open, an
+// abort), the staging deploys queued or running, and the staging resolver's
+// jobs that took their slot or that its worker runs. left is what the drain
+// does not wait for, with what the reboot does to it (rebootFixWork).
+func (e *Engine) rebootDrainWork(ctx context.Context, st *rebootState) (out, left []string) {
 	e.mu.Lock()
 	held := maps.Clone(e.rounds)
 	e.mu.Unlock()
@@ -392,6 +396,8 @@ func (e *Engine) rebootDrainWork(ctx context.Context) []string {
 	if n := e.roundTails.Load(); n > 0 {
 		out = append(out, fmt.Sprintf("the end of %d round(s)", n))
 	}
+	fixes, left := e.rebootFixWork(ctx, held, st)
+	out = append(out, fixes...)
 	if b := e.backgroundBusy(); b != "" {
 		out = append(out, b)
 	}
@@ -417,7 +423,7 @@ func (e *Engine) rebootDrainWork(ctx context.Context) []string {
 		out = append(out, fmt.Sprintf("%d request(s) answered off the tick", answering))
 	}
 	out = append(out, e.deploysInFlight()...)
-	return append(out, e.resolvesInFlight(ctx)...)
+	return append(out, e.resolvesInFlight(ctx)...), left
 }
 
 // deploysInFlight are the staging deploys queued or running, which the steps

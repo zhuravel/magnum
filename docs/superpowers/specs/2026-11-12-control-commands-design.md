@@ -108,6 +108,14 @@ while one holds keeps its start, its end and its reason unless a flag changes th
   pinned PR's you type into). A merge of the parent is a fix job in phase fixing, so it is a
   reservation; both reviews named it as uncovered, and a test holds a real one at its push. A session a dialog
   holds (herdr shows it blocked) is named with its remedy.
+- Review, the fix loops' pushes (`rebootFixWork`): the push of a held merge runs off the loop under a fix
+  reservation and is named as itself ("push of the held merge of talkable/talkable#2 (Workflows token)"). A loop
+  whose settle confirms its fixer's push while GitHub does not answer (`FixState.Confirm`, no job holding it) is work
+  until its 30-minute cap, counted from the start of the confirmation, and then it is left. A settle of a confirmed
+  push that stopped between its steps is work for up to 30 minutes from when the drain first saw it, and then it is
+  left. The acknowledgement's `left` names what the drain does not wait for: a fix whose push GitHub did not
+  confirm (the late settle recovers it after the reboot), and a held merge's push row that a stop cut (the start
+  ends it, and P asks the push again).
 - Factory (`rebootDrainWork`): work.json's items (local review rounds, checks, claims, talks, QA runs; a backoff
   repair aside, as for a restart) and every agent run that is pending, submitted or working, the liaison's too
   (`runtime.Runtime.TurnsInFlight`, from the agents store). A run whose state the store cannot tell counts as

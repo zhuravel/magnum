@@ -19194,6 +19194,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
     in herdr) and, for the factory, no record a crash left names work (a local review round's agents are in a
     scratch registry), and one it cannot stat or read, or whose pidfile it cannot read, is never certified. It wakes the daemons at
     most once a minute, since the review tick polls GitHub.
+  - A fix's pushes under it (decided at the rebase onto the held merge and confirm-push). The push of a held merge
+    runs off the loop with the fixer App's Workflows token under a fix reservation, so the drain already waited for
+    it; the work now names it ("push of the held merge of talkable/talkable#2 (Workflows token)"), and a test holds
+    one at its push. Its y is refused under the drain like any merge of the parent. A held push's row that a stop
+    cut runs nothing, and the start ends it (`recoverHeldPush`), so the drain lists it in the acknowledgement's
+    `left` and does not wait. A loop whose settle confirms its fixer's push while GitHub does not answer
+    (`FixState.Confirm`, with no job holding it) is work until its 30-minute cap, counted from the start of the
+    confirmation, and is left after that ("the late settle recovers it after the reboot"). `daemon-restart --drain`
+    waits for no such loop, because the restart fails it as unconfirmed and the poll settles it late. A reboot does
+    the same, but the wait lets GitHub's answer settle the fix as pushed: there is no failure toast, no attention and
+    no late reopen of a fix whose push landed. Past the cap the loop fails as unconfirmed anyway (`capPushes`), so a
+    longer wait gains nothing, and the drain never waits without end. A fix that failed as unconfirmed is left too,
+    since the late settle needs no daemon to stay up. A settle of a confirmed push that stopped between its steps
+    (the next poll resumes it) is work for up to the same 30 minutes from when the drain first saw it, and then it
+    is left: its steps resume after the reboot.
   - It ends at each daemon's first start on another boot: another `kern.bootsessionuuid`, which is unique per boot
     (`kern.boottime` moves when macOS steps the clock after a wake, so it decides only without a session, past two
     minutes); both read through the sysctl runner (`Deps.Boot` in tests). A crash, a new build or a restart by

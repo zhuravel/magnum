@@ -148,9 +148,10 @@ func (d RebootDrain) Words() string {
 // generation its gates hold, its pid (a restarted daemon's acknowledgement
 // is void), whether nothing it would cut runs (Quiet) and since when, the
 // work that still runs (in words, "round of talkable/talkable#12"),
-// whether it parked its idle agents once quiet (Parked), and what its park
-// left as it was, each with why and what the reboot does to it (Left: a
-// task whose park kept failing).
+// whether it parked its idle agents once quiet (Parked), and what it does
+// not wait for, each with why and what the reboot does to it (Left: a task
+// whose park kept failing, a liaison pane you are in, a fixer's push
+// GitHub did not confirm, which the late settle recovers).
 type DrainAck struct {
 	Generation int64     `json:"generation"`
 	PID        int       `json:"pid"`
