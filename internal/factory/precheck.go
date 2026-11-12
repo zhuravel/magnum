@@ -1380,6 +1380,10 @@ func (p *precheckRun) onBase(cmd string, run ProofRun, red []specFailure) (baseR
 	if len(atBase) == 0 {
 		return map[string]bool{}, true
 	}
+	if slices.Contains(p.stops.NoBase, specsBaseKey) { // your answer: the red specs are judged at the head alone
+		p.say("\nNot run on the base: your answer judges the specs red at the head without their run there, as the change's.\n")
+		return map[string]bool{}, true
+	}
 	headRed := registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "unknown", Command: run.Command, Exit: run.Exit, Took: run.Took}
 	baseScript := renderCommand(cmd, atBase, p.base)
 	bound, within := baseBound(p.repo, len(atBase), run.Took)

@@ -59,6 +59,7 @@ const (
 	decideAgain     = "again"     // your own words on a check: it runs again
 	decideDrop      = "drop"      // the task stops
 	decideWriter    = "writer"    // the check's faults are the writer's for the task
+	decideNoBase    = "no_base"   // the specs red at the head are judged without their run on the base
 	decideRetry     = "retry"     // your retry closed the question
 	decideRestore   = "restore"   // what a review round left goes back as the reviewed head has it
 	decideKeep      = "keep"      // what a review round left stays in the copy
@@ -74,6 +75,7 @@ const (
 	optionFresh     = "Start the role in a fresh session"
 	optionDrop      = "Drop the task"
 	optionWriter    = "Hand it to the writer"
+	optionNoBase    = "Judge the red specs without the base run"
 	// a review round's leftovers that may be yours
 	optionRestoreCopy = "Restore the copy to the reviewed head"
 	optionKeepChange  = "Keep the change"
@@ -120,6 +122,10 @@ type stopsRecord struct {
 	// Writer are the checks whose faults your answer handed to the writer
 	// for the task: their failures are the writer's, as any other.
 	Writer []string `json:"writer,omitempty"`
+	// NoBase are the base runs (specsBaseKey) your answer gave up for the
+	// task: the specs red at the head are judged without them, as the
+	// change's, and the PR body names it.
+	NoBase []string `json:"no_base,omitempty"`
 	// Kept are the tracked changes your answers kept in the copy ("Keep the
 	// change"): while a path's change has the fingerprint it had then
 	// (keptSum), no look at the copy counts it as a round's, and the
@@ -396,6 +402,8 @@ func decideStop(a stopAsk, answer string) (decision, words string) {
 		return decideKeep, strings.TrimSpace(answer)
 	case is(optionDrop, "drop"):
 		return decideDrop, ""
+	case a.Kind == stopCheck && a.Check == specsBaseKey && (is(optionNoBase, "without") || is(optionWriter, "writer")):
+		return decideNoBase, "" // the writer cannot fix a hang on the base: it gets the red specs at the head
 	case a.Kind == stopCheck && is(optionSkip, "skip"):
 		return decideSkip, ""
 	case a.Kind == stopCheck && is(optionWriter, "writer"):
@@ -437,6 +445,10 @@ func (rec *stopsRecord) apply(a stopAsk) {
 		if !slices.Contains(rec.Writer, a.Check) {
 			rec.Writer = append(rec.Writer, a.Check)
 		}
+	case decideNoBase:
+		if !slices.Contains(rec.NoBase, a.Check) {
+			rec.NoBase = append(rec.NoBase, a.Check)
+		}
 	case decideAccept:
 		rec.Accepted = append(rec.Accepted, accepted{Check: a.Check, Failures: a.Failures})
 	}
@@ -451,6 +463,8 @@ func decisionWords(a stopAsk) string {
 		return "run " + a.Check + " with a bound of " + boundWords(a.Words) + " for this task (its last was " + boundWords(a.Bound) + ")"
 	case decideWriter:
 		return "hand the faults of " + a.Check + " to the writer for this task"
+	case decideNoBase:
+		return "judge the specs red at the head without their run on the base for this task (the PR body names it)"
 	case decideAccept:
 		return "accept the failure of " + a.Check + " as known for this task (the PR body names it)"
 	case decideDirection:
@@ -636,6 +650,10 @@ func stopsSentences(dir string) string {
 	var out []string
 	for _, key := range rec.Skipped {
 		out = append(out, "The factory's precheck skipped "+key+" for this change, on the operator's answer: CI is its only run.")
+	}
+	if len(rec.NoBase) > 0 {
+		out = append(out, "The factory's precheck judged the specs red at the head without their run on the base, which did not end, "+
+			"on the operator's answer: it took them as the change's.")
 	}
 	for _, a := range rec.Accepted {
 		s := "The operator accepted the failure of the factory's " + a.Check + " as known for this change"

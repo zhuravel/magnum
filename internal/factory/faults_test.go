@@ -140,9 +140,10 @@ func (r *codingRig) hangingBase(key string) (registry.Task, func() []time.Durati
 
 // A run on the base that hangs runs again, then once with its bound doubled
 // (up to precheck.cap_max); when that hangs too, the task asks you a
-// question with the skip, the longer bound and the drop, the longer bound
-// recommended, and its NEEDS YOU names the decision, never "retry". The
-// writer never hears of it.
+// question with a longer bound for the base run (recommended), the red specs
+// judged at the head without it, and the drop, and its NEEDS YOU names the
+// decision, never "retry". The writer, who cannot fix a hang on the base, is
+// never offered it, and never hears of it.
 func TestABaseRunThatHangsGetsADoubledBoundThenAQuestion(t *testing.T) {
 	r := newCodingRig(t)
 	got, bounds := r.hangingBase("PR-12561")
@@ -150,41 +151,78 @@ func TestABaseRunThatHangsGetsADoubledBoundThenAQuestion(t *testing.T) {
 		t.Fatalf("base runs bounded by %v, want its run, again, then one with its bound doubled", b)
 	}
 	if got.State != registry.TaskNeedsYou ||
-		!strings.Contains(got.WaitsWhat, "skip this check for this task, run it with a longer bound, drop the task or hand it to the writer?") ||
+		!strings.Contains(got.WaitsWhat, "run it with a longer bound, judge the red specs without the base run or drop the task?") ||
 		strings.Contains(strings.ToLower(got.WaitsWhat), "retry") {
 		t.Fatalf("task %s waits %q, want the question's decision and no retry", got.State, got.WaitsWhat)
 	}
 	qs := r.newestQuestions(got.ID)
-	if len(qs) != 1 || qs[0].RaisedBy != factoryAsks || !slices.Equal(optionLabels(qs[0]), []string{optionSkip, optionLonger, optionDrop, optionWriter}) ||
-		qs[0].Recommended != 1 || !strings.Contains(qs[0].Context, "ran it with its bound doubled") {
-		t.Fatalf("questions %+v, want the factory's one with skip, a longer bound (recommended) and drop", qs)
+	if len(qs) != 1 || qs[0].RaisedBy != factoryAsks || !slices.Equal(optionLabels(qs[0]), []string{optionLonger, optionNoBase, optionDrop}) ||
+		qs[0].Recommended != 0 || !strings.Contains(qs[0].Context, "ran it with its bound doubled") {
+		t.Fatalf("questions %+v, want the factory's one with a longer bound (recommended), the red specs without the base run and drop", qs)
 	}
 	if ps := r.rt.promptsTo("fx-writer"); len(ps) != 1 {
 		t.Fatalf("the writer got %d prompts, want no fix turn for a run that hangs", len(ps))
 	}
 }
 
-// Your answer "skip" skips the check for the task: the precheck runs no
-// specs and records them skipped, the task goes on, and the PR body names
-// the check as skipped. A longer bound runs the base run with it.
+// Your answer "skip" skips the check for the task: the precheck runs it no
+// more and records it skipped, the task goes on, and the PR body names the
+// check as skipped. A longer bound runs the base run with it. Judging the
+// red specs without the base run gives them to the writer as the change's,
+// runs the base run no more, and the PR body names it: the question never
+// comes back the same.
 func TestYourAnswerToACheckQuestionSkipsItOrGivesItYourBound(t *testing.T) {
 	t.Run("skip", func(t *testing.T) {
-		r := newCodingRig(t)
-		task, _ := r.hangingBase("PR-12562")
-		before := r.precheckSpecRuns()
-		r.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: task.QuestionRev, Answers: map[int]string{0: optionSkip}})
+		r := installsRig(t)
+		task := r.codingTask("PR-12562", "bug")
+		r.startStage(task)
+		r.fix(task)
+		r.lintCrashesFor(10, "Error: rubocop's server went away\n")
+		r.endTurns(task, 1)
+		got := r.reload(task.ID)
+		if qs := r.newestQuestions(task.ID); got.State != registry.TaskNeedsYou || len(qs) != 1 || !slices.Contains(optionLabels(qs[0]), optionSkip) {
+			t.Fatalf("task %s waits %q with %+v; want the lint's question with a skip", got.State, got.WaitsWhat, qs)
+		}
+		before := len(r.ran("bin/lint"))
+		r.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: got.QuestionRev, Answers: map[int]string{0: optionSkip}})
 		r.passes(task, func() bool { return r.reload(task.ID).Stage != "coding" })
-		if n := r.precheckSpecRuns() - before; n != 0 {
-			t.Fatalf("the precheck's specs ran %d times after your skip", n)
+		if n := len(r.ran("bin/lint")) - before; n != 0 {
+			t.Fatalf("the lint ran %d times after your skip", n)
 		}
 		if got := r.reload(task.ID); got.Stage == "coding" || got.State == registry.TaskNeedsYou {
 			t.Fatalf("task at %s %s waits %q, want it past coding", got.Stage, got.State, got.WaitsWhat)
 		}
-		if got := r.checksOf(task.ID, "spec"); got[len(got)-1] != registry.CheckSkipped {
-			t.Fatalf("spec checks %q, want the last one skipped", got)
+		if got := r.checksOf(task.ID, "lint"); got[len(got)-1] != registry.CheckSkipped {
+			t.Fatalf("lint checks %q, want the last one skipped", got)
 		}
-		if s := stopsSentences(r.layout.FactoryTaskDir(task.ID)); !strings.Contains(s, "skipped precheck.specs") {
+		if s := stopsSentences(r.layout.FactoryTaskDir(task.ID)); !strings.Contains(s, "skipped precheck.lint") {
 			t.Fatalf("the PR body's sentences %q, want the skipped check named", s)
+		}
+	})
+	t.Run("the red specs without the base run", func(t *testing.T) {
+		for _, answer := range []string{optionNoBase, optionWriter} { // "the writer" on a base run: it gets the red specs, never the hang
+			if d, _ := decideStop(stopAsk{Kind: stopCheck, Check: specsBaseKey}, answer); d != decideNoBase {
+				t.Fatalf("%q on the base run's question decides %q, want %q", answer, d, decideNoBase)
+			}
+		}
+		r := newCodingRig(t)
+		task, bounds := r.hangingBase("PR-12565")
+		runs := len(bounds())
+		r.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: task.QuestionRev, Answers: map[int]string{0: optionNoBase}})
+		r.passes(task, func() bool { return r.writerPrompts() > 1 || !isLive(r.reload(task.ID)) })
+		ps := r.rt.promptsTo("fx-writer")
+		if len(ps) != 2 || !strings.HasPrefix(ps[1].Text, fixLead) || !strings.Contains(ps[1].Text, "red at the head") {
+			t.Fatalf("the writer's prompts %+v; want a fix turn for the specs red at the head", ps)
+		}
+		if n := len(bounds()); n != runs {
+			t.Fatalf("%d base runs after your answer, want none", n-runs)
+		}
+		open := slices.DeleteFunc(r.newestQuestions(task.ID), func(q registry.Question) bool { return q.State != registry.QuestionOpen })
+		if got := r.reload(task.ID); got.State == registry.TaskNeedsYou || len(open) != 0 {
+			t.Fatalf("task %s waits %q with %+v open; want the writer at work and no question again", got.State, got.WaitsWhat, open)
+		}
+		if s := stopsSentences(r.layout.FactoryTaskDir(task.ID)); !strings.Contains(s, "without their run on the base") {
+			t.Fatalf("the PR body's sentences %q, want the red specs judged without the base run named", s)
 		}
 	})
 	t.Run("a longer bound", func(t *testing.T) {

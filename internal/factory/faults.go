@@ -339,6 +339,9 @@ func faultQuestion(f checkFault) stopQuestion {
 	if len(f.tried) > 0 {
 		tried = "the factory " + andList(f.tried)
 	}
+	if f.key == specsBaseKey {
+		return baseQuestion(f, tried)
+	}
 	q := registry.Question{
 		Text:    fmt.Sprintf("The factory's check %s %s at %s: how does the task go on?", f.key, f.what, short(f.head)),
 		Context: tried + ", and it never named a failure of the change, so the writer cannot fix it",
@@ -358,6 +361,35 @@ func faultQuestion(f checkFault) stopQuestion {
 		q.Recommended, q.Why = 3, "what it printed names a file the branch changed: the change may be its cause"
 	case f.hang:
 		q.Recommended, q.Why = 1, "a run that only takes long passes with a longer bound"
+	}
+	return stopQuestion{
+		ask: stopAsk{Kind: stopCheck, Key: faultKey(f.head, f.key), Check: f.key, Skip: f.skip, Bound: f.bound.String(),
+			Why: f.key + " " + f.what + " at " + short(f.head)},
+		q: q,
+	}
+}
+
+// baseQuestion is the question of the specs' run on the base that hung
+// through its fault steps (f, tried in words): a hang on the base is no
+// failure of the change, which the writer cannot fix, so the writer is not
+// offered it. Run it with a longer bound (recommended), judge the specs red
+// at the head without it (as the change's; the PR body names it), or drop
+// the task.
+func baseQuestion(f checkFault, tried string) stopQuestion {
+	q := registry.Question{
+		Text:    fmt.Sprintf("The factory's check %s %s at %s: how does the task go on?", f.key, f.what, short(f.head)),
+		Context: tried + ", and it never ended, so it never told which of the specs red at the head are red on the base too",
+		Example: cmp.Or(textx.Clip(f.tail, 600), "it printed nothing"),
+		Options: []registry.Option{
+			{Label: optionLonger, Means: "answer with the bound, such as `" + optionLonger + ": 40m`, longer than its last of " +
+				capText(f.bound) + ": the base run runs with that bound for this task (twice its last one when you name none, or a " +
+				"shorter one)"},
+			{Label: optionNoBase, Means: "the specs red at the head count as the change's, and the writer gets them with a fix turn; " +
+				"the base run runs no more for this task, and the PR body names it"},
+			{Label: optionDrop, Means: "the task stops"},
+		},
+		Recommended: 0, Why: "a run that only takes long gives its verdict with a longer bound",
+		Evidence: precheckFile,
 	}
 	return stopQuestion{
 		ask: stopAsk{Kind: stopCheck, Key: faultKey(f.head, f.key), Check: f.key, Skip: f.skip, Bound: f.bound.String(),
