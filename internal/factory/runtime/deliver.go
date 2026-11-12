@@ -158,7 +158,7 @@ func (r *Runtime) bringBack(ctx context.Context, t registry.Task, a registry.Att
 	case ranOut: // your retry: the ladders start over
 		r.mu.Lock()
 		st.stuck, st.lost = false, false
-		st.step, st.resumes, st.fresh = 0, 0, false
+		st.step = 0
 		st.recoveries, st.counted, st.dueAt = 0, true, time.Time{}
 		r.mu.Unlock()
 		r.noteStartOver(ctx, t, a, st.role.Name, "your retry") // a restart counts from here too

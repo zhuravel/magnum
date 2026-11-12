@@ -63,9 +63,6 @@ const (
 	// same before the watchdog takes its next step, and how long a
 	// recovery waits for progress before the next one.
 	NoProgressAfter = 10 * time.Minute
-	// MaxResumes is how often a lost pane's conversation is resumed in one
-	// attempt before a fresh session starts from the files.
-	MaxResumes = 2
 	// MaxStagePrompts is how many prompts a role gets in one stage before a
 	// loop without progress is assumed; MaxContext the share of its context
 	// (percent) past which it is; SameFailures how often the same failing
@@ -233,18 +230,14 @@ type roleState struct {
 	since time.Time
 	step  int
 	stuck bool
-	// Recovery of a lost pane: resumes used (bringBack's), whether the fresh
-	// session started (or, for a role that took no prompt yet, its
-	// relaunch), whether a recovery waits for progress, and whether the
-	// recoveries ran out; ranOut is when the steps ran out (lost, stuck, or a
-	// heal told to you), which your retry after it starts over; noPrompt
-	// counts the fresh starts of a Codex session that never took its first
-	// prompt. recoveries are the recoveries the role took in the attempt
-	// since the count last started over (recoveriesUsed: counted is false
-	// until the task's recover events were read), and dueAt is when the next
-	// one runs, after its wait (RecoveryWaits; zero: none is scheduled).
-	resumes    int
-	fresh      bool
+	// Recovery of a lost pane: whether a recovery waits for progress, and
+	// whether the recoveries ran out; ranOut is when the steps ran out (lost,
+	// stuck, or a heal told to you), which your retry after it starts over;
+	// noPrompt counts the fresh starts of a Codex session that never took its
+	// first prompt. recoveries are the recoveries the role took in the
+	// attempt since the count last started over (recoveriesUsed: counted is
+	// false until the task's recover events were read), and dueAt is when the
+	// next one runs, after its wait (RecoveryWaits; zero: none is scheduled).
 	recovering bool
 	lost       bool
 	ranOut     time.Time

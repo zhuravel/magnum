@@ -241,7 +241,6 @@ func (e *Engine) askStop(ctx context.Context, t registry.Task, sq stopQuestion) 
 	if err != nil {
 		return err
 	}
-	e.freeHeavy(ctx, cur, "its task waits on you")
 	return e.waitForAnswers(ctx, cur, e.holding(cur, open))
 }
 
