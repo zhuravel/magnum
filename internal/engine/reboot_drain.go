@@ -197,16 +197,21 @@ func (e *Engine) readBoot(ctx context.Context) BootID {
 	return b
 }
 
-// startRebootDrain runs at the start: it records the controls this build
-// knows (KVDaemonControls, for the CLI), drops a former daemon's
-// acknowledgement (this one acknowledges anew, once its gates hold), and
+// recordControls records the controls this build knows (KVDaemonControls,
+// for the CLI), right after the start recorded its pid: the CLI reads a pid
+// recorded without them as an older build's.
+func (e *Engine) recordControls(ctx context.Context) {
+	e.setKV(ctx, KVDaemonControls, Controls{Version: ControlsVersion, PID: os.Getpid()}.Value())
+}
+
+// startRebootDrain runs at the start: it drops a former daemon's
+// acknowledgement (this one acknowledges anew, once its gates hold) and
 // ends a drain until "boot" that began on another boot of the Mac. A dry
 // run writes nothing.
 func (e *Engine) startRebootDrain(ctx context.Context) {
 	if e.d.DryRun {
 		return
 	}
-	e.setKV(ctx, KVDaemonControls, Controls{Version: ControlsVersion, PID: os.Getpid()}.Value())
 	e.delKV(ctx, KVDaemonDrainAck)
 	v, ok := e.getKV(ctx, KVDaemonRebootDrain)
 	if !ok || v == "" {

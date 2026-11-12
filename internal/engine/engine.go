@@ -1376,6 +1376,7 @@ func (e *Engine) startup(ctx context.Context) {
 	e.writeWorkMark() // work.go: a crashed daemon's mark goes before this one queues any
 	if !e.d.DryRun {
 		e.setKV(ctx, store.KVDaemonPid, strconv.Itoa(os.Getpid()))
+		e.recordControls(ctx) // reboot_drain.go: beside the pid, so the CLI never reads the pid without them
 	}
 	e.recordBuild(ctx)
 	e.recordConfig(ctx)       // config_restart.go: the user config this start runs; a saved config's restart is done
