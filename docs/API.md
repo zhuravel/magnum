@@ -9511,6 +9511,10 @@ const KVStagingResolves = "staging.resolve.*"
     (kvStagingResolve) in one KVValues read: StagingResolverSays reads them for
     the card and `magnum staging`.
 
+const QueuedRebootDrain = "reboot_drain"
+    QueuedRebootDrain is why a curation waits (CurateQueued.Why) while the
+    daemon drains for a reboot alone.
+
 const ReqCodexFlag = "codex-flag"
     ReqCodexFlag flags a PR or clears its flag (CodexFlagPayload).
 
@@ -10152,11 +10156,6 @@ func ProposalStale(ctx context.Context, st *store.Store, nr notes.Repo, p store.
     state of its base version. It reads the version's listing from the registry
     and hashes the files on disk, never a version's content.
 
-func ReadBootTime(ctx context.Context, r execx.Runner) (time.Time, error)
-    ReadBootTime reads the Mac's boot time, `sysctl -n kern.boottime`,
-    through r ("{ sec = 1762940000, usec = 123456 } Wed Nov 12 10:13:20 2026");
-    an error when it cannot (another system, sysctl missing).
-
 func ReadDaemonConfigSum(ctx context.Context, st *store.Store) (string, bool)
     ReadDaemonConfigSum reads KVDaemonConfigSum: the hex SHA-256 of the user
     config the running daemon loaded, "" when it read none; false when no daemon
@@ -10401,6 +10400,28 @@ type AutoApproveRefused struct {
 
 func ParseAutoApproveRefused(v string) (AutoApproveRefused, bool)
     ParseAutoApproveRefused reads a KVPRAutoApproveRefused value.
+
+type BootID struct {
+	Session string    `json:"session,omitempty"`
+	Time    time.Time `json:"time,omitzero"`
+}
+    BootID names a boot of the Mac: its boot session (kern.bootsessionuuid,
+    unique per boot) and its boot time (kern.boottime), either empty when it
+    could not be read.
+
+func ReadBoot(ctx context.Context, r execx.Runner) (BootID, error)
+    ReadBoot reads the Mac's boot through r, read only: `sysctl -n
+    kern.bootsessionuuid` and `sysctl -n kern.boottime` ("{ sec = 1762940000,
+    usec = 123456 } Wed Nov 12 10:13:20 2026"). Either may fail alone; an error
+    when neither names the boot (another system, sysctl missing).
+
+func (b BootID) Known() bool
+    Known reports whether b names a boot.
+
+func (b BootID) Other(o BootID) bool
+    Other reports whether b is another boot than o: their sessions differ when
+    both have one, else their boot times are more than bootTimeSlack apart.
+    An unknown boot is no other boot.
 
 type Build struct {
 	Version   string    `json:"version"`
@@ -10708,7 +10729,7 @@ func ReadCurating(ctx context.Context, st *store.Store) *CurateMark
 type CurateQueued struct {
 	Repo    string    `json:"repo"`
 	Trigger string    `json:"trigger"`
-	Why     string    `json:"why"` // QueuedJudge | QueuedBusy | QueuedDrain | QueuedGitHub
+	Why     string    `json:"why"` // QueuedJudge | QueuedBusy | QueuedDrain | QueuedRebootDrain | QueuedGitHub
 	At      time.Time `json:"at"`
 }
     CurateQueued is a curation waiting for a start (KVNotesCurateQueue).
@@ -10857,10 +10878,11 @@ type Deps struct {
 	// A port of its own keeps the probe out of the commands a test scripts
 	// for Runner. nil = no memory sample.
 	MemoryRunner execx.Runner
-	// BootTime reads the Mac's boot time at the start, which ends a drain
-	// for a reboot begun on another boot (reboot_drain.go); nil reads it
-	// through MemoryRunner (ReadBootTime), and no runner leaves it unknown.
-	BootTime func(ctx context.Context) (time.Time, error)
+	// Boot reads the Mac's boot at the start, which ends a drain for a
+	// reboot begun on another boot (reboot_drain.go); nil reads it through
+	// MemoryRunner, the sysctl runner (ReadBoot), and no runner leaves it
+	// unknown.
+	Boot func(ctx context.Context) (BootID, error)
 	// Classifier sets up the retro's classifier for one retro run ([learn],
 	// retro.go); nil = the candidates are stored unclassified.
 	Classifier func(ctx context.Context, run RetroRun) (Classifier, error)
@@ -10999,12 +11021,15 @@ type DrainAck struct {
 	QuietSince time.Time `json:"quiet_since,omitzero"`
 	Parked     bool      `json:"parked"`
 	Work       []string  `json:"work,omitempty"`
+	Left       []string  `json:"left,omitempty"`
 }
     DrainAck is a daemon's acknowledgement of a drain for a reboot: the
-    generation its gates hold, its pid (a restarted daemon's acknowledgement is
-    void), whether nothing it would cut runs (Quiet) and since when, the work
-    that still runs (in words, "round of talkable/talkable#12"), and whether it
-    parked its idle agents once quiet (Parked).
+    generation its gates hold, its pid (a restarted daemon's acknowledgement
+    is void), whether nothing it would cut runs (Quiet) and since when,
+    the work that still runs (in words, "round of talkable/talkable#12"),
+    whether it parked its idle agents once quiet (Parked), and what its park
+    left as it was, each with why and what the reboot does to it (Left: a task
+    whose park kept failing).
 
 func ParseDrainAck(v string) (DrainAck, bool)
     ParseDrainAck reads an acknowledgement (Value); false for anything else.
@@ -12282,24 +12307,24 @@ type RebootDrain struct {
 	Generation int64     `json:"generation"`
 	Since      time.Time `json:"since"`
 	Until      string    `json:"until"`
-	Boot       time.Time `json:"boot,omitzero"`
+	Boot       BootID    `json:"boot,omitzero"`
 	Reason     string    `json:"reason,omitempty"`
 }
-    RebootDrain is a drain for a reboot: the command's generation (its start in
-    nanoseconds, the same on both daemons' records), since when, until what ends
-    it (DrainUntilBoot, DrainUntilResume), the Mac's boot time when it began
-    (zero when it could not be read: only `magnum resume` ends such a drain) and
-    why.
+    RebootDrain is a drain for a reboot: the command's generation (its start
+    in nanoseconds, the same on both daemons' records), since when, until what
+    ends it (DrainUntilBoot, DrainUntilResume), the boot of the Mac it began on
+    (unknown when it could not be read: only `magnum resume` ends such a drain)
+    and why.
 
 func ParseRebootDrain(v string) (RebootDrain, bool)
     ParseRebootDrain reads a record's value (Value); false for anything else,
     "" included.
 
-func (d RebootDrain) EndsAtStart(boot time.Time) bool
+func (d RebootDrain) EndsAtStart(boot BootID) bool
     EndsAtStart reports whether a daemon that starts on boot (the Mac's boot
-    time now; zero when unknown) ends d: a drain until "boot" whose boot is
-    known and differs. A crash restart or a restart on the same boot keeps it,
-    and so does any start when either time is unknown.
+    now) ends d: a drain until "boot" begun on another boot (BootID.Other).
+    A crash restart or a restart on the same boot keeps it, and so does any
+    start when either boot is unknown.
 
 func (d RebootDrain) Value() string
     Value is d as its records hold it.
@@ -15033,11 +15058,11 @@ type Deps struct {
 	// staging cells.
 	Staging Staging
 	// Build is the build the daemon runs (engine.Build.Label), which
-	// work.json names for the CLI's status; BootTime reads the Mac's boot
-	// time at the start, which ends a drain for a reboot begun on another
-	// boot (control.go); nil leaves it unknown.
-	Build    string
-	BootTime func(ctx context.Context) (time.Time, error)
+	// work.json names for the CLI's status; Boot reads the Mac's boot at the
+	// start (engine.ReadBoot), which ends a drain for a reboot begun on
+	// another boot (control.go); nil leaves it unknown.
+	Build string
+	Boot  func(ctx context.Context) (engine.BootID, error)
 	// Clock returns the current time; nil means time.Now.
 	Clock func() time.Time
 	Log   *slog.Logger
@@ -17930,6 +17955,11 @@ func (r *Runtime) LetGo(ctx context.Context, t registry.Task, role string) (int,
     (EventDeliveryUnknown). The role gets prompts again, none of those is sent
     a second time, and a run of theirs that was never submitted, and carries no
     prompt that arrived, is abandoned. It returns how many it settled.
+
+func (r *Runtime) LiveAgents(ctx context.Context, t registry.Task) (bool, error)
+    LiveAgents reports whether task t has a live agent (a session starting or
+    live), its liaison's included: the drain for a reboot parks only such a
+    task. A task never launched, and never talked about, has none.
 
 func (r *Runtime) Observe(ctx context.Context) (evs []Event, err error)
     Observe runs one observe pass over herdr's snapshot and returns its events
