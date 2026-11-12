@@ -1,9 +1,12 @@
 package factory
 
 import (
+	"errors"
+	"os"
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -270,5 +273,34 @@ func TestALongerBoundIsTakenOnlyWhereItIsNamedAndIsLonger(t *testing.T) {
 		if d, words := decideStop(ask, answer); d != want[0] || (want[1] != "" && words != want[1]) {
 			t.Errorf("decideStop(%q) = %q, %q; want %q, %q", answer, d, words, want[0], want[1])
 		}
+	}
+}
+
+// A fault's run again that did not start for a reason of the moment (EAGAIN
+// on a loaded machine) is the machine's, as any start failure: the precheck
+// ends on that error, which the infrastructure hold tries again, never on
+// the fault's question.
+func TestAFaultsRunAgainThatDidNotStartIsTheMachines(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12590", "bug")
+	r.fix(task)
+	var mu sync.Mutex
+	runs := 0
+	r.mu.Lock()
+	r.exits = map[string][]int{"bin/specs": {1}} // its run prints nothing: a fault's sign
+	r.startErr = func(run scriptRun) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if strings.HasPrefix(run.Script, "bin/specs") {
+			if runs++; runs == 2 {
+				return &os.SyscallError{Syscall: "fork/exec", Err: syscall.EAGAIN}
+			}
+		}
+		return nil
+	}
+	r.mu.Unlock()
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err == nil || !errors.Is(err, syscall.EAGAIN) || res.ForYou || res.fault != nil {
+		t.Fatalf("precheck %+v, %v; want the machine's error, no question for you", res, err)
 	}
 }

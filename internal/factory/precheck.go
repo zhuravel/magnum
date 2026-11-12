@@ -1268,7 +1268,11 @@ func (p *precheckRun) runNaming(key, what, script, failing string, files []strin
 		runOnce()
 		words := faultStepWords(step, r.bound, p.repo.Installs)
 		r.tried = append(r.tried, words)
-		if !r.ok && p.parent.Err() == nil { // the cap stopped the run again of a fault: it never passes
+		// The cap stopped the run again of a fault: it never passes. A run
+		// again that did not start (p.err: the machine's, of the moment) or
+		// that cannot run (a failure for you) is not the cap's: its own
+		// cause stands, the infrastructure hold's or yours.
+		if !r.ok && p.parent.Err() == nil && p.err == nil && !p.res.ForYou {
 			r.cutSign = before
 		}
 		p.spendFaultStep(key, step, words, runEnded(r.run, r.ok, names(r.run)))
