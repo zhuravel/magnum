@@ -59,9 +59,12 @@ const workflowsPath = ".github/workflows"
 // parentGit is the git the daemon's merge of a PR's parent takes beyond Git
 // (*gitx.Client has it): the merged tree, its merge commit, the paths a
 // change touches, the paths two commits have otherwise, a first-parent
-// chain's commits and the push as the fixer App. A git without it (a
-// test's) merges no parent: the fixer starts as before.
+// chain's commits and the push as the fixer App, and the reads of a
+// merge's workflow files in a repository of the daemon's own on objects
+// hashed again (isolatedGit). A git without it (a test's) merges no
+// parent: the fixer starts as before.
 type parentGit interface {
+	isolatedGit
 	MergeTree(ctx context.Context, dir, head, base string) (tree string, conflicts []string, err error)
 	CommitTree(ctx context.Context, dir, tree string, parents []string, message string, who gitx.Signature) (string, error)
 	ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error)
@@ -71,6 +74,47 @@ type parentGit interface {
 }
 
 var _ parentGit = (*gitx.Client)(nil)
+
+// isolatedGit reads a clone's objects where none of the clone's own
+// settings apply, and checks them (*gitx.Client has it): Isolated runs its
+// func in a bare repository of its own that shares the clone's objects
+// (no config, attribute, merge driver or ref of the clone's, which the
+// fixer's pane can write), and VerifyObjects hashes again every object a
+// read of a path at some commits goes through (gitx.ErrObjectMismatch for
+// one whose content is not its name: git never hashes an object again
+// when it reads it, while GitHub has the real one).
+type isolatedGit interface {
+	Isolated(ctx context.Context, dir string, fn func(iso string) error) error
+	VerifyObjects(ctx context.Context, dir, path string, commits ...string) error
+}
+
+// workflowRead is read of a merge's workflow files in dir's objects, in a
+// repository of the daemon's own (isolatedGit.Isolated), after every
+// object of the workflow files at commits is hashed again
+// (VerifyObjects): what decides or shows a push with the Workflows token
+// is what GitHub would get of it. A forged object is
+// gitx.ErrObjectMismatch (forgedWords).
+func workflowRead[T any](ctx context.Context, g isolatedGit, dir string, commits []string, read func(iso string) (T, error)) (T, error) {
+	var out T
+	err := g.Isolated(ctx, dir, func(iso string) error {
+		if err := g.VerifyObjects(ctx, iso, workflowsPath, commits...); err != nil {
+			return err
+		}
+		var err error
+		out, err = read(iso)
+		return err
+	})
+	return out, err
+}
+
+// forgedWords says why magnum pushes or holds nothing of at (the merge in
+// words): err, an object a read of its workflow files went through, is not
+// what its name says (gitx.ErrObjectMismatch), so what magnum read of the
+// clone is not what GitHub would get.
+func forgedWords(at string, err error) string {
+	return fmt.Sprintf("an object of the workflow files of %s in the clone is not what its name says (%v), so what magnum read of it is "+
+		"not what GitHub would get", at, err)
+}
 
 // daemonPusher is the identity a push of a merge that carries its base's
 // workflow files goes out as (*identity.App has it): a token of the
@@ -96,9 +140,12 @@ const workflowsWord = "with Workflows"
 // fixer's pane can write) and every workflow file of the merge is as that
 // tip on GitHub has it, never with the PR's own, and then with a token of
 // the daemon's own with Workflows write (workflowsToken), released after
-// the push. how is workflowsWord for such a push; refused says why nothing
+// the push. Its reads of the workflow files run in a repository of the
+// daemon's own (isolatedGit), the comparison with the tip after the
+// objects are hashed again (workflowRead): a forged one pushes nothing
+// (forgedWords). how is workflowsWord for such a push; refused says why nothing
 // was pushed (the branch, the PR's own workflow changes, a base GitHub has
-// otherwise, or an App without Workflows: "needs Workflows on the App"),
+// otherwise, a forged object, or an App without Workflows: "needs Workflows on the App"),
 // and for a merge of the tip GitHub names whose only fault is that it keeps
 // the PR's own workflow changes, which ones (pushRefusal.own): the settle
 // holds such a merge for your y (holdMerge).
@@ -111,8 +158,11 @@ func (e *Engine) pushMerge(ctx context.Context, job *fixJob, pg parentGit, id *c
 		return "", pushRefusal{}, fmt.Errorf("identity %q is not configured", id.Name)
 	}
 	dir, at := job.slot.Path, fmt.Sprintf("the merge of %s at %s", b.base, textx.ShortSHA(b.sha))
-	workflows, err := pg.ChangedPaths(ctx, dir, head, merge, workflowsPath)
-	if err != nil {
+	var workflows []string // a wrong none pushes with the App's token, which GitHub refuses for a workflow change
+	if err := pg.Isolated(ctx, dir, func(iso string) (err error) {
+		workflows, err = pg.ChangedPaths(ctx, iso, head, merge, workflowsPath)
+		return err
+	}); err != nil {
 		return "", pushRefusal{}, err
 	}
 	var env map[string]string
@@ -127,8 +177,13 @@ func (e *Engine) pushMerge(ctx context.Context, job *fixJob, pg parentGit, id *c
 		if why != "" {
 			return "", pushRefusal{why: fmt.Sprintf("%s brings workflow changes (%s), and %s", at, files, why)}, nil
 		}
-		own, err := pg.DifferingPaths(ctx, dir, merge, tip, workflowsPath)
-		if err != nil {
+		own, err := workflowRead(ctx, pg, dir, []string{head, tip, merge}, func(iso string) ([]string, error) {
+			return pg.DifferingPaths(ctx, iso, merge, tip, workflowsPath)
+		})
+		switch {
+		case errors.Is(err, gitx.ErrObjectMismatch):
+			return "", pushRefusal{why: forgedWords(at, err)}, nil
+		case err != nil:
 			return "", pushRefusal{}, fmt.Errorf("whether %s keeps the PR's own workflow changes: %w", at, err)
 		}
 		switch {

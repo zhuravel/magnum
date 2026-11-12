@@ -103,6 +103,8 @@ type call struct {
 	// env is the caller's environment over the command (a commit's author,
 	// a push's gh config dir), never over a key of gitx's own (gitEnv).
 	env map[string]string
+	// stdin is written to git (cat-file --batch's object names).
+	stdin []byte
 }
 
 // git runs `git -C dir args...`. Errors are wrapped with the label and keep the
@@ -119,7 +121,8 @@ func (c *Client) git(ctx context.Context, dir string, k call, args ...string) (e
 }
 
 // gitCommand is the command git runs as: `git -C dir args...` with gitx's
-// environment.
+// environment, or `git --git-dir=<it> args...` for a dir that names a
+// bare repository of gitx's own (gitDirPrefix).
 func gitCommand(dir string, k call, args []string) execx.Cmd {
 	env := gitEnv(k.mutates)
 	for key, v := range k.env {
@@ -127,9 +130,14 @@ func gitCommand(dir string, k call, args []string) execx.Cmd {
 			env[key] = v
 		}
 	}
+	where := []string{"-C", dir}
+	if gitDir, bare := strings.CutPrefix(dir, gitDirPrefix); bare {
+		where, dir = []string{"--git-dir=" + gitDir}, gitDir
+	}
 	cmd := execx.Cmd{
 		Name:    "git",
-		Args:    append([]string{"-C", dir}, args...),
+		Args:    append(where, args...),
+		Stdin:   k.stdin,
 		Env:     env,
 		Unset:   ScrubbedEnv(),
 		Timeout: k.timeout,
@@ -148,7 +156,7 @@ func gitCommand(dir string, k call, args []string) execx.Cmd {
 	return cmd
 }
 
-// hooksOff is the configuration every git command of magnum's runs with:
+// hooksOff is the configuration every git command of magnum's runs with.
 // core.hooksPath=/dev/null, so git runs none of the clone's hooks. A PR's
 // setup script (bundle install, npm install through the pool's scripts) can
 // point core.hooksPath into the work tree (husky's .husky/_, lefthook) or
@@ -157,11 +165,18 @@ func gitCommand(dir string, k call, args []string) execx.Cmd {
 // comes through its smudge filter, which is not a hook. The setting goes in
 // the environment (GIT_CONFIG_COUNT and its pairs, which git ranks with
 // `git -c`), so every command line stays as it is, and the git processes
-// git starts (a submodule's, Git LFS's) inherit it.
+// git starts (a submodule's, Git LFS's) inherit it. core.commitGraph=false,
+// so git reads a commit's tree and parents from the commit object, never
+// from objects/info/commit-graph: git never checks that file's checksum,
+// an agent's pane can write it, and a forged one gave a merge another tree
+// than the one a push of it sends (a commit-graph only makes walks of
+// history faster).
 var hooksOff = map[string]string{
-	"GIT_CONFIG_COUNT":   "1",
+	"GIT_CONFIG_COUNT":   "2",
 	"GIT_CONFIG_KEY_0":   "core.hooksPath",
 	"GIT_CONFIG_VALUE_0": "/dev/null",
+	"GIT_CONFIG_KEY_1":   "core.commitGraph",
+	"GIT_CONFIG_VALUE_1": "false",
 }
 
 // realObjects makes git read every object as it is: no replacement of
@@ -180,8 +195,9 @@ var realObjects = map[string]string{
 }
 
 // Env returns the environment gitx sets on its git commands: no credential
-// prompt, the clone's hooks off (core.hooksPath=/dev/null), the objects as
-// they are (no replacement, no graft) and, for a
+// prompt, the clone's hooks off (core.hooksPath=/dev/null), no
+// commit-graph, the objects as they are (no replacement, no graft) and,
+// for a
 // command that does not mutate, no optional locks. Code that runs git
 // outside gitx should put it in execx.Cmd.Env, with ScrubbedEnv in Unset.
 func Env(mutates bool) map[string]string { return gitEnv(mutates) }

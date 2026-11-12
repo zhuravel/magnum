@@ -18878,6 +18878,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
     and the fixer's report of a merge run says no more than the attention; the fixer's report comes back once
     the merge is pushed or dropped. Its YOUR MOVE column says "P pushes it, e the diff". The board's state cell
     says "merge ready" as the attention's cause (`mergeReadyShown`), on its one line.
+  - The threat model. The agents' panes run unsandboxed as the operator's user, and they can read the fixer
+    App's private key file. On 2026-11-10 the operator decided that the factory's panes may keep reading local
+    secrets. So no check at the git level stops a fixer that is malicious on purpose: it can mint a Workflows
+    token of its own and push what it wants. The hold protects against an agent's mistakes and plain edits: a
+    workflow change that the operator did not read never goes out with the daemon's Workflows token. The checks
+    at the git level harden that in depth. They are the objects read as they are (no replace refs, grafts or
+    commit-graph), the objects hashed again, and the reads and pushes in a repository of the daemon's own. So an
+    edit in the clone does not make what magnum shows or decides differ from what GitHub gets.
   - Tests, failing first and the fix round's checked by mutation: in engine
     TestAHandedMergeThatKeepsThePRsOwnWorkflowChangesIsHeldForYourY, TestAnAppWithoutWorkflowsHoldsNoMergeItCannotPush,
     TestAFixRunsHeldMergeSaysTheFindingsWaitForTheNextFix, TestOnlyAFixOfFindingsSaysTheFindingsWait,
@@ -18953,6 +18961,39 @@ skill versions); people add theirs to the sections before it, at the end of the 
     git, which shows the push from the clone redirected first), TestTheDaemonsPushWorksFromAShallowClone and
     TestGitxsGraftFileAddsNoAdviceToGitsOutput in gitx, TestAFixDropsAStaleHeldMergeAndGoesOn in
     engine.
+  - A fifth round (K1 to K5, each reproduced with git 2.56.1 by a second reader). git reads a commit's tree
+    and parents from `objects/info/commit-graph` and never checks that file's checksum. A forged graph gave a
+    merge the tip's workflow tree, so `DifferingPaths(merge, tip)` was empty and `pushMerge` pushed the merge
+    with the Workflows token. git also never hashes an object again when it reads it. A loose object rewritten
+    with benign bytes showed a benign workflow file in held-merge.diff, and GitHub kept the real one. Every gitx
+    call now sets `core.commitGraph=false` (a second pair in `hooksOff`), which makes long walks of history
+    slower. `gitx.Client.VerifyObjects` hashes again, in Go, every object that a read of `.github/workflows`
+    goes through at the head, the tip and the merge (`cat-file --batch`). These are the commit, the root tree,
+    the trees down to the path, and every tree and blob under it. A mismatch is `gitx.ErrObjectMismatch`
+    (`forgedWords`). Then `pushMerge` pushes nothing, `holdMerge` holds nothing, and the held push drops the
+    hold. `RemergeDiff` ran in the clone, so a merge driver of the clone's (a `merge=` attribute and its
+    `merge.<name>.driver`) ran inside the daemon. Its answer made held-merge.diff say that no conflict was
+    resolved. The reads that decide or show a merge's workflow files now run in `gitx.Client.Isolated`, after
+    that check (`workflowRead`): `ChangedPaths` and `DifferingPaths` in `pushMerge`, `RemergeDiff` and
+    `PathsDiff` in `heldDiff`, and `Parents` in `pushHeld`. `Isolated` is a bare repository of the daemon's own,
+    made as the push's is (`isolate`), with none of the clone's config, attributes or drivers. `handedMerge`'s
+    `ChangedPaths` stays in the slot: a wrong answer there only says that the merge was not handed over. The
+    push and those reads name that repository with `--git-dir` (`gitDirPrefix`). With `-C`, a global
+    `safe.bareRepository=explicit` refused it (git 3.0 makes it the default), so every merge of the parent and
+    every y failed with exit 128. `copyShallow` checked the path and then opened it, so a link swapped in
+    between could name a FIFO, whose open waits forever. It now opens with `O_NOFOLLOW` and `O_NONBLOCK`, checks
+    the open file for a regular file, and copies 4 MiB at most. `heldBlocksFix` dropped a held merge as stale
+    when the registry's head was the merge itself (GitHub took the push, and its job ended before it said so).
+    It now settles it as pushed first (`heldLanded`), as the poll and P do. Tests, failing first:
+    TestGitxReadsACommitsTreeAndParentsFromTheCommitNotTheCommitGraph (a forged graph, patched as the reader
+    did), TestVerifyObjectsFindsAnObjectWhoseContentIsNotItsName (a forged commit, tree and blob),
+    TestIsolatedReadsRunNoMergeDriverOrAttributeOfTheClones (the driver runs in the clone first),
+    TestTheIsolatedRepositoryWorksWhenTheGlobalConfigWantsExplicitBareRepositories and
+    TestCopyShallowTakesARegularFileAloneAndNeverWaits in gitx;
+    TestTheWorkflowReadsOfAMergeRunIsolatedOnObjectsHashedAgain, TestAMergeWhoseWorkflowObjectsAreForgedIsNeitherPushedNorHeld,
+    TestAHeldMergeWhoseObjectsAreForgedIsDroppedAtTheY and TestAFixSettlesAHeldMergeGitHubTookAsPushed in
+    engine. The race between the check and the push stays: a pane that swaps objects in between changes what
+    git sends, never what GitHub takes for the merge's name.
 
 - **A GitHub blip never fails a fix whose push landed** (2026-11-12, amends "The settle confirms the fixer's push on
   GitHub"). On talkable/talkable#12226 the fixer pushed e6c1f37 and the poll saw that head at 14:20:53. At 14:21:22 the

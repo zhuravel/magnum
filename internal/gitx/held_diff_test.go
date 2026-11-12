@@ -216,7 +216,9 @@ func TestGitxReadsTheRealObjectsWhateverTheClonesReplacementsAndGrafts(t *testin
 // differ" for workflow content git took as binary (a NUL in the file, a
 // -diff attribute in the clone's info/attributes, core.bigFileThreshold in
 // its config), and the y pushed what nobody saw. They read every file as
-// text now, with no attribute, external diff or textconv of the clone's.
+// text now, with no external diff or textconv; the daemon runs them in
+// Isolated, where no attribute or merge driver of the clone's applies
+// (TestIsolatedReadsRunNoMergeDriverOrAttributeOfTheClones).
 func TestTheHeldMergesDiffsShowEveryFileAsText(t *testing.T) {
 	fx := newFixture(t)
 	ctx := context.Background()

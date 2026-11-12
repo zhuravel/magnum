@@ -134,6 +134,7 @@ type heldRow struct {
 // and the held refs of a clone (sweepHeldOrphans).
 // A git without it holds no merge: the refusal goes to you as before.
 type heldGit interface {
+	isolatedGit
 	UpdateRef(ctx context.Context, dir, ref, sha string) error
 	UpdateRefDelete(ctx context.Context, mainClone, ref string) error
 	Parents(ctx context.Context, dir, rev string) ([]string, error)
@@ -211,7 +212,11 @@ func (e *Engine) holdMerge(ctx context.Context, job *fixJob, id *config.Identity
 		return HeldMerge{}, r.why
 	}
 	diff, err := heldDiff(ctx, hg, clone, h)
-	if err != nil {
+	switch {
+	case errors.Is(err, gitx.ErrObjectMismatch):
+		e.log.Warn("fix: hold the merge of the parent: a forged object", "subject", job.subject(), "err", err)
+		return HeldMerge{}, forgedWords(at, err)
+	case err != nil:
 		return failed("its diff", err)
 	}
 	ref := HeldMergeRef(job.pr.ID)
@@ -284,17 +289,25 @@ func (j *fixJob) handRefusedWords(why string) string {
 // for a merge that resolved no conflict in a workflow file.
 const heldNoConflict = "No conflict in a workflow file was resolved: the workflow changes come unchanged from %s and the PR.\n"
 
-// heldDiff is held-merge.diff of h in dir: a first line that names the
-// merge, how it resolved the conflicts in the workflow files (`git show
-// --remerge-diff`), or heldNoConflict's one line when it resolved none,
-// then everything its push changes in them against its head (`git diff`),
-// every control character but tab and newline escaped (escapeControls).
+// heldDiff is held-merge.diff of h in dir's objects: a first line that
+// names the merge, how it resolved the conflicts in the workflow files
+// (`git show --remerge-diff`), or heldNoConflict's one line when it
+// resolved none, then everything its push changes in them against its
+// head (`git diff`), every control character but tab and newline escaped
+// (escapeControls). Both read in a repository of the daemon's own, after
+// the workflow files' objects at the head, the tip and the merge are
+// hashed again (workflowRead): no merge driver or attribute of the
+// clone's runs, and a forged object is gitx.ErrObjectMismatch.
 func heldDiff(ctx context.Context, hg heldGit, dir string, h HeldMerge) ([]byte, error) {
-	remerge, err := hg.RemergeDiff(ctx, dir, h.Merge, workflowsPath)
-	if err != nil {
-		return nil, err
-	}
-	plain, err := hg.PathsDiff(ctx, dir, h.Head, h.Merge, workflowsPath)
+	var remerge, plain string
+	_, err := workflowRead(ctx, hg, dir, []string{h.Head, h.Tip, h.Merge}, func(iso string) (struct{}, error) {
+		var err error
+		if remerge, err = hg.RemergeDiff(ctx, iso, h.Merge, workflowsPath); err != nil {
+			return struct{}{}, err
+		}
+		plain, err = hg.PathsDiff(ctx, iso, h.Head, h.Merge, workflowsPath)
+		return struct{}{}, err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -908,7 +921,9 @@ func (e *Engine) stopsAfterHeldPush(ctx context.Context, job *fixJob, orders []s
 // clone that holds it, GitHub's head of the PR, its base and its base's
 // tip, which is then the merge's second parent on the base, are still the
 // held ones (heldStale), the held ref is the merge, and its parents are
-// the head and the tip. Then it pushes the merge as pushMerge pushes one,
+// the head and the tip (read in a repository of the daemon's own after
+// the workflow files' objects are hashed again, workflowRead: a forged
+// object drops the hold). Then it pushes the merge as pushMerge pushes one,
 // with a lease on the head and the fixer App's own Workflows token
 // (workflowsToken), within heldPushTimeout and whatever stops the job
 // meanwhile (an abort acts before the push starts), skipping only the check that
@@ -958,13 +973,18 @@ func (e *Engine) pushHeld(ctx context.Context, job *fixJob, id *config.Identity,
 	case err != nil:
 		return false, "", fmt.Errorf("the held ref %s: %w", ref, err)
 	}
-	switch ps, err := hg.Parents(ctx, h.Clone, h.Merge); {
+	at := fmt.Sprintf("the merge of %s at %s", h.Base, short(h.Tip))
+	ps, err := workflowRead(ctx, hg, h.Clone, []string{h.Head, h.Tip, h.Merge}, func(iso string) ([]string, error) {
+		return hg.Parents(ctx, iso, h.Merge)
+	})
+	switch {
+	case errors.Is(err, gitx.ErrObjectMismatch):
+		return refuse(forgedWords(at, err), true)
 	case err != nil:
 		return false, "", fmt.Errorf("the parents of the merge %s: %w", short(h.Merge), err)
 	case len(ps) != 2 || !strings.EqualFold(ps[0], h.Head) || !strings.EqualFold(ps[1], h.Tip):
 		return refuse(fmt.Sprintf("the merge %s is not one of %s at %s into the head %s", short(h.Merge), h.Base, short(h.Tip), short(h.Head)), true)
 	}
-	at := fmt.Sprintf("the merge of %s at %s", h.Base, short(h.Tip))
 	env, release, why, err := e.workflowsToken(ctx, id, at, textx.Count(len(h.Workflows), "file", "files"))
 	switch {
 	case err != nil:
@@ -1155,13 +1175,20 @@ func (e *Engine) sweepHeldFiles(ctx context.Context, rows map[int64]string) {
 // heldBlocksFix refuses a fix of pr (of repo; label names it) while magnum
 // holds a merge of its parent: its fixer would merge the base again over
 // the held merge, moving or deleting its ref and file under its row. A
-// held merge that went stale as the registry shows it (heldStale: a push
-// of yours that the poll could not judge while a job held the PR, among
-// others) is dropped instead, as P drops it, and the fix goes on: an
-// autofix refused for it would never be tried again.
+// held merge the registry has as the PR's head already (GitHub took its
+// push, and its job ended before it said so, while a job held the PR at
+// the polls) is settled as pushed (heldLanded), as the poll and P settle
+// it, and the fix goes on. One that went stale as the registry shows it
+// (heldStale: a push of yours that the poll could not judge while a job
+// held the PR, among others) is dropped, as P drops it, and the fix goes
+// on: an autofix refused for it would never be tried again.
 func (e *Engine) heldBlocksFix(ctx context.Context, repo store.Repo, pr store.PR, label string) error {
 	row, held := e.heldMergeOf(ctx, pr)
 	if !held {
+		return nil
+	}
+	if strings.EqualFold(pr.HeadSHA, row.h.Merge) {
+		e.heldLanded(ctx, repo, pr, row, "a fix")
 		return nil
 	}
 	if why := e.heldStale(repo, pr, row.h, github.PRDetails{}, false); why != "" {

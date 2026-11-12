@@ -463,8 +463,11 @@ func (c *Client) HasFile(ctx context.Context, dir, rev, file string) (bool, erro
 // core.bigFileThreshold); an output past execx.MaxOutput is an error, never
 // a part of it. "" when the merge resolved no conflict
 // there and changed nothing there that git's own merge would not have.
-// The magnum daemon shows it to the operator before the y that pushes a
-// merge it holds (engine.HeldMerge).
+// git's merge here runs dir's merge drivers (a merge attribute and its
+// merge.<name>.driver), so in a clone an agent's pane writes, run it in
+// Isolated, where none of the clone's apply. The magnum daemon shows it
+// to the operator before the y that pushes a merge it holds
+// (engine.HeldMerge).
 func (c *Client) RemergeDiff(ctx context.Context, dir, merge string, paths ...string) (string, error) {
 	if err := checkRev("revision", merge); err != nil {
 		return "", err

@@ -120,11 +120,13 @@ type mergeGit struct {
 	pushes    []string
 	pushDirs  []string    // the directory each push ran in
 	held      heldGitFake // fix_held_merge_test.go: the refs, parents and diffs of a held merge
+	objects   objectsFake // fix_parent_objects_test.go: the isolated reads and the objects' check
 }
 
-func (g *mergeGit) DifferingPaths(_ context.Context, _, _, b string, paths ...string) ([]string, error) {
+func (g *mergeGit) DifferingPaths(_ context.Context, dir, _, b string, paths ...string) ([]string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.objects.read("DifferingPaths", dir)
 	switch {
 	case !slices.Contains(paths, workflowsPath):
 		return nil, nil
@@ -186,10 +188,11 @@ func (g *mergeGit) CommitTree(_ context.Context, dir, tree string, parents []str
 	return fixParentMerge, nil
 }
 
-func (g *mergeGit) ChangedPaths(_ context.Context, _, base, head string, pathspecs ...string) ([]string, error) {
+func (g *mergeGit) ChangedPaths(_ context.Context, dir, base, head string, pathspecs ...string) ([]string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if slices.Contains(pathspecs, workflowsPath) {
+		g.objects.read("ChangedPaths", dir)
 		return slices.Clone(g.workflows), nil
 	}
 	return slices.Clone(g.schema), nil

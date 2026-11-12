@@ -20140,6 +20140,10 @@ var ErrNotDescendant = errors.New("gitx: the commit does not descend from the re
     ErrNotDescendant is PushLease's refusal of a commit that does not descend
     from the remote head it expects: the push would rewrite history.
 
+var ErrObjectMismatch = errors.New("gitx: the content does not match the name")
+    ErrObjectMismatch is VerifyObjects' answer for an object whose content is
+    not what its name says.
+
 var ErrTreeTooLarge = errors.New("gitx: tree too large to list")
     ErrTreeTooLarge is Symlinks' error for a tree, and ChangedNames' for a list
     of names, whose listing passes execx.MaxOutput: a link or a path it would
@@ -20150,10 +20154,10 @@ FUNCTIONS
 
 func Env(mutates bool) map[string]string
     Env returns the environment gitx sets on its git commands: no credential
-    prompt, the clone's hooks off (core.hooksPath=/dev/null), the objects as
-    they are (no replacement, no graft) and, for a command that does not mutate,
-    no optional locks. Code that runs git outside gitx should put it in
-    execx.Cmd.Env, with ScrubbedEnv in Unset.
+    prompt, the clone's hooks off (core.hooksPath=/dev/null), no commit-graph,
+    the objects as they are (no replacement, no graft) and, for a command that
+    does not mutate, no optional locks. Code that runs git outside gitx should
+    put it in execx.Cmd.Env, with ScrubbedEnv in Unset.
 
 func EnvConfig(environ []string, key string) (string, bool)
     EnvConfig is the value environ's GIT_CONFIG_COUNT pairs give key,
@@ -20483,6 +20487,14 @@ func (c *Client) IsAncestor(ctx context.Context, dir, ancestor, rev string) (boo
     logged at Debug; any other failure, a revision dir lacks among them (exit
     128), is an error, never a no.
 
+func (c *Client) Isolated(ctx context.Context, dir string, fn func(iso string) error) error
+    Isolated runs fn with iso, a bare repository of its own whose objects are
+    dir's (isolate) and that has none of dir's config, attributes, hooks,
+    refs or index: a read there runs no merge driver, diff driver or attribute
+    of the clone's, which an agent's pane can write. Every Client method takes
+    iso as its dir; only a full commit id names a commit there. The repository
+    goes when fn returns.
+
 func (c *Client) LsRemote(ctx context.Context, dir string, timeout time.Duration, patterns ...string) (string, error)
     LsRemote runs `git ls-remote <origin> patterns...` in dir, reaching origin
     the way fetches do (NetworkRemote with HTTPSFetch), and returns its output.
@@ -20675,10 +20687,13 @@ func (c *Client) RemergeDiff(ctx context.Context, dir, merge string, paths ...st
     to the merge as it was committed, with no commit header, no external diff,
     textconv or color, and every file as text (--text: no "Binary files …
     differ" for a NUL, a -diff attribute or the clone's core.bigFileThreshold);
-    an output past execx.MaxOutput is an error, never a part of it. "" when the
-    merge resolved no conflict there and changed nothing there that git's own
-    merge would not have. The magnum daemon shows it to the operator before the
-    y that pushes a merge it holds (engine.HeldMerge).
+    an output past execx.MaxOutput is an error, never a part of it. "" when
+    the merge resolved no conflict there and changed nothing there that git's
+    own merge would not have. git's merge here runs dir's merge drivers (a
+    merge attribute and its merge.<name>.driver), so in a clone an agent's pane
+    writes, run it in Isolated, where none of the clone's apply. The magnum
+    daemon shows it to the operator before the y that pushes a merge it holds
+    (engine.HeldMerge).
 
 func (c *Client) RemoteURL(ctx context.Context, dir string) (string, error)
     RemoteURL returns the URL of origin in dir. Credentials embedded in the URL
@@ -20848,6 +20863,18 @@ func (c *Client) UpdateRefDelete(ctx context.Context, mainClone, ref string) err
     refused so a bug can never delete a real branch or tag. A symbolic ref is
     never followed: one pointing outside refs/magnum/ is refused, and the delete
     runs with --no-deref so git removes the ref itself, not its target.
+
+func (c *Client) VerifyObjects(ctx context.Context, dir, path string, commits ...string) error
+    VerifyObjects hashes again, in Go, every object a read of path (a directory,
+    "/" between its parts, from the top) at each of commits (full ids) goes
+    through: the commit, its root tree, the tree of each part of path, and every
+    tree and blob under it. git reads an object as its store has it and never
+    hashes it again (a loose object rewritten, a pack whose index names another
+    object's place), while GitHub has the real one, so a diff git shows of a
+    forged object is not what a push of it gives GitHub. An object whose content
+    is not its name is ErrObjectMismatch, named; a missing one is an error too.
+    A commit that has no path has nothing more to check, and a gitlink under it
+    (a submodule's commit) is no object here.
 
 func (c *Client) WordUses(ctx context.Context, dir, rev, word string) ([]Use, error)
     WordUses lists the files of rev that name word as a whole word, each

@@ -93,9 +93,10 @@ func (g *mergeGit) UpdateRefDelete(_ context.Context, dir, ref string) error {
 	return nil
 }
 
-func (g *mergeGit) Parents(_ context.Context, _, rev string) ([]string, error) {
+func (g *mergeGit) Parents(_ context.Context, dir, rev string) ([]string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.objects.read("Parents", dir)
 	if p, ok := g.held.parents[rev]; ok {
 		return slices.Clone(p), nil
 	}
@@ -105,15 +106,17 @@ func (g *mergeGit) Parents(_ context.Context, _, rev string) ([]string, error) {
 	return []string{fixHead, fixBaseTip}, nil
 }
 
-func (g *mergeGit) RemergeDiff(context.Context, string, string, ...string) (string, error) {
+func (g *mergeGit) RemergeDiff(_ context.Context, dir, _ string, _ ...string) (string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.objects.read("RemergeDiff", dir)
 	return g.held.remerge, g.held.diffErr
 }
 
-func (g *mergeGit) PathsDiff(context.Context, string, string, string, ...string) (string, error) {
+func (g *mergeGit) PathsDiff(_ context.Context, dir, _, _ string, _ ...string) (string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.objects.read("PathsDiff", dir)
 	return g.held.diff, nil
 }
 

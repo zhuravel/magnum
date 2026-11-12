@@ -3537,11 +3537,17 @@ control character but tab and newline escaped (`\x1b`), and every format charact
 (`\u202e`, `\u061c`), so nothing an agent wrote hides or reorders a line in the pager; the workflow files'
 names are escaped the same way wherever magnum shows them. A diff too long to read whole (over 8 MiB) holds
 nothing; every file shows as text, whatever git would take as binary. magnum reads the clone's objects as they
-are (no `refs/replace/`, no `info/grafts`), and its own pushes with its tokens go from a repository of its own
-that shares the clone's objects, so no setting in the clone (a `pushInsteadOf`, a proxy) redirects them. A hold that fails leaves nothing behind and needs you as before, and the daemon's start removes any
+are (no `refs/replace/`, no `info/grafts`, no commit-graph), and it hashes again every object of the workflow
+files it reads at the head, the base's tip and the merge: an object whose content is not what its name says
+pushes nothing and holds nothing. Those reads, and its own pushes with its tokens, run in a repository of its
+own that shares the clone's objects, so no setting in the clone (a `pushInsteadOf`, a proxy, a merge driver)
+applies to them. A hold that fails leaves nothing behind and needs you as before, and the daemon's start removes any
 held ref or `held-merge.diff` that no held merge names (a crash between the hold and its record). While a
 merge is held, `magnum fix` (and autofix, and a CI fix) is refused: its fixer would merge the base again over
-it; `P` pushes it first, and a push of yours to the branch drops it. The PR needs you: "merge ready: claude-fix
+it; `P` pushes it first, and a push of yours to the branch drops it. A fix on a PR whose head is the held
+merge already (GitHub took its push) settles it as pushed and goes on. The hold guards against an agent's
+mistakes and plain edits, not against a fixer that means harm: the agents' panes run as your user and can read
+the fixer App's private key, so such a fixer could mint its own Workflows token. The PR needs you: "merge ready: claude-fix
 merged master at c0c0c0c and resolved 5 conflicts. It changes .github/workflows/ci.yml and pronto.yml.
 fixer-app[bot] pushes it only after your y: P asks (e shows held-merge.diff)." (a fix of findings adds that
 the findings wait for the next fix after the push, and the calls the loop's earlier cycles left you follow
