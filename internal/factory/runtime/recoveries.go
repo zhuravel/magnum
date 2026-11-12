@@ -148,7 +148,8 @@ func (r *Runtime) appendEvent(ctx context.Context, id int64, kind, text string) 
 // session at its fix budget: its session quit, its runs handed over, and a
 // new session that starts from the attempt's first prompt with then after
 // it (fromFiles). Its ladders start over (the watchdog's, the recoveries',
-// counted from here: a "starts over" event), so it spends no recovery. The
+// counted from here: a "starts over" event, and its loop's in the stage,
+// counted from its next prompt), so it spends no recovery. The
 // new run's id comes back; a role that may not restart now (a pause, you in
 // its pane) is that error.
 func (r *Runtime) SendFresh(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, then string) (string, error) {
@@ -169,6 +170,9 @@ func (r *Runtime) SendFresh(ctx context.Context, t registry.Task, a registry.Att
 	r.mu.Lock()
 	st.stuck, st.lost, st.pending, st.recovering = false, false, false, false
 	st.step, st.recoveries, st.counted, st.dueAt = 0, 0, true, time.Time{}
+	if l := r.loops[loopKey{t.ID, a.Stage, role.Name}]; l != nil { // a fresh session: its loop's ladder starts over too
+		l.step, l.fails, l.reset = loopNone, nil, true
+	}
 	r.mu.Unlock()
 	r.noteStartOver(ctx, t, a, role.Name, "a fresh session the factory's stage asked for")
 	return r.fromFiles(ctx, t, a, st, "the factory's stage asked for a fresh session", then)

@@ -453,6 +453,25 @@ func (r checkResult) why() string {
 	return ""
 }
 
+// failedCheck is the check whose failure why says, and its failures: the
+// factory's proof and the failing examples of its head run (else its why),
+// or the precheck's failing check and its failures (failCheck).
+func (r checkResult) failedCheck() (check string, failed []string) {
+	switch {
+	case r.Proof != nil && !r.Proof.Passed:
+		for _, f := range failures(r.Proof.Head.Output) {
+			failed = append(failed, f.key)
+		}
+		if len(failed) == 0 {
+			failed = []string{textx.FirstLine(r.Proof.Why)}
+		}
+		return "the factory's proof", failed
+	case r.Precheck != nil && !r.Precheck.Passed:
+		return r.Precheck.check, r.Precheck.failures
+	}
+	return "", nil
+}
+
 // failedCommand is the command of the failure why says, as it ran, for the
 // writer to run until it passes: the head's spec run of a proof that failed
 // there (red, or a hang), the precheck's failing command; "" when no
@@ -582,7 +601,9 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 		if res.forYou() {
 			return forYouProblem(*t, file, res), "", false, nil
 		}
-		return &endProblem{file: file, why: res.why(), change: true, command: res.failedCommand()}, "", false, nil
+		check, failed := res.failedCheck()
+		return &endProblem{file: file, why: res.why(), change: true, command: res.failedCommand(), check: check, failures: failed}, "",
+			false, nil
 	}
 	return nil, bh.Head, false, nil
 }

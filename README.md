@@ -4368,6 +4368,7 @@ observe = "5s"                       # how often it reads its panes (a turn's en
 poll = "45s"                         # how often its main tick moves the tasks (a request kicks one at once)
 human_cooldown = "15m"               # it leaves a pane alone this long after you type into it
 provisional_lone_answer = true       # a lone question after a batch you answered: coding starts on its recommendation
+fix_go_on = 2                        # at the cap of fix turns, 2 more fix turns this many times while the writer makes progress
 sensitive = ["Gemfile.lock", ".github/workflows/**", "config/**"]   # files the ready card flags for a second look
 
 [factory.local_review]
@@ -4422,7 +4423,8 @@ stages = [
   kind of task and keeps the others, `[factory.local_review]` and the `codex_fallback`, `kind_by_jira_type`
   and `kind_words` tables merge entry by entry, and `[[factory.repo]]` blocks are appended.
 - **Limits and intervals.** `max_active`, `heavy_stages` and `[factory.local_review] cycles` (1 to 10) are
-  at least 1; `[factory.local_review] extra_cycles` is 0 to 10 (default 2, 0 turns the extra rounds off); `[factory.local_review] cap_go_on` is an integer from 0 to 5 (default 2, 0 turns the go-on at the cap off); `memory_gate_swap` is 0 to 100; `observe` and `poll` are positive and `human_cooldown` is not
+  at least 1; `[factory.local_review] extra_cycles` is 0 to 10 (default 2, 0 turns the extra rounds off); `[factory.local_review] cap_go_on` is an integer from 0 to 5 (default 2, 0 turns the go-on at the cap off); `fix_go_on`
+  is 0 to 10 (default 2, 0 turns the writer's extra fix turns off); `memory_gate_swap` is 0 to 100; `observe` and `poll` are positive and `human_cooldown` is not
   negative. `herdr_socket` is empty (the named session's own socket) or an absolute path.
   `[factory.local_review] second_judge` is `"wide"`, `"always"` or `"never"`; any other word is refused, naming them.
   `[factory.local_review] left_blocks` is `true` or `false` (default `false`); any other value is refused when the

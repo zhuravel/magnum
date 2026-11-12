@@ -78,6 +78,14 @@ type Factory struct {
 	// goes to the writer. false: every question waits for your answer.
 	ProvisionalLoneAnswer bool `toml:"provisional_lone_answer"`
 
+	// FixGoOn is how many times one stage's attempt gives a role whose
+	// change the factory's checks still refuse at its cap of fix turns 2
+	// more fix turns by itself, while its last turns make progress (fewer
+	// failures, a different failure, a different check failing); 0 to
+	// MaxFixGoOn, 0 turns it off. Without progress the role gets one fresh
+	// session, then the task asks you.
+	FixGoOn int `toml:"fix_go_on"`
+
 	// Sensitive are the path globs (MatchPath's: "**" matches whole
 	// directories) of the files whose change the ready card's FLAGS line
 	// names for a second look: by default Gemfile.lock, the workflows and
@@ -571,6 +579,13 @@ const (
 	MaxQACap          = 3 * time.Hour
 )
 
+// DefaultFixGoOn and MaxFixGoOn are the default and the most of [factory]
+// fix_go_on.
+const (
+	DefaultFixGoOn = 2
+	MaxFixGoOn     = 10
+)
+
 // DefaultFactoryBrowsers are the browsers the factory starts for QA when
 // [factory] browser names none: the first that exists.
 var DefaultFactoryBrowsers = []string{
@@ -603,6 +618,7 @@ func DefaultFactory() Factory {
 			"chore":   {"upgrade", "bump", "dependency", "gem", "rename", "cleanup", "refactor"},
 		},
 		ProvisionalLoneAnswer: true,
+		FixGoOn:               DefaultFixGoOn,
 	}
 }
 
@@ -904,6 +920,9 @@ func (c *Config) validateFactory() []error {
 	}
 	if f.HeavyStages < 1 {
 		bad("factory.heavy_stages must be at least 1, got %d", f.HeavyStages)
+	}
+	if f.FixGoOn < 0 || f.FixGoOn > MaxFixGoOn {
+		bad("factory.fix_go_on must be between 0 (off) and %d, got %d", MaxFixGoOn, f.FixGoOn)
 	}
 	if f.HerdrSocket != "" && !filepath.IsAbs(f.HerdrSocket) {
 		bad("factory.herdr_socket must be absolute after expansion (or empty for the session's own socket): %s", f.HerdrSocket)

@@ -12,7 +12,6 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
-	"github.com/zhuravel/magnum/internal/factory/runtime"
 )
 
 // setHang makes the copy's scripts that hang names never end on their own.
@@ -122,17 +121,19 @@ func TestAChecksRunThatFailsThreeTimesNeedsYou(t *testing.T) {
 
 // A change the factory's checks refuse gets fix turns, each naming what
 // failed and the file of the runs, up to the stage's prompt cap
-// (runtime.MaxStagePrompts); then the task needs you with the last failure.
+// (runtime.MaxStagePrompts); then, the same failure each turn being no
+// progress, one fresh session with its fixGoOnTurns turns; then the task
+// asks you, naming the last failure.
 func TestAChangeThatFailsTheChecksGetsFixTurnsUpToTheStagesCap(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.codingTask("PR-12370", "bug")
 	r.lint = func([]string) string { return "app/credit.rb:3:5: C: Style/NumericLiterals: on the changed line\n" }
 	r.startStage(task)
 	r.fix(task)
-	r.endTurns(task, 2*runtime.MaxStagePrompts)
+	r.endTurns(task, 2*capPrompts)
 	ps := r.rt.promptsTo("fx-writer")
-	if len(ps) != runtime.MaxStagePrompts {
-		t.Fatalf("the writer got %d prompts, want %d: its first and the fix turns", len(ps), runtime.MaxStagePrompts)
+	if len(ps) != capPrompts {
+		t.Fatalf("the writer got %d prompts, want %d: its first, the fix turns and its fresh session's", len(ps), capPrompts)
 	}
 	report := filepath.Join(r.layout.FactoryTaskDir(task.ID), precheckFile)
 	for _, p := range ps[1:] {
@@ -141,7 +142,7 @@ func TestAChangeThatFailsTheChecksGetsFixTurnsUpToTheStagesCap(t *testing.T) {
 		}
 	}
 	got := r.reload(task.ID)
-	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "does not pass after 5 fix turns") ||
+	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "does not pass after 7 fix turns") ||
 		!strings.Contains(got.WaitsWhat, "lint: 1 offense on the changed lines") {
 		t.Fatalf("task %s waits %q; want needs_you naming the last failure", got.State, got.WaitsWhat)
 	}

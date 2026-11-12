@@ -1167,7 +1167,8 @@ func (e *Engine) ended(ctx context.Context, tp *registry.Task, st config.Factory
 	switch {
 	case p.operator:
 	case p.change:
-		if what := e.fixOrWait(ctx, t, a, r, p); what != "" {
+		e.noteTurn(t, a, r, runID, p) // its failure, for the progress at the cap
+		if what := e.fixOrWait(ctx, t, a, run, r, p); what != "" {
 			r.failed = p.file
 			return what
 		}
@@ -1182,12 +1183,15 @@ func (e *Engine) ended(ctx context.Context, tp *registry.Task, st config.Factory
 }
 
 // fixOrWait gives role r, whose change the factory's checks refused (p) in
-// attempt a of task t's stage, a fix turn ("") while its fix budget
-// (fixBudgetOf) has one left, or is the task's wait on you: a merge turn
-// whose one fix turn for the base went (mergeAsked), your retry or not, or
-// the budget spent, the wait naming it. A budget the registry cannot read
-// gives the turn.
-func (e *Engine) fixOrWait(ctx context.Context, t registry.Task, a registry.Attempt, r *stageRole, p *endProblem) string {
+// attempt a of task t's stage (run), a fix turn ("") while its fix budget
+// (fixBudgetOf) has one left, the fresh session granted at its cap when
+// that is due (freshDue), or is the task's wait on you: a merge turn whose
+// one fix turn for the base went (mergeAsked), your retry or not. At the
+// cap it goes on by itself first (atFixCap: more fix turns while it makes
+// progress, then one fresh session); once those are spent the wait names
+// the budget, and the task asks you its question (fixQuestion, run.ask). A
+// budget the registry cannot read gives the turn.
+func (e *Engine) fixOrWait(ctx context.Context, t registry.Task, a registry.Attempt, run *agentsRun, r *stageRole, p *endProblem) string {
 	if p.merge != "" && e.mergeAsked(ctx, t, a, r) {
 		return noValidFile(r, p) // a merge turn gets one fix turn for the base, then you
 	}
@@ -1196,13 +1200,32 @@ func (e *Engine) fixOrWait(ctx context.Context, t registry.Task, a registry.Atte
 		e.log.Warn("count a role's prompts in its stage", "task", t.ID, "role", r.runAs.Name, "err", err)
 	}
 	if err != nil || b.n < b.max {
-		r.next, r.problem = nextFix, p
+		e.nextFixTurn(ctx, t, a, run, r, p)
 		return ""
 	}
 	if p.merge != "" {
 		return noValidFile(r, p)
 	}
+	switch step, err := e.atFixCap(ctx, t, a, r, p, b); {
+	case err != nil:
+		e.log.Warn("go on at a role's cap of fix turns", "task", t.ID, "role", r.runAs.Name, "err", err)
+	case step != fixCapAsk:
+		e.nextFixTurn(ctx, t, a, run, r, p)
+		return ""
+	}
+	q := fixQuestion(a, r, p, b)
+	run.ask = &q
 	return changeWait(r, p, b)
+}
+
+// nextFixTurn makes role r's next prompt its fix turn for p: the fresh
+// session granted at its cap when no prompt carried it yet (freshDue),
+// else a fix turn in its session.
+func (e *Engine) nextFixTurn(ctx context.Context, t registry.Task, a registry.Attempt, run *agentsRun, r *stageRole, p *endProblem) {
+	r.next, r.problem = nextFix, p
+	if e.freshDue(ctx, t, a, r) {
+		r.next, r.fresh = nextFresh, e.freshFixText(ctx, t, run.copy, e.d.Layout.FactoryTaskDir(t.ID), p)
+	}
 }
 
 // changeWait is the wait of a task whose role r's change the factory's
@@ -1246,15 +1269,19 @@ func fixTurn(text string) bool { return strings.HasPrefix(runtime.TurnText(text)
 // and a retry at that cap starts another. A retry while the role was under
 // its cap (the task waited on you for another cause: a question, a QA stop,
 // a check that crashed) changes nothing, and a let-go (recorded as a retry
-// with its role) is none. A new attempt counts from 0, as the runtime's
-// count of a loop without progress starts again on a new attempt.
+// with its role) is none. A grant adds its turns to the cap in force: the
+// factory's own at the cap (fix-turns.json: a go-on while the role made
+// progress, its fresh session) and your answer to its question (a direction,
+// or the failure accepted as known: RetryFixTurns), so none of them spends
+// your retry's. A new attempt counts from 0, as the runtime's count of a
+// loop without progress starts again on a new attempt.
 func (e *Engine) fixBudgetOf(ctx context.Context, t registry.Task, a registry.Attempt, r *stageRole) (fixBudget, error) {
 	b := fixBudget{max: StageFixTurns}
 	entries, err := e.reg.LedgerOf(ctx, t.ID)
 	if err != nil {
 		return b, err
 	}
-	ins, err := e.reg.Inputs(ctx, t.ID)
+	evs, err := e.budgetEvents(ctx, t, a, r)
 	if err != nil {
 		return b, err
 	}
@@ -1265,13 +1292,14 @@ func (e *Engine) fixBudgetOf(ctx context.Context, t registry.Task, a registry.At
 		}
 	}
 	from := 0 // the prompts sent before the cap in force began
-	for _, in := range ins {
-		if in.Kind != registry.InputRetry || in.Role != "" || in.Stage != a.Stage {
+	for _, ev := range evs {
+		if ev.turns > 0 { // a grant: more turns on the cap in force
+			b.max += ev.turns
 			continue
 		}
 		before := 0 // sent at or before the retry, as the screen's let-go reads a retry after a prompt
 		for _, at := range sent {
-			if !in.At.Before(at) {
+			if !ev.at.Before(at) {
 				before++
 			}
 		}
@@ -1281,6 +1309,51 @@ func (e *Engine) fixBudgetOf(ctx context.Context, t registry.Task, a registry.At
 	}
 	b.n = len(sent) - from
 	return b, nil
+}
+
+// budgetEvent is what changes a role's fix budget, at: your retry at the
+// stage (turns 0) or a grant of turns.
+type budgetEvent struct {
+	at    time.Time
+	turns int
+}
+
+// budgetEvents are the events of role r's fix budget in attempt a of task
+// t, oldest first: your retries at the stage (a let-go, recorded as a retry
+// with its role, is none), the factory's grants (fix-turns.json) and your
+// answers to its fix question that give turns (a direction, an
+// acceptance).
+func (e *Engine) budgetEvents(ctx context.Context, t registry.Task, a registry.Attempt, r *stageRole) ([]budgetEvent, error) {
+	ins, err := e.reg.Inputs(ctx, t.ID)
+	if err != nil {
+		return nil, err
+	}
+	var evs []budgetEvent
+	for _, in := range ins {
+		if in.Kind == registry.InputRetry && in.Role == "" && in.Stage == a.Stage {
+			evs = append(evs, budgetEvent{at: in.At})
+		}
+	}
+	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	rec, err := readFixTurns(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range rec.grantsOf(a.ID, r.runAs.Name) {
+		evs = append(evs, budgetEvent{at: g.At, turns: g.Turns})
+	}
+	stops, err := readStops(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, ask := range stops.Asks {
+		if ask.Kind == stopFix && ask.Attempt == a.ID && ask.Role == r.runAs.Name &&
+			(ask.Decision == decideDirection || ask.Decision == decideAccept) {
+			evs = append(evs, budgetEvent{at: ask.Decided, turns: RetryFixTurns})
+		}
+	}
+	slices.SortStableFunc(evs, func(x, y budgetEvent) int { return x.at.Compare(y.at) })
+	return evs, nil
 }
 
 // mergeAsked reports whether role r got its fix turn for an unmerged base
@@ -1412,6 +1485,13 @@ func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.
 		switch {
 		case p != nil && r.letGo && !p.operator:
 			return letGoWait(r, p, t.Branch)
+		case p != nil && p.change && p.merge == "": // checked again (your answer, say): a fix turn while its budget gives one
+			r.failed = ""
+			if what := e.fixOrWait(ctx, *t, a, run, r, p); what != "" {
+				r.failed = p.file
+				return what
+			}
+			continue
 		case p != nil:
 			run.ask = cmp.Or(p.ask, run.ask) // a check that named no failure of the code: its question
 			return noValidFile(r, p)

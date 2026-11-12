@@ -944,6 +944,36 @@ func (c *Client) FileLog(ctx context.Context, dir, rev, path string, n int) ([]C
 	return commits, nil
 }
 
+// LogAfter returns the last n commits of to that from lacks, newest first
+// (git log -n <n> ^from to), as FileLog does for a path: the commits a
+// branch made since from.
+func (c *Client) LogAfter(ctx context.Context, dir, from, to string, n int) ([]Commit, error) {
+	if err := errors.Join(checkRev("from", from), checkRev("to", to)); err != nil {
+		return nil, err
+	}
+	if n <= 0 {
+		return nil, fmt.Errorf("gitx: log needs a positive count (n %d)", n)
+	}
+	res, err := c.git(ctx, dir, call{label: "log " + from + ".." + to},
+		"log", "-n", strconv.Itoa(n), "-z", "--no-color", "--no-show-signature", "--format=%h%x00%cs%x00%s", "^"+from, to, "--")
+	if err != nil {
+		return nil, err
+	}
+	out := string(res.Stdout)
+	if out == "" {
+		return nil, nil
+	}
+	f := strings.Split(strings.TrimSuffix(out, "\x00"), "\x00")
+	if len(f)%3 != 0 {
+		return nil, fmt.Errorf("gitx: log %s..%s: unexpected output of %d fields", from, to, len(f))
+	}
+	commits := make([]Commit, 0, len(f)/3)
+	for i := 0; i < len(f); i += 3 {
+		commits = append(commits, Commit{SHA: f[i], Date: f[i+1], Subject: f[i+2]})
+	}
+	return commits, nil
+}
+
 // BlameLine is the commit that last wrote line (from 1) of path at rev, and
 // when it was authored (`git blame --porcelain -L <line>,<line> rev --
 // path`; path is relative to dir, the top of a work tree: blame takes no

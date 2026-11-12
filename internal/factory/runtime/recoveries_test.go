@@ -57,6 +57,33 @@ func TestYourRetryStartsTheRecoveriesOverAndSpendsNone(t *testing.T) {
 	}
 }
 
+// A fresh session the stage asks for (the writer's at its fix budget)
+// starts its loop's ladder over too: the prompts after it are counted from
+// it, so no compaction comes for the prompts before it.
+func TestAFreshSessionStartsTheLoopsLadderOver(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	g.h.setSession(g.agent("fx-repro"), "sid-1")
+	for i := 1; i <= MaxStagePrompts; i++ {
+		if _, err := g.ladderSend(i); err != nil {
+			t.Fatalf("prompt %d: %v", i, err)
+		}
+	}
+	g.h.setStatus(g.agent("fx-repro"), "idle")
+	if _, err := g.r.SendFresh(g.ctx, g.task, g.attempt, g.role("fx-repro"), "fix turn, fresh"); err != nil {
+		t.Fatal(err)
+	}
+	g.observeN(2)
+	for i := 1; i < MaxStagePrompts; i++ {
+		if _, err := g.ladderSend(100 + i); err != nil {
+			t.Fatalf("prompt %d after the fresh session: %v", i, err)
+		}
+	}
+	if compacts, _ := g.ladderSteps(); compacts != 0 {
+		t.Fatalf("%d compactions after the fresh session, want none: its prompts count from it", compacts)
+	}
+}
+
 // A fresh start your answer asks for (SendFresh) starts the role in a new
 // session with the attempt's first prompt and the words after it, at once,
 // and its recoveries start over: a loss after it gets all of them again.

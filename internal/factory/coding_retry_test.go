@@ -18,12 +18,19 @@ import (
 const lintOffense = "app/credit.rb:3:5: C: Style/NumericLiterals: on the changed line\n"
 
 // capWait starts the wait of a task whose writer's change the checks still
-// refuse at the stage's cap of fix turns, with no retry of yours at the cap.
-const capWait = "the fx-writer agent's change does not pass after 5 fix turns in the stage: "
+// refuse the same way at the stage's cap of fix turns and after its fresh
+// session's, with no retry of yours: the question it asks you.
+const capWait = "1 question before coding goes on: the fx-writer agent's change does not pass after 7 fix turns in the stage: "
 
 // retryCapWait starts the wait after the fix turns your retry at the cap
 // gave.
-const retryCapWait = "the fx-writer agent's change does not pass after 2 more fix turns since your retry at the cap: "
+const retryCapWait = "1 question before coding goes on: the fx-writer agent's change does not pass after 2 more fix turns since " +
+	"your retry at the cap: "
+
+// capPrompts are the writer's prompts when the task asks you at its cap:
+// its first, StageFixTurns fix turns, and its fresh session's fixGoOnTurns
+// (no go-on: the same failure every turn is no progress).
+const capPrompts = runtime.MaxStagePrompts + fixGoOnTurns
 
 // setLint makes bin/lint print out for every run ("": no offense).
 func (r *codingRig) setLint(out string) {
@@ -54,10 +61,10 @@ func (r *codingRig) afterRetry(task registry.Task, want int, done func() bool) {
 	}
 }
 
-// toPromptCap runs task key's writer, whose change lint refuses, to the
-// coding stage's cap of fix turns: the task waits on you, the writer's
-// first prompt and its StageFixTurns fix turns spent (runtime.MaxStagePrompts
-// prompts).
+// toPromptCap runs task key's writer, whose change lint refuses the same
+// way each turn, to the coding stage's cap of fix turns and its fresh
+// session's: the task asks you, the writer's first prompt, its
+// StageFixTurns fix turns and its fresh session's spent (capPrompts).
 func (r *codingRig) toPromptCap(key string) registry.Task {
 	r.t.Helper()
 	task := r.codingTask(key, "bug")
@@ -66,9 +73,9 @@ func (r *codingRig) toPromptCap(key string) registry.Task {
 	r.fix(task)
 	r.endTurns(task, 2*runtime.MaxStagePrompts)
 	if got := r.reload(task.ID); got.State != registry.TaskNeedsYou || !strings.HasPrefix(got.WaitsWhat, capWait) ||
-		r.writerPrompts() != runtime.MaxStagePrompts {
+		r.writerPrompts() != capPrompts {
 		r.t.Fatalf("task %s waits %q after %d writer prompts; want you at the cap of %d", got.State, got.WaitsWhat, r.writerPrompts(),
-			runtime.MaxStagePrompts)
+			capPrompts)
 	}
 	return task
 }
@@ -110,7 +117,7 @@ func (r *codingRig) retryFixTurns(task registry.Task, had int) {
 func TestARetryAtThePromptCapGivesTheWriterTwoMoreFixTurns(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.toPromptCap("PR-12401")
-	r.retryFixTurns(task, runtime.MaxStagePrompts)
+	r.retryFixTurns(task, capPrompts)
 }
 
 // Each retry at the cap gives RetryFixTurns again, counted from that retry,
@@ -120,7 +127,7 @@ func TestEveryRetryAtThePromptCapGivesTwoMoreFixTurnsAgain(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.toPromptCap("PR-12402")
 	for i := range 3 {
-		r.retryFixTurns(task, runtime.MaxStagePrompts+i*RetryFixTurns)
+		r.retryFixTurns(task, capPrompts+i*RetryFixTurns)
 	}
 }
 
@@ -132,13 +139,13 @@ func TestARestartBetweenARetryAndItsFixTurnsKeepsTheirCount(t *testing.T) {
 	task := r.toPromptCap("PR-12406")
 	r.retryAnswer(task.ID)
 	r.restart()
-	r.afterRetry(task, runtime.MaxStagePrompts+1, nil)
+	r.afterRetry(task, capPrompts+1, nil)
 	r.endTurns(task, 2*RetryFixTurns)
 	got := r.reload(task.ID)
-	if n := r.writerPrompts(); n != runtime.MaxStagePrompts+RetryFixTurns || got.State != registry.TaskNeedsYou ||
+	if n := r.writerPrompts(); n != capPrompts+RetryFixTurns || got.State != registry.TaskNeedsYou ||
 		!strings.HasPrefix(got.WaitsWhat, retryCapWait) {
 		t.Fatalf("task %s waits %q after %d writer prompts; want you after %d, as with no restart", got.State, got.WaitsWhat, n,
-			runtime.MaxStagePrompts+RetryFixTurns)
+			capPrompts+RetryFixTurns)
 	}
 }
 
@@ -149,9 +156,9 @@ func TestARetryBelowTheCapAfterARetryAtTheCapGivesNoTurnMore(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.toPromptCap("PR-12407")
 	r.retryAnswer(task.ID)
-	r.afterRetry(task, runtime.MaxStagePrompts+1, nil)
-	if n := r.writerPrompts(); n != runtime.MaxStagePrompts+1 {
-		t.Fatalf("the writer got %d prompts after your retry at the cap, want %d", n, runtime.MaxStagePrompts+1)
+	r.afterRetry(task, capPrompts+1, nil)
+	if n := r.writerPrompts(); n != capPrompts+1 {
+		t.Fatalf("the writer got %d prompts after your retry at the cap, want %d", n, capPrompts+1)
 	}
 	r.commit("PR-12407 another try at the lint", map[string]string{"README": "shop, with credits\n"})
 	r.setLintCrash("Error: boom\n") // the checks of the new head stop on it
@@ -162,13 +169,13 @@ func TestARetryBelowTheCapAfterARetryAtTheCapGivesNoTurnMore(t *testing.T) {
 
 	r.setLintCrash("")
 	r.retryAnswer(task.ID)
-	r.afterRetry(task, runtime.MaxStagePrompts+RetryFixTurns, nil)
+	r.afterRetry(task, capPrompts+RetryFixTurns, nil)
 	r.endTurns(task, 2*RetryFixTurns)
 	got := r.reload(task.ID)
-	if n := r.writerPrompts(); n != runtime.MaxStagePrompts+RetryFixTurns || got.State != registry.TaskNeedsYou ||
+	if n := r.writerPrompts(); n != capPrompts+RetryFixTurns || got.State != registry.TaskNeedsYou ||
 		!strings.HasPrefix(got.WaitsWhat, retryCapWait) {
 		t.Fatalf("task %s waits %q after %d writer prompts; want you after %d: the turn left of your retry at the cap, no more",
-			got.State, got.WaitsWhat, n, runtime.MaxStagePrompts+RetryFixTurns)
+			got.State, got.WaitsWhat, n, capPrompts+RetryFixTurns)
 	}
 }
 
@@ -336,8 +343,8 @@ func TestARetryWhoseRecordFailsSaysTheWriterGetsNoMoreFixTurns(t *testing.T) {
 
 // Your retry while the task waits on you for another cause (here a lint
 // that crashed), one prompt short of the cap, changes nothing of it: the
-// writer's prompts still stop at runtime.MaxStagePrompts in the attempt,
-// with no turn more, and the wait reads as it does with no retry.
+// writer's prompts still stop at capPrompts in the attempt, with no turn
+// more, and the wait reads as it does with no retry.
 func TestARetryBelowThePromptCapLeavesTheCapAsItWas(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.codingTask("PR-12403", "bug")
@@ -360,9 +367,9 @@ func TestARetryBelowThePromptCapLeavesTheCapAsItWas(t *testing.T) {
 	r.afterRetry(task, runtime.MaxStagePrompts, nil)
 	r.endTurns(task, 2*RetryFixTurns)
 	got := r.reload(task.ID)
-	if n := r.writerPrompts(); n != runtime.MaxStagePrompts || got.State != registry.TaskNeedsYou || !strings.HasPrefix(got.WaitsWhat, capWait) {
+	if n := r.writerPrompts(); n != capPrompts || got.State != registry.TaskNeedsYou || !strings.HasPrefix(got.WaitsWhat, capWait) {
 		t.Fatalf("task %s waits %q after %d writer prompts; want you at the cap of %d, as with no retry", got.State, got.WaitsWhat, n,
-			runtime.MaxStagePrompts)
+			capPrompts)
 	}
 }
 
@@ -381,8 +388,8 @@ func TestARetryAtThePromptCapWhoseChecksPassSendsNoFixTurn(t *testing.T) {
 		}
 		return false
 	}
-	r.afterRetry(task, runtime.MaxStagePrompts+1, codingPassed)
-	if got := r.reload(task.ID); !codingPassed() || r.writerPrompts() != runtime.MaxStagePrompts || got.State == registry.TaskNeedsYou {
+	r.afterRetry(task, capPrompts+1, codingPassed)
+	if got := r.reload(task.ID); !codingPassed() || r.writerPrompts() != capPrompts || got.State == registry.TaskNeedsYou {
 		t.Fatalf("task %s at %s waits %q with %d writer prompts; want the coding stage passed and no fix turn", got.State, got.Stage,
 			got.WaitsWhat, r.writerPrompts())
 	}

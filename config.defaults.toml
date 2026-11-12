@@ -896,7 +896,13 @@ provisional_lone_answer = true    # the questions gate passes on the recommended
                                   # an alert says so) and the ready card waits for its answer. Your recommended
                                   # answer closes it; another one has the judge amend the report, then reaches the
                                   # writer (past coding, the task goes back to coding). false: every question waits
-sensitive = ["Gemfile.lock", ".github/workflows/**", "config/**"]   # the files whose change the ready card's FLAGS
+fix_go_on = 2                     # how many times one stage gives a role whose change the checks still refuse at its
+                                  # cap of fix turns 2 more by itself, while its last turns make progress (fewer
+                                  # failures, a different failure, another check failing); 0 to 10, 0 = off. Without
+                                  # progress (the same failure 3 turns in a row) the role gets one fresh session that
+                                  # names the failure, its commits and the failing output; then the task asks you
+                                  # (accept the failing check as known, give a direction, or drop the task)
+sensitive =["Gemfile.lock", ".github/workflows/**", "config/**"]   # the files whose change the ready card's FLAGS
                                   # line names for a second look: path globs, "**" matches whole directories and
                                   # "*" never crosses "/"; your list replaces this one
 codex_fallback = { fx-cause = "fx-cause-claude", fx-critic = "fx-critic-claude", fx-critic-narrow = "fx-critic-claude", fx-points-codex = "fx-points" }

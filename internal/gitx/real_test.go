@@ -819,6 +819,14 @@ func TestRealFileLogAndModifiedPaths(t *testing.T) {
 	if err != nil || !slices.Equal(subjects(log), []string{"Later fix (#20)", "Tune x"}) {
 		t.Fatalf("FileLog(main, 2) = %+v, %v", log, err)
 	}
+	// LogAfter lists what a branch made since a commit, at most n.
+	if log, err := fx.c.LogAfter(ctx, dir, tune, "feature", 2); err != nil ||
+		!slices.Equal(subjects(log), []string{"Feature drops y", "Feature adds new"}) {
+		t.Fatalf("LogAfter(base, feature, 2) = %q, %v", subjects(log), err)
+	}
+	if log, err := fx.c.LogAfter(ctx, dir, "main", "main", 5); err != nil || len(log) != 0 {
+		t.Fatalf("LogAfter of no commit = %+v, %v", log, err)
+	}
 	if c := log[1]; !strings.HasPrefix(tune, c.SHA) || len(c.SHA) < 7 || len(c.Date) != len("2026-10-06") || c.Date[4] != '-' {
 		t.Fatalf("commit = %+v, want an abbreviation of %s and a YYYY-MM-DD date", c, tune)
 	}

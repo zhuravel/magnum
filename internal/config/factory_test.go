@@ -721,6 +721,30 @@ func TestFactoryProvisionalLoneAnswerIsOnByDefaultAndTakesOnlyABoolean(t *testin
 	}
 }
 
+// fix_go_on is 2 by default, in the Go defaults and the embedded file; a
+// user's 0 turns the writer's extra fix turns off, and a value past 0 to
+// MaxFixGoOn is refused, naming the key.
+func TestFactoryFixGoOnIsTwoByDefaultAndBounded(t *testing.T) {
+	for _, f := range []Factory{Defaults().Factory, mustLoadDefaults(t).Factory} {
+		if f.FixGoOn != 2 {
+			t.Errorf("fix_go_on = %d by default, want 2", f.FixGoOn)
+		}
+	}
+	cfg, err := loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml+"\n[factory]\nfix_go_on = 0\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Factory.FixGoOn != 0 || cfg.Factory.MaxActive != 3 {
+		t.Errorf("factory = %+v, want fix_go_on off and the built-in max_active", cfg.Factory)
+	}
+	for _, bad := range []string{`-1`, `11`, `"two"`} {
+		_, err := loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml+"\n[factory]\nfix_go_on = "+bad+"\n")
+		if err == nil || !strings.Contains(err.Error(), "fix_go_on") {
+			t.Errorf("fix_go_on = %s: err = %v, want one naming the key", bad, err)
+		}
+	}
+}
+
 func mustLoadDefaults(t *testing.T) *Config {
 	t.Helper()
 	cfg, err := LoadWithOptions(paths.Layout{Home: repoRoot(t)}, "", LoadOptions{NoOverlay: true})
