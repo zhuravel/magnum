@@ -49,8 +49,8 @@ type rebootState struct {
 	marked     bool
 	ack        string
 	toasted    bool
-	// boot is the Mac's boot time as the start read it (zero: unknown).
-	boot time.Time
+	// boot is the Mac's boot as the start read it.
+	boot BootID
 }
 
 // rebootDraining reports whether a drain for a reboot holds: any value of
@@ -61,22 +61,22 @@ func (e *Engine) rebootDraining(ctx context.Context) bool {
 	return ok && v != ""
 }
 
-// readBootTime reads the Mac's boot time (Deps.BootTime, else sysctl
-// through MemoryRunner); zero when it cannot.
-func (e *Engine) readBootTime(ctx context.Context) time.Time {
-	read := e.d.BootTime
+// readBoot reads the Mac's boot (Deps.Boot, else sysctl through
+// MemoryRunner); unknown when it cannot.
+func (e *Engine) readBoot(ctx context.Context) BootID {
+	read := e.d.Boot
 	if read == nil {
 		if e.d.MemoryRunner == nil {
-			return time.Time{}
+			return BootID{}
 		}
-		read = func(ctx context.Context) (time.Time, error) { return ReadBootTime(ctx, e.d.MemoryRunner) }
+		read = func(ctx context.Context) (BootID, error) { return ReadBoot(ctx, e.d.MemoryRunner) }
 	}
-	t, err := read(ctx)
+	b, err := read(ctx)
 	if err != nil {
-		e.log.Warn("read the Mac's boot time: a drain for a reboot lasts until `magnum resume`", "err", err)
-		return time.Time{}
+		e.log.Warn("read the Mac's boot: a drain for a reboot lasts until `magnum resume`", "err", err)
+		return BootID{}
 	}
-	return t
+	return b
 }
 
 // startRebootDrain runs at the start: it records the controls this build
@@ -94,7 +94,7 @@ func (e *Engine) startRebootDrain(ctx context.Context) {
 	if !ok || v == "" {
 		return
 	}
-	e.reboot.boot = e.readBootTime(ctx)
+	e.reboot.boot = e.readBoot(ctx)
 	d, ok := ParseRebootDrain(v)
 	if !ok {
 		e.log.Warn("a drain for a reboot this build cannot read holds until `magnum resume`")

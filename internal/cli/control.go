@@ -70,8 +70,8 @@ type controlSeams struct {
 	FactoryAlive func(l paths.Layout) int
 	// FactoryKick wakes the factory daemon (SIGUSR1).
 	FactoryKick func(l paths.Layout) (int, error)
-	// BootTime reads the Mac's boot time (kern.boottime).
-	BootTime func(ctx context.Context) (time.Time, error)
+	// Boot reads the Mac's boot (kern.bootsessionuuid, kern.boottime).
+	Boot func(ctx context.Context) (engine.BootID, error)
 }
 
 var controlSys = controlSeams{
@@ -92,8 +92,8 @@ var controlSys = controlSeams{
 	},
 	FactoryAlive: factoryAlive,
 	FactoryKick:  factoryKickNow,
-	BootTime: func(ctx context.Context) (time.Time, error) {
-		return engine.ReadBootTime(ctx, daemonSys.runner(false, nil))
+	Boot: func(ctx context.Context) (engine.BootID, error) {
+		return engine.ReadBoot(ctx, daemonSys.runner(false, nil))
 	},
 }
 

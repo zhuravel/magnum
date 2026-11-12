@@ -62,6 +62,9 @@ func (h *harness) sendTo(t registry.Task, stage, role string) {
 	}
 }
 
+// factoryBoot is the tests' Mac's boot.
+var factoryBoot = engine.BootID{Session: "7546F65E-E75E-43EF-B8FC-1FAF8B9F0EBB", Time: time.Unix(1762930000, 0)}
+
 // pause writes the pause `magnum pause` asks of the factory, from now until
 // until (zero: until resume).
 func (h *harness) pause(until time.Time, reason string) Pause {
@@ -75,7 +78,7 @@ func (h *harness) pause(until time.Time, reason string) Pause {
 
 // rebootDrain writes the drain for a reboot `magnum drain` asks of the
 // factory, of generation gen, begun now on boot.
-func (h *harness) rebootDrain(gen int64, until string, boot time.Time) engine.RebootDrain {
+func (h *harness) rebootDrain(gen int64, until string, boot engine.BootID) engine.RebootDrain {
 	h.t.Helper()
 	d := engine.RebootDrain{Generation: gen, Since: h.clock.Now(), Until: until, Boot: boot}
 	if err := WriteRebootDrain(h.layout, d.Value()); err != nil {
@@ -199,7 +202,7 @@ func TestTheFactoryDrainForARebootWaitsForAWritersTurnThenParks(t *testing.T) {
 	waiting := h.task("PR-12404", registry.TaskNeedsYou, "report")
 	h.stage(config.FactoryStageAgents, idleStage)
 	h.sendTo(writer, "coding", "fx-writer")
-	d := h.rebootDrain(21, engine.DrainUntilBoot, time.Unix(1762930000, 0))
+	d := h.rebootDrain(21, engine.DrainUntilBoot, factoryBoot)
 
 	h.tickAndWait()
 
@@ -241,7 +244,7 @@ func TestTheFactoryDrainForARebootWaitsForTheLiaisonsTurn(t *testing.T) {
 	task := h.task("PR-12406", registry.TaskNeedsYou, "report")
 	h.stage(config.FactoryStageAgents, idleStage)
 	h.sendTo(task, "report", runtime.LiaisonRole)
-	h.rebootDrain(22, engine.DrainUntilBoot, time.Time{})
+	h.rebootDrain(22, engine.DrainUntilBoot, engine.BootID{})
 	h.tickAndWait()
 	if ack := h.workRecord().RebootDrain; ack == nil || ack.Quiet || !slices.Equal(ack.Work, []string{"liaison turn of PR-12406"}) {
 		t.Fatalf("acknowledgement %+v, want the liaison's turn named", ack)
@@ -253,15 +256,15 @@ func TestTheFactoryDrainForARebootWaitsForTheLiaisonsTurn(t *testing.T) {
 // `magnum resume` (the file gone) drops the acknowledgement and the work
 // starts again.
 func TestTheFactoryDrainForARebootEndsAtTheFirstStartOnANewBoot(t *testing.T) {
-	boot := time.Unix(1762930000, 0)
-	h := newHarness(t, func(d *Deps) { d.BootTime = func(context.Context) (time.Time, error) { return boot, nil } })
+	boot := factoryBoot
+	h := newHarness(t, func(d *Deps) { d.Boot = func(context.Context) (engine.BootID, error) { return boot, nil } })
 	h.rebootDrain(23, engine.DrainUntilBoot, boot)
 	h.e.endRebootDrainAtStart(h.ctx) // a crash restart on the same boot
 	if v, _ := ReadRebootDrain(h.layout); v == "" {
 		t.Fatal("a start on the same boot ended the drain")
 	}
 
-	boot = boot.Add(10 * time.Hour) // the Mac rebooted
+	boot = engine.BootID{Session: "0B1C2D3E-4F50-4162-8374-95A6B7C8D9E0"} // the Mac rebooted
 	h.e = New(h.deps)
 	h.e.endRebootDrainAtStart(h.ctx)
 	if v, _ := ReadRebootDrain(h.layout); v != "" {
@@ -275,7 +278,7 @@ func TestTheFactoryDrainForARebootEndsAtTheFirstStartOnANewBoot(t *testing.T) {
 		t.Fatalf("drain events %q", texts)
 	}
 
-	h.rebootDrain(24, engine.DrainUntilResume, boot.Add(-time.Hour))
+	h.rebootDrain(24, engine.DrainUntilResume, factoryBoot)
 	h.e.endRebootDrainAtStart(h.ctx)
 	if v, _ := ReadRebootDrain(h.layout); v == "" {
 		t.Fatal("a drain until resume ended at a start on another boot")
@@ -300,8 +303,8 @@ func TestTheFactoryDrainForARebootEndsAtTheFirstStartOnANewBoot(t *testing.T) {
 // A restart's drain and a drain for a reboot are two files: the start ends
 // the restart's alone, and the lift of either leaves the other.
 func TestTheFactorysRestartDrainAndRebootDrainDoNotLiftEachOther(t *testing.T) {
-	boot := time.Unix(1762930000, 0)
-	h := newHarness(t, func(d *Deps) { d.BootTime = func(context.Context) (time.Time, error) { return boot, nil } })
+	boot := factoryBoot
+	h := newHarness(t, func(d *Deps) { d.Boot = func(context.Context) (engine.BootID, error) { return boot, nil } })
 	h.e.drainerAlive = func(Drain) bool { return true }
 	h.stage(config.FactoryStageAgents, idleStage)
 	h.rebootDrain(25, engine.DrainUntilBoot, boot)
@@ -329,7 +332,7 @@ func TestTheFactorysRestartDrainAndRebootDrainDoNotLiftEachOther(t *testing.T) {
 func TestAQuietFactoryDrainForARebootSaysOnceAfterAnHour(t *testing.T) {
 	h := newHarness(t)
 	h.stage(config.FactoryStageAgents, idleStage)
-	h.rebootDrain(26, engine.DrainUntilBoot, time.Time{})
+	h.rebootDrain(26, engine.DrainUntilBoot, engine.BootID{})
 	h.tickAndWait()
 	h.clock.Add(59 * time.Minute)
 	h.tickAndWait()

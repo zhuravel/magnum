@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -15,11 +16,11 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-// The boot times of the tests' Mac: the one a drain began on, and another
-// after a reboot.
+// The boots of the tests' Mac: the one a drain began on, and another after
+// a reboot.
 var (
-	bootOne = time.Date(2026, 11, 12, 8, 0, 0, 0, time.UTC)
-	bootTwo = time.Date(2026, 11, 12, 18, 30, 0, 0, time.UTC)
+	bootOne = BootID{Session: "7546F65E-E75E-43EF-B8FC-1FAF8B9F0EBB", Time: time.Date(2026, 11, 12, 8, 0, 0, 0, time.UTC)}
+	bootTwo = BootID{Session: "0B1C2D3E-4F50-4162-8374-95A6B7C8D9E0", Time: time.Date(2026, 11, 12, 18, 30, 0, 0, time.UTC)}
 )
 
 // rebootDrain writes a drain for a reboot of generation gen, begun now on
@@ -51,10 +52,59 @@ func (h *harness) drainAck() (DrainAck, bool) {
 	return a, true
 }
 
-// onBoot has the harness's daemon read boot as the Mac's boot time.
-func onBoot(boot *time.Time) func(*harness) {
+// onBoot has the harness's daemon read boot as the Mac's boot.
+func onBoot(boot *BootID) func(*harness) {
 	return func(h *harness) {
-		h.d.BootTime = func(context.Context) (time.Time, error) { return *boot, nil }
+		h.d.Boot = func(context.Context) (BootID, error) { return *boot, nil }
+	}
+}
+
+// sysctlBoot answers the boot's two sysctl reads as macOS does: the boot
+// session's id (none: the oid is unknown) and the boot time.
+func sysctlBoot(session string, at time.Time) *execx.Fake {
+	rules := []execx.Rule{{Prefix: []string{sysctlPath, "-n", bootTimeOID},
+		Result: execx.Result{Stdout: []byte(fmt.Sprintf("{ sec = %d, usec = 0 } Wed Nov 12 08:00:00 2026\n", at.Unix()))}}}
+	if session != "" {
+		rules = append(rules, execx.Rule{Prefix: []string{sysctlPath, "-n", bootSessionOID}, Result: execx.Result{Stdout: []byte(session + "\n")}})
+	} else {
+		rules = append(rules, execx.Rule{Prefix: []string{sysctlPath, "-n", bootSessionOID},
+			Result: execx.Result{Code: 1, Stderr: []byte("sysctl: unknown oid 'kern.bootsessionuuid'")}})
+	}
+	return &execx.Fake{Rules: rules}
+}
+
+// The boot a drain began on is its boot session, not its boot time: macOS
+// moves kern.boottime when it steps the clock after a wake, so a crash
+// restart on the same boot must keep the drain however far that time moved.
+// Without a session (an older macOS) the time decides, past a slack of two
+// minutes.
+func TestARebootDrainKeepsItsBootWhenTheBootTimeShifts(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		session string
+		shift   time.Duration
+		ends    bool
+	}{
+		{"the same session, the time moved an hour", bootOne.Session, time.Hour, false},
+		{"another session", bootTwo.Session, 0, true},
+		{"no session, the time moved 40s", "", 40 * time.Second, false},
+		{"no session, the time moved 2h", "", 2 * time.Hour, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fake := sysctlBoot(c.session, bootOne.Time.Add(c.shift))
+			h := newHarness(t, func(h *harness) { h.d.MemoryRunner = fake })
+			d := h.rebootDrain(30, DrainUntilBoot)
+			if c.session == "" {
+				d.Boot.Session = ""
+				if err := h.st.SetKV(h.ctx, KVDaemonRebootDrain, d.Value()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			h.startup()
+			if got := !h.e.rebootDraining(h.ctx); got != c.ends {
+				t.Fatalf("the start ended the drain: %v, want %v", got, c.ends)
+			}
+		})
 	}
 }
 
@@ -249,7 +299,7 @@ func TestARebootDrainEndsAtTheFirstStartOnANewBootAndOnlyThen(t *testing.T) {
 // A boot time the daemon cannot read keeps the drain: only `magnum resume`
 // ends it then.
 func TestARebootDrainStaysWhenTheBootTimeIsUnknown(t *testing.T) {
-	fake := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{sysctlPath, "-n", bootOID}, Result: execx.Result{Code: 1}}}}
+	fake := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{sysctlPath}, Result: execx.Result{Code: 1}}}}
 	h := newHarness(t, func(h *harness) { h.d.MemoryRunner = fake })
 	h.rebootDrain(13, DrainUntilBoot)
 	h.startup()

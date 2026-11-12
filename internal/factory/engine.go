@@ -297,11 +297,11 @@ type Deps struct {
 	// staging cells.
 	Staging Staging
 	// Build is the build the daemon runs (engine.Build.Label), which
-	// work.json names for the CLI's status; BootTime reads the Mac's boot
-	// time at the start, which ends a drain for a reboot begun on another
-	// boot (control.go); nil leaves it unknown.
-	Build    string
-	BootTime func(ctx context.Context) (time.Time, error)
+	// work.json names for the CLI's status; Boot reads the Mac's boot at the
+	// start (engine.ReadBoot), which ends a drain for a reboot begun on
+	// another boot (control.go); nil leaves it unknown.
+	Build string
+	Boot  func(ctx context.Context) (engine.BootID, error)
 	// Clock returns the current time; nil means time.Now.
 	Clock func() time.Time
 	Log   *slog.Logger

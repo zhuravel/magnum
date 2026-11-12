@@ -304,8 +304,8 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 		Reveal:   factoryReveal(cfg, run),
 		// The controls (factory/control.go): the build work.json names, and
 		// the Mac's boot time, which ends a drain for a reboot.
-		Build:    engine.CurrentBuild(c.Version, "").Label(),
-		BootTime: func(ctx context.Context) (time.Time, error) { return engine.ReadBootTime(ctx, quiet) },
+		Build: engine.CurrentBuild(c.Version, "").Label(),
+		Boot:  func(ctx context.Context) (engine.BootID, error) { return engine.ReadBoot(ctx, quiet) },
 	}
 	// The tickets of intake: the [jira] site's client, reading with curl
 	// (the token on stdin, never in a pane).

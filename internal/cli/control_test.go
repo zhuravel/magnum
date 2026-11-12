@@ -25,12 +25,12 @@ type fakeFactoryDaemon struct {
 	installed bool
 	pid       int
 	kicks     int
-	boot      time.Time
+	boot      engine.BootID
 	bootErr   error
 }
 
-// controlBoot is the tests' Mac's boot time.
-var controlBoot = time.Date(2026, 10, 3, 7, 30, 0, 0, time.UTC)
+// controlBoot is the tests' Mac's boot.
+var controlBoot = engine.BootID{Session: "7546F65E-E75E-43EF-B8FC-1FAF8B9F0EBB", Time: time.Date(2026, 10, 3, 7, 30, 0, 0, time.UTC)}
 
 // newControlHarness is an act harness whose registry is a file (the factory's
 // status and screen read it read-only), with a fake factory daemon in
@@ -47,7 +47,7 @@ func newControlHarness(t *testing.T) (*actHarness, *fakeFactoryDaemon) {
 		FactoryPID:       func(context.Context, paths.Layout) (int, error) { return f.pid, nil },
 		FactoryAlive:     func(paths.Layout) int { return f.pid },
 		FactoryKick:      func(paths.Layout) (int, error) { f.kicks++; return f.pid, nil },
-		BootTime:         func(context.Context) (time.Time, error) { return f.boot, f.bootErr },
+		Boot:             func(context.Context) (engine.BootID, error) { return f.boot, f.bootErr },
 	}
 	return h, f
 }
@@ -227,7 +227,7 @@ func TestDrainWaitsForBothAcknowledgementsThenSaysSafeToReboot(t *testing.T) {
 	}
 	rd, ok := h.reviewDrain()
 	fd, fok := h.factoryDrain()
-	if !ok || !fok || rd.Generation != fd.Generation || rd.Until != engine.DrainUntilBoot || !rd.Boot.Equal(controlBoot) || rd.Reason != "reboot" {
+	if !ok || !fok || rd.Generation != fd.Generation || rd.Until != engine.DrainUntilBoot || rd.Boot != controlBoot || rd.Reason != "reboot" {
 		t.Fatalf("records %+v / %+v, want one generation until boot on the Mac's boot", rd, fd)
 	}
 	if h.kicks == 0 || f.kicks == 0 {

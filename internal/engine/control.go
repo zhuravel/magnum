@@ -64,15 +64,45 @@ const DrainQuietToastAfter = time.Hour
 
 // RebootDrain is a drain for a reboot: the command's generation (its start
 // in nanoseconds, the same on both daemons' records), since when, until
-// what ends it (DrainUntilBoot, DrainUntilResume), the Mac's boot time when
-// it began (zero when it could not be read: only `magnum resume` ends such
-// a drain) and why.
+// what ends it (DrainUntilBoot, DrainUntilResume), the boot of the Mac it
+// began on (unknown when it could not be read: only `magnum resume` ends
+// such a drain) and why.
 type RebootDrain struct {
 	Generation int64     `json:"generation"`
 	Since      time.Time `json:"since"`
 	Until      string    `json:"until"`
-	Boot       time.Time `json:"boot,omitzero"`
+	Boot       BootID    `json:"boot,omitzero"`
 	Reason     string    `json:"reason,omitempty"`
+}
+
+// BootID names a boot of the Mac: its boot session (kern.bootsessionuuid,
+// unique per boot) and its boot time (kern.boottime), either empty when it
+// could not be read.
+type BootID struct {
+	Session string    `json:"session,omitempty"`
+	Time    time.Time `json:"time,omitzero"`
+}
+
+// bootTimeSlack is how far kern.boottime may move on the same boot without
+// naming another one: macOS moves it when it steps the clock after a wake.
+// It decides only when a boot session is missing.
+const bootTimeSlack = 2 * time.Minute
+
+// Known reports whether b names a boot.
+func (b BootID) Known() bool { return b.Session != "" || !b.Time.IsZero() }
+
+// Other reports whether b is another boot than o: their sessions differ when
+// both have one, else their boot times are more than bootTimeSlack apart.
+// An unknown boot is no other boot.
+func (b BootID) Other(o BootID) bool {
+	switch {
+	case b.Session != "" && o.Session != "":
+		return b.Session != o.Session
+	case !b.Time.IsZero() && !o.Time.IsZero():
+		d := b.Time.Sub(o.Time)
+		return d > bootTimeSlack || d < -bootTimeSlack
+	}
+	return false
 }
 
 // Value is d as its records hold it.
@@ -99,11 +129,11 @@ func ParseRebootDrain(v string) (RebootDrain, bool) {
 }
 
 // EndsAtStart reports whether a daemon that starts on boot (the Mac's boot
-// time now; zero when unknown) ends d: a drain until "boot" whose boot is
-// known and differs. A crash restart or a restart on the same boot keeps
-// it, and so does any start when either time is unknown.
-func (d RebootDrain) EndsAtStart(boot time.Time) bool {
-	return d.Until == DrainUntilBoot && !d.Boot.IsZero() && !boot.IsZero() && !boot.Equal(d.Boot)
+// now) ends d: a drain until "boot" begun on another boot (BootID.Other). A
+// crash restart or a restart on the same boot keeps it, and so does any
+// start when either boot is unknown.
+func (d RebootDrain) EndsAtStart(boot BootID) bool {
+	return d.Until == DrainUntilBoot && boot.Other(d.Boot)
 }
 
 // Words say what ends d, for the status lines and the events.
@@ -172,22 +202,51 @@ func KnowsControls(v string, pid, want int) bool {
 	return c.PID == pid && c.Version >= want
 }
 
-// bootOID is the kernel's boot time.
-const bootOID = "kern.boottime"
+// The kernel's boot session (unique per boot) and boot time.
+const (
+	bootSessionOID = "kern.bootsessionuuid"
+	bootTimeOID    = "kern.boottime"
+)
 
-// ReadBootTime reads the Mac's boot time, `sysctl -n kern.boottime`, through
-// r ("{ sec = 1762940000, usec = 123456 } Wed Nov 12 10:13:20 2026"); an
-// error when it cannot (another system, sysctl missing).
-func ReadBootTime(ctx context.Context, r execx.Runner) (time.Time, error) {
+// bootSessionRe is a boot session's id.
+var bootSessionRe = regexp.MustCompile(`^[0-9A-Fa-f-]{16,64}$`)
+
+// ReadBoot reads the Mac's boot through r, read only: `sysctl -n
+// kern.bootsessionuuid` and `sysctl -n kern.boottime` ("{ sec = 1762940000,
+// usec = 123456 } Wed Nov 12 10:13:20 2026"). Either may fail alone; an
+// error when neither names the boot (another system, sysctl missing).
+func ReadBoot(ctx context.Context, r execx.Runner) (BootID, error) {
 	if r == nil {
-		return time.Time{}, errors.New("no runner reads the boot time")
+		return BootID{}, errors.New("no runner reads the boot")
 	}
-	res, err := r.Run(ctx, execx.Cmd{Name: sysctlPath, Args: []string{"-n", bootOID}, Timeout: memoryTimeout, Probe: true, Quiet: true,
-		Label: "sysctl " + bootOID})
-	if err != nil {
-		return time.Time{}, fmt.Errorf("sysctl %s: %w", bootOID, err)
+	read := func(oid string) (string, error) {
+		res, err := r.Run(ctx, execx.Cmd{Name: sysctlPath, Args: []string{"-n", oid}, Timeout: memoryTimeout, Probe: true, Quiet: true,
+			Label: "sysctl " + oid})
+		if err != nil {
+			return "", fmt.Errorf("sysctl %s: %w", oid, err)
+		}
+		return strings.TrimSpace(string(res.Stdout)), nil
 	}
-	return ParseBootTime(string(res.Stdout))
+	var b BootID
+	var errs []error
+	if s, err := read(bootSessionOID); err != nil {
+		errs = append(errs, err)
+	} else if bootSessionRe.MatchString(s) {
+		b.Session = s
+	} else {
+		errs = append(errs, fmt.Errorf("sysctl %s printed %q, not a boot session", bootSessionOID, s))
+	}
+	if out, err := read(bootTimeOID); err != nil {
+		errs = append(errs, err)
+	} else if t, err := ParseBootTime(out); err != nil {
+		errs = append(errs, err)
+	} else {
+		b.Time = t
+	}
+	if !b.Known() {
+		return b, errors.Join(errs...)
+	}
+	return b, nil
 }
 
 // bootRe matches kern.boottime's seconds and microseconds.
@@ -197,7 +256,7 @@ var bootRe = regexp.MustCompile(`sec\s*=\s*([0-9]+)\s*,\s*usec\s*=\s*([0-9]+)`)
 func ParseBootTime(out string) (time.Time, error) {
 	m := bootRe.FindStringSubmatch(out)
 	if m == nil {
-		return time.Time{}, fmt.Errorf("sysctl %s printed %q, not a boot time", bootOID, strings.TrimSpace(out))
+		return time.Time{}, fmt.Errorf("sysctl %s printed %q, not a boot time", bootTimeOID, strings.TrimSpace(out))
 	}
 	sec, err := strconv.ParseInt(m[1], 10, 64)
 	if err != nil {

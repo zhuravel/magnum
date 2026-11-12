@@ -349,10 +349,11 @@ type Deps struct {
 	// A port of its own keeps the probe out of the commands a test scripts
 	// for Runner. nil = no memory sample.
 	MemoryRunner execx.Runner
-	// BootTime reads the Mac's boot time at the start, which ends a drain
-	// for a reboot begun on another boot (reboot_drain.go); nil reads it
-	// through MemoryRunner (ReadBootTime), and no runner leaves it unknown.
-	BootTime func(ctx context.Context) (time.Time, error)
+	// Boot reads the Mac's boot at the start, which ends a drain for a
+	// reboot begun on another boot (reboot_drain.go); nil reads it through
+	// MemoryRunner, the sysctl runner (ReadBoot), and no runner leaves it
+	// unknown.
+	Boot func(ctx context.Context) (BootID, error)
 	// Classifier sets up the retro's classifier for one retro run ([learn],
 	// retro.go); nil = the candidates are stored unclassified.
 	Classifier func(ctx context.Context, run RetroRun) (Classifier, error)

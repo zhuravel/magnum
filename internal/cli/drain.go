@@ -167,8 +167,8 @@ func drainMain(ctx context.Context, c *Context, d *actDeps, o drainOpts) int {
 	rec := engine.RebootDrain{Generation: now.UnixNano(), Since: now, Until: engine.DrainUntilBoot, Reason: actClean(o.reason)}
 	if o.keep {
 		rec.Until = engine.DrainUntilResume
-	} else if boot, err := controlSys.BootTime(ctx); err != nil {
-		fmt.Fprintf(c.Stderr, "magnum drain: warning: cannot read the Mac's boot time (%v): the drain lasts until `magnum resume`\n", err)
+	} else if boot, err := controlSys.Boot(ctx); err != nil {
+		fmt.Fprintf(c.Stderr, "magnum drain: warning: cannot read the Mac's boot (%v): the drain lasts until `magnum resume`\n", err)
 	} else {
 		rec.Boot = boot
 	}
@@ -318,7 +318,7 @@ func drainWait(ctx context.Context, c *Context, d *actDeps, out controlOut, targ
 			for i, t := range targets {
 				out.say(t.name, states[i].text)
 			}
-			if rec.Until == engine.DrainUntilResume || rec.Boot.IsZero() {
+			if rec.Until == engine.DrainUntilResume || !rec.Boot.Known() {
 				fmt.Fprintln(c.Stdout, drainSafeKeepText)
 			} else {
 				fmt.Fprintln(c.Stdout, drainSafeText)

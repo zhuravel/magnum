@@ -14,6 +14,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/cleanup"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/herdr"
@@ -226,7 +227,7 @@ func newActHarnessOn(t *testing.T, open func(testing.TB, string) *store.Store) *
 		FactoryPID:       func(context.Context, paths.Layout) (int, error) { return 0, nil },
 		FactoryAlive:     func(paths.Layout) int { return 0 },
 		FactoryKick:      func(paths.Layout) (int, error) { return 0, nil },
-		BootTime:         func(context.Context) (time.Time, error) { return time.Time{}, errors.New("no boot time in a test") },
+		Boot:             func(context.Context) (engine.BootID, error) { return engine.BootID{}, errors.New("no boot in a test") },
 	}
 	t.Cleanup(func() {
 		actNewDeps, controlSys = old, oldControl
