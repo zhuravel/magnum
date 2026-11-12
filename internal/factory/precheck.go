@@ -1115,27 +1115,7 @@ func (p *precheckRun) specs(cmd string, files []string) {
 		p.skipCheck(registry.CheckSpec, key, script)
 		return
 	}
-	run, ok := p.run(key, "specs", script)
-	var tried []string
-	for ok && run.Exit != 0 && len(failures(run.Output)) == 0 && !p.halted() {
-		step := p.nextFaultStep(key, false)
-		if step == "" {
-			break
-		}
-		p.say("\n`%s` exited %d and names no failing spec: the factory runs it again.\n", script, run.Exit)
-		p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "unknown", Command: script, Exit: run.Exit, Took: run.Took})
-		if step == stepHeal {
-			if failed := p.healFault(key); failed != "" {
-				p.spendFaultStep(key, step, "ran the repository's installs", "the installs failed: "+failed)
-				tried = append(tried, "ran the repository's installs, and the installs failed: "+failed)
-				break
-			}
-		}
-		run, ok = p.run(key, "specs", script)
-		words := faultStepWords(step, p.limit, p.repo.Installs)
-		tried = append(tried, words)
-		p.spendFaultStep(key, step, words, runEnded(run, ok, len(failures(run.Output)) > 0))
-	}
+	run, ok, tried := p.runNaming(key, "specs", script, "failing spec", func(out string) bool { return len(failures(out)) > 0 })
 	if !ok {
 		if !p.stopped() {
 			p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "code", Command: script, Exit: run.Exit, Took: run.Took})
@@ -1157,6 +1137,37 @@ func (p *precheckRun) specs(cmd string, files []string) {
 		return
 	}
 	p.judgeRed(cmd, script, run, red)
+}
+
+// runNaming runs the test runner script (check key, what in the waits) and,
+// while a run exits non-zero naming no failure (names reads its output;
+// failing words what it names), its fault steps: again, then after the
+// repository's installs, each once at the head. Each run that named nothing
+// and runs again is recorded as a failed check of unknown cause. The last
+// run comes back, whether it ran to its end, and the steps tried.
+func (p *precheckRun) runNaming(key, what, script, failing string, names func(string) bool) (ProofRun, bool, []string) {
+	run, ok := p.run(key, what, script)
+	var tried []string
+	for ok && run.Exit != 0 && !names(run.Output) && !p.halted() {
+		step := p.nextFaultStep(key, false)
+		if step == "" {
+			break
+		}
+		p.say("\n`%s` exited %d and names no %s: the factory runs it again.\n", script, run.Exit, failing)
+		p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "unknown", Command: script, Exit: run.Exit, Took: run.Took})
+		if step == stepHeal {
+			if failed := p.healFault(key); failed != "" {
+				p.spendFaultStep(key, step, "ran the repository's installs", "the installs failed: "+failed)
+				tried = append(tried, "ran the repository's installs, and the installs failed: "+failed)
+				break
+			}
+		}
+		run, ok = p.run(key, what, script)
+		words := faultStepWords(step, p.limit, p.repo.Installs)
+		tried = append(tried, words)
+		p.spendFaultStep(key, step, words, runEnded(run, ok, names(run.Output)))
+	}
+	return run, ok, tried
 }
 
 // runEnded says how a check's run ended (ran: to its end; named: it named
@@ -1407,27 +1418,7 @@ func (p *precheckRun) jest(cmd string, files []string) {
 		p.skipCheck(registry.CheckSpec, key, script)
 		return
 	}
-	run, ok := p.run(key, "jest", script)
-	var tried []string
-	for ok && run.Exit != 0 && len(jestFailures(run.Output)) == 0 && !p.halted() {
-		step := p.nextFaultStep(key, false)
-		if step == "" {
-			break
-		}
-		p.say("\n## Jest\n\n`%s` exited %d and names no failing test: the factory runs it again.\n", script, run.Exit)
-		p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "unknown", Command: script, Exit: run.Exit, Took: run.Took})
-		if step == stepHeal {
-			if failed := p.healFault(key); failed != "" {
-				p.spendFaultStep(key, step, "ran the repository's installs", "the installs failed: "+failed)
-				tried = append(tried, "ran the repository's installs, and the installs failed: "+failed)
-				break
-			}
-		}
-		run, ok = p.run(key, "jest", script)
-		words := faultStepWords(step, p.limit, p.repo.Installs)
-		tried = append(tried, words)
-		p.spendFaultStep(key, step, words, runEnded(run, ok, len(jestFailures(run.Output)) > 0))
-	}
+	run, ok, tried := p.runNaming(key, "jest", script, "failing test", func(out string) bool { return len(jestFailures(out)) > 0 })
 	check := registry.Check{Kind: registry.CheckSpec, Result: registry.CheckPass, Command: script, Exit: run.Exit, Took: run.Took}
 	switch failed := jestFailures(run.Output); {
 	case !ok && (p.ctx.Err() != nil || p.overCap):
