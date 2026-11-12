@@ -214,3 +214,28 @@ func TestYourAnswerForARoleLostBeforeItsFirstPromptStartsItWithItsFirstPrompt(t 
 		})
 	}
 }
+
+// Your drop that stops.json recorded but that did not apply (the task's
+// end failed) is applied at the next pass, never lost.
+func TestADropThatDidNotApplyIsAppliedAtTheNextPass(t *testing.T) {
+	h := newHarness(t)
+	task := h.lostAfterRecoveries("PR-12549")
+	dir := h.layout.FactoryTaskDir(task.ID)
+	rec, err := readStops(dir)
+	if err != nil || len(rec.Asks) != 1 {
+		t.Fatalf("stops.json %+v (%v); want the one question", rec.Asks, err)
+	}
+	rec.Asks[0].Decision, rec.Asks[0].Decided = decideDrop, h.clock.Now()
+	if err := writeStops(dir, rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.reg.TransitionTask(h.ctx, task.ID, nil, registry.TaskActive, func(u *registry.TaskUpdate) { u.Because("your answer") }); err != nil {
+		t.Fatal(err) // your answer made it active; its end then failed
+	}
+	if ended, err := h.e.decideStops(h.ctx, h.reload(task.ID)); err != nil || !ended {
+		t.Fatalf("decideStops = %v, %v; want the recorded drop applied", ended, err)
+	}
+	if got := h.reload(task.ID); isLive(got) || got.State == registry.TaskNeedsYou {
+		t.Fatalf("task %s after the recorded drop; want it stopped", got.State)
+	}
+}

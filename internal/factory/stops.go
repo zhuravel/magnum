@@ -289,13 +289,21 @@ func (e *Engine) askStop(ctx context.Context, t registry.Task, sq stopQuestion) 
 // stage's pass: each undecided ask whose question you answered since it
 // was asked gets its decision (decideStop), which stops.json keeps (the
 // checks skipped or accepted, the bounds) for the checks to read, and an
-// event says it; a drop ends the task (ended). The decisions a stage acts
-// on (a direction, a fresh start) are read there.
+// event says it; a drop ends the task (ended), and a drop recorded whose
+// end did not apply (an error after stops.json) is applied at the next
+// pass. The decisions a stage acts on (a direction, a fresh start) are read
+// there.
 func (e *Engine) decideStops(ctx context.Context, t registry.Task) (ended bool, err error) {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	rec, err := readStops(dir)
-	if err != nil || !slices.ContainsFunc(rec.Asks, func(a stopAsk) bool { return a.Decision == "" }) {
+	if err != nil {
 		return false, err
+	}
+	if i := slices.IndexFunc(rec.Asks, func(a stopAsk) bool { return a.Decision == decideDrop }); i >= 0 && isLive(t) {
+		return true, e.dropByStop(ctx, t, rec.Asks[i]) // your drop recorded, whose end did not apply: it applies now
+	}
+	if !slices.ContainsFunc(rec.Asks, func(a stopAsk) bool { return a.Decision == "" }) {
+		return false, nil
 	}
 	qs, err := e.reg.Questions(ctx, t.ID)
 	if err != nil {
@@ -327,10 +335,15 @@ func (e *Engine) decideStops(ctx context.Context, t registry.Task) (ended bool, 
 		return false, err
 	}
 	if dropped != nil {
-		return true, e.endTask(ctx, t, "dropped by you: "+textx.Clip(dropped.Why, 200),
-			registry.Input{TaskID: t.ID, Kind: registry.InputDrop, Surface: answerSurface, Stage: t.Stage, Role: factoryAsks})
+		return true, e.dropByStop(ctx, t, *dropped)
 	}
 	return false, nil
+}
+
+// dropByStop ends task t on your drop answer to stop a.
+func (e *Engine) dropByStop(ctx context.Context, t registry.Task, a stopAsk) error {
+	return e.endTask(ctx, t, "dropped by you: "+textx.Clip(a.Why, 200),
+		registry.Input{TaskID: t.ID, Kind: registry.InputDrop, Surface: answerSurface, Stage: t.Stage, Role: factoryAsks})
 }
 
 // newestRow is the newest row (by revision) of the question of text in qs.

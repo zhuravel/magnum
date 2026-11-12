@@ -26490,8 +26490,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   Task 8 lost a pane. The local review's cap was the twelfth kind,
   and another change handles it. The operator's rule: the factory waits for them only for architectural
   decisions. A stop that only needs the retry key is a defect. So the factory now does this work by itself,
-  within a budget. Each automatic step writes an event and an alert. The alert does not stand, so `!` lists
-  it and the delivery drops it without a toast. What remains asks a question with concrete options on the
+  within a budget. Each automatic step writes an event and an alert. The alert is news: it stands while the
+  task is live, toasts as "factory: nothing needs you" with a count of nobody waiting on you, and is dropped
+  in silence once the task is no longer live. What remains asks a question with concrete options on the
   factory's question cards.
   - *The stop questions* (`stops.go`). A stop past its budget returns `asksYou` from the agents stage.
     `stageFailed` asks it (`askStop`). The ask goes to `stops.json` in the task's directory first. Then its
