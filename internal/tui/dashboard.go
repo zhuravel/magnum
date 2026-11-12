@@ -698,7 +698,11 @@ func (m dashboardModel) listKey(k string) (dashboardModel, tea.Cmd) {
 	case "a":
 		return m.run("attention", func(ctx context.Context, a DashboardActions) (ActionResult, error) { return a.Attention(ctx) })
 	case heldMergeKey: // held_merge.go: the merge magnum holds for your y, in the pager
-		r, _ := m.selected()
+		r, ok := m.selected()
+		if !ok { // no row yet, or none at all
+			cmd := m.openHeldMerge("", "")
+			return m, cmd
+		}
 		cmd := m.openHeldMerge(r.prRef(), m.heldOf(r))
 		return m, cmd
 	case "enter":

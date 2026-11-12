@@ -6,7 +6,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -160,5 +162,20 @@ func TestTheFactoryScreensEOpensAHeldMergesDiff(t *testing.T) {
 	h.press("e")
 	if !slices.Equal(*opened, []string{heldDiff}) || h.m.bar.asking != nil {
 		t.Errorf("e opened %q (asked %v), want %q", *opened, h.m.bar.asking != nil, heldDiff)
+	}
+}
+
+// The review's bug (H4): e on the dashboard with no row selected (before
+// the first load, after a load that failed, with no slot and an empty
+// queue) dereferenced a nil row and ended the screen with a panic. It says
+// that no merge is held there now.
+func TestEOnTheDashboardWithNoRowSaysSo(t *testing.T) {
+	m := testDashboard(context.Background(), &fakeSource{}, &fakeActions{}, DashboardOptions{Now: func() time.Time { return dashNow }})
+	m, _ = send(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	opened := recordPager(&m.actionBar)
+	m, _ = send(t, m, keyMsg("e"))
+	mustContain(t, viewOf(m), "no merge of the parent is held for your y on this row")
+	if len(*opened) != 0 {
+		t.Errorf("e with no row opened %q", *opened)
 	}
 }

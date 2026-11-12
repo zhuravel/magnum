@@ -39,6 +39,11 @@ type heldGitFake struct {
 	pushGate    chan struct{}
 	pushStarted chan struct{}
 	pushPanics  bool
+	// diffErr fails RemergeDiff (an output past execx's cap, say);
+	// refReadErr fails the read of a held ref (a cancelled context, a clone
+	// briefly gone), as no missing ref does.
+	diffErr    error
+	refReadErr error
 }
 
 // RefsUnder lists the refs under prefix (a part of refs/magnum/) that
@@ -103,7 +108,7 @@ func (g *mergeGit) Parents(_ context.Context, _, rev string) ([]string, error) {
 func (g *mergeGit) RemergeDiff(context.Context, string, string, ...string) (string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.held.remerge, nil
+	return g.held.remerge, g.held.diffErr
 }
 
 func (g *mergeGit) PathsDiff(context.Context, string, string, string, ...string) (string, error) {
@@ -420,7 +425,8 @@ func TestHeldMergeDiffEscapesTheControlsThatCouldHideALine(t *testing.T) {
 	h, mg := handedMerge(t)
 	heldConflicts(mg)
 	mg.mu.Lock()
-	mg.held.remerge = "+run: deploy\x1b[2K\r+run: echo ok\x7f\t# tab\n+if: ${{ github.actor == 'alice' \u202e && true }}\u2066\u200b\ufeff\n"
+	mg.held.remerge = "+run: deploy\x1b[2K\r+run: echo ok\x7f\t# tab\n+if: ${{ github.actor == 'alice' \u202e && true }}\u2066\u200b\ufeff\n" +
+		"+run: curl 10.0.\u061c0.1\u061c\u2028\n"
 	mg.mu.Unlock()
 	id := h.fix(FixPayload{Mode: FixModeMerge})
 	h.handle()
@@ -431,7 +437,7 @@ func TestHeldMergeDiffEscapesTheControlsThatCouldHideALine(t *testing.T) {
 	}
 	got := string(b)
 	if want := heldHeader + "+run: deploy\\x1b[2K\\x0d+run: echo ok\\x7f\t# tab\n+if: ${{ github.actor == 'alice' \\u202e && true }}\\u2066\\u200b\\ufeff\n" +
-		heldPlain; got != want {
+		"+run: curl 10.0.\\u061c0.1\\u061c\\u2028\n" + heldPlain; got != want {
 		t.Errorf("held-merge.diff = %q, want %q", got, want)
 	}
 }
@@ -1250,4 +1256,177 @@ func TestTheStartRemovesHeldRefsAndFilesNoRowNames(t *testing.T) {
 	}
 	h.e.sweepHeldOrphans(h.ctx)
 	wantNoHeld(t, h, mg)
+}
+
+// The review's bug (H1): a diff past execx's cap came back cut and was
+// held, so the y could push workflow content past the cut that nobody
+// read. A diff that cannot be read whole holds nothing: the PR needs you
+// as before, to merge by hand.
+func TestADiffThatCannotBeReadWholeHoldsNothing(t *testing.T) {
+	h, mg := handedMerge(t)
+	heldConflicts(mg)
+	mg.mu.Lock()
+	mg.held.diffErr = errors.New("gitx: show --remerge-diff: more than 8388608 bytes")
+	mg.mu.Unlock()
+	id := h.fix(FixPayload{Mode: FixModeMerge})
+	h.handle()
+	h.wantDone(id)
+	wantNoPush(t, mg)
+	wantNoHeld(t, h, mg)
+	if got := deref(h.wantState(2, store.PRNeedsAttention).LastError); !strings.Contains(got, "keeps the PR's own workflow changes") ||
+		!strings.Contains(got, "merge master into feature by hand") {
+		t.Errorf("attention = %q, want the merge by hand", got)
+	}
+}
+
+// The review's bug (H3): the workflow files' names came from the fixer's
+// merge as they were, and reached the y/N, the attention and the toast
+// with their bidi controls, which can reverse the rest of the question on
+// a terminal that does bidi. Their words escape them, as held-merge.diff
+// does.
+func TestTheWorkflowFilesNamesAreEscapedInTheWords(t *testing.T) {
+	h, mg := handedMerge(t)
+	heldConflicts(mg)
+	mg.mu.Lock()
+	mg.workflows = []string{".github/workflows/ci.yml", ".github/workflows/\u202elmy.yrotsih"}
+	mg.mu.Unlock()
+	id := h.fix(FixPayload{Mode: FixModeMerge})
+	h.handle()
+	h.wantDone(id)
+	attn := deref(h.wantState(2, store.PRNeedsAttention).LastError)
+	plan := h.planMerge().Text
+	for what, words := range map[string]string{"attention": attn, "plan": plan} {
+		if strings.ContainsRune(words, '\u202e') || !strings.Contains(words, "and \\u202elmy.yrotsih") {
+			t.Errorf("the %s = %q, want the file's U+202E escaped", what, words)
+		}
+	}
+}
+
+// The review's bug (H5): P on a held merge GitHub already took (a stop cut
+// its push's job, or git push failed after GitHub updated the branch)
+// called it stale, dropped it with "merge dropped … P merges the parent
+// again" and skipped what follows a push. The plan, the y's push and a
+// head the registry already has all settle it as pushed: no new push, its
+// row, ref and file go, fix.parent_pushed says so and its CI is noted.
+func TestPOnAHeldMergeGitHubTookSettlesItAsPushed(t *testing.T) {
+	storetest.Parallel(t)
+	for _, tc := range []struct {
+		name string
+		run  func(t *testing.T, h *harness) // P, with the merge on GitHub
+	}{
+		{"the plan", func(t *testing.T, h *harness) {
+			t.Helper()
+			h.gh.setHead("talkable/talkable", 2, fixMergeHead)
+			id := h.fix(FixPayload{Mode: FixModeMerge, DryRun: true})
+			h.handle()
+			if res := h.wantDone(id); !strings.Contains(res, "is on GitHub") {
+				t.Errorf("the plan's answer = %q, want the merge on GitHub", res)
+			}
+		}},
+		{"the y", func(t *testing.T, h *harness) {
+			t.Helper()
+			asked := h.planMerge().Asked
+			h.gh.setHead("talkable/talkable", 2, fixMergeHead)
+			if r := h.mergeBound(asked); r.State != store.RequestDone {
+				t.Errorf("the y: %s %q", r.State, deref(r.Result))
+			}
+		}},
+		{"the registry's head", func(t *testing.T, h *harness) {
+			t.Helper()
+			h.gh.setHead("talkable/talkable", 2, fixMergeHead)
+			h.execSQL(`UPDATE prs SET head_sha = ? WHERE id = ?`, fixMergeHead, h.pr(2).ID)
+			id := h.fix(FixPayload{Mode: FixModeMerge, DryRun: true})
+			h.handle()
+			if res := h.wantDone(id); !strings.Contains(res, "is on GitHub") {
+				t.Errorf("the plan's answer = %q, want the merge on GitHub", res)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, mg := holdMerged(t)
+			tc.run(t, h)
+			wantNoPush(t, mg)
+			wantNoHeld(t, h, mg)
+			if ev, ok := h.fixEvent("fix.held_dropped"); ok {
+				t.Errorf("fix.held_dropped = %q over a merge on GitHub", ev.Message)
+			}
+			if _, ok := h.fixEvent("fix.parent_pushed"); !ok {
+				t.Error("no fix.parent_pushed")
+			}
+			if _, ok, _ := h.st.GetKV(h.ctx, kvPRPushed(h.pr(2).ID)); !ok {
+				t.Error("magnum's push is not recorded for its CI")
+			}
+			if got := deref(h.pr(2).LastError); attention.MergeDropped(got) {
+				t.Errorf("attention = %q over a merge on GitHub", got)
+			}
+		})
+	}
+}
+
+// The review's bug (H6): the push read any failure to read the held ref as
+// a ref that is gone, a cancelled context among them, and dropped the
+// held merge with a false reason. A ref git cannot read now keeps the hold:
+// the push fails, and P asks again.
+func TestAGitErrorReadingTheHeldRefKeepsTheHold(t *testing.T) {
+	h, mg := holdMerged(t)
+	mg.mu.Lock()
+	mg.held.refReadErr = context.Canceled
+	mg.mu.Unlock()
+	if r := h.mergeBound(h.planMerge().Asked); r.State != store.RequestDone {
+		t.Fatalf("the y: %s %q", r.State, deref(r.Result))
+	}
+	wantNoPush(t, mg)
+	if _, ok := h.heldMergeOfPR(); !ok {
+		t.Error("the held merge went")
+	}
+	if ev, ok := h.fixEvent("fix.held_dropped"); ok {
+		t.Errorf("fix.held_dropped = %q", ev.Message)
+	}
+	if ev, ok := h.fixEvent("fix.failed"); !ok || !strings.Contains(ev.Message, "nothing was pushed") {
+		t.Errorf("fix.failed = %q, %v", ev.Message, ok)
+	}
+}
+
+// The review's bug (H7): `magnum ignore` during a held push that went was
+// answered "nothing to abort", and the PR was never muted. The push goes
+// on, and the ignore then mutes the PR, as it does after a fixer's push.
+func TestAnIgnoreDuringTheHeldPushMutesThePRAfterIt(t *testing.T) {
+	h, mg := holdMerged(t)
+	gate := startParkedPush(t, h, mg)
+	ignore := h.enqueue(ReqIgnore, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.e.handleRequests(h.ctx)
+	close(gate)
+	h.settle()
+	if _, pushes := mg.made(); len(pushes) != 1 {
+		t.Fatalf("pushes = %v, want the held merge's", pushes)
+	}
+	if r := h.request(ignore); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "muted") {
+		t.Errorf("the ignore: %s %q, want it muted", r.State, deref(r.Result))
+	}
+	if cur := h.pr(2); !cur.Muted {
+		t.Errorf("the PR is %s, not muted", cur.State)
+	}
+}
+
+// The review's bug (H8): a fix on a PR whose merge magnum holds could
+// merge the base again and move or delete the held merge's ref and file,
+// leaving its row to plan a push of a ref that is gone. A fix is refused
+// while a merge is held: P pushes it first (or a push to the branch drops
+// it).
+func TestAFixIsRefusedWhileAMergeIsHeld(t *testing.T) {
+	h, mg := holdMerged(t)
+	runs := len(h.fixRuns(h.pr(2).ID))
+	id := h.fix(FixPayload{})
+	h.handle()
+	r := h.request(id)
+	if r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "holds claude-fix's merge d3d3d3d") ||
+		!strings.Contains(deref(r.Result), "merge-parent") {
+		t.Errorf("the fix: %s %q, want it refused while the merge is held", r.State, deref(r.Result))
+	}
+	if got := len(h.fixRuns(h.pr(2).ID)); got != runs {
+		t.Errorf("fix runs = %d, want %d", got, runs)
+	}
+	if refs := mg.heldRefs(); refs[h.heldRefKey()] != fixMergeHead {
+		t.Errorf("held refs = %v, want the hold's", refs)
+	}
 }

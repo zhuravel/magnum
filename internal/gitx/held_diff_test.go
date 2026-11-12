@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/zhuravel/magnum/internal/execx"
 )
 
 // heldMergeFixture is a PR branch and its base that both change
@@ -140,5 +142,22 @@ func TestRefsUnderListsTheRefsUnderAPrefixOfRefsMagnum(t *testing.T) {
 		if _, err := fx.c.RefsUnder(ctx, fx.origin, bad); err == nil {
 			t.Errorf("RefsUnder of %q was taken", bad)
 		}
+	}
+}
+
+// The review's bug: execx keeps the first 8 MiB of a command's output and
+// marks the rest cut, and these two readers returned the cut text, so a
+// held-merge.diff could end before a workflow file the y pushes whole.
+// Both refuse an output cut at the cap, as every other diff reader here
+// does: the daemon then holds nothing.
+func TestRemergeDiffAndPathsDiffRefuseAnOutputCutAtTheCap(t *testing.T) {
+	const slot = "/w/talkable.review1"
+	ctx := context.Background()
+	c, _ := newFake(execx.Rule{Prefix: []string{"git", "-C", slot}, Result: execx.Result{Stdout: []byte("diff --git a/x b/x\n"), Truncated: true}})
+	if _, err := c.RemergeDiff(ctx, slot, strings.Repeat("d3", 20), ".github/workflows"); err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Errorf("RemergeDiff of a cut output = %v, want an error", err)
+	}
+	if _, err := c.PathsDiff(ctx, slot, strings.Repeat("a1", 20), strings.Repeat("d3", 20), ".github/workflows"); err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Errorf("PathsDiff of a cut output = %v, want an error", err)
 	}
 }

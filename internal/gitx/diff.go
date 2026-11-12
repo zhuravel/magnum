@@ -458,7 +458,8 @@ func (c *Client) HasFile(ctx context.Context, dir, rev, file string) (bool, erro
 // paths (each taken literally from the top): `git show --remerge-diff` of
 // it, the diff from git's own merge of its parents, conflict markers and
 // all, to the merge as it was committed, with no commit header, no
-// external diff, textconv or color. "" when the merge resolved no conflict
+// external diff, textconv or color; an output past execx.MaxOutput is an
+// error, never a part of it. "" when the merge resolved no conflict
 // there and changed nothing there that git's own merge would not have.
 // The magnum daemon shows it to the operator before the y that pushes a
 // merge it holds (engine.HeldMerge).
@@ -475,12 +476,16 @@ func (c *Client) RemergeDiff(ctx context.Context, dir, merge string, paths ...st
 	if err != nil {
 		return "", err
 	}
+	if res.Truncated {
+		return "", fmt.Errorf("gitx: show --remerge-diff %s: more than %d bytes", merge, execx.MaxOutput)
+	}
 	return string(res.Stdout), nil
 }
 
 // PathsDiff is the diff from a to b in paths (each taken literally from
 // the top): `git diff a b -- paths`, with no external diff, textconv or
-// color; "" when the two commits do not differ there.
+// color; an output past execx.MaxOutput is an error, never a part of it;
+// "" when the two commits do not differ there.
 func (c *Client) PathsDiff(ctx context.Context, dir, a, b string, paths ...string) (string, error) {
 	if err := checkRange(a, b); err != nil {
 		return "", err
@@ -493,6 +498,9 @@ func (c *Client) PathsDiff(ctx context.Context, dir, a, b string, paths ...strin
 		append([]string{"diff", "--no-color", "--no-ext-diff", "--no-textconv", a, b, "--"}, specs...)...)
 	if err != nil {
 		return "", err
+	}
+	if res.Truncated {
+		return "", fmt.Errorf("gitx: diff %s %s: more than %d bytes", a, b, execx.MaxOutput)
 	}
 	return string(res.Stdout), nil
 }

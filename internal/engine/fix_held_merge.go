@@ -50,6 +50,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/attention"
@@ -225,7 +226,7 @@ func (e *Engine) holdMerge(ctx context.Context, job *fixJob, id *config.Identity
 	}
 	e.event(ctx, "info", job.subject(), "fix.merge_held", fmt.Sprintf("magnum holds %s's merge %s of %s at %s into %s for your y: it keeps the "+
 		"PR's own workflow changes (%s); %s", h.Role, textx.ShortSHA(h.Merge), h.Base, textx.ShortSHA(h.Tip), job.label(),
-		strings.Join(r.own[:min(3, len(r.own))], ", "), h.Diff),
+		escapeControls(strings.Join(r.own[:min(3, len(r.own))], ", ")), h.Diff),
 		map[string]any{"base": h.Base, "tip": h.Tip, "head": h.Head, "merge": h.Merge, "workflows": len(h.Workflows), "own": len(r.own),
 			"conflicts": h.Conflicts, "cycle": job.state.Cycle})
 	return h, ""
@@ -336,12 +337,14 @@ func escapeControls(s string) string {
 	return b.String()
 }
 
-// hiddenFormat reports whether r is a bidi control or an invisible format
-// character a line can hide behind: the embeddings and overrides
-// U+202A–202E, the isolates U+2066–2069, the zero-width and directional
-// marks U+200B–200F and the byte order mark U+FEFF.
+// hiddenFormat reports whether r is a character a line can hide behind or
+// be reordered by: every format character (Unicode's Cf: the embeddings
+// and overrides U+202A–202E, the isolates U+2066–2069, the marks U+200E,
+// U+200F and U+061C, the zero-width U+200B–200D, the byte order mark
+// U+FEFF and their kin) and the line and paragraph separators U+2028,
+// U+2029, which a terminal can break a line at.
 func hiddenFormat(r rune) bool {
-	return (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) || (r >= 0x200b && r <= 0x200f) || r == 0xfeff
+	return unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
 }
 
 // attention is the PR's attention while h is held: "fix: merge ready:
@@ -364,14 +367,16 @@ func (h HeldMerge) attention() string {
 // workflowWords names files, workflow files, as a held merge's words do:
 // the first by its path, the next two by their path under
 // .github/workflows/, and how many more: ".github/workflows/ci.yml and
-// pronto.yml".
+// pronto.yml". The names are the fixer's merge's, so their control and
+// format characters are escaped (escapeControls) on their way to the y/N,
+// the attention and the toast.
 func workflowWords(files []string) string {
 	words := make([]string, 0, 4)
 	for i, f := range files[:min(3, len(files))] {
 		if i > 0 {
 			f = strings.TrimPrefix(f, workflowsPath+"/")
 		}
-		words = append(words, f)
+		words = append(words, escapeControls(f)) // a name the fixer chose: no bidi control reaches the y/N
 	}
 	if more := len(files) - 3; more > 0 {
 		words = append(words, fmt.Sprintf("%d more", more))
@@ -624,7 +629,7 @@ func (e *Engine) dropStaleHeldMerges(ctx context.Context, repo store.Repo, held 
 		}
 		d, has := details[pr.Number]
 		if strings.EqualFold(pr.HeadSHA, row.h.Merge) || (has && strings.EqualFold(d.HeadRefOid, row.h.Merge)) {
-			e.heldLanded(ctx, repo, pr, row)
+			e.heldLanded(ctx, repo, pr, row, "the poll")
 			continue
 		}
 		if why := e.heldStale(repo, pr, row.h, d, has); why != "" {
@@ -636,7 +641,7 @@ func (e *Engine) dropStaleHeldMerges(ctx context.Context, repo store.Repo, held 
 // heldLanded settles row, pr's held merge that the poll finds as the PR's
 // head on GitHub (a stop cut the job of its push after GitHub took it), as
 // pushed (heldPushed), never as a merge that went stale.
-func (e *Engine) heldLanded(ctx context.Context, repo store.Repo, pr store.PR, row heldRow) {
+func (e *Engine) heldLanded(ctx context.Context, repo store.Repo, pr store.PR, row heldRow, found string) {
 	job := &fixJob{repo: repo, pr: pr, head: row.h.Head, mode: FixModeMerge, role: config.Role{Name: row.h.Role}}
 	if w := e.cfg.WatchFor(repo.FullName()); w != nil {
 		job.watch = *w
@@ -644,7 +649,20 @@ func (e *Engine) heldLanded(ctx context.Context, repo store.Repo, pr store.PR, r
 			job.role = role
 		}
 	}
-	e.heldPushed(ctx, job, row, true)
+	e.heldPushed(ctx, job, row, found)
+}
+
+// heldOnGitHub settles row, pr's held merge, as pushed when the PR's head
+// is the merge already (head: the registry's or GitHub's), as found finds
+// it (heldLanded), and says so in a request's answer; ok is false for any
+// other head.
+func (e *Engine) heldOnGitHub(ctx context.Context, repo store.Repo, pr store.PR, row heldRow, head, found string) (string, bool) {
+	if !strings.EqualFold(head, row.h.Merge) {
+		return "", false
+	}
+	e.heldLanded(ctx, repo, pr, row, found)
+	return fmt.Sprintf("nothing to merge: %s is on GitHub already (the head of %s#%d is %s): magnum settled it as pushed",
+		row.h.words(), repo.FullName(), pr.Number, textx.ShortSHA(row.h.Merge)), true
 }
 
 // requestHeld answers a merge of pr's parent while magnum holds row's
@@ -670,6 +688,9 @@ func (e *Engine) requestHeld(ctx context.Context, pr store.PR, row heldRow, dry 
 	case e.roundActive(pr.ID):
 		return "", true, fmt.Errorf("%s: %s; ask again shortly", label, e.heldReason(pr.ID))
 	}
+	if res, ok := e.heldOnGitHub(ctx, repo, pr, row, pr.HeadSHA, "P"); ok { // a push a stop cut, or one that failed after GitHub took it
+		return res, true, nil
+	}
 	if why := e.heldStale(repo, pr, row.h, github.PRDetails{}, false); why != "" {
 		e.dropHeldMerge(ctx, repo, pr, row, why, false)
 		return "", false, nil
@@ -681,6 +702,9 @@ func (e *Engine) requestHeld(ctx context.Context, pr store.PR, row heldRow, dry 
 	h := row.h
 	if dry {
 		if d, ok := e.prDetails(ctx, job); ok {
+			if res, ok := e.heldOnGitHub(ctx, repo, pr, row, d.HeadRefOid, "P"); ok {
+				return res, true, nil
+			}
 			if why := e.heldStale(repo, pr, h, d, true); why != "" {
 				e.dropHeldMerge(ctx, repo, pr, row, why, false)
 				return "", false, nil
@@ -820,24 +844,23 @@ func (e *Engine) recoverHeldPush(ctx context.Context, repo store.Repo, pr store.
 // A shutdown leaves the loop's row for the next start.
 func (e *Engine) runHeldPush(ctx context.Context, job *fixJob, row heldRow) {
 	id, _, _ := e.fixerSignature(job.role.Identity)
-	why, err := e.pushHeld(ctx, job, id, row)
+	landed, why, err := e.pushHeld(ctx, job, id, row)
 	fctx := context.WithoutCancel(ctx)
 	pushed := why == "" && err == nil
 	if pushed {
 		e.endFixState(fctx, job)
-		e.heldPushed(fctx, job, row, false)
+		found := ""
+		if landed {
+			found = "the push"
+		}
+		e.heldPushed(fctx, job, row, found)
 	}
 	if orders := e.closeFixHandle(job.pr.ID); len(orders) > 0 {
 		if !pushed {
 			e.stopFix(fctx, job, orders)
 			return
 		}
-		for _, o := range orders {
-			e.complete(fctx, o.id, nil, "nothing to abort: magnum pushed the held merge of "+job.label()+" already")
-			e.mu.Lock()
-			delete(e.inflight, o.id)
-			e.mu.Unlock()
-		}
+		e.stopsAfterHeldPush(fctx, job, orders)
 		return
 	}
 	if pushed {
@@ -855,6 +878,31 @@ func (e *Engine) runHeldPush(ctx context.Context, job *fixJob, row heldRow) {
 	e.fixCallToast(job, why)
 }
 
+// stopsAfterHeldPush answers the stops (orders) that came while the push of
+// the job's held merge ran to its end: an abort hears that it came too
+// late, and an ignore still mutes the PR (settleStopped), as it does after
+// a fixer's push.
+func (e *Engine) stopsAfterHeldPush(ctx context.Context, job *fixJob, orders []stopOrder) {
+	label := job.label()
+	for _, o := range orders {
+		res, err := "nothing to abort: magnum pushed the held merge of "+label+" already", error(nil)
+		if o.ignore {
+			res = "ignored " + label + " after magnum pushed its held merge"
+			if to, serr := e.settleStopped(ctx, job.pr, true); serr != nil {
+				err = fmt.Errorf("%s: %w", res, serr)
+			} else if to != "" {
+				res += ": PR " + to
+			}
+			res += "; muted until `magnum unmute " + label + "`"
+			e.event(ctx, "info", job.subject(), "pr.ignored", res, map[string]any{"fix": true, "held": true})
+		}
+		e.complete(ctx, o.id, err, res)
+		e.mu.Lock()
+		delete(e.inflight, o.id)
+		e.mu.Unlock()
+	}
+}
+
 // pushHeld pushes row's merge, the job's PR's held merge, after the y
 // bound to it, as the fix identity id: with the base fetched into the
 // clone that holds it, GitHub's head of the PR, its base and its base's
@@ -865,18 +913,22 @@ func (e *Engine) runHeldPush(ctx context.Context, job *fixJob, row heldRow) {
 // (workflowsToken), within heldPushTimeout and whatever stops the job
 // meanwhile (an abort acts before the push starts), skipping only the check that
 // its workflow files are the tip's: you read them and said yes. It returns
-// why nothing was pushed (a merge that moved on GitHub, or whose ref or
-// parents are not the held ones, is dropped), or the push's error.
-func (e *Engine) pushHeld(ctx context.Context, job *fixJob, id *config.Identity, row heldRow) (string, error) {
+// landed for a merge GitHub has as the PR's head already (pushed before a
+// stop cut its job, or by a push whose git failed after GitHub took it),
+// which needs no push; why nothing was pushed (a merge that moved on
+// GitHub, or whose ref is gone or names another merge, or whose parents are
+// not the held ones, is dropped); or an error, the push's or a read's git
+// could not make, which keeps the hold.
+func (e *Engine) pushHeld(ctx context.Context, job *fixJob, id *config.Identity, row heldRow) (landed bool, refused string, err error) {
 	pg, okp := e.d.Git.(parentGit)
 	hg, okh := e.d.Git.(heldGit)
 	h, label, short := row.h, job.label(), textx.ShortSHA
-	refuse := func(why string, drop bool) (string, error) {
+	refuse := func(why string, drop bool) (bool, string, error) {
 		if drop {
 			e.dropHeldMerge(context.WithoutCancel(ctx), job.repo, job.pr, row, why, false)
 			why += "; magnum dropped the held merge"
 		}
-		return fmt.Sprintf("%s: %s: nothing was pushed", label, why), nil
+		return false, fmt.Sprintf("%s: %s: nothing was pushed", label, why), nil
 	}
 	switch {
 	case !okp || !okh || id == nil:
@@ -885,27 +937,38 @@ func (e *Engine) pushHeld(ctx context.Context, job *fixJob, id *config.Identity,
 		return refuse("the held merge names no clone that holds it", true)
 	}
 	if err := e.fetchBase(ctx, h.Clone, h.Base, fixRequestFetch); err != nil {
-		return "", fmt.Errorf("the fetch of %s: %w", h.Base, err)
+		return false, "", fmt.Errorf("the fetch of %s: %w", h.Base, err)
 	}
 	d, ok := e.prDetails(ctx, job)
 	if !ok {
 		return refuse("GitHub does not say where its head and its base are", false)
 	}
+	if strings.EqualFold(d.HeadRefOid, h.Merge) { // GitHub took it already (a push a stop cut, or one that failed after it)
+		return true, "", nil
+	}
 	if why := e.heldStale(job.repo, job.pr, h, d, true); why != "" {
 		return refuse(why+" since magnum held the merge", true)
 	}
+	// only a ref that is gone or names another merge drops the hold: a read git could not make now (a cancelled
+	// context, a clone briefly away) keeps it for P
 	ref := HeldMergeRef(job.pr.ID)
-	if got, err := e.d.Git.RevParse(ctx, h.Clone, ref); err != nil || !strings.EqualFold(got, h.Merge) {
+	switch got, err := e.d.Git.RevParse(ctx, h.Clone, ref); {
+	case errors.Is(err, gitx.ErrNoSuchRef) || (err == nil && !strings.EqualFold(got, h.Merge)):
 		return refuse(fmt.Sprintf("%s no longer holds the merge %s", ref, short(h.Merge)), true)
+	case err != nil:
+		return false, "", fmt.Errorf("the held ref %s: %w", ref, err)
 	}
-	if ps, err := hg.Parents(ctx, h.Clone, h.Merge); err != nil || len(ps) != 2 || !strings.EqualFold(ps[0], h.Head) || !strings.EqualFold(ps[1], h.Tip) {
+	switch ps, err := hg.Parents(ctx, h.Clone, h.Merge); {
+	case err != nil:
+		return false, "", fmt.Errorf("the parents of the merge %s: %w", short(h.Merge), err)
+	case len(ps) != 2 || !strings.EqualFold(ps[0], h.Head) || !strings.EqualFold(ps[1], h.Tip):
 		return refuse(fmt.Sprintf("the merge %s is not one of %s at %s into the head %s", short(h.Merge), h.Base, short(h.Tip), short(h.Head)), true)
 	}
 	at := fmt.Sprintf("the merge of %s at %s", h.Base, short(h.Tip))
 	env, release, why, err := e.workflowsToken(ctx, id, at, textx.Count(len(h.Workflows), "file", "files"))
 	switch {
 	case err != nil:
-		return "", err
+		return false, "", err
 	case why != "":
 		return refuse(why, false)
 	}
@@ -916,17 +979,18 @@ func (e *Engine) pushHeld(ctx context.Context, job *fixJob, id *config.Identity,
 	cancel()
 	release()
 	if err != nil {
-		return "", fmt.Errorf("the push of the merge %s: %w", short(h.Merge), err)
+		return false, "", fmt.Errorf("the push of the merge %s: %w", short(h.Merge), err)
 	}
-	return "", nil
+	return false, "", nil
 }
 
 // heldPushed is what follows the push of row's merge, the job's PR's held
 // merge: its row, ref and file go, the PR's row moves to the merge as the
-// poller would record it (parentOnRow; not for a push the poll found on
-// GitHub, landed, whose head it recorded, and which another drop of the
-// row since stops here), its CI
-// starts after the grace (notePush), and fix.parent_pushed says so. A fix
+// poller would record it (parentOnRow), its CI
+// starts after the grace (notePush), and fix.parent_pushed says so; found
+// names what found the merge on GitHub ("the poll", "P", "the push"; ""
+// for magnum's own push), and a row another took on since stops such a
+// settle. A fix
 // run's merge (its findings wait), or one whose attention asked calls
 // after its words, then needs you: a fix.needs_you event and the
 // attention say that the findings wait for `magnum fix` (f on the
@@ -936,20 +1000,21 @@ func (e *Engine) pushHeld(ctx context.Context, job *fixJob, id *config.Identity,
 // words say it runs first, and the event and the urgent toast carry them
 // (fixAttention raises no attention over a queued round). Any other ends
 // with the merge's fix.ended (which --wait reads) and an info toast.
-func (e *Engine) heldPushed(ctx context.Context, job *fixJob, row heldRow, landed bool) {
+func (e *Engine) heldPushed(ctx context.Context, job *fixJob, row heldRow, found string) {
 	h := row.h
 	rest := ""
 	if cur, err := e.st.PRByID(ctx, job.pr.ID); err == nil {
 		rest, _ = heldRest(cur, h)
 	}
-	if !e.dropHeldMerge(ctx, job.repo, job.pr, row, "pushed", true) && landed { // another took it on since the poll read it
+	if !e.dropHeldMerge(ctx, job.repo, job.pr, row, "pushed", true) && found != "" { // another took it on since it was read
 		return
 	}
 	e.notePush(ctx, job.pr.ID, h.Merge) // ci_dispatch.go: its CI starts after the grace
 	after := "after your y"
-	if landed { // the poll recorded the head already
-		after = "after your y, as the poll found it on GitHub after a stop cut the push's job"
-	} else if err := e.parentOnRow(ctx, job, h.Merge); err != nil {
+	if found != "" {
+		after += ", as " + found + " found it on GitHub"
+	}
+	if err := e.parentOnRow(ctx, job, h.Merge); err != nil { // a row that has the head already changes nothing
 		e.log.Warn("fix: the held merge's push on the PR row", "subject", job.subject(), "err", err)
 	}
 	data := map[string]any{"base": h.Base, "tip": h.Tip, "head": h.Head, "merge": h.Merge, "identity": h.Identity, "workflows": true, "held": true}

@@ -18904,6 +18904,28 @@ skill versions); people add theirs to the sections before it, at the end of the 
     TestAPanicDuringTheHeldPushKeepsTheHeldMerge, TestAHeldMergeThePollFindsOnGitHubSettlesAsPushed,
     TestAFailedSettleLeavesNoHeldRefOrFile, TestTheStartRemovesHeldRefsAndFilesNoRowNames, U+202E and its kin in
     TestHeldMergeDiffEscapesTheControlsThatCouldHideALine, and gitx's TestRefsUnderListsTheRefsUnderAPrefixOfRefsMagnum.
+  - A third review round (the engine's owner, H1 to H8). `RemergeDiff` and `PathsDiff` fail on an output past
+    execx's 8 MiB cap, as gitx's other diff readers do: a cut diff was held, and the y pushed workflow content
+    past the cut that nobody read; now nothing is held and the PR needs you to merge by hand. The escape covers
+    every format character (Unicode Cf, U+061C ALM among them) and the line and paragraph separators, and the
+    workflow files' names in the y/N, the attention, the toast and the event are escaped too (they are the
+    fixer's merge's paths). P on a held merge GitHub already took (a push a stop cut, or a git push that failed
+    after GitHub updated the branch) settles it as pushed, in the plan, the y's push and on a registry head
+    that is the merge, never as stale. The push drops the hold only for a held ref that is gone or names another
+    merge and for parents that differ; a read git could not make (a cancelled context, a clone briefly away)
+    keeps it. An ignore that came during a push that went still mutes the PR (`stopsAfterHeldPush`). The
+    dashboard's `e` with no row selected says so instead of a nil dereference. A fix on a PR whose merge
+    magnum holds could merge the base again and move or delete the held merge's ref and file under its row:
+    decided, `prepareFix` refuses it (a fix by hand, autofix, a CI fix) with "magnum holds claude-fix's merge
+    d3d3d3d of master at c0c0c0c for your y: `magnum merge-parent <ref>` (P on the screens) pushes it first,
+    and a push of yours to the branch drops it", rather than keying the cleanup to the merge's SHA: one held
+    merge per PR at a time keeps one ref, one file and one row that agree. Tests, failing first and each
+    checked by mutation: TestADiffThatCannotBeReadWholeHoldsNothing, TestTheWorkflowFilesNamesAreEscapedInTheWords,
+    TestPOnAHeldMergeGitHubTookSettlesItAsPushed (the plan, the y, the registry's head),
+    TestAGitErrorReadingTheHeldRefKeepsTheHold, TestAnIgnoreDuringTheHeldPushMutesThePRAfterIt,
+    TestAFixIsRefusedWhileAMergeIsHeld and U+061C and U+2028 in TestHeldMergeDiffEscapesTheControlsThatCouldHideALine
+    in engine, TestRemergeDiffAndPathsDiffRefuseAnOutputCutAtTheCap in gitx and TestEOnTheDashboardWithNoRowSaysSo
+    in tui.
 
 ## The factory (2026-11-03)
 

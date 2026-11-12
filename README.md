@@ -3533,10 +3533,13 @@ PR's report directory (`~/.local/share/magnum/reviews/<owner>/<repo>/<number>/`,
 its first line, then shows how the fixer resolved the conflicts in `.github/workflows` (`git show
 --remerge-diff`; "No conflict in a workflow file was resolved: the workflow changes come unchanged from master
 and the PR." when it resolved none), then everything the push changes there against the PR's head, every
-control character but tab and newline escaped (`\x1b`), and the bidi and invisible format characters too
-(`\u202e`), so nothing an agent wrote hides or reorders a line in the pager. A hold that fails leaves nothing
-behind and needs you as before, and the daemon's start removes any held ref or `held-merge.diff` that no held
-merge names (a crash between the hold and its record). The PR needs you: "merge ready: claude-fix
+control character but tab and newline escaped (`\x1b`), and every format character and line separator too
+(`\u202e`, `\u061c`), so nothing an agent wrote hides or reorders a line in the pager; the workflow files'
+names are escaped the same way wherever magnum shows them. A diff too long to read whole (over 8 MiB) holds
+nothing. A hold that fails leaves nothing behind and needs you as before, and the daemon's start removes any
+held ref or `held-merge.diff` that no held merge names (a crash between the hold and its record). While a
+merge is held, `magnum fix` (and autofix, and a CI fix) is refused: its fixer would merge the base again over
+it; `P` pushes it first, and a push of yours to the branch drops it. The PR needs you: "merge ready: claude-fix
 merged master at c0c0c0c and resolved 5 conflicts. It changes .github/workflows/ci.yml and pronto.yml.
 fixer-app[bot] pushes it only after your y: P asks (e shows held-merge.diff)." (a fix of findings adds that
 the findings wait for the next fix after the push, and the calls the loop's earlier cycles left you follow
@@ -3551,7 +3554,7 @@ fixer-app[bot] with the Workflows token; it changes .github/workflows/ci.yml and
 …; `magnum abort talkable/talkable#5` stops it" until git push starts, which then runs to its end; `--wait`
 follows it), bound to the merge's SHA, the head and the tip. A restart or a panic that cuts the push leaves the
 merge held for `P`, its attention and calls kept, and a push GitHub took before the cut is settled as pushed
-at the next poll. The push fetches the base, checks again that GitHub's head is the held head and its base's tip the
+at the next poll or `P`, whichever comes first; an ignore during a push that went still mutes the PR. The push fetches the base, checks again that GitHub's head is the held head and its base's tip the
 held tip, that the held ref is the merge whose parents they are, and that the fix identity is the one that
 held it, and pushes with the App's own Workflows token and a lease on the head; a merge that moved is dropped,
 and `fix.failed` says "nothing was pushed". A question that names another merge or is 10 minutes old is

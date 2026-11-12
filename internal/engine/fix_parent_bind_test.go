@@ -82,8 +82,12 @@ func (g *mergeGit) RevParse(ctx context.Context, dir, ref string) (string, error
 	g.mu.Lock()
 	n, tips, baseErr := len(g.fetches), g.tips, g.baseErr
 	sha, held := g.held.refs[dir+" "+ref]
+	readErr := g.held.refReadErr
 	g.mu.Unlock()
 	if strings.HasPrefix(ref, "refs/magnum/held/") {
+		if readErr != nil {
+			return "", readErr
+		}
 		if !held {
 			return "", gitx.ErrNoSuchRef
 		}

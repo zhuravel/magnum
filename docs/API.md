@@ -20585,7 +20585,8 @@ func (c *Client) PatchID(ctx context.Context, dir, rev string) (string, error)
 func (c *Client) PathsDiff(ctx context.Context, dir, a, b string, paths ...string) (string, error)
     PathsDiff is the diff from a to b in paths (each taken literally from the
     top): `git diff a b -- paths`, with no external diff, textconv or color;
-    "" when the two commits do not differ there.
+    an output past execx.MaxOutput is an error, never a part of it; "" when the
+    two commits do not differ there.
 
 func (c *Client) PushLease(ctx context.Context, dir, sha, branch, expect string) error
     PushLease pushes commit sha (a full id) to origin's refs/heads/<branch>
@@ -20640,10 +20641,11 @@ func (c *Client) RefsUnder(ctx context.Context, dir, prefix string) ([]string, e
 
 func (c *Client) RemergeDiff(ctx context.Context, dir, merge string, paths ...string) (string, error)
     RemergeDiff is how merge, a merge commit, resolved its conflicts in paths
-    (each taken literally from the top): `git show --remerge-diff` of it, the
-    diff from git's own merge of its parents, conflict markers and all, to the
-    merge as it was committed, with no commit header, no external diff, textconv
-    or color. "" when the merge resolved no conflict there and changed nothing
+    (each taken literally from the top): `git show --remerge-diff` of it,
+    the diff from git's own merge of its parents, conflict markers and all,
+    to the merge as it was committed, with no commit header, no external diff,
+    textconv or color; an output past execx.MaxOutput is an error, never a part
+    of it. "" when the merge resolved no conflict there and changed nothing
     there that git's own merge would not have. The magnum daemon shows it to the
     operator before the y that pushes a merge it holds (engine.HeldMerge).
 
