@@ -18883,8 +18883,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     secrets. So no check at the git level stops a fixer that is malicious on purpose: it can mint a Workflows
     token of its own and push what it wants. The hold protects against an agent's mistakes and plain edits: a
     workflow change that the operator did not read never goes out with the daemon's Workflows token. The checks
-    at the git level harden that in depth. They are the objects read as they are (no replace refs, grafts or
-    commit-graph), the objects hashed again, and the reads and pushes in a repository of the daemon's own. So an
+    at the git level harden that in depth. They are the objects read as they are (no replace refs or grafts,
+    and no commit-graph in the decision reads), the objects hashed again, and the reads and pushes in a
+    repository of the daemon's own. So an
     edit in the clone does not make what magnum shows or decides differ from what GitHub gets.
   - Tests, failing first and the fix round's checked by mutation: in engine
     TestAHandedMergeThatKeepsThePRsOwnWorkflowChangesIsHeldForYourY, TestAnAppWithoutWorkflowsHoldsNoMergeItCannotPush,
@@ -18965,9 +18966,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
     and parents from `objects/info/commit-graph` and never checks that file's checksum. A forged graph gave a
     merge the tip's workflow tree, so `DifferingPaths(merge, tip)` was empty and `pushMerge` pushed the merge
     with the Workflows token. git also never hashes an object again when it reads it. A loose object rewritten
-    with benign bytes showed a benign workflow file in held-merge.diff, and GitHub kept the real one. Every gitx
-    call now sets `core.commitGraph=false` (a second pair in `hooksOff`), which makes long walks of history
-    slower. `gitx.Client.VerifyObjects` hashes again, in Go, every object that a read of `.github/workflows`
+    with benign bytes showed a benign workflow file in held-merge.diff, and GitHub kept the real one. The
+    decision reads and the daemon's push run in `gitx.Client.Isolated` (below), whose every command sets
+    `core.commitGraph=false` (`noCommitGraph`). It must set it itself: its alternates name the clone's objects
+    directory, and git loads the clone's `objects/info/commit-graph` and `commit-graphs/` chains through an
+    alternate. The rest of gitx keeps the graph (the engine's owner agreed to narrow it so), so ancestry checks
+    and counts on a talkable-sized history do not slow down in every slot operation. A forged graph there
+    needs a fixer that is hostile on purpose, which the threat model above places outside what magnum guards
+    against. `gitx.Client.VerifyObjects` hashes again, in Go, every object that a read of `.github/workflows`
     goes through at the head, the tip and the merge (`cat-file --batch`). These are the commit, the root tree,
     the trees down to the path, and every tree and blob under it. A mismatch is `gitx.ErrObjectMismatch`
     (`forgedWords`). Then `pushMerge` pushes nothing, `holdMerge` holds nothing, and the held push drops the
@@ -18985,8 +18991,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     the open file for a regular file, and copies 4 MiB at most. `heldBlocksFix` dropped a held merge as stale
     when the registry's head was the merge itself (GitHub took the push, and its job ended before it said so).
     It now settles it as pushed first (`heldLanded`), as the poll and P do. Tests, failing first:
-    TestGitxReadsACommitsTreeAndParentsFromTheCommitNotTheCommitGraph (a forged graph, patched as the reader
-    did), TestVerifyObjectsFindsAnObjectWhoseContentIsNotItsName (a forged commit, tree and blob),
+    TestIsolatedReadsACommitsTreeAndParentsFromTheCommitNotTheCommitGraph (the clone's graph patched as the
+    reader did, which a read in the clone and a plain git in Isolated's repository both follow),
+    TestOnlyTheIsolatedRepositoryGoesWithoutTheCommitGraph, TestVerifyObjectsFindsAnObjectWhoseContentIsNotItsName (a forged commit, tree and blob),
     TestIsolatedReadsRunNoMergeDriverOrAttributeOfTheClones (the driver runs in the clone first),
     TestTheIsolatedRepositoryWorksWhenTheGlobalConfigWantsExplicitBareRepositories and
     TestCopyShallowTakesARegularFileAloneAndNeverWaits in gitx;

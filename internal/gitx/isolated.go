@@ -32,7 +32,8 @@ const shallowMax = 4 << 20
 // Isolated runs fn with iso, a bare repository of its own whose objects
 // are dir's (isolate) and that has none of dir's config, attributes,
 // hooks, refs or index: a read there runs no merge driver, diff driver or
-// attribute of the clone's, which an agent's pane can write. Every Client
+// attribute of the clone's, which an agent's pane can write, and reads no
+// commit-graph (noCommitGraph), the clone's included. Every Client
 // method takes iso as its dir; only a full commit id names a commit there.
 // The repository goes when fn returns.
 func (c *Client) Isolated(ctx context.Context, dir string, fn func(iso string) error) error {

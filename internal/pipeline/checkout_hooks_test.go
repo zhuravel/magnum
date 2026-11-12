@@ -26,7 +26,7 @@ func TestTheCheckoutRestoreRunsNoHooks(t *testing.T) {
 		t.Fatalf("git calls = %+v, want the reset and the clean", calls)
 	}
 	for _, c := range calls {
-		if c.Env["GIT_CONFIG_COUNT"] != "2" || c.Env["GIT_CONFIG_KEY_0"] != "core.hooksPath" || c.Env["GIT_CONFIG_VALUE_0"] != "/dev/null" ||
+		if c.Env["GIT_CONFIG_COUNT"] != "1" || c.Env["GIT_CONFIG_KEY_0"] != "core.hooksPath" || c.Env["GIT_CONFIG_VALUE_0"] != "/dev/null" ||
 			!maps.Equal(c.Env, gitx.Env(true)) {
 			t.Errorf("%s: env %v, want gitx's (%v)", c.String(), c.Env, gitx.Env(true))
 		}

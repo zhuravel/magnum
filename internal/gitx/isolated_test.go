@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -108,25 +109,71 @@ func (fx *fixture) gitRaw(dir string, args ...string) []byte {
 // ignores its checksum) gave gitx's reads another tree and other parents
 // for a merge than the commit object has, while a push sends the commit
 // object: DifferingPaths of a merge whose workflow files are the PR's own
-// said none differ, and the daemon pushed it with the Workflows token.
-// gitx reads no commit-graph now.
-func TestGitxReadsACommitsTreeAndParentsFromTheCommitNotTheCommitGraph(t *testing.T) {
+// said none differ, and the daemon pushed it with the Workflows token. The
+// decision reads run in Isolated, which reads no commit-graph, though its
+// alternates name the clone's objects, through which git loads the clone's
+// objects/info/commit-graph. The rest of gitx keeps the graph.
+func TestIsolatedReadsACommitsTreeAndParentsFromTheCommitNotTheCommitGraph(t *testing.T) {
 	fx := newHeldMergeFixture(t)
 	ctx := context.Background()
 	dir := fx.origin
 	tip := fx.git(dir, "rev-parse", "main")
-	fx.forgeCommitGraph(dir, fx.resolved, fx.git(dir, "rev-parse", tip+"^{tree}"), fx.base)
-	if got := fx.git(dir, "log", "-1", "--format=%T %P", fx.resolved); !strings.HasPrefix(got, fx.git(dir, "rev-parse", tip+"^{tree}")+" "+fx.base) {
-		t.Fatalf("git without gitx's settings reads %q: the forged graph is not read, so this test shows nothing", got)
+	forged := fx.git(dir, "rev-parse", tip+"^{tree}")
+	fx.forgeCommitGraph(dir, fx.resolved, forged, fx.base)
+	if got, err := fx.c.DifferingPaths(ctx, dir, fx.resolved, tip, ".github/workflows"); err != nil || len(got) != 0 {
+		t.Fatalf("DifferingPaths outside Isolated = %q, %v: the forged graph is not read, so this test shows nothing", got, err)
 	}
-	if got, err := fx.c.DifferingPaths(ctx, dir, fx.resolved, tip, ".github/workflows"); err != nil || !slices.Contains(got, ".github/workflows/ci.yml") {
-		t.Errorf("DifferingPaths(merge, tip) = %q, %v; want ci.yml, as the merge's own tree has it", got, err)
+	var differ []string
+	var plain string
+	var parents []string
+	err := fx.c.Isolated(ctx, dir, func(iso string) error {
+		raw, err := fx.r.Run(ctx, execx.Cmd{Name: "git", Args: []string{"--git-dir=" + strings.TrimPrefix(iso, gitDirPrefix), "log", "-1", "--format=%T", fx.resolved}})
+		if err != nil || raw.Out() != forged {
+			t.Fatalf("git in Isolated's repository without gitx's settings reads %q, %v: the clone's graph does not come through the alternate, so this test shows nothing", raw.Out(), err)
+		}
+		if differ, err = fx.c.DifferingPaths(ctx, iso, fx.resolved, tip, ".github/workflows"); err != nil {
+			return err
+		}
+		if plain, err = fx.c.PathsDiff(ctx, iso, fx.head, fx.resolved, ".github/workflows"); err != nil {
+			return err
+		}
+		parents, err = fx.c.Parents(ctx, iso, fx.resolved)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got, err := fx.c.PathsDiff(ctx, dir, fx.head, fx.resolved, ".github/workflows"); err != nil || !strings.Contains(got, "+jobs: resolved") {
-		t.Errorf("PathsDiff(head, merge) = %q, %v; want the merge's own resolution", got, err)
+	if !slices.Contains(differ, ".github/workflows/ci.yml") {
+		t.Errorf("DifferingPaths(merge, tip) in Isolated = %q; want ci.yml, as the merge's own tree has it", differ)
 	}
-	if ps, err := fx.c.Parents(ctx, dir, fx.resolved); err != nil || len(ps) != 2 || ps[0] != fx.head {
-		t.Errorf("Parents(merge) = %q, %v; want the head first, as the commit has it", ps, err)
+	if !strings.Contains(plain, "+jobs: resolved") {
+		t.Errorf("PathsDiff(head, merge) in Isolated = %q; want the merge's own resolution", plain)
+	}
+	if len(parents) != 2 || parents[0] != fx.head {
+		t.Errorf("Parents(merge) in Isolated = %q; want the head first, as the commit has it", parents)
+	}
+}
+
+// The engine owner's narrowing: only the commands in Isolated's
+// repository (the decision reads and the daemon's push) go without the
+// commit-graph. Every other gitx command keeps it, so ancestry checks and
+// counts on a long history stay fast in every slot operation.
+func TestOnlyTheIsolatedRepositoryGoesWithoutTheCommitGraph(t *testing.T) {
+	t.Parallel()
+	off := func(cmd execx.Cmd) bool {
+		return slices.Contains(cmd.Args, "core.commitGraph=false") ||
+			slices.ContainsFunc(slices.Collect(maps.Values(cmd.Env)), func(v string) bool { return strings.EqualFold(v, "core.commitGraph") })
+	}
+	for _, mutates := range []bool{false, true} {
+		if cmd := gitCommand("/clone", call{label: "merge-base", mutates: mutates}, []string{"merge-base", "--is-ancestor", "a", "b"}); off(cmd) {
+			t.Errorf("a command in a clone (mutates %v) carries core.commitGraph=false: %q %v", mutates, cmd.Args, cmd.Env)
+		}
+		if env := Env(mutates); slices.ContainsFunc(slices.Collect(maps.Values(env)), func(v string) bool { return strings.EqualFold(v, "core.commitGraph") }) {
+			t.Errorf("Env(%v) = %v, want the commit-graph kept", mutates, env)
+		}
+		if cmd := gitCommand(gitDirPrefix+"/tmp/iso", call{label: "diff", mutates: mutates}, []string{"diff"}); !off(cmd) {
+			t.Errorf("a command in Isolated's repository (mutates %v) = %q %v, want core.commitGraph=false", mutates, cmd.Args, cmd.Env)
+		}
 	}
 }
 

@@ -20154,10 +20154,10 @@ FUNCTIONS
 
 func Env(mutates bool) map[string]string
     Env returns the environment gitx sets on its git commands: no credential
-    prompt, the clone's hooks off (core.hooksPath=/dev/null), no commit-graph,
-    the objects as they are (no replacement, no graft) and, for a command that
-    does not mutate, no optional locks. Code that runs git outside gitx should
-    put it in execx.Cmd.Env, with ScrubbedEnv in Unset.
+    prompt, the clone's hooks off (core.hooksPath=/dev/null), the objects as
+    they are (no replacement, no graft) and, for a command that does not mutate,
+    no optional locks. Code that runs git outside gitx should put it in
+    execx.Cmd.Env, with ScrubbedEnv in Unset.
 
 func EnvConfig(environ []string, key string) (string, bool)
     EnvConfig is the value environ's GIT_CONFIG_COUNT pairs give key,
@@ -20491,9 +20491,10 @@ func (c *Client) Isolated(ctx context.Context, dir string, fn func(iso string) e
     Isolated runs fn with iso, a bare repository of its own whose objects are
     dir's (isolate) and that has none of dir's config, attributes, hooks,
     refs or index: a read there runs no merge driver, diff driver or attribute
-    of the clone's, which an agent's pane can write. Every Client method takes
-    iso as its dir; only a full commit id names a commit there. The repository
-    goes when fn returns.
+    of the clone's, which an agent's pane can write, and reads no commit-graph
+    (noCommitGraph), the clone's included. Every Client method takes iso as its
+    dir; only a full commit id names a commit there. The repository goes when fn
+    returns.
 
 func (c *Client) LsRemote(ctx context.Context, dir string, timeout time.Duration, patterns ...string) (string, error)
     LsRemote runs `git ls-remote <origin> patterns...` in dir, reaching origin

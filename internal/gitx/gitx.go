@@ -121,8 +121,9 @@ func (c *Client) git(ctx context.Context, dir string, k call, args ...string) (e
 }
 
 // gitCommand is the command git runs as: `git -C dir args...` with gitx's
-// environment, or `git --git-dir=<it> args...` for a dir that names a
-// bare repository of gitx's own (gitDirPrefix).
+// environment, or `git --git-dir=<it> -c core.commitGraph=false args...`
+// for a dir that names a bare repository of gitx's own (gitDirPrefix,
+// Isolated's).
 func gitCommand(dir string, k call, args []string) execx.Cmd {
 	env := gitEnv(k.mutates)
 	for key, v := range k.env {
@@ -132,7 +133,7 @@ func gitCommand(dir string, k call, args []string) execx.Cmd {
 	}
 	where := []string{"-C", dir}
 	if gitDir, bare := strings.CutPrefix(dir, gitDirPrefix); bare {
-		where, dir = []string{"--git-dir=" + gitDir}, gitDir
+		where, dir = []string{"--git-dir=" + gitDir, "-c", noCommitGraph}, gitDir
 	}
 	cmd := execx.Cmd{
 		Name:    "git",
@@ -165,19 +166,23 @@ func gitCommand(dir string, k call, args []string) execx.Cmd {
 // comes through its smudge filter, which is not a hook. The setting goes in
 // the environment (GIT_CONFIG_COUNT and its pairs, which git ranks with
 // `git -c`), so every command line stays as it is, and the git processes
-// git starts (a submodule's, Git LFS's) inherit it. core.commitGraph=false,
-// so git reads a commit's tree and parents from the commit object, never
-// from objects/info/commit-graph: git never checks that file's checksum,
-// an agent's pane can write it, and a forged one gave a merge another tree
-// than the one a push of it sends (a commit-graph only makes walks of
-// history faster).
+// git starts (a submodule's, Git LFS's) inherit it.
 var hooksOff = map[string]string{
-	"GIT_CONFIG_COUNT":   "2",
+	"GIT_CONFIG_COUNT":   "1",
 	"GIT_CONFIG_KEY_0":   "core.hooksPath",
 	"GIT_CONFIG_VALUE_0": "/dev/null",
-	"GIT_CONFIG_KEY_1":   "core.commitGraph",
-	"GIT_CONFIG_VALUE_1": "false",
 }
+
+// noCommitGraph is the setting of every command in Isolated's repository:
+// git reads a commit's tree and parents from the commit object there,
+// never from a commit-graph. git never checks a commit-graph's checksum,
+// loads the clone's (objects/info/commit-graph and commit-graphs/) through
+// the repository's alternates, and an agent's pane can write it: a forged
+// one gave a merge another tree than the one a push of it sends. Every
+// other gitx command keeps the graph, which keeps ancestry checks and
+// counts on a long history fast; a forged graph there needs a fixer that
+// means harm, which the hold does not guard against.
+const noCommitGraph = "core.commitGraph=false"
 
 // realObjects makes git read every object as it is: no replacement of
 // refs/replace/ (GIT_NO_REPLACE_OBJECTS) and no parent of info/grafts
@@ -195,9 +200,8 @@ var realObjects = map[string]string{
 }
 
 // Env returns the environment gitx sets on its git commands: no credential
-// prompt, the clone's hooks off (core.hooksPath=/dev/null), no
-// commit-graph, the objects as they are (no replacement, no graft) and,
-// for a
+// prompt, the clone's hooks off (core.hooksPath=/dev/null), the objects as
+// they are (no replacement, no graft) and, for a
 // command that does not mutate, no optional locks. Code that runs git
 // outside gitx should put it in execx.Cmd.Env, with ScrubbedEnv in Unset.
 func Env(mutates bool) map[string]string { return gitEnv(mutates) }
