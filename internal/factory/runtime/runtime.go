@@ -178,33 +178,36 @@ type Runtime struct {
 	// one slot, a pending request absorbs the others.
 	soon chan struct{}
 
-	mu         sync.Mutex
-	lastStart  time.Time
-	keys       map[int64]string      // task id -> its key, the owner name in titles
-	talkTasks  map[int64]*sync.Mutex // task id -> its Talk's lock (talkLock)
-	roles      map[roleKey]*roleState
-	loops      map[loopKey]*loopState
-	pauses     map[string]*pause        // agent kind -> its pause
-	misses     map[int64]time.Time      // ledger entry -> the first read that did not find it
-	shifts     map[string]time.Duration // run id -> the sleeps its deadline moved by
-	once       map[string]bool          // events and records written once
-	checked    map[int64]time.Time      // Codex session -> when TookNoPrompt last read it
-	pending    []Event                  // events found outside Observe
-	refused    map[int64]bool           // task -> a Codex refusal: its Codex roles never run again
-	idleSeen   map[int64]time.Time      // liaison session -> the pass that first saw it idle with no time to tell (liaisonIdleSince)
-	loginFP    string
-	loginRead  time.Time
-	reconciled time.Time
-	versions   map[string]cliVersion
-	typedRead  time.Time             // the last read of the turns typed into the panes
-	fullAt     time.Time             // the capture time of the last observe pass over every session (observeSessions)
-	seen       map[string]fileMark   // conversation -> its transcript as the last read that took it whole saw it
-	youAt      map[int64][]time.Time // session -> when herdr showed you in its pane (sawYou)
-	commands   map[string]bool       // the slash commands magnum types (agents.MagnumCommands)
-	focus      PaneFocus             // you in the factory's panes, as the observe passes saw you (noteFocus)
-	heals      map[int64]*heal       // task -> its heal of the factory's herdr server that cannot read its copy's volume (volume.go)
-	lastStop   time.Time             // the factory's herdr server's last stop by a heal (recentStop)
-	marks      map[string]string     // pane -> what it showed before its last launch (paneMark)
+	mu        sync.Mutex
+	lastStart time.Time
+	keys      map[int64]string      // task id -> its key, the owner name in titles
+	talkTasks map[int64]*sync.Mutex // task id -> its Talk's lock (talkLock)
+	roles     map[roleKey]*roleState
+	loops     map[loopKey]*loopState
+	pauses    map[string]*pause        // agent kind -> its pause
+	misses    map[int64]time.Time      // ledger entry -> the first read that did not find it
+	shifts    map[string]time.Duration // run id -> the sleeps its deadline moved by
+	once      map[string]bool          // events and records written once
+	checked   map[int64]time.Time      // Codex session -> when TookNoPrompt last read it
+	pending   []Event                  // events found outside Observe
+	refused   map[int64]bool           // task -> a Codex refusal: its Codex roles never run again
+	idleSeen  map[int64]time.Time      // liaison session -> the pass that first saw it idle with no time to tell (liaisonIdleSince)
+	loginFP   string
+	loginRead time.Time
+	// codexRestart: a Codex login changed while a drain for a reboot held
+	// new prompts, so the idle Codex sessions' restart waits for its lift.
+	codexRestart bool
+	reconciled   time.Time
+	versions     map[string]cliVersion
+	typedRead    time.Time             // the last read of the turns typed into the panes
+	fullAt       time.Time             // the capture time of the last observe pass over every session (observeSessions)
+	seen         map[string]fileMark   // conversation -> its transcript as the last read that took it whole saw it
+	youAt        map[int64][]time.Time // session -> when herdr showed you in its pane (sawYou)
+	commands     map[string]bool       // the slash commands magnum types (agents.MagnumCommands)
+	focus        PaneFocus             // you in the factory's panes, as the observe passes saw you (noteFocus)
+	heals        map[int64]*heal       // task -> its heal of the factory's herdr server that cannot read its copy's volume (volume.go)
+	lastStop     time.Time             // the factory's herdr server's last stop by a heal (recentStop)
+	marks        map[string]string     // pane -> what it showed before its last launch (paneMark)
 }
 
 // roleKey names a role of an attempt, as it runs (after a Codex fallback).

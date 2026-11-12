@@ -125,7 +125,9 @@ func (r *Runtime) Watchdog(ctx context.Context, now time.Time) (evs []Event, err
 // a step that quit the role's session and failed before a new run took its
 // place, pending) is due at now. A pending role that was on no ladder yet
 // (a fresh start of a Codex session that took no prompt, a loop's fresh
-// session) takes the recoveries' steps.
+// session) takes the recoveries' steps. Under a drain for a reboot
+// (mayPrompt) a role with no turn in flight takes no step: each would start
+// an agent or send a prompt, so it stays due until the drain is lifted.
 func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now time.Time) (Event, bool) {
 	if r.healing(ctx, st.taskID, st.key.attempt, st.role.Name) != nil {
 		return Event{}, false // the heal relaunches it, or told you
@@ -190,6 +192,12 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 		}
 		r.baseline(ctx, st, store.Run{})
 		return Event{}, false
+	}
+	if run.ID == "" { // drain.go: no turn in flight, so the climb's next step starts one (a fresh agent, a prompt)
+		if err := r.mayPrompt(); err != nil {
+			r.baseline(ctx, st, store.Run{}) // the role stays pending, and climbs once the drain is lifted
+			return Event{}, false
+		}
 	}
 	return r.climb(ctx, t, a, st, run)
 }

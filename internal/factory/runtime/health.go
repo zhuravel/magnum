@@ -620,9 +620,18 @@ func (r *Runtime) modelFallback(ctx context.Context, t registry.Task, pr store.P
 // check passes again lifts; a Codex login whose account changed lifts
 // Codex's login and usage pauses (they were the old account's) and
 // restarts the idle Codex sessions in new processes (a process keeps the
-// login it started with).
+// login it started with). Under a drain for a reboot (mayPrompt) that
+// restart waits, at each pass, for the drain's lift: its new processes would
+// start after the acknowledgement said quiet and parked, and the reboot
+// restarts them anyway.
 func (r *Runtime) checkLogin(ctx context.Context) {
 	now := r.now()
+	r.mu.Lock()
+	due := r.codexRestart
+	r.mu.Unlock()
+	if due {
+		r.restartIdleCodexOnce(ctx)
+	}
 	r.mu.Lock()
 	if !r.loginRead.IsZero() && now.Sub(r.loginRead) < loginEvery {
 		r.mu.Unlock()
@@ -653,6 +662,22 @@ func (r *Runtime) checkLogin(ctx context.Context) {
 		return
 	}
 	r.lift(agents.KindCodex, "the Codex login changed", pauseLogin, pauseUsage)
+	r.mu.Lock()
+	r.codexRestart = true
+	r.mu.Unlock()
+	r.restartIdleCodexOnce(ctx)
+}
+
+// restartIdleCodexOnce restarts the idle Codex sessions a login change made
+// due (codexRestart), unless a drain for a reboot holds new prompts: then
+// they stay due for the next pass.
+func (r *Runtime) restartIdleCodexOnce(ctx context.Context) {
+	if r.mayPrompt() != nil {
+		return
+	}
+	r.mu.Lock()
+	r.codexRestart = false
+	r.mu.Unlock()
 	r.restartIdleCodex(ctx)
 }
 
