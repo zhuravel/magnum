@@ -518,6 +518,9 @@ func (e *Engine) pushHeld(ctx context.Context, job *fixJob, h HeldMerge) (string
 		}
 		return "", fmt.Errorf("%s: %s: nothing was pushed", label, why)
 	}
+	if !filepath.IsAbs(h.Clone) {
+		return refuse("the held merge names no clone that holds it", true)
+	}
 	// the tip GitHub names is in the clone's git after this fetch
 	if err := e.fetchBase(ctx, h.Clone, h.Base, fixRequestFetch); err != nil {
 		return "", fmt.Errorf("%s: the fetch of %s: %w; nothing was pushed", label, h.Base, err)
