@@ -147,8 +147,10 @@ func (d RebootDrain) Words() string {
 // DrainAck is a daemon's acknowledgement of a drain for a reboot: the
 // generation its gates hold, its pid (a restarted daemon's acknowledgement
 // is void), whether nothing it would cut runs (Quiet) and since when, the
-// work that still runs (in words, "round of talkable/talkable#12"), and
-// whether it parked its idle agents once quiet (Parked).
+// work that still runs (in words, "round of talkable/talkable#12"),
+// whether it parked its idle agents once quiet (Parked), and what its park
+// left as it was, each with why and what the reboot does to it (Left: a
+// task whose park kept failing).
 type DrainAck struct {
 	Generation int64     `json:"generation"`
 	PID        int       `json:"pid"`
@@ -156,6 +158,7 @@ type DrainAck struct {
 	QuietSince time.Time `json:"quiet_since,omitzero"`
 	Parked     bool      `json:"parked"`
 	Work       []string  `json:"work,omitempty"`
+	Left       []string  `json:"left,omitempty"`
 }
 
 // Value is a as KVDaemonDrainAck holds it.

@@ -8,9 +8,11 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -54,6 +56,38 @@ func (r *Runtime) TurnsInFlight(ctx context.Context) ([]TurnInFlight, error) {
 		out = append(out, t)
 	}
 	return out, nil
+}
+
+// LiveAgents reports whether task t has a live agent (a session starting
+// or live), its liaison's included: the drain for a reboot parks only such
+// a task. A task never launched, and never talked about, has none.
+func (r *Runtime) LiveAgents(ctx context.Context, t registry.Task) (bool, error) {
+	var rows []store.PR
+	for _, find := range []func() (store.PR, error){
+		func() (store.PR, error) { return r.ownerRow(ctx, t.ID) },
+		func() (store.PR, error) { return liaisonRowIn(ctx, r.st, t.ID) },
+	} {
+		pr, err := find()
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return false, fmt.Errorf("the agents of %s: %w", taskKey(t), err)
+		}
+		rows = append(rows, pr)
+	}
+	for _, pr := range rows {
+		sessions, err := r.st.SessionsByPR(ctx, pr.ID)
+		if err != nil {
+			return false, fmt.Errorf("the agents of %s: %w", taskKey(t), err)
+		}
+		for _, s := range sessions {
+			if s.State == store.SessionStarting || s.State == store.SessionLive {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // mayPrompt is the engine's hold of new prompts (Deps.MayPrompt: a drain

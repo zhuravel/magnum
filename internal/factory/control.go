@@ -54,6 +54,12 @@ const (
 // held start says it.
 const rebootWhat = "the factory drains for a reboot (`magnum resume` ends it)"
 
+// parkTries is how many ticks in a row a task's park may fail under a drain
+// for a reboot before the drain leaves it (its idle panes close with the
+// reboot) and goes on: a park that keeps failing must not hold the drain
+// for good.
+const parkTries = 3
+
 // Pause is a pause `magnum pause` asks of the factory (pause.json): the
 // command's generation, since when, until when (zero: until `magnum
 // resume`) and why.
@@ -160,6 +166,8 @@ type controlState struct {
 	gen        int64
 	quietSince time.Time
 	parked     map[int64]bool
+	parkFails  map[int64]int
+	left       map[int64]string
 	done       bool
 	warned     map[string]string
 	boot       engine.BootID
@@ -204,13 +212,13 @@ func (e *Engine) takeControls(ctx context.Context) {
 	now := e.now()
 	l := e.d.Layout
 	if v, err := ReadPause(l); err != nil {
-		e.warnControl("pause", err.Error())
+		e.warnControl(ctx, "pause", err.Error())
 	} else {
 		p, ok := ParsePause(v)
 		why := "the pause was lifted: work starts again"
 		switch {
 		case v != "" && !ok:
-			e.warnControl("pause", "not a pause `magnum pause` writes")
+			e.warnControl(ctx, "pause", "not a pause `magnum pause` writes")
 		case ok && !p.Until.IsZero() && !now.Before(p.Until):
 			if err := LiftPause(l, v); err != nil {
 				e.log.Warn("lift a pause past its end", "err", err)
@@ -221,20 +229,22 @@ func (e *Engine) takeControls(ctx context.Context) {
 	}
 	v, err := ReadRebootDrain(l)
 	if err != nil {
-		e.warnControl("reboot", err.Error())
+		e.warnControl(ctx, "reboot", err.Error())
 		return
 	}
 	d, ok := engine.ParseRebootDrain(v)
 	if v != "" && !ok {
-		e.warnControl("reboot", "not a drain `magnum drain` writes: it holds until `magnum resume`")
+		e.warnControl(ctx, "reboot", "not a drain `magnum drain` writes")
 		d, ok = engine.RebootDrain{Since: now}, true
 	}
 	e.holdReboot(ctx, d, ok)
 }
 
-// warnControl logs, once while it lasts, that a control's file cannot be
-// read (why).
-func (e *Engine) warnControl(kind, why string) {
+// warnControl says, once while it lasts, that a control's file cannot be
+// read (why), in the log and in a warn event with what to do: an unreadable
+// pause.json holds no pause, an unreadable reboot-drain.json holds until
+// `magnum resume` removes it (`magnum doctor` says it too).
+func (e *Engine) warnControl(ctx context.Context, kind, why string) {
 	if e.ctl.warned == nil {
 		e.ctl.warned = map[string]string{}
 	}
@@ -243,6 +253,13 @@ func (e *Engine) warnControl(kind, why string) {
 	}
 	e.ctl.warned[kind] = why
 	e.log.Warn("a control's file cannot be read", "kind", kind, "why", why)
+	text := "pause.json cannot be read (" + why + "): no pause holds; `magnum pause` writes it again, `magnum resume` removes it"
+	evKind := "pause"
+	if kind == "reboot" {
+		text = "reboot-drain.json cannot be read (" + why + "): the drain holds until `magnum resume` removes it"
+		evKind = "drain"
+	}
+	e.event(ctx, 0, evKind, registry.PhaseFail, text)
 }
 
 // holdPause holds pause p (ok) or lets go of the one held, saying why.
@@ -282,6 +299,17 @@ func (e *Engine) holdReboot(ctx context.Context, d engine.RebootDrain, ok bool) 
 		e.event(ctx, 0, "drain", registry.PhaseInfo, "drain for a reboot held: nothing new starts (no launch, prompt, effect, "+
 			"local review round, check, claim, talk or QA run); the work that runs ends, then the idle agents park; it lasts "+d.Words())
 	}
+}
+
+// pausedNote is what the answer to your retry or your answers adds while
+// `magnum pause` holds the factory: the task goes on, but its next launch,
+// claim or check waits for the pause ("" with none).
+func (e *Engine) pausedNote() string {
+	p := e.ctl.pause.Load()
+	if p == nil {
+		return ""
+	}
+	return "; the factory is " + p.Words() + ": its next launch, claim or check waits for `magnum resume`"
 }
 
 // readBoot reads the Mac's boot (Deps.Boot); unknown when it cannot.
@@ -328,14 +356,15 @@ func (e *Engine) tendRebootDrain(ctx context.Context, tasks []registry.Task) {
 	d := st.reboot.Load()
 	if d == nil || d.Generation == 0 {
 		if st.gen != 0 {
-			st.gen, st.quietSince, st.parked, st.done = 0, time.Time{}, nil, false
+			st.gen, st.quietSince, st.parked, st.parkFails, st.left, st.done = 0, time.Time{}, nil, nil, nil, false
 			e.clearBlocker(ctx, HoldReboot)
 		}
 		e.setDrainAck(nil)
 		return
 	}
 	if st.gen != d.Generation {
-		st.gen, st.quietSince, st.parked, st.done = d.Generation, time.Time{}, map[int64]bool{}, false
+		st.gen, st.quietSince, st.done = d.Generation, time.Time{}, false
+		st.parked, st.parkFails, st.left = map[int64]bool{}, map[int64]int{}, map[int64]string{}
 		e.clearBlocker(ctx, HoldReboot)
 	}
 	now := e.now()
@@ -352,24 +381,49 @@ func (e *Engine) tendRebootDrain(ctx context.Context, tasks []registry.Task) {
 		st.done = true
 		e.event(ctx, 0, "drain", registry.PhaseInfo, "drained for a reboot: nothing runs and the idle agents are parked")
 	}
+	var left []string
+	for _, id := range slices.Sorted(maps.Keys(st.left)) {
+		left = append(left, st.left[id])
+	}
 	e.setDrainAck(&engine.DrainAck{Generation: d.Generation, PID: os.Getpid(), Quiet: quiet, QuietSince: st.quietSince,
-		Parked: parked, Work: work})
+		Parked: parked, Work: work, Left: left})
 	if quiet && now.Sub(st.quietSince) >= engine.DrainQuietToastAfter {
 		e.raiseBlocker(ctx, HoldReboot, "the drain for a reboot still holds, quiet since "+st.quietSince.Local().Format("15:04")+
 			": `magnum resume` ends it")
 	}
 }
 
-// setDrainAck writes the acknowledgement into work.json (nil: none) when it
-// changed.
+// setDrainAck writes the acknowledgement into work.json (nil: none). The
+// record's own check skips a write of what it holds already
+// (saveWorkLocked), so one that failed is written again at the next tick.
 func (e *Engine) setDrainAck(a *engine.DrainAck) {
 	e.workMu.Lock()
 	defer e.workMu.Unlock()
-	if (a == nil) == (e.ctl.ack == nil) && (a == nil || a.Value() == e.ctl.ack.Value()) {
-		return
-	}
 	e.ctl.ack = a
 	e.saveWorkLocked()
+}
+
+// liveReader says whether a task has a live agent (runtime.Runtime's
+// LiveAgents); a runtime without it parks every task it may.
+type liveReader interface {
+	LiveAgents(ctx context.Context, t registry.Task) (bool, error)
+}
+
+// parkable reports whether the drain parks task t's agents: a task at work,
+// waiting, needing you or published (a queued one has none yet, an ended
+// one had them parked as it ended) with a live agent, the liaison's too.
+func (e *Engine) parkable(ctx context.Context, t registry.Task) bool {
+	switch t.State {
+	case registry.TaskActive, registry.TaskWaiting, registry.TaskNeedsYou, registry.TaskPublished:
+	default:
+		return false
+	}
+	lr, ok := e.d.Runtime.(liveReader)
+	if !ok {
+		return true
+	}
+	live, err := lr.LiveAgents(ctx, t)
+	return err != nil || live // one it cannot read is parked: the park says what holds it
 }
 
 // turnReader lists the agents' turns in flight (runtime.Runtime's).
@@ -424,26 +478,38 @@ func (e *Engine) rebootDrainWork(ctx context.Context, tasks []registry.Task) []s
 	return out
 }
 
-// parkForRebootDrain parks the idle agents of every task that has any (all
-// but a queued one) once the daemon is quiet under the drain, each task once
-// per drain; a park that fails is tried again at the next tick. It reports
-// whether every park went through.
+// parkForRebootDrain parks the idle agents of every task that has live
+// ones (parkable) once the daemon is quiet under the drain, each task once
+// per drain. A park that fails is tried again at the next tick; after
+// parkTries failures in a row the drain leaves the task as it is, says so
+// once (the reboot closes its idle panes, and the factory brings its agents
+// back after it), names it in the acknowledgement's Left, and goes on. It
+// reports whether every park went through or was left.
 func (e *Engine) parkForRebootDrain(ctx context.Context, tasks []registry.Task) bool {
 	if e.d.Runtime == nil {
 		return true
 	}
+	st := &e.ctl
 	all := true
 	for _, t := range tasks {
-		if t.State == registry.TaskQueued || e.ctl.parked[t.ID] {
+		if st.parked[t.ID] || st.left[t.ID] != "" || !e.parkable(ctx, t) {
 			continue
 		}
-		if err := e.d.Runtime.Park(ctx, t); err != nil {
-			e.log.Warn("park the agents of a task for the drain for a reboot", "task", t.ID, "err", err)
-			e.event(ctx, t.ID, "park", registry.PhaseFail, err.Error())
+		err := e.d.Runtime.Park(ctx, t)
+		if err == nil {
+			st.parked[t.ID] = true
+			continue
+		}
+		st.parkFails[t.ID]++
+		e.log.Warn("park the agents of a task for the drain for a reboot", "task", t.ID, "try", st.parkFails[t.ID], "err", err)
+		if st.parkFails[t.ID] < parkTries {
 			all = false
 			continue
 		}
-		e.ctl.parked[t.ID] = true
+		why := TaskKey(t) + ": its agents could not be parked (" + err.Error() + "): the reboot closes their idle panes, and the factory " +
+			"brings them back after it"
+		st.left[t.ID] = why
+		e.event(ctx, t.ID, "park", registry.PhaseFail, "left for the drain for a reboot: "+why)
 	}
 	return all
 }

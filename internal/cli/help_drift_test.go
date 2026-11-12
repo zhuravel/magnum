@@ -133,6 +133,7 @@ var doctorHelpEntries = []doctorHelpEntry{
 	{"launchd", "launchd agent"}, {"launchd mise", "the mise it starts the daemon through"},
 	{"terminal", "Automation permission"}, {"plugin", "herdr plugin link"},
 	{"registry", "registry"},
+	{"controls", "pause.json and reboot-drain.json"},
 }
 
 // `magnum doctor --help` lists what doctor checks: the memory check was in

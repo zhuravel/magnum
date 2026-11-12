@@ -552,7 +552,7 @@ func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) 
 	e.checksMu.Lock()
 	delete(e.checkFails, t.ID)
 	e.checksMu.Unlock()
-	return fmt.Sprintf("%s goes on at %s", TaskKey(t), cmp.Or(t.Stage, "its first stage")) + same, nil
+	return fmt.Sprintf("%s goes on at %s", TaskKey(t), cmp.Or(t.Stage, "its first stage")) + same + e.pausedNote(), nil
 }
 
 // retryUnrecorded is what the answer to your retry adds when its record

@@ -626,7 +626,7 @@ func (e *Engine) answerRequest(ctx context.Context, p AnswerPayload) (string, er
 	if t.WaitsWho != "" || t.WaitsWhat != "" {
 		now = "it waits on " + t.WaitsWho + ": " + t.WaitsWhat
 	}
-	return TaskKey(t) + ": " + strings.Join(parts, "; ") + "; " + now, nil
+	return TaskKey(t) + ": " + strings.Join(parts, "; ") + "; " + now + e.pausedNote(), nil
 }
 
 // commentFile is the file of the comment drafted for question idx (from 0)

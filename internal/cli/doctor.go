@@ -48,7 +48,9 @@ func newDoctorCmd(c *Context) *cobra.Command {
 			"(whether the `zsh -lc` shell the agents run their tools in sees mise's shims), free disk, the machine's memory "+
 			"pressure and swap (a WARN at critical pressure; nothing in magnum acts on it), codex staging, the launchd agent "+
 			"and the mise it starts the daemon through, the terminal's Automation permission on macOS (named, never probed: "+
-			"doctor opens no window), the herdr plugin link and the registry. "+
+			"doctor opens no window), the herdr plugin link, the registry, and the factory's pause.json and reboot-drain.json "+
+			"(a WARN for one its daemon cannot read: an unreadable pause holds nothing, an unreadable drain holds until "+
+			"`magnum resume`). "+
 			"Each check prints PASS, WARN, FAIL or SKIP with the exact fix. Read-only; exits 1 when a check fails.",
 		func(pos []string) int { return runDoctor(c, asJSON, pos) })
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
@@ -194,7 +196,7 @@ func doctorRun(ctx context.Context, d doctorDeps) []doctorCheck {
 	groups := []func(context.Context, doctorDeps) []doctorCheck{
 		doctorConfig, doctorHerdrChecks, doctorAgentChecks, doctorSessionHooks, doctorHooksTrust, doctorAgentHooks, doctorHookSocket, doctorSkill, doctorFixRole, doctorWhiteboard, doctorPrompts, doctorGH, doctorIdentities, doctorJira, doctorMySQLCheck,
 		doctorClones, doctorFixerPushURL, doctorFixerRepos, doctorSchemaReset, doctorMise, doctorLoginShell, doctorDisk, doctorMemory, doctorStaging, doctorLaunchd, doctorLaunchdMise, doctorTerminal, doctorPluginCheck,
-		doctorLearnEditor, doctorRegistry,
+		doctorLearnEditor, doctorRegistry, doctorControls,
 	}
 	out := make([][]doctorCheck, len(groups))
 	var wg sync.WaitGroup
