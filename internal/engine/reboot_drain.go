@@ -372,32 +372,22 @@ func (e *Engine) sessionsAtWork(ctx context.Context, counted func(prID int64) bo
 
 // rebootDrainWork is what the review daemon still runs that a reboot would
 // cut, in words: its reservations (rounds, opens, fix jobs, merges of the
-// parent, whiteboards), a round's tail before its fix cycle or whiteboard,
-// the background jobs (backgroundBusy), the heavy worker's jobs and the
-// GitHub writes as the operator (workInFlight), the rounds the registry
-// holds in flight (an unreadable registry counts as one), the live sessions
-// at work that none of these holds (sessionsAtWork: a pinned PR's you type
-// into), the requests answered off the tick (a staging request, an open, an
-// abort), the staging
-// deploys queued or running, and the staging resolver's jobs that took their
-// slot or that its worker runs.
+// parent, a held merge's push, whiteboards: reservedWords), a round's tail
+// before its fix cycle or whiteboard, the background jobs (backgroundBusy),
+// the heavy worker's jobs and the GitHub writes as the operator
+// (workInFlight), the rounds the registry holds in flight (an unreadable
+// registry counts as one), the live sessions at work that none of these
+// holds (sessionsAtWork: a pinned PR's you type into), the requests answered
+// off the tick (a staging request, an open, an abort), the staging deploys
+// queued or running, and the staging resolver's jobs that took their slot or
+// that its worker runs.
 func (e *Engine) rebootDrainWork(ctx context.Context) []string {
 	var out []string
 	e.mu.Lock()
 	held := maps.Clone(e.rounds)
 	e.mu.Unlock()
 	for _, id := range slices.Sorted(maps.Keys(held)) {
-		h := held[id]
-		what := "round"
-		switch {
-		case h.open:
-			what = "open"
-		case h.fix:
-			what = "fix"
-		case h.whiteboard:
-			what = "whiteboard"
-		}
-		out = append(out, what+" of "+e.prWords(ctx, id))
+		out = append(out, e.reservedWords(ctx, id, held[id]))
 	}
 	if n := e.roundTails.Load(); n > 0 {
 		out = append(out, fmt.Sprintf("the end of %d round(s)", n))
