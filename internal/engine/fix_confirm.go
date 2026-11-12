@@ -265,7 +265,7 @@ func (e *Engine) confirmPush(ctx context.Context, job *fixJob, head string) erro
 // it is the one read (Store.SetKVIf).
 func (e *Engine) markConfirming(ctx context.Context, job *fixJob, head string) {
 	st, raw, ok, err := e.fixRow(ctx, job.pr.ID)
-	if err != nil || !ok || st.Phase != FixPhaseFixing {
+	if err != nil || !ok || st.Phase != FixPhaseFixing || st.By == heldPushBy {
 		return
 	}
 	st.Confirm = &FixConfirm{Head: head, Since: e.now().UTC()}
@@ -462,10 +462,12 @@ func (e *Engine) pushStarted(ctx context.Context, rec fixPush) bool {
 }
 
 // confirmingLoop reports whether pr's loop row is the loop whose settle
-// confirms rec's push: in phase fixing, at rec's report.
+// confirms rec's push: in phase fixing, at rec's report, and no held
+// merge's push (fix_held_merge.go), whose row names no report and which
+// confirms nothing.
 func (e *Engine) confirmingLoop(ctx context.Context, pr store.PR, rec fixPush) bool {
 	st, ok, err := e.fixState(ctx, pr.ID)
-	return err == nil && ok && st.Phase == FixPhaseFixing && st.Report == rec.Job.State.Report
+	return err == nil && ok && st.Phase == FixPhaseFixing && st.By != heldPushBy && st.Report == rec.Job.State.Report
 }
 
 // settlePushes looks, at the poll of repo once its rows took the radar's
@@ -671,7 +673,7 @@ func (e *Engine) endOrphanConfirms(ctx context.Context) {
 			continue
 		}
 		st, ok := ParseFixState(raw)
-		if !ok || st.Phase != FixPhaseFixing || st.Confirm == nil || e.roundActive(id) {
+		if !ok || st.Phase != FixPhaseFixing || st.Confirm == nil || st.By == heldPushBy || e.roundActive(id) {
 			continue
 		}
 		if recs == nil {

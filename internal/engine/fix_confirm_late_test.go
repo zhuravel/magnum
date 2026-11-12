@@ -549,3 +549,66 @@ func TestAFailedWriteOfTheLateSettleIsRetriedAlone(t *testing.T) {
 		t.Errorf("pr.forced events = %d, want 1", n)
 	}
 }
+
+// A held merge's push and a fixer's push to confirm never end each other.
+// They cannot run on one PR together (a fix is refused while a merge is
+// held, and a held push needs the PR without a loop), so each case builds
+// the other's rows by hand. A held push's loop row is no loop in its
+// settle: the tick drops a push record that names another loop and leaves
+// the held push's row, and the start ends that row as a cut push
+// (recoverHeldPush), never as an unconfirmed fix. A loop marked confirming
+// whose record is gone ends at the tick, and the merge magnum holds stays.
+func TestAHeldMergeAndAPushToConfirmOnOnePRLeaveEachOtherAlone(t *testing.T) {
+	storetest.Parallel(t)
+	t.Run("a held push's row and a push record", func(t *testing.T) {
+		h, _ := holdMerged(t)
+		held, _ := h.heldMergeOfPR()
+		pr := h.pr(2)
+		st := FixState{Cycle: 1, Cap: 1, Phase: FixPhaseFixing, Mode: FixModeMerge, By: heldPushBy, Head: held.Head, Since: held.Head,
+			Role: "claude-fix", StartedAt: h.clock.Now()}
+		if err := h.e.setFixState(h.ctx, pr.ID, st); err != nil {
+			t.Fatal(err)
+		}
+		rec := fixPush{Kind: fixPushConfirming, Run: "r-other", Pushed: fixPushed, Since: h.clock.Now(),
+			Job: fixPushJob{Head: fixHead, State: FixState{Cycle: 1, Cap: 3, Phase: FixPhaseFixing, Report: "/r/other.md"}}}
+		if err := writeKVJSON(h.ctx, h.e, kvPRFixPush(pr.ID), "fix push", rec); err != nil {
+			t.Fatal(err)
+		}
+		h.advance(fixConfirmCap)
+		_ = h.e.Tick(h.ctx)
+		h.settle()
+		if cur, ok := h.fixStateOf(2); !ok || cur.By != heldPushBy || cur.Confirm != nil {
+			t.Fatalf("the held push's row = %+v, %v; want it as it was", cur, ok)
+		}
+		if _, ok := h.fixPushOf(2); ok {
+			t.Error("the record of another loop's push stays")
+		}
+		h.e.recoverFixes(h.ctx)
+		if _, ok := h.fixStateOf(2); ok {
+			t.Error("the cut held push's row stayed")
+		}
+		if ev, ok := h.fixEvent("fix.failed"); ok {
+			t.Errorf("fix.failed: %s", ev.Message)
+		}
+		if _, ok := h.heldMergeOfPR(); !ok {
+			t.Error("the held merge went")
+		}
+	})
+	t.Run("a loop marked confirming and a held merge", func(t *testing.T) {
+		h, _ := holdMerged(t)
+		pr := h.pr(2)
+		if err := h.e.setFixState(h.ctx, pr.ID, FixState{Cycle: 1, Cap: 3, Phase: FixPhaseFixing, Head: fixHead, Since: fixHead, Role: "claude-fix",
+			Report: "/r/gone.md", StartedAt: h.clock.Now(), Confirm: &FixConfirm{Head: fixPushed, Since: h.clock.Now()}}); err != nil {
+			t.Fatal(err)
+		}
+		h.advance(time.Minute)
+		_ = h.e.Tick(h.ctx)
+		h.settle()
+		if _, ok := h.fixStateOf(2); ok {
+			t.Error("the loop marked confirming stays with no record")
+		}
+		if _, ok := h.heldMergeOfPR(); !ok {
+			t.Error("the held merge went with the loop")
+		}
+	})
+}
