@@ -975,10 +975,12 @@ func (e *Engine) sinceFixStart(ctx context.Context, job *fixJob) func(login, typ
 // (usually one page). A read that fails names nothing of its part. The
 // author's decisions the job's external file hands the fixer are their own
 // word, not the fixer's: `magnum fix --decide` posts one right before the
-// run starts, which a clock a moment behind GitHub's would put after it.
-func (e *Engine) nameUnmarkedReplies(ctx context.Context, job *fixJob, read func() ([]github.Thread, error)) {
+// run starts, which a clock a moment behind GitHub's would put after it. It
+// reports whether it looked at both: false when a read failed, so a later
+// settle of the same run looks again (fix_confirm.go).
+func (e *Engine) nameUnmarkedReplies(ctx context.Context, job *fixJob, read func() ([]github.Thread, error)) bool {
 	if job.started.IsZero() {
-		return
+		return true
 	}
 	decisions := map[string]bool{}
 	if x, ok := readExternalFile(filepath.Dir(deref(job.run.ReportPath))); ok {
@@ -989,7 +991,9 @@ func (e *Engine) nameUnmarkedReplies(ctx context.Context, job *fixJob, read func
 	asFixer := e.sinceFixStart(ctx, job)
 	var urls []string
 	var inThreads, onConversation []int64
-	if threads, err := read(); err == nil {
+	threads, err := read()
+	looked := err == nil
+	if err == nil {
 		for _, t := range threads {
 			all := t.AllComments()
 			for _, c := range all[min(1, len(all)):] { // replies only: the fixer starts no thread
@@ -1003,6 +1007,7 @@ func (e *Engine) nameUnmarkedReplies(ctx context.Context, job *fixJob, read func
 		before := func(c github.PRComment) bool { return c.CreatedAt.Before(job.started) }
 		comments, _, err := rd.IssueComments(ctx, job.repo.Owner, job.repo.Name, job.pr.Number, before)
 		if err != nil {
+			looked = false
 			e.log.Warn("fix: the PR's conversation, for the author's replies without the fix marker", "subject", job.subject(), "err", err)
 		}
 		for _, c := range comments {
@@ -1013,7 +1018,7 @@ func (e *Engine) nameUnmarkedReplies(ctx context.Context, job *fixJob, read func
 	}
 	n := len(urls)
 	if n == 0 {
-		return
+		return looked
 	}
 	data := map[string]any{"run": job.run.ID, "unmarked": n}
 	if len(inThreads) > 0 {
@@ -1024,6 +1029,7 @@ func (e *Engine) nameUnmarkedReplies(ctx context.Context, job *fixJob, read func
 	}
 	e.event(ctx, "warn", job.subject(), "fix.unmarked", fmt.Sprintf("%s: %s by the PR's author since the fixer started %s no fix marker, so magnum reads %s as the author's own: %s",
 		job.role.Name, textx.Count(n, "reply", "replies"), textx.Plural(n, "carries", "carry"), textx.Plural(n, "it", "them"), strings.Join(urls, ", ")), data)
+	return looked
 }
 
 // fixedInExternal is the thread of entry when it is a fix the fixer says it

@@ -195,6 +195,10 @@ type fixJob struct {
 	ciFile                     string
 	ciJobs                     int
 	ciOutcome, ciWhy, ciPushed string
+	// late: the job is a late settle of a push the cycle's failure did not
+	// confirm (fix_confirm.go), whose toasts have keys of their own
+	// (fixAttentionKey).
+	late bool
 }
 
 // fixRequestFetch bounds the fetch of the base a `magnum fix` request makes

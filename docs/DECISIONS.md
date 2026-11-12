@@ -18981,13 +18981,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
     The CLI's `fixesAtWork` does not count such a row. So `--drain` and `daemon-stop` do not wait for it.
   - The ticks. After 3 minutes with no answer, the settle does not run failFix. It puts the slot at the pushed head,
     whose commit is local. It writes `fix.push_confirming` and lets go of the PR. The loop's row stays in phase
-    fixing. So dispatch still holds the PR's rounds (`fixHolds`), and the slot stays held for the PR. The pool can
-    take that slot back. At each tick the poll tries the confirmation again (`settlePushes`). It reads the PR's head
-    as GitHub's radar lists it, once the rows took the radar's heads. The pushed head settles the fix as usual: first
-    `fix.push_confirmed`, then what any settle does after a push. Any other head fails it as unconfirmed.
+    fixing. So dispatch still holds the PR's rounds (`fixHolds`), and the slot stays held for the PR. The pool does
+    not take that slot back: the fixer's run is still open (`ended`), and `EvictableSlots` leaves the slot of a PR
+    with an open run. The settle closes that run within the cap. At each tick the poll tries the confirmation again
+    (`settlePushes`). It reads the PR's head as GitHub's radar lists it, once the rows took the radar's heads. The
+    pushed head settles the fix as usual: first `fix.push_confirmed`, then what any settle does after a push. An
+    earlier push of the fixer's (a commit its report lists before its last) is not there yet, so the loop waits. Any
+    other head fails it as unconfirmed.
     At each tick, also after a failed poll, `capPushes` runs. Past `fixConfirmCap` it fails the fix as unconfirmed and
     puts the slot back at the head the fixer started from. That cap is 30 minutes from the start of the record. A
-    `magnum abort` meanwhile ends the loop as it ends any loop without a reservation.
+    `magnum abort` meanwhile ends the loop as it ends any loop without a reservation. The next tick then abandons the
+    fixer's run and drops the record (`dropConfirming`).
   - The typed failure. Before the confirmation, `pushedHead` writes `pr.<id>.fix_push` (`fixPush`). It is a
     key-value row, so there is no migration. It holds the kind `confirming`, the run, the pushed head, the operator's
     typing and the job's fields that the registry's rows lack. It goes once GitHub confirms the push. Some failures
@@ -18998,8 +19002,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - The late settle. At the poll, magnum settles a `push_unconfirmed` row as pushed (`settleConfirmedPush`). The PR's
     head on GitHub must be exactly the pushed SHA. The settle holds the PR's reservation. It runs three steps of the
     package steps, under a subject of its own (`fix-push:<run>`). No round or loop resets that subject. So a restart
-    in the middle does none of the steps twice. The first step writes `fix.push_confirmed_late`. For a slot that is still
-    the PR's, the next step puts it at the push. The last moves the run from failed back to ended. It clears
+    in the middle does none of the steps twice. The first step writes `fix.push_confirmed_late`. For a slot that is
+    still the PR's, the next step puts it at the push. The last moves the run from failed back to ended. It clears
     the fix's attention: its kv row and its run's. Then it runs `settleReport`, what a settle does after a confirmed
     push. `settleReport` is split out of `settleFix`, and both use it. It writes the description, `fix.pushed` and
     `fix.replied`. It starts the push's CI (`notePush`) and reads the calls that the threads leave. It moves the PR
@@ -19017,6 +19021,40 @@ skill versions); people add theirs to the sections before it, at the end of the 
     Another failure can contain those words, and the engine's owner allows the typed kind only. A Details read at
     each tick for the retry of the ticks. The radar that the poll reads anyway names the head. A retry of a 403, a
     GraphQL error or a rate limit. Those are GitHub's answers.
+  - A review round (the same day) found eight faults, now fixed:
+    - A fixer's push of comments, whitespace or docs alone was never settled late. The poll's `settleTrivial` sets
+      `reviewed_sha` at such a push with no round, before `settlePushes` runs, and `lateGone` read that as a review.
+      Now only a review that magnum posted of the push since the failure counts (`reviewedSince`, from the last
+      review summary). The late settle then forces the re-review, as the settle does.
+    - A shutdown in the late settle's last step marked the step done while its writes failed on the cancelled
+      context. The run stayed open for good, with no loop row and no re-review. `settleConfirmedPush` and `failPush`
+      now run to their end on `context.WithoutCancel`, as `runFix` runs its settle. The last step fails when the
+      fixer's run is still open after it, so the next poll runs it again.
+    - A fixer that pushed twice lost its fix when the radar still showed its first push. `fixPush.Commits` keeps the
+      commits the report lists, and such a head waits, for a loop in its settle and for an unconfirmed fix alike.
+    - The late settle's toast had the failure's dedupe key, which swallowed it. A late job's key ends in `:late`.
+    - A loop could stay marked confirming with no record: the record's write failed, or a settle that could not
+      rebuild its job dropped it. `capPushes` now ends such a loop (`endOrphanConfirms`). A job that cannot be rebuilt
+      ends its loop once (`endConfirming`), where `failPush` tried again at every tick.
+    - GraphQL's empty answer past its time limit ("unexpected end of JSON input", a `*json.SyntaxError` at offset
+      0) and a cut answer (`io.ErrUnexpectedEOF`) are timeouts now, so they are transient.
+    - An outage that cut the settle's look for the author's replies without the fix marker lost the warning.
+      `nameUnmarkedReplies` now says whether it could read both lists, the record keeps that (`RepliesNamed`), and
+      the later settle looks again when it could not.
+    - This entry said that the pool could take the slot back. It cannot, as said above.
+  - Tests of the review round, each failing first or checked by a mutation of the code:
+    - TestALateSettleOfATrivialPushForcesItsReReview;
+    - TestAnUnconfirmedFixWhosePushThePollFindsIsSettledAsPushedOnce, now with a shutdown as its last step begins
+      and one while that step reads the threads;
+    - TestAnEarlierPushOfTheFixerIsNotYetItsHead (a loop in its settle, an unconfirmed fix, and a commit the fixer
+      never pushed);
+    - TestTheLateSettlesToastIsNotTheFailuresToast;
+    - TestAConfirmingLoopNeverOutlivesItsRecord;
+    - the empty and the cut answer in TestOnlyConnectionErrorsTimeoutsAnd5xxAreTransient;
+    - TestALaterSettleNamesTheUnmarkedRepliesTheOutageHid;
+    - TestALateSettleLeavesAPRThatMovedOn (a loop, a review since, a day, a closed PR);
+    - TestARestartAfterTheSettleOfAConfirmedPushBeganResumesIt;
+    - TestAnAbortWhileTheSettleConfirmsThePushEndsTheLoop.
   - Tests. They failed first, and mutations of the code fail them. In engine:
     - TestOnlyConnectionErrorsTimeoutsAnd5xxAreTransient (the table);
     - TestAConnectionErrorWhileThePushIsConfirmedIsRetriedAndTheFixSettlesAsUsual (five errors, then the answer);

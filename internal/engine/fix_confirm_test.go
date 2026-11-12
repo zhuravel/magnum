@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -71,6 +72,9 @@ func TestOnlyConnectionErrorsTimeoutsAnd5xxAreTransient(t *testing.T) {
 		{"a 504", api(504, "Gateway Timeout"), true},
 		{"a 5xx gh names in its exit", exit("gh: Bad Gateway (HTTP 502)"), true},
 		{"git cannot reach the remote", gitDown(), true},
+		{"GraphQL's time limit: an empty answer", fmt.Errorf("github details talkable/talkable (1): decode response: %w", json.Unmarshal(nil, new(any))), true},
+		{"a cut answer", fmt.Errorf("github details talkable/talkable (1): decode data: %w", io.ErrUnexpectedEOF), true},
+		{"an answer that is no JSON", fmt.Errorf("github details talkable/talkable (1): decode response: %w", json.Unmarshal([]byte("<html>"), new(any))), false},
 		{"the read and its fallback both down", errors.Join(ghDown(), gitDown()), true},
 		{"a 401", api(401, "Bad credentials"), false},
 		{"a 403", api(403, "Resource not accessible by integration"), false},
@@ -437,10 +441,19 @@ func TestALongOutageKeepsTheLoopInItsSettleAcrossTicks(t *testing.T) {
 // confirmed".
 func unconfirmedFix(t *testing.T) (*harness, *fixGit, store.PR) {
 	t.Helper()
+	return unconfirmedFixWith(t, "none")
+}
+
+// unconfirmedFixWith is unconfirmedFix whose fixer leaves needs, its
+// report's "## Needs you", to the author.
+func unconfirmedFixWith(t *testing.T, needs string) (*harness, *fixGit, store.PR) {
+	t.Helper()
 	h, git := fixHarness(t)
 	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
 	git.lostPush = true
-	pushFixer(h, git, nil)
+	fixerBy(h, git, func(run store.Run) (string, string) {
+		return fixPushed, fixReport(run.ID, "b2b2b2b Guard the nil owner", fixReplied, needs)
+	})
 	h.fix(FixPayload{})
 	h.handle()
 	h.wantState(2, store.PRNeedsAttention)
@@ -453,51 +466,97 @@ func unconfirmedFix(t *testing.T) (*harness, *fixGit, store.PR) {
 // A fix that failed only because its push was not confirmed is settled as
 // pushed once the poll finds exactly that push as the PR's head:
 // fix.push_confirmed_late, then what a settle does after a push (the
-// replies, the PR row's head, the forced re-review, the push's CI, the
-// attention cleared). A restart in the middle of it does none of that
-// twice, and a later poll does nothing.
+// replies, the calls the threads leave, the PR row's head, the forced
+// re-review, the push's CI, the attention cleared). A crash between its
+// steps, or a shutdown as its last step begins or while that step reads
+// the threads, loses none of its writes and repeats none of them after a
+// restart, and a later poll does nothing.
 func TestAnUnconfirmedFixWhosePushThePollFindsIsSettledAsPushedOnce(t *testing.T) {
-	h, _, pr := unconfirmedFix(t)
-	if kind, _ := h.e.getKV(h.ctx, KVPRAttention(pr.ID)); kind != attention.KindFix {
-		t.Fatalf("attention %q, want the fix's", kind)
-	}
-	h.gh.setHead("talkable/talkable", 2, fixPushed)
+	storetest.Parallel(t)
+	for _, tc := range []struct {
+		name string
+		// cut is the context of the poll that finds the push, and whether
+		// that poll settles the fix whole.
+		cut   func(h *harness) context.Context
+		whole bool
+	}{
+		{name: "a crash before the last step", cut: func(h *harness) context.Context {
+			return steps.WithFailpoint(h.ctx, func(_, name string, at steps.Point) error {
+				if name == "fix.push_settle" && at == steps.BeforeRun {
+					return errCrash
+				}
+				return nil
+			})
+		}},
+		{name: "a shutdown as the last step begins", whole: true, cut: func(h *harness) context.Context {
+			ctx, cancel := context.WithCancel(h.ctx)
+			return steps.WithFailpoint(ctx, func(_, name string, at steps.Point) error {
+				if name == "fix.push_settle" && at == steps.BeforeRun {
+					cancel()
+				}
+				return nil
+			})
+		}},
+		{name: "a shutdown while the last step reads the threads", whole: true, cut: func(h *harness) context.Context {
+			rec, _ := h.fixPushOf(2) // the settle could not look for unmarked replies: the late settle reads the threads first
+			rec.RepliesNamed = false
+			if err := writeKVJSON(h.ctx, h.e, kvPRFixPush(h.pr(2).ID), "fix push", rec); err != nil {
+				h.t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(h.ctx)
+			h.gh.mu.Lock()
+			h.gh.onThreads = func() { cancel() }
+			h.gh.mu.Unlock()
+			return ctx
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _, pr := unconfirmedFixWith(t, "- 2102 P2 app/lib/x.rb:7: contested")
+			if kind, _ := h.e.getKV(h.ctx, KVPRAttention(pr.ID)); kind != attention.KindFix {
+				t.Fatalf("attention %q, want the fix's", kind)
+			}
+			h.gh.setHead("talkable/talkable", 2, fixPushed)
+			_ = h.e.poll(tc.cut(h))
+			h.settle()
+			h.gh.mu.Lock()
+			h.gh.onThreads = nil
+			h.gh.mu.Unlock()
+			if n := len(h.fixEvents("fix.push_confirmed_late")); n != 1 {
+				t.Fatalf("fix.push_confirmed_late events = %d, want 1", n)
+			}
+			if tc.whole {
+				h.wantPushedSettle(pr, 1)
+			} else if n := len(h.fixEvents("fix.pushed")); n != 0 {
+				t.Fatalf("fix.pushed events = %d before the crash's resume, want none", n)
+			}
 
-	crash := steps.WithFailpoint(h.ctx, func(_, name string, at steps.Point) error {
-		if name == "fix.push_settle" && at == steps.BeforeRun {
-			return errCrash
-		}
-		return nil
-	})
-	_ = h.e.poll(crash)
-	h.settle()
-	if n := len(h.fixEvents("fix.push_confirmed_late")); n != 1 {
-		t.Fatalf("fix.push_confirmed_late events = %d, want 1", n)
-	}
-	if n := len(h.fixEvents("fix.pushed")); n != 0 {
-		t.Fatalf("fix.pushed events = %d before the crash's resume, want none", n)
-	}
-
-	h.e = New(h.d) // a restart
-	h.startup()
-	for range 2 {
-		if err := h.e.poll(h.ctx); err != nil {
-			t.Fatal(err)
-		}
-		h.settle()
-	}
-	h.wantPushedSettle(pr, 1)
-	if n := len(h.fixEvents("fix.push_confirmed_late")); n != 1 {
-		t.Errorf("fix.push_confirmed_late events = %d, want 1", n)
-	}
-	if n := h.eventCount("pr:talkable/talkable#2", "pr.forced"); n != 1 {
-		t.Errorf("pr.forced events = %d, want 1", n)
-	}
-	if kind, _ := h.e.getKV(h.ctx, KVPRAttention(pr.ID)); kind != "" {
-		t.Errorf("attention %q, want it cleared", kind)
-	}
-	if cur := h.pr(2); deref(cur.LastError) != "" {
-		t.Errorf("last_error = %q, want none", deref(cur.LastError))
+			h.e = New(h.d) // a restart
+			h.startup()
+			for range 2 {
+				if err := h.e.poll(h.ctx); err != nil {
+					t.Fatal(err)
+				}
+				h.settle()
+			}
+			h.wantPushedSettle(pr, 1)
+			for kind, want := range map[string]int{"fix.push_confirmed_late": 1, "fix.needs_you": 1} {
+				if n := len(h.fixEvents(kind)); n != want {
+					t.Errorf("%s events = %d, want %d", kind, n, want)
+				}
+			}
+			if n := h.eventCount("pr:talkable/talkable#2", "pr.forced"); n != 1 {
+				t.Errorf("pr.forced events = %d, want 1", n)
+			}
+			if st, _ := h.fixStateOf(2); len(st.NeedsYou) != 1 {
+				t.Errorf("the loop's calls = %v, want the one the fixer left", st.NeedsYou)
+			}
+			if kind, _ := h.e.getKV(h.ctx, KVPRAttention(pr.ID)); kind != "" {
+				t.Errorf("attention %q, want it cleared", kind)
+			}
+			if cur := h.pr(2); deref(cur.LastError) != "" {
+				t.Errorf("last_error = %q, want none", deref(cur.LastError))
+			}
+		})
 	}
 }
 

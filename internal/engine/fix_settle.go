@@ -81,10 +81,9 @@ func (e *Engine) settleFix(ctx, stop context.Context, job *fixJob) {
 		e.log.Info("fix settle interrupted by a shutdown while it confirmed the push; the next start fails the fix as unconfirmed", "subject", job.subject())
 		return
 	}
-	read := e.threadsReader(ctx, job)           // fix_calls.go: one GitHub read for every look
-	threads, counted := fixThreads(rep.Replied) // not counted without a report: the run may have replied
-	if !counted || threads > 0 || len(rep.NeedsYou) > 0 {
-		e.nameUnmarkedReplies(ctx, job, read) // fix_external.go; a run that fails too, before it fails
+	read := e.threadsReader(ctx, job)                                  // fix_calls.go: one GitHub read for every look
+	if !mayHaveReplied(rep) || e.nameUnmarkedReplies(ctx, job, read) { // fix_external.go; a run that fails too, before it fails
+		e.noteRepliesNamed(ctx, job) // fix_confirm.go: a later settle of the push need not look again
 	}
 	var held fixMergeHeld
 	var unanswered pushUnanswered
@@ -129,6 +128,15 @@ func (e *Engine) settleFix(ctx, stop context.Context, job *fixJob) {
 		return
 	}
 	e.settleReport(ctx, job, rep, pushed, target, typed, read)
+}
+
+// mayHaveReplied reports whether the run of rep (a run with no report
+// too) may have replied, so the settle names the author's replies without
+// the fix marker (nameUnmarkedReplies): its report counts replies or leaves
+// calls, or there is no report to say.
+func mayHaveReplied(rep FixReport) bool {
+	threads, counted := fixThreads(rep.Replied) // not counted without a report: the run may have replied
+	return !counted || threads > 0 || len(rep.NeedsYou) > 0
 }
 
 // settleSlot is the settle's step fix.settle: the slot back in order at
@@ -555,7 +563,7 @@ func (e *Engine) pushedHead(ctx, stop context.Context, job *fixJob, rep FixRepor
 	} else if refused != "" {
 		return "", fixHandRefused{why: refused}
 	}
-	e.noteFixPush(ctx, job, head, typed) // fix_confirm.go
+	e.noteFixPush(ctx, job, rep, head, typed) // fix_confirm.go
 	if err := e.confirmPush(stop, job, head); err != nil {
 		return "", err
 	}
@@ -710,7 +718,8 @@ func (e *Engine) endFixState(ctx context.Context, job *fixJob) {
 // re-review still runs: it gets the urgent toast alone. A PR elsewhere
 // (closed, ineligible) has the events only. The toast's dedupe key is the
 // loop's cycle's own (fixAttentionKey), so each loop that needs the author
-// toasts and a cycle's call is told once, however late the loop ends.
+// toasts and a cycle's call is told once, however late the loop ends; a
+// late settle of the cycle's push has a key of its own.
 func (e *Engine) fixAttention(ctx context.Context, job *fixJob, msg string) {
 	pr, err := e.st.PRByID(ctx, job.pr.ID)
 	if err != nil {
@@ -755,7 +764,11 @@ const fixAttentionWindow = 24 * time.Hour
 // re-review (loopJob, which has no run) builds the key of the settle that
 // started that re-review, so a call toasted at once is not toasted again.
 func fixAttentionKey(job *fixJob) string {
-	return fmt.Sprintf("attention:%d:%s:%s:%d", job.pr.ID, attention.KindFix, store.FormatTime(job.state.StartedAt), job.state.Cycle)
+	key := fmt.Sprintf("attention:%d:%s:%s:%d", job.pr.ID, attention.KindFix, store.FormatTime(job.state.StartedAt), job.state.Cycle)
+	if job.late { // fix_confirm.go: the late settle of a cycle whose failure toasted under the key
+		key += ":late"
+	}
+	return key
 }
 
 // fixCallToast is the fix job's urgent toast alone (no state change): msg,

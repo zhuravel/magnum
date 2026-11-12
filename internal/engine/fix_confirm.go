@@ -22,7 +22,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"slices"
 	"strings"
 	"time"
 
@@ -69,18 +71,24 @@ func kvPRFixPush(prID int64) string { return fmt.Sprintf("pr.%d.fix_push", prID)
 
 // fixPush is a fixer's push the settle confirms (Kind fixPushConfirming)
 // or could not confirm (fixPushUnconfirmed): the run, the pushed head (the
-// whole SHA), when the settle began to confirm it (Since, which
+// whole SHA), the short SHAs of the commits the fixer's report lists as
+// pushed (Commits: an earlier one GitHub shows is no other head, only one
+// not there yet), when the settle began to confirm it (Since, which
 // fixConfirmCap counts from), when the fix failed (Failed), whether the
-// operator typed into the fixer's pane during the run, and the job as the
-// settle had it, which a later settle rebuilds (pushJob).
+// operator typed into the fixer's pane during the run, whether the settle
+// looked for the author's replies without the fix marker (RepliesNamed: a
+// later settle looks when it could not), and the job as the settle had it,
+// which a later settle rebuilds (pushJob).
 type fixPush struct {
-	Kind   string     `json:"kind"`
-	Run    string     `json:"run"`
-	Pushed string     `json:"pushed"`
-	Since  time.Time  `json:"since"`
-	Failed time.Time  `json:"failed,omitzero"`
-	Typed  bool       `json:"typed,omitempty"`
-	Job    fixPushJob `json:"job"`
+	Kind         string     `json:"kind"`
+	Run          string     `json:"run"`
+	Pushed       string     `json:"pushed"`
+	Commits      []string   `json:"commits,omitempty"`
+	Since        time.Time  `json:"since"`
+	Failed       time.Time  `json:"failed,omitzero"`
+	Typed        bool       `json:"typed,omitempty"`
+	RepliesNamed bool       `json:"replies_named,omitempty"`
+	Job          fixPushJob `json:"job"`
 }
 
 // fixPushJob is what a settle reads of its fix job beyond the registry's
@@ -129,6 +137,13 @@ func (j *fixJob) pushRecord(kind, head string, since time.Time, typed bool) fixP
 		Described: j.described, BaseChecked: j.baseChecked}}
 }
 
+// earlierPush reports whether head, the PR's head GitHub shows, is one of
+// the commits rec's fixer pushed before its last (fixPush.Commits): GitHub
+// has not got to the last yet.
+func (rec fixPush) earlierPush(head string) bool {
+	return head != rec.Pushed && slices.ContainsFunc(rec.Commits, func(c string) bool { return len(c) >= 7 && strings.HasPrefix(head, c) })
+}
+
 // pushNotConfirmed is the settle's failure for want of the push on GitHub:
 // GitHub answered with another head, its read failed for good, or GitHub
 // did not answer within fixConfirmCap. Its words are as before; the record
@@ -159,10 +174,13 @@ func (p pushUnanswered) Unwrap() error { return p.err }
 // failure), a timeout, or an HTTP 5xx from GitHub. It reads what the GitHub
 // client returns: a typed error (*github.APIError, net.Error), or gh's or
 // git's exit and its output (github.ConnectionCause, its rate limits left
-// out). GitHub's own answer (401, 403, 404, a GraphQL error, a rate limit)
-// and every other error are not, nor is a stop. remoteHead's joined error
-// (the client's read, then `git ls-remote`) is transient only when each
-// part is.
+// out). An answer cut short is a timeout too: the empty body GraphQL
+// answers a query past its time limit with, which the client cannot decode
+// ("unexpected end of JSON input"), and a cut one (io.ErrUnexpectedEOF).
+// GitHub's own answer (401, 403, 404, a GraphQL error, a rate limit) and
+// every other error are not, nor is a stop. remoteHead's joined error (the
+// client's read, then `git ls-remote`) is transient only when each part
+// is.
 func transientRead(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return false
@@ -180,6 +198,12 @@ func transientRead(err error) bool {
 		return len(api.Errors) == 0 && api.Status >= 500 && api.Status <= 599
 	}
 	if _, ok := errors.AsType[net.Error](err); ok { // a dial, a DNS lookup, a reset, a timeout (context.DeadlineExceeded is one)
+		return true
+	}
+	if se, ok := errors.AsType[*json.SyntaxError](err); ok && se.Offset == 0 && se.Error() == "unexpected end of JSON input" {
+		return true // an empty answer: GraphQL's time limit (github's overloaded reads it so too)
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
 	if exit, ok := errors.AsType[*execx.ExitError](err); ok {
@@ -257,12 +281,34 @@ func (e *Engine) markConfirming(ctx context.Context, job *fixJob, head string) {
 }
 
 // noteFixPush records head, the push the job's settle is about to confirm,
-// as fixPushConfirming (kvPRFixPush): a restart that cuts the confirmation
-// then fails the fix as unconfirmed (recoverFixes), which the poll can
-// settle late.
-func (e *Engine) noteFixPush(ctx context.Context, job *fixJob, head string, typed bool) {
-	if err := writeKVJSON(ctx, e, kvPRFixPush(job.pr.ID), "fix push", job.pushRecord(fixPushConfirming, head, e.now().UTC(), typed)); err != nil {
+// and the commits rep lists as pushed, as fixPushConfirming (kvPRFixPush):
+// a restart that cuts the confirmation then fails the fix as unconfirmed
+// (recoverFixes), which the poll can settle late.
+func (e *Engine) noteFixPush(ctx context.Context, job *fixJob, rep FixReport, head string, typed bool) {
+	rec := job.pushRecord(fixPushConfirming, head, e.now().UTC(), typed)
+	for _, c := range rep.Pushed {
+		rec.Commits = append(rec.Commits, c.SHA)
+	}
+	if err := writeKVJSON(ctx, e, kvPRFixPush(job.pr.ID), "fix push", rec); err != nil {
 		e.warnUnlessStopped(ctx, err, "record the fixer's push to confirm", "subject", job.subject())
+	}
+}
+
+// noteRepliesNamed records on the job's push record, when the settle left
+// one, that the settle looked for the author's replies without the fix
+// marker (fixPush.RepliesNamed), so a later settle of the push does not.
+func (e *Engine) noteRepliesNamed(ctx context.Context, job *fixJob) {
+	key := kvPRFixPush(job.pr.ID)
+	raw, ok, err := e.st.GetKV(ctx, key)
+	var rec fixPush
+	if err != nil || !ok || json.Unmarshal([]byte(raw), &rec) != nil || rec.Run != job.run.ID || rec.RepliesNamed {
+		return
+	}
+	rec.RepliesNamed = true
+	if b, err := json.Marshal(rec); err == nil {
+		if _, err := e.st.SetKVIf(ctx, key, raw, string(b)); err != nil {
+			e.warnUnlessStopped(ctx, err, "record the look for unmarked replies", "subject", job.subject())
+		}
 	}
 }
 
@@ -393,13 +439,15 @@ func (e *Engine) settlePushes(ctx context.Context, repo store.Repo, radar []gith
 // decidePush decides on row, the push record of pr, at the poll that read
 // head as the PR's head on GitHub (seen false: the radar did not list it).
 // A settle that began is resumed. A loop still in its settle
-// (fixPushConfirming) is settled as usual once GitHub shows its push, and
-// fails as unconfirmed on any other head (GitHub answered); its record goes
-// when its loop is gone. An unconfirmed fix (fixPushUnconfirmed, the typed
-// kind and no other) is settled late once GitHub shows exactly its push;
-// its record goes when the PR moved on (another head, a new loop, a review
-// of the push that ran since, a PR no longer open), and waits while GitHub
-// shows the head the fixer started from. A record of any other kind goes.
+// (fixPushConfirming) is settled as usual once GitHub shows its push, waits
+// while GitHub shows an earlier push of the fixer's (fixPush.earlierPush),
+// and fails as unconfirmed on any other head (GitHub answered); its record
+// goes, its run abandoned, when its loop is gone (an abort). An unconfirmed
+// fix (fixPushUnconfirmed, the typed kind and no other) is settled late
+// once GitHub shows exactly its push; its record goes when the PR moved on
+// (another head, a new loop, a review of the push posted since, a PR no
+// longer open), and waits while GitHub shows the head the fixer started
+// from or an earlier push of the fixer's. A record of any other kind goes.
 func (e *Engine) decidePush(ctx context.Context, repo store.Repo, pr store.PR, row fixPushRow, head string, seen bool) {
 	rec := row.rec
 	if e.pushStarted(ctx, rec) {
@@ -410,8 +458,8 @@ func (e *Engine) decidePush(ctx context.Context, repo store.Repo, pr store.PR, r
 	case fixPushConfirming:
 		switch {
 		case !e.confirmingLoop(ctx, pr, rec):
-			e.dropPushRow(ctx, pr.ID, row)
-		case !seen:
+			e.dropConfirming(ctx, pr, row)
+		case !seen, rec.earlierPush(head):
 		case head == rec.Pushed:
 			e.settleConfirmedPush(ctx, repo, pr, row)
 		default:
@@ -424,7 +472,7 @@ func (e *Engine) decidePush(ctx context.Context, repo store.Repo, pr store.PR, r
 			return
 		}
 		switch {
-		case !seen, head == rec.Job.Head, !lateMayRun(pr):
+		case !seen, head == rec.Job.Head, rec.earlierPush(head), !lateMayRun(pr):
 		case head == rec.Pushed:
 			e.settleConfirmedPush(ctx, repo, pr, row)
 		default:
@@ -438,18 +486,35 @@ func (e *Engine) decidePush(ctx context.Context, repo store.Repo, pr store.PR, r
 }
 
 // lateGone says why the unconfirmed push rec of pr is settled no more ("" =
-// it may be): a loop runs on the PR, which is no longer open, or a review
-// of the pushed head ran since.
+// it may be): a loop runs on the PR, which is no longer open, or magnum
+// posted a review of the pushed head since the fix failed (reviewedSince).
+// A reviewed_sha at the push is no review: the poll settles a push of
+// comments, whitespace or docs alone as reviewed with no round
+// (settleTrivial), which the late settle's forced re-review still follows,
+// as the settle's does.
 func (e *Engine) lateGone(ctx context.Context, pr store.PR, rec fixPush) string {
 	switch _, running, err := e.fixState(ctx, pr.ID); {
 	case err != nil || running:
 		return "a fix loop runs on the PR"
 	case pr.GHState != store.GHOpen:
 		return "the PR is " + strings.ToLower(pr.GHState)
-	case deref(pr.ReviewedSHA) == rec.Pushed:
-		return "a review of " + textx.ShortSHA(rec.Pushed) + " ran since"
+	case e.reviewedSince(ctx, pr, rec):
+		return "magnum posted a review of " + textx.ShortSHA(rec.Pushed) + " since"
 	}
 	return ""
+}
+
+// reviewedSince reports whether the last review magnum posted on pr is one
+// of rec's push, posted since the fix failed (or, failing a time, since the
+// settle began to confirm the push).
+func (e *Engine) reviewedSince(ctx context.Context, pr store.PR, rec fixPush) bool {
+	sums, err := e.st.LastReviewSummaries(ctx, []int64{pr.ID})
+	sum, ok := sums[pr.ID]
+	since := rec.Failed
+	if since.IsZero() {
+		since = rec.Since
+	}
+	return err == nil && ok && sum.SHA == rec.Pushed && !sum.At.Before(since)
 }
 
 // lateMayRun reports whether pr is where a late settle takes it on: reviewed,
@@ -470,12 +535,24 @@ func (e *Engine) dropPushRow(ctx context.Context, prID int64, row fixPushRow) {
 	}
 }
 
+// dropConfirming removes row, the record of a push whose loop is gone (an
+// abort ended it while its settle confirmed the push), and abandons the
+// fixer's run, which no settle ends now: an active run would hold the PR's
+// slot and its cleanup for good.
+func (e *Engine) dropConfirming(ctx context.Context, pr store.PR, row fixPushRow) {
+	if run, err := e.st.RunByID(ctx, row.rec.Run); err == nil {
+		e.abandonFixRun(ctx, run, "the fix loop ended while its settle confirmed the push")
+	}
+	e.dropPushRow(ctx, pr.ID, row)
+}
+
 // capPushes runs each tick, the poll failed or not: a loop still in its
-// settle (fixPushConfirming) past fixConfirmCap since GitHub first did not
-// answer fails as unconfirmed, and its record goes once its loop is gone;
-// an unconfirmed fix's record goes fixPushKeep after it failed; a record of
-// any other kind goes. A PR a job holds, and a settle that began, are left
-// alone.
+// settle (fixPushConfirming) past fixConfirmCap since the settle began to
+// confirm its push fails as unconfirmed, and its record goes, its run
+// abandoned, once its loop is gone; an unconfirmed fix's record goes
+// fixPushKeep after it failed; a record of any other kind goes. A loop
+// marked confirming whose record is gone ends too (endOrphanConfirms). A PR
+// a job holds, and a settle that began, are left alone.
 func (e *Engine) capPushes(ctx context.Context) {
 	if e.d.DryRun {
 		return
@@ -497,7 +574,7 @@ func (e *Engine) capPushes(ctx context.Context) {
 		switch rec.Kind {
 		case fixPushConfirming:
 			if !e.confirmingLoop(ctx, pr, rec) {
-				e.dropPushRow(ctx, id, row)
+				e.dropConfirming(ctx, pr, row)
 				continue
 			}
 			if now.Sub(rec.Since) < fixConfirmCap {
@@ -516,6 +593,76 @@ func (e *Engine) capPushes(ctx context.Context) {
 			e.dropPushRow(ctx, id, row)
 		}
 	}
+	e.endOrphanConfirms(ctx)
+}
+
+// endOrphanConfirms ends each loop marked confirming (FixState.Confirm, in
+// phase fixing) that no job holds and whose push record is gone or another
+// loop's: a record that could not be written, or one a settle that could
+// not rebuild its job dropped. Such a loop would hold its PR's rounds until
+// a restart.
+func (e *Engine) endOrphanConfirms(ctx context.Context) {
+	vals, err := e.st.KVValues(ctx, "pr.*.fix")
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "read the fix loops that confirm a push")
+		return
+	}
+	var recs map[int64]fixPushRow
+	for key, raw := range vals {
+		var id int64
+		if _, err := fmt.Sscanf(key, "pr.%d.fix", &id); err != nil || KVPRFix(id) != key {
+			continue
+		}
+		st, ok := ParseFixState(raw)
+		if !ok || st.Phase != FixPhaseFixing || st.Confirm == nil || e.roundActive(id) {
+			continue
+		}
+		if recs == nil {
+			recs = e.fixPushes(ctx, store.Repo{})
+		}
+		if row, ok := recs[id]; ok && row.rec.Kind == fixPushConfirming && row.rec.Job.State.Report == st.Report {
+			continue
+		}
+		pr, err := e.st.PRByID(ctx, id)
+		if err != nil {
+			continue
+		}
+		repo, err := e.st.RepoByID(ctx, pr.RepoID)
+		if err != nil || !e.reserve(id, &roundHandle{cancel: func() {}, fix: true, stop: roundStop{ended: true}}) {
+			continue
+		}
+		e.endConfirming(context.WithoutCancel(ctx), repo, pr, "the record of its confirmation is gone")
+		e.unreserve(id)
+	}
+}
+
+// endConfirming ends, as failed for why, the loop of pr marked confirming
+// whose push no settle can confirm (its record gone, or naming a run that
+// is gone): the fixer's run at the loop's report failed, the slot back at
+// the head the fixer started from. The caller holds the PR's reservation.
+func (e *Engine) endConfirming(ctx context.Context, repo store.Repo, pr store.PR, why string) {
+	st, ok, err := e.fixState(ctx, pr.ID)
+	if err != nil || !ok || st.Phase != FixPhaseFixing || st.Confirm == nil {
+		return
+	}
+	job := e.loopJob(ctx, repo, pr, st)
+	if job.role.Name == "" {
+		job.role.Name = st.Role
+	}
+	if runs, err := e.st.RunsByPR(ctx, pr.ID); err == nil {
+		for _, r := range runs {
+			if r.Kind == store.RunFix && st.Report != "" && deref(r.ReportPath) == st.Report {
+				job.run = r
+			}
+		}
+	}
+	msg := "fix settle failed: " + pushNotConfirmed{head: st.Confirm.Head, err: errors.New(why)}.Error()
+	if job.slot.ID != 0 {
+		if err := e.resyncFixSlot(ctx, job, job.head); err != nil {
+			msg += fmt.Sprintf("; slot %s not put back: %v", job.slot.Name, err)
+		}
+	}
+	e.failFix(ctx, job, msg, st.Report)
 }
 
 // pushJob is the fix job of rec, pr's push record, rebuilt for a settle
@@ -535,20 +682,27 @@ func (e *Engine) pushJob(ctx context.Context, repo store.Repo, pr store.PR, rec 
 	job.run, job.head, job.started, job.login, job.mode, job.touched = run, j.Head, j.Started, j.Login, j.Mode, true
 	job.conflict, job.merged = j.Conflict.conflict(), j.Merged.conflict()
 	job.forMerge, job.alone, job.described, job.baseChecked = j.ForMerge, j.Alone, j.Described, j.BaseChecked
+	job.late = rec.Kind == fixPushUnconfirmed
 	return job, nil
 }
 
 // failPush fails the fix whose loop is still in its settle (row, pr's
-// record) as unconfirmed, for why: under the PR's reservation, the slot
-// back at the head the fixer started from, as any failed settle leaves it.
+// record) as unconfirmed, for why: under the PR's reservation and to its
+// end, whatever stops the tick meanwhile (the writes of a failure a
+// shutdown cut would leave the loop half ended), the slot back at the head
+// the fixer started from, as any failed settle leaves it. A job that
+// cannot be rebuilt (its run gone) ends the loop all the same, once
+// (endConfirming), and the record goes.
 func (e *Engine) failPush(ctx context.Context, repo store.Repo, pr store.PR, row fixPushRow, why error) {
 	if !e.reserve(pr.ID, &roundHandle{cancel: func() {}, fix: true, stop: roundStop{ended: true}}) {
 		return
 	}
 	defer e.unreserve(pr.ID)
+	ctx = context.WithoutCancel(ctx)
 	job, err := e.pushJob(ctx, repo, pr, row.rec)
 	if err != nil {
-		e.log.Warn("fix: the job of a push to confirm", "subject", prSubject(repo, pr.Number), "err", err)
+		e.endConfirming(ctx, repo, pr, why.Error()+"; "+err.Error())
+		e.dropPushRow(ctx, pr.ID, row)
 		return
 	}
 	msg := "fix settle failed: " + pushNotConfirmed{head: row.rec.Pushed, err: why}.Error()
@@ -562,9 +716,11 @@ func (e *Engine) failPush(ctx context.Context, repo store.Repo, pr store.PR, row
 
 // settleConfirmedPush settles the fix of row (pr's record) as pushed, now
 // that GitHub shows its push as the PR's head, under the PR's reservation
-// (an abort meanwhile is told to try again shortly), in resumable steps of
-// a subject of its own (pushSubject), so a restart in the middle does none
-// of them twice: the first says so (fix.push_confirmed for a loop still in
+// (an abort meanwhile is told to try again shortly) and to its end, as a
+// fix job's settle runs, whatever stops the tick meanwhile: a shutdown in
+// the middle of a step would leave its writes half done under a step
+// marked done. It runs in resumable steps of a subject of its own
+// (pushSubject), so a restart between them does none of them twice: the first says so (fix.push_confirmed for a loop still in
 // its settle, fix.push_confirmed_late for a fix that failed for want of
 // it), the next puts the slot at the push, and the last does what a settle
 // does after a confirmed push (settleReport: the replies and the calls the
@@ -577,7 +733,7 @@ func (e *Engine) settleConfirmedPush(ctx context.Context, repo store.Repo, pr st
 		return
 	}
 	defer e.unreserve(pr.ID)
-	ctx = github.WithOp(ctx, opFixSettle) // github_cost.go
+	ctx = github.WithOp(context.WithoutCancel(ctx), opFixSettle) // github_cost.go
 	subject := prSubject(repo, pr.Number)
 	job, err := e.pushJob(ctx, repo, pr, rec)
 	if err == nil {
@@ -585,6 +741,9 @@ func (e *Engine) settleConfirmedPush(ctx context.Context, repo store.Repo, pr st
 	}
 	if err != nil {
 		e.log.Warn("fix: a confirmed push cannot be settled", "subject", subject, "err", err)
+		if rec.Kind == fixPushConfirming { // its loop would hold the PR in its settle for good
+			e.endConfirming(ctx, repo, pr, "its push cannot be settled: "+err.Error())
+		}
 		e.dropPushRow(ctx, pr.ID, row)
 		return
 	}
@@ -633,8 +792,11 @@ func (e *Engine) pushSlot(ctx context.Context, job *fixJob, head string) {
 
 // settlePushed is the last step of the settle of rec's confirmed push: a
 // late one's run goes back from failed to ended and the fix's attention is
-// cleared (its row and its run's), then settleReport does what a settle
-// does after a push, on the fixer's report read again.
+// cleared (its row and its run's), the author's replies without the fix
+// marker are named when the settle could not look for them (an outage),
+// then settleReport does what a settle does after a push, on the fixer's
+// report read again. The step fails, and the next poll runs it again, when
+// the run is still active after it: a write of the settle's failed.
 func (e *Engine) settlePushed(ctx context.Context, job *fixJob, rec fixPush, late bool) error {
 	rep, err := e.readFixReport(job)
 	if err != nil {
@@ -655,7 +817,18 @@ func (e *Engine) settlePushed(ctx context.Context, job *fixJob, rec fixPush, lat
 			e.delKV(ctx, KVPRAttention(job.pr.ID), kvPRAttentionRun(job.pr.ID))
 		}
 	}
-	e.settleReport(ctx, job, rep, true, rec.Pushed, rec.Typed, e.threadsReader(ctx, job))
+	read := e.threadsReader(ctx, job)
+	if !rec.RepliesNamed && mayHaveReplied(rep) {
+		e.nameUnmarkedReplies(ctx, job, read) // fix_external.go: the settle's own look failed in the outage
+	}
+	e.settleReport(ctx, job, rep, true, rec.Pushed, rec.Typed, read)
+	run, err := e.st.RunByID(ctx, job.run.ID)
+	switch {
+	case err != nil:
+		return err
+	case slices.Contains([]string{store.RunPending, store.RunSubmitted, store.RunWorking, store.RunEnded}, run.State):
+		return fmt.Errorf("the fixer's run %s is still %s after the settle: a write of it failed", run.ID, run.State)
+	}
 	return nil
 }
 
