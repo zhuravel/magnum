@@ -239,3 +239,76 @@ func TestADropThatDidNotApplyIsAppliedAtTheNextPass(t *testing.T) {
 		t.Fatalf("task %s after the recorded drop; want it stopped", got.State)
 	}
 }
+
+// A second answer for a role still lost before its first prompt is applied
+// too: its recoveries start over again and its first prompt carries the
+// newer answer, never the first one's.
+func TestASecondAnswerForARoleStillLostBeforeItsFirstPromptIsApplied(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12550", "bug", "investigate")
+	h.rt.mu.Lock()
+	h.rt.sendErr = errors.New("agent: no session")
+	h.rt.mu.Unlock()
+	h.startStage(task)
+	lose := func() registry.Task {
+		h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventLost, Reason: "no progress after 3 recoveries"})
+		h.clock.Add(time.Minute)
+		h.tick()
+		got := h.reload(task.ID)
+		if got.State != registry.TaskNeedsYou {
+			t.Fatalf("task %s waits %q; want the lost question", got.State, got.WaitsWhat)
+		}
+		return got
+	}
+	got := lose()
+	h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: got.QuestionRev, Answers: map[int]string{0: optionStart}})
+	h.clock.Add(time.Minute)
+	h.tick() // its first prompt still finds no session
+	got = lose()
+	h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: got.QuestionRev, Answers: map[int]string{0: optionDirection + ": use the seeds"}})
+	h.rt.mu.Lock()
+	h.rt.sendErr = nil
+	h.rt.mu.Unlock()
+	h.clock.Add(time.Minute)
+	h.tick()
+	ps := h.rt.promptsTo("fx-repro")
+	if over := h.rt.startOvers(); len(over) != 2 || len(ps) != 1 || !strings.Contains(ps[0].Text, "use the seeds") {
+		t.Fatalf("start-overs %q, prompts %+v; want two start-overs and the first prompt with the second answer's words", over, ps)
+	}
+}
+
+// A role's needs-you event in a pass that asks another role's stop question
+// is kept, never dropped: once you answered, the task waits on you for it.
+func TestAnotherRolesNeedsYouEventOutlivesAStopQuestion(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12551", "bug", "investigate")
+	h.startStage(task)
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-cause", RunID: h.lastRun("fx-cause"), Kind: runtime.EventStuck,
+		Reason: "the turn hung"},
+		runtime.Event{TaskID: task.ID, Role: "fx-repro", RunID: h.lastRun("fx-repro"), Kind: runtime.EventLost,
+			Reason: "no progress after 3 recoveries"})
+	h.tick()
+	got := h.reload(task.ID)
+	h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: got.QuestionRev, Answers: map[int]string{0: optionStart}})
+	h.tick()
+	if after := h.reload(task.ID); after.State != registry.TaskNeedsYou || !strings.Contains(after.WaitsWhat, "fx-cause agent is stuck") {
+		t.Fatalf("task %s waits %q after your answer; want the stuck fx-cause told", after.State, after.WaitsWhat)
+	}
+}
+
+// Two roles' needs-you events in one pass with no question are both told:
+// the task waits on you for each, named in one line.
+func TestTwoRolesNeedsYouEventsAreBothTold(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12552", "bug", "investigate")
+	h.startStage(task)
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-cause", RunID: h.lastRun("fx-cause"), Kind: runtime.EventStuck,
+		Reason: "the turn hung"},
+		runtime.Event{TaskID: task.ID, Role: "fx-repro", RunID: h.lastRun("fx-repro"), Kind: runtime.EventBlocked,
+			Reason: "dialog: Allow this?"})
+	h.tick()
+	if got := h.reload(task.ID); got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "fx-cause agent is stuck") ||
+		!strings.Contains(got.WaitsWhat, "fx-repro agent shows a prompt") {
+		t.Fatalf("task %s waits %q; want both roles told", got.State, got.WaitsWhat)
+	}
+}

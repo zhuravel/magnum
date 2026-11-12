@@ -398,7 +398,7 @@ func (r *Runtime) ended(ctx context.Context, run store.Run) {
 	defer r.mu.Unlock()
 	if st := r.roles[roleKey{run.TargetSHA, run.Role}]; st != nil {
 		st.step, st.stuck, st.recovering, st.pending, st.sig, st.since = 0, false, false, false, "", time.Time{}
-		st.dueAt = time.Time{} // a recovery that waited is void: the role moved
+		r.voidDue(st) // a recovery that waited is void: the role moved
 	}
 }
 

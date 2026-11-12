@@ -48,8 +48,14 @@ const (
 	recoveryWord  = "recovery "
 	startOverWord = "starts over"
 	ranOutWord    = "ran out"
-	dueWord       = "due " // a recovery that waits: "due 2 at <time>"
+	dueWord       = "due " // a recovery that waits: "due 2 at <time>", or "due void" once it is void (voidDue)
+	dueQuietWord  = " on no progress"
+	dueVoidWord   = "due void"
 )
+
+// noProgressLead starts the why of a recovery the watchdog takes for a
+// session that shows no progress: its wait is quiet (dueQuiet).
+const noProgressLead = "no progress for "
 
 // recoverLead starts the recover events of role in attempt.
 func recoverLead(role, attempt string) string { return role + " in " + attempt + ": " }
@@ -190,7 +196,8 @@ func (r *Runtime) SendFresh(ctx context.Context, t registry.Task, a registry.Att
 		return "", err
 	}
 	r.mu.Lock()
-	st.stuck, st.pending, st.step, st.dueAt = false, false, 0, time.Time{}
+	st.stuck, st.pending, st.step = false, false, 0
+	r.voidDue(st)
 	if recoveriesOver {
 		st.lost, st.recovering = false, false
 	}
@@ -222,29 +229,55 @@ func (r *Runtime) MadeProgress(t registry.Task, a registry.Attempt, role string)
 }
 
 // dueOf is the due time of the recovery of role in attempt of task id that
-// waited when the daemon stopped: the newest recover event of the role says
-// it ("due n at <time>"), with no recovery, start over or running out after
-// it.
-func (r *Runtime) dueOf(ctx context.Context, id int64, attempt, role string) (time.Time, bool) {
+// waited when the daemon stopped, and whether it came of a no-progress
+// finding (quiet: "on no progress"): the newest recover event of the role
+// says it ("due n at <time>"), with no recovery, start over, running out
+// or void ("due void") after it.
+func (r *Runtime) dueOf(ctx context.Context, id int64, attempt, role string) (due time.Time, quiet, ok bool) {
 	evs, err := r.reg.TaskEvents(ctx, id, recoverKind, 0)
 	if err != nil {
-		return time.Time{}, false
+		return time.Time{}, false, false
 	}
 	lead := recoverLead(role, attempt)
-	var due time.Time
 	for _, ev := range evs { // oldest first, as countRecoveries reads them
 		rest, ok := strings.CutPrefix(ev.Text, lead)
 		if !ok {
 			continue
 		}
-		due = time.Time{}
+		due, quiet = time.Time{}, false
 		if w, ok := strings.CutPrefix(rest, dueWord); ok {
 			if _, at, ok := strings.Cut(w, " at "); ok {
+				at, quiet = strings.CutSuffix(at, dueQuietWord)
 				due, _ = time.Parse(time.RFC3339, at)
 			}
 		}
 	}
-	return due, !due.IsZero()
+	return due, quiet, !due.IsZero()
+}
+
+// voidDue ends the wait of role st's recovery (dueAt): a run went, its turn
+// ended, it moved or its recoveries started over. A wait a due event said
+// is queued for flushVoids, so a restart reads no due recovery back. r.mu is
+// held.
+func (r *Runtime) voidDue(st *roleState) {
+	st.dueAt, st.dueQuiet = time.Time{}, false
+	if st.dueSaid {
+		st.dueSaid = false
+		r.voids = append(r.voids, st)
+	}
+}
+
+// flushVoids writes the "due void" recover event of each wait voidDue ended
+// since the last flush: at each watchdog pass, and before a new wait's due
+// event, which it never follows.
+func (r *Runtime) flushVoids(ctx context.Context) {
+	r.mu.Lock()
+	vs := r.voids
+	r.voids = nil
+	r.mu.Unlock()
+	for _, st := range vs {
+		r.appendEvent(ctx, st.taskID, recoverKind, recoverLead(st.key.role, st.key.attempt)+dueVoidWord)
+	}
 }
 
 // StartOver starts the recoveries and the ladders of role in attempt a of
@@ -262,7 +295,8 @@ func (r *Runtime) StartOver(ctx context.Context, t registry.Task, a registry.Att
 		return
 	}
 	r.mu.Lock()
-	st.stuck, st.lost, st.pending, st.recovering, st.step, st.dueAt = false, false, false, false, 0, time.Time{}
+	st.stuck, st.lost, st.pending, st.recovering, st.step = false, false, false, false, 0
+	r.voidDue(st)
 	r.mu.Unlock()
 	r.noteStartOver(ctx, t, a, role.Name, why)
 }

@@ -131,3 +131,43 @@ func (g *rig) setTaskState(state string) {
 		g.t.Fatal(err)
 	}
 }
+
+// A recovery that waits after a no-progress finding outlives a restart as
+// such: the restart takes a fresh look at the session (a new baseline) and
+// runs the recovery at its due time unless the session moves, though its
+// session is live.
+func TestANoProgressWaitOutlivesARestart(t *testing.T) {
+	g := newRig(t)
+	g.lostThenResumed("fx-repro", "sid-1")
+	g.h.setStatus(g.agent("fx-repro"), herdr.StatusWorking)
+	g.watchdog()
+	g.clock.Add(NoProgressAfter)
+	g.watchdog() // no progress: recovery 3 waits its 5 minutes
+	starts := len(g.h.startCalls())
+	g.restart()
+	g.watchdog()
+	g.afterWait(3)
+	if got := len(g.h.startCalls()); got != starts+1 {
+		t.Fatalf("%d starts after a restart during a no-progress wait, want the recovery once", got-starts)
+	}
+}
+
+// A waited recovery voided in memory (the session moved again) is voided in
+// its events too: a restart reads no due recovery back.
+func TestAVoidedWaitStaysVoidAfterARestart(t *testing.T) {
+	g := newRig(t)
+	g.lostThenResumed("fx-repro", "sid-1")
+	g.h.setStatus(g.agent("fx-repro"), herdr.StatusWorking)
+	g.watchdog()
+	g.clock.Add(NoProgressAfter)
+	g.watchdog() // no progress: the next recovery waits
+	starts := len(g.h.startCalls())
+	g.h.screen(g.agent("fx-repro"), "Bash(bin/rspec)\nrunning the specs again\n")
+	g.watchdog() // the session moved: the wait is void
+	g.restart()
+	g.watchdog()
+	g.afterWait(3)
+	if got := len(g.h.startCalls()); got != starts {
+		t.Fatalf("%d starts after a restart: the voided wait came back", got-starts)
+	}
+}

@@ -84,6 +84,8 @@ func (e errRecoveriesSpent) Error() string {
 // contained: it comes back as the error.
 func (r *Runtime) Watchdog(ctx context.Context, now time.Time) (evs []Event, err error) {
 	defer contain("watchdog", r.log, &err)
+	r.flushVoids(ctx)
+	defer r.flushVoids(ctx)
 	runs, err := r.st.ActiveRuns(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("watchdog: %w", err)
@@ -145,12 +147,18 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 		quiet, was := st.dueQuiet, st.sig
 		r.mu.Unlock()
 		if quiet { // after a no-progress finding: a session that moves again voids it
-			if sig := r.signature(ctx, st, run); sig != was {
-				r.mu.Lock()
-				st.dueAt, st.dueQuiet, st.sig, st.since = time.Time{}, false, sig, now
+			sig := r.signature(ctx, st, run)
+			r.mu.Lock()
+			switch {
+			case st.since.IsZero(): // read back after a restart: what the session shows now is what a move is told against
+				st.sig, st.since = sig, now
+			case sig != was:
+				r.voidDue(st)
+				st.sig, st.since = sig, now
 				r.mu.Unlock()
 				return Event{}, false
 			}
+			r.mu.Unlock()
 		}
 		if now.Before(due) {
 			return Event{}, false
@@ -199,7 +207,7 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 		return Event{}, false // a pause, a refusal or you in the pane: no step now
 	}
 	if recovering || (run.ID == "" && !climbing) {
-		err := r.recoverRole(ctx, t, a, st.role, "no progress for "+NoProgressAfter.String(), run.ID != "")
+		err := r.recoverRole(ctx, t, a, st.role, noProgressLead+NoProgressAfter.String(), run.ID != "")
 		if spent, ok := errors.AsType[errRecoveriesSpent](err); ok {
 			return r.lostEvent(t, a, st.role, spent), true
 		}
@@ -210,8 +218,8 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 		}
 		r.mu.Lock()
 		waits := !st.dueAt.IsZero()
-		if waits { // the recovery waits: what the session shows now is what a move of it is told against
-			st.dueQuiet, st.sig = true, sig
+		if waits { // the recovery waits (dueQuiet): what the session shows now is what a move of it is told against
+			st.sig = sig
 		}
 		r.mu.Unlock()
 		if !waits {
@@ -241,7 +249,8 @@ func (r *Runtime) recoverDue(ctx context.Context, st *roleState) (Event, bool) {
 	}
 	if _, live := r.liveSession(ctx, st); live && !quiet { // a wait for a lost pane whose role has a session again (read back after a restart): none is due
 		r.mu.Lock()
-		st.dueAt, st.recovering, st.dueSaid = time.Time{}, false, false
+		r.voidDue(st)
+		st.recovering = false
 		r.mu.Unlock()
 		return Event{}, false
 	}
@@ -255,7 +264,8 @@ func (r *Runtime) recoverDue(ctx context.Context, st *roleState) (Event, bool) {
 	}
 	if a.State != registry.AttemptLaunching && a.State != registry.AttemptRunning { // the stage moved on: none is due
 		r.mu.Lock()
-		st.dueAt, st.recovering = time.Time{}, false
+		r.voidDue(st)
+		st.recovering = false
 		r.mu.Unlock()
 		return Event{}, false
 	}
@@ -436,7 +446,7 @@ func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.A
 		r.mu.Lock()
 		st.stuck, st.lost, st.pending, st.recovering = false, false, false, false
 		st.step = 0
-		st.dueAt = time.Time{}
+		r.voidDue(st)
 		r.mu.Unlock()
 		r.noteStartOver(ctx, t, a, role.Name, "your retry") // a restart counts from here too
 	case owned:
@@ -537,7 +547,8 @@ func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.A
 	now := r.now()
 	r.mu.Lock()
 	if st.lost || used >= MaxRecoveries {
-		st.recovering, st.dueAt = false, time.Time{}
+		st.recovering = false
+		r.voidDue(st)
 		r.mu.Unlock()
 		return errRecoveriesSpent{n: used}
 	}
@@ -547,11 +558,17 @@ func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.A
 	}
 	if now.Before(st.dueAt) {
 		fresh := !st.recovering || !st.dueSaid
-		st.recovering, st.dueQuiet, st.dueSaid = true, false, true // the watchdog takes it once its wait is over
+		quiet := strings.HasPrefix(why, noProgressLead)
+		st.recovering, st.dueQuiet, st.dueSaid = true, quiet, true // the watchdog takes it once its wait is over
 		due := st.dueAt
 		r.mu.Unlock()
 		if fresh { // a restart reads it back (dueOf), so the wait outlives the daemon
-			r.appendEvent(ctx, t.ID, recoverKind, fmt.Sprintf("%s%s%d at %s", recoverLead(role.Name, a.ID), dueWord, n, due.UTC().Format(time.RFC3339)))
+			r.flushVoids(ctx) // an earlier wait's void goes first: never after the due event it would end
+			text := fmt.Sprintf("%s%s%d at %s", recoverLead(role.Name, a.ID), dueWord, n, due.UTC().Format(time.RFC3339))
+			if quiet {
+				text += dueQuietWord
+			}
+			r.appendEvent(ctx, t.ID, recoverKind, text)
 		}
 		r.log.Info("a role's recovery waits", "task", t.ID, "role", role.Name, "recovery", n, "due", due)
 		return nil

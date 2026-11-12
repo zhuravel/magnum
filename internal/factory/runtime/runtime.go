@@ -180,6 +180,7 @@ type Runtime struct {
 	keys      map[int64]string      // task id -> its key, the owner name in titles
 	talkTasks map[int64]*sync.Mutex // task id -> its Talk's lock (talkLock)
 	roles     map[roleKey]*roleState
+	voids     []*roleState // waits a due event said that voidDue ended: flushVoids writes their "due void"
 	loops     map[loopKey]*loopState
 	pauses    map[string]*pause        // agent kind -> its pause
 	misses    map[int64]time.Time      // ledger entry -> the first read that did not find it
@@ -242,8 +243,10 @@ type roleState struct {
 	ranOut     time.Time
 	dueAt      time.Time
 	// dueQuiet: the waited recovery came of a no-progress finding, whose
-	// screen and transcript were sig; a session that moves since voids it.
-	// dueSaid: a "due" recover event says the wait (dueOf reads it back).
+	// screen and transcript were sig (none yet after a restart: the first
+	// look takes it); a session that moves since voids it. dueSaid: a "due"
+	// recover event says the wait (dueOf reads it back, and voidDue's "due
+	// void" ends it).
 	dueQuiet, dueSaid bool
 	// pending: a recovery quit the role's session (or found it gone) and
 	// abandoned its runs, and no new run of it was sent yet (handOver): the
@@ -547,7 +550,7 @@ func (r *Runtime) calm(attempt, role string, taskID int64, kind string, refused 
 	defer r.mu.Unlock()
 	if st := r.roles[roleKey{attempt, role}]; st != nil {
 		st.recovering, st.pending, st.step, st.sig, st.since = false, false, 0, "", time.Time{}
-		st.dueAt = time.Time{}
+		r.voidDue(st)
 		st.refused = st.refused || refused
 	}
 	if refused && kind == agents.KindCodex {
@@ -1087,8 +1090,8 @@ func (r *Runtime) stateFor(ctx context.Context, attempt, role string) (*roleStat
 		return nil, fmt.Errorf("attempt %s: no factory role %q", attempt, role)
 	}
 	st = &roleState{key: k, taskID: a.TaskID, stage: a.Stage, role: spec}
-	if due, ok := r.dueOf(ctx, a.TaskID, attempt, role); ok { // a recovery that waited when the daemon stopped
-		st.dueAt, st.recovering, st.dueSaid = due, true, true
+	if due, quiet, ok := r.dueOf(ctx, a.TaskID, attempt, role); ok { // a recovery that waited when the daemon stopped
+		st.dueAt, st.recovering, st.dueSaid, st.dueQuiet = due, true, true, quiet
 	}
 	if pr, err := r.ownerRow(ctx, a.TaskID); err == nil {
 		if ss, err := r.st.SessionsByPR(ctx, pr.ID); err == nil {
@@ -1203,7 +1206,8 @@ func (r *Runtime) settleRun(ctx context.Context, runID, outcome, why string) err
 		l.fails, l.step = nil, 0
 		l.reset = true
 		delete(r.once, noProgressKey(lk))
-		st.dueAt, st.recovering = time.Time{}, false
+		r.voidDue(st)
+		st.recovering = false
 	} else {
 		l.fails = append(l.fails, why)
 		if len(l.fails) > SameFailures {

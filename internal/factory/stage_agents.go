@@ -269,8 +269,10 @@ type stageRole struct {
 	freshOver bool
 	// firstNote is your answer to the lost question of a role that took no
 	// prompt yet, which its first prompt carries after the stage's
-	// (applyStops); "" for none.
-	firstNote string
+	// (applyStops); "" for none. firstNoteAt is when you decided it: a newer
+	// answer to a question asked again takes its place.
+	firstNote   string
+	firstNoteAt time.Time
 	// relaunch: it runs again as its fallback after a Codex refusal or a
 	// usage limit (a launch, then its prompt); covered: its fallback is a
 	// role of the stage (coveredIn), so it leaves the run instead. refused:
@@ -485,24 +487,35 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 }
 
 // youOf is what this pass of run (attempt a of task *tp's stage st) needs
-// you for: the first wait the runtime's events (the rebuild's, then the
-// observe pass's) bring, else the recheck of the roles that failed
-// (recheckFailed), and the question a stop past its budget asks in its
-// place (run.ask; nil for none). "" for nothing.
+// you for: the waits the runtime's events (the rebuild's, then the observe
+// pass's) bring, every one of them, else the recheck of the roles that
+// failed (recheckFailed), and the questions stops past their budgets ask
+// (run.ask). "" for nothing. With no question, the task waits on you for
+// every wait, named in one line; with one, it waits on the question, and
+// the events of the other waits are kept for the pass after your answer
+// (the task's inbox), so none is dropped.
 func (e *Engine) youOf(ctx context.Context, tp *registry.Task, st config.FactoryStage, a registry.Attempt, run *agentsRun,
 	rebuilt []runtime.Event, dir string) (string, []stopQuestion) {
-	you := ""
-	var asks []stopQuestion
-	for _, ev := range append(rebuilt, e.takeEvents(tp.ID)...) { // the first event that needs you is what the task waits on you for
+	var (
+		whats, asked []string
+		asks         []stopQuestion
+		kept         []runtime.Event
+	)
+	for _, ev := range append(rebuilt, e.takeEvents(tp.ID)...) {
 		run.ask = nil
-		what := e.onAgentEvent(ctx, tp, st, a, run, ev, dir)
-		if what != "" && you == "" {
-			you = what
-		}
-		if what != "" && run.ask != nil { // every stop's question of the pass is asked: one taken here is never asked again
-			asks = append(asks, *run.ask)
+		switch what := e.onAgentEvent(ctx, tp, st, a, run, ev, dir); {
+		case what == "":
+		case run.ask != nil: // every stop's question of the pass is asked: one taken here is never asked again
+			asks, asked = append(asks, *run.ask), append(asked, what)
+		case !slices.Contains(whats, what):
+			whats, kept = append(whats, what), append(kept, ev)
 		}
 	}
+	if len(asks) > 0 {
+		e.inbox[tp.ID] = append(kept, e.inbox[tp.ID]...)
+		return asked[0], asks
+	}
+	you := strings.Join(whats, "; ")
 	if you == "" {
 		run.ask = nil
 		if you = e.recheckFailed(ctx, tp, st, a, run, dir); run.ask != nil {
@@ -1716,7 +1729,7 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 				e.event(ctx, t.ID, "questions", registry.PhaseInfo, r.runAs.Name+" got the answer that changed the plan after coding "+
 					"began: "+changedWhich(run.change))
 			}
-			r.next, r.problem, r.pause, r.fresh, r.freshOver, r.firstNote = "", nil, "", "", false, ""
+			r.next, r.problem, r.pause, r.fresh, r.freshOver, r.firstNote, r.firstNoteAt = "", nil, "", "", false, "", time.Time{}
 		}
 		if serr == nil {
 			continue
