@@ -93,12 +93,11 @@ type PrecheckResult struct {
 	check    string
 	failures []string
 	// unnamed: the failures are firstFailing's, the run having named no
-	// failing example or offense. noAccept: a failure your accept must not
-	// hide (a run that showed nothing readable, ran no example or could not
-	// load a spec file). all are every failing check's failures, "key:
-	// failure", which the writer's progress compares.
-	unnamed, noAccept bool
-	all               []string
+	// failing example or offense, which no accept covers. all are every
+	// failing check's failures, "key: failure", which the writer's progress
+	// compares.
+	unnamed bool
+	all     []string
 }
 
 // errOverCap is the cause of a precheck's context its cap ended.
@@ -511,25 +510,27 @@ func (p *precheckRun) readDecisions() {
 // first failing line) for the fix turns' progress (fix_go_on.go); a failure
 // of a check your answer accepted as known for the task is a note instead.
 func (p *precheckRun) failCheck(key string, failures []string, why, cmd string) {
-	p.failChecked(key, failures, false, why, cmd)
+	if p.stops.accepts(key, failures) {
+		p.say("\nAccepted as known for this task, on your answer to its question: %s.\n", why)
+		return
+	}
+	if p.res.Passed {
+		p.res.check, p.res.failures, p.res.unnamed = key, failures, false
+	}
+	p.noteFailures(key, failures)
+	p.fail(why, cmd)
 }
 
 // failUnnamed is failCheck of a run that named no failing example or
 // offense: its failure is the line firstFailing reads, and your accept of
 // it holds for the check alone (unnamed).
 func (p *precheckRun) failUnnamed(key string, run ProofRun, why, cmd string) {
-	if unreadableRun(run) || blindRun(run) { // no accept: it would hide what the run never showed
-		if p.res.Passed {
-			p.res.noAccept = true
-		}
-		p.fail(why, cmd)
-		p.noteFailures(key, firstFailing(run))
-		if len(p.res.failures) == 0 {
-			p.res.check, p.res.failures, p.res.unnamed = key, firstFailing(run), true
-		}
-		return
+	failures := firstFailing(run) // the writer's progress compares them; no accept covers them
+	if p.res.Passed {
+		p.res.check, p.res.failures, p.res.unnamed = key, failures, true
 	}
-	p.failChecked(key, firstFailing(run), true, why, cmd)
+	p.noteFailures(key, failures)
+	p.fail(why, cmd)
 }
 
 // noteFailures records failures of check key among every failing check's
@@ -538,19 +539,6 @@ func (p *precheckRun) noteFailures(key string, failures []string) {
 	for _, f := range failures {
 		p.res.all = append(p.res.all, key+": "+f)
 	}
-}
-
-// failChecked is failCheck, unnamed for a failure read by firstFailing.
-func (p *precheckRun) failChecked(key string, failures []string, unnamed bool, why, cmd string) {
-	if p.stops.accepts(key, failures, unnamed) {
-		p.say("\nAccepted as known for this task, on your answer to its question: %s.\n", why)
-		return
-	}
-	if p.res.Passed {
-		p.res.check, p.res.failures, p.res.unnamed = key, failures, unnamed
-	}
-	p.noteFailures(key, failures)
-	p.fail(why, cmd)
 }
 
 // restoreOwn puts back what the precheck's commands changed so far

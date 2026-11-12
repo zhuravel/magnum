@@ -122,7 +122,6 @@ type endProblem struct {
 	check    string
 	failures []string
 	unnamed  bool     // the failures are firstFailing's
-	noAccept bool     // a failure your accept must not hide: the question offers none
 	all      []string // every failing check's failures, which the writer's progress compares
 }
 

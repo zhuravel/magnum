@@ -372,22 +372,6 @@ func failingLines(run ProofRun) []string {
 	return lines
 }
 
-// unreadableRun reports whether run printed nothing that may say why it failed
-// (failingLines: noise alone, a banner, nothing): its failure is the
-// writer's, with no accept offered.
-func unreadableRun(run ProofRun) bool { return firstLine(strings.Join(failingLines(run), "\n")) == "" }
-
-// blindRun reports whether a spec run ran no example or could not load a
-// spec file: nothing it would have found shows, so your accept of its
-// failure would hide every failure the change makes after it.
-func blindRun(run ProofRun) bool {
-	stdout, stderr := runText(run)
-	return zeroExamplesRe.MatchString(stdout+"\n"+stderr) || strings.Contains(stdout+stderr, "An error occurred while loading ")
-}
-
-// zeroExamplesRe is rspec's summary of a run of no example.
-var zeroExamplesRe = regexp.MustCompile(`(?m)^0 examples, `)
-
 // timingRe is a duration a run prints after a test or a step ("(12 ms)",
 // "(1.4 s)"), new each run.
 var timingRe = regexp.MustCompile(`\s*\(\d+(?:\.\d+)?\s*m?s\)$`)

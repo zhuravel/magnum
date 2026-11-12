@@ -607,7 +607,7 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 		p := &endProblem{file: file, why: res.why(), change: true, command: res.failedCommand(), check: check, failures: failed,
 			unnamed: unnamed}
 		if res.Precheck != nil && (res.Proof == nil || res.Proof.Passed) {
-			p.noAccept, p.all = res.Precheck.noAccept, res.Precheck.all
+			p.all = res.Precheck.all
 		}
 		return p, "", false, nil
 	}

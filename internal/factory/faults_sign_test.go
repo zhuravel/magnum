@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 )
@@ -457,55 +456,6 @@ func TestAFailureNoExampleNamesReadsTheSameOnEveryRun(t *testing.T) {
 	}
 }
 
-// Your accept of a failure no example names holds for that failure, read
-// the same on every run (firstFailing: its seed is no part of it), so the
-// question never comes back for it. A new failure of the check still fails,
-// as the option says: a spec file that no longer loads, and a failing
-// example.
-func TestAnAcceptOfAFailureNoExampleNamesHoldsForItsCheck(t *testing.T) {
-	r := newCodingRig(t)
-	task := r.codingTask("PR-12595", "bug")
-	r.fix(task)
-	r.mu.Lock()
-	r.adds = map[string]string{"bin/specs": afterSuiteRun("11866")}
-	r.mu.Unlock()
-	res, err := r.e.precheck(r.ctx, task, r.cp)
-	if err != nil || res.Passed || !res.unnamed {
-		t.Fatalf("precheck %+v, %v; want the writer's failure, read with no example named", res, err)
-	}
-	p := &endProblem{check: res.check, failures: res.failures, unnamed: res.unnamed, why: res.Why}
-	q := fixQuestion(registry.Attempt{ID: "t1-coding-1", Stage: "coding", N: 1}, &stageRole{runAs: config.Role{Name: "fx-writer"}}, p,
-		fixBudget{})
-	a := q.ask
-	a.Decision = decideAccept
-	dir := r.layout.FactoryTaskDir(task.ID)
-	rec, _ := readStops(dir)
-	rec.apply(a)
-	if err := writeStops(dir, rec); err != nil {
-		t.Fatal(err)
-	}
-	r.mu.Lock()
-	r.adds = map[string]string{"bin/specs": afterSuiteRun("4242")}
-	r.mu.Unlock()
-	if res, err := r.e.precheck(r.ctx, task, r.cp); err != nil || !res.Passed {
-		t.Fatalf("precheck %+v, %v after your accept, on a new seed; want it passed", res, err)
-	}
-	r.mu.Lock()
-	r.adds = map[string]string{"bin/specs": "\nRandomized with seed 5\n\nAn error occurred while loading ./spec/models/credit_points_spec.rb.\n" +
-		"Failure/Error: def points(\n\nSyntaxError:\n  --> ./app/credit.rb\n\n" +
-		"Finished in 0.00004 seconds (files took 0.2 seconds to load)\n0 examples, 0 failures, 1 error occurred outside of examples\n"}
-	r.mu.Unlock()
-	if res, err := r.e.precheck(r.ctx, task, r.cp); err != nil || res.Passed {
-		t.Fatalf("precheck %+v, %v on a spec file that no longer loads; want it failed: a new failure of the check", res, err)
-	}
-	r.mu.Lock()
-	r.adds = map[string]string{"bin/specs": "Failures:\n\n  1) Credit counts\nrspec ./spec/models/credit_points_spec.rb:3 # Credit counts\n"}
-	r.mu.Unlock()
-	if res, err := r.e.precheck(r.ctx, task, r.cp); err != nil || res.Passed {
-		t.Fatalf("precheck %+v, %v on a failing example; want it failed: the accept covers the unnamed failure only", res, err)
-	}
-}
-
 // eslint's stylish report and stylelint's name the file on a line of its
 // own and each offense on a row of line:column under it: the factory reads
 // the file from that line, so the changed-line filter holds for them as for
@@ -601,24 +551,6 @@ func TestARisingCoverageIsProgress(t *testing.T) {
 	turn := func(lines string) turnFailure { return turnFailure{Check: "precheck.jest", Failures: read(lines)} }
 	if !progressed([]turnFailure{turn("70.1"), turn("75.3"), turn("78.9")}) || progressed([]turnFailure{turn("75.3"), turn("75.3"), turn("75.3")}) {
 		t.Fatal("rising coverage reads as no progress, or the same coverage as progress")
-	}
-}
-
-// Your accept of a coverage miss holds while the coverage stays under the
-// same threshold, whatever its percent now (75.3%, 75.4%): its key reads
-// the percent as any, never another threshold or metric. The writer's
-// progress reads the raw line, so a coverage that rises is still progress.
-func TestAnAcceptOfACoverageMissHoldsUnderTheSameThreshold(t *testing.T) {
-	line := func(metric, at string) string {
-		return `Jest: "global" coverage threshold for ` + metric + ` (80%) not met: ` + at + "%"
-	}
-	rec := stopsRecord{Accepted: []accepted{{Check: "precheck.jest", Failures: []string{line("lines", "75.3")}, Unnamed: true}}}
-	if !rec.accepts("precheck.jest", []string{line("lines", "75.4")}, true) || rec.accepts("precheck.jest", []string{line("branches", "75.3")}, true) {
-		t.Fatal("the accept of 75.3% misses 75.4% under the same threshold, or covers another metric's")
-	}
-	if sameFailure(turnFailure{Check: "precheck.jest", Failures: []string{line("lines", "75.3")}},
-		turnFailure{Check: "precheck.jest", Failures: []string{line("lines", "75.4")}}) {
-		t.Fatal("a rising coverage reads as the same failure: no progress")
 	}
 }
 

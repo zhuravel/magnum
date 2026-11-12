@@ -11,32 +11,10 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry"
 )
 
-// acceptUnnamed runs task's precheck with bin/specs printing out, records
-// your accept of its unnamed failure (fixQuestion's ask, decided accept),
-// and returns the result.
-func (r *codingRig) acceptUnnamed(task registry.Task, out string) PrecheckResult {
-	r.t.Helper()
-	r.mu.Lock()
-	r.adds = map[string]string{"bin/specs": out}
-	r.mu.Unlock()
-	res, err := r.e.precheck(r.ctx, task, r.cp)
-	if err != nil || res.Passed || !res.unnamed {
-		r.t.Fatalf("precheck %+v, %v; want the writer's unnamed failure", res, err)
-	}
-	q := fixQuestion(registry.Attempt{ID: "t1-coding-1", Stage: "coding", N: 1}, &stageRole{runAs: config.Role{Name: "fx-writer"}},
-		&endProblem{check: res.check, failures: res.failures, unnamed: res.unnamed, noAccept: res.noAccept, why: res.Why}, fixBudget{})
-	if !slices.Contains(optionLabels(q.q), optionAccept) {
-		return res
-	}
-	a := q.ask
-	a.Decision = decideAccept
-	dir := r.layout.FactoryTaskDir(task.ID)
-	rec, _ := readStops(dir)
-	rec.apply(a)
-	if err := writeStops(dir, rec); err != nil {
-		r.t.Fatal(err)
-	}
-	return res
+// fixQuestionOf is the fix question a precheck's result res would ask.
+func fixQuestionOf(res PrecheckResult) stopQuestion {
+	return fixQuestion(registry.Attempt{ID: "t1-coding-1", Stage: "coding", N: 1}, &stageRole{runAs: config.Role{Name: "fx-writer"}},
+		&endProblem{check: res.check, failures: res.failures, unnamed: res.unnamed, why: res.Why}, fixBudget{})
 }
 
 // specsAgain runs task's precheck again with bin/specs printing out.
@@ -52,43 +30,30 @@ func (r *codingRig) specsAgain(task registry.Task, out string) PrecheckResult {
 	return res
 }
 
-// An accept of a failure no example names holds only while the whole
-// failure stays the same: the set of the run's stable failure lines, never
-// its first one alone. The same first error followed by a new error outside
-// of examples fails again, as the option says. A run that ran no example or
-// could not load a spec file is never accepted: the question offers no
-// accept for it, so nothing the change breaks after it stays hidden.
-func TestAnAcceptHoldsOnlyWhileTheWholeUnnamedFailureStaysTheSame(t *testing.T) {
+// "Accept this failing check as known" is offered only for a failure that
+// names its examples, tests or offenses: one that names nothing (an error
+// outside of examples, an unreadable output, a coverage threshold) never
+// gets it, as a line read from such a run cannot tell a new failure from
+// the old one.
+func TestAFailureThatNamesNothingOffersNoAccept(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.codingTask("PR-12600", "bug")
 	r.fix(task)
-	r.acceptUnnamed(task, afterSuiteRun("11866"))
-	if res := r.specsAgain(task, afterSuiteRun("4242")); !res.Passed {
-		t.Fatalf("precheck %+v on the accepted failure, a new seed; want it passed", res)
+	for _, out := range []string{afterSuiteRun("11866"), beforeSuiteRun("1"), "something went sideways\n"} {
+		res := r.specsAgain(task, out)
+		if res.Passed || !res.unnamed || slices.Contains(optionLabels(fixQuestionOf(res).q), optionAccept) {
+			t.Fatalf("precheck %+v; want the writer's unnamed failure, its question with no accept", res)
+		}
 	}
-	more := strings.Replace(afterSuiteRun("7"), "\n\nFinished in", "\n\nAn error occurred in an `after(:suite)` hook.\n"+
-		"Failure/Error: Billing.flush\n\nNameError:\n  uninitialized constant Billing\n\nFinished in", 1)
-	more = strings.ReplaceAll(more, "1 error occurred outside of examples", "2 errors occurred outside of examples")
-	if res := r.specsAgain(task, more); res.Passed {
-		t.Fatalf("precheck %+v with a new error after the accepted one; want it failed", res)
-	}
-
-	z := newCodingRig(t)
-	ztask := z.codingTask("PR-12601", "bug")
-	z.fix(ztask)
-	if res := z.acceptUnnamed(ztask, beforeSuiteRun("33502")); !res.noAccept {
-		t.Fatalf("precheck %+v of a run of 0 examples; want no accept offered", res)
-	}
-	if res := z.specsAgain(ztask, beforeSuiteRun("1")); res.Passed {
-		t.Fatalf("precheck %+v of a run of 0 examples after the question; want it failed", res)
+	named := r.specsAgain(task, "Failures:\n\n  1) Credit counts\nrspec ./spec/models/credit_points_spec.rb:3 # Credit counts\n")
+	if named.unnamed || !slices.Contains(optionLabels(fixQuestionOf(named).q), optionAccept) {
+		t.Fatalf("precheck %+v; want the named failure's question to offer the accept", named)
 	}
 }
 
 // A run's banner and its tools' versions are no failure ("Checking
 // formatting...", "yarn run v1.22.19"): the failure is the line after
-// them, so an accept of one file's warning never covers another's. A run
-// that printed nothing but such noise is unreadable: the writer's, with no
-// accept offered.
+// them.
 func TestABannerIsNoFailureLine(t *testing.T) {
 	read := func(stdout, stderr string) []string {
 		return firstFailing(ProofRun{Exit: 1, out: []byte(stdout), errOut: []byte(stderr)})
@@ -96,9 +61,6 @@ func TestABannerIsNoFailureLine(t *testing.T) {
 	if got := read("yarn run v1.22.19\n$ prettier --check src/a.js\nChecking formatting...\n", "[warn] src/a.js\n"); !slices.Equal(got,
 		[]string{"[warn] src/a.js"}) {
 		t.Fatalf("the failure read %q; want the warning, past the banners", got)
-	}
-	if !unreadableRun(ProofRun{Exit: 1, out: []byte("yarn run v1.22.19\nChecking formatting...\nDone in 0.42s.\n")}) {
-		t.Fatal("a run of banners alone reads as a failure line")
 	}
 }
 
@@ -146,15 +108,24 @@ func TestATurnRecordsEveryFailingChecksFailures(t *testing.T) {
 	}
 }
 
-// SimpleCov's key keeps its minimum: an accept of a coverage under 90%
-// never covers a coverage under another minimum.
-func TestASimpleCovAcceptKeepsItsMinimum(t *testing.T) {
-	line := func(at, minimum string) string {
-		return "Line coverage (" + at + "%) is below the expected minimum coverage (" + minimum + "%)."
+// A lint accept is keyed on the offense's file, its cop or rule and its
+// message, never its line and column, and counts its offenses: it holds
+// after the lines above an accepted offense shift, and after a number in
+// its message changes (LineLength's [121/120]), but a second offense of the
+// same key in the file is new and fails.
+func TestALintAcceptSurvivesShiftedLinesAndCountsItsOffenses(t *testing.T) {
+	known := []string{"app/models/credit.rb:12:5: C: Layout/LineLength: Line is too long. [121/120]"}
+	rec := stopsRecord{Accepted: []accepted{{Check: lintKey("bin/lint {files}"), Failures: known}}}
+	key := lintKey("bin/lint {files}")
+	if !rec.accepts(key, []string{"app/models/credit.rb:14:5: C: Layout/LineLength: Line is too long. [125/120]"}) {
+		t.Fatal("the accepted offense, its lines shifted and its length grown, no longer matches itself")
 	}
-	if acceptKey(line("82.35", "90.00")) != acceptKey(line("80.10", "90.00")) || acceptKey(line("82.35", "90.00")) == acceptKey(line("82.35", "95.00")) {
-		t.Fatalf("acceptKey reads %q and %q; want the coverage as any and the minimum kept", acceptKey(line("82.35", "90.00")),
-			acceptKey(line("82.35", "95.00")))
+	if rec.accepts(key, []string{"app/models/credit.rb:14:5: C: Layout/LineLength: Line is too long. [125/120]",
+		"app/models/credit.rb:30:1: C: Layout/LineLength: Line is too long. [133/120]"}) {
+		t.Fatal("a second offense of the accepted key in the same file passes as accepted")
+	}
+	if rec.accepts(key, []string{"app/models/credit.rb:12:5: C: Style/GuardClause: Use a guard clause."}) {
+		t.Fatal("another cop's offense passes as accepted")
 	}
 }
 

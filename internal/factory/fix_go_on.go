@@ -118,8 +118,14 @@ func (rec fixTurnsRecord) grantsOf(attempt, role string) []fixGrant {
 // sameFailure reports whether turns a and b failed the same way: the same
 // check with the same failures.
 func sameFailure(a, b turnFailure) bool {
-	fa, fb := slices.Sorted(slices.Values(a.Failures)), slices.Sorted(slices.Values(b.Failures))
-	return a.Check == b.Check && slices.Equal(fa, fb)
+	key := func(fs []string) []string { // a lint offense with no line, column or number: the same offense, its lines shifted
+		out := make([]string, 0, len(fs))
+		for _, f := range fs {
+			out = append(out, acceptKey(f))
+		}
+		return slices.Sorted(slices.Values(out))
+	}
+	return a.Check == b.Check && slices.Equal(key(a.Failures), key(b.Failures))
 }
 
 // progressed reports whether turns (a role's, oldest first) show progress:
@@ -307,7 +313,7 @@ func fixQuestion(a registry.Attempt, r *stageRole, p *endProblem, b fixBudget) s
 	role := r.runAs.Name
 	why := changeWait(r, p, b)
 	var opts []registry.Option
-	accept := p.check != "" && strings.HasPrefix(p.check, "precheck.") && !p.noAccept
+	accept := p.check != "" && strings.HasPrefix(p.check, "precheck.") && !p.unnamed // a failure that names nothing: no accept
 	if accept {
 		opts = append(opts, registry.Option{Label: optionAccept, Means: "the precheck treats this failure of " + p.check +
 			" as known for this task (a new failure of it still fails), and the PR body names it"})
@@ -318,7 +324,7 @@ func fixQuestion(a registry.Attempt, r *stageRole, p *endProblem, b fixBudget) s
 		registry.Option{Label: optionDrop, Means: "the task stops"})
 	ask := stopAsk{Kind: stopFix, Key: a.ID + "/" + role, Role: role, Attempt: a.ID, Why: why}
 	if accept { // a failure no example names is its line, read the same on every run (firstFailing)
-		ask.Check, ask.Failures, ask.Unnamed = p.check, p.failures, p.unnamed
+		ask.Check, ask.Failures = p.check, p.failures
 	}
 	return stopQuestion{ask: ask, q: registry.Question{
 		Text: fmt.Sprintf("The %s agent's change in %s (attempt %d) still fails after its fix turns and a fresh session: %s. How does "+

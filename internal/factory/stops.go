@@ -101,9 +101,6 @@ type stopAsk struct {
 	Decision string    `json:"decision,omitempty"`
 	Words    string    `json:"words,omitempty"`
 	Decided  time.Time `json:"decided,omitzero"`
-	// Unnamed: the fix stop's failure is no example's or offense's, its
-	// line firstFailing's: an accept of it covers that line alone.
-	Unnamed bool `json:"unnamed,omitempty"`
 }
 
 // accepted is a check whose failure you accepted as known for the task:
@@ -111,10 +108,6 @@ type stopAsk struct {
 type accepted struct {
 	Check    string   `json:"check"`
 	Failures []string `json:"failures,omitempty"`
-	// Unnamed: a failure no example or offense names, Failures its line
-	// (firstFailing, read the same on every run): the accept holds for
-	// that line alone, never for another or for a named failure.
-	Unnamed bool `json:"unnamed,omitempty"`
 }
 
 // stopsRecord is stops.json: the stop questions, and what your answers
@@ -175,31 +168,54 @@ func (rec stopsRecord) bound(key string) time.Duration {
 }
 
 // accepts reports whether your answer accepted the failure of check key,
-// whose failures are failures, as known for the task: an acceptance of it
-// with no failures named, or one that names each of them.
-func (rec stopsRecord) accepts(key string, failures []string, unnamed bool) bool {
+// whose named failures (examples, tests, offenses) are failures, as known
+// for the task: each failure's key (acceptKey) at most as many times as
+// the accept named it. A failure that names nothing is never accepted (the
+// question offers no accept for it).
+func (rec stopsRecord) accepts(key string, failures []string) bool {
+	now := keyCounts(failures)
 	return slices.ContainsFunc(rec.Accepted, func(a accepted) bool {
-		if a.Check != key || a.Unnamed != unnamed {
+		if a.Check != key || len(a.Failures) == 0 {
 			return false
 		}
-		keys := make([]string, 0, len(a.Failures))
-		for _, f := range a.Failures {
-			keys = append(keys, acceptKey(f))
+		known := keyCounts(a.Failures)
+		for k, n := range now {
+			if n > known[k] {
+				return false
+			}
 		}
-		return len(a.Failures) == 0 || !slices.ContainsFunc(failures, func(f string) bool { return !slices.Contains(keys, acceptKey(f)) })
+		return true
 	})
 }
 
-// coverageNowRe is the coverage a run reports against its threshold:
-// jest's "not met: 75.3%" and "Uncovered count for lines (12)", SimpleCov's
-// "Line coverage (82.35%)".
-var coverageNowRe = regexp.MustCompile(`(not met: )\d+(?:\.\d+)?%|(Uncovered count for \w+ \()\d+(\))|^(\w+ coverage \()\d+(?:\.\d+)?(%\) is below)`)
+// keyCounts counts failures by their accept keys (acceptKey).
+func keyCounts(failures []string) map[string]int {
+	out := map[string]int{}
+	for _, f := range failures {
+		out[acceptKey(f)]++
+	}
+	return out
+}
 
-// acceptKey is failure f as your accept of it holds: a coverage miss with
-// its coverage now read as any, so it holds while the coverage stays under
-// the same threshold. The writer's progress reads f as it is (sameFailure).
+// lintOffenseRe is a lint offense as the precheck names it: its file, its
+// line and column (path:line:col:, or a row's "path:line:col"), and the
+// rest: the severity, the cop or rule and the message.
+var lintOffenseRe = regexp.MustCompile(`^([^\s:]+):\s*\d+(?::\d+)?:?\s+(.*)$`)
+
+// digitsRe is a number in an offense's message, which an edit changes
+// (LineLength's [121/120], a complexity's score, a count).
+var digitsRe = regexp.MustCompile(`\d+`)
+
+// acceptKey is failure f as your accept of it holds and the writer's
+// progress compares it: a lint offense as its file, its cop or rule and its
+// message, with no line or column and no number in its message, so it
+// survives lines that shift above it and an edit of its own; any other
+// named failure as it is.
 func acceptKey(f string) string {
-	return coverageNowRe.ReplaceAllString(f, "${1}${2}${4}?${3}${5}")
+	if m := lintOffenseRe.FindStringSubmatch(f); m != nil {
+		return m[1] + ": " + digitsRe.ReplaceAllString(strings.Join(strings.Fields(m[2]), " "), "#")
+	}
+	return f
 }
 
 // isStopQuestion reports whether q is one of rec's stop questions.
@@ -469,7 +485,7 @@ func (rec *stopsRecord) apply(a stopAsk) {
 			rec.NoBase = append(rec.NoBase, a.Check)
 		}
 	case decideAccept:
-		rec.Accepted = append(rec.Accepted, accepted{Check: a.Check, Failures: a.Failures, Unnamed: a.Unnamed})
+		rec.Accepted = append(rec.Accepted, accepted{Check: a.Check, Failures: a.Failures})
 	}
 }
 
