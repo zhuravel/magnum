@@ -148,6 +148,38 @@ func TestTheLiveLogsBoundStopsTheWritesAndAddsItsLine(t *testing.T) {
 	}
 }
 
+// A private key a command prints spans lines, and the scrub sees one line
+// at a time: every line from its BEGIN line to its END line is masked, in
+// each stream apart, and the lines after it show again.
+func TestTheLiveLogMasksAPrivateKeyOverItsLines(t *testing.T) {
+	dir := t.TempDir()
+	l, err := newLiveLog(dir, time.Now, liveMax)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, errOut := l.command("precheck specs", "bin/specs spec/a_spec.rb")
+	_, _ = out.Write([]byte("fixture key:\n-----BEGIN RSA PRIVATE KEY-----\nMIIEbodyLINE1\nMIIE"))
+	_, _ = errOut.Write([]byte("a warning between\n"))
+	_, _ = out.Write([]byte("bodyLINE2\n-----END RSA PRIVATE KEY-----\nafter the key\n"))
+	l.ended("precheck specs", out, errOut, execx.Result{}, nil, time.Second)
+	l.close()
+	b, err := os.ReadFile(filepath.Join(dir, liveFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := string(b)
+	for _, gone := range []string{"bodyLINE1", "bodyLINE2", "MIIE"} {
+		if strings.Contains(live, gone) {
+			t.Errorf("live.log holds %q of the key:\n%s", gone, live)
+		}
+	}
+	for _, want := range []string{"fixture key:\n", "a warning between\n", "after the key\n"} {
+		if !strings.Contains(live, want) {
+			t.Errorf("live.log lacks %q:\n%s", want, live)
+		}
+	}
+}
+
 // The screen reads the step that runs from live.log's last begin line,
 // however much the step printed since; an output line that looks like one
 // is indented and never read as a step; a line longer than liveLineMax is

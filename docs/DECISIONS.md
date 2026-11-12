@@ -25721,9 +25721,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
     held to `scrub.py`).
   - *The scrub.* Each complete line, stripped first of what a terminal acts on (`textx.StripTerminal`, so no
     escape splits a secret), goes through `scrub.Secrets`, never `scrub.Text`: the hosts, emails and file names
-    a failure prints stay, as `outputOf` keeps them (its entry says why). A line longer than 64 KiB is cut there
+    a failure prints stay, as `outputOf` keeps them (its entry says why). The scrub sees one line, so its
+    private key pattern masks a key's BEGIN line to its end and none of the lines after it: each stream masks
+    every line from a BEGIN line of a private key to its END line whole. A line longer than 64 KiB is cut there
     and its rest dropped up to its newline, so no tail of a cut secret shows alone. An output line that starts
-    with `== ` is indented by a space, so no command forges a begin or an end line the screen reads.
+    with `== ` is indented by a space, so no command forges a begin or an end line the screen reads. A secret
+    quoted over several lines (a JSON value with a newline in it) is not covered: no such output was seen.
   - *The bound.* Past 8 MiB of output in one run, the output stops with one line that says so. The begin and end
     lines go on past it (a few hundred bytes each, a few dozen per run): without them the screen would show the
     step that ran at the bound for the rest of the run. That reads the brief's "stop writing" as the output.
@@ -25759,7 +25762,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     broken copy is no task's wait.
   Tests, each checked by mutation: `TestAPrecheckCommandsOutputReachesLiveLogWhileItRuns` (a secret written in
   two writes masked, a host and an email kept), `TestLiveLogStartsEmptyAtANewRunOfChecks`,
-  `TestTheLiveLogsBoundStopsTheWritesAndAddsItsLine`, `TestReadLiveStepReadsTheLastBeginOrEndLine`,
+  `TestTheLiveLogsBoundStopsTheWritesAndAddsItsLine`, `TestTheLiveLogMasksAPrivateKeyOverItsLines`,
+  `TestReadLiveStepReadsTheLastBeginOrEndLine`,
   `TestTheWaitOfARunningCheckShowsItsStepOnceWithItsTime`, `TestNoFileToFollowWhileAnAgentOfTheTaskWorks` and
   `TestTheClaimAndTheBootShowTheirTimeAndTheirLogs` in internal/factory;
   `TestTheWaitLineShowsTheStepOnceWithItsRunningTime`, `TestOOnATaskWhoseCheckRunsFollowsLiveLogInThePager`,

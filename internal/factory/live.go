@@ -15,10 +15,11 @@ package factory
 // terminal acts on and its secrets masked (scrub.Secrets: the hosts, emails
 // and file names a failure prints stay, as outputOf keeps them), then
 // written: a secret split across two writes of the process is masked
-// whole. An output line that starts as a marker line does is indented, so
-// no command writes a begin or an end line. Past liveMax bytes of output
-// in one run, the output stops with one line that says so; the begin and
-// end lines still follow.
+// whole, and a private key's block over its lines, from its BEGIN line to
+// its END line. An output line that starts as a marker line does is
+// indented, so no command writes a begin or an end line. Past liveMax bytes
+// of output in one run, the output stops with one line that says so; the
+// begin and end lines still follow.
 
 import (
 	"bytes"
@@ -239,6 +240,10 @@ type liveLines struct {
 	l    *liveLog
 	buf  []byte
 	skip bool // the rest of a line cut at liveLineMax is dropped up to its newline
+	// inKey is a private key's block the stream printed whose END line did
+	// not come yet: each of its lines is masked whole (the scrub, which sees
+	// one line, masks the BEGIN line to its end and no line after it).
+	inKey bool
 }
 
 var _ io.Writer = (*liveLines)(nil)
@@ -285,13 +290,30 @@ func (w *liveLines) flush() {
 }
 
 // line writes one output line: stripped of what a terminal acts on, its
-// secrets masked, indented when it starts as a marker line does.
+// secrets masked (a private key's block whole, over its lines), indented
+// when it starts as a marker line does.
 func (w *liveLines) line(b []byte) {
-	s := scrub.Secrets(textx.StripTerminal(strings.ToValidUTF8(string(b), "�")))
+	s := textx.StripTerminal(strings.ToValidUTF8(string(b), "�"))
+	switch begin := strings.Index(s, "-----BEGIN "); {
+	case w.inKey:
+		w.inKey = !privateKeyEnds(s)
+		s = "<redacted>"
+	case begin >= 0 && strings.Contains(s[begin:], "PRIVATE KEY-----") && !privateKeyEnds(s[begin:]):
+		w.inKey = true
+		s = scrub.Secrets(s) // the BEGIN line, masked from it to its end
+	default:
+		s = scrub.Secrets(s)
+	}
 	if strings.HasPrefix(s, livePrefix) {
 		s = " " + s
 	}
 	w.l.write(s+"\n", true)
+}
+
+// privateKeyEnds reports whether s holds a private key's END line.
+func privateKeyEnds(s string) bool {
+	end := strings.Index(s, "-----END ")
+	return end >= 0 && strings.Contains(s[end:], "PRIVATE KEY-----")
 }
 
 // liveStream gives cmd the writers of its streams into the run's live log
