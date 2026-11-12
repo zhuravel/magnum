@@ -1177,6 +1177,7 @@ func (e *Engine) ended(ctx context.Context, tp *registry.Task, st config.Factory
 		return ""
 	}
 	r.failed = p.file
+	run.ask = cmp.Or(p.ask, run.ask) // a check that named no failure of the code: its question
 	return noValidFile(r, p)
 }
 
@@ -1412,6 +1413,7 @@ func (e *Engine) recheckFailed(ctx context.Context, t *registry.Task, st config.
 		case p != nil && r.letGo && !p.operator:
 			return letGoWait(r, p, t.Branch)
 		case p != nil:
+			run.ask = cmp.Or(p.ask, run.ask) // a check that named no failure of the code: its question
 			return noValidFile(r, p)
 		}
 		r.ok, r.failed, r.letGo = true, "", false

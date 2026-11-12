@@ -114,6 +114,13 @@ type endProblem struct {
 	change, operator bool
 	merge            string
 	command          string
+	// ask is the question a problem of yours asks in place of its wait (a
+	// check that named no failure of the code after its fault steps); check
+	// and failures are the failing check and its failures of a change
+	// problem, from the precheck (failCheck), for the fix turns' progress.
+	ask      *stopQuestion
+	check    string
+	failures []string
 }
 
 func (p *endProblem) String() string { return p.file + ": " + p.why }

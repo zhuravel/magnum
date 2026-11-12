@@ -495,7 +495,7 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 		delete(e.envCrashed, t.ID)
 		e.clearPrecheckWait(ctx, t)
 		e.dropCheck(t.ID)
-		return operatorProblem(*t, precheckFile, res.why()), "", false, nil
+		return forYouProblem(*t, precheckFile, res), "", false, nil
 	}
 	if p, pending, err := e.keptFirst(ctx, t); p != nil || pending || err != nil {
 		return p, "", pending, err
@@ -580,7 +580,7 @@ func (e *Engine) provenHead(ctx context.Context, t *registry.Task, c Copy) (p *e
 			file = factoryProofFile
 		}
 		if res.forYou() {
-			return operatorProblem(*t, file, res.why()), "", false, nil
+			return forYouProblem(*t, file, res), "", false, nil
 		}
 		return &endProblem{file: file, why: res.why(), change: true, command: res.failedCommand()}, "", false, nil
 	}
@@ -609,6 +609,18 @@ type envCrashes struct {
 // retry that lets the task go on once you fixed it (retryHint).
 func operatorProblem(t registry.Task, file, why string) *endProblem {
 	return &endProblem{file: file, why: why + retryHint(t), operator: true}
+}
+
+// forYouProblem is the end problem of task t's checks res, whose failure
+// is yours (file the one they wrote): a check that named no failure of the
+// code after its fault steps asks you its question (faultQuestion, the
+// problem's ask), with why and no retry; any other is operatorProblem's.
+func forYouProblem(t registry.Task, file string, res checkResult) *endProblem {
+	if res.Proof.passedOrNone() && res.Precheck != nil && res.Precheck.fault != nil {
+		q := faultQuestion(*res.Precheck.fault)
+		return &endProblem{file: file, why: res.why(), operator: true, ask: &q}
+	}
+	return operatorProblem(t, file, res.why())
 }
 
 // keptFirst is provenHead's guard before it reads the tree: while task t

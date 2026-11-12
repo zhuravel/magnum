@@ -516,11 +516,12 @@ func (r *codingRig) addMigration(key string) {
 }
 
 // A base run of the red files that does not end within its bound (the cap
-// grown from the red files) hangs: a failure for you that names
-// precheck.cap and precheck.cap_max as the knobs of a run that is only
-// long, the head's red run leaves its row, precheck.md keeps the end of
-// what the base run printed on stdout and on stderr, and the copy is back
-// on its branch.
+// grown from the red files) hangs: it runs again, then with its bound
+// doubled, and still hangs: a failure for you that names precheck.cap and
+// precheck.cap_max as the knobs of a run that is only long and what the
+// factory tried, the head's red run leaves its row, precheck.md keeps the
+// end of what the base run printed on stdout and on stderr, and the copy is
+// back on its branch.
 func TestABaseRunPastItsBoundHangsForYou(t *testing.T) {
 	r := newCodingRig(t)
 	r.redOnMaster()
@@ -532,8 +533,9 @@ func TestABaseRunPastItsBoundHangsForYou(t *testing.T) {
 	r.mu.Unlock()
 	r.setHang(func(run scriptRun) bool { return strings.HasPrefix(run.Script, "bin/specs ") && run.Branch == "" })
 	res, err := r.e.precheck(r.ctx, task, r.cp)
-	const why = "precheck: precheck.specs `bin/specs spec/models/credit_spec.rb` did not end on the base within 600ms: it hangs; " +
-		"fix: find what it waits for in the copy (a lock, a server, a prompt), or raise precheck.cap or precheck.cap_max when it only runs long"
+	const why = "precheck: precheck.specs `bin/specs spec/models/credit_spec.rb` did not end on the base within 1s: it hangs; " +
+		"fix: find what it waits for in the copy (a lock, a server, a prompt), or raise precheck.cap or precheck.cap_max when it only runs long; " +
+		"the factory ran it again and ran it with its bound doubled, 1s"
 	if err != nil || res.Passed || !res.ForYou || res.Why != why {
 		t.Fatalf("precheck %+v, %v; want a failure for you: %s", res, err, why)
 	}
@@ -639,7 +641,7 @@ func TestABaseRunStoppedAtItsBoundHangsWhateverItsResultLineSays(t *testing.T) {
 				t.Fatalf("the writer got %d prompts (%+v); want no fix turn for a base run that hangs", len(ps), ps)
 			}
 			got := r.reload(task.ID)
-			if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "did not end on the base within 600ms: it hangs") {
+			if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "precheck.specs on the base did not end within 1s") {
 				t.Fatalf("task %s waits %q; want it to need you for the base run that hangs", got.State, got.WaitsWhat)
 			}
 			if got := r.checksOf(task.ID, "spec"); !slices.Contains(got, "fail/unknown") || slices.Contains(got, "fail/code") {
@@ -733,7 +735,7 @@ func TestARedExampleOfASpecFileTheBaseLacksIsNeverListedAsUnjudged(t *testing.T)
 	r.smallCaps()
 	r.hangOnTheBase("1 example so far\n")
 	res, err := r.e.precheck(r.ctx, task, r.cp)
-	if err != nil || res.Passed || !res.ForYou || !strings.Contains(res.Why, "did not end on the base within 600ms: it hangs") {
+	if err != nil || res.Passed || !res.ForYou || !strings.Contains(res.Why, "did not end on the base within 1s: it hangs") {
 		t.Fatalf("precheck %+v, %v; want the base run that hangs to fail it for you", res, err)
 	}
 	report := r.readTask(task.ID, precheckFile)
@@ -758,7 +760,7 @@ func TestPrecheckMdNamesTheHeadsRedExamplesWhenTheBaseGivesNoVerdict(t *testing.
 		{"the base run hangs", func(r *codingRig) {
 			r.smallCaps()
 			r.hangOnTheBase("1 example so far\n")
-		}, "did not end on the base within 600ms: it hangs"},
+		}, "did not end on the base within 1s: it hangs"},
 		{"the base run cannot start", func(r *codingRig) {
 			r.mu.Lock()
 			r.startErr = func(run scriptRun) error {
@@ -822,14 +824,14 @@ func TestABaseRunPastTwiceTheHeadsRunNamesBothTimes(t *testing.T) {
 	r.headRunTakes(400 * time.Millisecond)
 	r.hangOnTheBase("1 example so far\n")
 	res, err := r.e.precheck(r.ctx, task, r.cp)
-	const why = "precheck: precheck.specs `bin/specs spec/models/credit_spec.rb` did not end on the base within 800ms " +
-		"(twice the head's run of 400ms): it hangs; fix: find what it waits for in the copy (a lock, a server, a prompt), " +
-		"or raise precheck.cap or precheck.cap_max when it only runs long"
+	const why = "precheck: precheck.specs `bin/specs spec/models/credit_spec.rb` did not end on the base within 2s: it hangs; " +
+		"fix: find what it waits for in the copy (a lock, a server, a prompt), or raise precheck.cap or precheck.cap_max when it only " +
+		"runs long; the factory ran it again and ran it with its bound doubled, 2s"
 	if err != nil || res.Passed || !res.ForYou || res.Why != why {
 		t.Fatalf("precheck %+v, %v; want a failure for you: %s", res, err, why)
 	}
 	report := r.readTask(task.ID, precheckFile)
-	if want := "did not end on the base within 800ms (twice the head's run of 400ms), and the factory stopped it."; !strings.Contains(report, want) {
+	if want := "did not end on the base within 800ms (twice the head's run of 400ms): the factory runs it again."; !strings.Contains(report, want) {
 		t.Fatalf("%s lacks %q:\n%s", precheckFile, want, report)
 	}
 	r.onBranch(task.Branch, head)

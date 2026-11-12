@@ -178,18 +178,22 @@ func TestPrecheckTakesTheMachineWideSpecLock(t *testing.T) {
 
 // The cap stops a precheck that runs too long. In the lint, the first
 // step, a stop at the cap is no note and no fix turn: a lint that takes the
-// whole cap waits on something (a lock, a server), so the precheck fails
-// for you, naming the command and that it hangs, and the steps it kept from
+// whole cap waits on something (a lock, a server). It names no failure of
+// the code, so it runs again on a bound of its own, the cap's, then with
+// that bound doubled; then the precheck fails for you, naming the command,
+// that it hangs and what the factory tried, and the steps it kept from
 // starting did not run.
 func TestPrecheckStopsAtItsCap(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.codingTask("PR-12365", "bug")
 	r.fix(task)
 	fire := make(chan time.Time)
+	var mu sync.Mutex
+	var timers []time.Duration
 	r.e.after = func(d time.Duration) <-chan time.Time {
-		if d != 10*time.Minute+30*time.Second {
-			t.Errorf("the cap's timer is %s, want 10m30s (10m, and 15s for each of the 2 files)", d)
-		}
+		mu.Lock()
+		timers = append(timers, d)
+		mu.Unlock()
 		return fire
 	}
 	r.blocks["bin/lint"] = make(chan struct{}) // never ends on its own
@@ -205,16 +209,21 @@ func TestPrecheckStopsAtItsCap(t *testing.T) {
 	<-r.entered
 	close(fire)
 	res := <-done
-	if res.Passed || !res.ForYou ||
-		res.Why != "precheck: precheck.lint `bin/lint app/credit.rb spec/models/credit_points_spec.rb` did not end within 10m30s: it hangs; "+
-			"fix: find what it waits for in the copy (a lock, a server, a prompt)" {
-		t.Fatalf("precheck %+v; want a failure for you: the lint hangs", res)
+	if res.Passed || !res.ForYou || res.fault == nil || !res.fault.hang ||
+		res.Why != "precheck: precheck.lint `bin/lint app/credit.rb spec/models/credit_points_spec.rb` did not end within 21m: it hangs; "+
+			"fix: find what it waits for in the copy (a lock, a server, a prompt); the factory ran it again and ran it with its bound doubled, 21m" {
+		t.Fatalf("precheck %+v; want a failure for you: the lint hangs after its steps", res)
 	}
+	mu.Lock()
+	if want := []time.Duration{10*time.Minute + 30*time.Second, 10*time.Minute + 30*time.Second, 21 * time.Minute}; !slices.Equal(timers, want) {
+		t.Errorf("the timers %v, want the cap's of 10m30s (10m, and 15s for each of the 2 files), its own again, then doubled", timers)
+	}
+	mu.Unlock()
 	if res.Unfinished != "the specs and the jest tests did not run within the cap of 10m30s" {
 		t.Fatalf("unfinished %q, want the specs and jest, which did not run", res.Unfinished)
 	}
-	if got := r.checksOf(task.ID, "lint"); !slices.Equal(got, []string{registry.CheckSkipped}) {
-		t.Fatalf("lint checks %q, want the stopped run skipped", got)
+	if got := r.checksOf(task.ID, "lint"); !slices.Equal(got, []string{registry.CheckSkipped, registry.CheckSkipped, registry.CheckSkipped}) {
+		t.Fatalf("lint checks %q, want each stopped run skipped", got)
 	}
 	if report := r.readTask(task.ID, precheckFile); !strings.Contains(report, "on stderr (at most 20):\n\n```\nrubocop: waiting for the server lock\n```") {
 		t.Fatalf("%s does not keep the hung lint's stderr, stripped:\n%s", precheckFile, report)

@@ -436,7 +436,8 @@ func TestThePrecheckRestoresWhatItsCommandsChanged(t *testing.T) {
 
 // A NEEDS YOU whose cause is the configuration's or the machine's names
 // the fix, then the command that lets the task go on once it is fixed:
-// task 5 waited 127 minutes on a line that named neither.
+// task 5 waited 127 minutes on a line that named neither. A lint that
+// names no failure of the code asks a question instead (faults_test.go).
 func TestANeedsYouForTheChecksNamesTheFixAndTheRetry(t *testing.T) {
 	cases := []struct {
 		name string
@@ -448,10 +449,6 @@ func TestANeedsYouForTheChecksNamesTheFixAndTheRetry(t *testing.T) {
 		{"a denied lint", func(r *codingRig) {
 			r.cfg.Factory.Repos[0].Precheck.Lint = []string{"kubectl exec web-1 -- bin/lint {files}"}
 		}, []string{"denied", "fix: change precheck.lint", "`magnum factory install`"}},
-		{"a lint that crashed", func(r *codingRig) { r.lintCrash = func([]string) string { return "Error: boom\n" } },
-			[]string{"its stderr ends: Error: boom"}},
-		{"a lint that printed no offense", func(r *codingRig) { r.lint = func([]string) string { return "something is wrong\n" } },
-			[]string{"names no offense by path:line", "fix: have it print them so"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -635,9 +632,10 @@ func TestALintCrashTheBranchCausedGoesToTheWriterNotAHold(t *testing.T) {
 	}
 }
 
-// A gem the copy lacks is the copy's, not the machine's: the precheck runs
-// the repository's installs in the copy once and the lint again, and a
-// heal that works ends it there, with no hold and nobody asked.
+// A gem the copy lacks is the copy's, not the machine's: the lint that
+// crashed for it names no failure of the code, so it runs again, then the
+// precheck runs the repository's installs in the copy once and the lint
+// again, and a heal that works ends it there, with no hold and nobody asked.
 func TestAMissingGemIsHealedInTheCopy(t *testing.T) {
 	r := installsRig(t)
 	task := r.codingTask("PR-12390", "bug")
@@ -655,8 +653,8 @@ func TestAMissingGemIsHealedInTheCopy(t *testing.T) {
 	if n := len(r.ran("bundle install")); n != 1 {
 		t.Fatalf("bundle install ran %d times, want 1", n)
 	}
-	if got := r.checksOf(task.ID, "lint"); !slices.Equal(got, []string{"fail/env", "pass"}) {
-		t.Fatalf("lint checks %q, want the crash, then the pass after the heal", got)
+	if got := r.checksOf(task.ID, "lint"); !slices.Equal(got, []string{"fail/env", "fail/env", "pass"}) {
+		t.Fatalf("lint checks %q, want the crash, its run again, then the pass after the heal", got)
 	}
 }
 
@@ -773,8 +771,9 @@ func TestARetryAfterTheHeadMovedSaysNothingOfNothingChanged(t *testing.T) {
 }
 
 // A heal whose installs failed (rubygems.org out of reach) is no lint that
-// still crashed after it: the lint did not run again, and the NEEDS YOU
-// says the installs failed, with the line that says why.
+// still crashed after it: the lint did not run again after it (once more
+// before it, the first fault step), and the failure for you says the
+// installs failed, with the line that says why.
 func TestAHealWhoseInstallsFailedSaysSo(t *testing.T) {
 	r := installsRig(t)
 	task := r.codingTask("PR-12394", "bug")
@@ -789,8 +788,8 @@ func TestAHealWhoseInstallsFailedSaysSo(t *testing.T) {
 		strings.Contains(res.Why, "still crashed") {
 		t.Fatalf("precheck %+v; want a failure for you saying the installs failed and why", res)
 	}
-	if n := len(r.ran("bin/lint")); n != 1 {
-		t.Fatalf("the lint ran %d times, want once: a failed heal runs it no more", n)
+	if n := len(r.ran("bin/lint")); n != 2 {
+		t.Fatalf("the lint ran %d times, want twice: its run again, and none after the failed heal", n)
 	}
 }
 

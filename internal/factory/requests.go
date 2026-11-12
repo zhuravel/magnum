@@ -558,6 +558,16 @@ func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) 
 	return fmt.Sprintf("%s goes on at %s", TaskKey(t), cmp.Or(t.Stage, "its first stage")) + same + e.pausedNote(), nil
 }
 
+// asksOnCheckAt reports whether task t's question of a check that named no
+// failure of the code at head waits for your answer (stops.json): the
+// precheck's failure for you its wait is about.
+func (e *Engine) asksOnCheckAt(t registry.Task, head string) bool {
+	rec, err := readStops(e.d.Layout.FactoryTaskDir(t.ID))
+	return err == nil && slices.ContainsFunc(rec.Asks, func(a stopAsk) bool {
+		return a.Kind == stopCheck && a.Decision == "" && strings.HasPrefix(a.Key, head+" ")
+	})
+}
+
 // retryUnrecorded is what the answer to your retry adds when its record
 // failed to write: the task goes on as if you had not retried at the cap.
 const retryUnrecorded = "your retry was not recorded: the writer gets no more fix turns; retry again"
@@ -577,7 +587,7 @@ func (e *Engine) unchangedSince(ctx context.Context, t registry.Task) string {
 		json.Unmarshal(b, &rec) != nil {
 		return ""
 	}
-	if rec.Passed || !rec.ForYou || rec.Commands == "" || !strings.Contains(t.WaitsWhat, rec.Why) {
+	if rec.Passed || !rec.ForYou || rec.Commands == "" || !(strings.Contains(t.WaitsWhat, rec.Why) || e.asksOnCheckAt(t, rec.Head)) {
 		return ""
 	}
 	repo, ok := e.cfg.FactoryRepo(t.Repo)
