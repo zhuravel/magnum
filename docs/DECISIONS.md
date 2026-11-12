@@ -26573,9 +26573,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     the fresh session. A refused prompt and the event ask the same question once.
   - Not covered: the configuration's own stops (a denied or missing command, a missing `table_stats`) need an
     edit and an install, so they still name the fix and the retry. A migration that hangs still asks with its
-    fix, because a rerun of a migration that ran part-way is no heal. A comment in review.go still names the
-    old guard of a round's leftovers. Another change works on the cap path of `runReview`, so this change
-    does not touch review.go.
+    fix, because a rerun of a migration that ran part-way is no heal. The cap's go-on at the local review
+    (the entry above) is its own change: its alert is news that stands while the task is live, while the
+    automatic steps here write alerts that do not stand, and the stop questions alert as any wait on you.
   Tests, failing first and each checked by a mutation: `TestALintThatNamesNoOffenseRunsAgainThenAfterTheInstalls`,
   `TestABaseRunThatHangsGetsADoubledBoundThenAQuestion`, `TestYourAnswerToACheckQuestionSkipsItOrGivesItYourBound`,
   `TestARestartInTheMiddleOfTheFaultStepsNeitherDoublesNorLosesOne`,
