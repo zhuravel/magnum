@@ -231,11 +231,18 @@ func (e *Engine) saveWorkLocked() {
 	e.workSaved = b
 }
 
-// closeWork removes the record as the daemon stops: no daemon keeps it.
+// closeWork removes the record as the daemon stops: no daemon keeps it. A
+// stop whose wait for the work off the loop ran out keeps it, naming that
+// work (control.go: workCut): it may still run, its agents in herdr, and a
+// drain read after the exit must not take it for a clean stop.
 func (e *Engine) closeWork() {
 	e.workMu.Lock()
 	defer e.workMu.Unlock()
 	e.workClosed = true
+	if e.ctl.workCut.Load() {
+		e.log.Warn("kept the record of the work a restart would cut: work off the loop did not end before the stop")
+		return
+	}
 	if err := os.Remove(e.d.Layout.FactoryWork()); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		e.log.Warn("remove the record of the work a restart would cut", "err", err)
 	}

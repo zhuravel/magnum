@@ -164,6 +164,9 @@ func liftControl(path, value string) error {
 type controlState struct {
 	pause  atomic.Pointer[Pause]
 	reboot atomic.Pointer[engine.RebootDrain]
+	// workCut is a stop whose wait for the work off the loop ran out
+	// (stopBackground): closeWork keeps the record then.
+	workCut atomic.Bool
 
 	gen        int64
 	quietSince time.Time

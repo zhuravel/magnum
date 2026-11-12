@@ -395,6 +395,7 @@ func (e *Engine) stopBackground() {
 	case <-done:
 	case <-time.After(wait):
 		e.log.Warn("work off the loop did not end within the drain's wait; the daemon stops anyway", "wait", wait)
+		e.ctl.workCut.Store(true) // control.go: closeWork keeps the record, which a drain then reads
 	}
 	ctx := context.Background() // the engine's is cancelled
 	if tasks, err := e.reg.Tasks(ctx); err == nil {
