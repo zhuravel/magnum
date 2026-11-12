@@ -4685,7 +4685,10 @@ stages = [
   changed the copy since it began (an agent of the task at work, a prompt to one, you in or typing into one of
   its panes): then it cannot tell its changes from yours, leaves them, and the task needs you, naming them. A lint offense counts only
   on a changed line, read as `path:line[:column]: message` (rubocop's `--format emacs`, eslint's `--format
-  unix`); a lint that exits non-zero naming no offense that way fails. The specs command's failures are read
+  unix`); a lint that exits non-zero naming no offense that way fails. An offense in a file outside the copy (a
+  gem's) and a warning Ruby prints for a file it loads (`path:N: warning: …`) are none. A fatal row of a file the
+  change touched is the writer's whatever its line: eslint's `Parsing error` or its `0:0` error (never a `0:0`
+  warning such as `File ignored …`), RuboCop's `F:` severity or `Lint/Syntax`. The specs command's failures are read
   as rspec lists them (`rspec ./spec/x_spec.rb:12 # what it says`): a red one is run again on the base, and
   one red there too is recorded as not the change's (`not_ours`) and passes. The proof runs its spec files
   with `specs` (with `jest` when every one is JavaScript). A precheck stops at its cap, which grows with the
@@ -4743,9 +4746,13 @@ stages = [
   packages). eslint's stylish report and stylelint's, whose rows of `line:column` sit under the line that names
   their file, are read by the changed lines as `path:line` offenses are. A failure no example or offense names is
   read the same on every run (the error's own line or a missed coverage threshold, past rspec's seed, its
-  progress and timing and a coverage table; hex addresses as `0x?`), and your accept of it covers that line
-  alone (a coverage miss under the same threshold whatever its percent), never a new failure of the check. A report row that no file's line names (a cut tail) makes the output
-  unreadable, the writer's. A fault takes steps first: the precheck runs it again, then runs the repository's `installs` and
+  progress and timing and a coverage table; hex addresses as `0x?`), so the writer's progress shows, but you
+  cannot accept it as known. Only a failure that names its examples, tests or offenses can be accepted, keyed
+  on those names: a lint's offense by its file, its cop or rule and its message, never its line and column, with
+  the numbers in its message (`[121/120]`, a complexity score) read as any. The accept counts the offenses of
+  each key, so a second equal offense in the same file fails. A report row that no file's line names (a cut
+  tail) makes the output unreadable, the writer's. A script file the change touched (`package.json`, a
+  `Makefile`, a rake task, `bin/`) causes a missing command only when it defines or names that command. A fault takes steps first: the precheck runs it again, then runs the repository's `installs` and
   runs it again, and runs one that hangs once more with its bound doubled (up to `cap_max`), each step once at a
   head (`check-faults.json` in the task's folder keeps them across restarts; each is a `check` event and an
   alert, news whose toast counts nobody as waiting on you). A fault never passes: one whose run again the cap stops fails the precheck, and a lint whose hang spent
@@ -5160,7 +5167,9 @@ turns, at most `[factory] fix_go_on` times (default 2); else it gets one fresh s
 the failure, its commits on the branch and the end of the failing output, with 2 fix turns. Each is a `fix` event
 and an alert (news, as above). Then the task asks you (`does not pass after 7 fix turns in the stage: <why>: accept this failing
 check as known, give a direction or drop the task?`): accepting it passes that check's failure for the task (a new
-failure of it still fails) and the PR body names it; a direction (`Give a direction: <your words>`) goes to the
+failure of it still fails) and the PR body names it. Only a precheck failure that names its examples, tests or
+offenses offers the accept: one that names nothing (an error outside of examples, an output the factory cannot
+read, a coverage threshold) asks only for a direction or the drop; a direction (`Give a direction: <your words>`) goes to the
 writer with its next fix turn, with 2 more. A check that named no failure of the code is never a turn's failure.
 Your retry at that cap runs the checks again, and for checks that still fail the writer
 gets 2 more fix turns in the same attempt, counted from your retry, then the task needs you again (`does not pass
@@ -5690,12 +5699,16 @@ resumed from its conversation, then the last started fresh from the attempt's fi
 role whose pane is lost before its first prompt (its CLI exited at its start) is relaunched each time, and its stage
 sends that prompt; a recovery with no progress within 10 minutes takes the next step, unless the session moves
 again during its wait. A waited recovery's due time is a `recover` event too, so a restart keeps it, and a task
-that waits on you keeps it due. A role lost before its first prompt starts on your answer with the stage's first
-prompt, your answer after it. Each recovery is a `recover`
+that waits on you keeps it due. After a restart, a wait that came of a no-progress finding takes a fresh look at the
+session and recovers it at its due time unless it moves. A wait that ends early (the role moved) writes `due void`,
+so a restart never reads it back. A role lost before its first prompt starts on your answer with the stage's first
+prompt, your answer after it; when you answer again before that prompt went, your newest answer counts and its
+recoveries start over again. Each recovery is a `recover`
 event, so a restart counts them, and an alert, news whose toast counts nobody as waiting on you. When they run out the task asks you (`the <role> agent's pane was
 lost: no progress after 3 recoveries: start the role again, give a direction or drop the task?`): starting it again,
 or your direction, starts a fresh session of the role with its context and counts its recoveries again.
-Your retry starts those steps over. The stage's next prompt to a role of the attempt with no session starts it again
+When several agents need you in one pass, the task's wait names each of them; with a stop's question among them,
+the question comes first and the other waits come back after your answer. Your retry starts those steps over. The stage's next prompt to a role of the attempt with no session starts it again
 first, as a launch would (it waits for the same holds: the daemon's drain, a disk or memory hold, a CLI's pause or
 login, Codex's budget, the stagger at memory warn), and the prompt goes as after a launch: a role the factory parked
 while the task waited on you is resumed from its conversation, which counts against nothing, and a lost one takes

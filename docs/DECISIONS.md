@@ -26523,14 +26523,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
     a crash's "[BUG] …", a missed coverage threshold, whose rising percent is progress), past the noise a run
     prints anew (rspec's seed, run options, progress dots, timing) and a table's rules and rows (jest's
     coverage table), hex addresses as 0x?. Read on its first line, rspec's error outside of examples gave
-    "Randomized with seed N", so no turn failed the same way twice and every turn was progress, and your
-    accept stored today's line and never matched again. Your accept of such a failure covers that stable
-    line and stays unnamed (`stops.json` Unnamed): a new failure of the check still fails, as the option
-    says, never a later unnamed one or a named one (keyed on the check alone, it passed a load error). A
-    coverage miss's key reads its coverage now as any (`acceptKey`), so the accept holds while the
-    coverage stays under the same threshold, and the writer's progress still reads the raw line. jest's
-    "Jest: Uncovered count … exceeds global threshold" is such a line too, and only a table's rules and
-    rows (a name, then " | ", three cells) are skipped as noise.
+    "Randomized with seed N", so no turn failed the same way twice and every turn was progress. That stable
+    line keys the writer's progress only: such a failure gets no accept (the last part of this entry says
+    why). jest's "Jest: Uncovered count … exceeds global threshold" is such a line too, and only a table's
+    rules and rows (a name, then " | ", three cells) are skipped as noise.
     eslint's stylish report and stylelint's are read by the line that names the file above their rows of
     line:column (`namedOffenses`), so the changed-line filter holds for them; a row with no file's line
     above it (a tail cut at `outputKeep`) makes the whole output unreadable, the writer's. Every sign is read against the
@@ -26566,8 +26562,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     attempt (default 2, 0 to 10). After that, or without progress, the role gets one fresh session with 2 fix
     turns. Its first prompt names the failure, its commits on the branch since the base
     (`gitx.LogAfter`) and the end of the failing output. Then the question comes: accept the failing check as
-    known, give a direction, or drop the task. The acceptance is for a precheck check only, and a new failure
-    of it still fails. A direction goes with the next fix turn once, with 2 more turns. "Progress" compares
+    known, give a direction, or drop the task. The acceptance is for a precheck check only, and only for a
+    failure that names its examples, tests or offenses; a new failure of it still fails. A direction goes with the next fix turn once, with 2 more turns. "Progress" compares
     the failures that the precheck records (`failCheck`: the parsed offenses, red examples and jest failures,
     and the proof's red examples). Without them it compares the first failing line. `fix-turns.json` keeps
     them per run, with the grants. A check that named no failure of the code records no turn. `fixBudgetOf`
@@ -26635,11 +26631,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     you", which it never did. News that no longer stands goes in silence. The stop questions alert as any
     wait on you.
   - *The engine owner's review of 132da8d2* (23 findings, 3 of them P1). An unnamed failure is every error
-    of its run (each exception's class and message), never its first alone, so an accept of it holds only
-    while the whole failure stays the same; a run that ran no example, could not load a spec file, or
-    printed only noise (a tool's banner and version lines are noise now) offers no accept. Keys carry no
-    timing (jest's "(12 ms)") and no sha (the proof's why), a turn records every failing check's failures,
-    and SimpleCov's key keeps its minimum. The lint is read from its whole output (an output execx cut is
+    of its run (each exception's class and message), never its first alone (a tool's banner and version
+    lines are noise now). Keys carry no timing (jest's "(12 ms)") and no sha (the proof's why), and a turn
+    records every failing check's failures. The lint is read from its whole output (an output execx cut is
     unreadable), eslint's 0:0 fatal error of a touched file is the writer's, a signal's death is read from
     the wait status (`execx.Result.Signal`) as 128 plus the signal, a missing command of a script the change
     defines is the change's, and a deleted file counts among the files the change touched. A go-on whose
@@ -26651,6 +26645,34 @@ skill versions); people add theirs to the sections before it, at the end of the 
     before its first prompt starts on your answer as a fresh launch (`Runtime.StartOver`); a recorded drop
     whose end failed is applied at the next pass. Refuted and left: S12 (the rm step under a doubt names
     only saved files, by design) and S22 (no path reaches an answered ask that a retry closes).
+  - *The engine owner's check of 9ef72bdb* (G1 to G14). An accept is offered only for a failure that names its
+    examples, tests or offenses, and it is keyed on those names (`acceptKey`). A failure that names nothing
+    (an error outside of examples, an output the factory cannot read, a coverage threshold) never gets one:
+    the question offers a direction or the drop. The accepts of such failures were keyed on a stable line
+    read from one run, and each review round found another way for that line to cover a new failure of a
+    later run (G1, G4 and the rest of S1). So the coordinator ruled to remove the unnamed accepts, their keys
+    (`stops.json` Unnamed, the coverage minimum) and their tests. A lint accept is keyed on the offense's
+    file, its cop or rule and its message, never its line and column. The numbers in its message
+    (RuboCop's `[121/120]`, a complexity score) read as any on both sides, so an accepted offense matches
+    itself after an edit. It counts the offenses of each key, and a second equal offense in the same file
+    fails (G3). The lint's offenses are its files' alone: a warning Ruby prints for a gem's file and an
+    offense in a file outside the copy are none, so a lint that exits 2 on a plugin it cannot load goes the
+    no-offense way, never passing as "none on a changed line" (G5). A fatal row of a touched file is the
+    writer's whatever its line: eslint's `Parsing error` or its 0:0 error, RuboCop's F severity or
+    `Lint/Syntax`, never a 0:0 warning such as `File ignored …` (G6, G8). A script file the change touched
+    causes a missing command only when it defines or names that command, read from the crash's line or the
+    lint's stderr (`definesMissing`, G7). The proof's progress key is what its head run names: a jest
+    proof's failing tests, else the head run's failure lines, and its why line, its sha read as any, only
+    when the run names nothing (G2). A role lost before its first prompt that you answer again starts its
+    recoveries over again, and its first prompt carries your newest answer (`firstNoteAt`; a newer decided
+    answer of a role takes the place of older ones, G9). Every role's needs-you event of a pass is asked or
+    told: with no question the task waits on all of them in one line, and with one the other events stay in
+    the task's inbox for the pass after your answer (G10). A wait after a no-progress finding says so in its
+    due event (`on no progress`), so a restart keeps it, takes a fresh look at the session and recovers it
+    at its due time unless it moves (G11). A wait voided in memory writes `due void` (`voidDue`,
+    `flushVoids`), at the watchdog's pass and before any new due event, so a restart never reads it back
+    (G12). startRound's run again settles a go-on once its look finds the copy clean, as the round's end
+    does (G13, G14).
   Tests, failing first and each checked by a mutation: `TestALintThatNamesNoOffenseRunsAgainThenAfterTheInstalls`,
   `TestABaseRunThatHangsGetsADoubledBoundThenAQuestion`, `TestYourAnswerToACheckQuestionSkipsItOrGivesItYourBound`,
   `TestARestartInTheMiddleOfTheFaultStepsNeitherDoublesNorLosesOne`,
@@ -26672,23 +26694,29 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestALintInAFormatTheFactoryCannotReadIsTheWriters`, `TestStylelintsExit2WithItsReportIsNeverAFault`,
   `TestALintsErrorExitIsTheWritersWhenTheBranchChangedWhatItLoads`,
   `TestATestRunnersSegfaultOrHeapAbortOnChangedCodeIsTheWriters`,
-  `TestAFailureNoExampleNamesReadsTheSameOnEveryRun`, `TestAnAcceptOfAFailureNoExampleNamesHoldsForItsCheck`,
+  `TestAFailureNoExampleNamesReadsTheSameOnEveryRun`,
   `TestALintsRowsUnderTheirFileAreReadByTheChangedLines`, `TestALintReportWithRowsOfNoFileIsTheWriters`,
   `TestARisingCoverageIsProgress`, `TestARoundsTrackedChangeIsSavedAndPutBackWhenNoTurnIsInFlight`,
   `TestARoundsLeftoverInDoubtAsksYouToPutItBackOrDrop`, `TestAGoOnOverACopyThatStillHasTheLeftoverAsksAgain`,
   `TestADoubtThatComesDuringTheSaveAsksBeforeAnyPutBack` and
   `TestARoundThatLeavesTheCopyOffItsHeadAsksYouToPutItBackOrDrop`,
-  `TestAnAcceptHoldsOnlyWhileTheWholeUnnamedFailureStaysTheSame`, `TestABannerIsNoFailureLine`,
+  `TestABannerIsNoFailureLine`,
   `TestJestsFailureKeysCarryNoTiming`, `TestTheProofsUnnamedFailureReadsNoSha`,
-  `TestATurnRecordsEveryFailingChecksFailures`, `TestASimpleCovAcceptKeepsItsMinimum`,
+  `TestATurnRecordsEveryFailingChecksFailures`,
   `TestALintsFatalErrorOfAChangedFileIsTheWriters`, `TestASignalsDeathReadsAsItsExit`,
   `TestALintsOffensesAreReadFromItsWholeOutput`, `TestAMissingCommandOfAScriptTheChangeDefinesIsTheChanges`,
   `TestALintErrorNamingAFileTheChangeDeletedIsTheChanges`,
   `TestARoundThatRunsAgainAfterAGoOnPutsBackItsOwnLeftoverByItself`,
   `TestAFileStagedAndEditedAgainKeepsItsStagedVersion`, `TestEveryLostRoleOfAPassAsksItsQuestion`,
   `TestARebuildForYourStartAnswerRecoversNothing`,
-  `TestYourAnswerForARoleLostBeforeItsFirstPromptStartsItWithItsFirstPrompt` and
-  `TestADropThatDidNotApplyIsAppliedAtTheNextPass` in internal/factory.
+  `TestYourAnswerForARoleLostBeforeItsFirstPromptStartsItWithItsFirstPrompt`,
+  `TestADropThatDidNotApplyIsAppliedAtTheNextPass`, `TestAFailureThatNamesNothingOffersNoAccept`,
+  `TestALintAcceptSurvivesShiftedLinesAndCountsItsOffenses`, `TestARubyWarningOfAGemIsNoOffense`,
+  `TestARuboCopFatalRowOfAChangedFileIsTheWriters`, `TestALintsZeroZeroWarningIsNoFatalError`,
+  `TestAScriptFileCausesOnlyTheMissingCommandItNames`, `TestAJestProofsFailureIsItsFailingTests`,
+  `TestASecondAnswerForARoleStillLostBeforeItsFirstPromptIsApplied`,
+  `TestAnotherRolesNeedsYouEventOutlivesAStopQuestion`, `TestTwoRolesNeedsYouEventsAreBothTold` and
+  `TestAGoOnAtAStoppedRoundsRunAgainSettlesItsQuestion` in internal/factory.
   In internal/factory/runtime: `TestALostPaneIsRecoveredThreeTimesAfterItsWaitsTheLastInAFreshSession`,
   `TestARestartBetweenTheRecoveriesNeitherDoublesNorLosesOne`, `TestYourRetryStartsTheRecoveriesOverAndSpendsNone`,
   `TestAFreshStartStartsTheRoleWithItsContextAndItsRecoveriesOver`, `TestAFreshSessionStartsTheLoopsLadderOver`,
@@ -26696,8 +26724,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestTheRecoveriesCountTheSameInMemoryAndAfterARestart`,
   `TestTheFixBudgetsFreshSessionKeepsThePanesRecoveries`, `TestTheGoOnsStartTheLoopLadderOver`,
   `TestAWaitedRecoveryOutlivesARestart`, `TestADueRecoveryWaitsForATaskThatWaitsOnYou`,
-  `TestAWaitedRecoveryOfASessionThatMovesAgainIsVoid`, `TestTheRecoveriesRunningOutHandTheRunOver` and
-  `TestStartOverStartsALostRolesRecoveriesOver`. In internal/execx: `TestARunASignalEndedReportsTheSignal`.
+  `TestAWaitedRecoveryOfASessionThatMovesAgainIsVoid`, `TestTheRecoveriesRunningOutHandTheRunOver`,
+  `TestStartOverStartsALostRolesRecoveriesOver`, `TestANoProgressWaitOutlivesARestart` and
+  `TestAVoidedWaitStaysVoidAfterARestart`. In internal/execx: `TestARunASignalEndedReportsTheSignal`.
   In internal/config: `TestFactoryFixGoOnIsTwoByDefaultAndBounded`.
 
 ## Learned rules
