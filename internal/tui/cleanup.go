@@ -102,9 +102,9 @@ func newCleanupModel(plan CleanupPlan) cleanupModel {
 	for i := range sel {
 		sel[i] = true
 	}
-	in := textinput.New()
+	in := newLineInput(0)
 	in.Prompt = "> "
-	in.Focus()
+	_ = in.Focus()
 	m := cleanupModel{plan: plan, selected: sel, input: in, width: 80, height: 24}
 	m.applyStyles(defaultStyles)
 	return m
@@ -113,9 +113,8 @@ func newCleanupModel(plan CleanupPlan) cleanupModel {
 // applyStyles switches the screen and its text input to st.
 func (m *cleanupModel) applyStyles(st styles) {
 	m.st = st
-	in := textinput.DefaultStyles(st.dark)
+	in := lineStyles(st)
 	in.Focused.Prompt = st.Warn
-	in.Cursor.Color = st.Accent.GetForeground()
 	m.input.SetStyles(in)
 }
 
@@ -146,7 +145,7 @@ func (m cleanupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.step == cleanupStepConfirm && m.typing() {
 		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg) // cursor blink
+		m.input, cmd = m.input.Update(msg) // a paste: the cursor never blinks
 		return m, cmd
 	}
 	return m, nil

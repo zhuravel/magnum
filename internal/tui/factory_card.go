@@ -206,7 +206,8 @@ func cleanTaskCard(c TaskCard) TaskCard {
 }
 
 func cleanNewTaskForm(f NewTaskForm) NewTaskForm {
-	f.Text = cleanInput(f.Text)
+	t := typedText{f.Text, f.after}.cleaned(cleanInput)
+	f.Text, f.after = t.text, t.after
 	f.Kind, f.KindWhy, f.Branch, f.Starts = cleanText(f.Kind), cleanText(f.KindWhy), cleanText(f.Branch), cleanText(f.Starts)
 	f.Err, f.Repo, f.Title, f.Ask = cleanText(f.Err), cleanText(f.Repo), cleanText(f.Title), cleanText(f.Ask)
 	f.RepoWhy, f.NotJira, f.Repos = cleanText(f.RepoWhy), cleanText(f.NotJira), cleanAll(f.Repos)
@@ -508,13 +509,6 @@ func (p *cardPainter) bar() string {
 	return "┃"
 }
 
-func (p *cardPainter) caret() string {
-	if p.ascii() {
-		return "_"
-	}
-	return "▏"
-}
-
 // minus is the sign of a removed line.
 func (p *cardPainter) minus() string {
 	if p.ascii() {
@@ -677,11 +671,16 @@ func (p *cardPainter) markInView(body []string, room int) int {
 }
 
 // inputFoot is a footer that takes a typed line: what it is for, then the
-// text behind the bar, with the caret.
+// text behind the bar with its cursor, scrolled sideways to keep it in view.
 func (p *cardPainter) inputFoot(in *cardInput) []string {
-	rows := p.inputRows(cleanInput(strings.ReplaceAll(in.text, "\n", " ")))
-	return []string{" " + p.st.Label.Render(cleanText(in.label)), rows[len(rows)-1]}
+	t := typedText{in.text, in.after}.cleaned(cleanLine)
+	row := p.line(at(1, 1, seg{p.bar(), p.st.Accent}), placed{3, p.width - 3, typedLineCell(t, p.width-3, noStyle)})
+	return []string{" " + p.st.Label.Render(cleanText(in.label)), row}
 }
+
+// cleanLine is a typed line cleaned as cleanInput cleans a text, its line
+// breaks spaces.
+func cleanLine(s string) string { return cleanInput(strings.ReplaceAll(s, "\n", " ")) }
 
 // answerTag is where an answer came from, in the recap's words.
 func answerTag(q CardQuestion) string {

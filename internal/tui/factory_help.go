@@ -143,9 +143,12 @@ var factoryKeyHelp = []struct {
 		{"", "your PR's card has the PR's keys alone: f c F K r R z M U, E (offered first where the PR's deploy comes before its merge), " +
 			"o magnum's pane, b t e, a the next; no task to retry, diff or drop"},
 		{"esc", "back"}}},
-	{"New task", []hint{{"enter", "start (y/N)"}, {"ctrl+j", "a new line"}, {"ctrl+g", "your editor"},
-		{"tab", "the kind: bug, feature, chore"}, {repoKey, "the repository, when the factory has several"},
-		{"esc", "back, the draft kept"}}},
+	{"New task", []hint{{"enter", "start (y/N)"}, {"ctrl+j", "a new line (shift+enter too, where the terminal tells it)"},
+		{"ctrl+g", "your editor"}, {"tab", "the kind: bug, feature, chore"}, {repoKey, "the repository, when the factory has several"},
+		{"esc", "back, the draft kept"},
+		{"← → alt+← alt+→", "move a character, a word (ctrl+b ctrl+f, alt+b alt+f); ↑ ↓ a line; home end (ctrl+a ctrl+e) the line's ends, " +
+			"alt+< alt+> the text's; ctrl+w alt+d ctrl+u ctrl+k delete a word before, after, to the line's start, end; " +
+			"the same keys edit every line you type, the filter's ↑ ↓ excepted"}}},
 }
 
 // helpContent is the help's lines at screen width w: the keys, the mouse,

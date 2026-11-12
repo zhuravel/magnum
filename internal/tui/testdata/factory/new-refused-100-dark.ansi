@@ -1,7 +1,7 @@
  [1;94mmagnum factory[m[37m · [mnew task                                                              [1;94mesc[m [37mcancels[m 
 
  [1;37mJira key or describe the task[m                       [1;94menter[m [37mstarts[m[37m · [m[1;94mctrl+j[m [37mnew line[m[37m · [m[1;94mctrl+g[m [37meditor[m 
- [94m┃[m the refund of PR-12345 is wrong for advocates who changed their plan[94m▏[m
+ [94m┃[m the refund of PR-12345 is wrong for advocates who changed their plan[7m [m
 
  [1;37mJIRA[m      [1;91mJira refused PR-12345: the Jira token file is missing; starts from your words[m
  [1;37mKIND[m      bug         [37mguessed from "is wrong" · [m[37mtab: bug, feature, chore[m

@@ -21,6 +21,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -1000,7 +1001,8 @@ func (m factoryModel) questionCard() (QuestionCard, bool) {
 		c.NeedlessReasons = reasonWords(factoryNeedlessReasons)
 	}
 	if m.q.typing {
-		c.input = &cardInput{label: "Your answer · enter takes it · esc drops it", text: m.input.Value()}
+		t := lineTyped(m.input)
+		c.input = &cardInput{label: "Your answer · enter takes it · esc drops it", text: t.text, after: t.after}
 	}
 	c.changed = m.q.changed
 	c.sending = m.bar.busy != "" && m.inflight != nil && m.inflight.kind == followAnswer
@@ -1198,8 +1200,9 @@ func (m *factoryModel) inputKey(msg tea.KeyPressMsg) tea.Cmd {
 
 // editLine and editText hand a key or a paste to the line or the text being
 // typed. Their commands are dropped: the painter draws the text and its
-// caret itself, so the cursor's blink is not needed, and a paste comes from
-// the terminal (tea.PasteMsg), never from a read of the clipboard.
+// cursor itself, which never blinks, and a paste comes from the terminal
+// (tea.PasteMsg), never from a read of the clipboard (the shared keys have
+// no ctrl+v).
 func editLine(in textinput.Model, msg tea.Msg) textinput.Model {
 	in, _ = in.Update(msg)
 	return in
@@ -1238,7 +1241,8 @@ func (m factoryModel) readyCard() (ReadyCard, bool) {
 		c.Reasons = reasonWords(factorySendBackReasons)
 	}
 	if rs.noting {
-		c.input = &cardInput{label: "Your note to the writer · enter asks y/N · esc drops it", text: m.input.Value()}
+		t := lineTyped(m.input)
+		c.input = &cardInput{label: "Your note to the writer · enter asks y/N · esc drops it", text: t.text, after: t.after}
 	}
 	c.rule = m.rule()
 	c.Hints = newCardPainter(m.viewWidth(), m.st, m.g, m.now()).readyHints(c)
@@ -1722,7 +1726,7 @@ func (m factoryModel) newTaskForm() NewTaskForm {
 		// pick's: none is drawn until the pick's preview is read.
 		f = NewTaskForm{Repos: f.Repos}
 	}
-	f.Text = text
+	f.Text, f.after = text, utf8.RuneCountInString(text)-textCursor(m.form.area)
 	if m.form.repo != "" && severalRepos(f) {
 		f.Repo, f.RepoWhy = m.form.repo, "your pick"
 	}
@@ -1780,11 +1784,35 @@ func (m *factoryModel) newTaskKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+g":
 		return m.editDraft()
 	}
+	switch {
+	case key.Matches(msg, editKeys.lineUp):
+		m.moveRow(-1)
+		return nil
+	case key.Matches(msg, editKeys.lineDown):
+		m.moveRow(1)
+		return nil
+	}
+	m.form.goal = 0
 	before := m.form.area.Value()
 	if m.form.area = editText(m.form.area, msg); m.form.area.Value() != before {
 		return m.textChanged()
 	}
 	return nil
+}
+
+// moveRow moves the new task's cursor d rows down (up when d is below
+// zero) through the rows the painter draws, a long line's too, on the cell
+// column it had when the moves began, or as near as the row allows; on the
+// first row up and on the last one down it stays.
+func (m *factoryModel) moveRow(d int) {
+	rows := typedRows(m.form.area.Value(), inputTextW(m.viewWidth()))
+	row, col := cursorRowAt(rows, textCursor(m.form.area))
+	if m.form.goal == 0 {
+		m.form.goal = col + 1
+	}
+	if to := row + d; to >= 0 && to < len(rows) {
+		setTextCursor(&m.form.area, rows[to].offsetAt(m.form.goal-1))
+	}
 }
 
 // nextRepo picks the repository after the one the form shows, in the
@@ -1799,10 +1827,10 @@ func (m *factoryModel) nextRepo() {
 // The text changed (typed, pasted, back from the editor, or the form opened
 // on its draft): enter's question waits no more for its preview, since it
 // is asked only for the text enter was pressed on; a y typed meanwhile is
-// text, never an answer.
+// text, never an answer. Up and down forget the column they kept.
 func (m *factoryModel) textChanged() tea.Cmd {
 	m.form.seq++
-	m.form.kind, m.form.askOnce = "", false
+	m.form.kind, m.form.askOnce, m.form.goal = "", false, 0
 	seq := m.form.seq
 	return m.opts.Tick(factoryPreviewWait, func(time.Time) tea.Msg { return factoryPreviewDueMsg{seq: seq} })
 }

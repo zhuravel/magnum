@@ -152,24 +152,24 @@ func TestTheTaskCardAsksInItsFooter(t *testing.T) {
 }
 
 // A card takes a typed line in its footer: what it is for, then the text
-// behind the bar and the caret; the note on the rule is the screen's.
+// behind the bar and its cursor; the note on the rule is the screen's.
 func TestACardTakesTypedTextInItsFooter(t *testing.T) {
 	c := fixtureReadyCardAfter()
 	c.Ask, c.Cursor = "", 1
 	c.input = &cardInput{label: "Your note to the writer · enter sends it · esc drops it", text: "the copier spec misses archived rules"}
-	frame := ansi.Strip(drawReady(c)(100, 30, true, IconsUnicode))
+	frame := cursorMarked(drawReady(c)(100, 30, true, IconsUnicode))
 	lines := strings.Split(frame, "\n")
 	n := len(lines)
-	if !strings.Contains(lines[n-2], "Your note to the writer") || !strings.Contains(lines[n-1], "┃ the copier spec misses archived rules▏") {
+	if !strings.Contains(lines[n-2], "Your note to the writer") || !strings.Contains(lines[n-1], "┃ the copier spec misses archived rules⟦ ⟧") {
 		t.Errorf("the footer reads %q / %q", lines[n-2], lines[n-1])
 	}
 	q := fixtureQuestionCard()
 	q.input = &cardInput{label: "Your answer · enter takes it · esc drops it", text: "two days before"}
 	q.rule = newStyles(true).Dim.Render("question 2 flagged needless")
-	frame = ansi.Strip(drawQuestion(q)(100, 30, true, IconsUnicode))
+	frame = cursorMarked(drawQuestion(q)(100, 30, true, IconsUnicode))
 	lines = strings.Split(frame, "\n")
 	n = len(lines)
-	if !strings.Contains(lines[n-1], "two days before▏") || !strings.Contains(lines[n-3], "question 2 flagged needless") {
+	if !strings.Contains(lines[n-1], "two days before⟦ ⟧") || !strings.Contains(lines[n-3], "question 2 flagged needless") {
 		t.Errorf("the question card's footer and rule read %q / %q", lines[n-3], lines[n-1])
 	}
 }

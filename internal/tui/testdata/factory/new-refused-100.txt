@@ -1,7 +1,7 @@
  magnum factory · new task                                                              esc cancels 
 
  Jira key or describe the task                       enter starts · ctrl+j new line · ctrl+g editor 
- ┃ the refund of PR-12345 is wrong for advocates who changed their plan▏
+ ┃ the refund of PR-12345 is wrong for advocates who changed their plan 
 
  JIRA      Jira refused PR-12345: the Jira token file is missing; starts from your words
  KIND      bug         guessed from "is wrong" · tab: bug, feature, chore

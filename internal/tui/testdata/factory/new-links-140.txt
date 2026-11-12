@@ -2,7 +2,7 @@
 
  Jira key or describe the task                                                               enter starts · ctrl+j new line · ctrl+g editor 
  ┃ https://example.atlassian.net/browse/PR-12345 the same fix as https://github.com/example/talkable/pull/4512; CI is red since https://git
- ┃ hub.com/example/talkable/actions/runs/1234567▏
+ ┃ hub.com/example/talkable/actions/runs/1234567 
 
  JIRA      PR-12345 · Story · To Do · High · reporter rev-ann · read by the daemon 2s ago
            Credit expiry reminder email

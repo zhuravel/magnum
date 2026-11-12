@@ -1,7 +1,7 @@
  magnum factory · new task                                                                                                      esc cancels 
 
  Jira key or describe the task                                                               enter starts · ctrl+j new line · ctrl+g editor 
- ┃ the copier change of PR-12345 also breaks PR-12360: fix both in one place▏
+ ┃ the copier change of PR-12345 also breaks PR-12360: fix both in one place 
 
  JIRA      PR-12345 and PR-12360 found in your text · the task asks which issue it is
  KIND      bug         guessed from "breaks" · tab: bug, feature, chore

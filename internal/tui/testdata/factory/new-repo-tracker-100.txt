@@ -1,7 +1,7 @@
  magnum factory · new task                                                              esc cancels 
 
  Jira key or describe the task                       enter starts · ctrl+j new line · ctrl+g editor 
- ┃ EX-12 the export fails on Safari for merchants with a long name▏
+ ┃ EX-12 the export fails on Safari for merchants with a long name 
 
  REPO      example/site  from the EX tracker · shift+tab: example/app, example/site
  JIRA      none: EX-12's tracker is not Jira, so the agents work from your words

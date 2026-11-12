@@ -1,7 +1,7 @@
  magnum factory · new task                                                              esc cancels 
 
  Jira key or describe the task                       enter starts · ctrl+j new line · ctrl+g editor 
- ┃ fix the expiry reminder of PR-12345: advocates only, not their friends▏
+ ┃ fix the expiry reminder of PR-12345: advocates only, not their friends 
 
  JIRA      PR-12345 · Story · To Do · High · reporter rev-ann · read by the daemon 2s ago
            Credit expiry reminder email · found in your text

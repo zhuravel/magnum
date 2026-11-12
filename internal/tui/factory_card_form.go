@@ -20,7 +20,7 @@ func (p *cardPainter) newTask(f NewTaskForm, height int) string {
 	p.f.Spinner = f.Spinner
 	head := []string{p.titleLine(p.chip(hint{"esc", "cancels"}), seg{"new task", noStyle}), ""}
 	body := []string{p.inputLabel()}
-	body = append(body, p.inputRows(f.Text)...)
+	body = append(body, p.inputRows(typedText{f.Text, f.after})...)
 	if rows := p.previewRows(f); len(rows) > 0 {
 		body = append(body, "")
 		body = append(body, rows...)
@@ -87,29 +87,21 @@ func (p *cardPainter) inputLabel() string {
 	return truncate(left, p.width)
 }
 
-// inputRows echo the text being typed, behind the quote bar, with the caret
-// at its end (on a new line after a line break). A line wider than the screen
-// breaks at the width, not at a word, so every space stays where it was typed.
-// The last lines are kept when there are many.
-func (p *cardPainter) inputRows(text string) []string {
-	w := max(p.width-4, 8) // the caret takes the cell after the text
-	var lines []string
-	for l := range strings.SplitSeq(text, "\n") {
-		if ansi.StringWidth(l) <= w {
-			lines = append(lines, l)
-			continue
-		}
-		lines = append(lines, strings.Split(ansi.Hardwrap(l, w, true), "\n")...)
-	}
-	if len(lines) > cardInputLines {
-		lines = lines[len(lines)-cardInputLines:]
-	}
-	last := len(lines) - 1
-	out := make([]string, len(lines))
-	for i, l := range lines {
-		c := cell{{l, noStyle}}
-		if i == last {
-			c = append(c, seg{p.caret(), p.st.Accent})
+// inputRows echo the text being typed, behind the quote bar, with its
+// cursor (on a new line after a line break at the end). A line wider than
+// the screen breaks at the width, not at a word, so every space stays where
+// it was typed. At most cardInputLines rows are drawn, the cursor's among
+// them: the last ones while it is there (rowWindow).
+func (p *cardPainter) inputRows(t typedText) []string {
+	rows := typedRows(t.text, inputTextW(p.width))
+	cur, _ := cursorRowAt(rows, t.pos())
+	from := rowWindow(len(rows), cur, cardInputLines)
+	rows = rows[from:min(from+cardInputLines, len(rows))]
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		c := cell{{clusterText(r.cs), noStyle}}
+		if i == cur-from {
+			c = cursorCell(r.cs, cursorIn(r.cs, t.pos()), noStyle)
 		}
 		out[i] = p.line(at(1, 1, seg{p.bar(), p.st.Accent}), placed{3, p.width - 3, c})
 	}

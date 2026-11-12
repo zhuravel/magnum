@@ -65,7 +65,8 @@ func TestSlashFiltersHomesRows(t *testing.T) {
 		t.Fatalf("filter COUPON shows %v, want %v", got, want)
 	}
 	v := h.view()
-	mustContain(t, v, `filter "COUPON" · 6 hidden`, "/ COUPON▏")
+	mustContain(t, v, `filter "COUPON" · 6 hidden`, "/ COUPON")
+	mustContain(t, h.marked(), "/ COUPON⟦ ⟧")
 	mustNotContain(t, v, "Weekly gem upgrades")
 	if r, _ := h.m.selectedRow(); r.Key != "PR-12371" {
 		t.Errorf("the cursor is on %s, want PR-12371, the shown row nearest #4611", r.Key)

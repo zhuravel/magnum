@@ -606,7 +606,7 @@ func TestSendBackAsksForAReasonKeyThenANote(t *testing.T) {
 	h.press("4") // tests too thin
 	mustContain(t, h.view(), "Your note to the writer")
 	h.feed(typed("the spec never copies an archived campaign")...)
-	mustContain(t, h.view(), "the spec never copies an archived campaign▏")
+	mustContain(t, h.marked(), "the spec never copies an archived campaign⟦ ⟧")
 	h.press("enter")
 	mustContain(t, h.view(), "Send PR-12360 back to the writer (tests too thin)? y/N")
 	if h.act.calls() != 0 {
@@ -713,7 +713,7 @@ func TestNewTaskAsksBeforeItStartsAgents(t *testing.T) {
 		t.Fatal("enter started the task before y")
 	}
 	h.press("n")
-	mustContain(t, h.view(), "PR-12350 the reminder is for advocates only▏") // back to the text, nothing lost
+	mustContain(t, h.marked(), "PR-12350 the reminder is for advocates only⟦ ⟧") // back to the text, nothing lost
 	if h.act.calls() != 0 {
 		t.Fatal("n started the task")
 	}
@@ -1267,7 +1267,7 @@ func TestATypedYNeverAnswersALateNewTaskQuestion(t *testing.T) {
 	if len(h.act.starts) != 0 {
 		t.Errorf("a typed y started a task: %+v", h.act.starts)
 	}
-	mustContain(t, h.view(), "PR-12350 the reminder yesy▏")
+	mustContain(t, h.marked(), "PR-12350 the reminder yesy⟦ ⟧")
 }
 
 // A new task's question is asked only on the new-task view: enter waits for
@@ -1293,7 +1293,7 @@ func TestALateNewTaskQuestionIsNeverAskedOffItsView(t *testing.T) {
 	if len(h.act.starts) != 0 {
 		t.Fatalf("a typed y started a task: %+v", h.act.starts)
 	}
-	mustContain(t, h.view(), "we yes▏")
+	mustContain(t, h.marked(), "we yes⟦ ⟧")
 
 	home := testFactory(t, 100, 40)
 	home.act.preview = previewJira
@@ -1408,24 +1408,6 @@ func TestTheChangedRecapNamesTheQuestionOpenAgain(t *testing.T) {
 	mustContain(t, h.view(), "question 2 of 3", "When does the reminder go out, in the merchant's time?")
 }
 
-// Typing keeps the cursor at the end of the text, where the caret is drawn:
-// the keys that would move it are not taken.
-func TestTheCursorStaysWhereTheCaretIsDrawn(t *testing.T) {
-	h := testFactory(t, 100, 40)
-	h.press("n")
-	h.feed(typed("abc")...)
-	h.press("left", "home", "up")
-	h.feed(typed("X")...)
-	mustContain(t, h.view(), "abcX▏")
-	h.press("esc", "esc")
-	h.open("PR-12345")
-	h.press("5")
-	h.feed(typed("ab")...)
-	h.press("left")
-	h.feed(typed("X")...)
-	mustContain(t, h.view(), "abX▏")
-}
-
 func TestLowerFirstLowersTheFirstRune(t *testing.T) {
 	for in, want := range map[string]string{"Élan": "élan", "«Yes»": "«Yes»", "Ask rev-ann": "ask rev-ann", "": ""} {
 		if got := lowerFirst(in); got != want {
@@ -1490,7 +1472,7 @@ func TestTheSendBacksNoteSurvivesANo(t *testing.T) {
 	h.press("2", "1")
 	h.feed(typed("the spec never copies an archived campaign")...)
 	h.press("enter", "n", "2", "1")
-	mustContain(t, h.view(), "the spec never copies an archived campaign▏")
+	mustContain(t, h.marked(), "the spec never copies an archived campaign⟦ ⟧")
 	h.press("enter", "y")
 	if len(h.act.decides) != 1 || h.act.decides[0].note != "the spec never copies an archived campaign" {
 		t.Errorf("decides = %+v", h.act.decides)
@@ -1826,5 +1808,5 @@ func TestCtrlGEditsTheDraftInTheEditor(t *testing.T) {
 		t.Fatalf("ctrl+g sent %d ExecProcess messages", len(h.execs))
 	}
 	h.feed(factoryEditorMsg{text: "PR-12350 the reminder, edited\n"})
-	mustContain(t, h.view(), "PR-12350 the reminder, edited▏")
+	mustContain(t, h.marked(), "PR-12350 the reminder, edited⟦ ⟧")
 }

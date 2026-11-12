@@ -5725,6 +5725,88 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestCRefusesAnothersPRAndAPRWithNothingFailed, TestDashboardCFixesCIAfterThePlan and
   TestTheHelpNamesCForACIFix; TestEveryRowActionRunsItsOwnCall and the menus' tests know c.
 
+- **Every text input moves its cursor, with one set of editing keys and one cursor that does not blink**
+  (2026-11-12). The operator asked for it. In `magnum factory` they typed a new task's text and the cursor
+  did not move: typing always went at the end.
+
+  Why the keys were off. The factory screen has three inputs: the new task's text, the typed line of an
+  answer or a send-back's note, and home's `/` filter. Their painters drew a caret (`▏`, or `_` in ASCII)
+  after the text. A cursor at another place then typed where no caret showed, so these inputs turned the
+  movement keys off on purpose. The board's filter, the settings search and the cleanup's typed slug drew
+  the component's own view. Their cursors moved, but they blinked: a new frame came every 530 ms with no
+  change of the text. They also kept the components' key maps, so `ctrl+v` read the clipboard there. The
+  factory screen never read it.
+
+  What changed. One set of keys (`editKeys` in textedit.go) goes to all six inputs, through
+  `newLineInput` and `newTextInput`. The keys are close to Claude Code's prompt:
+
+  - `←` `→` (`ctrl+b` `ctrl+f`) move a character. `alt+←` `alt+→` (`alt+b` `alt+f`) move a word.
+  - `home` `end` (`ctrl+a` `ctrl+e`) go to the ends of the line.
+  - `backspace` deletes the character before the cursor. `delete` (`ctrl+d`) deletes the one under it.
+  - `ctrl+w` (`alt+backspace`) deletes the word before. `alt+d` deletes the word after.
+  - `ctrl+u` deletes to the start of the line. `ctrl+k` deletes to its end.
+  - In the new task's text only: `↑` `↓` (`ctrl+p` `ctrl+n`) move a line, and `alt+<` `alt+>` go to the
+    ends of the text. `ctrl+j` and `shift+enter` make a new line.
+
+  The set leaves all other bindings unset. So no key reads the clipboard (`ctrl+v`). A paste comes from
+  the terminal (`tea.PasteMsg`) and goes in at the cursor. No key selects. The textarea's page keys, its
+  case keys (`alt+c`, `alt+l`, `alt+u`), its transpose (`ctrl+t`) and its copy are off. The textinput's
+  suggestions (`tab`, `↑` `↓`) are off.
+
+  One look for the cursor. The cell under the cursor shows in reverse video. At the end of the text the
+  cursor is a reverse-video space. The inputs that draw themselves keep the component's view. We set it
+  to no blink and no cursor color (`lineStyles`). Before, the board's and the cleanup's cursor had the
+  accent color. We did not draw these inputs with the factory's helper, for two reasons. First, the view
+  gives the same bytes as the helper's `cursorLook` (`\x1b[7mx\x1b[m`). The tests check these bytes on all
+  six inputs. Second, the view already scrolls the board's filter sideways and draws the placeholders. The
+  helper does neither.
+
+  The factory's painters draw the cursor where it is. `typedRows` lays out the new task's text with the
+  painter's own wrapping (`ansi.Hardwrap` at the width), one grapheme at a time. A wide rune takes two
+  cells. A combining mark takes none. A cursor between a letter and its mark is on the letter. The painter
+  draws 6 rows. If the cursor is among the last rows, these are the last rows. Else, if the cursor is among
+  the first rows, these are the first rows. Else the cursor's row is near the middle (`rowWindow`). A typed line scrolls
+  sideways in the same way (`typedLineCell`). Both are stateless, because a painter of fingerprinted data
+  keeps no state. The data holds the cursor: `NewTaskForm.after`, `cardInput.after` and
+  `factoryFrame.input` count the runes after it. So if only the cursor moves, the frame changes.
+
+  `cleanInput` cleans the text on each side of the cursor separately (`typedText.cleaned`). So the
+  cursor's column counts the cells of the cleaned text. `cleanText` no longer folds home's filter while you
+  type it. It drew two typed spaces as one, and a cursor that moves over them then seems to stay. The
+  title line's filter is still folded.
+
+  `↑` `↓` in the new task's text move between the rows that the painter draws, also in a long line. They
+  keep their column across a shorter row. The textarea's own rows wrap by word at its 200 cells, so they
+  do not match the painter's rows. The screen takes these keys before the textarea (`moveRow`). Then it puts
+  the textarea's cursor at the new offset (`setTextCursor`), because the textarea has no setter for an
+  offset.
+
+  The clashes. A key that a screen already used keeps its meaning there:
+
+  - The board's filter: `ctrl+k` and `ctrl+j` move the row cursor. So on the board `ctrl+k` deletes
+    nothing. The factory's filter does not use these keys.
+  - Both filters: `↑` `↓` and `ctrl+p` `ctrl+n` move the selected row. These are the text's line keys,
+    and a line has no line keys, so no editing key is lost.
+  - The new task: `enter` (the textarea's default new line), `ctrl+g` (its default select-all), `tab`,
+    `shift+tab` and `esc` stay the form's.
+
+  These are not clashes. The board's and home's `ctrl+d` and `ctrl+u` (a page) and `home` `end` go to the
+  input while you type a filter. The board's filter already worked that way. The settings search takes
+  `enter`, `esc` and `ctrl+c`. The cleanup's slug takes `enter`, `esc` and `ctrl+c`. The factory's typed
+  line takes `enter` and `esc`. None of these is an editing key. `ctrl+c` quits the factory screen
+  everywhere.
+
+  No test or README text promised `ctrl+v` on the board. The settings pop-up's huh forms draw their own
+  inputs, as before. The filter of `magnum pick` (the list component's own input) is not one of the six.
+
+  Tests, failing first: TestTheNewTasksTextMovesItsCursorWithTheEditingKeys,
+  TestTheSharedKeysDeleteAsClaudeCodesPromptDoes, TestTheNewTasksPainterDrawsTheCursorWhereItIs,
+  TestALongTextShowsTheLinesAroundTheCursor, TestAPasteGoesInAtTheCursor,
+  TestTheAnswerLineAndHomesFilterMoveTheirCursor, TestALongTypedLineScrollsSidewaysToTheCursor,
+  TestAFrameChangesWhenOnlyTheCursorMoves and TestTheBoardSettingsAndCleanupInputsTakeTheSharedKeys.
+  TestTheCursorStaysWhereTheCaretIsDrawn checked the old keys, so it is gone.
+  TestCleanupTypedConfirmMismatchThenMatch now expects no blink command.
+
 ## Operations
 
 - **The daemon exits when the schema was migrated under it** (another binary ran a newer migration);

@@ -53,7 +53,6 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -444,6 +443,9 @@ type factoryDraft struct {
 	repo       string // the repository the operator picked with shift+tab; "" = the preview's
 	cycles     int    // shift+tab presses before the text's first preview, applied when it lands
 	askOnce    bool   // enter waits for the preview of the text to ask y/N
+	// goal is the cell column up and down keep, one more (0: none): a
+	// row too short for it does not lose it for the rows after.
+	goal int
 }
 
 // fresh reports whether the preview is the one of the text and the pick on
@@ -552,22 +554,9 @@ func newFactoryModel(ctx context.Context, src FactorySource, act FactoryActions,
 	if opts.Tick == nil {
 		opts.Tick = tea.Tick
 	}
-	area := textarea.New()
-	area.KeyMap.InsertNewline.SetKeys("ctrl+j")
-	area.CharLimit, area.ShowLineNumbers = 0, false
+	area := newTextInput() // the painter draws it and its cursor (inputRows)
 	area.SetWidth(200)
-	_ = area.Focus() // the text is drawn by the painter: the blink is not needed
 	in, filter := typedLine(500), typedLine(200)
-	// The painter draws the caret at the end of the text: the keys that would
-	// move the cursor elsewhere (or select, or read the clipboard) are off,
-	// so what is typed goes where the caret is.
-	ak := &area.KeyMap
-	for _, b := range []*key.Binding{&ak.CharacterBackward, &ak.CharacterForward, &ak.WordForward, &ak.WordBackward,
-		&ak.LineNext, &ak.LinePrevious, &ak.LineStart, &ak.LineEnd, &ak.InputBegin, &ak.InputEnd, &ak.PageUp, &ak.PageDown,
-		&ak.SelectCharacterForward, &ak.SelectCharacterBackward, &ak.SelectWordForward, &ak.SelectWordBackward,
-		&ak.SelectLineUp, &ak.SelectLineDown, &ak.SelectAll, &ak.Paste} {
-		b.SetEnabled(false)
-	}
 	m := factoryModel{
 		bar: newFactoryBar(ctx, nil, opts.Now, opts.Tick), ctx: ctx, src: src, act: act, opts: opts,
 		g: newGlyphs(opts.Icons), loading: true, selIdx: 0,
@@ -582,19 +571,11 @@ func newFactoryModel(ctx context.Context, src FactorySource, act FactoryActions,
 }
 
 // typedLine is a line typed on the screen of at most limit runes (your own
-// answer, a send back's note, home's filter). The painter draws its text
-// and the caret at its end: the keys that would move the cursor elsewhere
-// (or read the clipboard) are off, so what is typed goes where the caret
-// is.
+// answer, a send back's note, home's filter), with the shared editing keys;
+// the painter draws its text and its cursor (typedLineCell).
 func typedLine(limit int) textinput.Model {
-	in := textinput.New()
-	in.CharLimit = limit
+	in := newLineInput(limit)
 	_ = in.Focus()
-	ik := &in.KeyMap
-	for _, b := range []*key.Binding{&ik.CharacterForward, &ik.CharacterBackward, &ik.WordForward, &ik.WordBackward,
-		&ik.LineStart, &ik.LineEnd, &ik.Paste, &ik.AcceptSuggestion, &ik.NextSuggestion, &ik.PrevSuggestion} {
-		b.SetEnabled(false)
-	}
 	return in
 }
 
@@ -1356,11 +1337,8 @@ func (m factoryModel) homeFrame() factoryFrame {
 		f.hidden = len(m.orderOf(false)) - len(m.order())
 	}
 	if m.filtering {
-		caret := "▏"
-		if m.g.mode == IconsASCII {
-			caret = "_"
-		}
-		f.input = "/ " + cleanInput(m.filter.Value()) + caret
+		t := lineTyped(m.filter)
+		f.input = &t
 	}
 	if _, ok := m.selectedRow(); ok {
 		f.Cursor = slices.IndexFunc(rows, func(r FactoryRow) bool { return r.ID == m.selID })

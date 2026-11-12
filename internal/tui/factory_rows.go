@@ -338,8 +338,12 @@ type QuestionCard struct {
 }
 
 // cardInput is a line typed in a card's footer (your own answer, the note
-// of a send back): what it is for, and the text so far.
-type cardInput struct{ label, text string }
+// of a send back): what it is for, the text so far and its cursor, after
+// being how many of its runes follow the cursor (0: at its end).
+type cardInput struct {
+	label, text string
+	after       int
+}
 
 // recapChange is the recap after the factory refused the batch because the
 // questions changed: when, why (may be empty) and the question to see again
@@ -729,7 +733,8 @@ type NewTaskForm struct {
 	// Hints are the footer's key hints; none: the form's own (newTaskHints).
 	Hints []hint `json:"-"`
 
-	rule string // the screen's note on the rule (styled)
+	rule  string // the screen's note on the rule (styled)
+	after int    // the cursor: how many runes of Text follow it (0: at its end)
 }
 
 // FormLink is a link in the new task text. Kind is "jira" (a Jira link is

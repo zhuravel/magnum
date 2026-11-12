@@ -314,7 +314,7 @@ func (m prBoardModel) frameKey() prbFrameKey {
 		k.spin = m.spin.View()
 	}
 	if m.filtering {
-		k.filter = m.filter.View() // the cursor and its blink too
+		k.filter = m.filter.View() // the cursor too
 	}
 	if m.confirm != nil {
 		k.confirm = m.confirm.question
@@ -345,10 +345,9 @@ func newPRBoardModel(ctx context.Context, src PRBoardSource, act DashboardAction
 	}
 	g := newGlyphs(opts.Icons)
 	sp := spinner.New(spinner.WithSpinner(g.spinner), spinner.WithStyle(defaultStyles.Accent))
-	in := textinput.New()
+	in := newLineInput(120)
 	in.Prompt = "/ "
 	in.Placeholder = "ref, title, author, reviewer, label; state: assignee: author: review:requested"
-	in.CharLimit = 120
 	m := prBoardModel{
 		actionBar: newActionBar(ctx, act, opts.Log, opts.Now, opts.Tick), src: src, opts: opts, g: g, spin: sp, filter: in, cache: &prbCache{},
 		self: selfSet(opts.SelfLogins), sort: opts.DefaultSort, desc: true, boardView: opts.DefaultView,
@@ -375,10 +374,9 @@ func (m *prBoardModel) applyStyles(st styles) {
 	m.st = st
 	m.pal = newPRBPalette(st)
 	m.spin.Style = st.Accent
-	in := textinput.DefaultStyles(st.dark)
+	in := lineStyles(st)
 	in.Focused.Prompt, in.Blurred.Prompt = st.Key, st.Dim
 	in.Focused.Placeholder, in.Blurred.Placeholder = st.Dim, st.Dim
-	in.Cursor.Color = st.Accent.GetForeground()
 	m.filter.SetStyles(in)
 }
 
@@ -572,10 +570,6 @@ func (m prBoardModel) update(msg tea.Msg) (prBoardModel, tea.Cmd) {
 	case tea.PasteMsg:
 		if m.filtering {
 			return m.editFilter(msg)
-		}
-	default:
-		if m.filtering {
-			return m.editFilter(msg) // cursor blinks
 		}
 	}
 	return m, nil
@@ -883,8 +877,10 @@ func (m prBoardModel) tableKey(k string) (prBoardModel, tea.Cmd) {
 	return m, nil
 }
 
-// filterKey edits the filter: enter keeps it, esc clears it, the arrows
-// still move the cursor.
+// filterKey edits the filter with the shared editing keys: enter keeps it,
+// esc clears it, and the row keys stay the rows': up and down, ctrl+p and
+// ctrl+n, and ctrl+k and ctrl+j, which the filter's ctrl+k (delete to the
+// end) gives way to.
 func (m prBoardModel) filterKey(msg tea.KeyPressMsg) (prBoardModel, tea.Cmd) {
 	switch msg.String() {
 	case "esc":

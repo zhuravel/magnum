@@ -300,8 +300,8 @@ func TestCleanupTypedConfirmMismatchThenMatch(t *testing.T) {
 	plan := CleanupPlan{Actions: typedFixture().Actions[:2]} // p1 + d9
 	m := newCleanupTest(t, plan, 100, 30)
 	m, cmd := send(t, m, keys("enter")...)
-	if cmd == nil {
-		t.Error("entering the typed step should return the input's blink command")
+	if cmd != nil {
+		t.Error("entering the typed step returns a command: the input's cursor does not blink")
 	}
 	mustContain(t, viewOf(m), "Apply 2 action(s)?", "(type review9)",
 		"Type review9 to confirm dropping its databases (cannot be undone):", "> ")

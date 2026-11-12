@@ -88,12 +88,13 @@ type factoryFrame struct {
 	// several owners); filter is the filter's text, hidden the rows they
 	// hide, which the title line says; ownerNext is the owner O moves to
 	// ("" = every owner), which a scope that shows nothing names; input is
-	// the filter as it is typed, drawn in place of the selected row's help
-	// line.
-	all                                   []FactoryRow
-	repo, owner, ownerNext, filter, input string
-	owners                                bool
-	hidden                                int
+	// the filter as it is typed, with its cursor, drawn in place of the
+	// selected row's help line (nil: the filter is not typed).
+	all                            []FactoryRow
+	repo, owner, ownerNext, filter string
+	input                          *typedText
+	owners                         bool
+	hidden                         int
 }
 
 const (
@@ -260,7 +261,11 @@ func newFactoryPainter(f factoryFrame, width int, st styles, g glyphs, now time.
 		})
 	}
 	p.f.repo, p.f.owner, p.f.ownerNext = cleanText(f.repo), cleanText(f.owner), cleanText(f.ownerNext)
-	p.f.filter, p.f.input = cleanText(f.filter), cleanText(f.input)
+	p.f.filter = cleanText(f.filter)
+	if f.input != nil {
+		t := f.input.cleaned(cleanLine)
+		p.f.input = &t
+	}
 	for _, r := range p.rows {
 		for _, c := range r.Stagings {
 			if !slices.Contains(p.names, c.Name) {
@@ -1795,8 +1800,8 @@ func (p *factoryPainter) render(height int) (string, map[int64]int) {
 			help = truncate(" "+t, p.width)
 		}
 	}
-	if p.f.input != "" { // the filter as it is typed
-		help = truncate(" "+p.st.Accent.Render(p.f.input), p.width)
+	if p.f.input != nil { // the filter as it is typed
+		help = truncate(" "+p.st.Accent.Render("/ ")+typedLineCell(*p.f.input, max(p.width-3, 1), p.st.Accent).render(nil), p.width)
 	}
 	lines = append(lines, p.f.ask...)
 	lines = append(lines, p.base.footerRule(p.width, msg, below), help, p.hintsLine())

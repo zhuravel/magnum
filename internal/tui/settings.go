@@ -212,10 +212,9 @@ type settingsFrameKey struct {
 }
 
 func newSettingsModel(ctx context.Context, src SettingsSource, rt SettingsRuntime, opts SettingsOptions, hosted bool) settingsModel {
-	in := textinput.New()
+	in := newLineInput(80)
 	in.Prompt = "/ "
 	in.Placeholder = "label or key; * for the settings your file sets or the draft changes"
-	in.CharLimit = 80
 	return settingsModel{
 		ctx: ctx, src: src, rt: rt, opts: opts, hosted: hosted,
 		st: defaultStyles, draft: SettingsDraft{}, invalid: map[string]string{},
@@ -393,17 +392,12 @@ func (m settingsModel) update(msg tea.Msg) (settingsModel, tea.Cmd, bool) {
 		m, cmd2 := m.afterPopup()
 		return m, tea.Batch(cmd, cmd2, m.resizePopup()), true
 	}
-	if m.mode == modeSearch {
-		var cmd tea.Cmd
-		m.search, cmd = m.search.Update(msg)
-		return m, cmd, true
-	}
-	return m, nil, false
+	return m, nil, false // the search's cursor never blinks: it has no message of its own
 }
 
 // fieldMsg reports whether msg is a bubble's own message (a cursor
-// blinking, which names its cursor), which the popup or the search input
-// takes. huh's own reach a popup only tagged with it (popupMsg); anything
+// blinking, which names its cursor), which the popup takes (the search
+// input's cursor never blinks). huh's own reach a popup only tagged with it (popupMsg); anything
 // else is not the screen's.
 func fieldMsg(msg tea.Msg) bool {
 	t := reflect.TypeOf(msg)

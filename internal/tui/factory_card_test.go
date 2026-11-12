@@ -1271,7 +1271,7 @@ func TestNewTaskEchoShowsWhatWasTyped(t *testing.T) {
 	input := func(text string, w int) []string {
 		f := NewTaskForm{Text: text}
 		var rows []string
-		for l := range strings.SplitSeq(plainCard(drawNewTask(f), w), "\n") {
+		for l := range strings.SplitSeq(cursorMarked(drawNewTask(f)(w, 0, true, IconsUnicode)), "\n") {
 			if strings.HasPrefix(l, " ┃") {
 				rows = append(rows, l)
 			}
@@ -1282,20 +1282,20 @@ func TestNewTaskEchoShowsWhatWasTyped(t *testing.T) {
 		name, text string
 		want       []string
 	}{
-		{"a line break at the end", "foo\n", []string{" ┃ foo", " ┃ ▏"}},
-		{"two line breaks at the end", "foo\n\n", []string{" ┃ foo", " ┃", " ┃ ▏"}},
-		{"a space at the end", "foo ", []string{" ┃ foo ▏"}},
-		{"two spaces inside", "foo  bar", []string{" ┃ foo  bar▏"}},
-		{"an indent", "  foo\n    bar", []string{" ┃   foo", " ┃     bar▏"}},
-		{"a blank line inside", "foo\n\nbar", []string{" ┃ foo", " ┃", " ┃ bar▏"}},
-		{"a tab", "a\tb", []string{" ┃ a    b▏"}},
+		{"a line break at the end", "foo\n", []string{" ┃ foo", " ┃ ⟦ ⟧"}},
+		{"two line breaks at the end", "foo\n\n", []string{" ┃ foo", " ┃", " ┃ ⟦ ⟧"}},
+		{"a space at the end", "foo ", []string{" ┃ foo ⟦ ⟧"}},
+		{"two spaces inside", "foo  bar", []string{" ┃ foo  bar⟦ ⟧"}},
+		{"an indent", "  foo\n    bar", []string{" ┃   foo", " ┃     bar⟦ ⟧"}},
+		{"a blank line inside", "foo\n\nbar", []string{" ┃ foo", " ┃", " ┃ bar⟦ ⟧"}},
+		{"a tab", "a\tb", []string{" ┃ a    b⟦ ⟧"}},
 	} {
 		if got := input(c.text, 100); !slices.Equal(got, c.want) {
 			t.Errorf("%s: the echo of %q reads %q, want %q", c.name, c.text, got, c.want)
 		}
 	}
 	// Control characters never reach the echo, and a lone carriage return is a line break.
-	if got := input("a\x1b[2Jb\x00c\rd", 100); !slices.Equal(got, []string{" ┃ ab c", " ┃ d▏"}) {
+	if got := input("a\x1b[2Jb\x00c\rd", 100); !slices.Equal(got, []string{" ┃ ab c", " ┃ d⟦ ⟧"}) {
 		t.Errorf("control characters in the echo: %q", got)
 	}
 	// A line wider than the screen breaks at the width and loses no character.
@@ -1306,13 +1306,13 @@ func TestNewTaskEchoShowsWhatWasTyped(t *testing.T) {
 	}
 	var kept strings.Builder
 	for _, r := range rows {
-		kept.WriteString(strings.TrimPrefix(strings.TrimSuffix(r, "▏"), " ┃ "))
+		kept.WriteString(strings.TrimPrefix(strings.TrimSuffix(r, "⟦ ⟧"), " ┃ "))
 	}
 	if strings.Count(kept.String(), "a") != 12 || strings.Count(kept.String(), "b") != 12 {
 		t.Errorf("the wrapped echo lost letters: %q", rows)
 	}
 	for _, r := range rows {
-		if w := ansi.StringWidth(r); w > 30 {
+		if w := ansi.StringWidth(r) - 2*strings.Count(r, "⟦"); w > 30 {
 			t.Errorf("an echo row is %d cells wide, over 30: %q", w, r)
 		}
 	}

@@ -1,7 +1,7 @@
  [1;94mmagnum factory[m[37m · [mnew task                                                              [1;94mesc[m [37mcancels[m 
 
  [1;37mJira key or describe the task[m                       [1;94menter[m [37mstarts[m[37m · [m[1;94mctrl+j[m [37mnew line[m[37m · [m[1;94mctrl+g[m [37meditor[m 
- [94m┃[m PR-12345 the reminder is for advocates only, not their friends[94m▏[m
+ [94m┃[m PR-12345 the reminder is for advocates only, not their friends[7m [m
 
  [1;37mJIRA[m      [94mPR-12345[m[37m · [mStory[37m · [mTo Do[37m · [mHigh[37m · [mreporter rev-ann[37m · [m[37mread by the daemon 2s ago[m
            [1mCredit expiry reminder email[m

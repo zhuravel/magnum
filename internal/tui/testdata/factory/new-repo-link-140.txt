@@ -2,7 +2,7 @@
 
  Jira key or describe the task                                                               enter starts · ctrl+j new line · ctrl+g editor 
  ┃ fix the CSV export: it drops the last row
- ┃ see https://github.com/example/app/issues/88▏
+ ┃ see https://github.com/example/app/issues/88 
 
  REPO      example/app   from the link · shift+tab: example/app, example/site
  JIRA      none: the agents work from your words
