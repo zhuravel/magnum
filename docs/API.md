@@ -16057,6 +16057,10 @@ type ReviewFile struct {
 	Head           string       `json:"head"`
 	AttemptsBefore int          `json:"attempts_before"`
 	Findings       []ReviewItem `json:"findings"`
+	// Kept are the changes the operator kept in the copy that the writer
+	// commits in this turn: a round that blocked nothing gives the writer
+	// a short turn for them alone (keptTurn), with no finding.
+	Kept []string `json:"kept,omitempty"`
 }
     ReviewFile is review-<n>.json, what a blocking round hands the writer:
     the cycle's number, the head it reviewed, how many attempts the review stage
@@ -17765,6 +17769,11 @@ func PromptHash(text string) string
     PromptHash is the ledger's hash of a prompt: the sha256 of its text with the
     line ends made \n and the surrounding space trimmed, as a transcript records
     it.
+
+func RecoveryAlert(what string) bool
+    RecoveryAlert reports whether what, an alert's text after its task's key,
+    is the alert of a lost pane's recovery (noteRecovery): news of a step the
+    factory took by itself, which waits on nobody.
 
 func Scrub(text string) (clean string, kept bool)
     Scrub cleans text before the factory keeps it: scrub.Text (execx.Redact:
