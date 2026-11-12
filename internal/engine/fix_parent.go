@@ -687,6 +687,9 @@ func (e *Engine) parentPushed(ctx context.Context, job *fixJob, head, needs stri
 // and to the daemon's push of a merge the fixer handed over (pushHanded).
 func (e *Engine) requestMerge(ctx context.Context, pr store.PR, dry bool, asked *MergeAsked) (string, error) {
 	if e.draining(ctx) {
+		if e.onlyRebootDrain(ctx) { // reboot_drain.go
+			return "", rebootDrainError{}
+		}
 		return "", errors.New("the daemon drains for a restart: ask again after it")
 	}
 	if row, ok := e.heldMergeOf(ctx, pr); ok { // fix_held_merge.go: the merge magnum holds for your y

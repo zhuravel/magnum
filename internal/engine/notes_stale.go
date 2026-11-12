@@ -70,7 +70,7 @@ type CurateMark struct {
 type CurateQueued struct {
 	Repo    string    `json:"repo"`
 	Trigger string    `json:"trigger"`
-	Why     string    `json:"why"` // QueuedJudge | QueuedBusy | QueuedDrain | QueuedGitHub
+	Why     string    `json:"why"` // QueuedJudge | QueuedBusy | QueuedDrain | QueuedRebootDrain | QueuedGitHub
 	At      time.Time `json:"at"`
 }
 
@@ -238,6 +238,8 @@ func queuedText(why string) string {
 		return "starts when the learn job running now (a curation, the retro, a skill edit or gate) ends"
 	case QueuedDrain:
 		return drainStarts
+	case QueuedRebootDrain:
+		return rebootDrainStarts
 	case QueuedGitHub:
 		return "starts when the GitHub budget recovers"
 	}

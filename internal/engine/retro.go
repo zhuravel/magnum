@@ -273,7 +273,7 @@ func (e *Engine) requestRetro(ctx context.Context, p RetroPayload) (string, erro
 	settle := e.cfg.Learn.Settle.Duration
 	spec := retroSpec{prs: p.PRs, again: p.Again || len(p.PRs) > 0, lookback: lookback, settle: settle}
 	if e.draining(ctx) { // the queue waits out the drain (startQueuedRetro)
-		return e.queueRetro(ctx, spec, drainStarts)
+		return e.queueRetro(ctx, spec, e.drainStarts(ctx))
 	}
 	if low, ok := e.githubLowAny(); ok { // github_floor.go: and the GitHub budget's reset
 		return e.queueRetro(ctx, spec, githubStarts(low))
@@ -284,7 +284,7 @@ func (e *Engine) requestRetro(ctx context.Context, p RetroPayload) (string, erro
 	started, since, other := e.startRetro(ctx, spec)
 	switch {
 	case !started && other == "" && ctx.Err() == nil && e.draining(ctx): // a drain began since
-		return e.queueRetro(ctx, spec, drainStarts)
+		return e.queueRetro(ctx, spec, e.drainStarts(ctx))
 	case !started && other == "": // the daemon began stopping since refusingHold
 		return "", fmt.Errorf("no retro now: %s", cmp.Or(e.stopping(ctx), "the daemon is stopping"))
 	case !started && other != retroJob: // another learn job started since learnRunning
@@ -347,7 +347,7 @@ func (e *Engine) queuedRetroStarts(ctx context.Context) string {
 	low, isLow := e.githubLowAny()
 	switch {
 	case e.draining(ctx):
-		starts = drainStarts
+		starts = e.drainStarts(ctx)
 	case job != "":
 		starts = learnJobEnds(job, since)
 	case isLow:

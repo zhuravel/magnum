@@ -143,6 +143,10 @@ func (e *Engine) holdFix(ctx context.Context, pr store.PR, dry bool, by string, 
 	// when it starts, why it is held (the answer's and the event's words)
 	// and what the hold waits for.
 	when, why, cause, what := "after the restart", "the daemon is draining", "the daemon drains for a restart", "for the restart"
+	if e.onlyRebootDrain(ctx) { // reboot_drain.go: no restart comes; the drain's end does
+		when, why, cause, what = "once the drain for a reboot ends", "the daemon drains for a reboot", "the daemon drains for a reboot",
+			"until the drain for a reboot ends (the first start after the reboot, or `magnum resume`)"
+	}
 	rec := heldFix{At: e.now().UTC(), Head: job.head, By: by}
 	if hold.low != nil {
 		when, why, cause, what = "once the GitHub budget of "+hold.low.identity+" recovers", hold.low.text(), hold.low.text(), "until the GitHub budget recovers"

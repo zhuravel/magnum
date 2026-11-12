@@ -53,6 +53,78 @@ func (e *Engine) refuseUnderRebootDrain(ctx context.Context, req store.Request) 
 	return true
 }
 
+// rebootDrainStarts is when a request queued or held behind a drain for a
+// reboot starts, for its answer and its event (drainStarts is a restart
+// drain's).
+const rebootDrainStarts = "starts once the drain for a reboot ends (the first start after the reboot, or `magnum resume`)"
+
+// QueuedRebootDrain is why a curation waits (CurateQueued.Why) while the
+// daemon drains for a reboot alone.
+const QueuedRebootDrain = "reboot_drain"
+
+// rebootDrainError refuses a fix cycle or a whiteboard while the daemon
+// drains for a reboot alone: it is errFixDraining, in its own words.
+type rebootDrainError struct{}
+
+func (rebootDrainError) Error() string {
+	return "the daemon drains for a reboot (`magnum drain`): ask again after the reboot, or after `magnum resume`"
+}
+
+func (rebootDrainError) Is(target error) bool { return target == errFixDraining }
+
+// onlyRebootDrain reports whether the drain that holds the daemon is a
+// drain for a reboot alone: no restart's drain, no move of the panes. The
+// answers then name it, never a restart that does not come.
+func (e *Engine) onlyRebootDrain(ctx context.Context) bool {
+	if !e.rebootDraining(ctx) || e.panesMoving() != "" {
+		return false
+	}
+	v, ok := e.getKV(ctx, KVDaemonDraining)
+	return !ok || v == ""
+}
+
+// drainStarts is when what a drain holds starts, in its answer's words.
+func (e *Engine) drainStarts(ctx context.Context) string {
+	if e.onlyRebootDrain(ctx) {
+		return rebootDrainStarts
+	}
+	return drainStarts
+}
+
+// queuedDrain is why a curation a drain holds waits (QueuedDrain,
+// QueuedRebootDrain).
+func (e *Engine) queuedDrain(ctx context.Context) string {
+	if e.onlyRebootDrain(ctx) {
+		return QueuedRebootDrain
+	}
+	return QueuedDrain
+}
+
+// drainErr is the refusal of a fix cycle or a whiteboard under a drain
+// (errFixDraining, or rebootDrainError, which is it).
+func (e *Engine) drainErr(ctx context.Context) error {
+	if e.onlyRebootDrain(ctx) {
+		return rebootDrainError{}
+	}
+	return errFixDraining
+}
+
+// drainSince is since when the drain that holds the daemon holds it: a
+// restart's (its record's start, either format), else a reboot's.
+func (e *Engine) drainSince(ctx context.Context) (time.Time, bool) {
+	if v, ok := e.getKV(ctx, KVDaemonDraining); ok && v != "" {
+		if d, ok := ParseDrain(v); ok {
+			return d.Since, true
+		}
+	}
+	if v, ok := e.getKV(ctx, KVDaemonRebootDrain); ok {
+		if d, ok := ParseRebootDrain(v); ok {
+			return d.Since, true
+		}
+	}
+	return time.Time{}, false
+}
+
 // drainParkWhy is the mark of the sessions a drain for a reboot parks once
 // the daemon is quiet (restartMark.Why).
 const drainParkWhy = "the drain for a reboot"

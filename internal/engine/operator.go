@@ -223,7 +223,7 @@ func (e *Engine) noteHeldRequested(ctx context.Context, waits []prWait, now time
 		}
 		due := now.Sub(h.since) >= heldToastAfter
 		if w.Reason == WaitDraining {
-			started, ok := e.kvTime(ctx, KVDaemonDraining)
+			started, ok := e.drainSince(ctx) // reboot_drain.go: a restart's record, either format, or a reboot's
 			due = due && ok && now.Sub(started) >= drainToastAfter
 		}
 		if due && !h.toasted {

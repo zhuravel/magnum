@@ -337,7 +337,7 @@ func (e *Engine) prepareWhiteboard(ctx context.Context, pr store.PR, by string) 
 	full := repo.FullName()
 	label := fmt.Sprintf("%s#%d", full, pr.Number)
 	if e.draining(ctx) {
-		return nil, errFixDraining
+		return nil, e.drainErr(ctx)
 	}
 	w := e.cfg.WatchFor(full)
 	if w == nil {
@@ -481,6 +481,10 @@ func (e *Engine) startWhiteboard(ctx context.Context, pr store.PR, by string) (*
 	if !e.reserve(pr.ID, &roundHandle{cancel: cancel, whiteboard: true}) {
 		cancel()
 		return nil, busyRefusal(e.heldReason(pr.ID), by)
+	}
+	if e.draining(ctx) { // a drain that began during the checks above (the status check runs a CLI command)
+		e.unreserve(pr.ID)
+		return nil, e.drainErr(ctx)
 	}
 	job.started = e.now()
 	started := *job

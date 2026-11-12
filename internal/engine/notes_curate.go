@@ -501,7 +501,7 @@ func (e *Engine) requestCurate(ctx context.Context, p NotesCuratePayload) (strin
 	_, low := e.githubLowAny()
 	switch {
 	case e.draining(ctx): // the queue waits out the drain (maybeCurate starts nothing under it)
-		why = QueuedDrain
+		why = e.queuedDrain(ctx)
 	case low: // and the GitHub budget's reset (github_floor.go)
 		why = QueuedGitHub
 	case e.notesJudging(ctx, repo.ID):
@@ -524,8 +524,9 @@ func (e *Engine) requestCurate(ctx context.Context, p NotesCuratePayload) (strin
 	if started, since, other := e.startCurate(ctx, repo, CurateTriggerRequest); !started {
 		switch {
 		case other == "" && ctx.Err() == nil && e.draining(ctx): // a drain began since
-			e.queueCurate(ctx, full, CurateTriggerRequest, QueuedDrain)
-			return prefix + "queued: " + queuedText(QueuedDrain) + ready, nil
+			why := e.queuedDrain(ctx)
+			e.queueCurate(ctx, full, CurateTriggerRequest, why)
+			return prefix + "queued: " + queuedText(why) + ready, nil
 		case other == "": // the daemon began stopping since refusingHold
 			return "", fmt.Errorf("no curation now: %s", cmp.Or(e.stopping(ctx), "the daemon is stopping"))
 		}
