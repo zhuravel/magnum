@@ -195,10 +195,6 @@ type fixJob struct {
 	ciFile                     string
 	ciJobs                     int
 	ciOutcome, ciWhy, ciPushed string
-	// late: the job is a late settle of a push the cycle's failure did not
-	// confirm (fix_confirm.go), whose toasts have keys of their own
-	// (fixAttentionKey).
-	late bool
 }
 
 // fixRequestFetch bounds the fetch of the base a `magnum fix` request makes
@@ -944,6 +940,7 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 	}
 	st.Phase, st.Head, st.Report, st.Role, st.NeedsYou, st.ForcedAt, st.Held = FixPhaseFixing, job.head, "", job.role.Name, nil, time.Time{}, false
 	st.Answered, st.Context, st.OthersUnread = nil, "", "" // the last cycle's calls go with its NeedsYou
+	st.Confirm, st.Late = nil, false                       // fix_confirm.go: the last cycle's push
 	job.state = st
 	rctx, cancel := context.WithCancel(ctx)
 	if !e.reserve(pr.ID, &roundHandle{cancel: cancel, fix: true}) {
@@ -987,7 +984,7 @@ func (e *Engine) claimFixRow(ctx context.Context, job *fixJob, prev, st FixState
 		if err := e.setFixState(ctx, job.pr.ID, st); err != nil {
 			return err
 		}
-		e.dropFixPush(ctx, job.pr.ID) // fix_confirm.go: a new loop ends the wait of a push an earlier one did not confirm
+		e.dropFixPushRun(ctx, job.pr.ID) // fix_confirm.go: a new loop ends the wait of a push an earlier one did not confirm
 		return nil
 	case !ok || !sameWaitingLoop(cur, prev):
 		return fmt.Errorf("%s: %w", job.label(), errFixLoopGone)

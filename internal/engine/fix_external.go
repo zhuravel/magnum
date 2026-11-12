@@ -976,8 +976,10 @@ func (e *Engine) sinceFixStart(ctx context.Context, job *fixJob) func(login, typ
 // author's decisions the job's external file hands the fixer are their own
 // word, not the fixer's: `magnum fix --decide` posts one right before the
 // run starts, which a clock a moment behind GitHub's would put after it. It
-// reports whether it looked at both: false when a read failed, so a later
-// settle of the same run looks again (fix_confirm.go).
+// reports whether it read the threads: false when that read failed, so a
+// later settle of the same run looks again (fix_confirm.go); a failed read
+// of the conversation alone does not, which would name the threads'
+// replies twice.
 func (e *Engine) nameUnmarkedReplies(ctx context.Context, job *fixJob, read func() ([]github.Thread, error)) bool {
 	if job.started.IsZero() {
 		return true
@@ -1007,7 +1009,6 @@ func (e *Engine) nameUnmarkedReplies(ctx context.Context, job *fixJob, read func
 		before := func(c github.PRComment) bool { return c.CreatedAt.Before(job.started) }
 		comments, _, err := rd.IssueComments(ctx, job.repo.Owner, job.repo.Name, job.pr.Number, before)
 		if err != nil {
-			looked = false
 			e.log.Warn("fix: the PR's conversation, for the author's replies without the fix marker", "subject", job.subject(), "err", err)
 		}
 		for _, c := range comments {

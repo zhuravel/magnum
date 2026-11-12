@@ -88,7 +88,10 @@ func KVPRFixOff(prID int64) string { return fmt.Sprintf("pr.%d.fix_off", prID) }
 // Needs you (parentRefusedNote); "" when it merged or had nothing to merge.
 // Confirm is the push the cycle's settle confirms on GitHub while GitHub
 // does not answer (fix_confirm.go): the loop is still at work, in phase
-// fixing, and the screens say so (Confirming); nil otherwise.
+// fixing, and the screens say so (Confirming); nil otherwise. Late says the
+// cycle's push was settled late, after its fix failed for want of it: the
+// toasts of that settle and of the loop's end after it have keys of their
+// own, apart from the failure's (fixAttentionKey).
 type FixState struct {
 	Cycle         int         `json:"cycle"`
 	Cap           int         `json:"cap"`
@@ -111,6 +114,7 @@ type FixState struct {
 	CIChecks      []string    `json:"ci_checks,omitempty"`
 	ParentRefused string      `json:"parent_refused,omitempty"`
 	Confirm       *FixConfirm `json:"confirm,omitempty"`
+	Late          bool        `json:"late,omitempty"`
 }
 
 // FixConfirm is the fixer's push a fix loop's settle confirms on GitHub

@@ -719,7 +719,8 @@ func (e *Engine) endFixState(ctx context.Context, job *fixJob) {
 // (closed, ineligible) has the events only. The toast's dedupe key is the
 // loop's cycle's own (fixAttentionKey), so each loop that needs the author
 // toasts and a cycle's call is told once, however late the loop ends; a
-// late settle of the cycle's push has a key of its own.
+// late settle of the cycle's push, and the loop's end after it, have a key
+// of their own (FixState.Late).
 func (e *Engine) fixAttention(ctx context.Context, job *fixJob, msg string) {
 	pr, err := e.st.PRByID(ctx, job.pr.ID)
 	if err != nil {
@@ -765,7 +766,7 @@ const fixAttentionWindow = 24 * time.Hour
 // started that re-review, so a call toasted at once is not toasted again.
 func fixAttentionKey(job *fixJob) string {
 	key := fmt.Sprintf("attention:%d:%s:%s:%d", job.pr.ID, attention.KindFix, store.FormatTime(job.state.StartedAt), job.state.Cycle)
-	if job.late { // fix_confirm.go: the late settle of a cycle whose failure toasted under the key
+	if job.state.Late { // fix_confirm.go: the late settle of a cycle whose failure toasted under the key, and the loop's end after it
 		key += ":late"
 	}
 	return key
@@ -885,15 +886,18 @@ func (e *Engine) stopFix(ctx context.Context, job *fixJob, orders []stopOrder) {
 // meanwhile).
 func (e *Engine) endFixLoop(ctx context.Context, repo store.Repo, pr store.PR, by string) string {
 	st, raw, _, err := e.fixRow(ctx, pr.ID)
-	if note := e.endFixLoopRow(ctx, repo, pr, st, raw, err, by); note != "" {
+	if note := e.endFixLoopRow(ctx, repo, pr, st, raw, err, by, true); note != "" {
 		return note
 	}
 	return e.dropHeldFix(ctx, repo, pr, by) // fix_held.go: a held fix, which no loop runs yet
 }
 
 // endFixLoopRow is endFixLoop for the row the caller read: st, raw as stored
-// ("" = none) and readErr, the error of a row that cannot be read.
-func (e *Engine) endFixLoopRow(ctx context.Context, repo store.Repo, pr store.PR, st FixState, raw string, readErr error, by string) string {
+// ("" = none) and readErr, the error of a row that cannot be read; held
+// says the caller holds the PR's reservation. A loop whose settle confirmed
+// its push (FixState.Confirm) has no job to end its run or put its slot
+// back, so the stop does (stopConfirming, fix_confirm.go).
+func (e *Engine) endFixLoopRow(ctx context.Context, repo store.Repo, pr store.PR, st FixState, raw string, readErr error, by string, held bool) string {
 	if raw == "" {
 		return ""
 	}
@@ -906,6 +910,9 @@ func (e *Engine) endFixLoopRow(ctx context.Context, repo store.Repo, pr store.PR
 	note := fmt.Sprintf("fix loop ended (cycle %d of %d, %s)", st.Cycle, st.Cap, st.Phase)
 	if readErr != nil {
 		note = "the fix loop's unreadable row cleared"
+	}
+	if st.Confirm != nil {
+		note += e.stopConfirming(ctx, repo, pr, st, held)
 	}
 	e.event(ctx, "info", prSubject(repo, pr.Number), "fix.stopped", note+" by "+by, map[string]any{"by": by, "report": st.Report})
 	e.toastFixStopped(repo, pr, st, note)
@@ -941,7 +948,7 @@ func (e *Engine) abortFixLoop(ctx context.Context, id int64, repo store.Repo, pr
 		if e.stopHeld(ctx, id, repo, pr, false) {
 			return true
 		}
-		if note := e.endFixLoopRow(ctx, repo, pr, st, raw, err, "magnum abort"); note != "" {
+		if note := e.endFixLoopRow(ctx, repo, pr, st, raw, err, "magnum abort", false); note != "" {
 			e.complete(ctx, id, nil, "aborted "+label+": "+note)
 			return true
 		}

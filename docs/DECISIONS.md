@@ -19055,6 +19055,25 @@ skill versions); people add theirs to the sections before it, at the end of the 
     - TestALateSettleLeavesAPRThatMovedOn (a loop, a review since, a day, a closed PR);
     - TestARestartAfterTheSettleOfAConfirmedPushBeganResumesIt;
     - TestAnAbortWhileTheSettleConfirmsThePushEndsTheLoop.
+  - A second review round found three more faults, now fixed:
+    - An abort while the settle confirmed the push removed only the loop's row. The fixer's run stayed open until
+      the next tick, and the slot stayed at the pushed head. A `magnum fix` before that tick failed its guard ("slot
+      review1 holds b2b2b2b, not the reviewed head a1a1a1a"). The stop of such a loop (`endFixLoopRow`) now abandons
+      the run, drops the record and puts the slot back at the loop's head (`stopConfirming`). It takes the PR's
+      reservation for that when the stop holds none. A new loop that finds a record (`claimFixRow`) abandons its run
+      too (`dropFixPushRun`).
+    - The loop's end after a late settle's re-review rebuilt its job from the loop's row, so its toast had the
+      failure's key and was swallowed for 24 hours. The row now keeps the late mark (`FixState.Late`), and the key of
+      that end ends in `:late` too. The next cycle clears the mark.
+    - A retry of the late settle's last step ran the whole tail again: a second `fix.pushed`, `fix.replied` and
+      forced review. The tail is now four steps: the run reopened and the attention cleared, the unmarked replies,
+      `settleReport`, and the run's verdict (`pushRunEnded`). A verdict that could not be written fails the last step
+      alone, and the next poll writes it and nothing else. `RepliesNamed` now holds once the threads were read, even
+      when the conversation's read failed, so no later look names the threads' replies twice.
+  - Tests of the second review round, each failing first: TestAnAbortWhileConfirmingThenAFixStartsAtTheReviewedHead,
+    TestANewLoopAbandonsTheRunOfAPushItsRecordKept, TestTheLoopsEndAfterALateSettleToastsAgain,
+    TestAFailedWriteOfTheLateSettleIsRetriedAlone (a trigger refuses the verdict once), and the case "the threads
+    answered, the conversation did not" of TestALaterSettleNamesTheUnmarkedRepliesTheOutageHid.
   - Tests. They failed first, and mutations of the code fail them. In engine:
     - TestOnlyConnectionErrorsTimeoutsAnd5xxAreTransient (the table);
     - TestAConnectionErrorWhileThePushIsConfirmedIsRetriedAndTheFixSettlesAsUsual (five errors, then the answer);

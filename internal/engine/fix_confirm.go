@@ -317,6 +317,63 @@ func (e *Engine) dropFixPush(ctx context.Context, prID int64) {
 	e.delKV(ctx, kvPRFixPush(prID))
 }
 
+// dropFixPushRun removes the PR's push record, if any, for a new loop that
+// starts (claimFixRow), and abandons the fixer's run it names while that
+// run is active, as dropConfirming does: an open run would hold the PR's
+// slot and its cleanup for good.
+func (e *Engine) dropFixPushRun(ctx context.Context, prID int64) {
+	if rec, ok, _ := readKVJSON[fixPush](ctx, e, kvPRFixPush(prID), "fix push"); ok {
+		if run, err := e.st.RunByID(ctx, rec.Run); err == nil {
+			e.abandonFixRun(ctx, run, "a new fix loop started while the push of this run waited for GitHub")
+		}
+	}
+	e.dropFixPush(ctx, prID)
+}
+
+// stopConfirming finishes the stop of a loop whose settle confirmed its
+// push (st, its row, which the stop removed): no job ends it, so the
+// fixer's run at the loop's report is abandoned, the push's record goes,
+// and the slot goes back to the head the fixer started from, as a stop of
+// a fix job leaves it (stopFix), so a new fix's guard finds the reviewed
+// head there. held says the stop holds the PR's reservation; without it the
+// slot is put back under one taken here, and is left as it is when a job
+// holds the PR. It returns what to add to the stop's note.
+func (e *Engine) stopConfirming(ctx context.Context, repo store.Repo, pr store.PR, st FixState, held bool) string {
+	ctx = context.WithoutCancel(ctx)
+	if run, ok := e.runAtReport(ctx, pr.ID, st.Report); ok {
+		e.abandonFixRun(ctx, run, "the fix loop was stopped while its settle confirmed the push")
+	}
+	e.dropFixPush(ctx, pr.ID)
+	if !held {
+		if !e.reserve(pr.ID, &roundHandle{cancel: func() {}, fix: true, stop: roundStop{ended: true}}) {
+			return ""
+		}
+		defer e.unreserve(pr.ID)
+	}
+	job := e.loopJob(ctx, repo, pr, st)
+	if job.slot.ID == 0 || st.Head == "" {
+		return ""
+	}
+	if err := e.resyncFixSlot(ctx, job, st.Head); err != nil {
+		return fmt.Sprintf("; slot %s not put back: %v", job.slot.Name, err)
+	}
+	return ", slot " + job.slot.Name + " back at " + textx.ShortSHA(st.Head)
+}
+
+// runAtReport is the PR's fix run whose report is report (ok false: none).
+func (e *Engine) runAtReport(ctx context.Context, prID int64, report string) (store.Run, bool) {
+	runs, err := e.st.RunsByPR(ctx, prID)
+	if err != nil || report == "" {
+		return store.Run{}, false
+	}
+	for _, r := range runs {
+		if r.Kind == store.RunFix && deref(r.ReportPath) == report {
+			return r, true
+		}
+	}
+	return store.Run{}, false
+}
+
 // awaitPush leaves the job's loop in its settle when GitHub did not answer
 // within fixConfirmWindow (u): the row stays in phase fixing, marked
 // confirming, the record stays fixPushConfirming, and the job lets go of
@@ -649,12 +706,8 @@ func (e *Engine) endConfirming(ctx context.Context, repo store.Repo, pr store.PR
 	if job.role.Name == "" {
 		job.role.Name = st.Role
 	}
-	if runs, err := e.st.RunsByPR(ctx, pr.ID); err == nil {
-		for _, r := range runs {
-			if r.Kind == store.RunFix && st.Report != "" && deref(r.ReportPath) == st.Report {
-				job.run = r
-			}
-		}
+	if run, ok := e.runAtReport(ctx, pr.ID, st.Report); ok {
+		job.run = run
 	}
 	msg := "fix settle failed: " + pushNotConfirmed{head: st.Confirm.Head, err: errors.New(why)}.Error()
 	if job.slot.ID != 0 {
@@ -682,7 +735,7 @@ func (e *Engine) pushJob(ctx context.Context, repo store.Repo, pr store.PR, rec 
 	job.run, job.head, job.started, job.login, job.mode, job.touched = run, j.Head, j.Started, j.Login, j.Mode, true
 	job.conflict, job.merged = j.Conflict.conflict(), j.Merged.conflict()
 	job.forMerge, job.alone, job.described, job.baseChecked = j.ForMerge, j.Alone, j.Described, j.BaseChecked
-	job.late = rec.Kind == fixPushUnconfirmed
+	job.state.Late = rec.Kind == fixPushUnconfirmed // fixAttentionKey: its toasts are not its failure's
 	return job, nil
 }
 
@@ -720,13 +773,17 @@ func (e *Engine) failPush(ctx context.Context, repo store.Repo, pr store.PR, row
 // fix job's settle runs, whatever stops the tick meanwhile: a shutdown in
 // the middle of a step would leave its writes half done under a step
 // marked done. It runs in resumable steps of a subject of its own
-// (pushSubject), so a restart between them does none of them twice: the first says so (fix.push_confirmed for a loop still in
-// its settle, fix.push_confirmed_late for a fix that failed for want of
-// it), the next puts the slot at the push, and the last does what a settle
-// does after a confirmed push (settleReport: the replies and the calls the
-// threads leave, the PR row's head, the push's CI, the re-review or the
-// loop's end), with a late one's run back from failed and its attention
-// cleared first. The record goes last.
+// (pushSubject), so a restart between them does none of them twice: the
+// first says so (fix.push_confirmed for a loop still in its settle,
+// fix.push_confirmed_late for a fix that failed for want of it), the next
+// puts the slot at the push, a late one's run goes back from failed and
+// its attention is cleared (pushReopen), the author's replies without the
+// fix marker are named when the settle could not (pushReplies), then what
+// a settle does after a confirmed push (settlePushed: settleReport's
+// replies and calls the threads leave, the PR row's head, the push's CI,
+// the re-review or the loop's end), and last the run's verdict is checked
+// (pushRunEnded): a write of it that failed fails that step alone, so the
+// next poll finishes it and nothing else. The record goes last.
 func (e *Engine) settleConfirmedPush(ctx context.Context, repo store.Repo, pr store.PR, row fixPushRow) {
 	rec := row.rec
 	if !e.reserve(pr.ID, &roundHandle{cancel: func() {}, fix: true, stop: roundStop{ended: true}}) {
@@ -747,14 +804,17 @@ func (e *Engine) settleConfirmedPush(ctx context.Context, repo store.Repo, pr st
 		e.dropPushRow(ctx, pr.ID, row)
 		return
 	}
-	sub, late := pushSubject(rec.Run), rec.Kind == fixPushUnconfirmed
+	sub, read := pushSubject(rec.Run), e.threadsReader(ctx, job)
 	for _, s := range []struct {
 		name string
 		fn   func(ctx context.Context) error
 	}{
 		{pushFirstStep(rec), func(ctx context.Context) error { e.pushConfirmed(ctx, job, rec); return nil }},
 		{"fix.push_slot", func(ctx context.Context) error { e.pushSlot(ctx, job, rec.Pushed); return nil }},
-		{"fix.push_settle", func(ctx context.Context) error { return e.settlePushed(ctx, job, rec, late) }},
+		{"fix.push_reopen", func(ctx context.Context) error { return e.pushReopen(ctx, job, rec) }},
+		{"fix.push_replies", func(ctx context.Context) error { return e.pushReplies(ctx, job, rec, read) }},
+		{"fix.push_settle", func(ctx context.Context) error { return e.settlePushed(ctx, job, rec, read) }},
+		{"fix.push_run", func(ctx context.Context) error { return e.pushRunEnded(ctx, job) }},
 	} {
 		if err := steps.Step(ctx, e.st, sub, s.name, s.fn); err != nil {
 			e.log.Warn("fix: the settle of a confirmed push stopped; the next poll resumes it", "subject", subject, "step", s.name, "err", err)
@@ -790,44 +850,81 @@ func (e *Engine) pushSlot(ctx context.Context, job *fixJob, head string) {
 	}
 }
 
-// settlePushed is the last step of the settle of rec's confirmed push: a
-// late one's run goes back from failed to ended and the fix's attention is
-// cleared (its row and its run's), the author's replies without the fix
-// marker are named when the settle could not look for them (an outage),
-// then settleReport does what a settle does after a push, on the fixer's
-// report read again. The step fails, and the next poll runs it again, when
-// the run is still active after it: a write of the settle's failed.
-func (e *Engine) settlePushed(ctx context.Context, job *fixJob, rec fixPush, late bool) error {
+// pushReopen is a step of the settle of rec's confirmed push: a late one's
+// run goes back from failed to ended, so the settle's verdict reaches it,
+// and the fix's attention is cleared (its row and its run's).
+func (e *Engine) pushReopen(ctx context.Context, job *fixJob, rec fixPush) error {
+	if rec.Kind != fixPushUnconfirmed {
+		return nil
+	}
+	err := e.st.TransitionRun(ctx, job.run.ID, []string{store.RunFailed}, store.RunEnded, func(u *store.RunUpdate) {
+		u.Set("outcome", nil)
+		u.Set("error", nil)
+	})
+	if err != nil && !errors.Is(err, store.ErrConflict) {
+		return err
+	}
+	if kind, _ := e.getKV(ctx, KVPRAttention(job.pr.ID)); kind == attention.KindFix {
+		e.delKV(ctx, KVPRAttention(job.pr.ID), kvPRAttentionRun(job.pr.ID))
+	}
+	return nil
+}
+
+// pushReplies is a step of the settle of rec's confirmed push: the
+// author's replies without the fix marker are named when the settle could
+// not read the threads for them (fixPush.RepliesNamed) and the run may have
+// replied.
+func (e *Engine) pushReplies(ctx context.Context, job *fixJob, rec fixPush, read func() ([]github.Thread, error)) error {
+	if rec.RepliesNamed {
+		return nil
+	}
 	rep, err := e.readFixReport(job)
 	if err != nil {
 		return err
 	}
-	if late {
-		err := e.st.TransitionRun(ctx, job.run.ID, []string{store.RunFailed}, store.RunEnded, func(u *store.RunUpdate) {
-			u.Set("outcome", nil)
-			u.Set("error", nil)
-		})
-		if err != nil && !errors.Is(err, store.ErrConflict) {
-			return err
-		}
-		if run, err := e.st.RunByID(ctx, job.run.ID); err == nil {
-			job.run = run
-		}
-		if kind, _ := e.getKV(ctx, KVPRAttention(job.pr.ID)); kind == attention.KindFix {
-			e.delKV(ctx, KVPRAttention(job.pr.ID), kvPRAttentionRun(job.pr.ID))
-		}
-	}
-	read := e.threadsReader(ctx, job)
-	if !rec.RepliesNamed && mayHaveReplied(rep) {
+	if mayHaveReplied(rep) {
 		e.nameUnmarkedReplies(ctx, job, read) // fix_external.go: the settle's own look failed in the outage
 	}
-	e.settleReport(ctx, job, rep, true, rec.Pushed, rec.Typed, read)
-	run, err := e.st.RunByID(ctx, job.run.ID)
-	switch {
-	case err != nil:
+	return nil
+}
+
+// settlePushed is the step of the settle of rec's confirmed push that does
+// what a settle does after a push (settleReport), on the fixer's report
+// read again and its run as it is now. It fails only when the report cannot
+// be read: a write of settleReport's that fails is its own to log, as in
+// any settle, and the run's verdict is checked after it (pushRunEnded).
+func (e *Engine) settlePushed(ctx context.Context, job *fixJob, rec fixPush, read func() ([]github.Thread, error)) error {
+	rep, err := e.readFixReport(job)
+	if err != nil {
 		return err
-	case slices.Contains([]string{store.RunPending, store.RunSubmitted, store.RunWorking, store.RunEnded}, run.State):
-		return fmt.Errorf("the fixer's run %s is still %s after the settle: a write of it failed", run.ID, run.State)
+	}
+	if run, err := e.st.RunByID(ctx, job.run.ID); err == nil {
+		job.run = run
+	}
+	e.settleReport(ctx, job, rep, true, rec.Pushed, rec.Typed, read)
+	return nil
+}
+
+// pushRunEnded is the last step of the settle of a confirmed push: the
+// fixer's run must have its verdict. A run still active (a write of the
+// verdict failed, say on a busy registry) gets it now, verified as pushed
+// as the settle gives it, and the step fails while it stays active, so the
+// next poll tries this step alone again.
+func (e *Engine) pushRunEnded(ctx context.Context, job *fixJob) error {
+	active := []string{store.RunPending, store.RunSubmitted, store.RunWorking, store.RunEnded}
+	run, err := e.st.RunByID(ctx, job.run.ID)
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(active, run.State) {
+		return nil
+	}
+	e.finishFixRun(ctx, run, store.RunVerified, "pushed", "")
+	if run, err = e.st.RunByID(ctx, job.run.ID); err != nil {
+		return err
+	}
+	if slices.Contains(active, run.State) {
+		return fmt.Errorf("the fixer's run %s is still %s after the settle: its verdict could not be written", run.ID, run.State)
 	}
 	return nil
 }

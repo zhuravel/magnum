@@ -36,8 +36,8 @@ func outage(h *harness, git *fixGit) (back func()) {
 // (its last, fixPushed, its HEAD) and whose settle GitHub then never
 // answers: the loop stays in its settle, confirming the push, past the
 // settle's own retries. before runs once the push is on GitHub, before the
-// outage. It returns the outage's end.
-func confirmingFix(t *testing.T, pushed, needs string, before func(h *harness)) (*harness, *fixGit, store.PR, func()) {
+// outage, and during once the outage began. It returns the outage's end.
+func confirmingFix(t *testing.T, pushed, needs string, before func(h *harness), during ...func(h *harness)) (*harness, *fixGit, store.PR, func()) {
 	t.Helper()
 	h, git := fixHarness(t)
 	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
@@ -48,6 +48,9 @@ func confirmingFix(t *testing.T, pushed, needs string, before func(h *harness)) 
 				before(h)
 			}
 			back = outage(h, git)
+			for _, fn := range during {
+				fn(h)
+			}
 		}()
 		return fixPushed, fixReport(run.ID, pushed, fixReplied, needs)
 	})
@@ -263,6 +266,33 @@ func TestALaterSettleNamesTheUnmarkedRepliesTheOutageHid(t *testing.T) {
 			}
 		})
 	}
+	// The settle read the threads and named the author's reply there; only
+	// the conversation's read failed: no later settle names that reply again.
+	t.Run("the threads answered, the conversation did not", func(t *testing.T) {
+		inThread := func(h *harness) {
+			h.gh.mu.Lock()
+			h.gh.threads = map[int][]github.Thread{2: {magnumsThread(2101, "app/models/offer.rb", 42, h.clock.Now(), false, "Fixed in b2b2b2b.")}}
+			h.gh.mu.Unlock()
+		}
+		threadsAnswer := func(h *harness) {
+			h.gh.mu.Lock()
+			h.gh.threadsErr = nil
+			h.gh.mu.Unlock()
+		}
+		h, _, pr, back := confirmingFix(t, "b2b2b2b Fix", "none", inThread, threadsAnswer)
+		if n := len(h.fixEvents("fix.unmarked")); n != 1 {
+			t.Fatalf("fix.unmarked events during the outage = %d, want the thread's reply named", n)
+		}
+		back()
+		if err := h.e.poll(h.ctx); err != nil {
+			t.Fatal(err)
+		}
+		h.settle()
+		h.wantPushedSettle(pr, 0)
+		if n := len(h.fixEvents("fix.unmarked")); n != 1 {
+			t.Errorf("fix.unmarked events = %d, want the settle's one", n)
+		}
+	})
 }
 
 // reviewOf records magnum's posted review of head on PR pr, now.
@@ -407,5 +437,115 @@ func TestAnAbortWhileTheSettleConfirmsThePushEndsTheLoop(t *testing.T) {
 	}
 	if r := h.fixRuns(pr.ID)[0]; slices.Contains([]string{store.RunPending, store.RunSubmitted, store.RunWorking, store.RunEnded}, r.State) {
 		t.Errorf("fix run %s, want it no longer active", r.State)
+	}
+}
+
+// An abort while the settle confirms the push, then `magnum fix` before the
+// next tick: the abort abandons the old fixer's run and puts the slot back
+// at the head that fixer started from, so the new fix's guard finds the
+// reviewed head there and its loop runs; the old run holds no slot.
+func TestAnAbortWhileConfirmingThenAFixStartsAtTheReviewedHead(t *testing.T) {
+	h, git, pr, back := confirmingFix(t, "b2b2b2b Fix", "none", nil)
+	old := h.fixRuns(pr.ID)[0].ID
+	back()
+	fixer(h, git, fixPushed2, func(run store.Run) string { return fixReport(run.ID, "c3c3c3c Fix again", fixReplied, "none") })
+	h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.fix(FixPayload{})
+	h.handle()
+	if r, err := h.st.RunByID(h.ctx, old); err != nil || r.State != store.RunAbandoned {
+		t.Errorf("the old fixer's run = %+v, %v; want it abandoned", r.State, err)
+	}
+	if !slices.Contains(h.sl.all(), "resync:review1:"+fixHead) {
+		t.Errorf("slot calls %v, want the slot back at the reviewed head", h.sl.all())
+	}
+	if ev, ok := h.fixEvent("fix.failed"); ok {
+		t.Fatalf("fix.failed: %s", ev.Message)
+	}
+	runs := h.fixRuns(pr.ID)
+	if len(runs) != 2 || runs[1].State != store.RunVerified {
+		t.Fatalf("fix runs = %+v, want the new one verified", runs)
+	}
+	if _, ok := h.fixPushOf(2); ok {
+		t.Error("the old push's record stays")
+	}
+}
+
+// A new loop that finds the record of a push no loop holds any more drops
+// it and abandons its fixer's run, as the tick would.
+func TestANewLoopAbandonsTheRunOfAPushItsRecordKept(t *testing.T) {
+	h, git, pr, back := confirmingFix(t, "b2b2b2b Fix", "none", nil)
+	old := h.fixRuns(pr.ID)[0].ID
+	back()
+	if err := h.st.DeleteKV(h.ctx, KVPRFix(pr.ID)); err != nil { // the row went with no stop to end the rest
+		t.Fatal(err)
+	}
+	git.setHead(fixHead)
+	fixer(h, git, fixPushed2, func(run store.Run) string { return fixReport(run.ID, "c3c3c3c Fix again", fixReplied, "none") })
+	h.fix(FixPayload{})
+	h.handle()
+	if r, err := h.st.RunByID(h.ctx, old); err != nil || r.State != store.RunAbandoned {
+		t.Errorf("the old fixer's run = %+v, %v; want it abandoned", r.State, err)
+	}
+	if _, ok := h.fixPushOf(2); ok {
+		t.Error("the old push's record stays")
+	}
+}
+
+// The loop's end after the re-review a late settle forced toasts, though
+// the fix's failure toasted for the same loop and cycle: here the cap.
+func TestTheLoopsEndAfterALateSettleToastsAgain(t *testing.T) {
+	h, git := fixHarness(t, func(h *harness) { h.cfg.Pipeline.FixCycles = 1 })
+	fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	git.lostPush = true
+	pushFixer(h, git, nil)
+	h.fix(FixPayload{})
+	h.handle()
+	h.wantToasts("needs attention", 1)
+	reviewWith(h, findings(map[string]int{"P2": 1}, "CHANGES_REQUESTED"))
+	h.advance(time.Minute)
+	h.gh.setHead("talkable/talkable", 2, fixPushed)
+	h.tick() // the late settle, then its forced re-review
+	if n := len(h.fixEvents("fix.push_confirmed_late")); n != 1 {
+		t.Fatalf("fix.push_confirmed_late events = %d, want 1", n)
+	}
+	if _, ok := h.fixEvent("fix.capped"); !ok {
+		t.Fatal("no fix.capped after the re-review")
+	}
+	h.wantToasts("needs attention", 2)
+}
+
+// A write of the late settle's that fails (the run's verdict, which a busy
+// registry refused) fails its step, and the next poll finishes what is
+// missing alone: every other effect of the settle happens once.
+func TestAFailedWriteOfTheLateSettleIsRetriedAlone(t *testing.T) {
+	h, _, pr := unconfirmedFix(t)
+	run := h.fixRuns(pr.ID)[0].ID
+	if _, err := h.st.DB().ExecContext(h.ctx, `CREATE TRIGGER busy_verdict BEFORE UPDATE OF state ON runs
+  WHEN NEW.id = '`+run+`' AND NEW.state = 'verified' BEGIN SELECT RAISE(ABORT, 'database is locked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	h.gh.setHead("talkable/talkable", 2, fixPushed)
+	_ = h.e.poll(h.ctx)
+	h.settle()
+	if r := h.fixRuns(pr.ID)[0]; r.State == store.RunVerified {
+		t.Fatal("the verdict was written through the trigger")
+	}
+	if _, err := h.st.DB().ExecContext(h.ctx, `DROP TRIGGER busy_verdict`); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := h.e.poll(h.ctx); err != nil {
+			t.Fatal(err)
+		}
+		h.settle()
+	}
+	h.wantPushedSettle(pr, 1)
+	for kind, want := range map[string]int{"fix.push_confirmed_late": 1, "fix.pushed": 1, "fix.replied": 1} {
+		if n := len(h.fixEvents(kind)); n != want {
+			t.Errorf("%s events = %d, want %d", kind, n, want)
+		}
+	}
+	if n := h.eventCount("pr:talkable/talkable#2", "pr.forced"); n != 1 {
+		t.Errorf("pr.forced events = %d, want 1", n)
 	}
 }

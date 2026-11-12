@@ -11313,6 +11313,7 @@ type FixState struct {
 	CIChecks      []string    `json:"ci_checks,omitempty"`
 	ParentRefused string      `json:"parent_refused,omitempty"`
 	Confirm       *FixConfirm `json:"confirm,omitempty"`
+	Late          bool        `json:"late,omitempty"`
 }
     FixState is where a PR's fix loop is: cycle Cycle of at most Cap, in Phase.
     Since is the head the loop started from and Head the head the current
@@ -11366,7 +11367,10 @@ type FixState struct {
     Needs you (parentRefusedNote); "" when it merged or had nothing to merge.
     Confirm is the push the cycle's settle confirms on GitHub while GitHub does
     not answer (fix_confirm.go): the loop is still at work, in phase fixing,
-    and the screens say so (Confirming); nil otherwise.
+    and the screens say so (Confirming); nil otherwise. Late says the cycle's
+    push was settled late, after its fix failed for want of it: the toasts
+    of that settle and of the loop's end after it have keys of their own,
+    apart from the failure's (fixAttentionKey).
 
 func ParseFixState(s string) (FixState, bool)
     ParseFixState reads a KVPRFix value; ok is false for one that is not a fix
