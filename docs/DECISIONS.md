@@ -25901,7 +25901,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
     pane it gives way after FILES, to a count). The card recommends push, saying that no round reviewed the fix.
     The PR body's Known list adds `**Fixed after the local review's last round, not reviewed again**` and the
     findings, and its one-line count names them. magnum's review of the published PR reads the fix. The PR's status
-    file reads the exit as `findings`.
+    file reads the exit as `findings`, never `clean`.
+  - *The PR's first public round.* Such a PR gets magnum's first round in full, as any new PR: the initial kind,
+    every review role, nothing earlier to build on. No code of the engine reads the factory's local exit to skip or
+    shorten a round (factoryread reads the factory's links, findings and cycle heads for the retro and the replays,
+    never an exit), so none needed a change; a test pins it.
   - *The last fix's prompt.* The review's fix prompt told the writer that the next round reviews its commit, which
     is not so after the budget. `PromptData.LastFix` is set in the fix turn of a stop past the go-ons (`lastFix`:
     its go-on's record, by the cycle's number, `round`, has `Pass`), and `factory-review-fix.md` renders a variant
@@ -25917,7 +25921,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestAGoOnIsSaidOnceHoweverLongAfter`, `TestYourRetryAtAnUnsafeStopSpendsNoGoOn`,
   `TestTheReadyCardNamesTheFindingsFixedAfterTheLastRound`,
   `TestThePRBodyNamesTheFindingsFixedAfterTheLastRound` and `TestAGoOnsAlertIsAToastThatCountsNobodyAsWaitingOnYou`
-  in internal/factory; `TestReadyCardNamesTheFindingsFixedAfterTheLastRound` in internal/tui;
+  in internal/factory, and `TestTheProofAndTheReviewInTheStatusFile` reads `cap_fixed` as findings;
+  `TestAPRPublishedAfterTheLocalReviewsCapGetsAFullFirstRound` in internal/engine (it passes before and after: a
+  pin); `TestReadyCardNamesTheFindingsFixedAfterTheLastRound` in internal/tui;
   `TestFactoryLocalReviewCapGoOnDefaultsToTwoAndTakesZeroToFive` in internal/config.
   `TestARoundAtTheCapThatDoesNotConvergeStops`, `TestTheExtraRoundsStopAtExtraCycles` and the second half of
   `TestTheSecondOpinionRunsPastTheLastRoundCyclesAllows` set `cap_go_on = 0`. They pin the stop for you, and their
