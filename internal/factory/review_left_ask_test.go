@@ -336,3 +336,32 @@ func TestAKeptChangeAfterACleanRoundIsCommittedByTheWriter(t *testing.T) {
 		t.Fatalf("README at HEAD is %q; want your kept change committed", head)
 	}
 }
+
+// Your own words on a question that offers only restore or drop (a keep
+// would drop the task's commits) never take the restore, which resets a
+// branch: the factory asks again, saying that only Restore or Drop are
+// possible there, and moves nothing.
+func TestYourWordsOnARestoreOrDropQuestionAskAgain(t *testing.T) {
+	var rig *reviewRig
+	rig = newReviewRig(t, func(c evalrun.LocalCase) evalrun.LocalResult {
+		rig.gitIn(c.Checkout, "reset", "--quiet", "--keep", "HEAD~1")
+		return result()(c)
+	})
+	r := rig
+	task, head := r.reviewTask("PR-12409")
+	r.run(5, func() bool { return !isLive(r.reload(task.ID)) })
+	got := r.reload(task.ID)
+	moved := r.git(r.copyDir, "rev-parse", task.Branch)
+	r.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: got.QuestionRev, Answers: map[int]string{0: "keep my branch as it is"}})
+	r.run(4, func() bool { return r.reload(task.ID).QuestionRev != got.QuestionRev })
+	after := r.reload(task.ID)
+	qs := r.newestQuestions(task.ID)
+	if after.State != registry.TaskNeedsYou || after.QuestionRev == got.QuestionRev || len(qs) != 1 ||
+		!strings.Contains(qs[0].Text, "only Restore or Drop") || !slices.Equal(optionLabels(qs[0]), []string{optionRestoreCopy, optionDrop}) {
+		t.Fatalf("task %s waits %q with %+v; want the question again, saying only Restore or Drop are possible", after.State,
+			after.WaitsWhat, qs)
+	}
+	if now := r.git(r.copyDir, "rev-parse", task.Branch); now != moved || now == head {
+		t.Fatalf("the branch is at %s after your words; want it left at %s", now, moved)
+	}
+}

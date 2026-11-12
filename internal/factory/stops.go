@@ -63,6 +63,7 @@ const (
 	decideRetry     = "retry"     // your retry closed the question
 	decideRestore   = "restore"   // what a review round left goes back as the reviewed head has it
 	decideKeep      = "keep"      // what a review round left stays in the copy
+	decideAskAgain  = "ask_again" // your words fit no way the question offers: it asks again
 )
 
 // The options' labels of the stop questions.
@@ -417,8 +418,8 @@ func decideStop(a stopAsk, answer string) (decision, words string) {
 		return decideRestore, ""
 	case a.Kind == stopLeft && a.NoKeep && is(optionDrop, "drop"):
 		return decideDrop, ""
-	case a.Kind == stopLeft && a.NoKeep: // no keep was offered (it drops the task's commits): the restore, which drops none
-		return decideRestore, strings.TrimSpace(answer)
+	case a.Kind == stopLeft && a.NoKeep: // only restore or drop: your words never take the restore, which resets a branch
+		return decideAskAgain, strings.TrimSpace(answer)
 	case a.Kind == stopLeft: // keep the change, or your own words: nothing of yours is put back
 		return decideKeep, strings.TrimSpace(answer)
 	case is(optionDrop, "drop"):
@@ -500,6 +501,8 @@ func decisionWords(a stopAsk) string {
 		return "restore the copy to the reviewed head"
 	case decideKeep:
 		return "keep the change in the copy"
+	case decideAskAgain:
+		return "none of its ways (only Restore or Drop are possible there): it asks again"
 	}
 	return a.Decision
 }
@@ -510,10 +513,26 @@ func (rec stopsRecord) leftDecision(cy registry.Cycle, round int) string {
 	key := leftKey(cy, round)
 	for _, a := range slices.Backward(rec.Asks) {
 		if a.Kind == stopLeft && a.Key == key && a.Decision != decideRetry {
+			if a.Decision == decideAskAgain {
+				return ""
+			}
 			return a.Decision
 		}
 	}
 	return ""
+}
+
+// leftAskAgain are your words that fit none of the ways of the newest
+// question of what review round round of cycle cy left, when its answer
+// asks again (decideAskAgain); ok is false otherwise.
+func (rec stopsRecord) leftAskAgain(cy registry.Cycle, round int) (words string, ok bool) {
+	key := leftKey(cy, round)
+	for _, a := range slices.Backward(rec.Asks) {
+		if a.Kind == stopLeft && a.Key == key && a.Decision != decideRetry {
+			return a.Words, a.Decision == decideAskAgain
+		}
+	}
+	return "", false
 }
 
 // leftDecided is when you answered with your newest decision on what
@@ -565,6 +584,14 @@ func waitedCause(who string) leftCause {
 func movedCause(m movedFacts) leftCause {
 	return leftCause{words: "the factory moves no branch or HEAD by itself", context: "the factory moves no branch or HEAD by itself",
 		moved: &m}
+}
+
+// askedAgain is cause c asked again after your words fit none of its ways
+// (words): only Restore or Drop are possible where a keep would drop the
+// task's commits.
+func askedAgain(c leftCause, words string) leftCause {
+	c.words += fmt.Sprintf("; your answer %q is neither, and only Restore or Drop are possible here", textx.Clip(words, 80))
+	return c
 }
 
 // movedFacts are where a round left a copy off the reviewed head: the head

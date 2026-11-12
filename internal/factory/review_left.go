@@ -196,7 +196,11 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 		if err != nil {
 			return "", err
 		}
-		return e.askLeft(ctx, t, c, cy, round, left, movedCause(m), stops)
+		cause := movedCause(m)
+		if words, again := stops.leftAskAgain(cy, round); again {
+			cause = askedAgain(cause, words)
+		}
+		return e.askLeft(ctx, t, c, cy, round, left, cause, stops)
 	}
 	name := roundName(round, cy.N)
 	held := func(who string, ask bool) (string, error) { // the wait for a turn in flight, or the question past its bound
