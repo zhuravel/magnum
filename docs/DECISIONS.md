@@ -25691,6 +25691,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestARestartAfterTheProvisionalPassAsksNothingTwiceAndLosesNothing` in internal/factory;
   `TestFactoryProvisionalLoneAnswerIsOnByDefaultAndTakesOnlyABoolean` in internal/config.
 
+- **The factory's copies get the directory form of copy_files and the recovery from MySQL 3730 too** (2026-11-12).
+  The factory provisions, repairs and releases its copies with the slots package (`slots.ProvisionPool`, `Reserve`,
+  `Repair`, `Release`; `mise.go` copies `CopyFiles`), so the two changes of the entries above that name the review
+  slots (a `copy_files` entry that is a directory, and dropping and creating a slot's own databases once when a
+  schema reset hits MySQL error 3730) also reach a factory copy, at the factory daemon's next `factory install`. A
+  factory repository's `copy_files` lists a directory only when its owner adds one: the operator's configuration
+  lists the generated Jest API mocks for the talkable review pool, not for the factory's copies.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
