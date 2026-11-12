@@ -14,6 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // The boots of the tests' Mac: the one a drain began on, and another after
@@ -79,6 +80,7 @@ func sysctlBoot(session string, at time.Time) *execx.Fake {
 // Without a session (an older macOS) the time decides, past a slack of two
 // minutes.
 func TestARebootDrainKeepsItsBootWhenTheBootTimeShifts(t *testing.T) {
+	storetest.Parallel(t)
 	for _, c := range []struct {
 		name    string
 		session string

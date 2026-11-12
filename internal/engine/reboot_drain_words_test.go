@@ -4,12 +4,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // Under a drain for a reboot the answers name it, never a restart that does
 // not come: a `magnum fix` held, a merge of the parent refused, a retro and
 // a curation queued.
 func TestTheAnswersUnderARebootDrainNameIt(t *testing.T) {
+	storetest.Parallel(t)
 	t.Run("fix", func(t *testing.T) {
 		h, _ := fixHarness(t)
 		fixablePR(h, "zhuravel", map[string]int{"P2": 2})
