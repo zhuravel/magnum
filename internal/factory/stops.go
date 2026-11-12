@@ -112,6 +112,10 @@ type stopAsk struct {
 	// Unnamed: the fix stop's failure is no example's or offense's
 	// (firstFailing): an accept of it is the check's alone.
 	Unnamed bool `json:"unnamed,omitempty"`
+	// Blind marks a question of a round's leftovers asked while the factory
+	// could not tell who works in the copy: your answer to it runs though
+	// it still cannot; an answer to any other never does.
+	Blind bool `json:"blind,omitempty"`
 }
 
 // accepted is a check whose failure you accepted as known for the task:
@@ -522,6 +526,19 @@ func (rec stopsRecord) leftDecision(cy registry.Cycle, round int) string {
 	return ""
 }
 
+// leftBlind reports whether your newest decision on what review round round
+// of cycle cy left answers a question asked while the factory could not
+// tell who works in the copy (Blind).
+func (rec stopsRecord) leftBlind(cy registry.Cycle, round int) bool {
+	key := leftKey(cy, round)
+	for _, a := range slices.Backward(rec.Asks) {
+		if a.Kind == stopLeft && a.Key == key && a.Decision != decideRetry {
+			return a.Blind
+		}
+	}
+	return false
+}
+
 // leftAskAgain are your words that fit none of the ways of the newest
 // question of what review round round of cycle cy left, when its answer
 // asks again (decideAskAgain); ok is false otherwise.
@@ -561,8 +578,12 @@ func leftKey(cy registry.Cycle, round int) string {
 // context, and what its restore does beyond the round's leftovers ("" for
 // nothing).
 type leftCause struct {
-	words, context, restore string
-	moved                   *movedFacts
+	words, context string
+	// turn is the turn a restore may take edits of, that the factory
+	// cannot see end ("" for none): its edits in those paths go back too.
+	turn  string
+	blind bool // asked while the factory cannot tell who works in the copy
+	moved *movedFacts
 }
 
 // typedCause: you typed into a pane of the task, or one of its agents got
@@ -571,12 +592,21 @@ func typedCause(who string) leftCause {
 	return leftCause{words: who + " since the round began", context: "the change may be your own edit, so the factory put nothing back by itself"}
 }
 
-// waitedCause: the put-back waited leftWaitBound for who (inFlight).
-func waitedCause(who string) leftCause {
+// waitedCause: the put-back waited leftWaitBound for who (inFlight), turn
+// the run the watchdog judged stuck or lost ("" for a turn the factory
+// cannot see).
+func waitedCause(who, turn string) leftCause {
 	return leftCause{words: fmt.Sprintf("the factory waited %s to put it back (%s)", capText(leftWaitBound), who),
 		context: "the factory cannot tell whether a turn works in the copy, so it put nothing back by itself",
-		restore: "; a turn the factory cannot see that works in the copy has its edits in those paths go back too (saved first) and " +
-			"its new files leave the copy"}
+		turn:    cmp.Or(turn, "a turn the factory cannot see that works in the copy"), blind: true}
+}
+
+// blindCause: your answer to a question asked while the factory could tell
+// who works in the copy, which it now cannot (who says why): it never runs
+// blind, and asks again.
+func blindCause(who string) leftCause {
+	return leftCause{words: who, context: "the factory cannot tell whether a turn works in the copy now, so it ran no answer of yours " +
+		"by itself", turn: "a turn the factory cannot see that works in the copy", blind: true}
 }
 
 // movedCause: the round left the copy off the task's branch or the branch
@@ -674,7 +704,10 @@ func leftQuestion(t registry.Task, cy registry.Cycle, round int, left roundLefto
 	if cause.moved != nil {
 		restore, keep, keepOffered = movedWords(t, cy.HeadBefore, *cause.moved)
 	}
-	restore += cause.restore
+	if cause.turn != "" {
+		restore += fmt.Sprintf("; %s has its edits in those paths go back too (saved to %s), and its new files leave the copy",
+			cause.turn, cmp.Or(saved, "the task's folder"))
+	}
 	options := []registry.Option{{Label: optionRestoreCopy, Means: restore}, {Label: optionKeepChange, Means: keep}}
 	ending := "restore the copy or keep the change?"
 	if !keepOffered { // keeping it would drop the task's commits
@@ -687,7 +720,7 @@ func leftQuestion(t registry.Task, cy registry.Cycle, round int, left roundLefto
 	}
 	return stopQuestion{
 		ask: stopAsk{Kind: stopLeft, Key: leftKey(cy, round), Why: fmt.Sprintf("%s of the local review left %s, and %s", name, left,
-			cause.words), NoKeep: !keepOffered},
+			cause.words), NoKeep: !keepOffered, Blind: cause.blind},
 		q: registry.Question{
 			Text: fmt.Sprintf("%s of the local review left %s at %s, and %s: %s", strings.ToUpper(name[:1])+name[1:], left,
 				short(cy.HeadBefore), cause.words, ending),

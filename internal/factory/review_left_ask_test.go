@@ -365,3 +365,59 @@ func TestYourWordsOnARestoreOrDropQuestionAskAgain(t *testing.T) {
 		t.Fatalf("the branch is at %s after your words; want it left at %s", now, moved)
 	}
 }
+
+// A named agent's run that the watchdog judged stuck (or its pane lost) is
+// no live turn: the put-back waits for it as for a runtime that cannot
+// tell, at most leftWaitBound, then asks you, and the restore names that
+// turn: its edits in those paths go back too, saved, and its new files
+// leave the copy.
+func TestARunTheWatchdogJudgedStuckHoldsThePutBackAtMostTheBound(t *testing.T) {
+	r := leavingRig(t, func(r *reviewRig, dir string) {
+		r.put(dir, "README", "a reviewer's mutant, or the writer's\n")
+		r.rt.setAtWork("fx-writer")
+		r.rt.setJudged("fx-writer", "the watchdog judged its turn stuck")
+	})
+	task, _ := r.reviewTask("PR-12410")
+	r.run(6, func() bool { return strings.Contains(r.reload(task.ID).WaitsWhat, "fx-writer") })
+	r.clock.Add(leftWaitBound - time.Minute)
+	r.run(2, nil)
+	if got := r.reload(task.ID); got.State == registry.TaskNeedsYou {
+		t.Fatalf("task waits on you %q before the bound", got.WaitsWhat)
+	}
+	r.clock.Add(2 * time.Minute)
+	r.run(4, func() bool { return r.reload(task.ID).State == registry.TaskNeedsYou })
+	got := r.reload(task.ID)
+	qs := r.newestQuestions(task.ID)
+	if got.State != registry.TaskNeedsYou || len(qs) != 1 || !strings.Contains(qs[0].Text, "judged its turn stuck") ||
+		!strings.Contains(qs[0].Options[0].Means, "fx-writer agent's turn has its edits in those paths go back too (saved to review-1-left.diff)") {
+		t.Fatalf("task %s waits %q with %+v; want the question naming the stuck turn and what its restore takes", got.State,
+			got.WaitsWhat, qs)
+	}
+	if r.read("README") != "a reviewer's mutant, or the writer's\n" {
+		t.Fatal("the factory restored the copy before your answer")
+	}
+}
+
+// An answer to the question of a change that may be yours is never run
+// while the factory cannot tell who changed the copy since (a runtime whose
+// TouchedSince fails): it asks again, with the warning of a factory that
+// cannot tell, and your answer to that question runs the restore.
+func TestAnAnswerIsNeverRunWhileTheFactoryCannotTellWhoChangedTheCopy(t *testing.T) {
+	r, got := leftAfterYouTyped(t, "PR-12411")
+	r.rt.setTouchedAt("", time.Time{})
+	r.rt.setTouchedErr(errors.New("herdr: socket gone"))
+	r.answerLeft(got.ID, optionRestoreCopy)
+	r.run(4, func() bool { return r.reload(got.ID).QuestionRev != got.QuestionRev })
+	again := r.reload(got.ID)
+	qs := r.newestQuestions(got.ID)
+	if again.State != registry.TaskNeedsYou || len(qs) != 1 || !strings.Contains(qs[0].Text, "cannot tell") ||
+		r.read("README") != "your edit, or a reviewer's\n" {
+		t.Fatalf("task %s waits %q with %+v, README %q; want the question again, cannot tell, nothing restored", again.State,
+			again.WaitsWhat, qs, r.read("README"))
+	}
+	r.answerLeft(got.ID, optionRestoreCopy)
+	r.run(6, func() bool { return r.reload(got.ID).Stage != "local_review" || !isLive(r.reload(got.ID)) })
+	if r.read("README") != "shop\n" {
+		t.Fatalf("README is %q after your answer to the cannot-tell question; want it restored", r.read("README"))
+	}
+}

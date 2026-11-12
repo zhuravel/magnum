@@ -205,7 +205,7 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 	name := roundName(round, cy.N)
 	held := func(who string, ask bool) (string, error) { // the wait for a turn in flight, or the question past its bound
 		if ask {
-			return e.askLeft(ctx, t, c, cy, round, left, waitedCause(who), stops)
+			return e.askLeft(ctx, t, c, cy, round, left, waitedCause(who, e.judgedTurn(ctx, t)), stops)
 		}
 		what := fmt.Sprintf("%s of the local review left %s; the factory puts it back once %s", name, left, inFlightEnds(who))
 		e.waitOn(ctx, t, waitAgent, what)
@@ -217,7 +217,11 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 		return held(who, ask)
 	}
 	if decision != "" { // your answer, for the cause it was asked for: never run over a turn that started after it
-		if who := e.touchedAfter(ctx, t, stops.leftDecided(cy, round)); who != "" {
+		who, cannotTell := e.touchedAfter(ctx, t, stops.leftDecided(cy, round))
+		switch {
+		case cannotTell && !stops.leftBlind(cy, round): // an answer of a factory that could tell never runs blind
+			return e.askLeft(ctx, t, c, cy, round, left, blindCause(who), stops)
+		case who != "" && !cannotTell:
 			return e.askLeft(ctx, t, c, cy, round, left, typedCause(who), stops)
 		}
 	} else if who := e.yoursSince(ctx, t, cy); who != "" {
@@ -638,6 +642,19 @@ func (e *Engine) keepMoved(ctx context.Context, t registry.Task, c Copy, cy regi
 	return "", e.keepLeft(ctx, t, c, now)
 }
 
+// judgedTurn names the run of task t the watchdog judged stuck or lost
+// that may still work in its copy ("the fx-writer agent's turn"), "" for
+// none.
+func (e *Engine) judgedTurn(ctx context.Context, t registry.Task) string {
+	if e.d.Runtime == nil {
+		return ""
+	}
+	if role, you, err := e.d.Runtime.AtWork(ctx, t); err == nil && role != "" && !you && e.d.Runtime.Judged(t, role) != "" {
+		return "the " + role + " agent's turn"
+	}
+	return ""
+}
+
 // forgetLeftWait forgets the start of the wait of round key (leftKey) for
 // a runtime that cannot tell (stops.json Waits), when one is kept.
 func forgetLeftWait(dir, key string) error {
@@ -655,7 +672,8 @@ func forgetLeftWait(dir, key string) error {
 // inFlight says who keeps a put-back of what a round left in task t's copy
 // from running now ("" for nobody): a turn of an agent of the task in
 // flight in the copy (Runtime.AtWork), you in one of its panes, or a
-// runtime that cannot tell (cannotTell).
+// runtime that cannot tell (cannotTell), which a run the watchdog judged
+// stuck or lost is too (Runtime.Judged).
 func (e *Engine) inFlight(ctx context.Context, t registry.Task) (who string, cannotTell bool) {
 	if e.d.Runtime == nil {
 		return "", false
@@ -667,24 +685,26 @@ func (e *Engine) inFlight(ctx context.Context, t registry.Task) (who string, can
 	case role != "" && you:
 		return "you are in the " + role + " pane", false
 	case role != "":
+		if j := e.d.Runtime.Judged(t, role); j != "" { // no live turn: the factory cannot tell when it ends
+			return "the " + role + " agent's turn may still work in it: " + j, true
+		}
 		return "the " + role + " agent works in it", false
 	}
 	return "", false
 }
 
 // touchedAfter names who could have changed task t's copy after at (your
-// answer's time: Runtime.TouchedSince), "" for nobody, for a zero at, or
-// for a runtime that cannot answer (your answer then stands).
-func (e *Engine) touchedAfter(ctx context.Context, t registry.Task, at time.Time) string {
+// answer's time: Runtime.TouchedSince), "" for nobody or for a zero at;
+// cannotTell when the runtime cannot answer (who then says so).
+func (e *Engine) touchedAfter(ctx context.Context, t registry.Task, at time.Time) (who string, cannotTell bool) {
 	if e.d.Runtime == nil || at.IsZero() {
-		return ""
+		return "", false
 	}
 	who, err := e.d.Runtime.TouchedSince(ctx, t, at)
 	if err != nil {
-		e.log.Warn("who changed the copy since your answer", "task", t.ID, "err", err)
-		return ""
+		return "the factory cannot tell who changed it since your answer (" + textx.Clip(textx.FirstLine(err.Error()), 200) + ")", true
 	}
-	return who
+	return who, false
 }
 
 // inFlightEnds says when a put-back that waits for who (inFlight) runs.

@@ -35,6 +35,9 @@ func TestYourRetryStartsTheRecoveriesOverAndSpendsNone(t *testing.T) {
 	if lost := only(g.loseAll("fx-repro"), EventLost); len(lost) != 1 {
 		t.Fatalf("events %+v, want the recoveries run out", lost)
 	}
+	if j := g.r.Judged(g.task, "fx-repro"); !strings.Contains(j, "lost") {
+		t.Fatalf("Judged = %q for a pane lost past its recoveries, want its judgment", j)
+	}
 
 	g.retried()
 	g.restart()

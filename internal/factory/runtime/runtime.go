@@ -1541,6 +1541,26 @@ func (r *Runtime) AtWork(ctx context.Context, t registry.Task) (role string, you
 	return "", false, nil
 }
 
+// Judged is the watchdog's judgment of role's run in task t, "" for none:
+// its turn hung through the watchdog's steps (stuck), or its pane is lost
+// past its recoveries. Such a run is in flight still (AtWork names it), but
+// no live turn: what waits for it ends, the factory's put-back of a
+// round's leftovers after its bound.
+func (r *Runtime) Judged(t registry.Task, role string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, st := range r.roles {
+		switch {
+		case st.taskID != t.ID || st.role.Name != role:
+		case st.lost:
+			return "the watchdog found its pane lost"
+		case st.stuck:
+			return "the watchdog judged its turn stuck"
+		}
+	}
+	return ""
+}
+
 // TouchedSince names who could have changed task t's copy since the time
 // since, "" for nobody: a prompt to one of its agents after it (a run made
 // after it), or your input into one of its panes after it (the owner row's

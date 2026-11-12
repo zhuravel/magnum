@@ -104,6 +104,7 @@ type Runtime interface {
 	QuitRole(ctx context.Context, t registry.Task, role, why string) error
 	RunState(ctx context.Context, runID string) (state, why string, err error)
 	AtWork(ctx context.Context, t registry.Task) (role string, you bool, err error)
+	Judged(t registry.Task, role string) string
 	TouchedSince(ctx context.Context, t registry.Task, since time.Time) (who string, err error)
 	Recover(ctx context.Context, t registry.Task) (changed []string, err error)
 	SettleWorkspaces(ctx context.Context) ([]runtime.Orphan, error)
