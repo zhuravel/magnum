@@ -457,10 +457,11 @@ func TestAFailureNoExampleNamesReadsTheSameOnEveryRun(t *testing.T) {
 	}
 }
 
-// Your accept of a failure no example names holds for its check while that
-// check fails so again, whatever its run prints anew (its seed, a scratch
-// directory's name in its message): the accept is the check's alone, never
-// today's line, so the question never comes back for it.
+// Your accept of a failure no example names holds for that failure, read
+// the same on every run (firstFailing: its seed is no part of it), so the
+// question never comes back for it. A new failure of the check still fails,
+// as the option says: a spec file that no longer loads, and a failing
+// example.
 func TestAnAcceptOfAFailureNoExampleNamesHoldsForItsCheck(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.codingTask("PR-12595", "bug")
@@ -484,10 +485,18 @@ func TestAnAcceptOfAFailureNoExampleNamesHoldsForItsCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.mu.Lock()
-	r.adds = map[string]string{"bin/specs": strings.ReplaceAll(afterSuiteRun("4242"), "a file behind", "/tmp/rspec-4242 behind")}
+	r.adds = map[string]string{"bin/specs": afterSuiteRun("4242")}
 	r.mu.Unlock()
 	if res, err := r.e.precheck(r.ctx, task, r.cp); err != nil || !res.Passed {
 		t.Fatalf("precheck %+v, %v after your accept, on a new seed; want it passed", res, err)
+	}
+	r.mu.Lock()
+	r.adds = map[string]string{"bin/specs": "\nRandomized with seed 5\n\nAn error occurred while loading ./spec/models/credit_points_spec.rb.\n" +
+		"Failure/Error: def points(\n\nSyntaxError:\n  --> ./app/credit.rb\n\n" +
+		"Finished in 0.00004 seconds (files took 0.2 seconds to load)\n0 examples, 0 failures, 1 error occurred outside of examples\n"}
+	r.mu.Unlock()
+	if res, err := r.e.precheck(r.ctx, task, r.cp); err != nil || res.Passed {
+		t.Fatalf("precheck %+v, %v on a spec file that no longer loads; want it failed: a new failure of the check", res, err)
 	}
 	r.mu.Lock()
 	r.adds = map[string]string{"bin/specs": "Failures:\n\n  1) Credit counts\nrspec ./spec/models/credit_points_spec.rb:3 # Credit counts\n"}

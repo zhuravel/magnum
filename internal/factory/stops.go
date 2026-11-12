@@ -110,8 +110,8 @@ type stopAsk struct {
 	// NoKeep marks a question of what a round left that offered no keep
 	// (it would drop the task's commits): its ways are restore and drop.
 	NoKeep bool `json:"no_keep,omitempty"`
-	// Unnamed: the fix stop's failure is no example's or offense's
-	// (firstFailing): an accept of it is the check's alone.
+	// Unnamed: the fix stop's failure is no example's or offense's, its
+	// line firstFailing's: an accept of it covers that line alone.
 	Unnamed bool `json:"unnamed,omitempty"`
 	// Blind marks a question of a round's leftovers asked while the factory
 	// could not tell who works in the copy: your answer to it runs though
@@ -127,8 +127,9 @@ type stopAsk struct {
 type accepted struct {
 	Check    string   `json:"check"`
 	Failures []string `json:"failures,omitempty"`
-	// Unnamed: a failure no example or offense names (firstFailing), whose
-	// accept holds for the check while it fails so, never for a named one.
+	// Unnamed: a failure no example or offense names, Failures its line
+	// (firstFailing, read the same on every run): the accept holds for
+	// that line alone, never for another or for a named failure.
 	Unnamed bool `json:"unnamed,omitempty"`
 }
 
@@ -216,11 +217,8 @@ func (rec stopsRecord) bound(key string) time.Duration {
 // with no failures named, or one that names each of them.
 func (rec stopsRecord) accepts(key string, failures []string, unnamed bool) bool {
 	return slices.ContainsFunc(rec.Accepted, func(a accepted) bool {
-		switch {
-		case a.Check != key:
+		if a.Check != key || a.Unnamed != unnamed {
 			return false
-		case a.Unnamed:
-			return unnamed
 		}
 		return len(a.Failures) == 0 || !slices.ContainsFunc(failures, func(f string) bool { return !slices.Contains(a.Failures, f) })
 	})
