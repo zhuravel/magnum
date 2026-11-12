@@ -16127,7 +16127,8 @@ type Runtime interface {
 	Owner(ctx context.Context, t registry.Task) (store.PR, error)
 	Launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error
 	Send(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (runID string, err error)
-	SendFresh(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, then string) (runID string, err error)
+	SendFresh(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, then string, recoveriesOver bool) (runID string, err error)
+	MadeProgress(t registry.Task, a registry.Attempt, role string)
 	Observe(ctx context.Context) ([]runtime.Event, error)
 	Verify(ctx context.Context, runID string, ok bool, why string) error
 	Void(ctx context.Context, runID, why string) error
@@ -18015,6 +18016,12 @@ func (r *Runtime) LiveAgents(ctx context.Context, t registry.Task) (bool, error)
     live), its liaison's included: the drain for a reboot parks only such a
     task. A task never launched, and never talked about, has none.
 
+func (r *Runtime) MadeProgress(t registry.Task, a registry.Attempt, role string)
+    MadeProgress starts the loop ladder of role in attempt a of task t over,
+    as a verified run's progress or your retry does: the writer's go-on at
+    its fix budget (the factory's stage found its turns making progress),
+    whose turns the ladder then counts from its next prompt, never as a loop.
+
 func (r *Runtime) Observe(ctx context.Context) (evs []Event, err error)
     Observe runs one observe pass over herdr's snapshot and returns its events
     (and those Send and the recoveries found since the last pass), reading every
@@ -18162,7 +18169,8 @@ func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt,
     agent_not_found) has the role's pane read for macOS's refusal of its copy
     (launchDenied).
 
-func (r *Runtime) SendFresh(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, then string) (string, error)
+func (r *Runtime) SendFresh(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, then string,
+	recoveriesOver bool) (string, error)
     SendFresh starts role (as it runs) of attempt a of task t afresh,
     on your answer to a question its stage asked (the role's pane lost after
     its recoveries, the writer's fix turns spent) or for the writer's one fresh
@@ -20423,7 +20431,8 @@ var (
 	ErrRebaseConflict = errors.New("gitx: the rebase conflicts")
 	// ErrNotOnBranch is MergeFFOnly finding another branch (or a detached
 	// HEAD) checked out than the one it is to fast-forward, right before
-	// its merge, or that branch not at the commit it merged right after.
+	// its merge, or that branch not at the commit it merged right after;
+	// FastForward and ResetKeep finding a detached HEAD.
 	ErrNotOnBranch = errors.New("gitx: the checkout is not on the branch to fast-forward")
 	// ErrBranchExists is SwitchCreate finding the branch it is to create.
 	ErrBranchExists = errors.New("gitx: the branch exists")
@@ -21035,6 +21044,13 @@ func (c *Client) ReplayOnto(ctx context.Context, dir, onto, from string, config 
     so HEAD, the index and the work tree are as they were; the error is then
     ErrRebaseConflict, with the paths that conflicted in the commit it stopped
     at, sorted.
+
+func (c *Client) ResetKeep(ctx context.Context, dir, rev string) error
+    ResetKeep moves the branch checked out in the work tree at dir, and HEAD,
+    to rev (`git reset --keep <rev>`): the work tree's changes the move does not
+    touch stay, and one it would overwrite makes git refuse, which is an error,
+    and nothing moves. The commit the branch was at stays in the repository (its
+    reflog). A detached HEAD is ErrNotOnBranch: it moves no branch.
 
 func (c *Client) ResetPlaceholder(ctx context.Context, dir, branch, base string) error
     ResetPlaceholder points the slot's placeholder branch at origin/<base>
