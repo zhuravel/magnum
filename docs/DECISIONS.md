@@ -19074,6 +19074,32 @@ skill versions); people add theirs to the sections before it, at the end of the 
     TestANewLoopAbandonsTheRunOfAPushItsRecordKept, TestTheLoopsEndAfterALateSettleToastsAgain,
     TestAFailedWriteOfTheLateSettleIsRetriedAlone (a trigger refuses the verdict once), and the case "the threads
     answered, the conversation did not" of TestALaterSettleNamesTheUnmarkedRepliesTheOutageHid.
+  - The engine owner's review found five more faults, now fixed:
+    - In a GitHub incident, `git ls-remote` fails as the API does, with texts the shared classifier does not name:
+      curl's "The requested URL returned error: 503", "Empty reply from server", "Failure when receiving data from
+      the peer", "HTTP/2 stream 1 was not closed cleanly", and ssh's "Connection closed by ... port 22". So a 502 of
+      the read joined with git's 503 failed the fix at once. `transientRead` now reads such an exit with a git-aware
+      pattern of its own (`transientExitRe`), after `github.ConnectionCause`. Of the two ways offered, this one keeps
+      a join transient only when both parts are, so git's definite answers (a 403, a missing repository, no branch)
+      still fail at once.
+    - An `APIError` with status 499 (GitHub's own timeout) and gh's HTTP/2 texts (REFUSED_STREAM, CANCEL, GOAWAY, a
+      lost connection, which the client's `overloaded` reads as GitHub not answering) were permanent. They are
+      transient now.
+    - `endConfirming` resynced the slot to the job's head, which `loopJob` never sets, and `Resync` refuses an
+      empty id. So the slot stayed at the pushed head, and a later `magnum fix` failed its guard. It now uses the
+      row's head, else the reviewed one, as the start's recovery does. The tests' `fakeSlots.Resync` refuses an id
+      that is no commit, as the real one does.
+    - The look for unmarked replies reported only the threads' read. When the conversation's read worked and the
+      threads' failed, a later look named the conversation's replies again. It now reports each read, the record
+      keeps both (`RepliesNamed`, `ConversationNamed`), and a later look reads only where the first could not.
+    - A blip before GitHub confirmed the push left the confirming mark on the loop's row for the rest of the settle.
+      So `daemon-restart --drain` and `daemon-stop` did not wait for that loop, and the push's record was already
+      gone. A restart in that tail ended the fix as lost. `confirmPush` now takes the mark off as soon as GitHub
+      confirms the push (`unmarkConfirming`, compare and set), before the record goes.
+  - Tests of that review, each failing first: the git, ssh, HTTP/2 and 499 rows of
+    TestOnlyConnectionErrorsTimeoutsAnd5xxAreTransient; the slot in TestAConfirmingLoopNeverOutlivesItsRecord; "the
+    conversation answered, the threads did not" in TestALaterSettleNamesTheUnmarkedRepliesTheOutageHid; and
+    TestADrainDuringTheSettlesTailWaitsForTheLoop.
   - Tests. They failed first, and mutations of the code fail them. In engine:
     - TestOnlyConnectionErrorsTimeoutsAnd5xxAreTransient (the table);
     - TestAConnectionErrorWhileThePushIsConfirmedIsRetriedAndTheFixSettlesAsUsual (five errors, then the answer);

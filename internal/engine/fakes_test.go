@@ -2110,6 +2110,9 @@ func (f *fakeSlots) GuardLive(ctx context.Context, slot store.Slot) error { retu
 // slot's checked-out head; resyncErr makes it fail after the record.
 func (f *fakeSlots) Resync(ctx context.Context, slot store.Slot, sha string) error {
 	f.record(fmt.Sprintf("resync:%s:%s", slot.Name, sha))
+	if len(sha) < 7 || len(sha) > 64 || strings.Trim(sha, "0123456789abcdef") != "" { // as slots.Manager.Resync refuses one
+		return fmt.Errorf("slots: resync %s: %q is not a commit id", slot.Name, sha)
+	}
 	if err := f.GuardLive(ctx, slot); err != nil {
 		return err
 	}

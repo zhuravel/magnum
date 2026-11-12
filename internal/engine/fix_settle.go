@@ -81,10 +81,12 @@ func (e *Engine) settleFix(ctx, stop context.Context, job *fixJob) {
 		e.log.Info("fix settle interrupted by a shutdown while it confirmed the push; the next start fails the fix as unconfirmed", "subject", job.subject())
 		return
 	}
-	read := e.threadsReader(ctx, job)                                  // fix_calls.go: one GitHub read for every look
-	if !mayHaveReplied(rep) || e.nameUnmarkedReplies(ctx, job, read) { // fix_external.go; a run that fails too, before it fails
-		e.noteRepliesNamed(ctx, job) // fix_confirm.go: a later settle of the push need not look again
+	read := e.threadsReader(ctx, job) // fix_calls.go: one GitHub read for every look
+	threadsRead, conversationRead := true, true
+	if mayHaveReplied(rep) {
+		threadsRead, conversationRead = e.nameUnmarkedReplies(ctx, job, read, true, true) // fix_external.go; a run that fails too, before it fails
 	}
+	e.noteRepliesNamed(ctx, job, threadsRead, conversationRead) // fix_confirm.go: a later settle of the push looks only where this one could not
 	var held fixMergeHeld
 	var unanswered pushUnanswered
 	var unconfirmed pushNotConfirmed

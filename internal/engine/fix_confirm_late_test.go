@@ -3,6 +3,7 @@ package engine
 import (
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -197,6 +198,12 @@ func TestAConfirmingLoopNeverOutlivesItsRecord(t *testing.T) {
 		if _, ok := h.fixPushOf(2); ok {
 			t.Error("the record stays")
 		}
+		if calls := h.sl.all(); calls[len(calls)-1] != "resync:review1:"+fixHead {
+			t.Errorf("slot calls %v, want the slot back at the head the fixer started from", calls)
+		}
+		if ev, _ := h.fixEvent("fix.failed"); strings.Contains(ev.Message, "not put back") {
+			t.Errorf("fix.failed = %q", ev.Message)
+		}
 		h.advance(time.Minute)
 		_ = h.e.Tick(h.ctx)
 		h.settle()
@@ -268,6 +275,36 @@ func TestALaterSettleNamesTheUnmarkedRepliesTheOutageHid(t *testing.T) {
 	}
 	// The settle read the threads and named the author's reply there; only
 	// the conversation's read failed: no later settle names that reply again.
+	// The settle read the conversation and named the author's reply there;
+	// only the threads' read failed: the later settle names the threads'
+	// reply alone, never the conversation's again.
+	t.Run("the conversation answered, the threads did not", func(t *testing.T) {
+		both := func(h *harness) {
+			reply(h)
+			h.gh.mu.Lock()
+			h.gh.threads = map[int][]github.Thread{2: {magnumsThread(2101, "app/models/offer.rb", 42, h.clock.Now(), false, "Fixed in b2b2b2b.")}}
+			h.gh.mu.Unlock()
+		}
+		conversationAnswers := func(h *harness) {
+			h.gh.mu.Lock()
+			h.gh.prCommentsErr = nil
+			h.gh.mu.Unlock()
+		}
+		h, _, pr, back := confirmingFix(t, "b2b2b2b Fix", "none", both, conversationAnswers)
+		if evs := h.fixEvents("fix.unmarked"); len(evs) != 1 || evs[0].Message != named {
+			t.Fatalf("fix.unmarked events during the outage = %+v, want the conversation's reply named", evs)
+		}
+		back()
+		if err := h.e.poll(h.ctx); err != nil {
+			t.Fatal(err)
+		}
+		h.settle()
+		h.wantPushedSettle(pr, 0)
+		evs := h.fixEvents("fix.unmarked")
+		if len(evs) != 2 || strings.Contains(evs[1].Message, "issuecomment-7102") || !strings.Contains(evs[1].Message, "#discussion_r") {
+			t.Errorf("fix.unmarked events = %+v, want the thread's reply named after the conversation's, each once", evs)
+		}
+	})
 	t.Run("the threads answered, the conversation did not", func(t *testing.T) {
 		inThread := func(h *harness) {
 			h.gh.mu.Lock()
@@ -611,4 +648,43 @@ func TestAHeldMergeAndAPushToConfirmOnOnePRLeaveEachOtherAlone(t *testing.T) {
 			t.Error("the held merge went with the loop")
 		}
 	})
+}
+
+// A push GitHub confirms after a blip is no longer marked confirming while
+// the settle's tail runs (its reads, the report's decision, the re-review):
+// the loop is at work, so `daemon-restart --drain` and `daemon-stop` wait
+// for it (the CLI's fixesAtWork counts a row in phase fixing that is not
+// marked confirming), and no restart finds a loop with no record to settle
+// it by.
+func TestADrainDuringTheSettlesTailWaitsForTheLoop(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	var mu sync.Mutex
+	var seen []FixState
+	pushFixer(h, git, func() {
+		h.gh.mu.Lock()
+		h.gh.detailsErrs = []error{ghDown()}
+		h.gh.onThreads = func() { // the tail's first read, after GitHub confirmed the push
+			if st, ok, err := h.e.fixState(h.ctx, pr.ID); err == nil && ok {
+				mu.Lock()
+				seen = append(seen, st)
+				mu.Unlock()
+			}
+		}
+		h.gh.mu.Unlock()
+		git.mu.Lock()
+		git.lsErr = gitDown()
+		git.mu.Unlock()
+	})
+	h.fix(FixPayload{})
+	h.handle()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) == 0 {
+		t.Fatal("the settle's tail read no threads")
+	}
+	if st := seen[0]; st.Phase != FixPhaseFixing || st.Confirm != nil {
+		t.Errorf("the loop during the tail = %+v; want it at work, not marked confirming", st)
+	}
+	h.wantPushedSettle(pr, 0)
 }

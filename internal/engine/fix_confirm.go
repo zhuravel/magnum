@@ -18,12 +18,14 @@ package engine
 // resumable steps (settleConfirmedPush).
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -76,19 +78,21 @@ func kvPRFixPush(prID int64) string { return fmt.Sprintf("pr.%d.fix_push", prID)
 // not there yet), when the settle began to confirm it (Since, which
 // fixConfirmCap counts from), when the fix failed (Failed), whether the
 // operator typed into the fixer's pane during the run, whether the settle
-// looked for the author's replies without the fix marker (RepliesNamed: a
-// later settle looks when it could not), and the job as the settle had it,
-// which a later settle rebuilds (pushJob).
+// looked for the author's replies without the fix marker in the threads
+// (RepliesNamed) and on the conversation (ConversationNamed): a later
+// settle looks where it could not, and only there, and the job as the
+// settle had it, which a later settle rebuilds (pushJob).
 type fixPush struct {
-	Kind         string     `json:"kind"`
-	Run          string     `json:"run"`
-	Pushed       string     `json:"pushed"`
-	Commits      []string   `json:"commits,omitempty"`
-	Since        time.Time  `json:"since"`
-	Failed       time.Time  `json:"failed,omitzero"`
-	Typed        bool       `json:"typed,omitempty"`
-	RepliesNamed bool       `json:"replies_named,omitempty"`
-	Job          fixPushJob `json:"job"`
+	Kind              string     `json:"kind"`
+	Run               string     `json:"run"`
+	Pushed            string     `json:"pushed"`
+	Commits           []string   `json:"commits,omitempty"`
+	Since             time.Time  `json:"since"`
+	Failed            time.Time  `json:"failed,omitzero"`
+	Typed             bool       `json:"typed,omitempty"`
+	RepliesNamed      bool       `json:"replies_named,omitempty"`
+	ConversationNamed bool       `json:"conversation_named,omitempty"`
+	Job               fixPushJob `json:"job"`
 }
 
 // fixPushJob is what a settle reads of its fix job beyond the registry's
@@ -174,7 +178,9 @@ func (p pushUnanswered) Unwrap() error { return p.err }
 // failure), a timeout, or an HTTP 5xx from GitHub. It reads what the GitHub
 // client returns: a typed error (*github.APIError, net.Error), or gh's or
 // git's exit and its output (github.ConnectionCause, its rate limits left
-// out). An answer cut short is a timeout too: the empty body GraphQL
+// out, then transientExitRe: what git, curl, ssh and Go's HTTP/2 print when
+// GitHub fails to answer, which the shared classifier does not name). A 499
+// is GitHub's own timeout. An answer cut short is a timeout too: the empty body GraphQL
 // answers a query past its time limit with, which the client cannot decode
 // ("unexpected end of JSON input"), and a cut one (io.ErrUnexpectedEOF).
 // GitHub's own answer (401, 403, 404, a GraphQL error, a rate limit) and
@@ -195,7 +201,7 @@ func transientRead(err error) bool {
 		return len(errs) > 0
 	}
 	if api, ok := errors.AsType[*github.APIError](err); ok {
-		return len(api.Errors) == 0 && api.Status >= 500 && api.Status <= 599
+		return len(api.Errors) == 0 && (api.Status == 499 || api.Status >= 500 && api.Status <= 599)
 	}
 	if _, ok := errors.AsType[net.Error](err); ok { // a dial, a DNS lookup, a reset, a timeout (context.DeadlineExceeded is one)
 		return true
@@ -207,11 +213,24 @@ func transientRead(err error) bool {
 		return true
 	}
 	if exit, ok := errors.AsType[*execx.ExitError](err); ok {
-		cause := github.ConnectionCause(exit.Stderr)
-		return cause != "" && cause != github.RateLimited
+		if cause := github.ConnectionCause(exit.Stderr); cause != "" {
+			return cause != github.RateLimited
+		}
+		return transientExitRe.MatchString(strings.ToLower(exit.Stderr))
 	}
 	return false
 }
+
+// transientExitRe is what an exit prints, lower case, when GitHub fails to
+// answer and github.ConnectionCause names nothing: git's (curl's) HTTP 5xx
+// ("The requested URL returned error: 503"), an empty or cut answer, an
+// HTTP/2 stream git or gh lost (curl's "HTTP/2 stream 1 was not closed
+// cleanly", Go's REFUSED_STREAM, CANCEL, GOAWAY and lost connection, which
+// the client's overloaded reads so too), and ssh's connection GitHub
+// closed. A 4xx, a missing repository or a refused key match nothing.
+var transientExitRe = regexp.MustCompile(`requested url returned error: 5\d\d\b|empty reply from server|failure when receiving data from the peer|` +
+	`http/2 stream \d+ was not closed cleanly|refused_stream|cancel; received from peer|server sent goaway|http2: client connection lost|` +
+	`connection closed by \S+ port \d+|kex_exchange_identification`)
 
 // confirmPush checks that GitHub has head, the commit the fixer says it
 // pushed, as the head of the PR's branch (remoteHead). A head GitHub shows
@@ -235,6 +254,9 @@ func (e *Engine) confirmPush(ctx context.Context, job *fixJob, head string) erro
 		var wait time.Duration
 		switch {
 		case err == nil && got == head:
+			if tries > 0 { // GitHub answered after a blip: the loop is at work again, its settle no longer confirming
+				e.unmarkConfirming(ctx, job)
+			}
 			return nil
 		case err == nil:
 			if looks++; looks >= fixPushLooks {
@@ -280,6 +302,30 @@ func (e *Engine) markConfirming(ctx context.Context, job *fixJob, head string) {
 	job.state.Confirm = st.Confirm
 }
 
+// unmarkConfirming takes the confirming mark off the job's loop row once
+// GitHub confirmed the push after a blip (markConfirming put it there):
+// the rest of the settle is the loop at work, which `daemon-restart
+// --drain` and `daemon-stop` wait for (the CLI's fixesAtWork), and the
+// push's record goes right after, so a restart cut in the rest of the
+// settle could not settle the loop late. The row is replaced only while it
+// is the one read (Store.SetKVIf).
+func (e *Engine) unmarkConfirming(ctx context.Context, job *fixJob) {
+	ctx = context.WithoutCancel(ctx)
+	job.state.Confirm = nil
+	st, raw, ok, err := e.fixRow(ctx, job.pr.ID)
+	if err != nil || !ok || st.Confirm == nil {
+		return
+	}
+	st.Confirm = nil
+	b, err := json.Marshal(st)
+	if err != nil {
+		return
+	}
+	if _, err := e.st.SetKVIf(ctx, KVPRFix(job.pr.ID), raw, string(b)); err != nil {
+		e.log.Warn("fix: take the confirming mark off the loop", "subject", job.subject(), "err", err)
+	}
+}
+
 // noteFixPush records head, the push the job's settle is about to confirm,
 // and the commits rep lists as pushed, as fixPushConfirming (kvPRFixPush):
 // a restart that cuts the confirmation then fails the fix as unconfirmed
@@ -295,16 +341,21 @@ func (e *Engine) noteFixPush(ctx context.Context, job *fixJob, rep FixReport, he
 }
 
 // noteRepliesNamed records on the job's push record, when the settle left
-// one, that the settle looked for the author's replies without the fix
-// marker (fixPush.RepliesNamed), so a later settle of the push does not.
-func (e *Engine) noteRepliesNamed(ctx context.Context, job *fixJob) {
+// one, where the settle looked for the author's replies without the fix
+// marker: in the threads (fixPush.RepliesNamed) and on the conversation
+// (fixPush.ConversationNamed), so a later settle of the push looks only
+// where it could not.
+func (e *Engine) noteRepliesNamed(ctx context.Context, job *fixJob, threads, conversation bool) {
 	key := kvPRFixPush(job.pr.ID)
 	raw, ok, err := e.st.GetKV(ctx, key)
 	var rec fixPush
-	if err != nil || !ok || json.Unmarshal([]byte(raw), &rec) != nil || rec.Run != job.run.ID || rec.RepliesNamed {
+	if err != nil || !ok || json.Unmarshal([]byte(raw), &rec) != nil || rec.Run != job.run.ID {
 		return
 	}
-	rec.RepliesNamed = true
+	if (!threads || rec.RepliesNamed) && (!conversation || rec.ConversationNamed) {
+		return
+	}
+	rec.RepliesNamed, rec.ConversationNamed = rec.RepliesNamed || threads, rec.ConversationNamed || conversation
 	if b, err := json.Marshal(rec); err == nil {
 		if _, err := e.st.SetKVIf(ctx, key, raw, string(b)); err != nil {
 			e.warnUnlessStopped(ctx, err, "record the look for unmarked replies", "subject", job.subject())
@@ -698,7 +749,9 @@ func (e *Engine) endOrphanConfirms(ctx context.Context) {
 // endConfirming ends, as failed for why, the loop of pr marked confirming
 // whose push no settle can confirm (its record gone, or naming a run that
 // is gone): the fixer's run at the loop's report failed, the slot back at
-// the head the fixer started from. The caller holds the PR's reservation.
+// the head the fixer started from (the row's, else the reviewed one, as
+// the start's recovery puts it back). The caller holds the PR's
+// reservation.
 func (e *Engine) endConfirming(ctx context.Context, repo store.Repo, pr store.PR, why string) {
 	st, ok, err := e.fixState(ctx, pr.ID)
 	if err != nil || !ok || st.Phase != FixPhaseFixing || st.Confirm == nil {
@@ -712,8 +765,8 @@ func (e *Engine) endConfirming(ctx context.Context, repo store.Repo, pr store.PR
 		job.run = run
 	}
 	msg := "fix settle failed: " + pushNotConfirmed{head: st.Confirm.Head, err: errors.New(why)}.Error()
-	if job.slot.ID != 0 {
-		if err := e.resyncFixSlot(ctx, job, job.head); err != nil {
+	if head := cmp.Or(st.Head, deref(pr.ReviewedSHA)); job.slot.ID != 0 && head != "" { // loopJob names no head: the loop's row does
+		if err := e.resyncFixSlot(ctx, job, head); err != nil {
 			msg += fmt.Sprintf("; slot %s not put back: %v", job.slot.Name, err)
 		}
 	}
@@ -873,11 +926,11 @@ func (e *Engine) pushReopen(ctx context.Context, job *fixJob, rec fixPush) error
 }
 
 // pushReplies is a step of the settle of rec's confirmed push: the
-// author's replies without the fix marker are named when the settle could
-// not read the threads for them (fixPush.RepliesNamed) and the run may have
-// replied.
+// author's replies without the fix marker are named where the settle could
+// not read them (fixPush.RepliesNamed, the threads, and ConversationNamed),
+// and only there, when the run may have replied.
 func (e *Engine) pushReplies(ctx context.Context, job *fixJob, rec fixPush, read func() ([]github.Thread, error)) error {
-	if rec.RepliesNamed {
+	if rec.RepliesNamed && rec.ConversationNamed {
 		return nil
 	}
 	rep, err := e.readFixReport(job)
@@ -885,7 +938,7 @@ func (e *Engine) pushReplies(ctx context.Context, job *fixJob, rec fixPush, read
 		return err
 	}
 	if mayHaveReplied(rep) {
-		e.nameUnmarkedReplies(ctx, job, read) // fix_external.go: the settle's own look failed in the outage
+		e.nameUnmarkedReplies(ctx, job, read, !rec.RepliesNamed, !rec.ConversationNamed) // fix_external.go: the settle's own look failed in the outage
 	}
 	return nil
 }
