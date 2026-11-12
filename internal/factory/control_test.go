@@ -305,7 +305,7 @@ func TestTheFactorysRestartDrainAndRebootDrainDoNotLiftEachOther(t *testing.T) {
 	h.e.drainerAlive = func(Drain) bool { return true }
 	h.stage(config.FactoryStageAgents, idleStage)
 	h.rebootDrain(25, engine.DrainUntilBoot, boot)
-	restart := h.installDrain(4250)
+	h.installDrain(4250)
 	h.e.endDrainAtStart(h.ctx)
 	h.e.endRebootDrainAtStart(h.ctx)
 	if v, _ := ReadDrain(h.layout); v != "" {
@@ -314,7 +314,7 @@ func TestTheFactorysRestartDrainAndRebootDrainDoNotLiftEachOther(t *testing.T) {
 	if v, _ := ReadRebootDrain(h.layout); v == "" {
 		t.Fatal("the start ended the drain for a reboot with the restart's")
 	}
-	restart = h.installDrain(4251)
+	restart := h.installDrain(4251)
 	if err := LiftRebootDrain(h.layout, ""); err != nil {
 		t.Fatal(err)
 	}

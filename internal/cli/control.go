@@ -91,11 +91,15 @@ var controlSys = controlSeams{
 		return pid, nil
 	},
 	FactoryAlive: factoryAlive,
-	FactoryKick:  func(l paths.Layout) (int, error) { return daemonSys.factoryKick(l) },
+	FactoryKick:  factoryKickNow,
 	BootTime: func(ctx context.Context) (time.Time, error) {
 		return engine.ReadBootTime(ctx, daemonSys.runner(false, nil))
 	},
 }
+
+// factoryKickNow wakes the factory daemon through daemonSys as it is at the
+// call (a method value would keep the one of the package's start).
+func factoryKickNow(l paths.Layout) (int, error) { return daemonSys.factoryKick(l) }
 
 // controlReviewPID is the running review daemon's pid (0: none), read
 // without waking it when the deps can (Running), else through the kick.
@@ -417,17 +421,12 @@ func reviewControlRO(ctx context.Context, c *Context) daemonControl {
 	return reviewControlOf(func(k string) (string, bool) { v, ok := rows[k]; return v, ok }, pid > 0, pid)
 }
 
-// readControlKV reads controlKVKeys from db into rows; a failed read leaves
-// what it read.
+// readControlKV reads controlKVKeys from db into rows (each a daemon.* row);
+// a failed read leaves what it read.
 func readControlKV(ctx context.Context, db *sql.DB, rows map[string]string) {
 	ctx, cancel := context.WithTimeout(ctx, completeTimeout)
 	defer cancel()
-	marks := strings.TrimSuffix(strings.Repeat("?, ", len(controlKVKeys)), ", ")
-	args := make([]any, len(controlKVKeys))
-	for i, k := range controlKVKeys {
-		args[i] = k
-	}
-	rs, err := db.QueryContext(ctx, "SELECT key, value FROM kv WHERE key IN ("+marks+")", args...)
+	rs, err := db.QueryContext(ctx, "SELECT key, value FROM kv WHERE key GLOB 'daemon.*'")
 	if err != nil {
 		return
 	}

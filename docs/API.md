@@ -8959,6 +8959,31 @@ const (
 	KVConfigRestartRefused = "config.restart_refused"
 )
 const (
+	// KVDaemonRebootDrain is the drain for a reboot (RebootDrain.Value),
+	// which `magnum drain` writes and `magnum resume` deletes; a daemon's
+	// start on another boot ends a drain until "boot".
+	KVDaemonRebootDrain = "daemon.reboot_drain"
+	// KVDaemonDrainAck is the review daemon's acknowledgement of it
+	// (DrainAck.Value), rewritten while the drain holds.
+	KVDaemonDrainAck = "daemon.reboot_drain_ack"
+	// KVDaemonControls is the controls the running daemon knows
+	// (Controls.Value), written at its start: the CLI refuses a drain a
+	// daemon would not hold.
+	KVDaemonControls = "daemon.controls"
+)
+    The kv rows of the controls on the review daemon's registry.
+
+const (
+	// DrainUntilBoot ends the drain at the first start of a daemon on
+	// another boot of the Mac.
+	DrainUntilBoot = "boot"
+	// DrainUntilResume ends it at `magnum resume` alone (`magnum drain
+	// --keep`).
+	DrainUntilResume = "resume"
+)
+    The ends of a RebootDrain (RebootDrain.Until).
+
+const (
 	// MachineEventKind is the event a round records the review machine's
 	// failures in: subject pr:<owner>/<name>#<N>, data {"failures": [{"cmd",
 	// "error"} or a bare error string, ...]}.
@@ -9352,6 +9377,16 @@ const CLIChangeRecent = 24 * time.Hour
     CLIChangeRecent is how long a change of a kind's CLI is news: `magnum
     status` says "(changed at 11:24)", and a launch failure of one of the kind's
     roles that parks a PR names it (attention.CLIChange).
+
+const ControlsVersion = 1
+    ControlsVersion is the version of the controls a daemon of this build knows:
+    the drain for a reboot and its acknowledgement, and the factory's
+    pause.json.
+
+const DrainQuietToastAfter = time.Hour
+    DrainQuietToastAfter is how long a daemon stays quiet under a drain for
+    a reboot before it says once that the drain still holds: the Mac did not
+    reboot.
 
 const EvPRMuted = "pr.muted"
     EvPRMuted is the event a mute records, its reason in the data's "reason"
@@ -9952,6 +9987,10 @@ func KickDaemon(layout paths.Layout) (int, error)
     that does not handle it: the pid is signalled only after ps shows a magnum
     daemon, as `magnum daemon stop` checks.
 
+func KnowsControls(v string, pid, want int) bool
+    KnowsControls reports whether the KVDaemonControls value v says that the
+    daemon pid knows the controls of version want.
+
 func LiveAgents(live []store.Session) (n, working int)
     LiveAgents counts the registry's live sessions (starting or live,
     as Store.LiveSessions lists them) and those of them herdr last saw working;
@@ -10078,6 +10117,9 @@ func PRSubject(repo store.Repo, number int) string
     PRSubject is the audit subject of PR number of repo ("pr:owner/name#N"),
     which the PR's events carry: the factory reads a PR's fix loops by it.
 
+func ParseBootTime(out string) (time.Time, error)
+    ParseBootTime reads `sysctl -n kern.boottime`'s output.
+
 func PinnedSince(ctx context.Context, st *store.Store) (map[string]time.Time, error)
     PinnedSince is when each subject that is pinned now was pinned, by the
     registry's pin events: "pr:owner/name#N" for a PR pinned by `magnum open`,
@@ -10109,6 +10151,11 @@ func ProposalStale(ctx context.Context, st *store.Store, nr notes.Repo, p store.
     ProposalStale reports whether p is stale: the notes on disk are not the
     state of its base version. It reads the version's listing from the registry
     and hashes the files on disk, never a version's content.
+
+func ReadBootTime(ctx context.Context, r execx.Runner) (time.Time, error)
+    ReadBootTime reads the Mac's boot time, `sysctl -n kern.boottime`,
+    through r ("{ sec = 1762940000, usec = 123456 } Wed Nov 12 10:13:20 2026");
+    an error when it cannot (another system, sysctl missing).
 
 func ReadDaemonConfigSum(ctx context.Context, st *store.Store) (string, bool)
     ReadDaemonConfigSum reads KVDaemonConfigSum: the hex SHA-256 of the user
@@ -10583,6 +10630,16 @@ func ReadConfigRestartRefused(ctx context.Context, st *store.Store) (ConfigResta
     ReadConfigRestartRefused reads KVConfigRestartRefused (false when none is
     set or it cannot be read).
 
+type Controls struct {
+	Version int `json:"version"`
+	PID     int `json:"pid"`
+}
+    Controls is what KVDaemonControls holds: the ControlsVersion the daemon pid
+    knows.
+
+func (c Controls) Value() string
+    Value is c as KVDaemonControls holds it.
+
 type Critic interface {
 	Critique(ctx context.Context, job CritiqueJob) (CritiqueResult, error)
 	Close(ctx context.Context) error
@@ -10800,6 +10857,10 @@ type Deps struct {
 	// A port of its own keeps the probe out of the commands a test scripts
 	// for Runner. nil = no memory sample.
 	MemoryRunner execx.Runner
+	// BootTime reads the Mac's boot time at the start, which ends a drain
+	// for a reboot begun on another boot (reboot_drain.go); nil reads it
+	// through MemoryRunner (ReadBootTime), and no runner leaves it unknown.
+	BootTime func(ctx context.Context) (time.Time, error)
 	// Classifier sets up the retro's classifier for one retro run ([learn],
 	// retro.go); nil = the candidates are stored unclassified.
 	Classifier func(ctx context.Context, run RetroRun) (Classifier, error)
@@ -10930,6 +10991,30 @@ func ParseDrain(v string) (Drain, bool)
 
 func (d Drain) Value() string
     Value is d as KVDaemonDraining stores it.
+
+type DrainAck struct {
+	Generation int64     `json:"generation"`
+	PID        int       `json:"pid"`
+	Quiet      bool      `json:"quiet"`
+	QuietSince time.Time `json:"quiet_since,omitzero"`
+	Parked     bool      `json:"parked"`
+	Work       []string  `json:"work,omitempty"`
+}
+    DrainAck is a daemon's acknowledgement of a drain for a reboot: the
+    generation its gates hold, its pid (a restarted daemon's acknowledgement is
+    void), whether nothing it would cut runs (Quiet) and since when, the work
+    that still runs (in words, "round of talkable/talkable#12"), and whether it
+    parked its idle agents once quiet (Parked).
+
+func ParseDrainAck(v string) (DrainAck, bool)
+    ParseDrainAck reads an acknowledgement (Value); false for anything else.
+
+func (a DrainAck) Done(gen int64, pid int) bool
+    Done reports whether a is the acknowledgement of generation gen by the
+    daemon pid, quiet and parked: that daemon is safe to reboot.
+
+func (a DrainAck) Value() string
+    Value is a as KVDaemonDrainAck holds it.
 
 type EditJob struct {
 	Run    EditRun
@@ -12192,6 +12277,35 @@ type ProvisionPayload struct {
     ProvisionPayload provisions Count pool slots (resuming interrupted ones
     first; Count <= 0 = up to pool.min) of the pool of repository Pool ("" =
     daemon.default_repo, else the only pool).
+
+type RebootDrain struct {
+	Generation int64     `json:"generation"`
+	Since      time.Time `json:"since"`
+	Until      string    `json:"until"`
+	Boot       time.Time `json:"boot,omitzero"`
+	Reason     string    `json:"reason,omitempty"`
+}
+    RebootDrain is a drain for a reboot: the command's generation (its start in
+    nanoseconds, the same on both daemons' records), since when, until what ends
+    it (DrainUntilBoot, DrainUntilResume), the Mac's boot time when it began
+    (zero when it could not be read: only `magnum resume` ends such a drain) and
+    why.
+
+func ParseRebootDrain(v string) (RebootDrain, bool)
+    ParseRebootDrain reads a record's value (Value); false for anything else,
+    "" included.
+
+func (d RebootDrain) EndsAtStart(boot time.Time) bool
+    EndsAtStart reports whether a daemon that starts on boot (the Mac's boot
+    time now; zero when unknown) ends d: a drain until "boot" whose boot is
+    known and differs. A crash restart or a restart on the same boot keeps it,
+    and so does any start when either time is unknown.
+
+func (d RebootDrain) Value() string
+    Value is d as its records hold it.
+
+func (d RebootDrain) Words() string
+    Words say what ends d, for the status lines and the events.
 
 type Recorder struct {
 	// Has unexported fields.
@@ -14305,6 +14419,13 @@ const (
     (evalrun.LocalReviewConfig): the swap here is the same text again.
 
 const (
+	HoldPause  = "pause"
+	HoldReboot = "reboot"
+)
+    The holds of the controls (Hold.Kind): `magnum pause`'s and `magnum
+    drain`'s.
+
+const (
 	HoldInfra  = "infra"
 	HoldHerdr  = "herdr"
 	HoldDisk   = "disk"
@@ -14603,6 +14724,14 @@ func LiftDrain(l paths.Layout, value string) error
     LiftDrain removes the drain asked of the factory daemon of layout l when it
     is value; a drain asked since by another command, or none, is left alone.
 
+func LiftPause(l paths.Layout, value string) error
+    LiftPause removes the pause asked of the factory daemon of layout l when it
+    is value ("": whatever it is); another, or none, is left alone.
+
+func LiftRebootDrain(l paths.Layout, value string) error
+    LiftRebootDrain removes the drain for a reboot asked of the factory daemon
+    of layout l when it is value ("": whatever it is).
+
 func Lock(l paths.Layout) (unlock func(), err error)
     Lock takes the factory daemon's lock (Layout.FactoryLock), held for the
     daemon's whole life; another daemon holding it is ErrRunning, naming that
@@ -14656,6 +14785,14 @@ func ReadDrain(l paths.Layout) (string, error)
     ReadDrain is the drain asked of the factory daemon of layout l ("" for
     none).
 
+func ReadPause(l paths.Layout) (string, error)
+    ReadPause is the pause asked of the factory daemon of layout l ("" for
+    none).
+
+func ReadRebootDrain(l paths.Layout) (string, error)
+    ReadRebootDrain is the drain for a reboot asked of the factory daemon of
+    layout l ("" for none).
+
 func ReadSeen(l paths.Layout) (time.Time, error)
     ReadSeen is when you last saw the factory screen's home, as SaveSeen kept it
     in layout l; the zero time before the first.
@@ -14704,6 +14841,14 @@ func WriteDrain(l paths.Layout, value string) error
     WriteDrain asks the factory daemon of layout l for a drain: value is
     Drain.Value (since when, and the asking command's pid and start), and it
     replaces any drain asked before.
+
+func WritePause(l paths.Layout, value string) error
+    WritePause asks the factory daemon of layout l for a pause (Pause.Value),
+    replacing any pause asked before.
+
+func WriteRebootDrain(l paths.Layout, value string) error
+    WriteRebootDrain asks the factory daemon of layout l for a drain for a
+    reboot (engine.RebootDrain.Value), replacing any asked before.
 
 func WriteReviewCandidate(l paths.Layout) (string, error)
     WriteReviewCandidate writes the review candidate the factory's local rounds
@@ -14887,6 +15032,12 @@ type Deps struct {
 	// [[factory.repo]] has staging entries); nil reads none, and no row has
 	// staging cells.
 	Staging Staging
+	// Build is the build the daemon runs (engine.Build.Label), which
+	// work.json names for the CLI's status; BootTime reads the Mac's boot
+	// time at the start, which ends a drain for a reboot begun on another
+	// boot (control.go); nil leaves it unknown.
+	Build    string
+	BootTime func(ctx context.Context) (time.Time, error)
 	// Clock returns the current time; nil means time.Now.
 	Clock func() time.Time
 	Log   *slog.Logger
@@ -14929,9 +15080,16 @@ func (e *Engine) Kick()
     screen's requests); a kick already pending absorbs it.
 
 func (e *Engine) MayLaunch() (who, what string, ok bool)
-    MayLaunch is mayLaunch for the runtime, which passes the same holds when
-    it starts a role outside a launch (runtime.Deps.MayStart). It reads the
-    engine's holds, so it is called on the engine's loop.
+    MayLaunch is mayLaunch less the pause, for the runtime, which passes these
+    holds when it starts a role outside a launch (runtime.Deps.MayStart:
+    a prompt's bring-back, the liaison your talk starts): a pause holds no work
+    under way and nothing you ask for. It reads the engine's holds, so it is
+    called on the engine's loop.
+
+func (e *Engine) MayPrompt() (who, what string, ok bool)
+    MayPrompt is the runtime's hold of new prompts (runtime.Deps.MayPrompt):
+    a drain for a reboot holds them, as a reboot would cut their turns;
+    a restart's drain lets them go, since the turns outlive a restart.
 
 func (e *Engine) Overlap(ctx context.Context, t registry.Task, files []string) (string, error)
     Overlap is the advisory line of what else touches task t's work ("" for
@@ -15350,6 +15508,26 @@ type PRView struct {
 	Draft                      bool
 }
     PRView is a pull request as the factory reads it back after it opened it.
+
+type Pause struct {
+	Generation int64     `json:"generation"`
+	Since      time.Time `json:"since"`
+	Until      time.Time `json:"until,omitzero"`
+	Reason     string    `json:"reason,omitempty"`
+}
+    Pause is a pause `magnum pause` asks of the factory (pause.json): the
+    command's generation, since when, until when (zero: until `magnum resume`)
+    and why.
+
+func ParsePause(v string) (Pause, bool)
+    ParsePause reads pause.json's value (Value); false for anything else.
+
+func (p Pause) Value() string
+    Value is p as pause.json holds it.
+
+func (p Pause) Words() string
+    Words say the pause as the holds and the status lines do: "paused by you
+    until Nov 12 15:30 (lunch)".
 
 type PostedFinding struct {
 	ID                 int64
@@ -16063,13 +16241,19 @@ type WorkItem struct {
     when it runs.
 
 type WorkRecord struct {
-	PID   int        `json:"pid"`
-	Drain string     `json:"drain,omitempty"`
-	Work  []WorkItem `json:"work"`
+	PID         int              `json:"pid"`
+	Drain       string           `json:"drain,omitempty"`
+	Work        []WorkItem       `json:"work"`
+	Controls    int              `json:"controls,omitempty"`
+	Build       string           `json:"build,omitempty"`
+	RebootDrain *engine.DrainAck `json:"reboot_drain,omitempty"`
 }
     WorkRecord is work.json (paths.Layout.FactoryWork): the pid of the daemon
     that wrote it, the drain it holds (drain.json's value it took; "" for none)
-    and the work it runs that a restart would cut, oldest first.
+    and the work it runs that a restart would cut, oldest first; the controls
+    its build knows (engine.ControlsVersion: pause.json and the drain for a
+    reboot; 0 for an older build) and the build itself, and its acknowledgement
+    of the drain for a reboot that holds (control.go; nil for none).
 
 func ReadWork(l paths.Layout) (WorkRecord, bool, error)
     ReadWork reads the record the factory daemon of layout l keeps; ok is false
@@ -17565,24 +17749,27 @@ func (e *DeniedError) Error() string
     else DeniedLine.
 
 type Deps struct {
-	Config   *config.Config
-	Layout   paths.Layout
-	Herdr    agents.Herdr
-	Store    *store.Store
-	Registry *registry.Registry
-	Runner   execx.Runner
-	Memory   func(ctx context.Context) engine.MemorySample
-	MayStart func() (who, what string, ok bool)
-	Clock    func() time.Time
-	Log      *slog.Logger
+	Config    *config.Config
+	Layout    paths.Layout
+	Herdr     agents.Herdr
+	Store     *store.Store
+	Registry  *registry.Registry
+	Runner    execx.Runner
+	Memory    func(ctx context.Context) engine.MemorySample
+	MayStart  func() (who, what string, ok bool)
+	MayPrompt func() (who, what string, ok bool)
+	Clock     func() time.Time
+	Log       *slog.Logger
 }
     Deps are the runtime's collaborators. Config, Herdr, Store,
     Registry and Runner are required. Store is the factory's agents store
     (Layout.FactoryAgentsDB). Memory nil reads no memory (taken as normal);
-    MayStart is the engine's holds of a launch (a disk or memory hold,
-    a drain for an install: who and what, as a task's wait says them), which a
-    start outside a launch passes too (mayStart), called on the engine's loop;
-    nil holds nothing. Clock nil is time.Now; Log nil discards.
+    MayStart is the engine's holds of a launch (a disk or memory hold, a drain
+    for an install: who and what, as a task's wait says them), which a start
+    outside a launch passes too (mayStart), called on the engine's loop; nil
+    holds nothing. MayPrompt is the engine's hold of new prompts (a drain for a
+    reboot), which Send asks before anything else, called on the engine's loop;
+    nil holds none. Clock nil is time.Now; Log nil discards.
 
 type Event struct {
 	TaskID  int64
@@ -17869,11 +18056,12 @@ func (r *Runtime) RunsAs(t registry.Task, role config.Role) (config.Role, error)
 func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (string, error)
     Send sends text to role's agent in attempt a of task t (role as it runs:
     RunsAs) as a new run, and returns the run's id. The ledger entry,
-    with the text scrubbed and its hash, is written before the prompt leaves. It
-    refuses without sending: a pause of the role's kind (a *WaitError), an entry
-    of the role whose delivery is unknown (ErrDeliveryUnknown), the operator
-    typing in the pane (ErrOperatorInPane), and a loop without progress whose
-    steps ran out (ErrNoProgress, with EventNoProgress at the next Observe).
+    with the text scrubbed and its hash, is written before the prompt leaves.
+    It refuses without sending: a drain for a reboot (Deps.MayPrompt) and
+    a pause of the role's kind (each a *WaitError), an entry of the role
+    whose delivery is unknown (ErrDeliveryUnknown), the operator typing in
+    the pane (ErrOperatorInPane), and a loop without progress whose steps
+    ran out (ErrNoProgress, with EventNoProgress at the next Observe).
     Past MaxStagePrompts prompts in the stage, a context over MaxContext or the
     same failure SameFailures times, it first compacts the session, the next
     time starts a fresh session with the attempt's first prompt and text after
@@ -17936,6 +18124,13 @@ func (r *Runtime) TouchedSince(ctx context.Context, t registry.Task, since time.
     human_active_at). The factory's checks ask it before they put back what
     their own commands changed: with somebody else at work since they began,
     they cannot tell their changes from that person's or that agent's.
+
+func (r *Runtime) TurnsInFlight(ctx context.Context) ([]TurnInFlight, error)
+    TurnsInFlight are the turns of every agent of the factory that a reboot
+    would cut, oldest first: each run the agents store keeps pending, submitted
+    or working, on a task's row or its liaison's. A run whose turn ended (ended,
+    verified, failed, abandoned) is idle; a state the store cannot place counts
+    as a turn in flight.
 
 func (r *Runtime) UseHookSocket(path string)
     UseHookSocket has every pane the runtime makes from now on carry
@@ -18001,6 +18196,16 @@ type Turn struct {
     AgentState herdr.StatusWorking when a run of the factory's was in flight
     in the pane when the turn arrived (else herdr.StatusIdle), and Origin
     registry.OriginHerdr or registry.OriginUnknown.
+
+type TurnInFlight struct {
+	TaskID  int64
+	Liaison bool
+	Role    string
+	Since   time.Time
+}
+    TurnInFlight is an agent's turn in flight: the task it works for (0 when
+    the store's row names none), whether it is the task's liaison, its role and
+    since when (the prompt's submit, else the run's creation).
 
 type WaitError struct {
 	Who, What string
@@ -24982,6 +25187,10 @@ func (l Layout) FactoryPRStatus() string
     for the PRs its tasks published, pr-status/<owner>/<repo>/<number>.json
     (internal/prstatus names one and holds its contract), beside FactoryDB.
 
+func (l Layout) FactoryPause() string
+    FactoryPause is pause.json, the pause `magnum pause` asks of the factory
+    daemon (since when, until when, why), beside FactoryDrain.
+
 func (l Layout) FactoryPid() string
     FactoryPid is the factory daemon's pidfile under State, beside the review
     daemon's: the two daemons can run at once.
@@ -24989,6 +25198,10 @@ func (l Layout) FactoryPid() string
 func (l Layout) FactoryQALock() string
     FactoryQALock is the lock file under State that a factory QA run holds
     (flock) while it runs: one at a time on the machine.
+
+func (l Layout) FactoryRebootDrain() string
+    FactoryRebootDrain is reboot-drain.json, the drain for a reboot `magnum
+    drain` asks of the factory daemon (engine.RebootDrain), beside FactoryDrain.
 
 func (l Layout) FactorySeen() string
     FactorySeen is seen.json, when you last saw the factory screen's home
@@ -33403,6 +33616,10 @@ type ColumnWidths interface {
     when nothing is kept; SaveWidths with an empty map forgets them. The screens
     call both from commands, so a slow store never blocks a key.
 
+type ControlFact struct{ Full, Short string }
+    ControlFact is a daemon's pause or drain as a title says it, whole and short
+    ("factory draining").
+
 type DaemonFacts struct {
 	// SkewOld is the build the daemon runs when it is older than the CLI's
 	// or the one on disk ("v1.4.0", "dev (8ad5bb2)"), SkewSince when that
@@ -33439,6 +33656,10 @@ type DaemonFacts struct {
 	// LearnProposals counts the skill proposals the gate held for the
 	// operator (`magnum learn --review`).
 	LearnProposals int
+	// Controls are the daemons' pauses and drains for a reboot that are no
+	// fact above ("factory paused by you until 15:30: magnum resume",
+	// "review draining since 14:02: magnum resume ends it"), drawn first.
+	Controls []ControlFact
 }
     DaemonFacts are what the titles say of the daemon; the zero value says
     nothing.
