@@ -26558,12 +26558,27 @@ skill versions); people add theirs to the sections before it, at the end of the 
     agent of the task has a turn in flight in the copy, and you are in no pane of it (`inFlight`). The factory
     asks this before the save and again before the put-back. Second, the copy is on the branch at the
     head that the round reviewed.
-    A turn in flight is a held wait, never NEEDS YOU, and the put-back runs once the turn ended. When you
-    typed into a pane of the task since the round began (`TouchedSince`, as before), or the factory cannot
-    tell, the change may be your own edit. Then the factory saves it and puts nothing back by itself: it asks
-    you, with the saved diff, "Restore the copy to the reviewed head" or "Keep the change" (`leftQuestion`).
-    The round's result stands either way. A kept change stays in the copy, and the writer's next commit may
-    take it. A failed save or put-back asks you with the steps, as before.
+    A turn in flight is a held wait, never NEEDS YOU, and the put-back runs once the turn ended. That wait
+    lasts at most 30 minutes (`leftWaitBound`), counted from its first pass, which `stops.json` keeps
+    across restarts: a run that never leaves its state, or an `AtWork` that keeps failing, held the task
+    for good before. After it, the factory asks the question below, and your answer to restore runs the
+    put-back whoever the runtime still names. When you typed into a pane of the task since the round began
+    (`TouchedSince`, as before), or the factory cannot tell, the change may be your own edit. Then the
+    factory saves it and puts nothing back by itself: it asks you, with the saved diff, "Restore the copy
+    to the reviewed head" or "Keep the change" (`leftQuestion`). The round's result stands either way. A
+    kept change stays in the copy, remembered by its fingerprint in `stops.json` (`keptSum`: the sha256 of
+    its patch against HEAD and of its file). While it stays the same, no look at the copy (`roundLeft`)
+    counts it as a round's, so nothing puts it back or asks again, and the factory's checks name it as the
+    operator's to commit, never to undo (`dirtyWords`): before, the next check told the writer to "commit
+    them or undo them", and a writer that undid it threw your kept change away. A failed save or put-back
+    asks you with the steps, as before. A copy that a round left off the task's branch, or with the branch
+    at another head, asks the same question, where it said only to put the copy back and let the task go
+    on (a bare retry). Restore saves what the round left, puts it back, switches the copy back to the
+    branch (`gitx.Switch`) and moves a branch at another head back to the reviewed head
+    (`gitx.ResetKeep`, `git reset --keep`), an event naming the head it was at; the commits stay in the
+    repository. Keep switches a copy off the branch back to it with its changes, or takes a branch at a new
+    head as the task's head (`headMoved`), whose checks run again there. The factory still moves no branch
+    or HEAD by itself. Your answer moves it, and your own put-back and retry still work.
   - *A lost pane* (`runtime/recoveries.go`). A lost pane gets 3 recoveries in an attempt. The first runs at
     once, as a lost pane's recovery always did. The second waits 1 minute and the third 5 minutes. Each wait
     counts from the loss, or from the pass that found that the last recovery made no progress. So a transient
@@ -26590,8 +26605,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - Not covered: the configuration's own stops (a denied or missing command, a missing `table_stats`) need an
     edit and an install, so they still name the fix and the retry. A migration that hangs still asks with its
     fix, because a rerun of a migration that ran part-way is no heal. The cap's go-on at the local review
-    (the entry above) is its own change: its alert is news that stands while the task is live, while the
-    automatic steps here write alerts that do not stand, and the stop questions alert as any wait on you.
+    (the entry above) is its own change: its alert is news that stands while the task is live. The
+    automatic steps here write news too (`newsAlert`: a check healed, a go-on at the fix budget, a round's
+    leftovers put back), which stands while the task is live and counts nobody as waiting on you. Before,
+    their alerts never stood, so each was dropped at once with the event "dropped, it no longer waits on
+    you", which it never did. News that no longer stands goes in silence. The stop questions alert as any
+    wait on you.
   Tests, failing first and each checked by a mutation: `TestALintThatNamesNoOffenseRunsAgainThenAfterTheInstalls`,
   `TestABaseRunThatHangsGetsADoubledBoundThenAQuestion`, `TestYourAnswerToACheckQuestionSkipsItOrGivesItYourBound`,
   `TestARestartInTheMiddleOfTheFaultStepsNeitherDoublesNorLosesOne`,
@@ -26602,11 +26621,25 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestACheckFaultNeverCountsAsAWritersTurnWithoutProgress`,
   `TestARestartAtTheFixCapNeitherDoublesNorLosesTheFreshSession`, `TestYourRetryAtTheFixQuestionSpendsNoGrant`,
   `TestARoundsTrackedChangeIsRestoredOnceNoTurnIsInFlight`, `TestALostPaneAfterItsRecoveriesAsksAQuestionNeverRetry`,
-  `TestYourAnswerToALostPanesQuestionStartsTheRoleAfresh`, `TestYourDropOfALostPanesQuestionStopsTheTask` and
-  `TestYourRetryOfALostPanesQuestionClosesItAndRecoversTheRole` in internal/factory.
+  `TestYourAnswerToALostPanesQuestionStartsTheRoleAfresh`, `TestYourDropOfALostPanesQuestionStopsTheTask`,
+  `TestYourRetryOfALostPanesQuestionClosesItAndRecoversTheRole`,
+  `TestAnRspecRunThatFailsOutsideOfExamplesIsTheWriters`,
+  `TestAJestFailureIsAFaultOnlyWithASignOfABrokenEnvironment`,
+  `TestALintInAFormatTheFactoryCannotReadAsksForTheFormatNotAFault`,
+  `TestAFaultThatNamesAChangedFileRecommendsHandingItToTheWriter`, `TestAFaultWhoseRunAgainTheCapStopsNeverPasses`,
+  `TestALintThatSpentTheCapAndThenPassesLeavesTheSpecsTheirCap`, `TestALongerBoundReachesTheSpecRunsFault`,
+  `TestTheHealOfALintThatSpentTheCapIsRecorded`, `TestALongerBoundIsTakenOnlyWhereItIsNamedAndIsLonger`,
+  `TestAKeptChangeStaysThroughTheLaterRoundsWhileItIsTheSame`,
+  `TestAPutBackThatWaitsPastItsBoundAsksToRestoreOrKeep`,
+  `TestARoundThatLeavesTheCopyOffItsHeadAsksToRestoreOrKeepIt` and
+  `TestAStepTheFactoryTookByItselfIsNewsNeverAWaitOnYou` in internal/factory.
   In internal/factory/runtime: `TestALostPaneIsRecoveredThreeTimesAfterItsWaitsTheLastInAFreshSession`,
   `TestARestartBetweenTheRecoveriesNeitherDoublesNorLosesOne`, `TestYourRetryStartsTheRecoveriesOverAndSpendsNone`,
-  `TestAFreshStartStartsTheRoleWithItsContextAndItsRecoveriesOver` and `TestAFreshSessionStartsTheLoopsLadderOver`.
+  `TestAFreshStartStartsTheRoleWithItsContextAndItsRecoveriesOver`, `TestAFreshSessionStartsTheLoopsLadderOver`,
+  `TestAWaitedRecoveryOvertakenByATurnsEndRestartsNothing`,
+  `TestTheRecoveriesCountTheSameInMemoryAndAfterARestart`,
+  `TestTheFixBudgetsFreshSessionKeepsThePanesRecoveries` and `TestTheGoOnsStartTheLoopLadderOver`.
+  In internal/gitx: `TestResetKeepMovesTheBranchBackAndKeepsTheChanges`.
   In internal/config: `TestFactoryFixGoOnIsTwoByDefaultAndBounded`.
 
 ## Learned rules

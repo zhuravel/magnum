@@ -4740,7 +4740,7 @@ stages = [
   format's fix. A fault takes steps first: the precheck runs it again, then runs the repository's `installs` and
   runs it again, and runs one that hangs once more with its bound doubled (up to `cap_max`), each step once at a
   head (`check-faults.json` in the task's folder keeps them across restarts; each is a `check` event and an
-  alert). A fault never passes: one whose run again the cap stops fails the precheck, and a lint whose hang spent
+  alert, news whose toast counts nobody as waiting on you). A fault never passes: one whose run again the cap stops fails the precheck, and a lint whose hang spent
   the cap and then ended leaves the specs and jest a cap of their own. One that still names no failure asks you a
   question on the card (`1 question before coding goes on: <the check> … at <head>: skip this check for this
   task, run it with a longer bound, drop the task or hand it to the writer?`, the writer's way recommended when
@@ -5146,7 +5146,7 @@ while the writer makes progress: when its last 3 turns did not fail the same way
 offenses, another failure, another check failing; `fix-turns.json` keeps each turn's failure), it gets 2 more fix
 turns, at most `[factory] fix_go_on` times (default 2); else it gets one fresh session whose first prompt names
 the failure, its commits on the branch and the end of the failing output, with 2 fix turns. Each is a `fix` event
-and an alert. Then the task asks you (`does not pass after 7 fix turns in the stage: <why>: accept this failing
+and an alert (news, as above). Then the task asks you (`does not pass after 7 fix turns in the stage: <why>: accept this failing
 check as known, give a direction or drop the task?`): accepting it passes that check's failure for the task (a new
 failure of it still fails) and the PR body names it; a direction (`Give a direction: <your words>`) goes to the
 writer with its next fix turn, with 2 more. A check that named no failure of the code is never a turn's failure.
@@ -5199,18 +5199,22 @@ commit). What a round left on that branch at that head (a reviewer's `bundle che
 each file the round took out of the index, regular files only, under `review-<n>-left/` at its path in the copy
 (at most 1,000 files and 256 MiB, 64 MiB a file), then puts the copy back as the round found it by itself (`git
 restore --source=HEAD --staged --worktree` for the tracked paths) and reads the result, which stands; an event
-and an alert name what it saved. A file the round staged that HEAD lacks (`git add -A`, `git add -f`, `git add -N`)
+and an alert name what it saved (the alert is news: its toast counts nobody as waiting on you). A file the round staged that HEAD lacks (`git add -A`, `git add -f`, `git add -N`)
 goes back out of the index only, and leaves the copy only when git lists it as a new file once the rest is back
 and the round's new ignore files are gone, and it is not older than the round, so a file of yours stays, ignored
 or not (without the listing nothing leaves); one the round staged and then changed or deleted stays staged, as
 the index holds the only copy of what was staged, and the task needs you. A directory the removal empties goes
 too. It does so while no turn of an agent of the task is in flight in the copy and you are in none of its
 panes, asked before the save and again before the put-back; while one is, the task waits for it (never on you)
-and the put-back runs once the turn ended. When you typed into a pane of the task (or one of its agents got a
-prompt) since the round began, the change may be your own edit: the factory saves it and puts nothing back by
-itself, and asks you (`… restore the copy to the reviewed head or keep the change?`, the saved diff on the card);
-the round's result stands either way, and a kept change stays in the copy. A round stopped before its end (a drain, an install) has the same
-done before it runs again in its cycle. When the save or the put-back fails (a symlink among the new files, too
+and the put-back runs once the turn ended, for at most 30 minutes (`stops.json` keeps when the wait began, across
+restarts): a run that never ends, or a runtime that cannot tell who works in the copy, then asks you the question
+below, and your answer to restore runs the put-back whoever the runtime still names. When you typed into a pane of
+the task (or one of its agents got a prompt) since the round began, the change may be your own edit: the factory
+saves it and puts nothing back by itself, and asks you (`… restore the copy to the reviewed head or keep the
+change?`, the saved diff on the card); the round's result stands either way. A kept change stays in the copy,
+remembered by its fingerprint (its patch against HEAD and its file): while it stays the same, no later round counts
+it as its own, nothing puts it back, and the factory's checks ask the writer to commit it, never to undo it. A round
+stopped before its end (a drain, an install) has the same done before it runs again in its cycle. When the save or the put-back fails (a symlink among the new files, too
 many of them, a git that refuses), the task needs you, naming what the round left, why the factory left it, and
 the steps that put it back and go on:
 `git -C <copy> --literal-pathspecs restore --staged --worktree -- <paths>` (`restore --staged` alone for the
@@ -5219,9 +5223,13 @@ cannot prove the round's or did not save: the rm step names only new files saved
 when the save failed) that are not older than the round, none after
 the round changed an ignore file, and never a file the round staged; the wait names those for you to judge. Past ten paths a step reads exactly them from a file in the task's directory
 (`round-<n>-restore.paths`, `-unstage.paths`, `-remove.paths`, NUL-separated:
-`--pathspec-from-file=<file> --pathspec-file-nul`, `xargs -0 rm -- < <file>`). A copy off the branch or at
-another head, which the factory never moves, needs you as before: put the copy back as the round found it, then
-let the task go on. The factory reads the result itself: a
+`--pathspec-from-file=<file> --pathspec-file-nul`, `xargs -0 rm -- < <file>`). A copy a round left off the branch
+or with the branch at another head, which the factory never moves by itself, asks you the same question: restore
+saves what the round left, puts it back, switches the copy back to the branch and moves a branch at another head
+back to the head the round reviewed (`git reset --keep`; an event names the head it was at, whose commits stay in
+the repository), and the result stands; keep switches a copy off the branch back to it with its changes, and the
+result stands, or takes a branch at a new head as the task's head, whose checks run again there. Your own
+put-back and `magnum factory retry <task>` still let the task go on. The factory reads the result itself: a
 P0, P1 or P2, new or still open, or the verdict `blocking` blocks, whatever the planned event says. A round that
 ended `needs_attention`, `blocked`, `error`, `timeout` or refused, or whose result does not parse, is "review
 unavailable" and never clean: the task needs you (`you: review unavailable (<outcome>): <the round's error>`),
