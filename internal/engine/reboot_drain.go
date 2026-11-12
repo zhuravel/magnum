@@ -332,13 +332,35 @@ func (e *Engine) blockedSessions(ctx context.Context) []string {
 	return out
 }
 
+// sessionsAtWork are the live sessions herdr shows working while no round,
+// job or reservation holds their PR (counted), pinned PRs included: a
+// session you opened and type into works with no round to count it, and the
+// park leaves a pinned PR's to you. "talkable/talkable#4 at work in herdr
+// (codex-judge)".
+func (e *Engine) sessionsAtWork(ctx context.Context, counted func(prID int64) bool) []string {
+	live, err := e.st.LiveSessions(ctx)
+	if err != nil {
+		return []string{"the live sessions (unreadable)"}
+	}
+	var out []string
+	for _, s := range live {
+		if herdr.Status(deref(s.AgentStatus)) != herdr.StatusWorking || counted(s.PRID) {
+			continue
+		}
+		out = append(out, e.prWords(ctx, s.PRID)+" at work in herdr ("+s.Role+")")
+	}
+	return out
+}
+
 // rebootDrainWork is what the review daemon still runs that a reboot would
 // cut, in words: its reservations (rounds, opens, fix jobs, merges of the
 // parent, whiteboards), a round's tail before its fix cycle or whiteboard,
 // the background jobs (backgroundBusy), the heavy worker's jobs and the
 // GitHub writes as the operator (workInFlight), the rounds the registry
-// holds in flight (an unreadable registry counts as one), the requests
-// answered off the tick (a staging request, an open, an abort), the staging
+// holds in flight (an unreadable registry counts as one), the live sessions
+// at work that none of these holds (sessionsAtWork: a pinned PR's you type
+// into), the requests answered off the tick (a staging request, an open, an
+// abort), the staging
 // deploys queued or running, and the staging resolver's jobs that took their
 // slot or that its worker runs.
 func (e *Engine) rebootDrainWork(ctx context.Context) []string {
@@ -372,11 +394,14 @@ func (e *Engine) rebootDrainWork(ctx context.Context) []string {
 	if err != nil {
 		out = append(out, "the registry's rounds (unreadable)")
 	}
+	rounds := map[int64]bool{}
 	for _, pr := range prs {
+		rounds[pr.ID] = true
 		if _, ok := held[pr.ID]; !ok {
 			out = append(out, "round of "+e.prWords(ctx, pr.ID)+" ("+pr.State+")")
 		}
 	}
+	out = append(out, e.sessionsAtWork(ctx, func(id int64) bool { _, ok := held[id]; return ok || rounds[id] })...)
 	e.mu.Lock()
 	answering := len(e.inflight)
 	e.mu.Unlock()
