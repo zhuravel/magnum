@@ -157,10 +157,14 @@ type stopsRecord struct {
 }
 
 // keptChange is a tracked path whose change your answer kept in the copy,
-// and the fingerprint of its file then (keptSum).
+// the fingerprint of its file then (keptSum) and of HEAD's file then
+// (Base: a HEAD with another file since is a commit of it), and the diff
+// saved of it then, in the task's directory.
 type keptChange struct {
-	Path string `json:"path"`
-	Sum  string `json:"sum"`
+	Path  string `json:"path"`
+	Sum   string `json:"sum"`
+	Base  string `json:"base,omitempty"`
+	Saved string `json:"saved,omitempty"`
 }
 
 // readStops reads stops.json in the task directory dir; none is an empty

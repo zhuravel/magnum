@@ -3,6 +3,7 @@ package factory
 import (
 	"encoding/json"
 	"errors"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -273,8 +274,10 @@ func TestABranchMovedBehindTheReviewedHeadOffersOnlyRestoreOrDrop(t *testing.T) 
 }
 
 // A kept change that leaves the copy without a commit (undone, put back by
-// hand) leaves the kept list with an event that says so, and the writer's
-// prompts no longer name it.
+// hand) leaves the kept list on the loop, with an event and an alert that
+// say so and name the diff saved when you kept it, and the writer's
+// prompts no longer name it. The checks' read of it, off the loop, writes
+// nothing.
 func TestAKeptChangeGoneWithoutACommitIsSaidSo(t *testing.T) {
 	r, got := leftAfterYouTyped(t, "PR-12407")
 	r.rt.setTouchedAt("", time.Time{})
@@ -284,16 +287,43 @@ func TestAKeptChangeGoneWithoutACommitIsSaidSo(t *testing.T) {
 		t.Fatalf("stops.json keeps %+v (%v); want the one kept change", rec.Kept, err)
 	}
 	r.git(r.copyDir, "checkout", "--", "README")
+	r.e.dirtyWords(r.ctx, r.reload(got.ID), r.cp, []string{"app/credit.rb"}) // the checks' read, off the loop: it writes nothing
+	if rec, _ := readStops(r.layout.FactoryTaskDir(got.ID)); len(rec.Kept) != 1 ||
+		slices.ContainsFunc(r.events(got.ID, "review"), func(e registry.Event) bool { return strings.Contains(e.Text, "without a commit") }) {
+		t.Fatalf("the checks' read wrote stops.json (%+v) or an event; want it read only", rec.Kept)
+	}
 	if note := r.e.keptNote(r.ctx, r.reload(got.ID), r.cp); note != "" {
 		t.Fatalf("the kept note %q after the change is gone; want none", note)
 	}
 	if rec, _ := readStops(r.layout.FactoryTaskDir(got.ID)); len(rec.Kept) != 0 {
 		t.Fatalf("stops.json still keeps %+v", rec.Kept)
 	}
+	gone := func(e registry.Event) bool {
+		return strings.Contains(e.Text, "README") && strings.Contains(e.Text, "without a commit") &&
+			regexp.MustCompile(`review-1-left(-\d+)?\.diff`).MatchString(e.Text)
+	}
+	if !slices.ContainsFunc(r.events(got.ID, "review"), gone) || !slices.ContainsFunc(r.events(got.ID, "alert"), gone) {
+		t.Fatal("no event and alert say the kept change is gone without a commit, naming its saved diff")
+	}
+}
+
+// A commit that takes the kept file with more edits of it is a commit of
+// it, never a loss: the event says it is committed with more edits, and no
+// alert says it is gone.
+func TestAKeptChangeCommittedWithMoreEditsIsNoLoss(t *testing.T) {
+	r, got := leftAfterYouTyped(t, "PR-12412")
+	r.rt.setTouchedAt("", time.Time{})
+	r.answerLeft(got.ID, optionKeepChange)
+	r.run(2, nil)
+	r.clock.Add(time.Minute)
+	r.commit("PR-12412 the operator's edit, and more", map[string]string{"README": "your edit, or a reviewer's, and more\n"})
+	if note := r.e.keptNote(r.ctx, r.reload(got.ID), r.cp); note != "" {
+		t.Fatalf("the kept note %q after its commit; want none", note)
+	}
 	if !slices.ContainsFunc(r.events(got.ID, "review"), func(e registry.Event) bool {
-		return strings.Contains(e.Text, "README") && strings.Contains(e.Text, "without a commit")
-	}) {
-		t.Fatal("no event says the kept change is gone without a commit")
+		return strings.Contains(e.Text, "README") && strings.Contains(e.Text, "committed with more edits")
+	}) || slices.ContainsFunc(r.events(got.ID, "alert"), func(e registry.Event) bool { return strings.Contains(e.Text, "without a commit") }) {
+		t.Fatal("want an event that the kept change is committed with more edits, and no alert of a loss")
 	}
 }
 

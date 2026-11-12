@@ -190,7 +190,7 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 	decision := stops.leftDecision(cy, round)
 	switch {
 	case decision == decideKeep && left.moved == "": // your answer: the change stays, and the round's result stands
-		return "", e.keepLeft(ctx, t, c, left)
+		return "", e.keepLeft(ctx, t, c, cy, left)
 	case decision == "" && left.moved != "":
 		m, err := e.movedFacts(ctx, t, c, cy.HeadBefore)
 		if err != nil {
@@ -414,10 +414,16 @@ func headSum(ctx context.Context, git *gitx.Client, dir, p string) (string, erro
 // keptState reads the changes your answers kept in task t's copy c
 // (stops.json Kept): kept are those the copy still has as changes, by
 // path, and same the paths of them whose file is as it was when you kept it
-// (keptSum). A kept path whose file is as HEAD has it leaves the list: a
-// commit took it (HEAD has the kept file), or it is gone from the copy
-// without a commit, which an event says.
-func (e *Engine) keptState(ctx context.Context, t registry.Task, c Copy) (kept []keptChange, same map[string]bool, err error) {
+// (keptSum). A kept path whose file is as HEAD has it is no change any
+// more: a commit took it (HEAD has the kept file, or a file HEAD did not
+// have when you kept it: committed with more edits), or it is gone from the
+// copy without a commit (HEAD's file is the one it had then). With settle,
+// on the loop alone, such a path leaves the list (stops.json is written)
+// with an event, and a loss with an alert too, each naming the diff saved
+// when you kept it; without it (the checks off the loop: dirtyWords) the
+// read writes nothing.
+func (e *Engine) keptState(ctx context.Context, t registry.Task, c Copy, settle bool) (kept []keptChange, same map[string]bool,
+	err error) {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	rec, err := readStops(dir)
 	if err != nil || len(rec.Kept) == 0 {
@@ -429,7 +435,11 @@ func (e *Engine) keptState(ctx context.Context, t registry.Task, c Copy) (kept [
 	}
 	defer root.Close()
 	same = map[string]bool{}
-	var gone []string
+	type ended struct {
+		k   keptChange
+		how string
+	}
+	var done []ended
 	for _, k := range rec.Kept {
 		wt := keptSum(root, k.Path)
 		at, err := headSum(ctx, e.d.Git, c.Path, k.Path)
@@ -437,21 +447,34 @@ func (e *Engine) keptState(ctx context.Context, t registry.Task, c Copy) (kept [
 			return nil, nil, err
 		}
 		switch {
-		case wt == at && at == k.Sum: // committed: the branch has it
-			e.event(ctx, t.ID, "review", registry.PhaseInfo, "the change you kept in "+k.Path+" is committed: the factory no longer names it")
-		case wt == at:
-			gone = append(gone, k.Path)
-		default:
+		case wt != at:
 			kept = append(kept, k)
 			same[k.Path] = wt == k.Sum
+		case at == k.Sum:
+			done = append(done, ended{k, "committed"})
+		case k.Base != "" && at != k.Base:
+			done = append(done, ended{k, "committed with more edits"})
+		default:
+			done = append(done, ended{k, "gone"})
 		}
 	}
-	if len(kept) == len(rec.Kept) {
+	if len(done) == 0 || !settle {
 		return kept, same, nil
 	}
-	if len(gone) > 0 {
-		e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("the change you kept in %s is gone from the copy without a commit: "+
-			"the factory no longer names it to the writer", clipList(gone)))
+	for _, d := range done {
+		saved := ""
+		if d.k.Saved != "" {
+			saved = " (saved in " + d.k.Saved + ")"
+		}
+		if d.how != "gone" {
+			e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("the change you kept in %s is %s%s: the factory no longer names it",
+				d.k.Path, d.how, saved))
+			continue
+		}
+		text := fmt.Sprintf("the change you kept in %s is gone from the copy without a commit%s: the factory no longer names it to the "+
+			"writer", d.k.Path, saved)
+		e.event(ctx, t.ID, "review", registry.PhaseInfo, text)
+		e.alert(ctx, t.ID, TaskKey(t)+": "+text)
 	}
 	rec.Kept = kept
 	return kept, same, writeStops(dir, rec)
@@ -460,7 +483,7 @@ func (e *Engine) keptState(ctx context.Context, t registry.Task, c Copy) (kept [
 // keptUnchanged are the paths of tracked, changed in task t's copy c, whose
 // change your answer kept and whose file is as it was then (keptState).
 func (e *Engine) keptUnchanged(ctx context.Context, t registry.Task, c Copy, tracked []string) ([]string, error) {
-	_, same, err := e.keptState(ctx, t, c)
+	_, same, err := e.keptState(ctx, t, c, true)
 	if err != nil || len(same) == 0 {
 		return nil, err
 	}
@@ -468,9 +491,10 @@ func (e *Engine) keptUnchanged(ctx context.Context, t registry.Task, c Copy, tra
 }
 
 // keptPaths are the paths of the changes your answers kept that task t's
-// copy c still has (keptState), whatever their file holds now.
-func (e *Engine) keptPaths(ctx context.Context, t registry.Task, c Copy) []string {
-	kept, _, err := e.keptState(ctx, t, c)
+// copy c still has (keptState, settled when settle: on the loop alone),
+// whatever their file holds now.
+func (e *Engine) keptPaths(ctx context.Context, t registry.Task, c Copy, settle bool) []string {
+	kept, _, err := e.keptState(ctx, t, c, settle)
 	if err != nil {
 		e.log.Warn("read the changes you kept", "task", t.ID, "err", err)
 	}
@@ -488,7 +512,7 @@ const keptNoteLead = "The operator kept these changes in the copy"
 // answers keep changes in its copy c (keptPaths): commit them, never undo
 // them. "" for none.
 func (e *Engine) keptNote(ctx context.Context, t registry.Task, c Copy) string {
-	paths := e.keptPaths(ctx, t, c)
+	paths := e.keptPaths(ctx, t, c, true)
 	if len(paths) == 0 {
 		return ""
 	}
@@ -496,13 +520,15 @@ func (e *Engine) keptNote(ctx context.Context, t registry.Task, c Copy) string {
 		keptNoteLead, clipList(paths), t.Branch)
 }
 
-// keepLeft remembers the tracked changes of what a round left (left) in
-// task t's copy c as kept, on your answer: their paths and the
-// fingerprints of their files (keptSum) go to stops.json (Kept), so no
-// later look at the copy (roundLeft) counts them as a round's while they
-// stay the same, and the writer's prompts and the factory's checks name
-// them to be committed, never undone (keptNote, dirtyWords).
-func (e *Engine) keepLeft(ctx context.Context, t registry.Task, c Copy, left roundLeftovers) error {
+// keepLeft remembers the tracked changes of what round cycle cy left
+// (left) in task t's copy c as kept, on your answer: their paths, the
+// fingerprints of their files (keptSum) and of HEAD's (Base), and the diff
+// saved of them first (saveLeft: review-<n>-left….diff) go to stops.json
+// (Kept), so no later look at the copy (roundLeft) counts them as a round's
+// while they stay the same, the writer's prompts and the factory's checks
+// name them to be committed, never undone (keptNote, dirtyWords), and their
+// loss names the saved diff.
+func (e *Engine) keepLeft(ctx context.Context, t registry.Task, c Copy, cy registry.Cycle, left roundLeftovers) error {
 	if len(left.tracked) == 0 {
 		return nil
 	}
@@ -516,18 +542,30 @@ func (e *Engine) keepLeft(ctx context.Context, t registry.Task, c Copy, left rou
 		return err
 	}
 	defer root.Close()
-	changed := false
+	var news []string
 	for _, p := range left.tracked {
-		sum := keptSum(root, p)
-		switch i := slices.IndexFunc(rec.Kept, func(k keptChange) bool { return k.Path == p }); {
-		case i < 0:
-			rec.Kept, changed = append(rec.Kept, keptChange{Path: p, Sum: sum}), true
-		case rec.Kept[i].Sum != sum:
-			rec.Kept[i].Sum, changed = sum, true
+		if i := slices.IndexFunc(rec.Kept, func(k keptChange) bool { return k.Path == p }); i < 0 || rec.Kept[i].Sum != keptSum(root, p) {
+			news = append(news, p)
 		}
 	}
-	if !changed {
+	if len(news) == 0 {
 		return nil
+	}
+	base := leftName(dir, cy.N)
+	if _, err := saveLeft(ctx, e.d.Git, c.Path, dir, base, roundLeftovers{tracked: news}); err != nil {
+		return err
+	}
+	for _, p := range news {
+		at, err := headSum(ctx, e.d.Git, c.Path, p)
+		if err != nil {
+			return err
+		}
+		k := keptChange{Path: p, Sum: keptSum(root, p), Base: at, Saved: base + leftDiffExt}
+		if i := slices.IndexFunc(rec.Kept, func(k keptChange) bool { return k.Path == p }); i >= 0 {
+			rec.Kept[i] = k
+		} else {
+			rec.Kept = append(rec.Kept, k)
+		}
 	}
 	e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("keeps %s in %s on your answer (%s): no round puts it back while it "+
 		"stays the same, and the writer commits it", plural(len(left.tracked), "tracked change"), c.Name, clipList(left.tracked)))
@@ -639,7 +677,7 @@ func (e *Engine) keepMoved(ctx context.Context, t registry.Task, c Copy, cy regi
 		}
 		return "", errHeadTaken
 	}
-	return "", e.keepLeft(ctx, t, c, now)
+	return "", e.keepLeft(ctx, t, c, cy, now)
 }
 
 // judgedTurn names the run of task t the watchdog judged stuck or lost

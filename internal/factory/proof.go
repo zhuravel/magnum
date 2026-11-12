@@ -187,7 +187,7 @@ func nonEmpty(s string) []string {
 // answer kept (keptPaths, whatever its file holds now) is to be committed,
 // never undone.
 func (e *Engine) dirtyWords(ctx context.Context, t registry.Task, c Copy, dirty []string) string {
-	paths := e.keptPaths(ctx, t, c)
+	paths := e.keptPaths(ctx, t, c, false) // off the loop: a read that writes nothing
 	kept := slices.DeleteFunc(slices.Clone(dirty), func(p string) bool { return !slices.Contains(paths, p) })
 	others := slices.DeleteFunc(slices.Clone(dirty), func(p string) bool { return slices.Contains(kept, p) })
 	var parts []string

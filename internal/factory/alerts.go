@@ -313,6 +313,7 @@ const (
 	healsAlert   = "the factory heals a check by itself: "
 	goesOnAlert  = "the factory goes on by itself: "
 	putBackAlert = "the factory put back by itself "
+	keptAlert    = "the change you kept in " // gone from the copy without a commit (keptState)
 )
 
 // newsAlert reports whether text is news, an alert that waits on nobody: a
@@ -324,7 +325,7 @@ func newsAlert(text string) bool {
 	}
 	_, what, _ := strings.Cut(text, ": ")
 	return strings.HasPrefix(what, healsAlert) || strings.HasPrefix(what, goesOnAlert) || strings.HasPrefix(what, putBackAlert) ||
-		runtime.RecoveryAlert(what)
+		strings.HasPrefix(what, keptAlert) || runtime.RecoveryAlert(what)
 }
 
 // alertStands reports whether the alert ev still holds: the factory's own

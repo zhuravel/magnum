@@ -1169,7 +1169,7 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 	sum := ReviewSummary{Rounds: round, Head: cy.HeadBefore, Leftovers: leftovers, Declined: all, Doubts: doubts, Missing: loopMissing(dir, loop)}
 	clean := !rr.blocks || len(live)+len(questions)+len(doubts) == 0 || rr.heldByLeft && e.atCap(dir, loop, round) &&
 		len(questions)+len(doubts) == 0 && !slices.ContainsFunc(live, func(i ReviewItem) bool { return blockingSeverity(i.Severity) })
-	if kept := e.keptPaths(ctx, t, c); clean && len(kept) > 0 { // what you kept is committed before the loop ends
+	if kept := e.keptPaths(ctx, t, c, true); clean && len(kept) > 0 { // what you kept is committed before the loop ends
 		kSum := sum
 		kSum.Exit, kSum.Leftovers = registry.ExitClean, slices.Concat(leftovers, live, questions)
 		return e.keptTurn(ctx, t, st, cy, round, kept, withSecond(dir, loop, kSum))
