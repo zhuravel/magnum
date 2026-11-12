@@ -874,6 +874,14 @@ func (g *rig) watchdog() []Event {
 	return evs
 }
 
+// afterWait runs the watchdog once the wait before recovery n (from 1) of
+// a lost pane is over (RecoveryWaits), and returns its events.
+func (g *rig) afterWait(n int) []Event {
+	g.t.Helper()
+	g.clock.Add(RecoveryWaits[n-1])
+	return g.watchdog()
+}
+
 // owner is the task's owner row.
 func (g *rig) owner() store.PR {
 	g.t.Helper()

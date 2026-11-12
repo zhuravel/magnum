@@ -233,17 +233,24 @@ type roleState struct {
 	since time.Time
 	step  int
 	stuck bool
-	// Recovery of a lost pane: resumes used, whether the fresh session
-	// started (or, for a role that took no prompt yet, its relaunch),
-	// whether a recovery waits for progress, and whether the recoveries ran
-	// out; ranOut is when the steps ran out (lost, stuck, or a heal told to
-	// you), which your retry after it starts over; noPrompt counts the
-	// fresh starts of a Codex session that never took its first prompt.
+	// Recovery of a lost pane: resumes used (bringBack's), whether the fresh
+	// session started (or, for a role that took no prompt yet, its
+	// relaunch), whether a recovery waits for progress, and whether the
+	// recoveries ran out; ranOut is when the steps ran out (lost, stuck, or a
+	// heal told to you), which your retry after it starts over; noPrompt
+	// counts the fresh starts of a Codex session that never took its first
+	// prompt. recoveries are the recoveries the role took in the attempt
+	// since the count last started over (recoveriesUsed: counted is false
+	// until the task's recover events were read), and dueAt is when the next
+	// one runs, after its wait (RecoveryWaits; zero: none is scheduled).
 	resumes    int
 	fresh      bool
 	recovering bool
 	lost       bool
 	ranOut     time.Time
+	recoveries int
+	counted    bool
+	dueAt      time.Time
 	// pending: a recovery quit the role's session (or found it gone) and
 	// abandoned its runs, and no new run of it was sent yet (handOver): the
 	// watchdog keeps the role due its next step.

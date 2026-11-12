@@ -330,6 +330,9 @@ func (s *screen) read(t registry.Task) (*taskView, error) {
 	if !waitsOnQuestions(t) {
 		retryOpen = withoutProvisional(v.open, v.provs)
 	}
+	if stops, err := readStops(s.l.FactoryTaskDir(t.ID)); err == nil { // a stop's question refuses no retry
+		retryOpen = withoutStops(retryOpen, stops)
+	}
 	v.retry = retryRefusalOf(t, retryOpen, v.asks) == nil // the retry's own guard, on what this view read
 	if t.JiraKey != "" {
 		v.reporter = readReporter(s.l.FactoryTaskDir(t.ID))

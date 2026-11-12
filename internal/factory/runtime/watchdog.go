@@ -6,12 +6,13 @@ package runtime
 // three steps, each NoProgressAfter of stillness after the last: the shell
 // stopped and a nudge, the session quit hard and resumed, a fresh session
 // from the attempt's first prompt; then EventStuck with the pane's last
-// line. A lost pane is resumed from its conversation, at most MaxResumes
-// times an attempt, then starts fresh from the files; a role whose pane is
-// lost before its first prompt (its CLI exited at its start) is relaunched
-// once, its stage sending that prompt next; a recovery that shows no
-// progress within NoProgressAfter takes the next step, and EventLost ends
-// them. A loop without progress (Send) is compacted, then started fresh
+// line. A lost pane gets MaxRecoveries recoveries an attempt, each after
+// its wait (RecoveryWaits: 1, 5 and 15 minutes): resumed from its
+// conversation before the last, which starts fresh from the files; a role
+// whose pane is lost before its first prompt (its CLI exited at its start)
+// is relaunched, its stage sending that prompt next; a recovery that shows
+// no progress within NoProgressAfter takes the next step, and EventLost
+// ends them (recoveries.go counts them across restarts). A loop without progress (Send) is compacted, then started fresh
 // once, then left to the operator. A role a heal of the factory's herdr
 // server holds (volume.go) takes none of these steps.
 
@@ -134,10 +135,16 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 	}
 	r.mu.Lock()
 	climbing, recovering, done := st.step > 0, st.recovering, st.stuck || st.lost
-	shift := r.shifts[run.ID]
+	shift, due := r.shifts[run.ID], st.dueAt
 	r.mu.Unlock()
 	if done {
 		return Event{}, false
+	}
+	if !due.IsZero() { // a recovery that waits: it runs once its wait is over, whatever the screen shows
+		if now.Before(due) {
+			return Event{}, false
+		}
+		return r.recoverDue(ctx, st)
 	}
 	deadline := time.Time{}
 	if run.ID != "" {
@@ -200,6 +207,36 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 		}
 	}
 	return r.climb(ctx, t, a, st, run)
+}
+
+// recoverDue takes the recovery of role st whose wait is over (dueAt), as
+// watch takes a recovery that shows no progress: none for a task that
+// stopped or a stage that moved on, none while it may not restart (a
+// pause, you in its pane), and EventLost once the recoveries ran out.
+func (r *Runtime) recoverDue(ctx context.Context, st *roleState) (Event, bool) {
+	t, err := r.reg.TaskByID(ctx, st.taskID)
+	if err != nil {
+		return Event{}, false
+	}
+	a, err := r.reg.AttemptByID(ctx, st.key.attempt)
+	if err != nil {
+		return Event{}, false
+	}
+	if (t.State != registry.TaskActive && t.State != registry.TaskWaiting) ||
+		(a.State != registry.AttemptLaunching && a.State != registry.AttemptRunning) {
+		r.mu.Lock()
+		st.dueAt, st.recovering = time.Time{}, false
+		r.mu.Unlock()
+		return Event{}, false
+	}
+	err = r.recoverRole(ctx, t, a, st.role, "its pane was lost", false)
+	if spent, ok := errors.AsType[errRecoveriesSpent](err); ok {
+		return r.lostEvent(t, a, st.role, spent), true
+	}
+	if err != nil && !errors.Is(err, errRefusedRole) {
+		r.log.Warn("a role's recovery after its wait", "attempt", a.ID, "role", st.role.Name, "err", err)
+	}
+	return Event{}, false
 }
 
 // signature is what tells the watchdog the role moved: its transcript's
@@ -332,11 +369,11 @@ func (r *Runtime) nudge(ctx context.Context, t registry.Task, a registry.Attempt
 
 // RecoverLost recovers role (as it runs) of attempt a of task t whose pane
 // was lost, or whose last turn a recovery gave up with no turn in its place
-// (RecoveryPrefix, which a stage rebuilt after a restart reads): a resume
-// of its conversation (at most MaxResumes in the attempt), then a fresh
-// session from the files; then the recoveries ran out (EventLost, "no
-// progress after <n> recoveries", at the next Observe). Each recovery that
-// shows no progress within NoProgressAfter takes the next step (Watchdog).
+// (RecoveryPrefix, which a stage rebuilt after a restart reads): its next
+// recovery of MaxRecoveries, after its wait (recoverRole); then the
+// recoveries ran out (EventLost, "no progress after <n> recoveries", at the
+// next Observe). Each recovery that shows no progress within
+// NoProgressAfter takes the next step (Watchdog).
 // A role this runtime already recovers is left to the watchdog. One whose
 // steps ran out (stuck, lost) is left so while a turn of it is at work in a
 // live pane (its end, or you in the pane, moves it); with nothing at work,
@@ -366,7 +403,9 @@ func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.A
 		r.mu.Lock()
 		st.stuck, st.lost, st.pending, st.recovering = false, false, false, false
 		st.step, st.resumes, st.fresh = 0, 0, false
+		st.recoveries, st.counted, st.dueAt = 0, true, time.Time{}
 		r.mu.Unlock()
+		r.noteStartOver(ctx, t, a, role.Name, "your retry") // a restart counts from here too
 	case owned:
 		return nil
 	}
@@ -412,10 +451,16 @@ func (r *Runtime) lostEvent(t registry.Task, a registry.Attempt, role config.Rol
 	return Event{TaskID: t.ID, Role: role.Name, Kind: EventLost, Reason: spent.Error()}
 }
 
-// recoverRole is RecoverLost's next step. A role that took no prompt yet in
-// the attempt has no first prompt to start afresh from: its fresh step is a
-// relaunch (relaunchRole), its stage sending that prompt next; one with a
-// conversation (you typed in it) is resumed first, as any role. Under a
+// recoverRole is RecoverLost's next step: recovery n of the role's
+// MaxRecoveries in the attempt (recoveriesUsed, which a restart reads from
+// the task's recover events), after its wait (RecoveryWaits[n-1], counted
+// from the first call that found it due: until then the role is due it, and
+// the watchdog takes it once the wait is over). Its step is recoveryStep's:
+// a role that took no prompt yet in the attempt has no first prompt to
+// start afresh from, so it is relaunched, its stage sending that prompt
+// next; one with a conversation is resumed before the last recovery, which
+// starts a fresh session from the files. Each recovery is a recover event
+// and an alert. Once MaxRecoveries ran, it is errRecoveriesSpent. Under a
 // drain for a reboot (mayPrompt) a role with no turn in flight starts
 // nothing and answers the drain's *WaitError: the role stays due, and the
 // watchdog recovers it once the drain is lifted. One whose recovery turn
@@ -444,31 +489,30 @@ func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.A
 		return err
 	}
 	unprompted := !r.hadPrompt(ctx, t.ID, a.ID, role.Name)
+	used := r.recoveriesUsed(ctx, st)
+	now := r.now()
 	r.mu.Lock()
-	if st.lost {
-		n := st.resumes + 1
+	if st.lost || used >= MaxRecoveries {
+		st.recovering, st.dueAt = false, time.Time{}
 		r.mu.Unlock()
-		return errRecoveriesSpent{n: n}
+		return errRecoveriesSpent{n: used}
 	}
-	step := "fresh"
-	switch {
-	case st.resumes < MaxResumes && resume != "":
-		st.resumes++
-		step = "resume"
-	case !st.fresh && unprompted:
-		st.fresh = true
-		step = "relaunch"
-	case !st.fresh:
-		st.fresh = true
-	default:
-		n := st.resumes + 1
-		st.recovering = false
+	n := used + 1
+	if st.dueAt.IsZero() {
+		st.dueAt = now.Add(RecoveryWaits[n-1])
+	}
+	if now.Before(st.dueAt) {
+		st.recovering = true // the watchdog takes it once its wait is over
+		due := st.dueAt
 		r.mu.Unlock()
-		return errRecoveriesSpent{n: n}
+		r.log.Info("a role's recovery waits", "task", t.ID, "role", role.Name, "recovery", n, "due", due)
+		return nil
 	}
-	st.recovering = true
+	step := recoveryStep(n, resume, unprompted)
+	st.dueAt, st.recoveries, st.recovering = time.Time{}, n, true
 	r.mu.Unlock()
-	r.log.Warn("a role is recovered", "task", t.ID, "role", role.Name, "why", why, "step", step)
+	r.log.Warn("a role is recovered", "task", t.ID, "role", role.Name, "why", why, "step", step, "recovery", n)
+	r.noteRecovery(ctx, t, a, role.Name, n, step, why)
 	switch step {
 	case "resume":
 		err = r.restart(ctx, t, a, st, true, why)

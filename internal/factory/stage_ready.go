@@ -1186,7 +1186,9 @@ const knownMarker = "<!-- magnum factory: the Known list -->"
 // local review left open (knownList, from review-summary.json), the
 // sentences of a precheck that passed at the task's head (from
 // precheck.json): unfinished (precheckSentence), and of the migrations it
-// did not run for lack of databases (notRunSentence); then the Visual QA
+// did not run for lack of databases (notRunSentence), and of the checks
+// your answers to its stop questions skipped or accepted as known
+// (stopsSentences, from stops.json); then the Visual QA
 // section of the QA run that passed at the task's head (qaMarker,
 // qaSection; none without QA), in place of those an earlier append wrote,
 // and records the body as the pr_body artifact.
@@ -1209,6 +1211,9 @@ func (e *Engine) appendKnown(ctx context.Context, t registry.Task) error {
 		if len(rec.MigrationsNotRun) > 0 {
 			text += "\n" + notRunSentence(rec.MigrationsNotRun) + "\n"
 		}
+	}
+	if s := stopsSentences(dir); s != "" { // the checks your answers skipped or accepted
+		text += "\n" + s + "\n"
 	}
 	if res, ok := readQASummary(dir); ok && res.Head == t.HeadSHA {
 		if qa := qaSection(res); qa != "" {

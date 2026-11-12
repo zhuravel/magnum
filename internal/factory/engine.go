@@ -86,6 +86,7 @@ type Runtime interface {
 	Owner(ctx context.Context, t registry.Task) (store.PR, error)
 	Launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error
 	Send(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (runID string, err error)
+	SendFresh(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, then string) (runID string, err error)
 	Observe(ctx context.Context) ([]runtime.Event, error)
 	Verify(ctx context.Context, runID string, ok bool, why string) error
 	Void(ctx context.Context, runID, why string) error
@@ -1143,7 +1144,9 @@ func live(tasks []registry.Task) []registry.Task {
 // linked it) reads its ticket first (linkedTicket). A task past its coding
 // stage whose answer changed the plan after coding went on the recommended
 // one goes back to coding once its stage has nothing in flight
-// (changePastCoding). A copy a base run left
+// (changePastCoding). Your answers to its stop questions are acted on
+// before the stage's pass (decideStops: a drop ends the task). A copy a base
+// run left
 // detached is restored before anything else (resumeDetached), and what a
 // check left in the copy for you is settled (settleKept): put back under
 // its guard, or the task needs you again for it, never the writer.
@@ -1189,6 +1192,9 @@ func (e *Engine) advance(ctx context.Context, t registry.Task) error {
 		return nil
 	}
 	if ready, err := e.linkedTicket(ctx, &t); err != nil || !ready {
+		return err
+	}
+	if ended, err := e.decideStops(ctx, t); err != nil || ended { // your answers to its stop questions, first
 		return err
 	}
 	if back, err := e.changePastCoding(ctx, t, st, i); err != nil || back {

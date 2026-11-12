@@ -1122,7 +1122,8 @@ func TestTheJudgesFilesAreRecordedAtEachRevision(t *testing.T) {
 }
 
 // The runtime's events that need you move the task to NEEDS YOU with a
-// plain reason; none is a failure of the task.
+// plain reason (a lost pane whose recoveries ran out, with the decision its
+// question asks for); none is a failure of the task.
 func TestTheRuntimesEventsMoveTheTaskWithPlainReasons(t *testing.T) {
 	for _, tc := range []struct {
 		kind         runtime.EventKind
@@ -1131,7 +1132,8 @@ func TestTheRuntimesEventsMoveTheTaskWithPlainReasons(t *testing.T) {
 	}{
 		{runtime.EventBlocked, "fx-repro", "dialog: Allow this edit of db/seeds.rb?",
 			"the fx-repro agent shows a prompt the factory does not know: Allow this edit of db/seeds.rb?"},
-		{runtime.EventLost, "fx-history", "no progress after 3 recoveries", "the fx-history agent's pane was lost: no progress after 3 recoveries"},
+		{runtime.EventLost, "fx-history", "no progress after 3 recoveries", "1 question before investigate goes on: the fx-history agent's " +
+			"pane was lost: no progress after 3 recoveries: start the role again, give a direction or drop the task?"},
 		{runtime.EventStuck, "fx-repro", "Running bin/rspec spec/models/campaign_copy_spec.rb", "the fx-repro agent is stuck: Running bin/rspec spec/models/campaign_copy_spec.rb"},
 		{runtime.EventNoProgress, "fx-history", "no progress: the same failure 3 times", "the fx-history agent makes no progress: the same failure 3 times"},
 		{runtime.EventHooksTrust, "fx-cause", "codex: hooks need review (Trust all, in the pane or by running codex once)",
@@ -1806,7 +1808,7 @@ func TestARefusalInAPassThatGoesToYouSetsItsFilesAsideAtOnce(t *testing.T) {
 		runtime.Event{TaskID: task.ID, Role: "fx-repro", RunID: h.lastRun("fx-repro"), Kind: runtime.EventLost, Reason: "no progress after 3 recoveries"},
 	)
 	h.tick()
-	if got := h.reload(task.ID); got.State != registry.TaskNeedsYou || !strings.HasPrefix(got.WaitsWhat, "the fx-repro agent's pane was lost") {
+	if got := h.reload(task.ID); got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, ": the fx-repro agent's pane was lost") {
 		t.Fatalf("task %s waits %q, want it on you for the lost pane", got.State, got.WaitsWhat)
 	}
 	h.wantSetAside(task, "findings-fx-cause.md")

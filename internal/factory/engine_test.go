@@ -285,6 +285,9 @@ type sentPrompt struct {
 	Attempt, Role, Text string
 	RunID               string
 	PromptFile          string
+	// Fresh: it started a fresh session (SendFresh), Text being the words
+	// after the attempt's first prompt.
+	Fresh bool
 }
 
 // verifyCall is a Verify the stage made.
@@ -379,6 +382,19 @@ func (f *fakeRuntime) Send(ctx context.Context, t registry.Task, a registry.Atte
 		return id, err
 	}
 	return id, reg.MarkDelivered(ctx, e.ID, registry.DeliveredYes)
+}
+
+// SendFresh is Send of then in a fresh session: the prompt is recorded with
+// Fresh set, and its ledger entry holds then alone (runtime.TurnText reads
+// the same of the runtime's, which carries the first prompt before it).
+func (f *fakeRuntime) SendFresh(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, then string) (string, error) {
+	id, err := f.Send(ctx, t, a, role, then)
+	if id != "" {
+		f.mu.Lock()
+		f.sent[len(f.sent)-1].Fresh = true
+		f.mu.Unlock()
+	}
+	return id, err
 }
 
 // RunsAs is the runtime's: a Codex role of a task Codex never works on runs

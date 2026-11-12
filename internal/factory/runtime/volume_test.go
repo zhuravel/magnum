@@ -231,7 +231,7 @@ func TestAnotherTasksLiveAgentHoldsTheServerStop(t *testing.T) {
 // A denial the daemon shares (it cannot read the copy either) is the
 // copy's or its volume's, no herdr server's: nothing is stopped, the
 // refused prompt is the stage's failure as before, and the lost pane takes
-// the recoveries' steps: one relaunch, then the role is lost, to you.
+// the recoveries' steps: a relaunch at each, then the role is lost, to you.
 func TestADenialTheDaemonSharesStopsNoServer(t *testing.T) {
 	g := newRig(t)
 	g.unreadable = true
@@ -243,14 +243,16 @@ func TestADenialTheDaemonSharesStopsNoServer(t *testing.T) {
 		t.Fatalf("Send = %v, want herdr's refusal as it is", err)
 	}
 	var evs []Event
-	for range 3 {
+	for n := 1; n <= MaxRecoveries; n++ {
 		evs = append(evs, g.observeN(3)...)
+		evs = append(evs, g.afterWait(n)...)
 	}
+	evs = append(evs, g.observeN(3)...)
 	if n := g.h.stopCount(); n != 0 {
 		t.Fatalf("%d stops of the herdr server for a copy the daemon cannot read", n)
 	}
-	if lost := only(evs, EventLost); len(lost) != 1 || len(g.h.startCalls()) != 2 {
-		t.Fatalf("events %+v and %d starts, want one relaunch, then lost", evs, len(g.h.startCalls()))
+	if lost := only(evs, EventLost); len(lost) != 1 || len(g.h.startCalls()) != 1+MaxRecoveries {
+		t.Fatalf("events %+v and %d starts, want a relaunch at each recovery, then lost", evs, len(g.h.startCalls()))
 	}
 }
 
@@ -335,9 +337,10 @@ func TestAFactorySessionThatIsYoursIsNeverStopped(t *testing.T) {
 }
 
 // A role whose pane is lost before its first prompt (its CLI exited at its
-// start) is relaunched once, then lost: the task goes to you. Your retry
-// starts its recoveries over, so the next prompt relaunches it and goes.
-func TestALostRoleIsRelaunchedOnceThenOnYourRetry(t *testing.T) {
+// start) is relaunched at each of its recoveries, each after its wait, then
+// lost: the task goes to you. Your retry starts its recoveries over, so the
+// next prompt relaunches it and goes.
+func TestALostRoleIsRelaunchedAtEachRecoveryThenOnYourRetry(t *testing.T) {
 	g := newRig(t)
 	g.h.exitAtStart = "error: unexpected argument '--search' found\n"
 	g.launch("fx-repro")
@@ -346,26 +349,28 @@ func TestALostRoleIsRelaunchedOnceThenOnYourRetry(t *testing.T) {
 	}
 
 	var evs []Event
-	for range 3 {
+	for n := 1; n <= MaxRecoveries; n++ {
 		evs = append(evs, g.observeN(3)...)
+		evs = append(evs, g.afterWait(n)...)
 	}
-	if lost := only(evs, EventLost); len(lost) != 1 || lost[0].Reason != "no progress after 1 recoveries" {
-		t.Fatalf("events %+v, want lost after 1 recovery", evs)
+	evs = append(evs, g.observeN(3)...)
+	if lost := only(evs, EventLost); len(lost) != 1 || lost[0].Reason != "no progress after 3 recoveries" {
+		t.Fatalf("events %+v, want lost after 3 recoveries", evs)
 	}
-	if n := len(g.h.startCalls()); n != 2 {
-		t.Fatalf("%d starts, want the launch and one relaunch", n)
+	if n := len(g.h.startCalls()); n != 1+MaxRecoveries {
+		t.Fatalf("%d starts, want the launch and a relaunch at each recovery", n)
 	}
 	if _, err := g.r.Send(g.ctx, g.task, g.attempt, g.role("fx-repro"), "reproduce the bug"); !errors.Is(err, agents.ErrNoSession) {
 		t.Fatalf("Send before your retry = %v, want it held: the role is yours", err)
 	}
-	if n := len(g.h.startCalls()); n != 2 {
-		t.Fatalf("%d starts before your retry, want 2", n)
+	if n := len(g.h.startCalls()); n != 1+MaxRecoveries {
+		t.Fatalf("%d starts before your retry, want %d", n, 1+MaxRecoveries)
 	}
 
 	g.retried()
 	g.h.exitAtStart = "" // you fixed the CLI
 	g.send("fx-repro", "reproduce the bug")
-	if n := len(g.h.startCalls()); n != 3 {
+	if n := len(g.h.startCalls()); n != 2+MaxRecoveries {
 		t.Fatalf("%d starts after your retry, want one more relaunch", n)
 	}
 	if p := g.h.promptTexts(); !slices.Contains(p, "reproduce the bug") {
@@ -444,7 +449,7 @@ func TestAParkedRoleIsResumedOnEachAnswerOffTheLostPaneLadder(t *testing.T) {
 	g.observe()
 	g.h.losePane(g.agent("fx-repro"))
 	starts := len(g.h.startCalls())
-	if evs := g.observe(); len(only(evs, EventLost)) != 0 {
+	if evs := append(g.observe(), g.afterWait(1)...); len(only(evs, EventLost)) != 0 {
 		t.Fatalf("a real loss after the parks gave %+v", evs)
 	}
 	if s := g.h.startCalls(); len(s) != starts+1 || !strings.Contains(strings.Join(s[len(s)-1].Args, " "), "--resume sid-1") {

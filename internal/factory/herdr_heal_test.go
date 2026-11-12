@@ -64,9 +64,9 @@ func TestADeniedVolumeEventSendsTheTaskToYou(t *testing.T) {
 }
 
 // A role whose pane was lost before its first prompt and whose recoveries
-// ran out sends the task to you (EventLost), so your retry is accepted, and
-// the stage prompts the role again after it: the runtime brings a role with
-// no session back on that prompt.
+// ran out sends the task to you (EventLost, its question), so your retry is
+// accepted, and the stage prompts the role again after it: the runtime
+// brings a role with no session back on that prompt.
 func TestALostRoleGoesToYouAndYourRetryPromptsItAgain(t *testing.T) {
 	h := newHarness(t)
 	task := h.kindTask("PR-12532", "bug", "investigate")
@@ -75,9 +75,9 @@ func TestALostRoleGoesToYouAndYourRetryPromptsItAgain(t *testing.T) {
 	if got := h.reload(task.ID); got.State != registry.TaskActive || got.WaitsWho != waitAgent {
 		t.Fatalf("task %s waits %q: %q, want an agent's wait", got.State, got.WaitsWho, got.WaitsWhat)
 	}
-	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventLost, Reason: "no progress after 1 recoveries"})
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventLost, Reason: "no progress after 3 recoveries"})
 	h.tick()
-	want := "the fx-repro agent's pane was lost: no progress after 1 recoveries"
+	want := lostWait
 	if got := h.reload(task.ID); got.State != registry.TaskNeedsYou || got.WaitsWho != "you" || got.WaitsWhat != want {
 		t.Fatalf("task %s waits %q: %q, want needs_you, you: %s", got.State, got.WaitsWho, got.WaitsWhat, want)
 	}

@@ -133,9 +133,10 @@ func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt,
 // apart at memory warn); you in the pane wait too. A role the factory
 // parked (its newest session parked, its conversation resumable) is
 // resumed, which no park charges to the lost-pane ladder; a lost one takes
-// the recoveries' steps, on their count: its conversation resumed (at most
-// MaxResumes in the attempt), else a fresh session, which for a role that
-// took no prompt yet is a relaunch; then the recoveries ran out
+// the next of its MaxRecoveries recoveries at once (the prompt is due: no
+// wait), on their count (recoveriesUsed) and as recoveryStep chooses it: its
+// conversation resumed before the last one, else a fresh session, which for
+// a role that took no prompt yet is a relaunch; then the recoveries ran out
 // (EventLost). After a resume or a relaunch the caller's prompt goes as it
 // would after a launch (done false); a fresh session of a role that had
 // prompts takes the attempt's first prompt with text after it (fromFiles),
@@ -158,7 +159,9 @@ func (r *Runtime) bringBack(ctx context.Context, t registry.Task, a registry.Att
 		r.mu.Lock()
 		st.stuck, st.lost = false, false
 		st.step, st.resumes, st.fresh = 0, 0, false
+		st.recoveries, st.counted, st.dueAt = 0, true, time.Time{}
 		r.mu.Unlock()
+		r.noteStartOver(ctx, t, a, st.role.Name, "your retry") // a restart counts from here too
 	}
 	if err := r.mayRestart(ctx, t, st); err != nil {
 		return "", true, err
@@ -176,25 +179,19 @@ func (r *Runtime) bringBack(ctx context.Context, t registry.Task, a registry.Att
 		return "", false, r.startIn(ctx, t, a, st, pr, resume, stagger)
 	}
 	unprompted := !r.hadPrompt(ctx, t.ID, a.ID, st.role.Name)
+	used := r.recoveriesUsed(ctx, st)
 	r.mu.Lock()
-	step := "fresh"
-	switch {
-	case st.resumes < MaxResumes && resume != "":
-		st.resumes++
-		step = "resume"
-	case !st.fresh && unprompted:
-		st.fresh = true
-		step = "relaunch"
-	case !st.fresh:
-		st.fresh = true
-	default:
-		n := st.resumes + 1
+	if used >= MaxRecoveries {
 		r.mu.Unlock()
-		r.emit("", r.lostEvent(t, a, st.role, errRecoveriesSpent{n: n}))
+		r.emit("", r.lostEvent(t, a, st.role, errRecoveriesSpent{n: used}))
 		return "", false, nil // Submit refuses: no session
 	}
+	n := used + 1
+	step := recoveryStep(n, resume, unprompted)
+	st.recoveries, st.dueAt = n, time.Time{}
 	r.mu.Unlock()
 	r.log.Warn("a role with no session is started again before its prompt", "task", t.ID, "role", st.role.Name, "step", step)
+	r.noteRecovery(ctx, t, a, st.role.Name, n, step, "it had no session when its prompt was due")
 	switch step {
 	case "resume":
 		return "", false, r.startIn(ctx, t, a, st, pr, resume, stagger)

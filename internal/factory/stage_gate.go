@@ -600,12 +600,18 @@ func (e *Engine) waitForAnswers(ctx context.Context, t registry.Task, open []reg
 // questionsWait is how task t waits for the answers to its open questions:
 // on you while one of them is not asked of someone ("you: 3 questions
 // before coding"; a stage that a role's questions suspended: "1 question
-// before coding goes on"), else on the first one you asked ("rev-ann: a
-// question in Jira").
+// before coding goes on"; a stop's question adds the decision it asks for:
+// "1 question before coding goes on: <the stop>: skip this check for this
+// task, run it with a longer bound or drop the task?"), else on the first
+// one you asked ("rev-ann: a question in Jira").
 func (e *Engine) questionsWait(t registry.Task, open []registry.Question, asks map[string]ask) (state, who, what string) {
 	onYou, first, byLogin := questionsAsked(open, asks)
 	if onYou > 0 || first == "" {
-		return registry.TaskNeedsYou, waitsYou, e.questionsBefore(t, max(onYou, 1))
+		what = e.questionsBefore(t, max(onYou, 1))
+		if d := e.stopDecisionWords(t, open); d != "" { // a stop's question: the decision it asks for, never "retry"
+			what += ": " + d
+		}
+		return registry.TaskNeedsYou, waitsYou, what
 	}
 	if n := byLogin[first]; n > 1 {
 		return registry.TaskWaiting, first, fmt.Sprintf("%d questions in Jira", n)
@@ -707,8 +713,13 @@ func (e *Engine) amendDue(ctx context.Context, t registry.Task) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	stops, err := readStops(dir) // a stop's question changes the checks or the turns, never the plan
+	if err != nil {
+		return false, err
+	}
 	return slices.ContainsFunc(qs, func(q registry.Question) bool {
-		return q.State == registry.QuestionAnswered && !q.TookRecommendation && !isWhichIssue(q) && q.Answered.After(at)
+		return q.State == registry.QuestionAnswered && !q.TookRecommendation && !isWhichIssue(q) && q.Answered.After(at) &&
+			!stops.isStopQuestion(q)
 	}), nil
 }
 

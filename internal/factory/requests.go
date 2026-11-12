@@ -541,6 +541,9 @@ func (e *Engine) retryTask(ctx context.Context, p RetryPayload) (string, error) 
 		e.log.Warn("record a retry", "task", t.ID, "err", err)
 		same += "; " + retryUnrecorded
 	}
+	if err := e.closeStops(ctx, t); err != nil { // your retry answers a stop's question as before it: none stays open
+		e.log.Warn("close the stop questions a retry answers", "task", t.ID, "err", err)
+	}
 	delete(e.panics, t.ID)
 	delete(e.lastFail, t.ID)
 	delete(e.publishFails, t.ID)
@@ -600,8 +603,9 @@ func (e *Engine) unchangedSince(ctx context.Context, t registry.Task) string {
 // (a retry would only ask them again; asks.json in t's directory of
 // layout l says which open questions wait on someone you asked instead). A
 // question coding went on the recommended answer of (provisional.json)
-// refuses no retry of another wait. A registry or a file that cannot be
-// read is its error.
+// refuses no retry of another wait, and a stop's question (stops.json)
+// none at all: your retry closes it and goes on as it did before the
+// question. A registry or a file that cannot be read is its error.
 func retryRefusal(ctx context.Context, reg *registry.Registry, l paths.Layout, t registry.Task) error {
 	if t.State != registry.TaskNeedsYou {
 		return retryRefusalOf(t, nil, nil)
@@ -617,6 +621,11 @@ func retryRefusal(ctx context.Context, reg *registry.Registry, l paths.Layout, t
 		}
 		open = withoutProvisional(open, recs)
 	}
+	stops, err := readStops(l.FactoryTaskDir(t.ID)) // a stop's question your retry closes: it refuses none
+	if err != nil {
+		return err
+	}
+	open = withoutStops(open, stops)
 	asks, err := readAsksIn(l.FactoryTaskDir(t.ID)) // asks.json only says whom the open questions wait on
 	if err != nil {
 		return err

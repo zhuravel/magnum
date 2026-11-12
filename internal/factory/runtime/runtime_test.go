@@ -118,6 +118,7 @@ func TestAPaneCarriesItsCopysRedisOffsetAndNoSecret(t *testing.T) {
 	g.restart()
 	g.h.losePane(g.agent("fx-repro"))
 	g.observe()
+	g.afterWait(1)
 	g.observeN(2)
 	if s := g.h.startCalls(); len(s) != 2 || !strings.Contains(strings.Join(s[1].Args, " "), "--resume sid-1") {
 		t.Fatalf("starts %+v, want the lost conversation resumed", s)
@@ -232,7 +233,8 @@ func TestTheRoleRunRecordsThePromptTheStageRuns(t *testing.T) {
 
 	g.restart()
 	g.h.losePane(g.agent("fx-judge"))
-	g.observeN(3) // the lost pane's conversation is resumed
+	g.observeN(3)
+	g.afterWait(1) // the lost pane's conversation is resumed
 	if s := g.h.startCalls(); len(s) != 2 {
 		t.Fatalf("starts %+v, want the lost pane recovered", s)
 	}

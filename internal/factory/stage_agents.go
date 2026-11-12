@@ -201,6 +201,10 @@ type agentsRun struct {
 	// roles (changeInRun): a role's next turn, or its first prompt, names
 	// them. nil for none, and in any other stage.
 	change []answerChange
+	// ask is the question the event or the check this pass took last asks
+	// you in place of the wait it returned (a stop past its budget:
+	// stops.go); nil for none.
+	ask *stopQuestion
 }
 
 // agentsTurn is how runTurn runs an attempt: as an agents stage of the
@@ -257,6 +261,9 @@ type stageRole struct {
 	problem *endProblem
 	pause   string
 	nudged  bool
+	// fresh is the prompt after the attempt's first one that a fresh
+	// session of the role starts with (nextFresh).
+	fresh string
 	// relaunch: it runs again as its fallback after a Codex refusal or a
 	// usage limit (a launch, then its prompt); covered: its fallback is a
 	// role of the stage (coveredIn), so it leaves the run instead. refused:
@@ -305,6 +312,11 @@ const (
 	nextContinue = "continue"
 	nextAnswers  = "answers"
 	nextChanged  = "changed"
+	// nextFresh starts the role in a fresh session (Runtime.SendFresh) with
+	// stageRole.fresh after the attempt's first prompt: your answer to a stop
+	// question (start the role again, a direction), or the writer's one
+	// fresh session at its fix budget (fix_go_on.go).
+	nextFresh = "fresh"
 )
 
 // StageFixTurns is how many fix turns a role whose change the factory's
@@ -426,17 +438,14 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 		}
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
-	you := ""
-	for _, ev := range append(rebuilt, e.takeEvents(t.ID)...) { // the first event that needs you is what the task waits on you for
-		if what := e.onAgentEvent(ctx, &t, st, a, run, ev, dir); what != "" && you == "" {
-			you = what
-		}
+	if err := e.applyStops(ctx, t, a, run); err != nil {
+		return false, e.stageFailed(ctx, t, err)
 	}
-	if you == "" {
-		you = e.recheckFailed(ctx, &t, st, a, run, dir)
-	}
-	if you != "" {
+	if you, ask := e.youOf(ctx, &t, st, a, run, rebuilt, dir); you != "" {
 		e.setAsideBeforeYou(ctx, t, st, run)
+		if ask != nil { // a stop past its budget: its question
+			return false, e.stageFailed(ctx, t, asksYou{*ask})
+		}
 		return false, e.stageFailed(ctx, t, needsYou{you})
 	}
 	if waits, err := e.suspended(ctx, &t, run); err != nil || waits {
@@ -462,6 +471,27 @@ func (e *Engine) runTurn(ctx context.Context, t registry.Task, st config.Factory
 	return true, e.passStage(ctx, t, st, a, dir, run.proven)
 }
 
+// youOf is what this pass of run (attempt a of task *tp's stage st) needs
+// you for: the first wait the runtime's events (the rebuild's, then the
+// observe pass's) bring, else the recheck of the roles that failed
+// (recheckFailed), and the question a stop past its budget asks in its
+// place (run.ask; nil for none). "" for nothing.
+func (e *Engine) youOf(ctx context.Context, tp *registry.Task, st config.FactoryStage, a registry.Attempt, run *agentsRun,
+	rebuilt []runtime.Event, dir string) (string, *stopQuestion) {
+	you, ask := "", (*stopQuestion)(nil)
+	for _, ev := range append(rebuilt, e.takeEvents(tp.ID)...) { // the first event that needs you is what the task waits on you for
+		run.ask = nil
+		if what := e.onAgentEvent(ctx, tp, st, a, run, ev, dir); what != "" && you == "" {
+			you, ask = what, run.ask
+		}
+	}
+	if you == "" {
+		run.ask = nil
+		you, ask = e.recheckFailed(ctx, tp, st, a, run, dir), run.ask
+	}
+	return you, ask
+}
+
 // needsYou is what an agents stage waits on you for (an agent that needs
 // you, a file it wrote no valid one of after its nudge): no failure of the
 // task, which goes to NEEDS YOU with it (stageFailed).
@@ -472,6 +502,9 @@ func (n needsYou) Error() string { return waitsYou + ": " + n.what }
 // stageFailed moves task t to NEEDS YOU on a needsYou (nil comes back: the
 // task waits, it did not fail) and returns any other error as it is.
 func (e *Engine) stageFailed(ctx context.Context, t registry.Task, err error) error {
+	if a, ok := errors.AsType[asksYou](err); ok {
+		return e.askStop(ctx, t, a.ask)
+	}
 	if n, ok := errors.AsType[needsYou](err); ok {
 		e.toOperator(ctx, t, n.what, "an agent needs you")
 		return nil
@@ -1016,6 +1049,11 @@ func (e *Engine) onAgentEvent(ctx context.Context, t *registry.Task, st config.F
 	case runtime.EventHooksTrust:
 		return "the " + name + " agent: " + strings.TrimPrefix(ev.Reason, r.runAs.AgentKind()+": ")
 	case runtime.EventLost:
+		if r.next == nextFresh {
+			return "" // your answer starts it afresh: this pass sends that
+		}
+		q := lostQuestion(a, name, ev.Reason) // its recoveries ran out: a question, never "retry"
+		run.ask = &q
 		return withReason("the "+name+" agent's pane was lost", ev.Reason)
 	case runtime.EventStuck:
 		return withReason("the "+name+" agent is stuck", ev.Reason)
@@ -1523,7 +1561,11 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 			continue
 		}
 		sent := e.now()
-		id, serr := e.d.Runtime.Send(ctx, t, a, r.runAs, text)
+		send := e.d.Runtime.Send
+		if next == nextFresh {
+			send = e.d.Runtime.SendFresh
+		}
+		id, serr := send(ctx, t, a, r.runAs, text)
 		if id != "" {
 			if first {
 				r.firstPrompt(sent)
@@ -1543,7 +1585,7 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 				e.event(ctx, t.ID, "questions", registry.PhaseInfo, r.runAs.Name+" got the answer that changed the plan after coding "+
 					"began: "+changedWhich(run.change))
 			}
-			r.next, r.problem, r.pause = "", nil, ""
+			r.next, r.problem, r.pause, r.fresh = "", nil, "", ""
 		}
 		if serr == nil {
 			continue
@@ -1880,7 +1922,9 @@ func (e *Engine) promptText(ctx context.Context, t registry.Task, st config.Fact
 	case next == nextNudge:
 		return nudgeText(dir, r.problem), nil
 	case next == nextFix:
-		return fixText(dir, r.problem), nil
+		return fixText(dir, r.problem) + e.directionNote(ctx, t, a, r), nil
+	case next == nextFresh:
+		return r.fresh, nil
 	case next == nextContinue:
 		return continueText(r.pause, e.outputs(t, st, r.role)), nil
 	case next == nextAnswers || next == nextChanged: // a change no longer pending: your answers alone
