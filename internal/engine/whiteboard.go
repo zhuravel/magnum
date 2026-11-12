@@ -482,8 +482,13 @@ func (e *Engine) startWhiteboard(ctx context.Context, pr store.PR, by string) (*
 		cancel()
 		return nil, busyRefusal(e.heldReason(pr.ID), by)
 	}
+	if f := e.d.whiteboardReserved; f != nil {
+		f(pr.ID)
+	}
 	if e.draining(ctx) { // a drain that began during the checks above (the status check runs a CLI command)
-		e.unreserve(pr.ID)
+		orders, _, _ := e.closeWhiteboardHandle(pr.ID) // the stops that came since the reserve: no job serves them
+		e.unreserveWhiteboard(pr.ID)                   // a request that yielded meanwhile goes back to the dispatch
+		e.stopsUnstarted(ctx, pr, job.label(), orders)
 		return nil, e.drainErr(ctx)
 	}
 	job.started = e.now()
@@ -550,6 +555,29 @@ func (e *Engine) runWhiteboard(ctx context.Context, job *whiteboardJob) {
 		e.failWhiteboard(fctx, job, failed+err.Error())
 	default:
 		e.settleWhiteboard(fctx, job)
+	}
+}
+
+// stopsUnstarted answers the stops (orders) that came for a whiteboard job
+// of pr (label) that never started, the drain having closed its gate after
+// the reservation: an abort hears there was nothing to stop, and an ignore
+// still mutes the PR (settleStopped), as after a held merge's push.
+func (e *Engine) stopsUnstarted(ctx context.Context, pr store.PR, label string, orders []stopOrder) {
+	for _, o := range orders {
+		res, err := "nothing to abort: the whiteboard of "+label+" did not start", error(nil)
+		if o.ignore {
+			res = "ignored " + label + "; its whiteboard did not start"
+			if to, serr := e.settleStopped(ctx, pr, true); serr != nil {
+				err = fmt.Errorf("%s: %w", res, serr)
+			} else if to != "" {
+				res += ": PR " + to
+			}
+			res += "; muted until `magnum unmute " + label + "`"
+		}
+		e.mu.Lock()
+		delete(e.inflight, o.id)
+		e.mu.Unlock()
+		e.complete(ctx, o.id, err, res)
 	}
 }
 

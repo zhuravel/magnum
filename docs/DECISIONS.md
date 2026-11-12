@@ -19210,6 +19210,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
     (the next poll resumes it) is work for up to the same 30 minutes from when the drain first saw it, and then it
     is left: its steps resume after the reboot. What the drain cannot read is work: the loops' rows and their push
     records are read at once, and a settle whose steps cannot be read may have begun.
+  - The engine owner's review of the drain (D1 to D20) closed these gaps on the review daemon. A read of
+    `daemon.reboot_drain` that fails counts as a drain: the gates stay shut, and the tick lifts nothing (it keeps
+    the acknowledgement, its state and the park's marks for the next tick). The tick's own slot work waits under
+    the drain as the reconcile's does: the release of a closed PR past its grace (`closeGrace`) and of a
+    Codex-flagged PR's slot (`releaseFlagged`). A staging resolve that a live deploy needs goes on, because the
+    drain waits for that deploy, and holding its resolve would only fail it past the resolve's hour; a resolve
+    with no live deploy still waits. A whiteboard job that the drain turns away after its reservation answers the
+    stops and hands back the yields that reached it there, so no request stays in flight. `magnum
+    restart-sessions` (or a Codex login change) on a session that the drain's park had marked takes over the
+    mark, so the lift of the drain keeps that restart.
   - It ends at each daemon's first start on another boot: another `kern.bootsessionuuid`, which is unique per boot
     (`kern.boottime` moves when macOS steps the clock after a wake, so it decides only without a session, past two
     minutes); both read through the sysctl runner (`Deps.Boot` in tests). A crash, a new build or a restart by

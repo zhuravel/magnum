@@ -476,6 +476,10 @@ type Deps struct {
 	// without herdr, and a job then fails).
 	stagingResolver *stagingResolver
 	stagingAgents   func(stagingAgentJob) (stagingAgent, error)
+	// whiteboardReserved runs right after a whiteboard job reserved its PR,
+	// before its drain's re-check (startWhiteboard); nil but in tests,
+	// which answer requests on that reservation there.
+	whiteboardReserved func(prID int64)
 }
 
 // Options tune Run.

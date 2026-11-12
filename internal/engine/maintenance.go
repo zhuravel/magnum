@@ -19,9 +19,11 @@ import (
 // closeGrace hands closed PRs past their grace (and releases a previous
 // apply left half done) to the heavy worker: cleanup's default plan parks
 // their sessions, releases or removes their slots and moves them to
-// released.
+// released. Under a drain for a reboot it hands nothing (reboot_drain.go:
+// no slot work starts, as the reconcile's own cleanup waits): the PRs past
+// their grace are released at the first tick after the drain.
 func (e *Engine) closeGrace(ctx context.Context) {
-	if e.d.Cleanup == nil {
+	if e.d.Cleanup == nil || e.rebootDraining(ctx) {
 		return
 	}
 	due, err := e.st.ClosedPastGrace(ctx, e.now())

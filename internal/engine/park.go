@@ -652,9 +652,11 @@ func (e *Engine) forgetParkFails(byPR map[int64][]store.Session) {
 // pool slot (while herdr answers: a slot is released only after its agents
 // are parked). A per-PR worktree stays (it takes no pool place), and a PR
 // whose slot release failed waits flagReleaseRetry. The registry's flags
-// and the unwritten ones count; a read failure skips the tick.
+// and the unwritten ones count; a read failure skips the tick. Under a
+// drain for a reboot it releases nothing (reboot_drain.go: no slot work
+// starts); the release comes at the first tick after the drain.
 func (e *Engine) releaseFlagged(ctx context.Context, ts tickState) {
-	if e.d.Agents == nil || e.d.Slots == nil {
+	if e.d.Agents == nil || e.d.Slots == nil || e.rebootDraining(ctx) {
 		return
 	}
 	flagged, err := e.st.CodexFlaggedPRs(ctx)

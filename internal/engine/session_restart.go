@@ -86,19 +86,28 @@ func (e *Engine) restartMarks(ctx context.Context) map[int64]restartMark {
 
 // markRestart marks sessions for a restart, why saying what for; it
 // returns the ids it marked now (a session marked already keeps its first
-// mark).
+// mark). A mark of the drain's park alone (drainParkWhy) takes why when
+// anything else asks for the restart (`magnum restart-sessions`, a Codex
+// login that changed), so that the lift of the drain, which drops the
+// drain's marks, keeps that restart.
 func (e *Engine) markRestart(ctx context.Context, sessions []store.Session, why string) []int64 {
 	e.restartMu.Lock()
 	defer e.restartMu.Unlock()
 	marks := e.restartMarksLocked(ctx)
 	var added []int64
+	changed := false
 	for _, s := range sessions {
-		if _, ok := marks[s.ID]; !ok {
+		m, ok := marks[s.ID]
+		switch {
+		case !ok:
 			marks[s.ID] = restartMark{PR: s.PRID, Why: why}
 			added = append(added, s.ID)
+		case m.Why == drainParkWhy && why != drainParkWhy:
+			m.Why = why
+			marks[s.ID], changed = m, true
 		}
 	}
-	if len(added) > 0 {
+	if len(added) > 0 || changed {
 		e.saveRestartsLocked(ctx)
 	}
 	return added

@@ -189,9 +189,14 @@ type rebootState struct {
 
 // rebootDraining reports whether a drain for a reboot holds: any value of
 // its row, one this build cannot read included (it holds until `magnum
-// resume` deletes it).
+// resume` deletes it), and a row the registry cannot read now, which
+// holds as well: a read that fails never opens the gates.
 func (e *Engine) rebootDraining(ctx context.Context) bool {
-	v, ok := e.getKV(ctx, KVDaemonRebootDrain)
+	v, ok, err := e.st.GetKV(ctx, KVDaemonRebootDrain)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "kv read", "key", KVDaemonRebootDrain)
+		return true
+	}
 	return ok && v != ""
 }
 
@@ -266,7 +271,11 @@ func (e *Engine) tendRebootDrain(ctx context.Context) {
 	if e.d.DryRun {
 		return
 	}
-	v, _ := e.getKV(ctx, KVDaemonRebootDrain)
+	v, _, err := e.st.GetKV(ctx, KVDaemonRebootDrain)
+	if err != nil { // a read that failed lifts nothing: the acknowledgement, the state and the marks stay for the next tick
+		e.warnUnlessStopped(ctx, err, "drain for a reboot: read its record")
+		return
+	}
 	st := &e.reboot
 	if v == "" {
 		if st.gen != 0 || st.ack != "" {
@@ -424,6 +433,20 @@ func (e *Engine) rebootDrainWork(ctx context.Context, st *rebootState) (out, lef
 	}
 	out = append(out, e.deploysInFlight()...)
 	return append(out, e.resolvesInFlight(ctx)...), left
+}
+
+// deployLive reports whether the staging deploy that asked for job's
+// resolve (its Effect) is queued or running: the drain waits for that
+// deploy (deploysInFlight), so the resolve it needs goes on under the drain,
+// one the start's recovery queued again included.
+func (e *Engine) deployLive(job resolveJob) bool {
+	s := e.d.Staging
+	if s == nil || job.Effect == "" {
+		return false
+	}
+	return slices.ContainsFunc(s.Effects(job.Repo), func(f staging.Effect) bool {
+		return string(f.ID) == job.Effect && (f.State == staging.EffectQueued || f.State == staging.EffectRunning)
+	})
 }
 
 // deploysInFlight are the staging deploys queued or running, which the steps
