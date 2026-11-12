@@ -33,7 +33,6 @@ import (
 
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factory/runtime"
-	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -62,9 +61,7 @@ const (
 	decideWriter    = "writer"    // the check's faults are the writer's for the task
 	decideNoBase    = "no_base"   // the specs red at the head are judged without their run on the base
 	decideRetry     = "retry"     // your retry closed the question
-	decideRestore   = "restore"   // what a review round left goes back as the reviewed head has it
-	decideKeep      = "keep"      // what a review round left stays in the copy
-	decideAskAgain  = "ask_again" // your words fit no way the question offers: it asks again
+	decideGoOn      = "go_on"     // you put back what a review round left: the factory looks at the copy again
 )
 
 // The options' labels of the stop questions.
@@ -79,8 +76,7 @@ const (
 	optionWriter    = "Hand it to the writer"
 	optionNoBase    = "Judge the red specs without the base run"
 	// a review round's leftovers that may be yours
-	optionRestoreCopy = "Restore the copy to the reviewed head"
-	optionKeepChange  = "Keep the change"
+	optionPutBack = "I put the copy back myself — go on"
 )
 
 // stopAsk is one question the factory asked for a stop: its kind, what
@@ -104,22 +100,9 @@ type stopAsk struct {
 	Decision string    `json:"decision,omitempty"`
 	Words    string    `json:"words,omitempty"`
 	Decided  time.Time `json:"decided,omitzero"`
-	// Answered is when you answered (the question's own time; Decided is
-	// the pass that read it): a turn after it is one your answer never saw.
-	Answered time.Time `json:"answered,omitzero"`
-	// NoKeep marks a question of what a round left that offered no keep
-	// (it would drop the task's commits): its ways are restore and drop.
-	NoKeep bool `json:"no_keep,omitempty"`
 	// Unnamed: the fix stop's failure is no example's or offense's, its
 	// line firstFailing's: an accept of it covers that line alone.
 	Unnamed bool `json:"unnamed,omitempty"`
-	// Blind marks a question of a round's leftovers asked while the factory
-	// could not tell who works in the copy: your answer to it runs though
-	// it still cannot; an answer to any other never does.
-	Blind bool `json:"blind,omitempty"`
-	// BranchAt is the task's branch head a question of a copy a round left
-	// off its head counted (movedFacts): a restore runs only over it.
-	BranchAt string `json:"branch_at,omitempty"`
 }
 
 // accepted is a check whose failure you accepted as known for the task:
@@ -148,28 +131,6 @@ type stopsRecord struct {
 	// task: the specs red at the head are judged without them, as the
 	// change's, and the PR body names it.
 	NoBase []string `json:"no_base,omitempty"`
-	// Kept are the tracked changes your answers kept in the copy ("Keep the
-	// change"), by path: while its file is as it was then (keptSum), no look
-	// at the copy counts it as a round's; while the copy has it as a change,
-	// every writer prompt and the factory's checks name it, to be committed,
-	// never undone (keptNote, dirtyWords). A commit of it, or its loss
-	// without one (an event), takes it off (keptState).
-	Kept []keptChange `json:"kept,omitempty"`
-	// Waits are when a put-back of what a round left first waited for a
-	// turn in flight in the copy, by the round's key (leftKey):
-	// leftWaitBound counts from there, across restarts.
-	Waits map[string]time.Time `json:"waits,omitempty"`
-}
-
-// keptChange is a tracked path whose change your answer kept in the copy,
-// the fingerprint of its file then (keptSum) and of HEAD's file then
-// (Base: a HEAD with another file since is a commit of it), and the diff
-// saved of it then, in the task's directory.
-type keptChange struct {
-	Path  string `json:"path"`
-	Sum   string `json:"sum"`
-	Base  string `json:"base,omitempty"`
-	Saved string `json:"saved,omitempty"`
 }
 
 // readStops reads stops.json in the task directory dir; none is an empty
@@ -335,7 +296,7 @@ func (e *Engine) decideStops(ctx context.Context, t registry.Task) (ended bool, 
 			continue
 		}
 		a.Decision, a.Words = decideStop(*a, q.Answer)
-		a.Decided, a.Answered, changed = e.now(), q.Answered, true
+		a.Decided, changed = e.now(), true
 		rec.apply(*a)
 		e.event(ctx, t.ID, "stop", registry.PhaseInfo, "your answer to "+a.Why+": "+decisionWords(*a))
 		if a.Decision == decideDrop {
@@ -424,14 +385,10 @@ func decideStop(a stopAsk, answer string) (decision, words string) {
 		return ""
 	}
 	switch {
-	case a.Kind == stopLeft && is(optionRestoreCopy, "restore"):
-		return decideRestore, ""
-	case a.Kind == stopLeft && a.NoKeep && is(optionDrop, "drop"):
+	case a.Kind == stopLeft && is(optionDrop, "drop"):
 		return decideDrop, ""
-	case a.Kind == stopLeft && a.NoKeep: // only restore or drop: your words never take the restore, which resets a branch
-		return decideAskAgain, strings.TrimSpace(answer)
-	case a.Kind == stopLeft: // keep the change, or your own words: nothing of yours is put back
-		return decideKeep, strings.TrimSpace(answer)
+	case a.Kind == stopLeft: // you put the copy back, or your own words: the factory only looks at the copy again
+		return decideGoOn, strings.TrimSpace(answer)
 	case is(optionDrop, "drop"):
 		return decideDrop, ""
 	case a.Kind == stopCheck && a.Check == specsBaseKey && (is(optionNoBase, "without") || is(optionWriter, "writer")):
@@ -507,83 +464,32 @@ func decisionWords(a stopAsk) string {
 		return "run " + a.Check + " again, with your words"
 	case decideDrop:
 		return "drop the task"
-	case decideRestore:
-		return "restore the copy to the reviewed head"
-	case decideKeep:
-		return "keep the change in the copy"
-	case decideAskAgain:
-		return "none of its ways (only Restore or Drop are possible there): it asks again"
+	case decideGoOn:
+		return "you put the copy back: the factory looks at it again"
 	}
 	return a.Decision
 }
 
-// leftDecision is your decision on what review round round of cycle cy
-// left (restore, keep), "" while none is made.
-func (rec stopsRecord) leftDecision(cy registry.Cycle, round int) string {
+// leftAsked says how the questions of what review round round of cycle cy
+// left stand since your last retry: waits, one waits for your answer;
+// goOns, how many you answered "go on" (the copy, looked at again, still
+// had what the round left, or the question would not be asked again).
+func (rec stopsRecord) leftAsked(cy registry.Cycle, round int) (waits bool, goOns int) {
 	key := leftKey(cy, round)
-	for _, a := range slices.Backward(rec.Asks) {
-		if a.Kind == stopLeft && a.Key == key && a.Decision != decideRetry {
-			if a.Decision == decideAskAgain {
-				return ""
-			}
-			return a.Decision
+	for _, a := range rec.Asks {
+		if a.Kind != stopLeft || a.Key != key {
+			continue
+		}
+		switch a.Decision {
+		case "":
+			waits = true
+		case decideGoOn:
+			goOns++
+		case decideRetry: // your retry: the factory looks afresh
+			waits, goOns = false, 0
 		}
 	}
-	return ""
-}
-
-// leftBlind reports whether your newest decision on what review round round
-// of cycle cy left answers a question asked while the factory could not
-// tell who works in the copy (Blind).
-func (rec stopsRecord) leftBlind(cy registry.Cycle, round int) bool {
-	key := leftKey(cy, round)
-	for _, a := range slices.Backward(rec.Asks) {
-		if a.Kind == stopLeft && a.Key == key && a.Decision != decideRetry {
-			return a.Blind
-		}
-	}
-	return false
-}
-
-// leftBranchAt is the branch head the question your newest decision on
-// what review round round of cycle cy left answers counted ("" for none).
-func (rec stopsRecord) leftBranchAt(cy registry.Cycle, round int) string {
-	key := leftKey(cy, round)
-	for _, a := range slices.Backward(rec.Asks) {
-		if a.Kind == stopLeft && a.Key == key && a.Decision != decideRetry {
-			return a.BranchAt
-		}
-	}
-	return ""
-}
-
-// leftAskAgain are your words that fit none of the ways of the newest
-// question of what review round round of cycle cy left, when its answer
-// asks again (decideAskAgain); ok is false otherwise.
-func (rec stopsRecord) leftAskAgain(cy registry.Cycle, round int) (words string, ok bool) {
-	key := leftKey(cy, round)
-	for _, a := range slices.Backward(rec.Asks) {
-		if a.Kind == stopLeft && a.Key == key && a.Decision != decideRetry {
-			return a.Words, a.Decision == decideAskAgain
-		}
-	}
-	return "", false
-}
-
-// leftDecided is when you answered with your newest decision on what
-// review round round of cycle cy left (when the factory read it, for an
-// answer of an older build; zero while none is).
-func (rec stopsRecord) leftDecided(cy registry.Cycle, round int) time.Time {
-	key := leftKey(cy, round)
-	for _, a := range slices.Backward(rec.Asks) {
-		if a.Kind == stopLeft && a.Key == key && a.Decision != decideRetry {
-			if a.Answered.IsZero() {
-				return a.Decided
-			}
-			return a.Answered
-		}
-	}
-	return time.Time{}
+	return waits, goOns
 }
 
 // leftKey keys the question of what review round round of cycle cy left.
@@ -591,178 +497,57 @@ func leftKey(cy registry.Cycle, round int) string {
 	return fmt.Sprintf("round %d of cycle %d at %s", round, cy.N, cy.HeadBefore)
 }
 
-// leftCause is why the factory asks you about what a round left rather
-// than put it back by itself: the cause in the question's words, its
-// context, and what its restore does beyond the round's leftovers ("" for
-// nothing).
-type leftCause struct {
-	words, context string
-	// turn is the turn a restore may take edits of, that the factory
-	// cannot see end ("" for none): its edits in those paths go back too.
-	turn  string
-	blind bool // asked while the factory cannot tell who works in the copy
-	moved *movedFacts
-}
-
-// typedCause: you typed into a pane of the task, or one of its agents got
-// a prompt, since the round began (who, yoursSince): it may be your edit.
-func typedCause(who string) leftCause {
-	return leftCause{words: who + " since the round began", context: "the change may be your own edit, so the factory put nothing back by itself"}
-}
-
-// waitedCause: the put-back waited leftWaitBound for who (inFlight), turn
-// the run the watchdog judged stuck or lost ("" for a turn the factory
-// cannot see).
-func waitedCause(who, turn string) leftCause {
-	return leftCause{words: fmt.Sprintf("the factory waited %s to put it back (%s)", capText(leftWaitBound), who),
-		context: "the factory cannot tell whether a turn works in the copy, so it put nothing back by itself",
-		turn:    cmp.Or(turn, "a turn the factory cannot see that works in the copy"), blind: true}
-}
-
-// blindCause: your answer to a question asked while the factory could tell
-// who works in the copy, which it now cannot (who says why): it never runs
-// blind, and asks again.
-func blindCause(who string) leftCause {
-	return leftCause{words: who, context: "the factory cannot tell whether a turn works in the copy now, so it ran no answer of yours " +
-		"by itself", turn: "a turn the factory cannot see that works in the copy", blind: true}
-}
-
-// movedCause: the round left the copy off the task's branch or the branch
-// at another head than it reviewed (m, what restore and keep would move).
-func movedCause(m movedFacts) leftCause {
-	return leftCause{words: "the factory moves no branch or HEAD by itself", context: "the factory moves no branch or HEAD by itself",
-		moved: &m}
-}
-
-// movedSince is cause c asked again because the task's branch moved from
-// was, the head the question you answered counted, by the commits newer:
-// your answer ran over none of them.
-func movedSince(c leftCause, branch, was string, newer []gitx.ListedCommit) leftCause {
-	var shas []string
-	for _, n := range newer {
-		shas = append(shas, short(n.SHA))
-	}
-	c.words += fmt.Sprintf("; %s moved since the question you answered, from %s: %s (%s) the answer did not count, so it ran "+
-		"no restore", branch, short(was), plural(len(newer), "new commit"), clipList(shas))
-	return c
-}
-
-// askedAgain is cause c asked again after your words fit none of its ways
-// (words): only Restore or Drop are possible where a keep would drop the
-// task's commits.
-func askedAgain(c leftCause, words string) leftCause {
-	c.words += fmt.Sprintf("; your answer %q is neither, and only Restore or Drop are possible here", textx.Clip(words, 80))
-	return c
-}
-
-// movedFacts are where a round left a copy off the reviewed head: the head
-// the copy is at, whether it is on the task's branch, the branch's own head,
-// the commits a restore takes off the branch (after the reviewed head) and
-// off the copy (a copy off the branch: its commits the branch lacks), and
-// the task's commits a keep would drop (the reviewed head's that the
-// branch's head lacks: a branch moved back behind it, or beside it).
-type movedFacts struct {
-	at, branchAt         string
-	onBranch             bool
-	branchExtra, offCopy int
-	keepDrops            int
-}
-
-// commitsWords says n commits that leave something: "its 1 commit after
-// X leaves the branch (git's reflog keeps it; it is not in the saved
-// diff)".
-func commitsWords(n int, after, leave string) string {
-	if n == 1 {
-		return fmt.Sprintf("its 1 commit %s leaves %s (git's reflog keeps it; it is not in the saved diff)", after, leave)
-	}
-	return fmt.Sprintf("its %d commits %s leave %s (git's reflog keeps them; they are not in the saved diff)", n, after, leave)
-}
-
-// movedWords are the meanings of restore and keep for a copy a round left
-// off the reviewed head (m), and whether keep is offered: never when it
-// would drop the task's commits.
-func movedWords(t registry.Task, head string, m movedFacts) (restore, keep string, keepOffered bool) {
-	var r []string
-	if !m.onBranch {
-		w := "the copy switches back to " + t.Branch
-		if m.offCopy > 0 {
-			w += ": " + commitsWords(m.offCopy, "at "+short(m.at)+" off the branch", "the copy")
-		}
-		r = append(r, w)
-	}
-	switch {
-	case m.branchAt == head:
-	case m.branchExtra > 0:
-		r = append(r, fmt.Sprintf("%s is reset from %s to %s; %s", t.Branch, short(m.branchAt), short(head),
-			commitsWords(m.branchExtra, "after "+short(head), "the branch")))
-	default:
-		r = append(r, fmt.Sprintf("%s is reset from %s forward to %s, the head the round reviewed", t.Branch, short(m.branchAt), short(head)))
-	}
-	restore = "the changes go back (all saved first), " + strings.Join(r, ", and ") + "; the round's result stands"
-	if m.keepDrops > 0 {
-		return restore, "", false
-	}
-	var k []string
-	if !m.onBranch {
-		w := "the copy switches back to " + t.Branch + " with the changes"
-		if m.offCopy > 0 {
-			w += ", but " + commitsWords(m.offCopy, "at "+short(m.at)+" off the branch", "the copy")
-		}
-		k = append(k, w)
-	}
-	if m.branchAt != head {
-		k = append(k, fmt.Sprintf("%s stays at %s, its %s after %s included: that is the task's head, and its checks run again there",
-			t.Branch, short(m.branchAt), plural(m.branchExtra, "commit"), short(head)))
-	} else {
-		k = append(k, "the round's result stands")
-	}
-	return restore, strings.Join(k, "; "), true
+// leftAsk is what the question of a round's leftovers names: why the
+// factory put none of it back (doubt: leftDoubt), the saved diff and the
+// task's directory's name of the save, the diff itself, the branch's head
+// now for a copy that moved, the steps that put it back (leftSteps), and
+// how many of your "go on" found it still there.
+type leftAsk struct {
+	doubt, saved, diff, branchAt, steps string
+	goOns                               int
 }
 
 // leftQuestion is the question of what review round round of cycle cy left
-// in the copy of task t (left, its changes saved in the task's directory as
-// saved, diff their patch), which the factory puts back only on your answer,
-// for cause. Restore the copy to the reviewed head, or keep the change; the
-// round's result stands either way, but for a branch kept at a new head,
-// which is the task's head then, and its checks run again.
-func leftQuestion(t registry.Task, cy registry.Cycle, round int, left roundLeftovers, cause leftCause, saved, diff string) stopQuestion {
+// in task t's copy (left) that the factory put none of back (a): you put
+// the copy back yourself and the task goes on (the factory looks at the
+// copy again, and asks again when it still has it), or drop the task. It
+// names the saved diff, the paths, the reviewed head and, for a copy that
+// moved, the branch's head now; its context gives the steps.
+func leftQuestion(t registry.Task, cy registry.Cycle, round int, left roundLeftovers, a leftAsk) stopQuestion {
 	name := roundName(round, cy.N)
-	restore := "the tracked paths go back as the reviewed head has them and the round's new files go (all saved first), and the " +
-		"round's result stands"
-	keep := "the copy keeps it as it is, and the round's result stands; the writer commits it on the task's branch (with its next fix, " +
-		"or in a short turn of its own), never undoing it"
-	keepOffered := true
-	if cause.moved != nil {
-		restore, keep, keepOffered = movedWords(t, cy.HeadBefore, *cause.moved)
+	doubt := a.doubt
+	if a.goOns > 0 {
+		doubt = fmt.Sprintf("the copy still has it after your go-on (%d)", a.goOns)
 	}
-	if cause.turn != "" {
-		restore += fmt.Sprintf("; %s has its edits in those paths go back too (saved to %s), and its new files leave the copy",
-			cause.turn, cmp.Or(saved, "the task's folder"))
+	var names []string
+	if a.saved != "" {
+		names = append(names, "saved to "+a.saved)
 	}
-	options := []registry.Option{{Label: optionRestoreCopy, Means: restore}, {Label: optionKeepChange, Means: keep}}
-	ending := "restore the copy or keep the change?"
-	if !keepOffered { // keeping it would drop the task's commits
-		options[1] = registry.Option{Label: optionDrop, Means: "the task stops"}
-		ending = "restore the copy or drop the task?"
+	if a.branchAt != "" {
+		names = append(names, t.Branch+" is at "+short(a.branchAt)+" now")
 	}
-	context := cause.context
-	if saved != "" {
-		context += "; it saved the changes to " + saved
+	named := ""
+	if len(names) > 0 {
+		named = " (" + strings.Join(names, "; ") + ")"
 	}
-	branchAt := ""
-	if cause.moved != nil {
-		branchAt = cause.moved.branchAt
+	context := fmt.Sprintf("the factory put none of it back, as %s; as the round found it, the copy is %s at %s, with no tracked change "+
+		"and no new untracked file", doubt, t.Branch, short(cy.HeadBefore))
+	if a.steps != "" {
+		context += ": " + a.steps
 	}
 	return stopQuestion{
-		ask: stopAsk{Kind: stopLeft, Key: leftKey(cy, round), Why: fmt.Sprintf("%s of the local review left %s, and %s", name, left,
-			cause.words), NoKeep: !keepOffered, Blind: cause.blind, BranchAt: branchAt},
+		ask: stopAsk{Kind: stopLeft, Key: leftKey(cy, round), Why: fmt.Sprintf("%s of the local review left %s, and %s", name, left, doubt)},
 		q: registry.Question{
-			Text: fmt.Sprintf("%s of the local review left %s at %s, and %s: %s", strings.ToUpper(name[:1])+name[1:], left,
-				short(cy.HeadBefore), cause.words, ending),
-			Context:     context,
-			Example:     textx.Clip(diff, 1500),
-			Options:     options,
-			Recommended: -1, Evidence: cmp.Or(saved, "the factory's look at the copy")},
+			Text: fmt.Sprintf("%s of the local review left %s at %s%s, and %s: put the copy back yourself and go on, or drop the task?",
+				strings.ToUpper(name[:1])+name[1:], left, short(cy.HeadBefore), named, doubt),
+			Context: context,
+			Example: textx.Clip(a.diff, 1500),
+			Options: []registry.Option{
+				{Label: optionPutBack, Means: "the factory looks at the copy again: as the round found it, the round's result stands; " +
+					"still not, it asks again"},
+				{Label: optionDrop, Means: "the task stops"},
+			},
+			Recommended: 0, Evidence: cmp.Or(a.saved, "the factory's look at the copy")},
 	}
 }
 

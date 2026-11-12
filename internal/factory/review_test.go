@@ -1181,33 +1181,28 @@ func (r *reviewRig) gitIn(dir string, args ...string) {
 
 // A round's roles work in the task's copy, and what they leave there never
 // reaches the writer: a round that leaves the copy off its branch or the
-// branch at another head than it reviewed asks you to restore the copy to
-// the reviewed head or keep the change, never a bare retry, naming what it
-// left; before your answer the factory moves no branch or HEAD and changes
-// none of it, nor a tracked change or a new file left beside it (it saves
-// them first). Restore puts the change and the new file back and the copy
-// back on its branch at the reviewed head, and the round's result is read.
-// Keep switches a copy off its branch back to it, carrying the change, and
-// the round's result is read; a branch at a new head is the task's head, and
-// its checks run again there. Your own put-back and retry let the task go
-// on as before.
-func TestARoundThatLeavesTheCopyOffItsHeadAsksToRestoreOrKeepIt(t *testing.T) {
+// branch at another head than it reviewed asks you to put the copy back
+// yourself and go on, or to drop the task, never a bare retry, naming what
+// it left and the branch's head now; the factory moves no branch or HEAD
+// and changes none of it, nor a tracked change or a new file left beside it
+// (it saves them first). Once you put the copy back, "go on" reads the
+// round's result; your drop stops the task with the copy as it is.
+func TestARoundThatLeavesTheCopyOffItsHeadAsksYouToPutItBackOrDrop(t *testing.T) {
 	for _, tc := range []struct {
 		name, want string
-		moved      bool // the branch moved, not only the copy off it
 		leave      func(r *reviewRig, dir string)
 		undo       func(r *reviewRig, branch, head string)
 	}{
-		{"a detached HEAD", "the copy on a detached HEAD", false,
+		{"a detached HEAD", "the copy on a detached HEAD",
 			func(r *reviewRig, dir string) { r.gitIn(dir, "switch", "--quiet", "--detach") },
 			func(r *reviewRig, branch, _ string) { r.git(r.copyDir, "switch", "--quiet", branch) }},
-		{"a moved head", "not at", true,
+		{"a moved head", "not at",
 			func(r *reviewRig, dir string) {
 				r.gitIn(dir, "commit", "--quiet", "--allow-empty", "-m", "a reviewer's commit")
 			},
 			func(r *reviewRig, _, head string) { r.git(r.copyDir, "reset", "--quiet", "--keep", head) }},
-		// A tracked change and a new file on a moved head go with it.
-		{"a moved head with a tracked change and a new file", "1 tracked change in the copy (README)", true,
+		// A tracked change and a new file on a moved head stay with it.
+		{"a moved head with a tracked change and a new file", "1 tracked change in the copy (README)",
 			func(r *reviewRig, dir string) {
 				r.gitIn(dir, "commit", "--quiet", "--allow-empty", "-m", "a reviewer's commit")
 				r.put(dir, "README", "a reviewer's mutant\n")
@@ -1221,7 +1216,7 @@ func TestARoundThatLeavesTheCopyOffItsHeadAsksToRestoreOrKeepIt(t *testing.T) {
 				r.git(r.copyDir, "reset", "--quiet", "--keep", head)
 			}},
 	} {
-		for _, answer := range []string{optionRestoreCopy, optionKeepChange, "your own put-back and retry"} {
+		for _, answer := range []string{optionPutBack, optionDrop} {
 			t.Run(tc.name+"/"+answer, func(t *testing.T) {
 				var rig *reviewRig
 				rig = newReviewRig(t, func(c evalrun.LocalCase) evalrun.LocalResult {
@@ -1233,11 +1228,13 @@ func TestARoundThatLeavesTheCopyOffItsHeadAsksToRestoreOrKeepIt(t *testing.T) {
 				r.run(5, func() bool { return !isLive(r.reload(task.ID)) })
 				got := r.reload(task.ID)
 				qs := r.newestQuestions(task.ID)
+				branchAt := r.git(r.copyDir, "rev-parse", task.Branch)
 				if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "round 1 of the local review left") ||
 					!strings.Contains(got.WaitsWhat, tc.want) || got.Stage != "local_review" || strings.Contains(got.WaitsWhat, "retry") ||
-					len(qs) != 1 || !slices.Equal(optionLabels(qs[0]), []string{optionRestoreCopy, optionKeepChange}) {
-					t.Fatalf("task %s at %s waits %q with %+v; want the restore-or-keep question, naming %q", got.State, got.Stage,
-						got.WaitsWhat, qs, tc.want)
+					len(qs) != 1 || !slices.Equal(optionLabels(qs[0]), []string{optionPutBack, optionDrop}) ||
+					!strings.Contains(qs[0].Text, task.Branch+" is at "+short(branchAt)+" now") {
+					t.Fatalf("task %s at %s waits %q with %+v; want the put-back-or-drop question, naming %q and the branch's head",
+						got.State, got.Stage, got.WaitsWhat, qs, tc.want)
 				}
 				if cs := r.cycles(task.ID); len(cs) != 1 || !cs[0].Ended.IsZero() {
 					t.Fatalf("cycles %+v, want the round's still open", cs)
@@ -1246,51 +1243,25 @@ func TestARoundThatLeavesTheCopyOffItsHeadAsksToRestoreOrKeepIt(t *testing.T) {
 					t.Fatalf("the writer got %d prompts over the round's leftovers", len(ps))
 				}
 				moved := r.git(r.copyDir, "rev-parse", "HEAD")
-				if want := fmt.Sprintf("%s is reset from %s to %s; its 1 commit after %s leaves the branch (git's reflog keeps it; "+
-					"it is not in the saved diff)", task.Branch, short(moved), short(head), short(head)); tc.moved &&
-					!strings.Contains(qs[0].Options[0].Means, want) {
-					t.Fatalf("Restore says %q; want %q", qs[0].Options[0].Means, want)
+				if tc.name == "a moved head with a tracked change and a new file" &&
+					(r.read("README") != "a reviewer's mutant\n" || !r.inCopy("spec/probe_spec.rb")) {
+					t.Fatal("the factory changed what the round left")
 				}
-				if tc.moved == (moved == head) || (tc.name == "a moved head with a tracked change and a new file" &&
-					(r.read("README") != "a reviewer's mutant\n" || !r.inCopy("spec/probe_spec.rb"))) {
-					t.Fatal("the factory changed what the round left before your answer")
-				}
-				switch answer {
-				case optionRestoreCopy, optionKeepChange:
-					r.answerLeft(task.ID, answer)
-				default:
-					tc.undo(r, task.Branch, head)
-					r.letGoOn(task.ID)
-				}
-				r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" })
-				got = r.reload(task.ID)
-				branch := r.gitOut(r.copyDir, "symbolic-ref", "--short", "HEAD")
-				now := r.git(r.copyDir, "rev-parse", "HEAD")
-				switch {
-				case answer == optionKeepChange && tc.moved: // the new head is the task's: its checks run again
-					if got.Stage == "local_review" || got.Stage == "pr_body" || branch != task.Branch || now != moved {
-						t.Fatalf("task at %s on %s at %s; want the checks again at the moved head %s", got.Stage, branch, now, moved)
+				if answer == optionDrop {
+					r.answerLeft(task.ID, optionDrop)
+					r.run(2, nil)
+					if after := r.reload(task.ID); isLive(after) || r.git(r.copyDir, "rev-parse", "HEAD") != moved {
+						t.Fatalf("task %s after your drop, HEAD %s; want it stopped, the copy as the round left it",
+							after.State, r.git(r.copyDir, "rev-parse", "HEAD"))
 					}
-				default:
-					if got.Stage != "pr_body" || len(r.rv.calls()) != 1 || branch != task.Branch || now != head {
-						t.Fatalf("task at %s waits %q after %d rounds, copy on %q at %s; want pr_body on the one round's result, "+
-							"on %s at %s", got.Stage, got.WaitsWhat, len(r.rv.calls()), branch, now, task.Branch, head)
-					}
+					return
 				}
-				if tc.name == "a moved head with a tracked change and a new file" {
-					kept := answer == optionKeepChange
-					if (r.read("README") == "a reviewer's mutant\n") != kept || r.inCopy("spec/probe_spec.rb") != kept {
-						t.Fatalf("README %q, probe %v after %q", r.read("README"), r.inCopy("spec/probe_spec.rb"), answer)
-					}
-					if answer == optionRestoreCopy && (!strings.Contains(r.readTask(task.ID, "review-1-left.diff"), "+a reviewer's mutant") ||
-						r.readTask(task.ID, "review-1-left/spec/probe_spec.rb") != "a reviewer's probe\n") {
-						t.Fatal("the restore did not save the change and the new file first")
-					}
-				}
-				if answer == optionRestoreCopy && tc.moved && !slices.ContainsFunc(r.events(task.ID, "review"), func(e registry.Event) bool {
-					return strings.Contains(e.Text, short(moved))
-				}) {
-					t.Fatalf("no review event names the head %s the restore moved the branch back from", short(moved))
+				tc.undo(r, task.Branch, head)
+				r.answerLeft(task.ID, optionPutBack)
+				r.run(5, func() bool { return r.reload(task.ID).Stage != "local_review" })
+				if got := r.reload(task.ID); got.Stage != "pr_body" || len(r.rv.calls()) != 1 {
+					t.Fatalf("task at %s waits %q after %d rounds; want pr_body on the one round's result", got.Stage, got.WaitsWhat,
+						len(r.rv.calls()))
 				}
 			})
 		}

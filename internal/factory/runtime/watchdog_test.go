@@ -104,9 +104,6 @@ func TestAHungTurnClimbsTheWatchdogSteps(t *testing.T) {
 	if len(evs) != 1 || evs[0].Kind != EventStuck || evs[0].Reason != hung || evs[0].TaskID != g.task.ID || evs[0].Role != "fx-repro" {
 		t.Fatalf("after the steps the watchdog gave %+v, want stuck with %q", evs, hung)
 	}
-	if j := g.r.Judged(g.task, "fx-repro"); !strings.Contains(j, "stuck") { // what waits for its turn ends (the factory's put-back)
-		t.Fatalf("Judged = %q for a stuck run, want its judgment", j)
-	}
 	g.clock.Add(NoProgressAfter)
 	if evs := g.watchdog(); len(evs) != 0 {
 		t.Fatalf("a stuck run was reported again: %+v", evs)

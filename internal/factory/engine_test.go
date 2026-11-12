@@ -84,9 +84,7 @@ type fakeRuntime struct {
 	atWork    string
 	atWorkYou bool
 	atWorkErr error // what AtWork answers instead (setAtWorkErr)
-	// judged is the watchdog's judgment of a role's run, by role
-	// (setJudged); touchedErr what TouchedSince answers instead.
-	judged     map[string]string
+	// touchedErr is what TouchedSince answers instead (setTouchedErr).
 	touchedErr error
 	// touched is who TouchedSince names ("" for nobody), touchedAt when
 	// (zero: for any time).
@@ -665,23 +663,6 @@ func (f *fakeRuntime) setTouchedAt(who string, at time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.touched, f.touchedAt = who, at
-}
-
-// setJudged has the watchdog judge role's run (words; "" for none).
-func (f *fakeRuntime) setJudged(role, words string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.judged == nil {
-		f.judged = map[string]string{}
-	}
-	f.judged[role] = words
-}
-
-// Judged is the watchdog's judgment setJudged gave role.
-func (f *fakeRuntime) Judged(_ registry.Task, role string) string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.judged[role]
 }
 
 // setTouchedErr has TouchedSince fail with err (nil: answer again).

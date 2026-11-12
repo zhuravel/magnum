@@ -39,8 +39,7 @@ var (
 	ErrRebaseConflict = errors.New("gitx: the rebase conflicts")
 	// ErrNotOnBranch is MergeFFOnly finding another branch (or a detached
 	// HEAD) checked out than the one it is to fast-forward, right before
-	// its merge, or that branch not at the commit it merged right after;
-	// FastForward and ResetKeep finding a detached HEAD.
+	// its merge, or that branch not at the commit it merged right after.
 	ErrNotOnBranch = errors.New("gitx: the checkout is not on the branch to fast-forward")
 	// ErrBranchExists is SwitchCreate finding the branch it is to create.
 	ErrBranchExists = errors.New("gitx: the branch exists")
@@ -83,27 +82,6 @@ func (c *Client) Switch(ctx context.Context, dir, branch string) error {
 	}
 	_, err := c.git(ctx, dir, call{label: "switch " + branch, mutates: true, timeout: worktreeTimeout},
 		"switch", "--quiet", "--no-guess", "--no-overwrite-ignore", branch)
-	return err
-}
-
-// ResetKeep moves the branch checked out in the work tree at dir, and HEAD,
-// to rev (`git reset --keep <rev>`): the work tree's changes the move does
-// not touch stay, and one it would overwrite makes git refuse, which is an
-// error, and nothing moves. The commit the branch was at stays in the
-// repository (its reflog). A detached HEAD is ErrNotOnBranch: it moves no
-// branch.
-func (c *Client) ResetKeep(ctx context.Context, dir, rev string) error {
-	if err := checkRev("rev", rev); err != nil {
-		return err
-	}
-	switch on, err := c.headRef(ctx, dir); {
-	case err != nil:
-		return err
-	case on == "":
-		return fmt.Errorf("gitx: reset --keep %s: HEAD is detached: %w", rev, ErrNotOnBranch)
-	}
-	_, err := c.git(ctx, dir, call{label: "reset --keep " + rev, mutates: true, timeout: worktreeTimeout},
-		"reset", "--quiet", "--keep", rev)
 	return err
 }
 

@@ -148,7 +148,8 @@ func (e *Engine) branchHead(ctx context.Context, t registry.Task, c Copy, repo c
 	if dirty, err := trackedChanges(ctx, git, c.Path); err != nil {
 		return bh, err
 	} else if len(dirty) > 0 {
-		bh.Problem = e.dirtyWords(ctx, t, c, dirty)
+		bh.Problem = fmt.Sprintf("git status shows %s in the copy (%s): commit them or undo them",
+			plural(len(dirty), "tracked change"), clipList(dirty))
 		return bh, nil
 	}
 	if cur != t.Branch {
@@ -180,30 +181,6 @@ func nonEmpty(s string) []string {
 		return nil
 	}
 	return []string{s}
-}
-
-// dirtyWords says what the tracked changes dirty in task t's copy c keep
-// from the factory's checks: commit them or undo them, but a change your
-// answer kept (keptPaths, whatever its file holds now) is to be committed,
-// never undone.
-func (e *Engine) dirtyWords(ctx context.Context, t registry.Task, c Copy, dirty []string) string {
-	paths := e.keptPaths(ctx, t, c, false) // off the loop: a read that writes nothing
-	kept := slices.DeleteFunc(slices.Clone(dirty), func(p string) bool { return !slices.Contains(paths, p) })
-	others := slices.DeleteFunc(slices.Clone(dirty), func(p string) bool { return slices.Contains(kept, p) })
-	var parts []string
-	if len(others) > 0 {
-		parts = append(parts, fmt.Sprintf("git status shows %s in the copy (%s): commit them or undo them",
-			plural(len(others), "tracked change"), clipList(others)))
-	}
-	if len(kept) > 0 {
-		it := "it"
-		if len(kept) > 1 {
-			it = "them"
-		}
-		parts = append(parts, fmt.Sprintf("the operator kept %s in the copy (%s): commit %s on the task's branch, never undo %s",
-			plural(len(kept), "tracked change"), clipList(kept), it, it))
-	}
-	return strings.Join(parts, "; ")
 }
 
 // trackedChanges are the paths of the work tree at dir with tracked changes

@@ -148,11 +148,6 @@ type PromptData struct {
 	// that the PR's review checks the result after publish. false in any
 	// other turn.
 	LastFix bool
-	// KeptOnly is set in the local review's fix turn that commits the
-	// changes the operator kept after a round that blocked nothing (its
-	// review file lists no finding): the prompt says so, and that no round
-	// follows. false in any other turn.
-	KeptOnly bool
 	// The QA walker's turn of a qa stage (factory-qa.md), each "" (0) in any
 	// other: QARun is the run's folder (qa/<n>-<sha7> in TaskDir), where the
 	// walker saves its pages and console logs; QAURL the copy's server
@@ -2024,23 +2019,12 @@ func (e *Engine) unknownHeld(ctx context.Context, t registry.Task, es []registry
 }
 
 // promptText is the prompt role r of run (attempt a of task t's stage st,
-// in copy c) is due now, "" for none, a writer's with the changes you kept
-// in the copy (keptNote): its first (a fallback's after a
+// in copy c) is due now, "" for none: its first (a fallback's after a
 // Codex run of the role notes what that run left, and a coding stage's
 // names the answers that changed the plan this pass hands, run.change), its
 // nudge, a fix turn, the one to go on after a pause, the turn that hands it
 // those answers (nextChanged), or your answers.
 func (e *Engine) promptText(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt, c Copy, run *agentsRun,
-	r *stageRole, dir string) (string, error) {
-	text, err := e.duePrompt(ctx, t, st, a, c, run, r, dir)
-	if err != nil || text == "" || !slices.Contains(e.writerRoles(t), r.role.Name) {
-		return text, err
-	}
-	return text + e.keptNote(ctx, t, c), nil // the changes you kept: every writer prompt names them
-}
-
-// duePrompt is promptText's prompt before the note of the changes you kept.
-func (e *Engine) duePrompt(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt, c Copy, run *agentsRun,
 	r *stageRole, dir string) (string, error) {
 	switch next := r.next; {
 	case !r.prompted:
@@ -2298,9 +2282,6 @@ func (e *Engine) promptData(ctx context.Context, t registry.Task, st config.Fact
 	if st.Prompt == ReviewFixPrompt { // the local review's fix turn: its newest round's findings
 		if n := newestReview(dir); n > 0 {
 			d.Review, d.ReviewReply, d.LastFix = in(reviewFile(n)), in(reviewReplyFile(n)), lastFix(dir, n)
-			if rf, ok, err := readReviewFile(dir, n); err == nil && ok {
-				d.KeptOnly = keptOnly(rf)
-			}
 		}
 	}
 	if st.Prompt == QAFixPrompt { // QA's fix turn: its newest run's defects

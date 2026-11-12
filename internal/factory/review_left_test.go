@@ -43,51 +43,6 @@ func leftAfterYouTyped(t *testing.T, key string) (*reviewRig, registry.Task) {
 	return r, got
 }
 
-// A round's tracked change while you typed into a pane of the task since
-// the round began may be your own edit: the factory saves its diff to
-// review-1-left.diff and asks you, with two options, never "retry", and puts
-// nothing back by itself. "Restore the copy to the reviewed head" puts it
-// back and the round's result stands; "keep the change" leaves the copy as
-// it is and the round's result stands too.
-func TestARoundsChangeAfterYouTypedAsksToRestoreOrKeepIt(t *testing.T) {
-	for _, tc := range []struct {
-		answer, readme string
-	}{
-		{optionRestoreCopy, "shop\n"},
-		{optionKeepChange, "your edit, or a reviewer's\n"},
-	} {
-		t.Run(tc.answer, func(t *testing.T) {
-			r, got := leftAfterYouTyped(t, "PR-12398")
-			if got.State != registry.TaskNeedsYou || !strings.HasSuffix(got.WaitsWhat, "restore the copy to the reviewed head or keep the change?") ||
-				strings.Contains(strings.ToLower(got.WaitsWhat), "retry") {
-				t.Fatalf("task %s waits %q, want the leftovers' question", got.State, got.WaitsWhat)
-			}
-			qs := r.newestQuestions(got.ID)
-			if len(qs) != 1 || !slices.Equal(optionLabels(qs[0]), []string{optionRestoreCopy, optionKeepChange}) ||
-				!strings.Contains(qs[0].Example, "your edit, or a reviewer's") || !strings.Contains(qs[0].Evidence, "review-1-left.diff") {
-				t.Fatalf("questions %+v, want restore and keep, with the saved diff", qs)
-			}
-			if r.read("README") != "your edit, or a reviewer's\n" || !strings.Contains(r.readTask(got.ID, "review-1-left.diff"), "+your edit") {
-				t.Fatal("the factory put back what may be yours, or did not save it first")
-			}
-			r.rt.setTouchedAt("", time.Time{})
-			r.mustAnswer(AnswerPayload{TaskID: got.ID, Revision: got.QuestionRev, Answers: map[int]string{0: tc.answer}})
-			rounds := 1
-			if tc.answer == optionKeepChange { // the writer commits what you kept; no round follows
-				r.commitsKept(got, 1, tc.readme)
-			}
-			r.run(10, func() bool { return r.reload(got.ID).Stage != "local_review" || !isLive(r.reload(got.ID)) })
-			if after := r.reload(got.ID); after.Stage != "pr_body" || !isLive(after) || len(r.rv.calls()) != rounds {
-				t.Fatalf("task %s at %s waits %q after %d rounds; want pr_body after %d", after.State, after.Stage,
-					after.WaitsWhat, len(r.rv.calls()), rounds)
-			}
-			if r.read("README") != tc.readme {
-				t.Fatalf("README is %q after your answer, want %q", r.read("README"), tc.readme)
-			}
-		})
-	}
-}
-
 // failSave makes the factory's save of what a round left fail (git cannot
 // write the patch of its tracked changes): the put-back's steps go to you
 // with nothing saved.
@@ -203,73 +158,26 @@ func TestARoundsNewUntrackedFilesAreSavedAndRemovedWhenNobodyElseCouldHaveMadeTh
 	}
 }
 
-// A round's tracked change is restored by the factory itself once no turn
-// of an agent of the task is in flight in the copy and you are in none of
-// its panes: it is saved to review-1-left.diff (mode 0600), put back, and the
-// round's result stands. While an agent of the task works in the copy, or
-// you are in its pane (asked again just before the put-back, after the
-// save), nothing is put back and nothing is kept saved: the task waits,
-// never on you, and the put-back runs once the turn ended or you left.
-func TestARoundsTrackedChangeIsRestoredOnceNoTurnIsInFlight(t *testing.T) {
-	for _, tc := range []struct {
-		name, waits string
-		other       func(r *reviewRig)
-		gone        func(r *reviewRig)
-	}{
-		{"nobody else in the copy", "", func(*reviewRig) {}, func(*reviewRig) {}},
-		{"an agent at work in the copy", "its turn ended (the fx-writer agent works in it)",
-			func(r *reviewRig) { r.rt.setAtWork("fx-writer") },
-			func(r *reviewRig) { r.rt.setAtWork("") }},
-		// The guard is asked again after the save, just before the put-back.
-		{"you came into a pane while the factory saved it", "you left the pane (you are in the fx-writer pane)",
-			func(r *reviewRig) {
-				r.setFailGit(func(args []string) error {
-					if slices.Contains(args, "diff") && slices.Contains(args, "--binary") {
-						r.rt.setOperatorIn("fx-writer")
-					}
-					return nil
-				})
-			},
-			func(r *reviewRig) {
-				r.setFailGit(nil)
-				r.rt.setOperatorIn("")
-			}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			r := leavingRig(t, func(r *reviewRig, dir string) {
-				r.put(dir, "README", "a reviewer's mutant\n")
-				tc.other(r)
-			})
-			task, _ := r.reviewTask("PR-12392")
-			if tc.waits != "" {
-				r.run(6, func() bool { return strings.Contains(r.reload(task.ID).WaitsWhat, tc.waits) })
-				got := r.reload(task.ID)
-				if got.State == registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, tc.waits) {
-					t.Fatalf("task %s waits %q; want a wait until %q, never on you", got.State, got.WaitsWhat, tc.waits)
-				}
-				if r.read("README") != "a reviewer's mutant\n" || r.saved(task.ID, "review-1-left.diff") {
-					t.Fatal("the factory put back, or kept a save of, what a round left while a turn was in flight")
-				}
-				tc.gone(r)
+// The doubt is asked again just before the put-back, after the save: you
+// who came into a pane while the factory saved what a round left get the
+// question, and nothing is put back.
+func TestADoubtThatComesDuringTheSaveAsksBeforeAnyPutBack(t *testing.T) {
+	r := leavingRig(t, func(r *reviewRig, dir string) {
+		r.put(dir, "README", "a reviewer's mutant\n")
+		r.setFailGit(func(args []string) error {
+			if slices.Contains(args, "diff") && slices.Contains(args, "--binary") {
+				r.rt.setOperatorIn("fx-writer")
 			}
-			r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
-			if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) || len(r.rv.calls()) != 1 {
-				t.Fatalf("task %s at %s waits %q after %d rounds; want pr_body on the one round's result", got.State, got.Stage,
-					got.WaitsWhat, len(r.rv.calls()))
-			}
-			if r.read("README") != "shop\n" {
-				t.Fatal("README is not back as the round found it")
-			}
-			fi, err := os.Stat(filepath.Join(r.layout.FactoryTaskDir(task.ID), "review-1-left.diff"))
-			if err != nil || fi.Mode().Perm() != 0o600 || !strings.Contains(r.readTask(task.ID, "review-1-left.diff"), "+a reviewer's mutant") {
-				t.Fatalf("review-1-left.diff %v (%v), want the round's change kept, private", fi, err)
-			}
-			if !slices.ContainsFunc(r.events(task.ID, "alert"), func(e registry.Event) bool {
-				return strings.Contains(e.Text, "put back by itself")
-			}) {
-				t.Fatal("no alert says the factory put the copy back by itself")
-			}
+			return nil
 		})
+	})
+	task, _ := r.reviewTask("PR-12392")
+	r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
+	got := r.reload(task.ID)
+	if qs := r.newestQuestions(task.ID); got.State != registry.TaskNeedsYou || len(qs) != 1 ||
+		!strings.Contains(qs[0].Text, "you are in the fx-writer pane") || r.read("README") != "a reviewer's mutant\n" {
+		t.Fatalf("task %s waits %q with %+v, README %q; want the question, nothing put back", got.State, got.WaitsWhat, qs,
+			r.read("README"))
 	}
 }
 
