@@ -51,17 +51,18 @@ const (
 
 // The decisions an answer to a stop question makes.
 const (
-	decideSkip      = "skip"      // the check no longer runs for the task
-	decideLonger    = "longer"    // the check runs with a longer bound for the task
-	decideAccept    = "accept"    // the check's failure is known for the task
-	decideDirection = "direction" // your words go to the writer, or to a fresh session of the role
-	decideStart     = "start"     // the role starts again in a fresh session
-	decideAgain     = "again"     // your own words on a check: it runs again
-	decideDrop      = "drop"      // the task stops
-	decideWriter    = "writer"    // the check's faults are the writer's for the task
-	decideNoBase    = "no_base"   // the specs red at the head are judged without their run on the base
-	decideRetry     = "retry"     // your retry closed the question
-	decideGoOn      = "go_on"     // you put back what a review round left: the factory looks at the copy again
+	decideSkip      = "skip"        // the check no longer runs for the task
+	decideLonger    = "longer"      // the check runs with a longer bound for the task
+	decideAccept    = "accept"      // the check's failure is known for the task
+	decideDirection = "direction"   // your words go to the writer, or to a fresh session of the role
+	decideStart     = "start"       // the role starts again in a fresh session
+	decideAgain     = "again"       // your own words on a check: it runs again
+	decideDrop      = "drop"        // the task stops
+	decideWriter    = "writer"      // the check's faults are the writer's for the task
+	decideNoBase    = "no_base"     // the specs red at the head are judged without their run on the base
+	decideRetry     = "retry"       // your retry closed the question
+	decideGoOn      = "go_on"       // you put back what a review round left: the factory looks at the copy again
+	decideGoOnClean = "go_on_clean" // the look after your go-on found the copy as the round found it
 )
 
 // The options' labels of the stop questions.
@@ -501,7 +502,7 @@ func (rec stopsRecord) leftAsked(cy registry.Cycle, round int) (waits bool, goOn
 			waits = true
 		case decideGoOn:
 			goOns++
-		case decideRetry: // your retry: the factory looks afresh
+		case decideRetry, decideGoOnClean: // your retry, or a go-on that found the copy clean: a later leftover is a new one
 			waits, goOns = false, 0
 		}
 	}
@@ -816,4 +817,26 @@ func (e *Engine) directionNote(ctx context.Context, t registry.Task, a registry.
 			strings.TrimSpace(ask.Words)
 	}
 	return ""
+}
+
+// leftClean settles your go-ons on what review round round of cycle cy left
+// in task t's copy once a look found the copy as the round found it
+// (decideGoOnClean): a run again of the round that leaves something of its
+// own is a new leftover, which no doubt may put back by itself.
+func (e *Engine) leftClean(t registry.Task, cy registry.Cycle, round int) error {
+	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	rec, err := readStops(dir)
+	if err != nil {
+		return err
+	}
+	key, changed := leftKey(cy, round), false
+	for i, a := range rec.Asks {
+		if a.Kind == stopLeft && a.Key == key && a.Decision == decideGoOn {
+			rec.Asks[i].Decision, changed = decideGoOnClean, true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return writeStops(dir, rec)
 }

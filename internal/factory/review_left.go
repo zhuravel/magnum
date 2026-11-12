@@ -97,11 +97,12 @@ func (l roundLeftovers) staged() []string {
 }
 
 // fullRestore are the tracked paths that go back as HEAD has them, in the
-// index and the work tree: all but unstage.
+// index and the work tree: all but unstage and keepStaged.
 func (l roundLeftovers) fullRestore() []string {
 	return slices.DeleteFunc(slices.Clone(l.tracked), func(p string) bool {
 		_, found := slices.BinarySearch(l.unstage, p)
-		return found
+		_, keep := slices.BinarySearch(l.keepStaged, p)
+		return found || keep
 	})
 }
 

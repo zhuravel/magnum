@@ -952,6 +952,8 @@ func (e *Engine) goOnCycle(ctx context.Context, t registry.Task, st config.Facto
 		if why != "" {
 			return false, e.stageFailed(ctx, t, needsYou{why})
 		}
+	} else if err := e.leftClean(t, cy, round); err != nil { // a go-on's look found the copy clean
+		return false, err
 	}
 	return e.decideRound(ctx, t, st, c, cy, loop, res)
 }
@@ -988,6 +990,13 @@ func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head st
 		if strings.ContainsRune("ARC", rune(en.X)) || strings.ContainsRune("ARC", rune(en.Y)) {
 			headLacks[en.Path] = true
 			keep[en.Path] = strings.ContainsRune("MTD", rune(en.Y))
+		}
+		// A path HEAD has that the round staged and then changed or deleted
+		// again (MM, MD): the index holds a version no diff of the work tree
+		// saves, so it stays staged too, and the look after the put-back
+		// asks you.
+		if en.X == 'M' && strings.ContainsRune("MTD", rune(en.Y)) {
+			keep[en.Path] = true
 		}
 	}
 	slices.Sort(left.tracked)

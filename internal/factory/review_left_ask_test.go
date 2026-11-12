@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/pipeline"
 )
 
 // answerLeft answers task id's question of a round's leftovers with answer:
@@ -121,5 +123,53 @@ func TestAGoOnOverACopyThatStillHasTheLeftoverAsksAgain(t *testing.T) {
 	if after := r.reload(got.ID); isLive(after) || r.read("README") != "your edit, or a reviewer's\n" {
 		t.Fatalf("task %s at %s after your drop, README %q; want it stopped, the copy as it was", after.State, after.Stage,
 			r.read("README"))
+	}
+}
+
+// A go-on that found the copy as the round found it settles that question:
+// a run again of the round in its cycle (its result an error) that leaves a
+// leftover of its own, with no doubt now, has it put back by itself, never
+// asked about as "still there after your go-on".
+func TestARoundThatRunsAgainAfterAGoOnPutsBackItsOwnLeftoverByItself(t *testing.T) {
+	var r *reviewRig
+	r = newReviewRig(t, func(c evalrun.LocalCase) evalrun.LocalResult {
+		r.put(c.Checkout, "README", "a reviewer's mutant\n")
+		r.rt.setOperatorIn("fx-writer")
+		return outcome(pipeline.OutcomeError)(c)
+	}, func(c evalrun.LocalCase) evalrun.LocalResult {
+		r.put(c.Checkout, "README", "a reviewer's mutant, again\n")
+		return result()(c)
+	})
+	task, _ := r.reviewTask("PR-12422")
+	r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
+	r.rt.setOperatorIn("")
+	r.git(r.copyDir, "checkout", "--", "README") // you put the copy back
+	r.answerLeft(task.ID, optionPutBack)
+	r.run(10, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+	if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) || len(r.rv.calls()) != 2 || r.read("README") != "shop\n" ||
+		r.putBackAlerts(task.ID) != 1 {
+		t.Fatalf("task %s at %s waits %q after %d rounds, README %q, %d put-backs; want the run again's leftover put back by itself",
+			got.State, got.Stage, got.WaitsWhat, len(r.rv.calls()), r.read("README"), r.putBackAlerts(task.ID))
+	}
+}
+
+// A tracked file the round staged and then edited again (git status MM)
+// has a staged version that no diff of the work tree saves: it stays
+// staged, never restored by itself, and the question asks you, the index's
+// version still there.
+func TestAFileStagedAndEditedAgainKeepsItsStagedVersion(t *testing.T) {
+	r := leavingRig(t, func(r *reviewRig, dir string) {
+		r.put(dir, "README", "the staged version\n")
+		r.gitIn(dir, "add", "README")
+		r.put(dir, "README", "the work tree's version\n")
+	})
+	task, _ := r.reviewTask("PR-12423")
+	r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
+	got := r.reload(task.ID)
+	if got.State != registry.TaskNeedsYou || len(r.newestQuestions(task.ID)) != 1 {
+		t.Fatalf("task %s waits %q; want the question over the staged version", got.State, got.WaitsWhat)
+	}
+	if staged := r.git(r.copyDir, "show", ":README"); staged != "the staged version" {
+		t.Fatalf("the index holds %q; want the staged version kept", staged)
 	}
 }
