@@ -11,6 +11,7 @@ package cli
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -19,6 +20,9 @@ import (
 
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/factory"
+	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 const (
@@ -98,20 +102,27 @@ func runDrain(c *Context, o drainOpts, pos []string) int {
 }
 
 // drainTarget is one daemon's side of a drain: its record (read, write and a
-// lift that compares its value first), its acknowledgement, its pid now,
-// whether its build knows the drain, and its wake-up.
+// lift that compares its value first), its acknowledgement, its pid now and
+// whether its build knows the drain (and how to ask again, for a daemon that
+// starts while the command waits), the agents' turns it left in herdr while
+// it is down, its wake-up, and what its park left as it was.
 type drainTarget struct {
-	name  string
-	pid   int
-	knows bool
-	read  func(ctx context.Context) (string, error)
-	write func(ctx context.Context, v string) error
-	lift  func(ctx context.Context, v string) error
-	ack   func(ctx context.Context) string
-	alive func(ctx context.Context) int
-	kick  func()
-	// prev is the record before this command wrote its own.
+	name     string
+	pid      int
+	knows    bool
+	read     func(ctx context.Context) (string, error)
+	write    func(ctx context.Context, v string) error
+	lift     func(ctx context.Context, v string) error
+	ack      func(ctx context.Context) string
+	alive    func(ctx context.Context) (int, error)
+	knowsPID func(ctx context.Context, pid int) bool
+	down     func(ctx context.Context) ([]string, error)
+	start    string // what starts it again, for a daemon that is down
+	kick     func()
+	// prev is the record before this command wrote its own; left what the
+	// daemon's last acknowledgement says its park left.
 	prev string
+	left []string
 }
 
 // drainTargets are the daemons of scope sc, the factory first: its record
@@ -120,8 +131,7 @@ func drainTargets(ctx context.Context, c *Context, d *actDeps, sc controlScope) 
 	var out []*drainTarget
 	if sc.factory {
 		l := c.Layout
-		alive := func(ctx context.Context) int { pid, _ := controlSys.FactoryPID(ctx, l); return pid }
-		t := &drainTarget{name: daemonFactory, pid: alive(ctx),
+		t := &drainTarget{name: daemonFactory, start: "magnum factory install",
 			read:  func(context.Context) (string, error) { return factory.ReadRebootDrain(l) },
 			write: func(_ context.Context, v string) error { return factory.WriteRebootDrain(l, v) },
 			lift:  func(_ context.Context, v string) error { return factory.LiftRebootDrain(l, v) },
@@ -131,16 +141,16 @@ func drainTargets(ctx context.Context, c *Context, d *actDeps, sc controlScope) 
 				}
 				return ""
 			},
-			alive: alive,
-			kick:  func() { _, _ = controlSys.FactoryKick(l) },
+			alive:    func(ctx context.Context) (int, error) { return controlSys.FactoryPID(ctx, l) },
+			knowsPID: func(_ context.Context, pid int) bool { return factoryKnowsControls(l, pid) },
+			down:     func(ctx context.Context) ([]string, error) { return factoryTurnsDown(ctx, l) },
+			kick:     func() { _, _ = controlSys.FactoryKick(l) },
 		}
-		t.knows = t.pid == 0 || factoryKnowsControls(l, t.pid)
 		out = append(out, t)
 	}
 	if sc.review {
 		st := d.Store
-		get := func(ctx context.Context, key string) string { v, _, _ := st.GetKV(ctx, key); return v }
-		t := &drainTarget{name: daemonReview, pid: controlReviewPID(c, d),
+		t := &drainTarget{name: daemonReview, start: "magnum daemon-restart",
 			read: func(ctx context.Context) (string, error) {
 				v, _, err := st.GetKV(ctx, engine.KVDaemonRebootDrain)
 				return v, err
@@ -150,32 +160,78 @@ func drainTargets(ctx context.Context, c *Context, d *actDeps, sc controlScope) 
 				_, err := st.DeleteKVIf(ctx, engine.KVDaemonRebootDrain, v)
 				return err
 			},
-			ack:   func(ctx context.Context) string { return get(ctx, engine.KVDaemonDrainAck) },
-			alive: func(context.Context) int { return controlReviewPID(c, d) },
-			kick:  func() { _, _ = d.Kick() },
+			ack:      func(ctx context.Context) string { v, _, _ := st.GetKV(ctx, engine.KVDaemonDrainAck); return v },
+			alive:    func(context.Context) (int, error) { return reviewPID(d) },
+			knowsPID: func(ctx context.Context, pid int) bool { return reviewKnowsControls(ctx, d, pid) },
+			down:     func(ctx context.Context) ([]string, error) { return reviewTurnsDown(ctx, st) },
+			kick:     func() { _, _ = d.Kick() },
 		}
-		t.knows = t.pid == 0 || reviewKnowsControls(ctx, d, t.pid)
 		out = append(out, t)
 	}
+	for _, t := range out {
+		if pid, err := t.alive(ctx); err == nil { // one it cannot tell is said by the wait, which certifies nothing of it
+			t.pid = pid
+		}
+		t.knows = t.pid == 0 || t.knowsPID(ctx, t.pid)
+	}
 	return out
+}
+
+// reviewPID is the running review daemon's pid (0: none), read without
+// waking it when the deps can (Running), else through the kick; an error
+// when its pidfile cannot be read.
+func reviewPID(d *actDeps) (int, error) {
+	if d.Running != nil {
+		return d.Running()
+	}
+	return d.Kick()
+}
+
+// drainRecord is the drain for a reboot this command writes: a generation of
+// its own, and, when a drain already holds, its start, its end (until
+// resume after --keep unless --keep says it now), its reason unless --reason
+// gives one, and its boot unless this one reads the boot.
+func drainRecord(ctx context.Context, c *Context, targets []*drainTarget, now time.Time, o drainOpts) engine.RebootDrain {
+	rec := engine.RebootDrain{Generation: now.UnixNano(), Since: now, Until: engine.DrainUntilBoot, Reason: actClean(o.reason)}
+	var held *engine.RebootDrain
+	for _, t := range targets {
+		if v, err := t.read(ctx); err == nil {
+			if d, ok := engine.ParseRebootDrain(v); ok {
+				held = &d
+				break
+			}
+		}
+	}
+	if held != nil {
+		rec.Since, rec.Until = held.Since, held.Until
+		if rec.Reason == "" {
+			rec.Reason = held.Reason
+		}
+	}
+	if o.keep {
+		rec.Until = engine.DrainUntilResume
+	}
+	if rec.Until == engine.DrainUntilResume {
+		return rec
+	}
+	if boot, err := controlSys.Boot(ctx); err == nil {
+		rec.Boot = boot
+	} else if held != nil && held.Boot.Known() {
+		rec.Boot = held.Boot
+	} else {
+		fmt.Fprintf(c.Stderr, "magnum drain: warning: cannot read the Mac's boot (%v): the drain lasts until `magnum resume`\n", err)
+	}
+	return rec
 }
 
 func drainMain(ctx context.Context, c *Context, d *actDeps, o drainOpts) int {
 	sc := o.scope.resolve(c)
 	out := controlOut{c: c, cmd: "drain", both: sc.both()}
-	now := d.now()
-	rec := engine.RebootDrain{Generation: now.UnixNano(), Since: now, Until: engine.DrainUntilBoot, Reason: actClean(o.reason)}
-	if o.keep {
-		rec.Until = engine.DrainUntilResume
-	} else if boot, err := controlSys.Boot(ctx); err != nil {
-		fmt.Fprintf(c.Stderr, "magnum drain: warning: cannot read the Mac's boot (%v): the drain lasts until `magnum resume`\n", err)
-	} else {
-		rec.Boot = boot
-	}
 	targets := drainTargets(ctx, c, d, sc)
 	if !drainBuildsKnow(out, targets) {
 		return 1
 	}
+	rec := drainRecord(ctx, c, targets, d.now(), o)
 	value := rec.Value()
 	for i, t := range targets {
 		prev, err := t.read(ctx)
@@ -196,7 +252,7 @@ func drainMain(ctx context.Context, c *Context, d *actDeps, o drainOpts) int {
 		if t.pid > 0 {
 			out.say(t.name, "draining for a reboot: nothing new starts, not even what you ask for; the work in flight ends, then the idle agents park")
 		} else {
-			out.say(t.name, "draining for a reboot: no daemon runs, so nothing is in flight; its next start holds the drain")
+			out.say(t.name, "draining for a reboot: no daemon runs; its agents' turns in herdr end, and its next start holds the drain")
 		}
 	}
 	if o.noWait {
@@ -227,26 +283,35 @@ func drainBuildsKnow(out controlOut, targets []*drainTarget) bool {
 	return ok
 }
 
-// drainUndo lifts the records this command wrote on the daemons set before
-// one failed: only where no drain held before, and only while the record is
-// still this command's.
+// drainUndo undoes, on the daemons set before one failed, what this command
+// wrote, while its record is still this command's: it lifts a drain it
+// wrote where none was, and puts back the one it overwrote.
 func drainUndo(ctx context.Context, out controlOut, set []*drainTarget, value string) {
 	for _, t := range set {
-		if t.prev != "" {
-			out.fail(t.name, "keeps the drain it held before this command")
-			continue
+		var err error
+		if t.prev == "" {
+			if err = t.lift(ctx, value); err == nil {
+				out.fail(t.name, "its drain is lifted again: the other daemon's failed")
+				continue
+			}
+		} else {
+			var cur string
+			if cur, err = t.read(ctx); err == nil && cur == value {
+				err = t.write(ctx, t.prev)
+			}
+			if err == nil {
+				out.fail(t.name, "its drain is put back as it was: the other daemon's failed")
+				continue
+			}
 		}
-		if err := t.lift(ctx, value); err != nil {
-			out.fail(t.name, "its drain stays (could not lift it: "+err.Error()+"); `magnum resume` lifts it")
-			continue
-		}
-		out.fail(t.name, "its drain is lifted again: the other daemon's failed")
+		out.fail(t.name, "its drain stays as this command wrote it (could not undo it: "+err.Error()+"); `magnum resume` lifts it")
 	}
 }
 
 // drainState is a daemon's side of the wait: done (it acknowledged this
-// generation, is quiet and parked its idle agents, or it does not run) and
-// what still runs, in words.
+// generation, is quiet and parked its idle agents, or it is down with no
+// agent's turn in flight) and what still runs or keeps it from saying so,
+// in words.
 type drainState struct {
 	done bool
 	text string
@@ -262,7 +327,10 @@ const (
 	drainReplaced
 )
 
-// state reads t's side of the wait for generation gen.
+// state reads t's side of the wait for generation gen. A daemon it cannot
+// tell runs, or a daemon that is down whose agents' turns it cannot read,
+// is never done; one that is down is done only once its agents' turns in
+// herdr ended; a daemon that started meanwhile has its build checked again.
 func (t *drainTarget) state(ctx context.Context, gen int64) (drainState, drainStop) {
 	v, err := t.read(ctx)
 	if err != nil {
@@ -275,15 +343,25 @@ func (t *drainTarget) state(ctx context.Context, gen int64) (drainState, drainSt
 	case !ok || d.Generation != gen:
 		return drainState{}, drainReplaced
 	}
-	pid := t.alive(ctx)
+	pid, err := t.alive(ctx)
+	if err != nil {
+		return drainState{text: "cannot tell whether the " + t.name + " daemon runs (" + err.Error() + "): nothing is safe to say of it"}, drainGoesOn
+	}
 	if pid == 0 {
-		return drainState{done: true, text: "no daemon runs: nothing in flight"}, drainGoesOn
+		return t.downState(ctx), drainGoesOn
+	}
+	if pid != t.pid {
+		t.pid, t.knows = pid, t.knowsPID(ctx, pid)
+	}
+	if !t.knows {
+		return drainState{text: oldBuildText(t.name, pid, "`magnum drain`")}, drainGoesOn
 	}
 	a, ok := engine.ParseDrainAck(t.ack(ctx))
 	switch {
 	case !ok || a.Generation != gen || a.PID != pid:
 		return drainState{text: "has not held the drain yet"}, drainGoesOn
 	case a.Done(gen, pid):
+		t.left = a.Left
 		return drainState{done: true, text: "quiet, its idle agents parked"}, drainGoesOn
 	case a.Quiet && len(a.Work) > 0:
 		return drainState{text: "quiet; its agents cannot park yet: " + strings.Join(a.Work, ", ")}, drainGoesOn
@@ -293,39 +371,62 @@ func (t *drainTarget) state(ctx context.Context, gen int64) (drainState, drainSt
 	return drainState{text: "still runs: " + strings.Join(a.Work, ", ")}, drainGoesOn
 }
 
+// downState is the state of t's daemon while it is down: its agents' turns
+// outlive it in herdr, so it is done only once its store shows none.
+func (t *drainTarget) downState(ctx context.Context) drainState {
+	work, err := t.down(ctx)
+	switch {
+	case err != nil:
+		return drainState{text: "its daemon is down and its agents' turns cannot be read (" + err.Error() + "): start it (`" + t.start +
+			"`) so it says what runs, or `magnum resume`"}
+	case len(work) > 0:
+		return drainState{text: "its daemon is down while agents' turns run in herdr: " + strings.Join(work, ", ") + ": start it (`" +
+			t.start + "`) so it sees them end"}
+	}
+	return drainState{done: true, text: "no daemon runs, and no agent's turn is in flight"}
+}
+
 // drainWait waits until every daemon of targets is done (drainState), saying
 // what still runs every drainProgressEvery and waking the daemons every
 // rebootDrainKickEvery, for at most o.timeout. Ctrl-C and the timeout keep
-// the drain (exit 1); a resume ends the wait (exit 0), a newer drain too
-// (exit 1: its command waits for it).
+// the drain (exit 1); a resume of every daemon ends the wait (exit 0), of
+// some (two polls in a row: one resume lifts the daemons one at a time) with
+// what still holds (exit 1), and a newer drain too (exit 1: its command
+// waits for it).
 func drainWait(ctx context.Context, c *Context, d *actDeps, out controlOut, targets []*drainTarget, rec engine.RebootDrain, o drainOpts) int {
 	var waited, sinceProgress, sinceKick time.Duration
 	states := make([]drainState, len(targets))
+	partial := false
 	for {
 		all := true
+		var resumed []bool
+		lifted := 0
 		for i, t := range targets {
 			st, stop := t.state(ctx, rec.Generation)
 			switch stop {
-			case drainResumed:
-				fmt.Fprintln(c.Stdout, "the drain was lifted (`magnum resume`): new work starts again")
-				return 0
 			case drainReplaced:
 				fmt.Fprintf(c.Stderr, "magnum drain: a newer `magnum drain` took the drain over (%s): its command waits for it\n", t.name)
 				return 1
+			case drainResumed:
+				lifted++
+				st = drainState{text: "the drain was lifted (`magnum resume`)"}
 			}
+			resumed = append(resumed, stop == drainResumed)
 			states[i] = st
 			all = all && st.done
 		}
-		if all {
-			for i, t := range targets {
-				out.say(t.name, states[i].text)
-			}
-			if rec.Until == engine.DrainUntilResume || !rec.Boot.Known() {
-				fmt.Fprintln(c.Stdout, drainSafeKeepText)
-			} else {
-				fmt.Fprintln(c.Stdout, drainSafeText)
-			}
+		switch {
+		case lifted == len(targets):
+			fmt.Fprintln(c.Stdout, "the drain was lifted (`magnum resume`): new work starts again")
 			return 0
+		case lifted > 0 && partial:
+			return drainPartlyLifted(c, out, targets, resumed)
+		case lifted > 0:
+			partial = true
+		case all:
+			return drainSafe(c, out, targets, states, rec)
+		default:
+			partial = false
 		}
 		switch {
 		case ctx.Err() != nil:
@@ -356,6 +457,36 @@ func drainWait(ctx context.Context, c *Context, d *actDeps, out controlOut, targ
 	}
 }
 
+// drainSafe ends a wait whose daemons are all done: each one's line, what a
+// park left as it was, and the safe line.
+func drainSafe(c *Context, out controlOut, targets []*drainTarget, states []drainState, rec engine.RebootDrain) int {
+	for i, t := range targets {
+		out.say(t.name, states[i].text)
+		for _, l := range t.left {
+			out.say(t.name, "left as it is: "+l)
+		}
+	}
+	if rec.Until == engine.DrainUntilResume || !rec.Boot.Known() {
+		fmt.Fprintln(c.Stdout, drainSafeKeepText)
+	} else {
+		fmt.Fprintln(c.Stdout, drainSafeText)
+	}
+	return 0
+}
+
+// drainPartlyLifted ends a wait whose drain a resume lifted on some of the
+// daemons alone (resumed): it says which, and what still drains.
+func drainPartlyLifted(c *Context, out controlOut, targets []*drainTarget, resumed []bool) int {
+	for i, t := range targets {
+		if resumed[i] {
+			out.fail(t.name, "the drain was lifted (`magnum resume`): new work starts again there")
+		} else {
+			out.fail(t.name, "still drains: `magnum resume` lifts it, `magnum drain` drains both again")
+		}
+	}
+	return 1
+}
+
 // drainKept ends a wait that gave up (why) with the drain in force: what
 // still runs on each daemon, and how to go on.
 func drainKept(c *Context, out controlOut, targets []*drainTarget, states []drainState, why string) int {
@@ -367,4 +498,63 @@ func drainKept(c *Context, out controlOut, targets []*drainTarget, states []drai
 	}
 	fmt.Fprintln(c.Stderr, "`magnum drain` waits for it again; `magnum resume` allows new work")
 	return 1
+}
+
+// reviewTurnsDown are the review daemon's agents' turns in flight, from its
+// registry, while the daemon is down: "codex-judge turn of
+// talkable/talkable#12". Its turns outlive it in herdr.
+func reviewTurnsDown(ctx context.Context, st *store.Store) ([]string, error) {
+	runs, err := st.ActiveRuns(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, r := range runs {
+		switch r.State {
+		case store.RunEnded, store.RunVerified, store.RunFailed, store.RunAbandoned:
+			continue
+		}
+		what := fmt.Sprintf("PR %d", r.PRID)
+		if pr, err := st.PRByID(ctx, r.PRID); err == nil {
+			if repo, err := st.RepoByID(ctx, pr.RepoID); err == nil {
+				what = fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
+			}
+		}
+		out = append(out, r.Role+" turn of "+what)
+	}
+	return out, nil
+}
+
+// factoryTurnsDown are the factory daemon's agents' turns in flight, from
+// its agents store opened read-only, while the daemon is down: "fx-writer
+// turn of task 7" (a task's row and its liaison's are numbered by the task).
+// No agents store yet is none.
+func factoryTurnsDown(ctx context.Context, l paths.Layout) ([]string, error) {
+	path := l.FactoryAgentsDB()
+	if !fsx.Exists(path) {
+		return nil, nil
+	}
+	db, err := sql.Open("sqlite", registryReadOnlyDSN(path))
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(ctx, completeTimeout)
+	defer cancel()
+	rows, err := db.QueryContext(ctx, `SELECT r.role, p.number FROM runs r JOIN prs p ON p.id = r.pr_id
+		WHERE r.state IN (?, ?, ?) ORDER BY r.created_at`, store.RunPending, store.RunSubmitted, store.RunWorking)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var role string
+		var n int
+		if err := rows.Scan(&role, &n); err != nil {
+			return nil, err
+		}
+		out = append(out, fmt.Sprintf("%s turn of task %d", role, n))
+	}
+	return out, rows.Err()
 }

@@ -223,6 +223,7 @@ type controlPause struct {
 // it, is quiet and parked its idle agents, and the work that still runs.
 type controlDrain struct {
 	For          string    `json:"for"`
+	Unreadable   bool      `json:"unreadable,omitempty"`
 	Since        time.Time `json:"since"`
 	Until        string    `json:"until,omitempty"`
 	Reason       string    `json:"reason,omitempty"`
@@ -309,10 +310,15 @@ func factoryControlOf(l paths.Layout, pid int) daemonControl {
 }
 
 // rebootDrainOf is a drain for a reboot (its record's value) with the
-// acknowledgement of the daemon pid (ack's value); nil when none holds.
+// acknowledgement of the daemon pid (ack's value); nil when none holds. A
+// record the daemons cannot read holds them until `magnum resume`: it is an
+// unreadable drain.
 func rebootDrainOf(record, ack string, pid int) *controlDrain {
 	d, ok := engine.ParseRebootDrain(record)
 	if !ok {
+		if strings.TrimSpace(record) != "" {
+			return &controlDrain{For: drainForReboot, Unreadable: true}
+		}
 		return nil
 	}
 	cd := &controlDrain{For: drainForReboot, Since: d.Since, Until: d.Until, Reason: d.Reason}
@@ -330,8 +336,10 @@ func rebootDrainOf(record, ack string, pid int) *controlDrain {
 func (dc daemonControl) holdText(now time.Time, long bool) string {
 	var parts []string
 	if d := dc.Drain; d != nil {
-		switch d.For {
-		case drainForReboot:
+		switch {
+		case d.Unreadable:
+			parts = append(parts, "draining (unreadable record): magnum resume ends it")
+		case d.For == drainForReboot:
 			s := "draining since " + inspClock(now, d.Since) + ": magnum resume ends it"
 			switch {
 			case !long:

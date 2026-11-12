@@ -358,8 +358,9 @@ func TestDrainRefusesADaemonOfAnOlderBuild(t *testing.T) {
 	}
 }
 
-// A drain that fails on one daemon reports each and lifts only what it set:
-// the factory's drain it wrote where none was; one that held before stays.
+// A drain that fails on one daemon reports each and undoes only what it set:
+// it lifts the factory's drain it wrote where none was, and puts back one
+// that held before.
 func TestADrainThatFailsOnOneDaemonLiftsOnlyWhatItSet(t *testing.T) {
 	h, _ := newControlHarness(t)
 	if err := h.st.Close(); err != nil { // the review registry fails
@@ -381,7 +382,10 @@ func TestADrainThatFailsOnOneDaemonLiftsOnlyWhatItSet(t *testing.T) {
 	if code := drainMain(h.ctx, h.c, h.d, drainOpts{timeout: time.Hour}); code != 1 {
 		t.Fatalf("drain: exit %d, want 1", code)
 	}
-	actContains(t, h.errb.String(), "factory: keeps the drain it held before this command")
+	actContains(t, h.errb.String(), "factory: its drain is put back as it was")
+	if after, _ := factory.ReadRebootDrain(h.c.Layout); after != before {
+		t.Fatalf("the factory's drain is %q, want the one that held before (%q)", after, before)
+	}
 }
 
 // `magnum resume` lifts the pause and the drain on both daemons and keeps an

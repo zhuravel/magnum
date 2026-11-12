@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -390,18 +391,26 @@ func resumeReviewAll(ctx context.Context, c *Context, d *actDeps) int {
 	return code
 }
 
-// liftReviewRebootDrain deletes the review daemon's drain for a reboot and
-// its acknowledgement (the daemon says the lift in its event); false when
-// none held.
+// liftReviewRebootDrain deletes the review daemon's drain for a reboot it
+// read, and then its acknowledgement (the daemon says the lift in its
+// event); false when none held. A drain that changed between the read and
+// the delete (a newer `magnum drain`) is read again, a few times, and then
+// it is an error: nothing is said lifted that was not.
 func liftReviewRebootDrain(ctx context.Context, d *actDeps) (bool, error) {
-	v, ok, err := d.Store.GetKV(ctx, engine.KVDaemonRebootDrain)
-	if err != nil || !ok || v == "" {
-		return false, err
+	for range 3 {
+		v, ok, err := d.Store.GetKV(ctx, engine.KVDaemonRebootDrain)
+		if err != nil || !ok || v == "" {
+			return false, err
+		}
+		gone, err := d.Store.DeleteKVIf(ctx, engine.KVDaemonRebootDrain, v)
+		if err != nil {
+			return false, err
+		}
+		if gone {
+			return true, d.Store.DeleteKV(ctx, engine.KVDaemonDrainAck)
+		}
 	}
-	if _, err := d.Store.DeleteKVIf(ctx, engine.KVDaemonRebootDrain, v); err != nil {
-		return false, err
-	}
-	return true, d.Store.DeleteKV(ctx, engine.KVDaemonDrainAck)
+	return false, errors.New("the drain for a reboot changed while it was lifted (a newer `magnum drain`?): run `magnum resume` again")
 }
 
 // reviewStillHeld are the review daemon's holds a plain resume leaves, each
