@@ -181,7 +181,7 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 		return Event{}, false // a pause, a refusal or you in the pane: no step now
 	}
 	if recovering || (run.ID == "" && !climbing) {
-		err := r.recoverRole(ctx, t, a, st.role, "no progress for "+NoProgressAfter.String())
+		err := r.recoverRole(ctx, t, a, st.role, "no progress for "+NoProgressAfter.String(), run.ID != "")
 		if spent, ok := errors.AsType[errRecoveriesSpent](err); ok {
 			return r.lostEvent(t, a, st.role, spent), true
 		}
@@ -370,7 +370,7 @@ func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.A
 	case owned:
 		return nil
 	}
-	err = r.recoverRole(ctx, t, a, role, "its pane was lost or its recovery left no turn")
+	err = r.recoverRole(ctx, t, a, role, "its pane was lost or its recovery left no turn", false)
 	switch spent, ok := errors.AsType[errRecoveriesSpent](err); {
 	case ok:
 		r.emit("", r.lostEvent(t, a, role, spent))
@@ -416,10 +416,13 @@ func (r *Runtime) lostEvent(t registry.Task, a registry.Attempt, role config.Rol
 // the attempt has no first prompt to start afresh from: its fresh step is a
 // relaunch (relaunchRole), its stage sending that prompt next; one with a
 // conversation (you typed in it) is resumed first, as any role. Under a
-// drain for a reboot (mayPrompt) it starts nothing and answers the drain's
-// *WaitError: the role stays due, and the watchdog recovers it once the
-// drain is lifted.
-func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, why string) error {
+// drain for a reboot (mayPrompt) a role with no turn in flight starts
+// nothing and answers the drain's *WaitError: the role stays due, and the
+// watchdog recovers it once the drain is lifted. One whose recovery turn
+// hangs in flight (inFlight) takes its next step all the same, as the climb
+// of a turn in flight does: the drain waits for that turn, and only this
+// step cuts it.
+func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, why string, inFlight bool) error {
 	st, err := r.stateFor(ctx, a.ID, role.Name)
 	if err != nil {
 		return err
@@ -427,8 +430,10 @@ func (r *Runtime) recoverRole(ctx context.Context, t registry.Task, a registry.A
 	if err := r.mayRestart(ctx, t, st); err != nil {
 		return err // no step is spent
 	}
-	if err := r.mayPrompt(); err != nil {
-		return err // drain.go: no step is spent either
+	if !inFlight {
+		if err := r.mayPrompt(); err != nil {
+			return err // drain.go: no step is spent either
+		}
 	}
 	pr, err := r.owner(ctx, t, a.ID)
 	if err != nil {

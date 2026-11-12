@@ -26455,7 +26455,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   hung session, then failed) takes no step under the drain, and stays due; the restart of the idle Codex sessions
   after a Codex login change waits for the lift, since its new processes would start after a quiet
   acknowledgement and the reboot restarts them anyway. The climb of a turn in flight is left as it is: the drain
-  waits for that turn.
+  waits for that turn. So is the next step of a recovery whose own turn hangs in flight (H2): the drain waits for
+  that turn too, and only that step cuts it, so gating it kept the drain from ever going quiet.
   An hour quiet raises a NEEDS YOU blocker, with its one alert. work.json also names the build and the controls
   version, which the CLI checks before it writes either file; a stop whose wait for the work off the loop ran out
   keeps work.json, naming that work, so a drain after that exit is not certified. The daemon reads both files

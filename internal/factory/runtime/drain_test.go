@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/herdr"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 // A reboot cuts every agent's turn in flight: the task's own roles' and its
@@ -242,6 +243,39 @@ func TestAClimbWithNoTurnInFlightWaitsForTheDrain(t *testing.T) {
 	}
 	if p := g.h.promptTexts(); p[len(p)-1] != first {
 		t.Fatalf("the fresh session got %q, want the first prompt", p[len(p)-1])
+	}
+}
+
+// A recovery turn that hangs in flight under the drain still gets its next
+// step: the drain waits for that turn, so the step that cuts it (a quit and
+// a resume) goes on, as the climb of a turn in flight does. Held, the hung
+// turn stayed in flight and the drain never went quiet.
+func TestAHungRecoveryTurnTakesItsNextStepUnderTheDrain(t *testing.T) {
+	g := newRig(t)
+	g.launch("fx-repro")
+	g.h.setSession(g.agent("fx-repro"), "sid-1")
+	g.send("fx-repro", "reproduce the bug")
+	g.observeN(2)
+	g.h.losePane(g.agent("fx-repro"))
+	g.observe() // resume 1: its recovery turn is in flight, and hangs
+	active, err := g.st.ActiveRuns(g.ctx)
+	if err != nil || len(active) != 1 || active[0].Kind != store.RunRecovery {
+		t.Fatalf("runs in flight %+v, %v; want the recovery turn", active, err)
+	}
+	hung := active[0].ID
+	starts := len(g.h.startCalls())
+	g.draining(true)
+
+	for i := 0; i < 3 && len(g.h.startCalls()) == starts; i++ {
+		g.clock.Add(NoProgressAfter)
+		g.watchdog()
+	}
+
+	if len(g.h.startCalls()) == starts {
+		t.Fatal("the hung recovery turn got no next step under the drain: it stays in flight, and the drain never goes quiet")
+	}
+	if r := g.storeRun(hung); r.State != store.RunAbandoned {
+		t.Fatalf("the hung recovery run is %s after the next step, want abandoned", r.State)
 	}
 }
 
