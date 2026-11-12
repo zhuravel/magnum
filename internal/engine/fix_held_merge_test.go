@@ -1430,3 +1430,36 @@ func TestAFixIsRefusedWhileAMergeIsHeld(t *testing.T) {
 		t.Errorf("held refs = %v, want the hold's", refs)
 	}
 }
+
+// The review's bug (J3): the refusal of a fix while a merge is held fired
+// on a row the registry already showed stale (its head moved by a push of
+// the operator's while a job held the PR, so the poll had left it), and an
+// autofix refused so is never tried again. A fix now drops a stale held
+// merge, as P does, and goes on.
+func TestAFixDropsAStaleHeldMergeAndGoesOn(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stale func(*HeldMerge)
+		why   string
+	}{
+		{"head moved", func(held *HeldMerge) { held.Head = strings.Repeat("e", 40) }, "its head moved from eeeeeee"},
+		{"another PR", func(held *HeldMerge) { held.Number = 99 }, "its row names talkable/talkable#99"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := heldWithCalls(t, heldCall)
+			h.setHeld(tc.stale)
+			runs := len(h.fixRuns(h.pr(2).ID))
+			id := h.fix(FixPayload{})
+			h.handle()
+			if r := h.request(id); r.State != store.RequestDone || strings.Contains(deref(r.Result), "magnum holds") {
+				t.Errorf("the fix: %s %q, want it started over the stale held merge", r.State, deref(r.Result))
+			}
+			if ev, ok := h.fixEvent("fix.held_dropped"); !ok || !strings.Contains(ev.Message, tc.why) {
+				t.Errorf("fix.held_dropped = %q, %v; want %q in it", ev.Message, ok, tc.why)
+			}
+			if got := len(h.fixRuns(h.pr(2).ID)); got != runs+1 {
+				t.Errorf("fix runs = %d, want %d: the fix did not start", got, runs+1)
+			}
+		})
+	}
+}

@@ -3536,7 +3536,9 @@ and the PR." when it resolved none), then everything the push changes there agai
 control character but tab and newline escaped (`\x1b`), and every format character and line separator too
 (`\u202e`, `\u061c`), so nothing an agent wrote hides or reorders a line in the pager; the workflow files'
 names are escaped the same way wherever magnum shows them. A diff too long to read whole (over 8 MiB) holds
-nothing. A hold that fails leaves nothing behind and needs you as before, and the daemon's start removes any
+nothing; every file shows as text, whatever git would take as binary. magnum reads the clone's objects as they
+are (no `refs/replace/`, no `info/grafts`), and its own pushes with its tokens go from a repository of its own
+that shares the clone's objects, so no setting in the clone (a `pushInsteadOf`, a proxy) redirects them. A hold that fails leaves nothing behind and needs you as before, and the daemon's start removes any
 held ref or `held-merge.diff` that no held merge names (a crash between the hold and its record). While a
 merge is held, `magnum fix` (and autofix, and a CI fix) is refused: its fixer would merge the base again over
 it; `P` pushes it first, and a push of yours to the branch drops it. The PR needs you: "merge ready: claude-fix

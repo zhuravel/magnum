@@ -20124,9 +20124,10 @@ FUNCTIONS
 
 func Env(mutates bool) map[string]string
     Env returns the environment gitx sets on its git commands: no credential
-    prompt, the clone's hooks off (core.hooksPath=/dev/null) and, for a command
-    that does not mutate, no optional locks. Code that runs git outside gitx
-    should put it in execx.Cmd.Env, with ScrubbedEnv in Unset.
+    prompt, the clone's hooks off (core.hooksPath=/dev/null), the objects as
+    they are (no replacement, no graft) and, for a command that does not mutate,
+    no optional locks. Code that runs git outside gitx should put it in
+    execx.Cmd.Env, with ScrubbedEnv in Unset.
 
 func EnvConfig(environ []string, key string) (string, bool)
     EnvConfig is the value environ's GIT_CONFIG_COUNT pairs give key,
@@ -20584,9 +20585,9 @@ func (c *Client) PatchID(ctx context.Context, dir, rev string) (string, error)
 
 func (c *Client) PathsDiff(ctx context.Context, dir, a, b string, paths ...string) (string, error)
     PathsDiff is the diff from a to b in paths (each taken literally from the
-    top): `git diff a b -- paths`, with no external diff, textconv or color;
-    an output past execx.MaxOutput is an error, never a part of it; "" when the
-    two commits do not differ there.
+    top): `git diff a b -- paths`, with no external diff, textconv or color,
+    every file as text (--text); an output past execx.MaxOutput is an error,
+    never a part of it; "" when the two commits do not differ there.
 
 func (c *Client) PushLease(ctx context.Context, dir, sha, branch, expect string) error
     PushLease pushes commit sha (a full id) to origin's refs/heads/<branch>
@@ -20606,7 +20607,9 @@ func (c *Client) PushLeaseGitHub(ctx context.Context, dir, owner, repo, sha, bra
 
 func (c *Client) PushLeaseGitHubAs(ctx context.Context, dir, owner, repo, sha, branch, expect string, env map[string]string) error
     PushLeaseGitHubAs is PushLeaseViaAs to github.com/<owner>/<repo> over HTTPS
-    (GitHubHTTPSURL).
+    (GitHubHTTPSURL), from a repository of its own that shares dir's objects
+    (pushIsolated): the daemon's push with its own tokens, the Workflows one
+    among them, follows no setting of the clone's.
 
 func (c *Client) PushLeaseVia(ctx context.Context, dir, url, sha, branch, expect string) error
     PushLeaseVia is PushLease to url instead of origin, with gh as git's only
@@ -20644,10 +20647,12 @@ func (c *Client) RemergeDiff(ctx context.Context, dir, merge string, paths ...st
     (each taken literally from the top): `git show --remerge-diff` of it,
     the diff from git's own merge of its parents, conflict markers and all,
     to the merge as it was committed, with no commit header, no external diff,
-    textconv or color; an output past execx.MaxOutput is an error, never a part
-    of it. "" when the merge resolved no conflict there and changed nothing
-    there that git's own merge would not have. The magnum daemon shows it to the
-    operator before the y that pushes a merge it holds (engine.HeldMerge).
+    textconv or color, and every file as text (--text: no "Binary files …
+    differ" for a NUL, a -diff attribute or the clone's core.bigFileThreshold);
+    an output past execx.MaxOutput is an error, never a part of it. "" when the
+    merge resolved no conflict there and changed nothing there that git's own
+    merge would not have. The magnum daemon shows it to the operator before the
+    y that pushes a merge it holds (engine.HeldMerge).
 
 func (c *Client) RemoteURL(ctx context.Context, dir string) (string, error)
     RemoteURL returns the URL of origin in dir. Credentials embedded in the URL

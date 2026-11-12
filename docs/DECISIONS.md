@@ -18926,6 +18926,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
     TestAFixIsRefusedWhileAMergeIsHeld and U+061C and U+2028 in TestHeldMergeDiffEscapesTheControlsThatCouldHideALine
     in engine, TestRemergeDiffAndPathsDiffRefuseAnOutputCutAtTheCap in gitx and TestEOnTheDashboardWithNoRowSaysSo
     in tui.
+  - A fourth round (J1 to J3). gitx's reads honored `refs/replace/` and `info/grafts` in the clone, which the
+    fixer's pane can write, while git push sends the real objects: a replaced blob showed benign workflow text
+    in held-merge.diff while the y pushed the real one, and a replaced tree made `DifferingPaths(merge, tip)`
+    empty, so `pushMerge` pushed with the Workflows token with no hold. Every gitx call now runs with
+    `GIT_NO_REPLACE_OBJECTS=1` and `GIT_GRAFT_FILE=/dev/null/magnum-no-grafts` (`realObjects`): git 2.56.1
+    still reads `info/grafts`, and `GIT_NO_REPLACE_OBJECTS` does not turn it off (both checked with a real git).
+    The graft file is a path that can never exist, not `/dev/null`: on a file that exists, even an empty one,
+    git writes its deprecation advice for the graft file to stderr on every walk of commits. A shallow file only
+    cuts history, which makes the parents and ancestry checks refuse, never pass. The daemon's push
+    with its own tokens (`PushLeaseGitHubAs`: `pushMerge` and the held push) ran in the clone, whose config git
+    applies even to an explicit URL: `url.*.insteadOf` and `url.*.pushInsteadOf` rewrite it (shown with a real
+    git to another repository), and `http.proxy`, `http.sslVerify`, `http.sslCAInfo` and `http.extraHeader` reach
+    its HTTPS; `remote.*.pushurl` does not apply to a URL, and the `-c credential.helper=` reset already left gh
+    the only helper. It now pushes from a bare repository of its own whose `objects/info/alternates` names the
+    clone's objects (`pushIsolated`), so no setting of the clone's applies; the operator's global and system
+    config still do. A shallow clone's `shallow` file is copied into it (a regular file only): without it the
+    push looked for the cut commits' parents and failed. `magnum push`, the pane's own push with the pane's token, is unchanged. The held merge's
+    diffs pass `--text`, with `--no-ext-diff` and `--no-textconv`: a NUL in a workflow file, a `-diff`
+    attribute in the clone's `info/attributes` and its `core.bigFileThreshold` each turned a file into "Binary
+    files … differ", and the y pushed what nobody saw; `escapeControls` makes a NUL visible. A fix refused
+    while a merge is held now refuses only for a held merge that is not stale as the registry shows it
+    (`heldBlocksFix`, `heldStale`); a stale one is dropped, as P drops it, and the fix goes on, since an autofix
+    refused for it is never tried again. Tests, failing first: TestGitxReadsTheRealObjectsWhateverTheClonesReplacementsAndGrafts,
+    TestTheHeldMergesDiffsShowEveryFileAsText, TestTheDaemonsPushIgnoresTheClonesConfigThatCouldRedirectIt (real
+    git, which shows the push from the clone redirected first), TestTheDaemonsPushWorksFromAShallowClone and
+    TestGitxsGraftFileAddsNoAdviceToGitsOutput in gitx, TestAFixDropsAStaleHeldMergeAndGoesOn in
+    engine.
 
 ## The factory (2026-11-03)
 

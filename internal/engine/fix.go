@@ -634,9 +634,8 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	case prev.Cycle > 0 && !(running && sameWaitingLoop(cur, prev)):
 		return nil, fmt.Errorf("%s: %w", label, errFixLoopGone)
 	}
-	if row, held := e.heldMergeOf(ctx, pr); held { // fix_held_merge.go: its fixer would merge the base again over the held merge
-		return nil, fmt.Errorf("%s: magnum holds %s for your y: `magnum merge-parent %s` (P on the screens) pushes it first, and a push of "+
-			"yours to the branch drops it; a fix now would merge the base again over it", label, row.h.words(), label)
+	if err := e.heldBlocksFix(ctx, repo, pr, label); err != nil { // fix_held_merge.go
+		return nil, err
 	}
 	switch author := deref(pr.AuthorLogin); {
 	case author == "":

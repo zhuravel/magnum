@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/url"
 	"os"
@@ -365,13 +366,15 @@ func (c *Client) PushLeaseViaAs(ctx context.Context, dir, url, sha, branch, expe
 }
 
 // PushLeaseGitHubAs is PushLeaseViaAs to github.com/<owner>/<repo> over
-// HTTPS (GitHubHTTPSURL).
+// HTTPS (GitHubHTTPSURL), from a repository of its own that shares dir's
+// objects (pushIsolated): the daemon's push with its own tokens, the
+// Workflows one among them, follows no setting of the clone's.
 func (c *Client) PushLeaseGitHubAs(ctx context.Context, dir, owner, repo, sha, branch, expect string, env map[string]string) error {
 	url, err := gitHubURL(owner, repo)
 	if err != nil {
 		return err
 	}
-	return c.PushLeaseViaAs(ctx, dir, url, sha, branch, expect, env)
+	return c.pushIsolated(ctx, dir, url, sha, branch, expect, env)
 }
 
 // PushLeaseGitHub is PushLeaseVia to github.com/<owner>/<repo> over HTTPS
@@ -402,4 +405,77 @@ func checkURL(url string) error {
 		return errors.New("gitx: refusing a URL with embedded credentials")
 	}
 	return nil
+}
+
+// pushIsolated is pushLease of sha to url with gh as git's only credential
+// helper, from a bare repository of its own whose objects are dir's (its
+// objects/info/alternates names dir's common objects directory), never
+// from dir itself: dir's config, which an agent's pane can write, could
+// rewrite even an explicit URL (url.*.insteadOf, url.*.pushInsteadOf) or
+// reach the push's HTTPS (http.proxy, http.sslVerify, http.sslCAInfo,
+// http.extraHeader), and none of it applies to a repository it never
+// configured. The operator's own global and system config still do. A
+// shallow clone's list of cut commits comes along (copyShallow), so the
+// push still finds where its history ends. The repository goes when the
+// push ends.
+func (c *Client) pushIsolated(ctx context.Context, dir, url, sha, branch, expect string, env map[string]string) error {
+	if err := checkURL(url); err != nil {
+		return err
+	}
+	res, err := c.git(ctx, dir, call{label: "rev-parse --git-common-dir"}, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return fmt.Errorf("gitx: push %s: the clone's git directory: %w", branch, err)
+	}
+	common := res.Out()
+	tmp, err := os.MkdirTemp("", "magnum-push-")
+	if err != nil {
+		return fmt.Errorf("gitx: push %s: %w", branch, err)
+	}
+	defer os.RemoveAll(tmp)
+	if _, err := c.git(ctx, tmp, call{label: "init --bare", mutates: true}, "init", "--quiet", "--bare", "--template=", tmp); err != nil {
+		return fmt.Errorf("gitx: push %s: a repository of its own: %w", branch, err)
+	}
+	info := filepath.Join(tmp, "objects", "info")
+	if err := os.MkdirAll(info, 0o700); err != nil {
+		return fmt.Errorf("gitx: push %s: %w", branch, err)
+	}
+	if err := os.WriteFile(filepath.Join(info, "alternates"), []byte(filepath.Join(common, "objects")+"\n"), 0o600); err != nil {
+		return fmt.Errorf("gitx: push %s: %w", branch, err)
+	}
+	if err := copyShallow(common, tmp); err != nil {
+		return fmt.Errorf("gitx: push %s: the clone's shallow list: %w", branch, err)
+	}
+	return c.pushLease(ctx, tmp, ghOnlyHelper, url, sha, branch, expect, env)
+}
+
+// copyShallow copies the shallow file of the git directory common (the
+// commits whose parents a shallow clone lacks) to the git directory to,
+// when there is one: without it git in to would look for those parents
+// and fail. Only a regular file is copied, never what a link names. A
+// wrong list can only make git send less, which the remote refuses.
+func copyShallow(common, to string) error {
+	from := filepath.Join(common, "shallow")
+	info, err := os.Lstat(from)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return err
+	case !info.Mode().IsRegular():
+		return fmt.Errorf("%s is not a regular file", from)
+	}
+	src, err := os.Open(from)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst, err := os.OpenFile(filepath.Join(to, "shallow"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
+		return err
+	}
+	return dst.Close()
 }

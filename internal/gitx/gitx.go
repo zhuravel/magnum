@@ -164,18 +164,36 @@ var hooksOff = map[string]string{
 	"GIT_CONFIG_VALUE_0": "/dev/null",
 }
 
+// realObjects makes git read every object as it is: no replacement of
+// refs/replace/ (GIT_NO_REPLACE_OBJECTS) and no parent of info/grafts
+// (GIT_GRAFT_FILE at a path that can never exist, under /dev/null: git
+// 2.56 still reads the graft file, whatever GIT_NO_REPLACE_OBJECTS says,
+// and on a file that exists, even an empty one, it writes its deprecation
+// advice to stderr on every walk of commits). Both live in the clone's git
+// directory, which an agent's pane can write, while git push sends the
+// real objects: what magnum reads of a commit (a diff the operator is
+// shown, the workflow files a push may carry, a merge's parents) is what
+// a push of it sends.
+var realObjects = map[string]string{
+	"GIT_NO_REPLACE_OBJECTS": "1",
+	"GIT_GRAFT_FILE":         "/dev/null/magnum-no-grafts",
+}
+
 // Env returns the environment gitx sets on its git commands: no credential
-// prompt, the clone's hooks off (core.hooksPath=/dev/null) and, for a
+// prompt, the clone's hooks off (core.hooksPath=/dev/null), the objects as
+// they are (no replacement, no graft) and, for a
 // command that does not mutate, no optional locks. Code that runs git
 // outside gitx should put it in execx.Cmd.Env, with ScrubbedEnv in Unset.
 func Env(mutates bool) map[string]string { return gitEnv(mutates) }
 
 // gitEnv never lets git prompt for credentials (the daemon has no tty),
-// turns the clone's hooks off (hooksOff) and keeps read-only commands from
-// taking the index lock, which would otherwise race with a human running git
-// in the same worktree.
+// turns the clone's hooks off (hooksOff), reads the objects as they are
+// (realObjects) and keeps read-only commands from taking the index lock,
+// which would otherwise race with a human running git in the same
+// worktree.
 func gitEnv(mutates bool) map[string]string {
 	env := maps.Clone(hooksOff)
+	maps.Copy(env, realObjects)
 	env["GIT_TERMINAL_PROMPT"] = "0"
 	if !mutates {
 		env["GIT_OPTIONAL_LOCKS"] = "0"

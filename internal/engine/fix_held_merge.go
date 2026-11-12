@@ -1151,3 +1151,23 @@ func (e *Engine) sweepHeldFiles(ctx context.Context, rows map[int64]string) {
 		}
 	}
 }
+
+// heldBlocksFix refuses a fix of pr (of repo; label names it) while magnum
+// holds a merge of its parent: its fixer would merge the base again over
+// the held merge, moving or deleting its ref and file under its row. A
+// held merge that went stale as the registry shows it (heldStale: a push
+// of yours that the poll could not judge while a job held the PR, among
+// others) is dropped instead, as P drops it, and the fix goes on: an
+// autofix refused for it would never be tried again.
+func (e *Engine) heldBlocksFix(ctx context.Context, repo store.Repo, pr store.PR, label string) error {
+	row, held := e.heldMergeOf(ctx, pr)
+	if !held {
+		return nil
+	}
+	if why := e.heldStale(repo, pr, row.h, github.PRDetails{}, false); why != "" {
+		e.dropHeldMerge(ctx, repo, pr, row, why, false)
+		return nil
+	}
+	return fmt.Errorf("%s: magnum holds %s for your y: `magnum merge-parent %s` (P on the screens) pushes it first, and a push of "+
+		"yours to the branch drops it; a fix now would merge the base again over it", label, row.h.words(), label)
+}
