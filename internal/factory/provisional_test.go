@@ -213,6 +213,10 @@ func TestADifferentAnswerInCodingAmendsTheReportThenReachesTheWriter(t *testing.
 	h.taskFile(task.ID, reportFile, strings.Replace(goodReport, "none\n\n## Cause", "- Send it to paused plans too.\n\n## Cause", 1))
 	h.taskFile(task.ID, acceptanceFile, goodAcceptance)
 	h.taskFile(task.ID, questionsFile, "[]")
+	// The restart lost the result of the writer's checks, so its first tick
+	// runs them again off the loop, and the stage holds the writer's turn
+	// until they end: wait for them, as a slow machine does.
+	h.e.waitBackground()
 	h.ended(task, "fx-judge")
 	h.tick()
 	ws := h.rt.promptsTo("fx-writer")
