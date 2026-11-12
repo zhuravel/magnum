@@ -6,12 +6,14 @@ package factory
 // change and no untracked file the copy did not have before the round. What
 // a round leaves on that branch at that head (a reviewer's `bundle check`
 // adds a line to Gemfile.lock, a reviewer's probe file) the factory saves in
-// the task's directory and then puts back, but only while nobody else could
-// have made it (putBackRound): nobody at work in the copy now, and no prompt
-// to an agent of the task and no input of yours in its panes since the
-// round's cycle began (othersIn), asked before the save and again before the
-// put-back. A round stopped before its end has the same done before it runs
-// again in its cycle (startRound). Anything else needs you, with why and the
+// the task's directory (review-<n>-left.diff, review-<n>-left/) and then
+// puts back by itself, an event and an alert saying so, and the round's
+// result stands (putBackRound): while no turn of an agent of the task is in
+// flight in the copy and you are in none of its panes (inFlight), asked
+// before the save and again before the put-back; while one is, the task
+// waits for it, and the put-back runs once it ended. A round stopped before
+// its end has the same done before it runs again in its cycle
+// (startRound). A save or a put-back that fails needs you, with why and the
 // steps that put the copy back (leftWait); a copy off the branch or at
 // another head is always yours: the factory never moves a branch or HEAD
 // here. No step here discards a change it did not save first.
@@ -49,6 +51,10 @@ const (
 
 // leftStepPaths is how many paths a step of the wait for you names (leftWait).
 const leftStepPaths = 10
+
+// leftDiffExt ends the name of the diff of the tracked changes a round
+// left, saved in the task's directory (review-<n>-left.diff).
+const leftDiffExt = ".diff"
 
 // roundLeftovers is what a round left in a task's copy that keeps its
 // result from being read (roundLeft): tracked changes, the untracked files,
@@ -134,18 +140,20 @@ func roundName(round, n int) string {
 // task t's copy c (left), and says why the task needs you instead ("" when
 // the copy is back as the round found it). Only tracked changes and new
 // untracked files on the task's branch at the head the round reviewed go
-// back, and only while nobody else could have made them: nobody at work in
-// the copy and nobody in the task's panes since the cycle began (othersIn;
-// a cycle with no start fails the guard), asked before the save and again
-// before the put-back. Each is saved first in the task's directory
-// (saveLeft: round-<n>-left.patch, round-<n>-left/), then the tracked paths
-// go back as HEAD has them (the index only, for a file from before the
-// round) and the new files are removed (putBackLeft), with
-// begin, ok and fail events that name the counts and the saved files, and
-// the copy is looked at again (roundLeft): back as the round found it,
-// whatever git answered, an info event says so. A save that fails, or a
-// guard that fails after it, puts nothing back and keeps no save. It runs
-// whatever ended the pass (ctx's end does not stop it).
+// back, and only while no turn of an agent of the task is in flight in the
+// copy and you are in none of its panes (inFlight), asked before the save
+// and again before the put-back: while one is, nothing is saved or put
+// back, and the pass is a held wait (a heldError) that runs it again once
+// the turn ended. Each is saved first in the task's directory (saveLeft:
+// review-<n>-left.diff, mode 0600, and review-<n>-left/), then the tracked
+// paths go back as HEAD has them (`git restore --source=HEAD --staged
+// --worktree`; the index only, for a file from before the round) and the
+// new files are removed (putBackLeft), with begin, ok and fail events that
+// name the counts and the saved files, and the copy is looked at again
+// (roundLeft): back as the round found it, whatever git answered, an info
+// event and an alert say so, and the round's result stands. A save that
+// fails puts nothing back and keeps no save; it and a put-back that fails
+// need you. It runs whatever ended the pass (ctx's end does not stop it).
 func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy registry.Cycle, round int, left roundLeftovers) (string,
 	error) {
 	ctx = context.WithoutCancel(ctx)
@@ -153,15 +161,13 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 		return e.leftWait(t, c, cy, round, left, "", "")
 	}
 	name := roundName(round, cy.N)
-	guard := func() string {
-		if cy.Started.IsZero() {
-			return "the factory does not know when the round began, so it cannot tell the round's changes from others'"
-		}
-		return e.othersIn(ctx, t, cy.Started)
+	waitFor := func(who string) error {
+		what := fmt.Sprintf("%s of the local review left %s; the factory puts it back once %s", name, left, inFlightEnds(who))
+		e.waitOn(ctx, t, waitAgent, what)
+		return heldError{who: waitAgent, what: what}
 	}
-	if who := guard(); who != "" {
-		e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("left what %s left in %s as it is: %s", name, c.Name, who))
-		return e.leftWait(t, c, cy, round, left, "", "the factory put none of it back: "+who)
+	if who := e.inFlight(ctx, t); who != "" {
+		return "", waitFor(who)
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	base := leftName(dir, cy.N)
@@ -181,10 +187,9 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 		e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("save what %s left in %s: %s", name, c.Name, line))
 		return e.leftWait(t, c, cy, round, left, "", "the factory could not save it, so it put none of it back: "+line)
 	}
-	if who := guard(); who != "" {
+	if who := e.inFlight(ctx, t); who != "" {
 		undo() // the copy still has all of it
-		e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("left what %s left in %s as it is: %s", name, c.Name, who))
-		return e.leftWait(t, c, cy, round, left, "", "the factory put none of it back: "+who)
+		return "", waitFor(who)
 	}
 	perr := putBackLeft(ctx, e.d.Git, c.Path, left, cy.Started)
 	line := ""
@@ -208,7 +213,40 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 		c.Name, saved))
 	e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("%s of the local review left %s; saved to %s, "+
 		"the copy is back as the round found it", name, left, saved))
+	e.alert(ctx, t.ID, fmt.Sprintf("%s: the factory put back by itself what %s of the local review left in the copy (%s), "+
+		"saved to %s; the round's result stands", TaskKey(t), name, left, saved))
 	return "", nil
+}
+
+// inFlight says who keeps a put-back of what a round left in task t's copy
+// from running now ("" for nobody): a turn of an agent of the task in
+// flight in the copy (Runtime.AtWork), you in one of its panes, or a
+// runtime that cannot tell.
+func (e *Engine) inFlight(ctx context.Context, t registry.Task) string {
+	if e.d.Runtime == nil {
+		return ""
+	}
+	role, you, err := e.d.Runtime.AtWork(ctx, t)
+	switch {
+	case err != nil:
+		return "the factory cannot tell who works in it (" + textx.Clip(textx.FirstLine(err.Error()), 200) + ")"
+	case role != "" && you:
+		return "you are in the " + role + " pane"
+	case role != "":
+		return "the " + role + " agent works in it"
+	}
+	return ""
+}
+
+// inFlightEnds says when a put-back that waits for who (inFlight) runs.
+func inFlightEnds(who string) string {
+	switch {
+	case strings.HasPrefix(who, "you are in "):
+		return "you left the pane (" + who + ")"
+	case strings.HasPrefix(who, "the factory cannot tell"):
+		return "it can tell nobody works in the copy (" + strings.TrimPrefix(who, "the factory cannot tell who works in it ") + ")"
+	}
+	return "its turn ended (" + who + ")"
 }
 
 // leftWait is the wait for you over what round `round` (cycle cy) left in
@@ -329,17 +367,18 @@ func shellArgs(dir string, paths []string) string {
 }
 
 // leftName is the free name in dir of what cycle n's round left:
-// round-<n>-left, else round-<n>-left-<k> (the round ran again in its cycle
-// and left something again, or a save was not put back). A name is taken
-// by anything there, a dangling symlink too, or by what cannot be looked at.
+// review-<n>-left, else review-<n>-left-<k> (the round ran again in its
+// cycle and left something again, or a save was not put back). A name is
+// taken by anything there, a dangling symlink too, or by what cannot be
+// looked at.
 func leftName(dir string, n int) string {
 	taken := func(p string) bool {
 		_, err := os.Lstat(p)
 		return !errors.Is(err, fs.ErrNotExist)
 	}
-	name := fmt.Sprintf("round-%d-left", n)
-	for k := 2; taken(filepath.Join(dir, name+".patch")) || taken(filepath.Join(dir, name)); k++ {
-		name = fmt.Sprintf("round-%d-left-%d", n, k)
+	name := fmt.Sprintf("review-%d-left", n)
+	for k := 2; taken(filepath.Join(dir, name+leftDiffExt)) || taken(filepath.Join(dir, name)); k++ {
+		name = fmt.Sprintf("review-%d-left-%d", n, k)
 	}
 	return name
 }
@@ -350,7 +389,7 @@ func leftName(dir string, n int) string {
 func savedAs(base string, left roundLeftovers) string {
 	var out []string
 	if len(left.tracked) > 0 {
-		out = append(out, base+".patch")
+		out = append(out, base+leftDiffExt)
 	}
 	if len(left.added)+len(left.unindexed) > 0 {
 		out = append(out, base+"/")
@@ -360,7 +399,7 @@ func savedAs(base string, left roundLeftovers) string {
 
 // saveLeft saves what a round left in the copy at copyDir (left) before it
 // goes back, in the task's directory dir: the tracked paths' changes as one
-// patch against HEAD (gitx.DiffHead) in <base>.patch, and each new untracked
+// patch against HEAD (gitx.DiffHead) in <base>.diff, and each new untracked
 // file and each file the round took out of the index, a regular file only
 // (fsx.ReadRegularIn: read through an os.Root of the copy), at its path
 // under <base>/, within leftFileLimit,
@@ -371,7 +410,7 @@ func saveLeft(ctx context.Context, git *gitx.Client, copyDir, dir, base string, 
 	var madePatch, madeDir bool
 	remove := func() {
 		if madePatch {
-			_ = os.Remove(filepath.Join(dir, base+".patch"))
+			_ = os.Remove(filepath.Join(dir, base+leftDiffExt))
 		}
 		if madeDir {
 			_ = os.RemoveAll(filepath.Join(dir, base))
@@ -391,7 +430,7 @@ func saveLeft(ctx context.Context, git *gitx.Client, copyDir, dir, base string, 
 		if err != nil {
 			return nil, err
 		}
-		if err := fsx.WriteFileAtomic(filepath.Join(dir, base+".patch"), patch, 0o600); err != nil {
+		if err := fsx.WriteFileAtomic(filepath.Join(dir, base+leftDiffExt), patch, 0o600); err != nil {
 			return nil, err
 		}
 		madePatch = true

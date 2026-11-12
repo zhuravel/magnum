@@ -28,6 +28,18 @@ func leavingRig(t *testing.T, leave func(r *reviewRig, dir string)) *reviewRig {
 	return rig
 }
 
+// failSave makes the factory's save of what a round left fail (git cannot
+// write the patch of its tracked changes): the put-back's steps go to you
+// with nothing saved.
+func (r *reviewRig) failSave() {
+	r.setFailGit(func(args []string) error {
+		if slices.Contains(args, "diff") && slices.Contains(args, "--binary") {
+			return errors.New("fatal: unable to read the index")
+		}
+		return nil
+	})
+}
+
 // put writes text to rel in the copy at dir from a round's goroutine (no
 // t.Fatal there).
 func (r *reviewRig) put(dir, rel, text string) {
@@ -65,13 +77,12 @@ func (r *reviewRig) reviewInfos(id int64) []string {
 }
 
 // A round that leaves a tracked change (a reviewer's `bundle check` adds a
-// line to Gemfile.lock) while nobody else could have made it, nobody at
-// work in the copy and nobody in the task's panes since the round began,
-// has it saved and put back: the change goes to round-1-left.patch in the
-// task's directory, the copy is as the round found it, one info event says
-// so, and the round's result is read: the task goes on, never to you. Your
-// input into a pane before the round began does not hold it.
-func TestARoundsTrackedChangeIsSavedAndPutBackWhenNobodyElseCouldHaveMadeIt(t *testing.T) {
+// line to Gemfile.lock) at the head it reviewed, with no turn of an agent
+// of the task in flight in the copy, has it saved and put back: the change
+// goes to review-1-left.diff in the task's directory, the copy is as the
+// round found it, one info event says so, and the round's result is read:
+// the task goes on, never to you.
+func TestARoundsTrackedChangeIsSavedAndPutBackWhenNoTurnIsInFlight(t *testing.T) {
 	r := leavingRig(t, func(r *reviewRig, dir string) { r.put(dir, "README", "shop\nrake (13.3.0)\n") })
 	r.rt.setTouchedAt("you typed into a pane of PR-12390 at 09:00:00", r.clock.Now())
 	r.clock.Add(time.Minute)
@@ -83,11 +94,11 @@ func TestARoundsTrackedChangeIsSavedAndPutBackWhenNobodyElseCouldHaveMadeIt(t *t
 	if got := r.read("README"); got != "shop\n" {
 		t.Fatalf("README is %q, want it back as the round found it", got)
 	}
-	if patch := r.readTask(task.ID, "round-1-left.patch"); !strings.Contains(patch, "diff --git a/README b/README") ||
+	if patch := r.readTask(task.ID, "review-1-left.diff"); !strings.Contains(patch, "diff --git a/README b/README") ||
 		!strings.Contains(patch, "+rake (13.3.0)") {
-		t.Fatalf("round-1-left.patch:\n%s", patch)
+		t.Fatalf("review-1-left.diff:\n%s", patch)
 	}
-	want := "round 1 of the local review left 1 tracked change in the copy (README); saved to round-1-left.patch, " +
+	want := "round 1 of the local review left 1 tracked change in the copy (README); saved to review-1-left.diff, " +
 		"the copy is back as the round found it"
 	if infos := r.reviewInfos(task.ID); !slices.Equal(infos, []string{want}) {
 		t.Fatalf("review info events %q, want %q", infos, want)
@@ -98,7 +109,7 @@ func TestARoundsTrackedChangeIsSavedAndPutBackWhenNobodyElseCouldHaveMadeIt(t *t
 }
 
 // A round that leaves new untracked files while nobody else could have
-// made them has each saved under round-1-left/ in the task's directory, at
+// made them has each saved under review-1-left/ in the task's directory, at
 // its path in the copy, and removed from the copy: a file, and each file of
 // a new directory, whose emptied directories go too. A file git ignores in
 // that directory is neither saved nor removed. The task goes on.
@@ -113,48 +124,50 @@ func TestARoundsNewUntrackedFilesAreSavedAndRemovedWhenNobodyElseCouldHaveMadeTh
 	if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) {
 		t.Fatalf("task %s at %s waits %q; want it on at pr_body", got.State, got.Stage, got.WaitsWhat)
 	}
-	if got := r.readTask(task.ID, "round-1-left/spec/probe_spec.rb"); got != "a reviewer's probe\n" {
+	if got := r.readTask(task.ID, "review-1-left/spec/probe_spec.rb"); got != "a reviewer's probe\n" {
 		t.Fatalf("saved probe %q", got)
 	}
-	if got := r.readTask(task.ID, "round-1-left/probe/deep/credit_spec.rb"); got != "a deeper probe\n" {
+	if got := r.readTask(task.ID, "review-1-left/probe/deep/credit_spec.rb"); got != "a deeper probe\n" {
 		t.Fatalf("saved deeper probe %q", got)
 	}
-	if r.saved(task.ID, "round-1-left/probe/tmp/cache") || r.saved(task.ID, "round-1-left.patch") {
+	if r.saved(task.ID, "review-1-left/probe/tmp/cache") || r.saved(task.ID, "review-1-left.diff") {
 		t.Fatal("the factory saved an ignored file or a patch of no tracked change")
 	}
 	if r.inCopy("spec/probe_spec.rb") || r.inCopy("probe/deep") || !r.inCopy("probe/tmp/cache") {
 		t.Fatal("the copy is not as the round found it, or lost an ignored file")
 	}
 	want := "round 1 of the local review left 2 new untracked files in the copy (probe/deep/credit_spec.rb, spec/probe_spec.rb); " +
-		"saved to round-1-left/, the copy is back as the round found it"
+		"saved to review-1-left/, the copy is back as the round found it"
 	if infos := r.reviewInfos(task.ID); !slices.Equal(infos, []string{want}) {
 		t.Fatalf("review info events %q, want %q", infos, want)
 	}
 }
 
-// What a round left while somebody else could have changed the copy
-// stays as it is: you typed into one of the task's panes since the round
-// began, or an agent of the task works in the copy. Nothing is saved or put
-// back, and the task needs you with why and the steps: the git restore of
-// the tracked changes and the retry, and the new files named but never in
-// an rm step, as the factory saved none of them. Once you take the steps,
-// the round's result is read.
-func TestARoundsLeftoversWaitForYouWhenSomebodyElseCouldHaveMadeThem(t *testing.T) {
+// A round's tracked change is restored by the factory itself, whoever may
+// have made it, once no turn of an agent of the task is in flight in the
+// copy and you are in none of its panes: you typed into one of the task's
+// panes since the round began, and still it is saved to review-1-left.diff
+// (mode 0600), put back, and the round's result stands. While an agent of
+// the task works in the copy, or you are in its pane (asked again just
+// before the put-back, after the save), nothing is put back and nothing is
+// kept saved: the task waits, never on you, and the put-back runs once the
+// turn ended or you left.
+func TestARoundsTrackedChangeIsRestoredOnceNoTurnIsInFlight(t *testing.T) {
 	for _, tc := range []struct {
-		name, why string
-		other     func(r *reviewRig)
-		gone      func(r *reviewRig)
+		name, waits string
+		other       func(r *reviewRig)
+		gone        func(r *reviewRig)
 	}{
-		{"you typed into a pane since the round began", "you typed into a pane of PR-12392 at 10:00:00",
+		{"you typed into a pane since the round began", "",
 			func(r *reviewRig) {
 				r.rt.setTouchedAt("you typed into a pane of PR-12392 at 10:00:00", r.clock.Now().Add(time.Second))
 			},
 			func(*reviewRig) {}},
-		{"an agent at work in the copy", "the fx-writer agent works in it",
+		{"an agent at work in the copy", "its turn ended (the fx-writer agent works in it)",
 			func(r *reviewRig) { r.rt.setAtWork("fx-writer") },
 			func(r *reviewRig) { r.rt.setAtWork("") }},
 		// The guard is asked again after the save, just before the put-back.
-		{"you came into a pane while the factory saved it", "you are in the fx-writer pane",
+		{"you came into a pane while the factory saved it", "you left the pane (you are in the fx-writer pane)",
 			func(r *reviewRig) {
 				r.setFailGit(func(args []string) error {
 					if slices.Contains(args, "diff") && slices.Contains(args, "--binary") {
@@ -163,41 +176,44 @@ func TestARoundsLeftoversWaitForYouWhenSomebodyElseCouldHaveMadeThem(t *testing.
 					return nil
 				})
 			},
-			func(r *reviewRig) { r.rt.setOperatorIn("") }},
+			func(r *reviewRig) {
+				r.setFailGit(nil)
+				r.rt.setOperatorIn("")
+			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := leavingRig(t, func(r *reviewRig, dir string) {
 				r.put(dir, "README", "a reviewer's mutant\n")
-				r.put(dir, "spec/probe_spec.rb", "a reviewer's probe\n")
 				tc.other(r)
 			})
 			task, _ := r.reviewTask("PR-12392")
-			r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
-			got := r.reload(task.ID)
-			restore := "git -C " + r.copyDir + " --literal-pathspecs restore --staged --worktree -- README"
-			unsaved := "did not save or that are older than the round (spec/probe_spec.rb)"
-			retry := fmt.Sprintf("magnum factory retry %d", task.ID)
-			if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "round 1 of the local review left") ||
-				!strings.Contains(got.WaitsWhat, tc.why) || !strings.Contains(got.WaitsWhat, restore) ||
-				!strings.Contains(got.WaitsWhat, unsaved) || strings.Contains(got.WaitsWhat, "rm ") || !strings.Contains(got.WaitsWhat, retry) {
-				t.Fatalf("task %s waits %q; want you, with %q, %q, %q and no rm", got.State, got.WaitsWhat, tc.why, restore, unsaved)
+			if tc.waits != "" {
+				r.run(6, func() bool { return strings.Contains(r.reload(task.ID).WaitsWhat, tc.waits) })
+				got := r.reload(task.ID)
+				if got.State == registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, tc.waits) {
+					t.Fatalf("task %s waits %q; want a wait until %q, never on you", got.State, got.WaitsWhat, tc.waits)
+				}
+				if r.read("README") != "a reviewer's mutant\n" || r.saved(task.ID, "review-1-left.diff") {
+					t.Fatal("the factory put back, or kept a save of, what a round left while a turn was in flight")
+				}
+				tc.gone(r)
 			}
-			if r.read("README") != "a reviewer's mutant\n" || !r.inCopy("spec/probe_spec.rb") {
-				t.Fatal("the factory changed what the round left")
+			r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+			if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) || len(r.rv.calls()) != 1 {
+				t.Fatalf("task %s at %s waits %q after %d rounds; want pr_body on the one round's result", got.State, got.Stage,
+					got.WaitsWhat, len(r.rv.calls()))
 			}
-			if r.saved(task.ID, "round-1-left.patch") || r.saved(task.ID, "round-1-left") {
-				t.Fatal("the factory saved what it did not put back")
+			if r.read("README") != "shop\n" {
+				t.Fatal("README is not back as the round found it")
 			}
-			tc.gone(r)
-			r.git(r.copyDir, "restore", "--staged", "--worktree", "--", "README")
-			if err := os.Remove(filepath.Join(r.copyDir, "spec/probe_spec.rb")); err != nil {
-				t.Fatal(err)
+			fi, err := os.Stat(filepath.Join(r.layout.FactoryTaskDir(task.ID), "review-1-left.diff"))
+			if err != nil || fi.Mode().Perm() != 0o600 || !strings.Contains(r.readTask(task.ID, "review-1-left.diff"), "+a reviewer's mutant") {
+				t.Fatalf("review-1-left.diff %v (%v), want the round's change kept, private", fi, err)
 			}
-			r.letGoOn(task.ID)
-			r.run(5, func() bool { return r.reload(task.ID).Stage != "local_review" })
-			if got := r.reload(task.ID); got.Stage != "pr_body" || len(r.rv.calls()) != 1 {
-				t.Fatalf("task at %s waits %q after %d rounds; want pr_body on the one round's result", got.Stage, got.WaitsWhat,
-					len(r.rv.calls()))
+			if !slices.ContainsFunc(r.events(task.ID, "alert"), func(e registry.Event) bool {
+				return strings.Contains(e.Text, "put back by itself")
+			}) {
+				t.Fatal("no alert says the factory put the copy back by itself")
 			}
 		})
 	}
@@ -248,10 +264,10 @@ func TestARoundsLeftoversThatCannotBeSavedOrPutBackWaitForYou(t *testing.T) {
 			if r.read("README") != "a reviewer's mutant\n" {
 				t.Fatal("the factory put back what it could not save")
 			}
-			if saved := r.saved(task.ID, "round-1-left.patch"); saved != tc.saved || r.saved(task.ID, "round-1-left") {
-				t.Fatalf("round-1-left.patch saved %v, want %v (or a directory of no new file)", saved, tc.saved)
+			if saved := r.saved(task.ID, "review-1-left.diff"); saved != tc.saved || r.saved(task.ID, "review-1-left") {
+				t.Fatalf("review-1-left.diff saved %v, want %v (or a directory of no new file)", saved, tc.saved)
 			}
-			if tc.saved && !strings.Contains(got.WaitsWhat, "round-1-left.patch") {
+			if tc.saved && !strings.Contains(got.WaitsWhat, "review-1-left.diff") {
 				t.Fatalf("the wait %q does not name the saved patch", got.WaitsWhat)
 			}
 		})
@@ -292,13 +308,13 @@ func TestAFileFromBeforeTheRoundSurvivesThePutBack(t *testing.T) {
 			if got := r.read("probe/old.rb"); got != "yours, from before the round\n" {
 				t.Fatalf("probe/old.rb is %q", got)
 			}
-			if r.inCopy("probe/new_spec.rb") != tc.stays || !strings.Contains(r.readTask(task.ID, "round-1-left.patch"), "probe/new_spec.rb") {
+			if r.inCopy("probe/new_spec.rb") != tc.stays || !strings.Contains(r.readTask(task.ID, "review-1-left.diff"), "probe/new_spec.rb") {
 				t.Fatalf("the staged probe in the copy: %v, want %v; or it is not saved", r.inCopy("probe/new_spec.rb"), tc.stays)
 			}
 			if st := r.git(r.copyDir, "status", "--porcelain"); st != "?? probe/" {
 				t.Fatalf("status after the put-back:\n%s", st)
 			}
-			if r.saved(task.ID, "round-1-left") {
+			if r.saved(task.ID, "review-1-left") {
 				t.Fatal("the factory saved a file from before the round")
 			}
 			for _, info := range r.reviewInfos(task.ID) {
@@ -328,7 +344,7 @@ func TestAPutBackNeverRemovesATrackedFileItRestored(t *testing.T) {
 	if st := r.git(r.copyDir, "status", "--porcelain"); st != "?? app/old_probe.rb" {
 		t.Fatalf("status after the put-back:\n%s", st)
 	}
-	if r.saved(task.ID, "round-1-left/app/old_probe.rb") {
+	if r.saved(task.ID, "review-1-left/app/old_probe.rb") {
 		t.Fatal("the factory saved a file from before the round")
 	}
 }
@@ -363,8 +379,8 @@ func TestARoundStoppedMidwayHasItsLeftoversPutBackBeforeItRunsAgain(t *testing.T
 	if r.read("README") != "shop\n" || r.inCopy("spec/probe_spec.rb") {
 		t.Fatal("the copy is not as the stopped round found it")
 	}
-	if !strings.Contains(r.readTask(task.ID, "round-1-left.patch"), "a stopped reviewer's mutant") ||
-		r.readTask(task.ID, "round-1-left/spec/probe_spec.rb") != "a stopped reviewer's probe\n" {
+	if !strings.Contains(r.readTask(task.ID, "review-1-left.diff"), "a stopped reviewer's mutant") ||
+		r.readTask(task.ID, "review-1-left/spec/probe_spec.rb") != "a stopped reviewer's probe\n" {
 		t.Fatal("what the stopped round left is not saved")
 	}
 	if again, err := os.Stat(listing); err != nil || !os.SameFile(first, again) {
@@ -378,7 +394,7 @@ func TestARoundStoppedMidwayHasItsLeftoversPutBackBeforeItRunsAgain(t *testing.T
 func TestASecondSaveOfARoundKeepsTheFirst(t *testing.T) {
 	var task registry.Task
 	r := leavingRig(t, func(r *reviewRig, dir string) {
-		r.put(r.layout.FactoryTaskDir(task.ID), "round-1-left.patch", "an earlier save\n")
+		r.put(r.layout.FactoryTaskDir(task.ID), "review-1-left.diff", "an earlier save\n")
 		r.put(dir, "README", "shop\nrake (13.3.0)\n")
 	})
 	task, _ = r.reviewTask("PR-12397")
@@ -386,8 +402,8 @@ func TestASecondSaveOfARoundKeepsTheFirst(t *testing.T) {
 	if got := r.reload(task.ID); got.Stage != "pr_body" {
 		t.Fatalf("task %s at %s waits %q", got.State, got.Stage, got.WaitsWhat)
 	}
-	if r.readTask(task.ID, "round-1-left.patch") != "an earlier save\n" ||
-		!strings.Contains(r.readTask(task.ID, "round-1-left-2.patch"), "+rake (13.3.0)") {
+	if r.readTask(task.ID, "review-1-left.diff") != "an earlier save\n" ||
+		!strings.Contains(r.readTask(task.ID, "review-1-left-2.diff"), "+rake (13.3.0)") {
 		t.Fatal("the second save wrote over the first, or is missing")
 	}
 }
@@ -474,7 +490,7 @@ func TestTheWaitsStepsPutTheCopyBackAsTheyAreWritten(t *testing.T) {
 			r := leavingRig(t, func(r *reviewRig, dir string) {
 				tc.leave(r, dir)
 				if !strings.HasSuffix(tc.name, "saved") {
-					r.rt.setOperatorIn("fx-writer")
+					r.failSave()
 				}
 			})
 			task, _ := r.reviewTask("PR-12399")
@@ -522,7 +538,7 @@ func TestTheWaitsStepsNeverRemoveAFileNotProvenTheRounds(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := leavingRig(t, func(r *reviewRig, dir string) {
 				tc.leave(r, dir)
-				r.rt.setOperatorIn("fx-writer")
+				r.failSave()
 			})
 			task, _ := r.reviewTask("PR-12403")
 			r.write(r.copyDir, "tmp/cache.log", "yours, ignored\n")
@@ -684,7 +700,7 @@ func TestARoundsEditToAFileItTookOutOfTheIndexIsSavedFirst(t *testing.T) {
 	if got := r.read("app/credit.rb"); got != credit {
 		t.Fatalf("app/credit.rb is %q, want the branch's", got)
 	}
-	if got := r.readTask(task.ID, "round-1-left/app/credit.rb"); got != "a reviewer's mutant\n" {
+	if got := r.readTask(task.ID, "review-1-left/app/credit.rb"); got != "a reviewer's mutant\n" {
 		t.Fatalf("the round's change saved as %q", got)
 	}
 }
@@ -787,7 +803,8 @@ func TestAPutBackNeverRemovesAFileOlderThanTheRound(t *testing.T) {
 }
 
 // The wait's rm step names only new files saved in the task's directory
-// that are not older than the round: with nothing saved (you in a pane) it
+// that are not older than the round: with nothing saved (a symlink among
+// the new files, which no save takes) it
 // names none, and a file of yours that the round's change of
 // .git/info/exclude showed is never in it, saved or not. The wait names the
 // files it leaves out.
@@ -800,7 +817,9 @@ func TestTheWaitsRmStepNamesOnlyTheRoundsSavedFiles(t *testing.T) {
 		{"nothing saved", func(r *reviewRig, dir string) {
 			r.put(filepath.Join(r.main, ".git", "info"), "exclude", "")
 			r.put(dir, "spec/probe_spec.rb", "a reviewer's probe\n")
-			r.rt.setOperatorIn("fx-writer")
+			if err := os.Symlink("../README", filepath.Join(dir, "spec", "link")); err != nil {
+				r.t.Error(err)
+			}
 		}, "", "logs/app.log"},
 		{"saved, as the put-back failed", func(r *reviewRig, dir string) {
 			r.put(filepath.Join(r.main, ".git", "info"), "exclude", "")

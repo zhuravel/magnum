@@ -1237,7 +1237,7 @@ func TestARoundThatLeavesTheCopyChangedNeedsYouAndKeepsIt(t *testing.T) {
 			if ps := r.rt.promptsTo("fx-writer"); len(ps) != 0 {
 				t.Fatalf("the writer got %d prompts over the round's leftovers", len(ps))
 			}
-			if r.saved(task.ID, "round-1-left.patch") || r.saved(task.ID, "round-1-left") {
+			if r.saved(task.ID, "review-1-left.diff") || r.saved(task.ID, "review-1-left") {
 				t.Fatal("the factory saved what it does not put back")
 			}
 			tc.undo(r, task.Branch, head)
