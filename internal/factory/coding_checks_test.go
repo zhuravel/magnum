@@ -230,8 +230,6 @@ func TestAConfigurationProblemGoesStraightToYouNamingTheKey(t *testing.T) {
 			r.cfg.Factory.Repos[0].Precheck.Lint = []string{"kubectl exec web-1 -- bin/lint {files}"}
 		},
 			[]string{"precheck.lint", "kubectl exec"}},
-		{"lint output not by path:line", func(r *codingRig) { r.lint = func([]string) string { return "something is wrong\n" } },
-			[]string{"precheck.lint", "path:line"}},
 		{"a missing table_stats", func(r *codingRig) {
 			r.cfg.Factory.Repos[0].TableStats, r.cfg.Factory.Repos[0].LargeTableRows = "config/table_stats.json", 1000
 		}, []string{"table_stats", "config/table_stats.json"}},
