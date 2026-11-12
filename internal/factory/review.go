@@ -947,6 +947,9 @@ func (e *Engine) goOnCycle(ctx context.Context, t registry.Task, st config.Facto
 	}
 	if !left.none() {
 		why, err := e.putBackRound(ctx, t, c, cy, round, left)
+		if errors.Is(err, errHeadTaken) { // your answer kept the branch at a new head: its checks run again there
+			return false, nil
+		}
 		if err != nil {
 			return false, err
 		}
@@ -966,9 +969,11 @@ func (e *Engine) goOnCycle(ctx context.Context, t registry.Task, st config.Facto
 // tracked: unindexed), which the writer's `git add -A` would commit. A
 // tracked change of a path HEAD lacks (the round staged it) or that the
 // listing names may be a file of yours, ignored or not (unstage): only its
-// index goes back. Files are compared, never git status's entries, which
-// group a directory's files once and not once the round stages one of them.
-// Nothing of it is removed here.
+// index goes back. A tracked change your answer kept that has the
+// fingerprint it had then (keptUnchanged) is no round's. Files are
+// compared, never git status's entries, which group a directory's files
+// once and not once the round stages one of them. Nothing of it is removed
+// here.
 func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head string, n int) (roundLeftovers, error) {
 	var left roundLeftovers
 	git := e.d.Git
@@ -993,6 +998,11 @@ func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head st
 	}
 	slices.Sort(left.tracked)
 	left.tracked = slices.Compact(left.tracked)
+	kept, err := e.keptUnchanged(ctx, t, c.Path, left.tracked) // yours to keep, by your answer, while it stays the same
+	if err != nil {
+		return left, err
+	}
+	left.tracked = slices.DeleteFunc(left.tracked, func(p string) bool { return slices.Contains(kept, p) })
 	left.keepStaged = slices.DeleteFunc(slices.Clone(left.tracked), func(p string) bool { return !keep[p] })
 	cur, err := git.CurrentBranch(ctx, c.Path)
 	if err != nil {
@@ -1042,7 +1052,7 @@ func (e *Engine) roundLeft(ctx context.Context, t registry.Task, c Copy, head st
 	for _, p := range left.tracked {
 		tracked[p] = true
 	}
-	left.added = slices.DeleteFunc(untracked, func(p string) bool { return left.before.names(p) || tracked[p] })
+	left.added = slices.DeleteFunc(untracked, func(p string) bool { return left.before.names(p) || tracked[p] || slices.Contains(kept, p) })
 	return left, nil
 }
 

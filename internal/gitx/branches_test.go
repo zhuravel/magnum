@@ -748,6 +748,55 @@ func TestFastForwardCarriesTheChangesAndRefusesWhatIsNotAhead(t *testing.T) {
 	}
 }
 
+// ResetKeep moves the checked-out branch back to a commit it reviewed (your
+// answer to a round that committed on it): HEAD and the branch move, the
+// work tree's changes the move does not touch stay, and the commit it was
+// at stays in the repository. A change the move would overwrite is refused
+// and nothing moves; a detached HEAD moves no branch (ErrNotOnBranch).
+func TestResetKeepMovesTheBranchBackAndKeepsTheChanges(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	if err := fx.c.SwitchCreate(ctx, fx.clone, "task-PR-12347", "origin/main"); err != nil {
+		t.Fatal(err)
+	}
+	reviewed := fx.commit(fx.clone, "app/fix.rb", "fixed\n", "the task's work")
+	moved := fx.commit(fx.clone, "app/probe.rb", "probe\n", "a reviewer's commit")
+	fx.write(fx.clone, "README.md", "hello, edited\n")
+	if err := fx.c.ResetKeep(ctx, fx.clone, reviewed); err != nil {
+		t.Fatalf("ResetKeep: %v", err)
+	}
+	if got := fx.git(fx.clone, "rev-parse", "task-PR-12347"); got != reviewed {
+		t.Fatalf("the branch is at %s, want %s", got, reviewed)
+	}
+	if got, _ := os.ReadFile(filepath.Join(fx.clone, "README.md")); string(got) != "hello, edited\n" {
+		t.Fatalf("README.md = %q, want the change kept", got)
+	}
+	if _, err := os.Stat(filepath.Join(fx.clone, "app", "probe.rb")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the moved commit's file is still in the work tree: %v", err)
+	}
+	if got := fx.git(fx.clone, "cat-file", "-t", moved); got != "commit" {
+		t.Fatalf("the commit the branch was at is gone: %q", got)
+	}
+	// A change the move would overwrite: refused, nothing moves.
+	fx.git(fx.clone, "checkout", "--quiet", "--", "README.md")
+	again := fx.commit(fx.clone, "app/fix.rb", "fixed again\n", "another commit")
+	fx.write(fx.clone, "app/fix.rb", "mine\n")
+	if err := fx.c.ResetKeep(ctx, fx.clone, reviewed); err == nil {
+		t.Fatal("ResetKeep over a change of app/fix.rb succeeded")
+	}
+	if got := fx.git(fx.clone, "rev-parse", "HEAD"); got != again {
+		t.Fatalf("a refused move left HEAD at %s, want %s", got, again)
+	}
+	fx.git(fx.clone, "checkout", "--quiet", "--", "app/fix.rb")
+	fx.git(fx.clone, "switch", "--quiet", "--detach")
+	if err := fx.c.ResetKeep(ctx, fx.clone, reviewed); !errors.Is(err, ErrNotOnBranch) {
+		t.Fatalf("ResetKeep of a detached HEAD = %v, want ErrNotOnBranch", err)
+	}
+	if err := fx.c.ResetKeep(ctx, fx.clone, "--hard"); err == nil {
+		t.Fatal("an option as the commit was taken")
+	}
+}
+
 // RestoreTracked puts tracked paths back as HEAD has them, in the index and
 // the work tree (a precheck's command rewrote db/schema.rb, deleted a file,
 // staged one); nothing else changes, untracked files stay.

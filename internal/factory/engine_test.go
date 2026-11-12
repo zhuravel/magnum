@@ -83,6 +83,7 @@ type fakeRuntime struct {
 	// are in its pane (rather than its agent at work).
 	atWork    string
 	atWorkYou bool
+	atWorkErr error // what AtWork answers instead (setAtWorkErr)
 	// touched is who TouchedSince names ("" for nobody), touchedAt when
 	// (zero: for any time).
 	touched   string
@@ -637,6 +638,13 @@ func (f *fakeRuntime) setAtWork(role string) {
 	f.atWork, f.atWorkYou = role, false
 }
 
+// setAtWorkErr has AtWork fail with err (nil: answer again).
+func (f *fakeRuntime) setAtWorkErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.atWorkErr = err
+}
+
 // setOperatorIn has you in role's pane ("" for none).
 func (f *fakeRuntime) setOperatorIn(role string) {
 	f.mu.Lock()
@@ -670,6 +678,9 @@ func (f *fakeRuntime) TouchedSince(_ context.Context, _ registry.Task, since tim
 func (f *fakeRuntime) AtWork(context.Context, registry.Task) (string, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.atWorkErr != nil {
+		return "", false, f.atWorkErr
+	}
 	return f.atWork, f.atWorkYou, nil
 }
 

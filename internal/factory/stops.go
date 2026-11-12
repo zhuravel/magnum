@@ -120,6 +120,22 @@ type stopsRecord struct {
 	// Writer are the checks whose faults your answer handed to the writer
 	// for the task: their failures are the writer's, as any other.
 	Writer []string `json:"writer,omitempty"`
+	// Kept are the tracked changes your answers kept in the copy ("Keep the
+	// change"): while a path's change has the fingerprint it had then
+	// (keptSum), no look at the copy counts it as a round's, and the
+	// factory's checks ask for it to be committed, never undone.
+	Kept []keptChange `json:"kept,omitempty"`
+	// Waits are when a put-back of what a round left first waited for a
+	// turn in flight in the copy, by the round's key (leftKey):
+	// leftWaitBound counts from there, across restarts.
+	Waits map[string]time.Time `json:"waits,omitempty"`
+}
+
+// keptChange is a tracked path whose change your answer kept in the copy,
+// and the fingerprint of that change (keptSum).
+type keptChange struct {
+	Path string `json:"path"`
+	Sum  string `json:"sum"`
 }
 
 // readStops reads stops.json in the task directory dir; none is an empty
@@ -470,29 +486,61 @@ func leftKey(cy registry.Cycle, round int) string {
 	return fmt.Sprintf("round %d of cycle %d at %s", round, cy.N, cy.HeadBefore)
 }
 
+// leftCause is why the factory asks you about what a round left rather
+// than put it back by itself: the cause in the question's words, and its
+// context.
+type leftCause struct{ words, context string }
+
+// typedCause: you typed into a pane of the task, or one of its agents got
+// a prompt, since the round began (who, yoursSince): it may be your edit.
+func typedCause(who string) leftCause {
+	return leftCause{who + " since the round began", "the change may be your own edit, so the factory put nothing back by itself"}
+}
+
+// waitedCause: the put-back waited leftWaitBound for who (inFlight).
+func waitedCause(who string) leftCause {
+	return leftCause{fmt.Sprintf("the factory waited %s to put it back (%s)", capText(leftWaitBound), who),
+		"the factory cannot tell that the turn in the copy ended, so it put nothing back by itself"}
+}
+
+// movedCause: the round left the copy off the task's branch or the branch
+// at another head than it reviewed.
+var movedCause = leftCause{"the factory moves no branch or HEAD by itself", "the factory moves no branch or HEAD by itself"}
+
 // leftQuestion is the question of what review round round of cycle cy left
-// in the copy (left, its diff in the task's directory as saved) while you
-// typed into a pane of the task since the round began (who): it may be your
-// own edit, so the factory restores nothing by itself. Restore the copy to
-// the reviewed head, or keep the change; the round's result stands either
-// way.
-func leftQuestion(cy registry.Cycle, round int, left roundLeftovers, who, saved, diff string) stopQuestion {
+// in the copy of task t (left, its changes saved in the task's directory as
+// saved, diff their patch), which the factory puts back only on your answer,
+// for cause. Restore the copy to the reviewed head, or keep the change; the
+// round's result stands either way, but for a branch kept at a new head,
+// which is the task's head then, and its checks run again.
+func leftQuestion(t registry.Task, cy registry.Cycle, round int, left roundLeftovers, cause leftCause, saved, diff string) stopQuestion {
 	name := roundName(round, cy.N)
+	restore := "the tracked paths go back as the reviewed head has them and the round's new files go (all saved first), and the " +
+		"round's result stands"
+	keep := "the copy keeps it as it is, and the round's result stands; the factory's checks then ask for it to be committed, never undone"
+	if left.moved != "" {
+		restore = fmt.Sprintf("the changes go back (all saved first) and the copy goes back to %s at %s, the head the round reviewed "+
+			"(an event names the head it was at), and the round's result stands", t.Branch, short(cy.HeadBefore))
+		keep = fmt.Sprintf("a copy off %s switches back to it with the changes, and the round's result stands; %s at a new head is "+
+			"the task's head, and its checks run again there", t.Branch, t.Branch)
+	}
+	context := cause.context
+	if saved != "" {
+		context += "; it saved the changes to " + saved
+	}
 	return stopQuestion{
-		ask: stopAsk{Kind: stopLeft, Key: leftKey(cy, round), Why: fmt.Sprintf("%s of the local review left %s, and %s since it began",
-			name, left, who)},
+		ask: stopAsk{Kind: stopLeft, Key: leftKey(cy, round), Why: fmt.Sprintf("%s of the local review left %s, and %s", name, left,
+			cause.words)},
 		q: registry.Question{
-			Text: fmt.Sprintf("%s of the local review left %s at %s, and %s since the round began: restore the copy or keep "+
-				"the change?", strings.ToUpper(name[:1])+name[1:], left, short(cy.HeadBefore), who),
-			Context: "the change may be your own edit, so the factory put nothing back by itself; it saved it to " + saved,
+			Text: fmt.Sprintf("%s of the local review left %s at %s, and %s: restore the copy or keep the change?",
+				strings.ToUpper(name[:1])+name[1:], left, short(cy.HeadBefore), cause.words),
+			Context: context,
 			Example: textx.Clip(diff, 1500),
 			Options: []registry.Option{
-				{Label: optionRestoreCopy, Means: "the tracked paths go back as the reviewed head has them and the round's new files " +
-					"go (all saved first), and the round's result stands"},
-				{Label: optionKeepChange, Means: "the copy keeps it as it is, and the round's result stands; the writer's next commit " +
-					"may take it"},
+				{Label: optionRestoreCopy, Means: restore},
+				{Label: optionKeepChange, Means: keep},
 			},
-			Recommended: -1, Evidence: saved},
+			Recommended: -1, Evidence: cmp.Or(saved, "the factory's look at the copy")},
 	}
 }
 

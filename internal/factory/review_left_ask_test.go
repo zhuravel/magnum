@@ -1,0 +1,148 @@
+package factory
+
+import (
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/evalrun"
+	"github.com/zhuravel/magnum/internal/factory/registry"
+)
+
+// answerLeft answers task id's restore-or-keep question with answer.
+func (r *reviewRig) answerLeft(id int64, answer string) {
+	r.t.Helper()
+	got := r.reload(id)
+	qs := r.newestQuestions(id)
+	if got.State != registry.TaskNeedsYou || len(qs) != 1 || !slices.Equal(optionLabels(qs[0]), []string{optionRestoreCopy, optionKeepChange}) {
+		r.t.Fatalf("task %s waits %q with questions %+v; want the restore-or-keep question", got.State, got.WaitsWhat, qs)
+	}
+	r.mustAnswer(AnswerPayload{TaskID: id, Revision: got.QuestionRev, Answers: map[int]string{0: answer}})
+}
+
+// putBackAlerts are task id's alerts that say the factory put a round's
+// leftovers back by itself.
+func (r *reviewRig) putBackAlerts(id int64) int {
+	n := 0
+	for _, ev := range r.events(id, "alert") {
+		if strings.Contains(ev.Text, "put back by itself") {
+			n++
+		}
+	}
+	return n
+}
+
+// "Keep the change" holds while the change stays the same: the factory
+// remembers the kept change by its fingerprint, so no later look at the
+// copy counts it as a round's (nothing puts it back, nothing asks again),
+// and its checks after the writer's fix ask the writer to commit it, never
+// to undo it; the next round then reviews it, and its result stands. A
+// kept change that changed since is a round's again.
+func TestAKeptChangeStaysThroughTheLaterRoundsWhileItIsTheSame(t *testing.T) {
+	var r *reviewRig
+	r = newReviewRig(t, func(c evalrun.LocalCase) evalrun.LocalResult {
+		r.put(c.Checkout, "README", "your edit, or a reviewer's\n")
+		r.rt.setTouchedAt("you typed into a pane of PR-12401 at 10:00:00", r.clock.Now().Add(time.Second))
+		return result(refundFinding)(c)
+	}, result())
+	task, _ := r.reviewTask("PR-12401")
+	r.run(6, func() bool { return !isLive(r.reload(task.ID)) })
+	r.rt.setTouchedAt("", time.Time{})
+	r.answerLeft(task.ID, optionKeepChange)
+	r.run(6, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
+
+	cy := r.cycles(task.ID)[0]
+	if left, err := r.e.roundLeft(r.ctx, r.reload(task.ID), r.cp, cy.HeadBefore, cy.N); err != nil || !left.none() {
+		t.Fatalf("a later look at the copy finds %s (%v); want none: the kept change is no round's", left, err)
+	}
+	r.write(r.copyDir, "README", "your edit, and a reviewer's more\n")
+	if left, err := r.e.roundLeft(r.ctx, r.reload(task.ID), r.cp, cy.HeadBefore, cy.N); err != nil ||
+		!slices.Equal(left.tracked, []string{"README"}) {
+		t.Fatalf("a later look at the copy finds %s (%v); want README: a kept change that changed is a round's again", left, err)
+	}
+	r.write(r.copyDir, "README", "your edit, or a reviewer's\n")
+
+	r.writerFixes(task, 1, fixedCredit(1), nil) // its commit takes app/credit.rb only
+	r.run(6, func() bool { return len(r.rt.promptsTo("fx-writer")) > 1 })
+	ps := r.rt.promptsTo("fx-writer")
+	if len(ps) != 2 || !strings.Contains(ps[1].Text, "the operator kept 1 tracked change in the copy (README): commit it") ||
+		strings.Contains(ps[1].Text, "undo them") {
+		t.Fatalf("the writer's prompts %+v; want a turn that commits the kept change, never undoes it", ps)
+	}
+	if r.read("README") != "your edit, or a reviewer's\n" {
+		t.Fatal("the factory put back the change you kept")
+	}
+	r.clock.Add(time.Minute)
+	r.commit(task.JiraKey+" keeps the operator's edit", map[string]string{"README": "your edit, or a reviewer's\n"})
+	r.ended(task, "fx-writer")
+	r.run(10, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+	if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) || len(r.rv.calls()) < 2 {
+		t.Fatalf("task %s at %s waits %q after %d rounds; want pr_body on the later rounds' results", got.State, got.Stage,
+			got.WaitsWhat, len(r.rv.calls()))
+	}
+	if got := r.git(r.copyDir, "show", "HEAD:README"); got != "your edit, or a reviewer's" || r.putBackAlerts(task.ID) != 0 {
+		t.Fatalf("README at HEAD is %q with %d put-back alerts; want your kept change committed, never put back", got,
+			r.putBackAlerts(task.ID))
+	}
+}
+
+// A put-back that waits for a turn in flight in the copy waits at most
+// leftWaitBound: an agent's run that never ends, or a runtime that cannot
+// tell who works in the copy, holds the task no longer, and the factory
+// asks you to restore the copy or keep the change, naming the wait.
+// Restore puts it back though the runtime still names the turn (your
+// answer), and keep leaves it; the round's result stands either way.
+func TestAPutBackThatWaitsPastItsBoundAsksToRestoreOrKeep(t *testing.T) {
+	for _, hold := range []struct {
+		name, waits string
+		set         func(r *reviewRig)
+	}{
+		{"a run that never ends", "the fx-writer agent works in it", func(r *reviewRig) { r.rt.setAtWork("fx-writer") }},
+		{"a runtime that cannot tell", "herdr: socket gone",
+			func(r *reviewRig) { r.rt.setAtWorkErr(errors.New("herdr: socket gone")) }},
+	} {
+		for _, tc := range []struct{ answer, readme string }{
+			{optionRestoreCopy, "shop\n"},
+			{optionKeepChange, "a reviewer's mutant\n"},
+		} {
+			t.Run(hold.name+"/"+tc.answer, func(t *testing.T) {
+				r := leavingRig(t, func(r *reviewRig, dir string) {
+					r.put(dir, "README", "a reviewer's mutant\n")
+					hold.set(r)
+				})
+				task, _ := r.reviewTask("PR-12402")
+				r.run(6, func() bool { return strings.Contains(r.reload(task.ID).WaitsWhat, hold.waits) })
+				if got := r.reload(task.ID); got.State == registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, hold.waits) {
+					t.Fatalf("task %s waits %q; want a held wait for the turn first", got.State, got.WaitsWhat)
+				}
+				r.clock.Add(leftWaitBound - time.Minute)
+				r.run(2, nil)
+				if got := r.reload(task.ID); got.State == registry.TaskNeedsYou {
+					t.Fatalf("task waits on you %q before the bound", got.WaitsWhat)
+				}
+				r.clock.Add(2 * time.Minute)
+				r.run(4, func() bool { return r.reload(task.ID).State == registry.TaskNeedsYou })
+				got := r.reload(task.ID)
+				if qs := r.newestQuestions(task.ID); !strings.Contains(got.WaitsWhat, "waited 30m") || len(qs) != 1 ||
+					!strings.Contains(qs[0].Text, "waited 30m") || !strings.Contains(qs[0].Text, hold.waits) {
+					t.Fatalf("task %s waits %q with questions %+v; want the restore-or-keep question naming the wait", got.State,
+						got.WaitsWhat, qs)
+				}
+				if r.read("README") != "a reviewer's mutant\n" || !r.saved(task.ID, "review-1-left.diff") {
+					t.Fatal("the factory put back the change before your answer, or did not save it")
+				}
+				r.answerLeft(task.ID, tc.answer)
+				r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+				if got := r.reload(task.ID); got.Stage != "pr_body" || !isLive(got) || len(r.rv.calls()) != 1 {
+					t.Fatalf("task %s at %s waits %q after %d rounds; want pr_body on the round's result", got.State, got.Stage,
+						got.WaitsWhat, len(r.rv.calls()))
+				}
+				if got := r.read("README"); got != tc.readme {
+					t.Fatalf("README is %q after your answer, want %q", got, tc.readme)
+				}
+			})
+		}
+	}
+}

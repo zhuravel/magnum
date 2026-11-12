@@ -11,16 +11,21 @@ package factory
 // result stands (putBackRound): while no turn of an agent of the task is in
 // flight in the copy and you are in none of its panes (inFlight), asked
 // before the save and again before the put-back; while one is, the task
-// waits for it, and the put-back runs once it ended. A round stopped before
-// its end has the same done before it runs again in its cycle
-// (startRound). A save or a put-back that fails needs you, with why and the
-// steps that put the copy back (leftWait); a copy off the branch or at
-// another head is always yours: the factory never moves a branch or HEAD
-// here. No step here discards a change it did not save first.
+// waits for it, at most leftWaitBound, and the put-back runs once it ended.
+// What may be yours, a wait past its bound, and a copy off the branch or at
+// another head ask you to restore the copy or keep the change (askLeft): the
+// factory never moves a branch or HEAD by itself, only on your answer, and a
+// change you kept stays untouched while it is the same (keepLeft). A round
+// stopped before its end has the same done before it runs again in its
+// cycle (startRound). A save or a put-back that fails needs you, with why
+// and the steps that put the copy back (leftWait). No step here discards a
+// change it did not save first.
 
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -51,6 +56,12 @@ const (
 
 // leftStepPaths is how many paths a step of the wait for you names (leftWait).
 const leftStepPaths = 10
+
+// leftWaitBound is how long a put-back of what a round left waits for a
+// turn in flight in the copy, or for a runtime that cannot tell who works
+// there (inFlight): after it, the factory asks you to restore the copy or
+// keep the change.
+const leftWaitBound = 30 * time.Minute
 
 // leftDiffExt ends the name of the diff of the tracked changes a round
 // left, saved in the task's directory (review-<n>-left.diff).
@@ -136,51 +147,77 @@ func roundName(round, n int) string {
 	return fmt.Sprintf("round %d (cycle %d)", round, n)
 }
 
+// errHeadTaken is putBackRound's answer when your answer kept a branch a
+// round left at a new head: the task took that head (headMoved), and the
+// round's result is read no more.
+var errHeadTaken = errors.New("the task took the head the round left")
+
 // putBackRound puts back what round `round` of the loop (cycle cy) left in
 // task t's copy c (left), and says why the task needs you instead ("" when
-// the copy is back as the round found it). Only tracked changes and new
-// untracked files on the task's branch at the head the round reviewed go
-// back, and only while no turn of an agent of the task is in flight in the
-// copy and you are in none of its panes (inFlight), asked before the save
-// and again before the put-back: while one is, nothing is saved or put
-// back, and the pass is a held wait (a heldError) that runs it again once
-// the turn ended. Each is saved first in the task's directory (saveLeft:
-// review-<n>-left.diff, mode 0600, and review-<n>-left/), then the tracked
-// paths go back as HEAD has them (`git restore --source=HEAD --staged
-// --worktree`; the index only, for a file from before the round) and the
-// new files are removed (putBackLeft), with begin, ok and fail events that
-// name the counts and the saved files, and the copy is looked at again
-// (roundLeft): back as the round found it, whatever git answered, an info
-// event and an alert say so, and the round's result stands. A save that
-// fails puts nothing back and keeps no save; it and a put-back that fails
-// need you. It runs whatever ended the pass (ctx's end does not stop it).
+// the copy is back as the round found it, or keeps what your answer kept).
+// Tracked changes and new untracked files on the task's branch at the head
+// the round reviewed go back by themselves, but only while no turn of an
+// agent of the task is in flight in the copy and you are in none of its
+// panes (inFlight), asked before the save and again before the put-back:
+// while one is, nothing is saved or put back, and the pass is a held wait
+// (a heldError) that runs it again once the turn ended, for at most
+// leftWaitBound (leftHeld). Each is saved first in the task's directory
+// (saveLeft: review-<n>-left.diff, mode 0600, and review-<n>-left/), then
+// the tracked paths go back as HEAD has them (`git restore --source=HEAD
+// --staged --worktree`; the index only, for a file from before the round)
+// and the new files are removed (putBackLeft), with begin, ok and fail
+// events that name the counts and the saved files, and the copy is looked
+// at again (roundLeft): back as the round found it, whatever git answered,
+// an info event and an alert say so, and the round's result stands.
+//
+// It asks you to restore the copy or keep the change instead (askLeft) when
+// you typed into a pane of the task since the round began, when the wait
+// for a turn passed its bound, and when the round left the copy off the
+// task's branch or the branch at another head: the factory moves no branch
+// or HEAD by itself. On your answer, restore puts it back (restoreMoved for
+// a moved copy) and keep leaves it (keepLeft remembers it; keepMoved for a
+// moved copy). A save that fails puts nothing back and keeps no save; it
+// and a put-back that fails need you. It runs whatever ended the pass
+// (ctx's end does not stop it).
 func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy registry.Cycle, round int, left roundLeftovers) (string,
 	error) {
 	ctx = context.WithoutCancel(ctx)
-	if left.moved != "" {
-		return e.leftWait(t, c, cy, round, left, "", "")
-	}
-	name := roundName(round, cy.N)
-	waitFor := func(who string) error {
-		what := fmt.Sprintf("%s of the local review left %s; the factory puts it back once %s", name, left, inFlightEnds(who))
-		e.waitOn(ctx, t, waitAgent, what)
-		return heldError{who: waitAgent, what: what}
-	}
-	if who := e.inFlight(ctx, t); who != "" {
-		return "", waitFor(who)
-	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	stops, err := readStops(dir)
 	if err != nil {
 		return "", err
 	}
-	switch stops.leftDecision(cy, round) {
-	case decideKeep: // your answer: the change stays, and the round's result stands
-		return "", nil
-	case "":
-		if who := e.yoursSince(ctx, t, cy); who != "" {
-			return e.askLeft(ctx, t, c, cy, round, left, who, stops)
+	decision := stops.leftDecision(cy, round)
+	switch {
+	case decision == decideKeep && left.moved == "": // your answer: the change stays, and the round's result stands
+		return "", e.keepLeft(ctx, t, c, left)
+	case decision == "" && left.moved != "":
+		return e.askLeft(ctx, t, c, cy, round, left, movedCause, stops)
+	}
+	name := roundName(round, cy.N)
+	held := func(who string, ask bool) (string, error) { // the wait for a turn in flight, or the question past its bound
+		if ask {
+			return e.askLeft(ctx, t, c, cy, round, left, waitedCause(who), stops)
 		}
+		what := fmt.Sprintf("%s of the local review left %s; the factory puts it back once %s", name, left, inFlightEnds(who))
+		e.waitOn(ctx, t, waitAgent, what)
+		return "", heldError{who: waitAgent, what: what}
+	}
+	if who, ask, err := e.leftHeld(ctx, t, cy, round, decision); err != nil {
+		return "", err
+	} else if who != "" {
+		return held(who, ask)
+	}
+	if decision == "" {
+		if who := e.yoursSince(ctx, t, cy); who != "" {
+			return e.askLeft(ctx, t, c, cy, round, left, typedCause(who), stops)
+		}
+	}
+	switch {
+	case left.moved != "" && decision == decideKeep:
+		return e.keepMoved(ctx, t, c, cy, round)
+	case left.moved != "":
+		return e.restoreMoved(ctx, t, c, cy, round, left)
 	}
 	base := leftName(dir, cy.N)
 	saved := savedAs(base, left)
@@ -199,9 +236,12 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 		e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("save what %s left in %s: %s", name, c.Name, line))
 		return e.leftWait(t, c, cy, round, left, "", "the factory could not save it, so it put none of it back: "+line)
 	}
-	if who := e.inFlight(ctx, t); who != "" {
+	if who, ask, err := e.leftHeld(ctx, t, cy, round, decision); err != nil || who != "" {
 		undo() // the copy still has all of it
-		return "", waitFor(who)
+		if err != nil {
+			return "", err
+		}
+		return held(who, ask)
 	}
 	perr := putBackLeft(ctx, e.d.Git, c.Path, left, cy.Started)
 	line := ""
@@ -223,11 +263,53 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 	}
 	e.event(ctx, t.ID, "review", registry.PhaseOK, fmt.Sprintf("put back what %s left in %s as the round found it, saved to %s", name,
 		c.Name, saved))
+	if decision == decideRestore { // your answer's: no news to alert you of
+		return "", nil
+	}
 	e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("%s of the local review left %s; saved to %s, "+
 		"the copy is back as the round found it", name, left, saved))
-	e.alert(ctx, t.ID, fmt.Sprintf("%s: the factory put back by itself what %s of the local review left in the copy (%s), "+
-		"saved to %s; the round's result stands", TaskKey(t), name, left, saved))
+	e.alert(ctx, t.ID, fmt.Sprintf("%s: %swhat %s of the local review left in the copy (%s), saved to %s; the round's result stands",
+		TaskKey(t), putBackAlert, name, left, saved))
 	return "", nil
+}
+
+// leftHeld says whether a put-back of what round `round` of cycle cy left
+// in task t's copy waits for who (inFlight: a turn in flight, you in a
+// pane, a runtime that cannot tell), or asks you (ask) because that wait
+// passed leftWaitBound with no answer of yours (decision ""). The wait
+// counts from its first pass, which stops.json keeps (Waits) across
+// restarts; once the bound passed, your answer runs the put-back whoever
+// the runtime still names.
+func (e *Engine) leftHeld(ctx context.Context, t registry.Task, cy registry.Cycle, round int, decision string) (who string, ask bool,
+	err error) {
+	who = e.inFlight(ctx, t)
+	if who == "" {
+		return "", false, nil
+	}
+	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	rec, err := readStops(dir)
+	if err != nil {
+		return who, false, err
+	}
+	key := leftKey(cy, round)
+	since, ok := rec.Waits[key]
+	if !ok {
+		since = e.now()
+		if rec.Waits == nil {
+			rec.Waits = map[string]time.Time{}
+		}
+		rec.Waits[key] = since
+		if err := writeStops(dir, rec); err != nil {
+			return who, false, err
+		}
+	}
+	switch {
+	case e.now().Sub(since) < leftWaitBound:
+		return who, false, nil
+	case decision != "":
+		return "", false, nil
+	}
+	return who, true, nil
 }
 
 // yoursSince says how what a round of cycle cy left in task t's copy may be
@@ -251,27 +333,220 @@ func (e *Engine) yoursSince(ctx context.Context, t registry.Task, cy registry.Cy
 
 // askLeft saves what round `round` of cycle cy left in task t's copy c
 // (left) and asks you whether to restore the copy to the reviewed head or
-// keep the change (leftQuestion), as it may be your own edit (who says why):
-// the task waits on you, a held pass. A question asked already waits for
-// your answer with nothing saved again; a save that fails needs you with
-// the steps, as before (leftWait).
-func (e *Engine) askLeft(ctx context.Context, t registry.Task, c Copy, cy registry.Cycle, round int, left roundLeftovers, who string,
+// keep the change (leftQuestion), for cause: the task waits on you, a held
+// pass. A question asked already waits for your answer with nothing saved
+// again; a save that fails needs you with the steps, as before (leftWait).
+func (e *Engine) askLeft(ctx context.Context, t registry.Task, c Copy, cy registry.Cycle, round int, left roundLeftovers, cause leftCause,
 	stops stopsRecord) (string, error) {
-	q := leftQuestion(cy, round, left, who, "", "")
+	q := leftQuestion(t, cy, round, left, cause, "", "")
 	if i := stops.pending(stopLeft, q.ask.Key); i < 0 {
 		dir := e.d.Layout.FactoryTaskDir(t.ID)
-		base := leftName(dir, cy.N)
-		if _, err := saveLeft(ctx, e.d.Git, c.Path, dir, base, left); err != nil {
-			line := clipEnd(textx.FirstLine(scrub.Text(err.Error())), 240)
-			return e.leftWait(t, c, cy, round, left, "", "the factory could not save it, so it put none of it back: "+line)
+		base, saved := leftName(dir, cy.N), ""
+		if len(left.tracked)+len(left.added)+len(left.unindexed) > 0 {
+			if _, err := saveLeft(ctx, e.d.Git, c.Path, dir, base, left); err != nil {
+				line := clipEnd(textx.FirstLine(scrub.Text(err.Error())), 240)
+				return e.leftWait(t, c, cy, round, left, "", "the factory could not save it, so it put none of it back: "+line)
+			}
+			saved = savedAs(base, left)
 		}
 		diff, _ := os.ReadFile(filepath.Join(dir, base+leftDiffExt))
-		q = leftQuestion(cy, round, left, who, savedAs(base, left), scrub.Text(string(diff)))
+		q = leftQuestion(t, cy, round, left, cause, saved, scrub.Text(string(diff)))
 	}
 	if err := e.askStop(ctx, t, q); err != nil {
 		return "", err
 	}
 	return "", heldError{who: waitsYou, what: q.ask.Why}
+}
+
+// keptSum is the fingerprint of path p's change in the copy at copyDir
+// (root, an os.Root of it): the sha256 of its patch against HEAD
+// (gitx.DiffHead, which names HEAD's version of it) and of the file the
+// work tree has (none, for a file it lacks or that is no regular file): the
+// same while neither HEAD's version nor the copy's changed.
+func keptSum(ctx context.Context, git *gitx.Client, root *os.Root, copyDir, p string) (string, error) {
+	patch, err := git.DiffHead(ctx, copyDir, p)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	h.Write(patch)
+	if b, err := fsx.ReadRegularIn(root, p, leftFileLimit); err == nil {
+		h.Write([]byte{1})
+		h.Write(b)
+	} else {
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// keptUnchanged are the paths of tracked, changed in task t's copy at
+// copyDir, whose change your answer kept and that still have the
+// fingerprint they had then (keptSum).
+func (e *Engine) keptUnchanged(ctx context.Context, t registry.Task, copyDir string, tracked []string) ([]string, error) {
+	rec, err := readStops(e.d.Layout.FactoryTaskDir(t.ID))
+	if err != nil || len(rec.Kept) == 0 {
+		return nil, err
+	}
+	root, err := os.OpenRoot(copyDir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	var out []string
+	for _, p := range tracked {
+		i := slices.IndexFunc(rec.Kept, func(k keptChange) bool { return k.Path == p })
+		if i < 0 {
+			continue
+		}
+		sum, err := keptSum(ctx, e.d.Git, root, copyDir, p)
+		if err != nil {
+			return nil, err
+		}
+		if sum == rec.Kept[i].Sum {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+// keepLeft remembers the tracked changes of what a round left (left) in
+// task t's copy c as kept, on your answer: their fingerprints (keptSum) go
+// to stops.json (Kept), so no later look at the copy (roundLeft) counts
+// them as a round's while they stay the same, and the factory's checks ask
+// for them to be committed, never undone (dirtyWords).
+func (e *Engine) keepLeft(ctx context.Context, t registry.Task, c Copy, left roundLeftovers) error {
+	if len(left.tracked) == 0 {
+		return nil
+	}
+	dir := e.d.Layout.FactoryTaskDir(t.ID)
+	rec, err := readStops(dir)
+	if err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(c.Path)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	changed := false
+	for _, p := range left.tracked {
+		sum, err := keptSum(ctx, e.d.Git, root, c.Path, p)
+		if err != nil {
+			return err
+		}
+		switch i := slices.IndexFunc(rec.Kept, func(k keptChange) bool { return k.Path == p }); {
+		case i < 0:
+			rec.Kept, changed = append(rec.Kept, keptChange{Path: p, Sum: sum}), true
+		case rec.Kept[i].Sum != sum:
+			rec.Kept[i].Sum, changed = sum, true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("keeps %s in %s on your answer (%s): no round puts it back while it "+
+		"stays the same", plural(len(left.tracked), "tracked change"), c.Name, clipList(left.tracked)))
+	return writeStops(dir, rec)
+}
+
+// restoreMoved restores task t's copy c, which round `round` of cycle cy
+// left off the task's branch or with the branch at another head (left), to
+// the reviewed head, on your answer: what it left is saved first (saveLeft,
+// its patch against the head the copy is at), the tracked paths and the new
+// files go back (putBackLeft), the copy switches back to the branch
+// (gitx.Switch) and the branch goes back to the reviewed head
+// (gitx.ResetKeep), the head it was at named in the events (the commits
+// stay in the repository). A step that fails, or a copy still not as the
+// round found it, needs you with the steps (leftWait).
+func (e *Engine) restoreMoved(ctx context.Context, t registry.Task, c Copy, cy registry.Cycle, round int, left roundLeftovers) (string,
+	error) {
+	name, dir := roundName(round, cy.N), e.d.Layout.FactoryTaskDir(t.ID)
+	at, err := e.d.Git.RevParse(ctx, c.Path, "HEAD")
+	if err != nil {
+		return "", err
+	}
+	base, saved := leftName(dir, cy.N), ""
+	e.event(ctx, t.ID, "review", registry.PhaseBegin, fmt.Sprintf("restores %s to %s at %s on your answer: %s left %s, at %s", c.Name,
+		t.Branch, short(cy.HeadBefore), name, left, short(at)))
+	fail := func(left roundLeftovers, saved, why string, err error) (string, error) {
+		line := clipEnd(textx.FirstLine(scrub.Text(err.Error())), 240)
+		e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("restore %s to %s at %s: %s", c.Name, t.Branch, short(cy.HeadBefore), line))
+		return e.leftWait(t, c, cy, round, left, saved, why+line)
+	}
+	if len(left.tracked)+len(left.added)+len(left.unindexed) > 0 {
+		if _, err := saveLeft(ctx, e.d.Git, c.Path, dir, base, left); err != nil {
+			return fail(left, "", "the factory could not save it, so it put none of it back: ", err)
+		}
+		saved = savedAs(base, left)
+		if err := putBackLeft(ctx, e.d.Git, c.Path, left, cy.Started); err != nil {
+			return fail(left, base, "the factory saved it to "+saved+" but could not put it back: ", err)
+		}
+	}
+	if cur, err := e.d.Git.CurrentBranch(ctx, c.Path); err != nil || cur != t.Branch {
+		if err == nil {
+			err = e.d.Git.Switch(ctx, c.Path, t.Branch)
+		}
+		if err != nil {
+			return fail(left, base, "the factory could not switch the copy back to "+t.Branch+": ", err)
+		}
+	}
+	if err := e.d.Git.ResetKeep(ctx, c.Path, cy.HeadBefore); err != nil {
+		return fail(left, base, "the factory could not move "+t.Branch+" back to "+short(cy.HeadBefore)+": ", err)
+	}
+	now, err := e.roundLeft(ctx, t, c, cy.HeadBefore, cy.N)
+	switch {
+	case err != nil:
+		return "", err
+	case !now.none():
+		e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("after the restore of %s, it still has %s", c.Name, now))
+		return e.leftWait(t, c, cy, round, now, base, "the factory restored the copy, and it still has this")
+	}
+	words := fmt.Sprintf("restored %s to %s at %s on your answer; it was at %s", c.Name, t.Branch, short(cy.HeadBefore), short(at))
+	if saved != "" {
+		words += ", and what the round left is saved to " + saved
+	}
+	e.event(ctx, t.ID, "review", registry.PhaseOK, words)
+	return "", nil
+}
+
+// keepMoved keeps what round `round` of cycle cy left in task t's copy c
+// off the reviewed head, on your answer: a copy off the task's branch
+// switches back to it with its changes (gitx.Switch, which discards
+// nothing); the branch at a new head is the task's head then, and its
+// checks run again there (headMoved, errHeadTaken); at the reviewed head
+// the changes are kept as any you kept (keepLeft), and the round's result
+// stands. A switch git refuses needs you with the steps (leftWait).
+func (e *Engine) keepMoved(ctx context.Context, t registry.Task, c Copy, cy registry.Cycle, round int) (string, error) {
+	if cur, err := e.d.Git.CurrentBranch(ctx, c.Path); err != nil {
+		return "", err
+	} else if cur != t.Branch {
+		if err := e.d.Git.Switch(ctx, c.Path, t.Branch); err != nil {
+			line := clipEnd(textx.FirstLine(scrub.Text(err.Error())), 240)
+			e.event(ctx, t.ID, "review", registry.PhaseFail, fmt.Sprintf("switch %s back to %s: %s", c.Name, t.Branch, line))
+			left, lerr := e.roundLeft(ctx, t, c, cy.HeadBefore, cy.N)
+			if lerr != nil {
+				return "", lerr
+			}
+			return e.leftWait(t, c, cy, round, left, "", "the factory could not switch the copy back to "+t.Branch+": "+line)
+		}
+		e.event(ctx, t.ID, "review", registry.PhaseOK, fmt.Sprintf("switched %s back to %s on your answer, with what %s left", c.Name,
+			t.Branch, roundName(round, cy.N)))
+	}
+	now, err := e.roundLeft(ctx, t, c, cy.HeadBefore, cy.N)
+	if err != nil {
+		return "", err
+	}
+	if now.moved != "" {
+		head, err := e.d.Git.RevParse(ctx, c.Path, "HEAD")
+		if err != nil {
+			return "", err
+		}
+		if err := e.headMoved(ctx, t, head); err != nil {
+			return "", err
+		}
+		return "", errHeadTaken
+	}
+	return "", e.keepLeft(ctx, t, c, now)
 }
 
 // inFlight says who keeps a put-back of what a round left in task t's copy
@@ -300,7 +575,7 @@ func inFlightEnds(who string) string {
 	case strings.HasPrefix(who, "you are in "):
 		return "you left the pane (" + who + ")"
 	case strings.HasPrefix(who, "the factory cannot tell"):
-		return "it can tell nobody works in the copy (" + strings.TrimPrefix(who, "the factory cannot tell who works in it ") + ")"
+		return "it can tell nobody works in the copy " + strings.TrimPrefix(who, "the factory cannot tell who works in it ")
 	}
 	return "its turn ended (" + who + ")"
 }
@@ -323,8 +598,9 @@ func inFlightEnds(who string) string {
 // as the round found it.
 func (e *Engine) leftWait(t registry.Task, c Copy, cy registry.Cycle, round int, left roundLeftovers, saved, why string) (string, error) {
 	if left.moved != "" {
-		return fmt.Sprintf("round %d of the local review left %s: the factory changes none of it; put the copy back as the round found it "+
-			"(%s at %s, no tracked change, no new untracked file), then let the task go on", round, left, t.Branch, short(cy.HeadBefore)), nil
+		return fmt.Sprintf("%s of the local review left %s, and %s. Put the copy back as the round found it (%s at %s, no tracked "+
+			"change, no new untracked file); then `magnum factory retry %d`", roundName(round, cy.N), left, why, t.Branch,
+			short(cy.HeadBefore), t.ID), nil
 	}
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	quoted := execx.ShellQuote(c.Path)
