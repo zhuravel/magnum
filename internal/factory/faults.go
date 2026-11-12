@@ -61,9 +61,11 @@ const specsBaseKey = "precheck.specs on the base"
 func lintKey(cmd string) string { return "precheck.lint `" + cmd + "`" }
 
 // checkFault is a check that still named no failure after its fault steps,
-// for you: its key (and the key a skip takes), the head, what it did, how
-// long its bound was (a hang), the steps the factory took and the last
-// lines it printed.
+// for you: its key (and the key a skip takes), the head, what it did, the
+// bound its last run had, the steps the factory took, the last lines it
+// printed, whether those name a file the branch changed (the writer's
+// option is then recommended), and the writer's words of it (handed to the
+// writer: why, its failures and the command, as failCheck takes them).
 type checkFault struct {
 	key, skip, head string
 	what            string
@@ -71,7 +73,44 @@ type checkFault struct {
 	bound           time.Duration
 	tried           []string
 	tail            string
+	namesChanged    bool
 }
+
+// faultSign is the positive sign that a failed run of a check (its exit,
+// stdout and stderr, and the crash its stderr tells, crashOf) names a broken
+// environment and no failure of the code: it printed nothing at all, a
+// signal ended it, its stderr tells a crash the repository's installs bring
+// back (a missing gem, library or module) or a missing command, or, for a
+// lint, it exited 2 with an error line on stderr (rubocop's and eslint's
+// exit for an error, never for an offense). "" for none: the run is the
+// writer's, as any failure the change could have caused or the factory
+// cannot read. A crash of the machine's (a locale) is the infrastructure
+// hold's, no fault here.
+func faultSign(exit int, stdout, stderr string, crash envCrash, isCrash, lint bool) string {
+	switch {
+	case isCrash && crash.sig.machine: // the infrastructure hold's
+		return ""
+	case strings.TrimSpace(textx.StripTerminal(stdout+stderr)) == "":
+		return "printed nothing"
+	case exit < 0 || (exit > 128 && exit < 160):
+		return fmt.Sprintf("was ended by a signal (exit %d)", exit)
+	case isCrash && !crash.sig.machine && (crash.sig.heal || crash.sig.scriptOnly):
+		return "crashed for lack of " + crash.sig.lacks
+	case lint && exit == 2 && lastLine(stderr) != "":
+		return "exited 2 with an error and named no offense"
+	}
+	return ""
+}
+
+// namesChanged reports whether text names one of files, the paths the
+// branch changed.
+func namesChanged(text string, files []string) bool {
+	return slices.ContainsFunc(files, func(f string) bool { return f != "" && strings.Contains(text, f) })
+}
+
+// toWriter reports whether your answer handed check key's faults to the
+// writer for the task: its failure is the writer's, as any other.
+func (p *precheckRun) toWriter(key string) bool { return slices.Contains(p.stops.Writer, key) }
 
 // faultsRecord is check-faults.json: the steps spent, by faultKey.
 type faultsRecord map[string][]string
@@ -171,7 +210,8 @@ func (p *precheckRun) longerBound(bound time.Duration) (time.Duration, bool) {
 // heal does for a lint that crashed for lack of a gem: failed is why one
 // of them failed ("" when they all ran).
 func (p *precheckRun) healFault(key string) (failed string) {
-	p.e.event(p.ctx, p.t.ID, "heal", registry.PhaseBegin, fmt.Sprintf("%s: %s named no failure; runs the repository's installs", p.c.Name, key))
+	p.e.event(context.WithoutCancel(p.parent), p.t.ID, "heal", registry.PhaseBegin, fmt.Sprintf("%s: %s named no failure; runs the "+
+		"repository's installs", p.c.Name, key))
 	for _, in := range p.repo.Installs {
 		if _, err := p.e.script(p.parent, p.c, in.Run, "precheck heal", capOf(p.repo)); err != nil {
 			why := textx.Clip(textx.FirstLine(scrub.Text(err.Error())), outputLineRunes)
@@ -184,7 +224,7 @@ func (p *precheckRun) healFault(key string) (failed string) {
 		}
 	}
 	p.say("\nThe factory ran the repository's installs in the copy, and runs %s again.\n", key)
-	p.e.event(p.parent, p.t.ID, "heal", registry.PhaseOK, p.c.Name+": the installs ran; "+key+" runs again")
+	p.e.event(context.WithoutCancel(p.parent), p.t.ID, "heal", registry.PhaseOK, p.c.Name+": the installs ran; "+key+" runs again")
 	return ""
 }
 
@@ -193,6 +233,7 @@ func (p *precheckRun) healFault(key string) (failed string) {
 // retry, and the result carries f for the stage's question (faultQuestion).
 func (p *precheckRun) faultForYou(f checkFault, why string) {
 	f.head = p.head
+	f.namesChanged = f.namesChanged || namesChanged(f.tail, p.files)
 	if len(f.tried) > 0 {
 		why += "; the factory " + andList(f.tried)
 	}
@@ -211,13 +252,15 @@ func (p *precheckRun) skipCheck(kind, key, cmd string) {
 }
 
 // jestFailRe is a failing test in jest's output: a FAIL line of a test
-// file, a test marked ✕ or ×, or a failure's title after ●.
-var jestFailRe = regexp.MustCompile(`(?m)^\s*(?:FAIL\s+\S+|[✕×]\s+.+|●\s+.+?)\s*$`)
+// file, a test marked ✕ or ×, a failure's title after ●, or its summary
+// line of the tests or the suites that failed.
+var jestFailRe = regexp.MustCompile(`(?m)^\s*(?:FAIL\s+\S+|[✕×]\s+.+|●\s+.+?|Tests:\s+\d+ failed.*|Test Suites:\s+\d+ failed.*)\s*$`)
 
-// jestFailures are the failing tests jest's output names, each once.
+// jestFailures are the failing tests jest's output names (stdout and
+// stderr, where jest writes them), each once, read through its colors.
 func jestFailures(out string) []string {
 	var fs []string
-	for _, m := range jestFailRe.FindAllString(out, -1) {
+	for _, m := range jestFailRe.FindAllString(textx.StripTerminal(out), -1) {
 		if m = strings.TrimSpace(m); !slices.Contains(fs, m) {
 			fs = append(fs, m)
 		}
@@ -225,9 +268,38 @@ func jestFailures(out string) []string {
 	return fs
 }
 
+// runText is what run printed on stdout and stderr, from the ends the
+// precheck keeps (precheckTailWindow bytes each, raw), read through its
+// colors: what its failures and its signs are read from.
+func runText(run ProofRun) (stdout, stderr string) {
+	return textx.StripTerminal(string(run.out)), textx.StripTerminal(string(run.errOut))
+}
+
+// orFailing is failed, the failures a run named, else its first failing
+// line (firstFailing).
+func orFailing(failed []string, run ProofRun) []string {
+	if len(failed) > 0 {
+		return failed
+	}
+	return firstFailing(run)
+}
+
+// firstFailing is the first line of run's output that may say why it
+// failed (meaningfulLines), else its exit: the failure a check that names
+// none gives the writer's progress (fix_go_on.go).
+func firstFailing(run ProofRun) []string {
+	stdout, stderr := runText(run)
+	if line := firstLine(stdout + "\n" + stderr); line != "" {
+		return []string{line}
+	}
+	return []string{fmt.Sprintf("exited %d", run.Exit)}
+}
+
 // faultQuestion is the question of check fault f (the stage that checked
-// its role's change asks it): skip the check for the task, run it with a longer bound,
-// or drop the task. A hang recommends the longer bound, a crash the skip.
+// its role's change asks it): skip the check for the task, run it with a
+// longer bound, drop the task, or hand it to the writer. A fault whose
+// output names a file the branch changed recommends the writer, a hang the
+// longer bound, any other the skip.
 func faultQuestion(f checkFault) stopQuestion {
 	tried := "the factory ran it again"
 	if len(f.tried) > 0 {
@@ -239,13 +311,18 @@ func faultQuestion(f checkFault) stopQuestion {
 		Example: cmp.Or(textx.Clip(f.tail, 600), "it printed nothing"),
 		Options: []registry.Option{
 			{Label: optionSkip, Means: "the precheck no longer runs " + cmp.Or(f.skip, f.key) + " for this task, and the PR body names it as skipped (CI still runs it)"},
-			{Label: optionLonger, Means: "answer with the bound, such as `" + optionLonger + ": 40m`: it runs with that bound for this task (twice its last one when you name none)"},
+			{Label: optionLonger, Means: "answer with the bound, such as `" + optionLonger + ": 40m`, longer than its last of " +
+				capText(f.bound) + ": it runs with that bound for this task (twice its last one when you name none, or a shorter one)"},
 			{Label: optionDrop, Means: "the task stops"},
+			{Label: optionWriter, Means: "its failure goes to the writer as any failure of the change, with a fix turn, for this task"},
 		},
 		Recommended: 0, Why: "it never named a failure of the change, and CI runs it on the PR",
 		Evidence: precheckFile,
 	}
-	if f.hang {
+	switch {
+	case f.namesChanged:
+		q.Recommended, q.Why = 3, "what it printed names a file the branch changed: the change may be its cause"
+	case f.hang:
 		q.Recommended, q.Why = 1, "a run that only takes long passes with a longer bound"
 	}
 	return stopQuestion{

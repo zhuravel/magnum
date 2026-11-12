@@ -126,6 +126,10 @@ var envSignatures = []envSignature{
 	// prints its bare message; Ruby's own uncaught one ends in (LoadError).
 	{re: regexp.MustCompile(`^cannot load such file -- \S+$|cannot load such file -- \S+ \(LoadError\)$`), lacks: "a Ruby library",
 		heal: true, fix: "`bundle install` in {copy}"},
+	// Node's own (and jest's "… from '<file>'") of a package the copy's
+	// node_modules lack; a relative path ("./x") is the change's.
+	{re: regexp.MustCompile(`^(?:Error: )?Cannot find module '[^./'][^']*'`), lacks: "a Node module", heal: true,
+		fix: "the repository's installs (`pnpm install`, `yarn install`) in {copy}"},
 	{re: regexp.MustCompile(`^(?:\S+: )*(?:line \d+: )?\S+: command not found$|^(?:\S+: )*command not found: \S+$`), lacks: "a command",
 		scriptOnly: true, fix: "install it, or put its directory on your login shell's PATH ([daemon] shell_path), then `magnum factory install`"},
 }

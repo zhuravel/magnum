@@ -216,6 +216,12 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 	p := &precheckRun{e: e, t: t, c: c, repo: repo, head: bh.Head, base: bh.Base, ctx: cctx, parent: ctx, limit: limit, started: started,
 		res: PrecheckResult{Passed: true}}
 	p.readDecisions()
+	p.files = files
+	defer func() {
+		for _, cancel := range p.renewed {
+			cancel(nil)
+		}
+	}()
 	p.say("# Precheck of %s at %s\n\nThe change from %s: %d files.\n\nCap: %s.\n", t.Branch, short(bh.Head), short(bh.Base), len(files), how)
 	steps := []precheckStep{
 		{"the lint", len(pc.Lint) > 0 && len(files) > 0, false, func() { p.lint(pc.Lint, files, diff) }},
@@ -464,9 +470,12 @@ type precheckRun struct {
 	hung bool
 	// stops are your decisions for the task's checks (stops.json: the ones
 	// skipped, accepted, their bounds), faults the fault steps spent at each
-	// head (check-faults.json).
-	stops  stopsRecord
-	faults faultsRecord
+	// head (check-faults.json); files the paths the branch changed; renewed
+	// the cancels of the caps renewCap gave the steps after a fault.
+	stops   stopsRecord
+	faults  faultsRecord
+	files   []string
+	renewed []context.CancelCauseFunc
 }
 
 // readDecisions reads your decisions for the task's checks (stops.json)
@@ -804,7 +813,8 @@ func (p *precheckRun) lint(cmds []string, files []string, diff []gitx.FileLines)
 // to its end (ran) or its bound stopped it (hung), the offenses it named on
 // the changed lines (mine) and in all (named), the crash of the
 // environment its stderr tells (crash, isCrash) with the changed files the
-// crash names or the lint loads (theirs), and the bound it ran with.
+// crash names or the lint loads (theirs), the bound it ran with, and the
+// sign that it names a broken environment (faultSign; "" for none).
 type lintRun struct {
 	run       ProofRun
 	ran, hung bool
@@ -814,13 +824,16 @@ type lintRun struct {
 	isCrash   bool
 	theirs    []string
 	bound     time.Duration
+	sign      string
 }
 
 // fault reports whether r named no failure of the code: it hung, or it
-// exited non-zero naming no offense, and no crash of the machine's (the
-// infrastructure hold's) tells why.
+// exited non-zero naming no offense with a positive sign of a broken
+// environment (faultSign). One that names no offense and no such sign (an
+// output the factory cannot read) is no fault: its format is your
+// question, as before the fault steps.
 func (r lintRun) fault() bool {
-	return r.hung || (r.ran && r.run.Exit != 0 && r.named == 0 && !(r.isCrash && r.crash.sig.machine))
+	return r.hung || (r.ran && r.run.Exit != 0 && r.named == 0 && r.sign != "")
 }
 
 // lintCmd runs lint command cmd on files (lint's): once, then its fault
@@ -836,7 +849,7 @@ func (p *precheckRun) lintCmd(cmd string, files []string, changed map[string]map
 	}
 	r := p.lintOnce(cmd, script, files, changed, p.stops.bound(key))
 	var tried []string
-	for r.fault() && !p.halted() {
+	for r.fault() && !p.halted() && !p.toWriter(key) {
 		step := p.nextFaultStep(key, r.hung)
 		if step == "" {
 			break
@@ -863,7 +876,30 @@ func (p *precheckRun) lintCmd(cmd string, files []string, changed map[string]map
 		tried = append(tried, words)
 		p.spendFaultStep(key, step, words, lintEnded(r))
 	}
+	if p.overCap && !r.fault() && r.ran && !p.halted() { // its hang spent the cap, and it ran to its end after: the rest gets a cap of its own
+		p.renewCap()
+	}
 	p.settleLint(cmd, script, r, tried)
+}
+
+// renewCap gives the precheck's steps after a check whose hang spent the
+// cap, and whose run again then ended, a cap of their own (the precheck's
+// cap again, on the cap's timer seam): the specs and jest run, never left
+// unrun with a note because a fault took their time.
+func (p *precheckRun) renewCap() {
+	cctx, cancel := context.WithCancelCause(p.parent)
+	timer := p.e.timer(p.limit)
+	go func() {
+		select {
+		case <-timer:
+			cancel(errOverCap)
+		case <-cctx.Done():
+		}
+	}()
+	p.say("\nIts hang spent the precheck's cap, and its run again ended: the steps after it get a cap of %s of their own.\n",
+		capText(p.limit))
+	p.ctx, p.overCap = cctx, false
+	p.renewed = append(p.renewed, cancel)
 }
 
 // lintEnded says how lint run r ended, for its fault step's event.
@@ -925,6 +961,8 @@ func (p *precheckRun) lintOnce(cmd, script string, files []string, changed map[s
 		if r.crash, r.isCrash = crashOf("precheck.lint", cmd, p.c.Path, p.stderr); r.isCrash {
 			r.theirs = branchCaused(r.crash, p.stderr, files)
 		}
+		stdout, _ := runText(r.run)
+		r.sign = faultSign(r.run.Exit, stdout, p.stderr, r.crash, r.isCrash, true)
 	}
 	return r
 }
@@ -962,6 +1000,10 @@ func (p *precheckRun) settleLint(cmd, script string, r lintRun, tried []string) 
 	key := lintKey(cmd)
 	check := registry.Check{Kind: registry.CheckLint, Result: registry.CheckPass, Command: script, Exit: r.run.Exit, Took: r.run.Took}
 	switch {
+	case r.hung && p.toWriter(key): // your answer handed its faults to the writer
+		p.failCheck(key, []string{"did not end within " + capText(r.bound)}, "lint: `"+firstWord(cmd)+"` did not end within "+
+			capText(r.bound), script)
+		return
 	case r.hung: // its stop recorded its check (capStopped)
 		p.faultForYou(checkFault{key: key, skip: key, what: "did not end within " + capText(r.bound), hang: true, bound: r.bound,
 			tried: tried, tail: streamTail(r.run.errOut, precheckErrTail)},
@@ -1017,6 +1059,15 @@ func (p *precheckRun) lintNoOffense(cmd, script string, r lintRun, tried []strin
 		return "code"
 	}
 	key := lintKey(cmd)
+	switch {
+	case r.sign == "": // an output the factory cannot read: its format is your question, as before the fault steps
+		p.failForYou(p.lintCrashWhy(cmd))
+		return "unknown"
+	case p.toWriter(key): // your answer handed its faults to the writer
+		line := cmp.Or(lastLine(p.stderr), r.sign)
+		p.failCheck(key, []string{line}, fmt.Sprintf("lint: `%s` exited %d and named no offense: %s", firstWord(cmd), r.run.Exit, line), script)
+		return "code"
+	}
 	f := checkFault{key: key, skip: key, what: fmt.Sprintf("exited %d and named no offense by path:line", r.run.Exit), bound: r.bound, tried: tried,
 		tail: lastLines(scrub.Text(textx.StripTerminal(p.stderr)), 10)}
 	if !r.isCrash {
@@ -1101,9 +1152,12 @@ func failures(out string) []specFailure {
 // example red there too is recorded as a failure that is not ours
 // (not_ours) and does not fail the precheck; one green there, or of a spec
 // file the base lacks, is the change's (code). A red run that names no
-// failure it can be read by takes the fault steps (again, after the
+// failing example is the writer's, as anything the change could have caused
+// or the factory cannot read (a file that does not load, errors outside of
+// examples), unless it shows a positive sign of a broken environment
+// (faultSign): then it takes the fault steps (again, after the
 // repository's installs), then asks you. Every red run at the head leaves
-// its row. Specs your answer skipped do not run.
+// its row. Specs your answer skipped do not run; your bound bounds them.
 func (p *precheckRun) specs(cmd string, files []string) {
 	p.say("\n## Specs\n")
 	if len(files) == 0 {
@@ -1115,14 +1169,20 @@ func (p *precheckRun) specs(cmd string, files []string) {
 		p.skipCheck(registry.CheckSpec, key, script)
 		return
 	}
-	run, ok, tried := p.runNaming(key, "specs", script, "failing spec", func(out string) bool { return len(failures(out)) > 0 })
-	if !ok {
+	r := p.runNaming(key, "specs", script, "failing spec", files, func(run ProofRun) bool { return len(failures(run.Output)) > 0 })
+	run := r.run
+	switch {
+	case r.cutSign != "": // a fault whose run again the cap stopped never passes
+		p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "unknown", Command: script, Exit: run.Exit, Took: run.Took})
+		p.faultForYou(r.fault(key, "specs", script), fmt.Sprintf("specs: %s %s, and its run again did not end within the cap", firstWord(cmd),
+			r.cutSign))
+		return
+	case !r.ok:
 		if !p.stopped() {
 			p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "code", Command: script, Exit: run.Exit, Took: run.Took})
 		}
 		return
-	}
-	if run.Exit == 0 {
+	case run.Exit == 0:
 		p.say("\n`%s`: passed\n", script)
 		p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckPass, Command: script, Took: run.Took})
 		return
@@ -1131,43 +1191,89 @@ func (p *precheckRun) specs(cmd string, files []string) {
 	if len(red) == 0 {
 		p.say("\n`%s` exited %d and names no failing spec:\n\n```\n%s\n```\n", script, run.Exit, run.Output)
 		p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "unknown", Command: script, Exit: run.Exit, Took: run.Took})
-		p.faultForYou(checkFault{key: key, skip: key, what: fmt.Sprintf("exited %d and named no failing spec", run.Exit), tried: tried,
-			tail: lastLines(scrub.Text(textx.StripTerminal(run.Output)), 10)},
-			fmt.Sprintf("specs: %s exited %d and names no failing spec", firstWord(cmd), run.Exit))
+		if r.sign != "" {
+			p.faultForYou(r.fault(key, "specs", script), fmt.Sprintf("specs: %s exited %d and %s", firstWord(cmd), run.Exit, r.sign))
+			return
+		}
+		p.failCheck(key, firstFailing(run), fmt.Sprintf("specs: %s exited %d and names no failing spec", firstWord(cmd), run.Exit), script)
 		return
 	}
 	p.judgeRed(cmd, script, run, red)
 }
 
-// runNaming runs the test runner script (check key, what in the waits) and,
-// while a run exits non-zero naming no failure (names reads its output;
-// failing words what it names), its fault steps: again, then after the
-// repository's installs, each once at the head. Each run that named nothing
-// and runs again is recorded as a failed check of unknown cause. The last
-// run comes back, whether it ran to its end, and the steps tried.
-func (p *precheckRun) runNaming(key, what, script, failing string, names func(string) bool) (ProofRun, bool, []string) {
-	run, ok := p.run(key, what, script)
-	var tried []string
-	for ok && run.Exit != 0 && !names(run.Output) && !p.halted() {
+// runnerRun is the end of a test runner's runs with their fault steps
+// (runNaming): its last run, whether it ran to its end, the sign of a broken
+// environment it shows (faultSign; "" for none), the sign of the run before
+// a run again the cap stopped (cutSign: a fault that never passes), the
+// bound its runs had, and the steps tried.
+type runnerRun struct {
+	run           ProofRun
+	ok            bool
+	sign, cutSign string
+	bound         time.Duration
+	tried         []string
+}
+
+// fault is the check fault of r, check key's (what in its words, script
+// its command): what it did, its bound, its steps and its last lines.
+func (r runnerRun) fault(key, what, script string) checkFault {
+	sign := cmp.Or(r.sign, r.cutSign)
+	stdout, stderr := runText(r.run)
+	return checkFault{key: key, skip: key, what: fmt.Sprintf("exited %d and %s", r.run.Exit, sign), bound: r.bound, tried: r.tried,
+		tail: lastLines(scrub.Text(stdout+"\n"+stderr), 10)}
+}
+
+// runNaming runs the test runner script (check key, what in the waits), on
+// your bound for it when you gave one, and, while a run exits non-zero
+// naming no failure (names reads it; failing words what it names) with a
+// positive sign of a broken environment (faultSign, files the changed
+// files: a crash their change could cause is no such sign), its fault
+// steps: again, then after the repository's installs, each once at the
+// head. A check your answer handed to the writer takes none. Each run that
+// runs again is recorded as a failed check of unknown cause; one whose run
+// again the cap stopped is cutSign's, a fault that never passes.
+func (p *precheckRun) runNaming(key, what, script, failing string, files []string, names func(ProofRun) bool) runnerRun {
+	r := runnerRun{bound: cmp.Or(p.stops.bound(key), p.limit)}
+	runOnce := func() {
+		if b := p.stops.bound(key); b > 0 {
+			p.onOwnBound(b, func() { r.run, r.ok = p.run(key, what, script) })
+		} else {
+			r.run, r.ok = p.run(key, what, script)
+		}
+		r.sign = ""
+		if r.ok && r.run.Exit != 0 && !names(r.run) && !p.toWriter(key) {
+			stdout, stderr := runText(r.run)
+			crash, isCrash := crashOf(key, script, p.c.Path, stderr)
+			if !isCrash || len(branchCaused(crash, stderr, files)) == 0 {
+				r.sign = faultSign(r.run.Exit, stdout, stderr, crash, isCrash, false)
+			}
+		}
+	}
+	runOnce()
+	for r.sign != "" && !p.halted() {
 		step := p.nextFaultStep(key, false)
 		if step == "" {
 			break
 		}
-		p.say("\n`%s` exited %d and names no %s: the factory runs it again.\n", script, run.Exit, failing)
-		p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "unknown", Command: script, Exit: run.Exit, Took: run.Took})
+		p.say("\n`%s` exited %d, %s and names no %s: the factory runs it again.\n", script, r.run.Exit, r.sign, failing)
+		p.record(registry.Check{Kind: registry.CheckSpec, Result: registry.CheckFail, Cause: "unknown", Command: script, Exit: r.run.Exit, Took: r.run.Took})
 		if step == stepHeal {
 			if failed := p.healFault(key); failed != "" {
 				p.spendFaultStep(key, step, "ran the repository's installs", "the installs failed: "+failed)
-				tried = append(tried, "ran the repository's installs, and the installs failed: "+failed)
+				r.tried = append(r.tried, "ran the repository's installs, and the installs failed: "+failed)
 				break
 			}
 		}
-		run, ok = p.run(key, what, script)
-		words := faultStepWords(step, p.limit, p.repo.Installs)
-		tried = append(tried, words)
-		p.spendFaultStep(key, step, words, runEnded(run, ok, names(run.Output)))
+		before := r.sign
+		runOnce()
+		words := faultStepWords(step, r.bound, p.repo.Installs)
+		r.tried = append(r.tried, words)
+		if !r.ok && p.parent.Err() == nil { // the cap stopped the run again of a fault: it never passes
+			r.cutSign = before
+		}
+		p.spendFaultStep(key, step, words, runEnded(r.run, r.ok, names(r.run)))
 	}
-	return run, ok, tried
+	return r
 }
 
 // runEnded says how a check's run ended (ran: to its end; named: it named
@@ -1404,10 +1510,12 @@ func failureLines(fs []specFailure) string {
 }
 
 // jest runs the related jest tests of the changed files: a run that exits
-// non-zero naming a failing test fails the precheck, the writer's; one that
-// names none (jestFailures) takes the fault steps (again, after the
+// non-zero is the writer's, its failing tests read through its colors and
+// from its summary (jestFailures), or, when it names none the factory can
+// read, its first failing line; only one that shows a positive sign of a
+// broken environment (faultSign) takes the fault steps (again, after the
 // repository's installs), then asks you. Tests your answer skipped do not
-// run.
+// run; your bound bounds them.
 func (p *precheckRun) jest(cmd string, files []string) {
 	if cmd == "" || len(files) == 0 {
 		return
@@ -1418,23 +1526,29 @@ func (p *precheckRun) jest(cmd string, files []string) {
 		p.skipCheck(registry.CheckSpec, key, script)
 		return
 	}
-	run, ok, tried := p.runNaming(key, "jest", script, "failing test", func(out string) bool { return len(jestFailures(out)) > 0 })
+	named := func(run ProofRun) []string {
+		stdout, stderr := runText(run)
+		return jestFailures(stdout + "\n" + stderr)
+	}
+	r := p.runNaming(key, "jest", script, "failing test", files, func(run ProofRun) bool { return len(named(run)) > 0 })
+	run := r.run
 	check := registry.Check{Kind: registry.CheckSpec, Result: registry.CheckPass, Command: script, Exit: run.Exit, Took: run.Took}
-	switch failed := jestFailures(run.Output); {
-	case !ok && (p.ctx.Err() != nil || p.overCap):
-		return
-	case !ok:
-		check.Result, check.Cause = registry.CheckFail, "code"
-	case run.Exit != 0 && len(failed) == 0:
+	switch failed := named(run); {
+	case r.cutSign != "": // a fault whose run again the cap stopped never passes
 		check.Result, check.Cause = registry.CheckFail, "unknown"
-		p.say("\n## Jest\n\n`%s` exited %d and names no failing test:\n\n```\n%s\n```\n", script, run.Exit, run.Output)
-		p.faultForYou(checkFault{key: key, skip: key, what: fmt.Sprintf("exited %d and named no failing test", run.Exit), tried: tried,
-			tail: lastLines(scrub.Text(textx.StripTerminal(run.Output)), 10)},
-			fmt.Sprintf("jest: %s exited %d and names no failing test", firstWord(cmd), run.Exit))
+		p.faultForYou(r.fault(key, "jest", script), fmt.Sprintf("jest: %s %s, and its run again did not end within the cap", firstWord(cmd), r.cutSign))
+	case !r.ok && (p.ctx.Err() != nil || p.overCap):
+		return
+	case !r.ok:
+		check.Result, check.Cause = registry.CheckFail, "code"
+	case run.Exit != 0 && r.sign != "":
+		check.Result, check.Cause = registry.CheckFail, "unknown"
+		p.say("\n## Jest\n\n`%s` exited %d and %s:\n\n```\n%s\n```\n", script, run.Exit, r.sign, run.Output)
+		p.faultForYou(r.fault(key, "jest", script), fmt.Sprintf("jest: %s exited %d and %s", firstWord(cmd), run.Exit, r.sign))
 	case run.Exit != 0:
 		check.Result, check.Cause = registry.CheckFail, "code"
 		p.say("\n## Jest\n\n`%s` exited %d:\n\n```\n%s\n```\n", script, run.Exit, run.Output)
-		p.failCheck(key, failed, fmt.Sprintf("jest: %s exited %d", firstWord(cmd), run.Exit), script)
+		p.failCheck(key, orFailing(failed, run), fmt.Sprintf("jest: %s exited %d", firstWord(cmd), run.Exit), script)
 	default:
 		p.say("\n## Jest\n\n`%s`: passed\n", script)
 	}

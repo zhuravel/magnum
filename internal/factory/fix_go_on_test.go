@@ -176,7 +176,7 @@ func TestYourAnswerToTheFixQuestionGivesADirectionOrAcceptsTheCheck(t *testing.T
 	})
 }
 
-// A check fault (a jest run that names no failing test) is no turn of the
+// A check fault (a jest run that printed nothing at all) is no turn of the
 // writer's: no turn records it, it spends no fix turn and gives no go-on or
 // fresh session; it asks you, and the writer's turns before it stay its
 // last.
@@ -189,7 +189,7 @@ func TestACheckFaultNeverCountsAsAWritersTurnWithoutProgress(t *testing.T) {
 	r.endTurns(task, 2) // two turns with the offense
 	r.setLint("")
 	r.mu.Lock()
-	r.adds = map[string]string{"bin/jest": "pnpm: the test runner exited"}
+	r.exits = map[string][]int{"bin/jest": {1, 1}}
 	r.mu.Unlock()
 	r.commit("PR-12575 the offense fixed", map[string]string{"README": "shop, with credits\n"})
 	r.endTurns(task, 1)

@@ -4730,17 +4730,25 @@ stages = [
   the factory refuses it, `denied: <why>`. A command the deny list refuses or that is missing or not
   executable (a shell's exit 126 or 127 included), no `specs` command for the proof and a `table_stats` it
   cannot read are yours to fix: the task needs you at once, naming the key (`precheck.specs`, `table_stats`),
-  and the writer gets no turn for it. A check that fails and names no failure of the code (a lint that exits
-  non-zero and names no offense by `path:line`, a spec or jest run that exits non-zero and names no failing
-  example, a lint or a base run that does not end within its bound) is neither the writer's nor yet yours: the
-  precheck runs it again, then runs the repository's `installs` and runs it again, and runs one that hangs
-  once more with its bound doubled (up to `cap_max`), each step once at a head (`check-faults.json` in the task's
-  folder keeps them across restarts; each is a `check` event and an alert). One that still names no failure
-  asks you a question on the card (`1 question before coding goes on: <the check> … at <head>: skip this check
-  for this task, run it with a longer bound or drop the task?`): a skip runs it no more for the task and the PR
-  body names it as skipped, a longer bound (`Run it with a longer bound: 40m`, or twice its last) runs it with
-  that, and the factory never edits your configuration (`stops.json` keeps your answer). Your retry still runs
-  it once more at the same head and spends no step.
+  and the writer gets no turn for it. A check failure is a fault, neither the writer's nor yet yours, only with
+  a positive sign of a broken environment: it printed nothing at all, a signal ended it, its stderr tells a
+  missing gem, Ruby library, Node module or command, a lint exited 2 with an error line, or it did not end
+  within its bound (a lint, a base run). Anything the change could have caused or the factory cannot read is the
+  writer's, as before: a spec run that fails to load a file or names errors outside of examples, a jest run's
+  failures (read through its colors and from its `Tests: N failed` summary) or a coverage threshold it missed.
+  A lint whose offenses come in a format the factory cannot read (`--format json`) needs you at once, naming the
+  format's fix. A fault takes steps first: the precheck runs it again, then runs the repository's `installs` and
+  runs it again, and runs one that hangs once more with its bound doubled (up to `cap_max`), each step once at a
+  head (`check-faults.json` in the task's folder keeps them across restarts; each is a `check` event and an
+  alert). A fault never passes: one whose run again the cap stops fails the precheck, and a lint whose hang spent
+  the cap and then ended leaves the specs and jest a cap of their own. One that still names no failure asks you a
+  question on the card (`1 question before coding goes on: <the check> … at <head>: skip this check for this
+  task, run it with a longer bound, drop the task or hand it to the writer?`, the writer's way recommended when
+  its output names a file the branch changed): a skip runs it no more for the task and the PR body names it as
+  skipped, a longer bound (`Run it with a longer bound: 40m`, or `bound 40m` in your words; one no longer than
+  its last bound, or none, is twice the last) runs it with that, and handing it to the writer makes its
+  failures the writer's for the task. The factory never edits your configuration (`stops.json` keeps your
+  answer). Your retry still runs it once more at the same head and spends no step.
   The line names the fix where one is known, then `magnum factory retry <id>`; a lint's names the last line of
   its stderr that says why (past mise's warnings, a stack's frames and code frames of the source, scrubbed of
   secrets, emails and hosts; never its stdout), and hints at `--format emacs` only when its stderr says nothing

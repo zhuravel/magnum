@@ -26507,11 +26507,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
     guard). The retry closes the question (`closeStops`, a revision without it) and goes on as before the
     question. It spends no budget. The options that skip or accept a check are your answer (an answer input),
     and `appendKnown` names them in the PR body.
-  - *A check that crashed or hung* (`faults.go`). Some failures name no failure of the code. A lint exits
-    non-zero and names no offense. A spec run names no failing example. A jest run names no failing test. A
-    lint does not end within the cap. A run on the base goes past its bound. A crash of the
-    machine's environment stays the infrastructure hold's. `jestFailures` reads the FAIL, ✕ and ● lines.
-    Before, any non-zero exit of jest was the writer's, so task 9's "jest: pnpm exited 1" spent its fix turns.
+  - *A check that crashed or hung* (`faults.go`). A check failure is a fault only with a positive sign of a
+    broken environment (`faultSign`): it printed nothing at all, a signal ended it, its stderr tells a missing
+    gem, Ruby library, Node module or command (the heal's list), a lint exited 2 with an error line that names
+    no offense, or it did not end within its bound (a lint, a run on the base). Anything the change could have
+    caused, or that the factory cannot read, goes to the writer, as before this change: an rspec run that fails
+    to load a changed file or names errors outside of examples, a jest run's failures (read through its colors,
+    from its `Tests: N failed` summary and from 64 KiB of its output) or a coverage threshold it missed. A lint
+    whose offenses come in a format the factory cannot read is your configuration's question, as before (the
+    `--format emacs` fix). The fault's question has a fourth way, "Hand it to the writer", which it recommends
+    when the output names a file the branch changed. A crash of the machine's environment stays the
+    infrastructure hold's.
     Before the writer or you hear of such a failure, the precheck runs the check again. Then it runs the
     repository's installs (the heal) and runs the check again. The heal is now a step of every fault, not only
     of a missing gem. A run that hangs runs once more with its bound doubled, up to `precheck.cap_max`. The
@@ -26519,9 +26525,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
     the cap's timer seam). `check-faults.json` keeps the steps spent, by head and check. Each step is written
     once its run ended. A step that the daemon's stop cut is not spent. So a restart neither doubles nor loses
     a step, and a new head starts the steps again. A crash that the branch caused still goes to the writer
-    after the steps. A check that still names no failure asks: skip it for this task, run it with a longer
-    bound (`Run it with a longer bound: 40m`, else twice its last), or drop the task. A hang recommends the
-    longer bound, and a crash the skip. The factory never edits your configuration: the bound is the task's,
+    after the steps. A fault never passes: a run again that the cap stops fails the precheck, and a lint whose
+    hang spent the cap and then ended gives the specs and jest a cap of their own (`renewCap`). A check that
+    still names no failure asks: skip it for this task, run it with a longer bound, drop the task, or hand it
+    to the writer. A bound comes only from the option's field or from "bound <d>" in your words, and one no
+    longer than the check's last bound, or none, is twice the last; the specs' and jest's runs read it too. A
+    hang recommends the longer bound, and a crash the skip. The factory never edits your configuration: the bound is the task's,
     in `stops.json`. Your retry runs the check once more at the same head. As before, its answer tells you
     that nothing changed since the failure (`asksOnCheckAt`).
   - *The writer's fix turns* (`fix_go_on.go`). At its cap of fix turns, a role whose last 3 turns did not fail

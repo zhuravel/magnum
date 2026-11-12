@@ -149,12 +149,13 @@ func TestABaseRunThatHangsGetsADoubledBoundThenAQuestion(t *testing.T) {
 	if b := bounds(); !slices.Equal(b, []time.Duration{600 * time.Millisecond, 600 * time.Millisecond, 1200 * time.Millisecond}) {
 		t.Fatalf("base runs bounded by %v, want its run, again, then one with its bound doubled", b)
 	}
-	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "skip this check for this task, run it with a longer bound or drop the task?") ||
+	if got.State != registry.TaskNeedsYou ||
+		!strings.Contains(got.WaitsWhat, "skip this check for this task, run it with a longer bound, drop the task or hand it to the writer?") ||
 		strings.Contains(strings.ToLower(got.WaitsWhat), "retry") {
 		t.Fatalf("task %s waits %q, want the question's decision and no retry", got.State, got.WaitsWhat)
 	}
 	qs := r.newestQuestions(got.ID)
-	if len(qs) != 1 || qs[0].RaisedBy != factoryAsks || !slices.Equal(optionLabels(qs[0]), []string{optionSkip, optionLonger, optionDrop}) ||
+	if len(qs) != 1 || qs[0].RaisedBy != factoryAsks || !slices.Equal(optionLabels(qs[0]), []string{optionSkip, optionLonger, optionDrop, optionWriter}) ||
 		qs[0].Recommended != 1 || !strings.Contains(qs[0].Context, "ran it with its bound doubled") {
 		t.Fatalf("questions %+v, want the factory's one with skip, a longer bound (recommended) and drop", qs)
 	}
@@ -269,9 +270,11 @@ func TestYourRetryOfACheckQuestionRunsTheCheckOnceAndSpendsNoStep(t *testing.T) 
 }
 
 // A jest run that exits non-zero naming no failing test, only a coverage
-// threshold it missed, is a check fault: it runs again, then asks you, and
-// never passes on its own; the writer gets no fix turn for it.
-func TestAJestRunThatNamesOnlyAMissedCoverageThresholdAsksAndNeverPasses(t *testing.T) {
+// threshold it missed, is the writer's: the change may have lowered the
+// coverage, and a check failure is a fault only with a positive sign of a
+// broken environment. It runs once, the writer gets a fix turn naming it,
+// and it never passes on its own.
+func TestAJestRunThatNamesOnlyAMissedCoverageThresholdIsTheWritersAndNeverPasses(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.codingTask("PR-12566", "bug")
 	r.startStage(task)
@@ -279,20 +282,16 @@ func TestAJestRunThatNamesOnlyAMissedCoverageThresholdAsksAndNeverPasses(t *test
 	r.mu.Lock()
 	r.adds = map[string]string{"bin/jest": `Jest: "global" coverage threshold for lines (80%) not met: 75.3%`}
 	r.mu.Unlock()
-	r.endTurns(task, 3)
-	if n := len(r.ran("bin/jest")); n != 2 {
-		t.Fatalf("jest ran %d times, want its run and its run again", n)
+	r.endTurns(task, 1)
+	if n := len(r.ran("bin/jest")); n != 1 {
+		t.Fatalf("jest ran %d times, want once: no fault step", n)
 	}
-	got := r.reload(task.ID)
-	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, "precheck.jest exited 1 and named no failing test") ||
-		!strings.Contains(got.WaitsWhat, "skip this check for this task") {
-		t.Fatalf("task %s waits %q, want jest's question", got.State, got.WaitsWhat)
+	if got := r.reload(task.ID); got.State == registry.TaskNeedsYou {
+		t.Fatalf("task waits on you %q, want the writer's fix turn", got.WaitsWhat)
 	}
-	if rec := r.readPrecheckRecord(task.ID); rec.Passed || !rec.ForYou {
-		t.Fatalf("precheck.json %+v, want a failure for you, never a pass", rec)
-	}
-	if ps := r.rt.promptsTo("fx-writer"); len(ps) != 1 {
-		t.Fatalf("the writer got %d prompts, want no fix turn for a coverage threshold", len(ps))
+	ps := r.rt.promptsTo("fx-writer")
+	if len(ps) != 2 || !strings.HasPrefix(ps[1].Text, fixLead) || !strings.Contains(ps[1].Text, "jest: bin/jest exited 1") {
+		t.Fatalf("the writer's prompts %+v, want a fix turn naming jest's failure", ps)
 	}
 	for _, a := range r.attempts(task.ID) {
 		if a.Stage == "coding" && a.State == registry.AttemptVerified {

@@ -58,6 +58,7 @@ const (
 	decideStart     = "start"     // the role starts again in a fresh session
 	decideAgain     = "again"     // your own words on a check: it runs again
 	decideDrop      = "drop"      // the task stops
+	decideWriter    = "writer"    // the check's faults are the writer's for the task
 	decideRetry     = "retry"     // your retry closed the question
 	decideRestore   = "restore"   // what a review round left goes back as the reviewed head has it
 	decideKeep      = "keep"      // what a review round left stays in the copy
@@ -72,6 +73,7 @@ const (
 	optionStart     = "Start the role again"
 	optionFresh     = "Start the role in a fresh session"
 	optionDrop      = "Drop the task"
+	optionWriter    = "Hand it to the writer"
 	// a review round's leftovers that may be yours
 	optionRestoreCopy = "Restore the copy to the reviewed head"
 	optionKeepChange  = "Keep the change"
@@ -115,6 +117,9 @@ type stopsRecord struct {
 	Skipped  []string          `json:"skipped,omitempty"`
 	Accepted []accepted        `json:"accepted,omitempty"`
 	Bounds   map[string]string `json:"bounds,omitempty"`
+	// Writer are the checks whose faults your answer handed to the writer
+	// for the task: their failures are the writer's, as any other.
+	Writer []string `json:"writer,omitempty"`
 }
 
 // readStops reads stops.json in the task directory dir; none is an empty
@@ -314,6 +319,34 @@ func newestRow(qs []registry.Question, text string) (registry.Question, bool) {
 // durationRe is a bound in an answer's words ("40m", "1h30m", "90s").
 var durationRe = regexp.MustCompile(`\b\d+(?:\.\d+)?(?:h|m|s)(?:\d+(?:\.\d+)?(?:m|s))*\b`)
 
+// boundWordRe is an explicit bound in an answer's own words: "bound 40m".
+var boundWordRe = regexp.MustCompile(`(?i)\bbound\s+(\d+(?:\.\d+)?(?:h|m|s)(?:\d+(?:\.\d+)?(?:m|s))*)\b`)
+
+// explicitBound is the bound an answer names in so many words ("bound
+// 40m"), 0 for none: a duration elsewhere in free text is no bound.
+func explicitBound(answer string) time.Duration {
+	if m := boundWordRe.FindStringSubmatch(answer); m != nil {
+		if d, err := time.ParseDuration(m[1]); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
+// longerThan is bound when it is longer than last (a duration's words; ""
+// or unreadable: no last), else twice last: a longer bound is never
+// shorter than the one the check ran with.
+func longerThan(bound time.Duration, last string) time.Duration {
+	l, err := time.ParseDuration(last)
+	if err != nil || l <= 0 {
+		return bound
+	}
+	if bound > l {
+		return bound
+	}
+	return 2 * l
+}
+
 // boundIn is the first bound answer names, 0 for none.
 func boundIn(answer string) time.Duration {
 	for _, m := range durationRe.FindAllString(answer, -1) {
@@ -349,11 +382,14 @@ func decideStop(a stopAsk, answer string) (decision, words string) {
 		return decideDrop, ""
 	case a.Kind == stopCheck && is(optionSkip, "skip"):
 		return decideSkip, ""
-	case a.Kind == stopCheck && (is(optionLonger, "longer") || boundIn(answer) > 0):
-		if d := boundIn(answer); d > 0 {
-			return decideLonger, d.String()
+	case a.Kind == stopCheck && is(optionWriter, "writer"):
+		return decideWriter, ""
+	case a.Kind == stopCheck && (is(optionLonger, "longer") || explicitBound(answer) > 0):
+		bound := explicitBound(answer)
+		if is(optionLonger, "longer") {
+			bound = boundIn(after(optionLonger))
 		}
-		return decideLonger, ""
+		return decideLonger, longerThan(bound, a.Bound).String()
 	case a.Kind == stopCheck:
 		return decideAgain, strings.TrimSpace(answer)
 	case a.Kind == stopFix && a.Check != "" && is(optionAccept, "accept"):
@@ -375,17 +411,15 @@ func (rec *stopsRecord) apply(a stopAsk) {
 			rec.Skipped = append(rec.Skipped, key)
 		}
 	case decideLonger:
-		bound := a.Words
-		if bound == "" {
-			if last, err := time.ParseDuration(a.Bound); err == nil && last > 0 {
-				bound = (2 * last).String()
-			}
-		}
-		if bound != "" {
+		if d, err := time.ParseDuration(a.Words); err == nil && d > 0 {
 			if rec.Bounds == nil {
 				rec.Bounds = map[string]string{}
 			}
-			rec.Bounds[a.Check] = bound
+			rec.Bounds[a.Check] = d.String()
+		}
+	case decideWriter:
+		if !slices.Contains(rec.Writer, a.Check) {
+			rec.Writer = append(rec.Writer, a.Check)
 		}
 	case decideAccept:
 		rec.Accepted = append(rec.Accepted, accepted{Check: a.Check, Failures: a.Failures})
@@ -398,7 +432,9 @@ func decisionWords(a stopAsk) string {
 	case decideSkip:
 		return "skip " + cmp.Or(a.Skip, a.Check) + " for this task (the PR body names it)"
 	case decideLonger:
-		return "run " + a.Check + " with a longer bound for this task (" + cmp.Or(a.Words, "twice its last") + ")"
+		return "run " + a.Check + " with a bound of " + boundWords(a.Words) + " for this task (its last was " + boundWords(a.Bound) + ")"
+	case decideWriter:
+		return "hand the faults of " + a.Check + " to the writer for this task"
 	case decideAccept:
 		return "accept the failure of " + a.Check + " as known for this task (the PR body names it)"
 	case decideDirection:
@@ -521,6 +557,14 @@ func (e *Engine) stopDecisionWords(t registry.Task, open []registry.Question) st
 		}
 	}
 	return ""
+}
+
+// boundWords says a bound's words as capText does ("21m"), else as they are.
+func boundWords(s string) string {
+	if d, err := time.ParseDuration(s); err == nil {
+		return capText(d)
+	}
+	return s
 }
 
 // orList joins words as a list that ends with "or".

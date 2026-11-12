@@ -82,6 +82,10 @@ type codingRig struct {
 	// adds is what a script whose first word it names prints on stdout
 	// after its own output, and it then exits 1: a red run that says it.
 	adds map[string]string
+	// exits are the exits of the next runs of a script whose first word
+	// they name, one a run, each printing nothing at all (0: the run does
+	// its work as it would): a crash with no output, a signal's 137.
+	exits map[string][]int
 	// streams are what a script whose first word they name writes to its
 	// command's stream (execx.Cmd.Stream) as it starts, one write each,
 	// before it blocks or does its work; every script also writes its
@@ -300,7 +304,16 @@ func (r *codingRig) script(ctx context.Context, c execx.Cmd) (execx.Result, erro
 	}
 	r.mu.Lock()
 	add := r.adds[words[0]]
+	code := 0
+	if q := r.exits[words[0]]; len(q) > 0 {
+		code, r.exits[words[0]] = q[0], q[1:]
+	}
 	r.mu.Unlock()
+	if code != 0 { // it printed nothing at all
+		run.Out, run.Exit = "", code
+		r.record(run)
+		return execx.Result{Code: code}, &execx.ExitError{Cmd: c, Code: code}
+	}
 	if add != "" {
 		run.Out, run.Exit = strings.TrimPrefix(run.Out+"\n"+add, "\n"), 1
 	}
