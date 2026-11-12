@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -40,13 +41,11 @@ const drainParkWhy = "the drain for a reboot"
 var kindDrainHolds = notify.Kind{One: "drain for a reboot still holds", Many: "drains for a reboot still hold"}
 
 // rebootState is what the health checks keep of the drain for a reboot they
-// tend: its generation, since when the daemon is quiet under it, whether
-// its park marked the sessions, the acknowledgement last written and
-// whether its toast went.
+// tend: its generation, since when the daemon is quiet under it, the
+// acknowledgement last written and whether its toast went.
 type rebootState struct {
 	gen        int64
 	quietSince time.Time
-	marked     bool
 	ack        string
 	toasted    bool
 	// boot is the Mac's boot as the start read it.
@@ -155,15 +154,15 @@ func (e *Engine) tendRebootDrain(ctx context.Context) {
 	case st.quietSince.IsZero():
 		st.quietSince = now
 	}
-	parked := quiet && e.parkForRebootDrain(ctx, st)
-	ack := DrainAck{Generation: d.Generation, PID: os.Getpid(), Quiet: quiet, QuietSince: st.quietSince, Parked: parked, Work: work}
-	if val := ack.Value(); val != st.ack {
-		e.setKV(ctx, KVDaemonDrainAck, val)
-		if parked && !strings.Contains(st.ack, `"parked":true`) {
-			e.event(ctx, "info", "", "daemon.reboot_drain_quiet", "drained for a reboot: nothing runs and the idle sessions are parked", nil)
+	parked := false
+	if quiet {
+		parked = e.parkForRebootDrain(ctx)
+		if blocked := e.blockedSessions(ctx); len(blocked) > 0 { // they cannot park: the operator answers them
+			parked, work = false, blocked
 		}
-		st.ack = val
 	}
+	ack := DrainAck{Generation: d.Generation, PID: os.Getpid(), Quiet: quiet, QuietSince: st.quietSince, Parked: parked, Work: work}
+	e.writeDrainAck(ctx, st, ack)
 	if quiet && !st.toasted && now.Sub(st.quietSince) >= DrainQuietToastAfter {
 		st.toasted = true
 		body := fmt.Sprintf("nothing has run since %s and the Mac did not reboot: new work waits; `magnum resume` ends the drain",
@@ -171,6 +170,45 @@ func (e *Engine) tendRebootDrain(ctx context.Context) {
 		e.info(notify.Item{Key: fmt.Sprintf("reboot-drain:%d", d.Generation), Title: "magnum: the drain for a reboot still holds",
 			Body: body, Line: "the drain for a reboot still holds: " + body, Kind: kindDrainHolds, Window: 24 * time.Hour})
 	}
+}
+
+// writeDrainAck writes ack unless its row already holds it: the row, not a
+// copy in memory, is what the CLI reads, so a write that failed, or a row
+// that went, is written again at the next tick. st keeps the last value
+// written, for the event of the first quiet and parked one.
+func (e *Engine) writeDrainAck(ctx context.Context, st *rebootState, ack DrainAck) {
+	val := ack.Value()
+	if cur, _ := e.getKV(ctx, KVDaemonDrainAck); cur == val {
+		return
+	}
+	if err := e.st.SetKV(ctx, KVDaemonDrainAck, val); err != nil {
+		e.warnUnlessStopped(ctx, err, "drain for a reboot: write the acknowledgement")
+		return
+	}
+	if ack.Parked && !strings.Contains(st.ack, `"parked":true`) {
+		e.event(ctx, "info", "", "daemon.reboot_drain_quiet", "drained for a reboot: nothing runs and the idle sessions are parked", nil)
+	}
+	st.ack = val
+}
+
+// blockedSessions are the live sessions a dialog holds (herdr shows them
+// blocked: a hooks review, a permission prompt), which no park takes, each
+// with what to do: "codex-judge of talkable/talkable#3 shows a dialog:
+// answer it in its pane (`magnum open talkable/talkable#3`)".
+func (e *Engine) blockedSessions(ctx context.Context) []string {
+	live, err := e.st.LiveSessions(ctx)
+	if err != nil {
+		return []string{"the live sessions (unreadable)"}
+	}
+	var out []string
+	for _, s := range live {
+		if herdr.Status(deref(s.AgentStatus)) != herdr.StatusBlocked {
+			continue
+		}
+		pr := e.prWords(ctx, s.PRID)
+		out = append(out, fmt.Sprintf("%s of %s shows a dialog: answer it in its pane (`magnum open %s`)", s.Role, pr, pr))
+	}
+	return out
 }
 
 // rebootDrainWork is what the review daemon still runs that a reboot would
@@ -258,12 +296,14 @@ func (e *Engine) prWords(ctx context.Context, id int64) string {
 }
 
 // parkForRebootDrain parks the idle sessions once the daemon is quiet under
-// the drain: the first quiet check marks every session `magnum
-// restart-sessions --tool all` would restart (pinned PRs and shell panes
-// left alone), and restartSessions parks them through the early park as
-// soon as nothing blocks them. It reports whether the park is done: no such
-// session is still live.
-func (e *Engine) parkForRebootDrain(ctx context.Context, st *rebootState) bool {
+// the drain: each quiet check marks every session `magnum restart-sessions
+// --tool all` would restart now (pinned PRs and shell panes left alone; a
+// session marked before keeps its mark), so one that becomes restartable
+// later (`magnum unpin`, an open's hold that ended) parks too, and
+// restartSessions parks them through the early park as soon as nothing
+// blocks them. It reports whether the park is done: no such session is
+// still live.
+func (e *Engine) parkForRebootDrain(ctx context.Context) bool {
 	if e.d.Agents == nil {
 		return true
 	}
@@ -275,11 +315,8 @@ func (e *Engine) parkForRebootDrain(ctx context.Context, st *rebootState) bool {
 	if len(sessions) == 0 {
 		return true
 	}
-	if !st.marked {
-		st.marked = true
-		if added := e.markRestart(ctx, sessions, drainParkWhy); len(added) > 0 {
-			e.log.Info("drain for a reboot: the idle sessions park", "sessions", len(added))
-		}
+	if added := e.markRestart(ctx, sessions, drainParkWhy); len(added) > 0 {
+		e.log.Info("drain for a reboot: the idle sessions park", "sessions", len(added))
 	}
 	return false
 }

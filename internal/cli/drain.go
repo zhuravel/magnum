@@ -285,6 +285,8 @@ func (t *drainTarget) state(ctx context.Context, gen int64) (drainState, drainSt
 		return drainState{text: "has not held the drain yet"}, drainGoesOn
 	case a.Done(gen, pid):
 		return drainState{done: true, text: "quiet, its idle agents parked"}, drainGoesOn
+	case a.Quiet && len(a.Work) > 0:
+		return drainState{text: "quiet; its agents cannot park yet: " + strings.Join(a.Work, ", ")}, drainGoesOn
 	case a.Quiet:
 		return drainState{text: "quiet; parking its idle agents"}, drainGoesOn
 	}

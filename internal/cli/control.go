@@ -340,6 +340,8 @@ func (dc daemonControl) holdText(now time.Time, long bool) string {
 				s += " · not held yet"
 			case d.Quiet && d.Parked:
 				s += " · quiet: safe to reboot"
+			case d.Quiet && len(d.Work) > 0:
+				s += " · quiet; cannot park yet: " + strings.Join(d.Work, ", ")
 			case d.Quiet:
 				s += " · quiet, parking its idle agents"
 			default:
