@@ -18801,9 +18801,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `RemergeDiff`) or, when that is empty, the one line "No conflict in a workflow file was resolved: the
     workflow changes come unchanged from <base> and the PR.", then `git diff <head> <merge> --
     .github/workflows` (gitx `PathsDiff`), every control character but tab and newline escaped (`\x1b`,
-    `\x0d`, `\x7f`, C1 as `\u0085`): the pager runs with LESS=R, and agent-written content could hide a
-    line. Any failure of the hold removes what it wrote and falls back to the merge by hand, never "fix
-    settle failed". The attention is `attention.MergeReadyText` ("fix: merge ready: claude-fix merged master
+    `\x0d`, `\x7f`, C1 as `\u0085`) and the bidi and invisible format characters too (U+202A–202E,
+    U+2066–2069, U+200B–200F, U+FEFF: "Trojan Source"): the pager runs with LESS=R, and agent-written
+    content could hide or reorder a line. Any failure of the hold removes what it wrote and falls back to
+    the merge by hand, never "fix settle failed"; a settle that fails after the hold (its slot could not be
+    put back) removes the ref and the file too, and the start removes any `refs/magnum/held/*` ref and
+    `held-merge.diff` that no row names (`sweepHeldOrphans`: a crash between the hold and its row). The attention is `attention.MergeReadyText` ("fix: merge ready: claude-fix merged master
     at c0c0c0c and resolved 5 conflicts. It changes .github/workflows/ci.yml and pronto.yml. fixer-app[bot]
     pushes it only after your y: P asks (e shows held-merge.diff)."), and a fix of findings that did not start
     for the merge alone (`heldFindings`: not a merge of the parent, not a CI fix, which merge the base too)
@@ -18831,7 +18834,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
     on the base, so `baseOnGitHub`, which read the Details a second time and could no longer refuse, is not
     called), checks the held ref and the merge's parents, mints the Workflows token (`workflowsToken`, split
     out of `pushMerge` with its words) and pushes with a lease on the head within 2 minutes; it skips only the
-    check that the workflow files equal the tip's. After it the row, the ref and the file go, the PR row's
+    check that the workflow files equal the tip's. The push itself runs under `context.WithoutCancel` of the
+    job's context, bounded by the 2 minutes: `magnum abort` cancels the job, and an abort that cut git push
+    after GitHub took the merge left a merge on GitHub with no `notePush`, no `parentOnRow`, the words
+    "aborted", and the next poll's "merge dropped … P merges the parent again" over it. An abort now acts
+    before the push starts, and one that comes during it hears "nothing to abort: magnum pushed the held
+    merge … already". The job's loop row says `By: "the y of a held merge"` (`heldPushBy`): a restart that cut
+    the push (`recoverHeldPush`) or a panic in it (`heldPushPanicked`) ends that row without `failFix`, which
+    put "fix run lost in a daemon restart" in the place of the held merge's attention and its calls; the
+    held merge stays for P. A push GitHub took before a stop cut its job is settled as pushed by the poll
+    that finds the PR's head on the merge (`heldLanded`), never dropped as stale. After it the row, the ref and the file go, the PR row's
     head moves (`parentOnRow`), `notePush` starts its CI after the grace, and `fix.parent_pushed` (`held:
     true`) and the merge's `fix.ended` are written; a fix of findings's merge, or one whose attention asked
     calls, needs you again instead (`fix.needs_you`, the attention and an urgent toast: the findings wait
@@ -18886,7 +18898,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
     in tui TestEOnABoardRowWithAHeldMergeOpensItsDiffInThePager, TestPOnAHeldMergeAsksItsPushAndBindsTheMerge,
     TestEOnTheDashboardOpensTheHeldMergeOfTheRowsPR, TestAHeldMergesPagerThatFailsSaysSo,
     TestTheFactoryScreensEOpensAHeldMergesDiff and the moves goldens; in factory TestPRStatesNameAHeldMergesDiffFirst
-    and TestYourMoveFollowsTheReasonThePRNeedsYou's held merge.
+    and TestYourMoveFollowsTheReasonThePRNeedsYou's held merge. A second review round added, each checked by
+    mutation: TestAnAbortDuringTheHeldPushLetsItFinishAsPushed, TestThePollLeavesTheHeldMergeOfAPushAtWork (a
+    parked push and a poll during it), TestARestartThatCutTheHeldPushKeepsItsAttentionAndCalls,
+    TestAPanicDuringTheHeldPushKeepsTheHeldMerge, TestAHeldMergeThePollFindsOnGitHubSettlesAsPushed,
+    TestAFailedSettleLeavesNoHeldRefOrFile, TestTheStartRemovesHeldRefsAndFilesNoRowNames, U+202E and its kin in
+    TestHeldMergeDiffEscapesTheControlsThatCouldHideALine, and gitx's TestRefsUnderListsTheRefsUnderAPrefixOfRefsMagnum.
 
 ## The factory (2026-11-03)
 

@@ -88,6 +88,9 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	var held fixMergeHeld
 	switch {
 	case err != nil:
+		if errors.As(headErr, &held) { // fix_held_merge.go: no row will name what the hold wrote
+			e.unholdFiles(ctx, job.repo, job.pr, held.h)
+		}
 		e.failFixTyped(ctx, job, "fix settle failed: "+err.Error(), "", typed)
 		return
 	case errors.As(headErr, &held): // fix_held_merge.go: the fixer's merge magnum holds for your y

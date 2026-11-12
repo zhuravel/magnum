@@ -1861,6 +1861,10 @@ func (e *Engine) recoverFixes(ctx context.Context) {
 		if err != nil {
 			continue
 		}
+		if st.By == heldPushBy { // fix_held_merge.go: a held merge's push, no fixer: its attention stays
+			e.recoverHeldPush(ctx, repo, pr, raw)
+			continue
+		}
 		job := e.loopJob(ctx, repo, pr, st)
 		if st.Phase == FixPhaseReviewing {
 			e.recoverReviewingLoop(ctx, job, raw, "while the daemon was stopped") // fix_loop.go

@@ -20633,6 +20633,11 @@ func (c *Client) RebaseOnto(ctx context.Context, dir, onto, upstream string) err
     A rebase that stops (a conflict) is aborted, so the branch and its work tree
     are as they were, and the error is ErrRebaseConflict.
 
+func (c *Client) RefsUnder(ctx context.Context, dir, prefix string) ([]string, error)
+    RefsUnder lists the refs under prefix, a path under refs/magnum/ (one more
+    part at least) that ends in /: `git for-each-ref`, sorted. Any other prefix
+    is refused, so no caller lists a branch or a tag through it.
+
 func (c *Client) RemergeDiff(ctx context.Context, dir, merge string, paths ...string) (string, error)
     RemergeDiff is how merge, a merge commit, resolved its conflicts in paths
     (each taken literally from the top): `git show --remerge-diff` of it, the

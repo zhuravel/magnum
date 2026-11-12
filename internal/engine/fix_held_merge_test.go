@@ -34,6 +34,26 @@ type heldGitFake struct {
 	diff    string
 	refErr  error
 	onRef   func()
+	// pushGate parks PushLeaseGitHubAs, which says so on pushStarted, until
+	// the gate closes or the push's context ends; pushPanics makes it panic.
+	pushGate    chan struct{}
+	pushStarted chan struct{}
+	pushPanics  bool
+}
+
+// RefsUnder lists the refs under prefix (a part of refs/magnum/) that
+// UpdateRef wrote in dir.
+func (g *mergeGit) RefsUnder(_ context.Context, dir, prefix string) ([]string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	var out []string
+	for key := range g.held.refs {
+		if d, ref, _ := strings.Cut(key, " "); d == dir && strings.HasPrefix(ref, prefix) {
+			out = append(out, ref)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 func (g *mergeGit) UpdateRef(_ context.Context, dir, ref, sha string) error {
@@ -392,13 +412,15 @@ func TestAHeldMergeWithNoConflictInAWorkflowFileWritesOneLineThenThePlainDiff(t 
 
 // Workflow content an agent wrote reaches the pager, which runs with
 // LESS=R: held-merge.diff escapes every control character but tab and
-// newline (a carriage return, an escape sequence, a DEL), so none hides a
-// line from the operator who reads it before the y.
+// newline (a carriage return, an escape sequence, a DEL) and the bidi and
+// invisible format characters a "Trojan Source" line hides behind (U+202E
+// among them), so none hides or reorders a line the operator reads before
+// the y.
 func TestHeldMergeDiffEscapesTheControlsThatCouldHideALine(t *testing.T) {
 	h, mg := handedMerge(t)
 	heldConflicts(mg)
 	mg.mu.Lock()
-	mg.held.remerge = "+run: deploy\x1b[2K\r+run: echo ok\x7f\t# tab\n"
+	mg.held.remerge = "+run: deploy\x1b[2K\r+run: echo ok\x7f\t# tab\n+if: ${{ github.actor == 'alice' \u202e && true }}\u2066\u200b\ufeff\n"
 	mg.mu.Unlock()
 	id := h.fix(FixPayload{Mode: FixModeMerge})
 	h.handle()
@@ -408,7 +430,8 @@ func TestHeldMergeDiffEscapesTheControlsThatCouldHideALine(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(b)
-	if want := heldHeader + "+run: deploy\\x1b[2K\\x0d+run: echo ok\\x7f\t# tab\n" + heldPlain; got != want {
+	if want := heldHeader + "+run: deploy\\x1b[2K\\x0d+run: echo ok\\x7f\t# tab\n+if: ${{ github.actor == 'alice' \\u202e && true }}\\u2066\\u200b\\ufeff\n" +
+		heldPlain; got != want {
 		t.Errorf("held-merge.diff = %q, want %q", got, want)
 	}
 }
@@ -745,6 +768,41 @@ END`, KVPRHeldMerge(h.pr(2).ID), h.pr(2).ID))
 	})
 }
 
+// heldCall is the call cycle 1's fixer leaves the author (leavesCall).
+const heldCall = "app/models/offer.rb:42"
+
+// heldWithCalls runs a fix loop on PR #2 whose cycle 1 leaves the author
+// the call on 2101 at call and pushes, and whose cycle 2's fixer merges the
+// base: magnum holds that merge, and the attention says merge ready, then
+// asks the carried call.
+func heldWithCalls(t *testing.T, call string) (*harness, *mergeGit) {
+	t.Helper()
+	h, mg := mergeHarness(t, withFixerApp)
+	fixablePR(h, "zhuravel", map[string]int{"P1": 1, "P2": 1})
+	cycleFixer(h, mg.fixGit, leavesCall(fixPushed, 42), func(id string) (string, string) {
+		return fixMergeHead, fixReport(id, "d3d3d3d Merge c0c0c0c: not run: environment", "0 threads (0 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "none")
+	})
+	h.fix(FixPayload{})
+	h.handle()
+	reviewWith(h, byHead(map[string]map[string]int{fixPushed: {"P2": 1}}))
+	mg.behind, mg.lostPush = true, true // cycle 2's head lacks master's tip, and its merge conflicts
+	heldConflicts(mg)
+	mg.mu.Lock()
+	mg.held.parents = map[string][]string{fixMergeHead: {fixPushed, fixBaseTip}}
+	mg.mu.Unlock()
+	h.advance(time.Minute)
+	reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"}) // the re-review's new finding: cycle 2
+	held, ok := h.heldMergeOfPR()
+	if !ok || held.Head != fixPushed || !held.Findings {
+		t.Fatalf("held = %+v, %v; want cycle 2's merge into b2b2b2b, findings waiting", held, ok)
+	}
+	got := deref(h.wantState(2, store.PRNeedsAttention).LastError)
+	if !strings.HasPrefix(got, strings.TrimSuffix(held.Attention, ".")+"; ") || !strings.Contains(got, call) {
+		t.Fatalf("attention = %q, want merge ready, then the carried call on %s", got, call)
+	}
+	return h, mg
+}
+
 // The review's bug: a fix loop's calls were lost when its merge was held,
 // though a loop's end asks them wherever it ends. Cycle 1's fixer left the
 // author a call; cycle 2's fixer merged the base, and its merge is held: the
@@ -753,36 +811,9 @@ END`, KVPRHeldMerge(h.pr(2).ID), h.pr(2).ID))
 // for the next fix (`magnum fix`, f on the screens) and keeps the call.
 func TestAHeldMergeKeepsTheCallsTheLoopCarried(t *testing.T) {
 	storetest.Parallel(t)
-	const call = "app/models/offer.rb:42"
-	carried := func(t *testing.T) (*harness, *mergeGit) {
-		t.Helper()
-		h, mg := mergeHarness(t, withFixerApp)
-		fixablePR(h, "zhuravel", map[string]int{"P1": 1, "P2": 1})
-		cycleFixer(h, mg.fixGit, leavesCall(fixPushed, 42), func(id string) (string, string) {
-			return fixMergeHead, fixReport(id, "d3d3d3d Merge c0c0c0c: not run: environment", "0 threads (0 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "none")
-		})
-		h.fix(FixPayload{})
-		h.handle()
-		reviewWith(h, byHead(map[string]map[string]int{fixPushed: {"P2": 1}}))
-		mg.behind, mg.lostPush = true, true // cycle 2's head lacks master's tip, and its merge conflicts
-		heldConflicts(mg)
-		mg.mu.Lock()
-		mg.held.parents = map[string][]string{fixMergeHead: {fixPushed, fixBaseTip}}
-		mg.mu.Unlock()
-		h.advance(time.Minute)
-		reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"}) // the re-review's new finding: cycle 2
-		held, ok := h.heldMergeOfPR()
-		if !ok || held.Head != fixPushed || !held.Findings {
-			t.Fatalf("held = %+v, %v; want cycle 2's merge into b2b2b2b, findings waiting", held, ok)
-		}
-		got := deref(h.wantState(2, store.PRNeedsAttention).LastError)
-		if !strings.HasPrefix(got, strings.TrimSuffix(held.Attention, ".")+"; ") || !strings.Contains(got, call) {
-			t.Fatalf("attention = %q, want merge ready, then the carried call on %s", got, call)
-		}
-		return h, mg
-	}
+	const call = heldCall
 	t.Run("dropped", func(t *testing.T) {
-		h, mg := carried(t)
+		h, mg := heldWithCalls(t, call)
 		h.gh.mu.Lock()
 		h.gh.baseTip = fixMovedTip
 		h.gh.mu.Unlock()
@@ -794,7 +825,7 @@ func TestAHeldMergeKeepsTheCallsTheLoopCarried(t *testing.T) {
 		}
 	})
 	t.Run("pushed", func(t *testing.T) {
-		h, mg := carried(t)
+		h, mg := heldWithCalls(t, call)
 		if r := h.mergeBound(h.planMerge().Asked); r.State != store.RequestDone {
 			t.Fatalf("the push: %s %q", r.State, deref(r.Result))
 		}
@@ -1010,4 +1041,213 @@ func TestAMergeIntoAPRThatIsNotYoursIsNeverHeld(t *testing.T) {
 	if got := deref(h.wantState(2, store.PRNeedsAttention).LastError); !strings.Contains(got, why) || !strings.Contains(got, "by hand") {
 		t.Errorf("attention = %q, want the refusal %q and the merge by hand", got, why)
 	}
+}
+
+// startParkedPush plans the push of PR #2's held merge and sends its y with
+// the fake push parked, the request handled with no wait for the job, and
+// waits until the push starts; closing the gate it returns lets it go on.
+func startParkedPush(t *testing.T, h *harness, mg *mergeGit) chan struct{} {
+	t.Helper()
+	gate, started := make(chan struct{}), make(chan struct{}, 1)
+	asked := h.planMerge().Asked
+	mg.mu.Lock()
+	mg.held.pushGate, mg.held.pushStarted = gate, started
+	mg.mu.Unlock()
+	id := h.fix(FixPayload{Mode: FixModeMerge, Asked: &asked})
+	h.e.handleRequests(h.ctx)
+	if r := h.request(id); r.State != store.RequestDone || deref(r.Result) != heldPushing {
+		t.Fatalf("the y: %s %q", r.State, deref(r.Result))
+	}
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the push never started")
+	}
+	return gate
+}
+
+// The review's bug: the push ran under the job's context, which `magnum
+// abort` cancels, so an abort could kill git push after GitHub took the
+// merge, and the job then said "aborted" and skipped what follows a push.
+// The push itself runs to its end now (an abort acts only before it
+// starts): an abort during a parked push lets it finish and settle as
+// pushed, and the abort hears that it came too late.
+func TestAnAbortDuringTheHeldPushLetsItFinishAsPushed(t *testing.T) {
+	h, mg := holdMerged(t)
+	gate := startParkedPush(t, h, mg)
+	abort := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.e.handleRequests(h.ctx) // the abort cancels the job's context while git push runs
+	close(gate)
+	h.settle()
+	if _, pushes := mg.made(); len(pushes) != 1 {
+		t.Fatalf("pushes = %v, want the held merge's", pushes)
+	}
+	wantNoHeld(t, h, mg)
+	if cur := h.pr(2); cur.HeadSHA != fixMergeHead {
+		t.Errorf("the PR's head = %s, want the merge", cur.HeadSHA)
+	}
+	if _, ok, _ := h.st.GetKV(h.ctx, kvPRPushed(h.pr(2).ID)); !ok {
+		t.Error("magnum's push is not recorded for its CI")
+	}
+	if _, ok := h.fixEvent("fix.parent_pushed"); !ok {
+		t.Error("no fix.parent_pushed")
+	}
+	for _, kind := range []string{"fix.held_dropped", "pr.aborted"} {
+		if ev, ok := h.fixEvent(kind); ok {
+			t.Errorf("%s = %q after a push that went", kind, ev.Message)
+		}
+	}
+	const want = "nothing to abort: magnum pushed the held merge of talkable/talkable#2 already"
+	if r := h.request(abort); r.State != store.RequestDone || deref(r.Result) != want {
+		t.Errorf("the abort: %s %q, want done %q", r.State, deref(r.Result), want)
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the push's loop row stayed")
+	}
+}
+
+// A poll while the push's job holds the PR leaves its held merge to the
+// job, even when the merge looks stale to it (master's tip moved): the row
+// and the attention stay, and nothing says it was dropped.
+func TestThePollLeavesTheHeldMergeOfAPushAtWork(t *testing.T) {
+	h, mg := holdMerged(t)
+	gate := startParkedPush(t, h, mg)
+	h.gh.mu.Lock()
+	h.gh.baseTip = fixMovedTip
+	h.gh.mu.Unlock()
+	if err := h.e.Tick(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	row, attn := h.heldRow(), deref(h.pr(2).LastError)
+	_, dropped := h.fixEvent("fix.held_dropped")
+	close(gate)
+	h.settle()
+	if row == "" || !attention.MergeReady(attn) || dropped {
+		t.Errorf("after a poll during the push: row %q, attention %q, dropped %v; want the row, merge ready and no drop", row, attn, dropped)
+	}
+}
+
+// The review's bug: a restart that cut the push left its loop row, and the
+// start's recovery ran failFix, which put "fix run lost in a daemon
+// restart" in the place of the held merge's attention and its calls. The
+// start ends a held push's row quietly now: the held merge, its attention
+// and the calls the loop carried stay, and P asks its push again.
+func TestARestartThatCutTheHeldPushKeepsItsAttentionAndCalls(t *testing.T) {
+	h, _ := heldWithCalls(t, heldCall)
+	before := deref(h.pr(2).LastError)
+	held, _ := h.heldMergeOfPR()
+	if err := h.e.setFixState(h.ctx, h.pr(2).ID, FixState{Cycle: 1, Cap: 1, Phase: FixPhaseFixing, Mode: FixModeMerge, By: heldPushBy,
+		Head: held.Head, Since: held.Head, Role: "claude-fix", StartedAt: h.clock.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	h.e.recoverFixes(h.ctx)
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the cut push's loop row stayed")
+	}
+	if got := deref(h.wantState(2, store.PRNeedsAttention).LastError); got != before {
+		t.Errorf("attention = %q, want %q kept", got, before)
+	}
+	if plan := h.planMerge(); plan.Asked.Merge != fixMergeHead {
+		t.Errorf("the plan = %+v, want the held merge's push", plan)
+	}
+}
+
+// A panic during the push ends its job without failFix too: the held
+// merge, its row and its attention stay, the loop row goes, and fix.failed
+// says what happened.
+func TestAPanicDuringTheHeldPushKeepsTheHeldMerge(t *testing.T) {
+	h, mg := holdMerged(t)
+	mg.mu.Lock()
+	mg.held.pushPanics = true
+	mg.mu.Unlock()
+	if r := h.mergeBound(h.planMerge().Asked); r.State != store.RequestDone {
+		t.Fatalf("the y: %s %q", r.State, deref(r.Result))
+	}
+	if _, ok := h.heldMergeOfPR(); !ok {
+		t.Error("the held merge went")
+	}
+	if got := deref(h.wantState(2, store.PRNeedsAttention).LastError); got != heldAttention {
+		t.Errorf("attention = %q, want %q kept", got, heldAttention)
+	}
+	if ev, ok := h.fixEvent("fix.failed"); !ok || !strings.Contains(ev.Message, "panicked") {
+		t.Errorf("fix.failed = %q, %v", ev.Message, ok)
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the push's loop row stayed")
+	}
+}
+
+// A push that reached GitHub before a crash cut its job is no stale merge:
+// the poll that finds the PR's head on the held merge settles it as pushed
+// (its row, ref and file go, its CI is noted, fix.parent_pushed says so),
+// never "merge dropped … P merges the parent again" over a merge that is on
+// GitHub.
+func TestAHeldMergeThePollFindsOnGitHubSettlesAsPushed(t *testing.T) {
+	h, mg := holdMerged(t)
+	h.gh.setHead("talkable/talkable", 2, fixMergeHead) // the push went, and the daemon stopped before it said so
+	h.tick()
+	wantNoHeld(t, h, mg)
+	if ev, ok := h.fixEvent("fix.held_dropped"); ok {
+		t.Errorf("fix.held_dropped = %q over a merge on GitHub", ev.Message)
+	}
+	if ev, ok := h.fixEvent("fix.parent_pushed"); !ok || !strings.Contains(ev.Message, "d3d3d3d") {
+		t.Errorf("fix.parent_pushed = %q, %v", ev.Message, ok)
+	}
+	if _, ok, _ := h.st.GetKV(h.ctx, kvPRPushed(h.pr(2).ID)); !ok {
+		t.Error("magnum's push is not recorded for its CI")
+	}
+	if got := deref(h.pr(2).LastError); attention.MergeDropped(got) || attention.MergeReady(got) {
+		t.Errorf("attention = %q after the merge is on GitHub", got)
+	}
+}
+
+// The review's bug: holdMerge writes the ref and held-merge.diff before the
+// settle writes the row, and a settle whose slot could not be put back
+// failed before the held case, leaving both with no row. They go now.
+func TestAFailedSettleLeavesNoHeldRefOrFile(t *testing.T) {
+	h, mg := handedMerge(t)
+	heldConflicts(mg)
+	fixer(h, mg.fixGit, fixMergeHead, func(run store.Run) string {
+		h.sl.mu.Lock()
+		h.sl.resyncErr = errors.New("slots: guard review1: herdr snapshot: connection refused")
+		h.sl.mu.Unlock()
+		return fixReport(run.ID, "d3d3d3d Merge c0c0c0c: not run: environment", "0 threads (0 fixed, 0 already fixed, 0 not a bug, 0 won't fix)", "none")
+	})
+	id := h.fix(FixPayload{Mode: FixModeMerge})
+	h.handle()
+	h.wantDone(id)
+	wantNoHeld(t, h, mg)
+	if got := deref(h.wantState(2, store.PRNeedsAttention).LastError); !strings.HasPrefix(got, "fix settle failed: ") {
+		t.Errorf("attention = %q, want the failed settle", got)
+	}
+}
+
+// A crash between the hold and its row (or any row that went while its
+// files stayed) leaves a ref under refs/magnum/held/ and a held-merge.diff
+// that no row names: the start removes them, and leaves those a row names.
+func TestTheStartRemovesHeldRefsAndFilesNoRowNames(t *testing.T) {
+	h, mg := holdMerged(t)
+	clone := h.slot("review1").MainClone
+	if err := mg.UpdateRef(h.ctx, clone, HeldMergeRef(77), fixMergeHead); err != nil {
+		t.Fatal(err)
+	}
+	orphan := filepath.Join(h.d.Layout.PRReviews("talkable", "talkable", 3), HeldMergeFile)
+	if err := writeHeldDiff(filepath.Dir(orphan), orphan, []byte("Held merge …\n")); err != nil {
+		t.Fatal(err)
+	}
+	h.e.sweepHeldOrphans(h.ctx)
+	if refs := mg.heldRefs(); len(refs) != 1 || refs[h.heldRefKey()] != fixMergeHead {
+		t.Errorf("held refs = %v, want PR #2's alone", refs)
+	}
+	if _, err := os.Stat(orphan); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the orphan held-merge.diff stayed: %v", err)
+	}
+	if _, err := os.Stat(h.heldDiffPath()); err != nil {
+		t.Errorf("PR #2's held-merge.diff: %v", err)
+	}
+	if err := h.st.DeleteKV(h.ctx, KVPRHeldMerge(h.pr(2).ID)); err != nil { // the crash: the files and no row
+		t.Fatal(err)
+	}
+	h.e.sweepHeldOrphans(h.ctx)
+	wantNoHeld(t, h, mg)
 }

@@ -195,7 +195,21 @@ func (g *mergeGit) ChangedPaths(_ context.Context, _, base, head string, pathspe
 	return slices.Clone(g.schema), nil
 }
 
-func (g *mergeGit) PushLeaseGitHubAs(_ context.Context, dir, owner, repo, sha, branch, expect string, env map[string]string) error {
+func (g *mergeGit) PushLeaseGitHubAs(ctx context.Context, dir, owner, repo, sha, branch, expect string, env map[string]string) error {
+	g.mu.Lock()
+	gate, started, panics := g.held.pushGate, g.held.pushStarted, g.held.pushPanics
+	g.mu.Unlock()
+	if gate != nil { // fix_held_merge_test.go: the push parks until the test lets it go, or its context ends
+		started <- struct{}{}
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return fmt.Errorf("git push: %w", ctx.Err())
+		}
+	}
+	if panics {
+		panic("git push: a fake's panic")
+	}
 	g.mu.Lock()
 	g.pushes = append(g.pushes, fmt.Sprintf("%s/%s:%s:%s:%s:%s", owner, repo, sha, branch, expect, pushedAs(env)))
 	g.pushDirs = append(g.pushDirs, dir)

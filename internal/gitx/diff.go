@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -494,4 +495,29 @@ func (c *Client) PathsDiff(ctx context.Context, dir, a, b string, paths ...strin
 		return "", err
 	}
 	return string(res.Stdout), nil
+}
+
+// RefsUnder lists the refs under prefix, a path under refs/magnum/ (one
+// more part at least) that ends in /: `git for-each-ref`, sorted. Any other
+// prefix is refused, so no caller lists a branch or a tag through it.
+func (c *Client) RefsUnder(ctx context.Context, dir, prefix string) ([]string, error) {
+	dirPart, ok := strings.CutSuffix(prefix, "/")
+	if !ok || !strings.HasPrefix(prefix, magnumRefs) || len(prefix) <= len(magnumRefs) {
+		return nil, fmt.Errorf("gitx: refs under %q: the prefix must be a path under %s ending in /", prefix, magnumRefs)
+	}
+	if err := checkBranch("prefix", dirPart); err != nil {
+		return nil, err
+	}
+	res, err := c.git(ctx, dir, call{label: "for-each-ref " + prefix}, "for-each-ref", "--format=%(refname)", prefix)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for line := range strings.SplitSeq(res.Out(), "\n") {
+		if ref := strings.TrimSpace(line); strings.HasPrefix(ref, prefix) {
+			out = append(out, ref)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
 }

@@ -1389,6 +1389,7 @@ func (e *Engine) startup(ctx context.Context) {
 	// open_hold.go: a lasting pin of an earlier open becomes a hold.
 	e.convertOpenPins(ctx)
 	e.recoverFixes(ctx)           // fix.go: a fixer at work never survives a restart
+	e.sweepHeldOrphans(ctx)       // fix_held_merge.go: a hold a crash cut before its row
 	e.recoverStagingResolves(ctx) // staging_resolve.go: a resolver's job holds its PR again before any round
 	e.startHeldFixes(ctx)         // fix_held.go: the `magnum fix` requests a drain held for this start
 	e.retryParked(ctx)            // retry_parked.go: what failed rounds parked under another build, config or prompts

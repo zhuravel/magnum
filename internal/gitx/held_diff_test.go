@@ -2,6 +2,7 @@ package gitx
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -118,5 +119,26 @@ func TestPathsDiffIsTheDiffOfTwoCommitsInThePathsAsked(t *testing.T) {
 	}
 	if _, err := fx.c.PathsDiff(ctx, fx.origin, "-x", fx.resolved, ".github"); err == nil {
 		t.Error("an option as a revision was taken")
+	}
+}
+
+// The daemon's start removes the held refs no row names: RefsUnder lists
+// the refs under a prefix of refs/magnum/, and refuses any other prefix.
+func TestRefsUnderListsTheRefsUnderAPrefixOfRefsMagnum(t *testing.T) {
+	fx := newHeldMergeFixture(t)
+	ctx := context.Background()
+	for _, ref := range []string{"refs/magnum/held/7", "refs/magnum/held/12", "refs/magnum/pr/7"} {
+		if err := fx.c.UpdateRef(ctx, fx.origin, ref, fx.resolved); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := fx.c.RefsUnder(ctx, fx.origin, "refs/magnum/held/")
+	if want := []string{"refs/magnum/held/12", "refs/magnum/held/7"}; err != nil || !slices.Equal(got, want) {
+		t.Errorf("RefsUnder = %q, %v; want %q", got, err, want)
+	}
+	for _, bad := range []string{"refs/heads/", "refs/magnum/held", "refs/magnum/", "-x/"} {
+		if _, err := fx.c.RefsUnder(ctx, fx.origin, bad); err == nil {
+			t.Errorf("RefsUnder of %q was taken", bad)
+		}
 	}
 }
