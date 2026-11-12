@@ -26564,6 +26564,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
     the role again, give it a direction, or drop the task. The first two start a fresh session with its
     context through `SendFresh`, and its recoveries count again. The stage hands that start once: the ledger
     keeps the prompt that starts with `answerLead`.
+  - *A loop without progress* (`loopQuestion`). The runtime's loop guard compacts a role's session, then
+    starts a fresh one, and then found the role making no progress (its event, or a prompt it refuses). That
+    stop offered only the retry. It now asks the writer's kind of question: give a direction, start the role in
+    a fresh session, or drop the task. The first two go through `SendFresh`, so the guard counts again from
+    the fresh session. A refused prompt and the event ask the same question once.
   - Not covered: the configuration's own stops (a denied or missing command, a missing `table_stats`) need an
     edit and an install, so they still name the fix and the retry. A migration that hangs still asks with its
     fix, because a rerun of a migration that ran part-way is no heal. A comment in review.go still names the

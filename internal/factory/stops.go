@@ -45,6 +45,7 @@ const (
 	stopCheck = "check" // a check that failed and named no failure of the code, its steps spent
 	stopFix   = "fix"   // the writer's change still fails at its fix budget, its fresh session spent
 	stopLost  = "lost"  // a role's pane lost after its recoveries
+	stopLoop  = "loop"  // a role the runtime's loop guard found making no progress
 )
 
 // The decisions an answer to a stop question makes.
@@ -66,6 +67,7 @@ const (
 	optionAccept    = "Accept this failing check as known"
 	optionDirection = "Give a direction"
 	optionStart     = "Start the role again"
+	optionFresh     = "Start the role in a fresh session"
 	optionDrop      = "Drop the task"
 )
 
@@ -346,7 +348,7 @@ func decideStop(a stopAsk, answer string) (decision, words string) {
 		return decideAgain, strings.TrimSpace(answer)
 	case a.Kind == stopFix && a.Check != "" && is(optionAccept, "accept"):
 		return decideAccept, ""
-	case a.Kind == stopLost && is(optionStart, "start"):
+	case a.Kind == stopLost && is(optionStart, "start"), a.Kind == stopLoop && is(optionFresh, "fresh"):
 		return decideStart, ""
 	case is(optionDirection, "direction"):
 		return decideDirection, after(optionDirection)
@@ -522,6 +524,33 @@ func lostQuestion(a registry.Attempt, role, why string) stopQuestion {
 	}
 }
 
+// loopQuestion is the question of role (as it runs) in attempt a of task
+// t's stage, which the runtime's loop guard found making no progress (why,
+// its words: it compacted the session, then started a fresh one, and the
+// role still loops): give a direction (your words go to a fresh session),
+// start the role in a fresh session, or drop the task, as the writer's fix
+// stop asks.
+func loopQuestion(a registry.Attempt, role, why string) stopQuestion {
+	what := withReason("the "+role+" agent makes no progress", why)
+	return stopQuestion{
+		ask: stopAsk{Kind: stopLoop, Key: a.ID + "/" + role, Role: role, Attempt: a.ID, Why: what},
+		q: registry.Question{
+			Text: fmt.Sprintf("The %s agent in %s (attempt %d) makes no progress (%s): how does the task go on?", role,
+				stageWhat(a.Stage), a.N, cmp.Or(why, "its loop guard ran out")),
+			Context: "the factory compacted its session, then started it in a fresh one, and it still loops: the same failure " +
+				"again and again, or prompt after prompt in the stage",
+			Example: "a role that writes the same file wrong after each nudge",
+			Options: []registry.Option{
+				{Label: optionDirection, Means: "answer with your words, such as `" + optionDirection + ": read the seeds first`: " +
+					"they go to a fresh session of " + role + ", its loop counted again"},
+				{Label: optionFresh, Means: "a fresh session of " + role + " starts with its context (its first prompt and the " +
+					"task's files), its loop counted again"},
+				{Label: optionDrop, Means: "the task stops"},
+			},
+			Recommended: -1, Evidence: "the runtime's loop guard"},
+	}
+}
+
 // answerLead starts the words a fresh session your answer asked for begins
 // with after the attempt's first prompt, directionLead the direction your
 // answer gave the writer's fix turn: the ledger tells a decision handed by
@@ -532,8 +561,8 @@ const (
 )
 
 // applyStops hands each role of run (attempt a of task t's stage) the fresh
-// start your answer to its lost pane's question decided (start it again, a
-// direction) and it has not had yet: its next prompt starts a fresh session
+// start your answer to its lost pane's or its loop's question decided
+// (start it again, a direction) and it has not had yet: its next prompt starts a fresh session
 // (nextFresh) with the words of freshAnswerText. A decision is handed once
 // a prompt that starts with answerLead went to the role in the attempt
 // after it (the ledger keeps it), so a restart hands it once.
@@ -544,7 +573,8 @@ func (e *Engine) applyStops(ctx context.Context, t registry.Task, a registry.Att
 	}
 	var entries []registry.LedgerEntry
 	for _, ask := range rec.Asks {
-		if ask.Kind != stopLost || ask.Attempt != a.ID || (ask.Decision != decideStart && ask.Decision != decideDirection) {
+		if (ask.Kind != stopLost && ask.Kind != stopLoop) || ask.Attempt != a.ID ||
+			(ask.Decision != decideStart && ask.Decision != decideDirection) {
 			continue
 		}
 		r := run.byName(ask.Role)

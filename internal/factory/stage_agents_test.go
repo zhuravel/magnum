@@ -1122,8 +1122,9 @@ func TestTheJudgesFilesAreRecordedAtEachRevision(t *testing.T) {
 }
 
 // The runtime's events that need you move the task to NEEDS YOU with a
-// plain reason (a lost pane whose recoveries ran out, with the decision its
-// question asks for); none is a failure of the task.
+// plain reason (a lost pane whose recoveries ran out and a loop without
+// progress, with the decision their question asks for); none is a failure
+// of the task.
 func TestTheRuntimesEventsMoveTheTaskWithPlainReasons(t *testing.T) {
 	for _, tc := range []struct {
 		kind         runtime.EventKind
@@ -1135,7 +1136,9 @@ func TestTheRuntimesEventsMoveTheTaskWithPlainReasons(t *testing.T) {
 		{runtime.EventLost, "fx-history", "no progress after 3 recoveries", "1 question before investigate goes on: the fx-history agent's " +
 			"pane was lost: no progress after 3 recoveries: start the role again, give a direction or drop the task?"},
 		{runtime.EventStuck, "fx-repro", "Running bin/rspec spec/models/campaign_copy_spec.rb", "the fx-repro agent is stuck: Running bin/rspec spec/models/campaign_copy_spec.rb"},
-		{runtime.EventNoProgress, "fx-history", "no progress: the same failure 3 times", "the fx-history agent makes no progress: the same failure 3 times"},
+		{runtime.EventNoProgress, "fx-history", "no progress: the same failure 3 times", "1 question before investigate goes on: the " +
+			"fx-history agent makes no progress: the same failure 3 times: give a direction, start the role in a fresh session or drop " +
+			"the task?"},
 		{runtime.EventHooksTrust, "fx-cause", "codex: hooks need review (Trust all, in the pane or by running codex once)",
 			"the fx-cause agent: hooks need review (Trust all, in the pane or by running codex once)"},
 		{runtime.EventRefused, "fx-repro", "claude: a usage policy warning", "the fx-repro agent was refused: claude: a usage policy warning"},

@@ -1058,7 +1058,13 @@ func (e *Engine) onAgentEvent(ctx context.Context, t *registry.Task, st config.F
 	case runtime.EventStuck:
 		return withReason("the "+name+" agent is stuck", ev.Reason)
 	case runtime.EventNoProgress:
-		return withReason("the "+name+" agent makes no progress", strings.TrimPrefix(ev.Reason, "no progress: "))
+		if r.next == nextFresh {
+			return "" // your answer starts it afresh: this pass sends that
+		}
+		why := strings.TrimPrefix(ev.Reason, "no progress: ")
+		q := loopQuestion(a, name, why) // its loop guard ran out: a question, never "retry"
+		run.ask = &q
+		return withReason("the "+name+" agent makes no progress", why)
 	case runtime.EventVolumeDenied:
 		return ev.Reason // runtime.DeniedLine: what to allow, then your retry
 	}
@@ -1675,7 +1681,7 @@ func (e *Engine) promptRoles(ctx context.Context, t registry.Task, st config.Fac
 		if e.pauseHandOver(ctx, t, st, a, run.since(a), r, id, serr) {
 			continue
 		}
-		switch w := e.sendRefused(ctx, t, r, serr); {
+		switch w := e.sendRefused(ctx, t, a, r, serr); {
 		case errors.Is(w, ErrHeld):
 			held = cmpErr(held, w)
 		case w != nil:
@@ -1929,7 +1935,7 @@ func cmpErr(first, second error) error {
 // task (a drain's it does not record, as a launch's), or a loop without
 // progress or a copy's volume macOS still denies the factory's herdr
 // server, a needsYou; nil for any other error.
-func (e *Engine) sendRefused(ctx context.Context, t registry.Task, r *stageRole, err error) error {
+func (e *Engine) sendRefused(ctx context.Context, t registry.Task, a registry.Attempt, r *stageRole, err error) error {
 	var who, what string
 	if d, ok := errors.AsType[*runtime.DeniedError](err); ok {
 		return needsYou{d.Error()}
@@ -1938,8 +1944,8 @@ func (e *Engine) sendRefused(ctx context.Context, t registry.Task, r *stageRole,
 		return heldError{who: holdRestart, what: drainWhat} // a start the drain holds, as a launch's: no wait recorded
 	}
 	switch {
-	case errors.Is(err, runtime.ErrNoProgress):
-		return needsYou{"the " + r.runAs.Name + " agent makes no progress"}
+	case errors.Is(err, runtime.ErrNoProgress): // its loop guard ran out: its question (loopQuestion), never "retry"
+		return asksYou{loopQuestion(a, r.runAs.Name, noProgressWhy(err))}
 	case errors.Is(err, runtime.ErrOperatorInPane):
 		who, what = waitAgent, "you're in the "+r.runAs.Name+" pane; its prompt waits until you leave it"
 	case errors.Is(err, runtime.ErrDeliveryUnknown):
@@ -1958,6 +1964,17 @@ func (e *Engine) sendRefused(ctx context.Context, t registry.Task, r *stageRole,
 	}
 	e.waitOn(ctx, t, who, what)
 	return heldError{who: who, what: what}
+}
+
+// noProgressWhy is why the runtime's loop guard refused a prompt (err, an
+// ErrNoProgress), in its words: "6 prompts in the investigate stage", "the
+// same failure 3 times: …"; "" when it names none.
+func noProgressWhy(err error) string {
+	msg := strings.TrimSuffix(err.Error(), ": "+runtime.ErrNoProgress.Error())
+	if _, why, ok := strings.Cut(msg, ": "); ok && why != "" && !strings.Contains(why, runtime.ErrNoProgress.Error()) {
+		return why
+	}
+	return ""
 }
 
 // unknownHeld is what holds a role whose prompt's delivery nobody can tell
