@@ -192,7 +192,11 @@ func (e *Engine) putBackRound(ctx context.Context, t registry.Task, c Copy, cy r
 	case decision == decideKeep && left.moved == "": // your answer: the change stays, and the round's result stands
 		return "", e.keepLeft(ctx, t, c, left)
 	case decision == "" && left.moved != "":
-		return e.askLeft(ctx, t, c, cy, round, left, movedCause, stops)
+		m, err := e.movedFacts(ctx, t, c, cy.HeadBefore)
+		if err != nil {
+			return "", err
+		}
+		return e.askLeft(ctx, t, c, cy, round, left, movedCause(m), stops)
 	}
 	name := roundName(round, cy.N)
 	held := func(who string, ask bool) (string, error) { // the wait for a turn in flight, or the question past its bound
@@ -546,6 +550,14 @@ func (e *Engine) keepMoved(ctx context.Context, t registry.Task, c Copy, cy regi
 		head, err := e.d.Git.RevParse(ctx, c.Path, "HEAD")
 		if err != nil {
 			return "", err
+		}
+		// A branch that lacks the reviewed head's commits (moved back, or
+		// beside them since your answer) is never kept: it drops the task's.
+		if drops, err := e.d.Git.CommitsAfter(ctx, c.Path, head, cy.HeadBefore, false); err != nil {
+			return "", err
+		} else if len(drops) > 0 {
+			return e.leftWait(t, c, cy, round, now, "", fmt.Sprintf("keeping %s at %s would drop %s of the task after it, so "+
+				"the factory kept nothing", t.Branch, short(head), plural(len(drops), "commit")))
 		}
 		if err := e.headMoved(ctx, t, head); err != nil {
 			return "", err
@@ -926,4 +938,39 @@ func putBackLeft(ctx context.Context, git *gitx.Client, copyDir string, left rou
 		_ = root.Remove(d) // one that is not empty stays
 	}
 	return nil
+}
+
+// movedFacts reads where task t's copy c is, which a round that reviewed
+// head left off it (movedFacts).
+func (e *Engine) movedFacts(ctx context.Context, t registry.Task, c Copy, head string) (movedFacts, error) {
+	git := e.d.Git
+	var m movedFacts
+	var err error
+	if m.at, err = git.RevParse(ctx, c.Path, "HEAD"); err != nil {
+		return m, err
+	}
+	if m.branchAt, err = git.RevParse(ctx, c.Path, "refs/heads/"+t.Branch); err != nil {
+		return m, err
+	}
+	cur, err := git.CurrentBranch(ctx, c.Path)
+	if err != nil {
+		return m, err
+	}
+	m.onBranch = cur == t.Branch
+	count := func(from, to string) (int, error) {
+		cs, err := git.CommitsAfter(ctx, c.Path, from, to, false)
+		return len(cs), err
+	}
+	if m.branchExtra, err = count(head, m.branchAt); err != nil {
+		return m, err
+	}
+	if m.keepDrops, err = count(m.branchAt, head); err != nil {
+		return m, err
+	}
+	if !m.onBranch {
+		if m.offCopy, err = count(m.branchAt, m.at); err != nil {
+			return m, err
+		}
+	}
+	return m, nil
 }

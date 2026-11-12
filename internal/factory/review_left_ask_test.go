@@ -225,3 +225,31 @@ func TestAWaitThatEndedStartsItsBoundOver(t *testing.T) {
 		t.Fatalf("task %s waits %q; want the question after the new wait's own bound", got.State, got.WaitsWhat)
 	}
 }
+
+// A round that moved the task's branch back, behind the head it reviewed,
+// is never offered to be kept: keeping it would drop the writer's commits.
+// The question offers to restore the copy (the branch moves forward to the
+// reviewed head) or to drop the task, and restore lets the round's result
+// stand.
+func TestABranchMovedBehindTheReviewedHeadOffersOnlyRestoreOrDrop(t *testing.T) {
+	var rig *reviewRig
+	rig = newReviewRig(t, func(c evalrun.LocalCase) evalrun.LocalResult {
+		rig.gitIn(c.Checkout, "reset", "--quiet", "--keep", "HEAD~1")
+		return result()(c)
+	})
+	r := rig
+	task, head := r.reviewTask("PR-12406")
+	r.run(5, func() bool { return !isLive(r.reload(task.ID)) })
+	got := r.reload(task.ID)
+	qs := r.newestQuestions(task.ID)
+	if got.State != registry.TaskNeedsYou || len(qs) != 1 || !slices.Equal(optionLabels(qs[0]), []string{optionRestoreCopy, optionDrop}) ||
+		!strings.Contains(qs[0].Options[0].Means, "forward to "+short(head)) {
+		t.Fatalf("task %s waits %q with %+v; want restore (forward to %s) or drop, never keep", got.State, got.WaitsWhat, qs, short(head))
+	}
+	r.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: got.QuestionRev, Answers: map[int]string{0: optionRestoreCopy}})
+	r.run(6, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+	if got := r.reload(task.ID); got.Stage != "pr_body" || r.git(r.copyDir, "rev-parse", task.Branch) != head {
+		t.Fatalf("task %s at %s waits %q, the branch at %s; want pr_body with the branch back at %s", got.State, got.Stage,
+			got.WaitsWhat, r.git(r.copyDir, "rev-parse", task.Branch), head)
+	}
+}

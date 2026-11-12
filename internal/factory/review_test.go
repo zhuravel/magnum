@@ -1246,6 +1246,11 @@ func TestARoundThatLeavesTheCopyOffItsHeadAsksToRestoreOrKeepIt(t *testing.T) {
 					t.Fatalf("the writer got %d prompts over the round's leftovers", len(ps))
 				}
 				moved := r.git(r.copyDir, "rev-parse", "HEAD")
+				if want := fmt.Sprintf("%s is reset from %s to %s; its 1 commit after %s leaves the branch (git's reflog keeps it; "+
+					"it is not in the saved diff)", task.Branch, short(moved), short(head), short(head)); tc.moved &&
+					!strings.Contains(qs[0].Options[0].Means, want) {
+					t.Fatalf("Restore says %q; want %q", qs[0].Options[0].Means, want)
+				}
 				if tc.moved == (moved == head) || (tc.name == "a moved head with a tracked change and a new file" &&
 					(r.read("README") != "a reviewer's mutant\n" || !r.inCopy("spec/probe_spec.rb"))) {
 					t.Fatal("the factory changed what the round left before your answer")

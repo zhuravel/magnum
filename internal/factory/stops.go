@@ -105,6 +105,9 @@ type stopAsk struct {
 	// Answered is when you answered (the question's own time; Decided is
 	// the pass that read it): a turn after it is one your answer never saw.
 	Answered time.Time `json:"answered,omitzero"`
+	// NoKeep marks a question of what a round left that offered no keep
+	// (it would drop the task's commits): its ways are restore and drop.
+	NoKeep bool `json:"no_keep,omitempty"`
 }
 
 // accepted is a check whose failure you accepted as known for the task:
@@ -401,6 +404,10 @@ func decideStop(a stopAsk, answer string) (decision, words string) {
 	switch {
 	case a.Kind == stopLeft && is(optionRestoreCopy, "restore"):
 		return decideRestore, ""
+	case a.Kind == stopLeft && a.NoKeep && is(optionDrop, "drop"):
+		return decideDrop, ""
+	case a.Kind == stopLeft && a.NoKeep: // no keep was offered (it drops the task's commits): the restore, which drops none
+		return decideRestore, strings.TrimSpace(answer)
 	case a.Kind == stopLeft: // keep the change, or your own words: nothing of yours is put back
 		return decideKeep, strings.TrimSpace(answer)
 	case is(optionDrop, "drop"):
@@ -523,7 +530,10 @@ func leftKey(cy registry.Cycle, round int) string {
 // than put it back by itself: the cause in the question's words, its
 // context, and what its restore does beyond the round's leftovers ("" for
 // nothing).
-type leftCause struct{ words, context, restore string }
+type leftCause struct {
+	words, context, restore string
+	moved                   *movedFacts
+}
 
 // typedCause: you typed into a pane of the task, or one of its agents got
 // a prompt, since the round began (who, yoursSince): it may be your edit.
@@ -540,8 +550,75 @@ func waitedCause(who string) leftCause {
 }
 
 // movedCause: the round left the copy off the task's branch or the branch
-// at another head than it reviewed.
-var movedCause = leftCause{words: "the factory moves no branch or HEAD by itself", context: "the factory moves no branch or HEAD by itself"}
+// at another head than it reviewed (m, what restore and keep would move).
+func movedCause(m movedFacts) leftCause {
+	return leftCause{words: "the factory moves no branch or HEAD by itself", context: "the factory moves no branch or HEAD by itself",
+		moved: &m}
+}
+
+// movedFacts are where a round left a copy off the reviewed head: the head
+// the copy is at, whether it is on the task's branch, the branch's own head,
+// the commits a restore takes off the branch (after the reviewed head) and
+// off the copy (a copy off the branch: its commits the branch lacks), and
+// the task's commits a keep would drop (the reviewed head's that the
+// branch's head lacks: a branch moved back behind it, or beside it).
+type movedFacts struct {
+	at, branchAt         string
+	onBranch             bool
+	branchExtra, offCopy int
+	keepDrops            int
+}
+
+// commitsWords says n commits that leave something: "its 1 commit after
+// X leaves the branch (git's reflog keeps it; it is not in the saved
+// diff)".
+func commitsWords(n int, after, leave string) string {
+	if n == 1 {
+		return fmt.Sprintf("its 1 commit %s leaves %s (git's reflog keeps it; it is not in the saved diff)", after, leave)
+	}
+	return fmt.Sprintf("its %d commits %s leave %s (git's reflog keeps them; they are not in the saved diff)", n, after, leave)
+}
+
+// movedWords are the meanings of restore and keep for a copy a round left
+// off the reviewed head (m), and whether keep is offered: never when it
+// would drop the task's commits.
+func movedWords(t registry.Task, head string, m movedFacts) (restore, keep string, keepOffered bool) {
+	var r []string
+	if !m.onBranch {
+		w := "the copy switches back to " + t.Branch
+		if m.offCopy > 0 {
+			w += ": " + commitsWords(m.offCopy, "at "+short(m.at)+" off the branch", "the copy")
+		}
+		r = append(r, w)
+	}
+	switch {
+	case m.branchAt == head:
+	case m.branchExtra > 0:
+		r = append(r, fmt.Sprintf("%s is reset from %s to %s; %s", t.Branch, short(m.branchAt), short(head),
+			commitsWords(m.branchExtra, "after "+short(head), "the branch")))
+	default:
+		r = append(r, fmt.Sprintf("%s is reset from %s forward to %s, the head the round reviewed", t.Branch, short(m.branchAt), short(head)))
+	}
+	restore = "the changes go back (all saved first), " + strings.Join(r, ", and ") + "; the round's result stands"
+	if m.keepDrops > 0 {
+		return restore, "", false
+	}
+	var k []string
+	if !m.onBranch {
+		w := "the copy switches back to " + t.Branch + " with the changes"
+		if m.offCopy > 0 {
+			w += ", but " + commitsWords(m.offCopy, "at "+short(m.at)+" off the branch", "the copy")
+		}
+		k = append(k, w)
+	}
+	if m.branchAt != head {
+		k = append(k, fmt.Sprintf("%s stays at %s, its %s after %s included: that is the task's head, and its checks run again there",
+			t.Branch, short(m.branchAt), plural(m.branchExtra, "commit"), short(head)))
+	} else {
+		k = append(k, "the round's result stands")
+	}
+	return restore, strings.Join(k, "; "), true
+}
 
 // leftQuestion is the question of what review round round of cycle cy left
 // in the copy of task t (left, its changes saved in the task's directory as
@@ -554,29 +631,30 @@ func leftQuestion(t registry.Task, cy registry.Cycle, round int, left roundLefto
 	restore := "the tracked paths go back as the reviewed head has them and the round's new files go (all saved first), and the " +
 		"round's result stands"
 	keep := "the copy keeps it as it is, and the round's result stands; the factory's checks then ask for it to be committed, never undone"
-	if left.moved != "" {
-		restore = fmt.Sprintf("the changes go back (all saved first) and the copy goes back to %s at %s, the head the round reviewed "+
-			"(an event names the head it was at), and the round's result stands", t.Branch, short(cy.HeadBefore))
-		keep = fmt.Sprintf("a copy off %s switches back to it with the changes, and the round's result stands; %s at a new head is "+
-			"the task's head, and its checks run again there", t.Branch, t.Branch)
+	keepOffered := true
+	if cause.moved != nil {
+		restore, keep, keepOffered = movedWords(t, cy.HeadBefore, *cause.moved)
 	}
 	restore += cause.restore
+	options := []registry.Option{{Label: optionRestoreCopy, Means: restore}, {Label: optionKeepChange, Means: keep}}
+	ending := "restore the copy or keep the change?"
+	if !keepOffered { // keeping it would drop the task's commits
+		options[1] = registry.Option{Label: optionDrop, Means: "the task stops"}
+		ending = "restore the copy or drop the task?"
+	}
 	context := cause.context
 	if saved != "" {
 		context += "; it saved the changes to " + saved
 	}
 	return stopQuestion{
 		ask: stopAsk{Kind: stopLeft, Key: leftKey(cy, round), Why: fmt.Sprintf("%s of the local review left %s, and %s", name, left,
-			cause.words)},
+			cause.words), NoKeep: !keepOffered},
 		q: registry.Question{
-			Text: fmt.Sprintf("%s of the local review left %s at %s, and %s: restore the copy or keep the change?",
-				strings.ToUpper(name[:1])+name[1:], left, short(cy.HeadBefore), cause.words),
+			Text: fmt.Sprintf("%s of the local review left %s at %s, and %s: %s", strings.ToUpper(name[:1])+name[1:], left,
+				short(cy.HeadBefore), cause.words, ending),
 			Context: context,
 			Example: textx.Clip(diff, 1500),
-			Options: []registry.Option{
-				{Label: optionRestoreCopy, Means: restore},
-				{Label: optionKeepChange, Means: keep},
-			},
+			Options: options,
 			Recommended: -1, Evidence: cmp.Or(saved, "the factory's look at the copy")},
 	}
 }
