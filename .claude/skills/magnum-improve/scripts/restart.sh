@@ -77,15 +77,19 @@ if ! $migration; then
 fi
 
 # The running binary pauses; a config key only the new build knows can make it
-# refuse, and then the wait below still holds the build until rounds end.
-bin/magnum pause --for "$((max_secs / 60 + 30))m" --reason "restart onto a build with a migration" 2>&1 | tail -1 || true
+# refuse, and then the wait below still holds the build until rounds end. It
+# pauses the review daemon alone (--review, on a binary that knows it): the
+# factory and its pause are no part of this restart.
+scope=()
+bin/magnum pause --help 2>/dev/null | grep -q -- '--review' && scope=(--review)
+bin/magnum pause "${scope[@]}" --for "$((max_secs / 60 + 30))m" --reason "restart onto a build with a migration" 2>&1 | tail -1 || true
 start=$SECONDS
 next=$((SECONDS + 300))
 while :; do
     rounds=$(inflight) || rounds="(the registry is busy)"
     [[ -z $rounds ]] && break
     if ((SECONDS - start >= max_secs)); then
-        echo "restart: rounds still in flight after $max_wait: $rounds; nothing built or restarted (magnum resume lifts the pause)" >&2
+        echo "restart: rounds still in flight after $max_wait: $rounds; nothing built or restarted (magnum resume --review --keep-drain lifts the pause)" >&2
         exit 1
     fi
     if ((SECONDS >= next)); then
@@ -99,9 +103,11 @@ left=$((max_secs - (SECONDS - start)))
 ((left >= 300)) || left=300
 if ! drain_restart "${left}s"; then
     echo "restart: the daemon still runs the older schema, so bin/magnum refuses other commands until it restarts:" \
-        "run bin/magnum daemon-restart --drain, then bin/magnum resume" >&2
+        "run bin/magnum daemon-restart --drain, then bin/magnum resume --review --keep-drain" >&2
     exit 1
 fi
 sleep 20
-bin/magnum resume 2>&1 | tail -1
+# The new build lifts the review daemon's pause alone: never the factory's
+# pause nor a drain for a reboot (`magnum drain`) the operator holds.
+bin/magnum resume --review --keep-drain 2>&1 | tail -1
 bin/magnum status 2>&1 | sed -n '1,2p;/^build/p;/pauses/,/^$/p'

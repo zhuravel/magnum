@@ -14830,6 +14830,22 @@ func ReadyRecommendation(ctx context.Context, reg *registry.Registry, t registry
     itself at its head, read from reg (a registry that cannot be read counts
     none failed).
 
+func RemovePause(l paths.Layout) error
+    RemovePause removes pause.json whatever it holds, one this user cannot read
+    included: `magnum resume --factory` on a file it said it cannot read.
+
+func RemoveRebootDrain(l paths.Layout) error
+    RemoveRebootDrain removes reboot-drain.json as RemovePause does pause.json.
+
+func ReplacePause(l paths.Layout, from, to string) error
+    ReplacePause puts to back in pause.json while it still holds from (`magnum
+    pause` undoing what it wrote): a pause written meanwhile stays.
+
+func ReplaceRebootDrain(l paths.Layout, from, to string) error
+    ReplaceRebootDrain puts to back in reboot-drain.json while it still holds
+    from (`magnum drain` undoing what it wrote): a drain written meanwhile
+    stays.
+
 func ReviewCandidateDir(l paths.Layout) string
     ReviewCandidateDir is where the factory writes its review candidate:
     <data>/factory/review-candidate/.

@@ -19,7 +19,7 @@ import (
 
 const (
 	pauseUsage  = "pause [--review] [--factory] [--for 2h | --until 15:30] [--reason text | reason…]"
-	resumeUsage = "resume [--review] [--factory] | resume [--tool <kind>|all] [--watch owner]"
+	resumeUsage = "resume [--review] [--factory] [--keep-drain] | resume [--tool <kind>|all] [--watch owner]"
 )
 
 type pauseOpts struct {
@@ -122,7 +122,7 @@ func pauseMain(ctx context.Context, c *Context, d *actDeps, o pauseOpts) int {
 		}
 		return 1
 	}
-	lift, code := pauseFactory(c, out, o, now, until, fpid)
+	undo, code := pauseFactory(c, out, o, now, until, fpid)
 	if code != 0 || !sc.review {
 		if code != 0 && sc.review {
 			out.fail(daemonReview, "left as it was: nothing is paused")
@@ -132,8 +132,8 @@ func pauseMain(ctx context.Context, c *Context, d *actDeps, o pauseOpts) int {
 	rc := *c
 	rc.Stdout, rc.Stderr = prefixLines(c.Stdout, daemonReview+": "), prefixLines(c.Stderr, daemonReview+": ")
 	if code := pauseReview(ctx, &rc, d, o, now, until); code != 0 {
-		if lift() {
-			out.fail(daemonFactory, "its pause is lifted again: the review daemon's failed")
+		if msg := undo(); msg != "" {
+			out.fail(daemonFactory, msg+": the review daemon's failed")
 		}
 		return code
 	}
@@ -142,11 +142,12 @@ func pauseMain(ctx context.Context, c *Context, d *actDeps, o pauseOpts) int {
 
 // pauseFactory writes the factory's pause (pause.json): a pause renewed
 // while it holds keeps its start. It wakes the running factory daemon
-// (fpid), which holds the pause at its next tick, and returns the lift of
-// what it wrote: only a pause it wrote where none was, and only while the
-// file still holds it (true when it lifted it).
-func pauseFactory(c *Context, out controlOut, o pauseOpts, now, until time.Time, fpid int) (lift func() bool, code int) {
-	none := func() bool { return false }
+// (fpid), which holds the pause at its next tick, and returns the undo of
+// what it wrote, while the file still holds it: it lifts a pause written
+// where none was and puts back the one it overwrote (factory.ReplacePause),
+// and says which ("" when it undid nothing).
+func pauseFactory(c *Context, out controlOut, o pauseOpts, now, until time.Time, fpid int) (undo func() string, code int) {
+	none := func() string { return "" }
 	l := c.Layout
 	prev, err := factory.ReadPause(l)
 	if err != nil {
@@ -169,12 +170,18 @@ func pauseFactory(c *Context, out controlOut, o pauseOpts, now, until time.Time,
 	} else {
 		out.say(daemonFactory, "no factory daemon is running; the pause applies when it starts")
 	}
-	return func() bool {
-		if prev != "" {
-			return false
+	return func() string {
+		switch cur, err := factory.ReadPause(l); {
+		case err != nil || cur != value:
+			return "" // another pause took its place: it stays
+		case prev == "":
+			if factory.LiftPause(l, value) == nil {
+				return "its pause is lifted again"
+			}
+		case factory.ReplacePause(l, value, prev) == nil:
+			return "its pause is put back as it was"
 		}
-		cur, err := factory.ReadPause(l)
-		return err == nil && cur == value && factory.LiftPause(l, value) == nil
+		return "its pause stays as this command wrote it (could not undo it); `magnum resume --factory` lifts it"
 	}, 0
 }
 
@@ -288,6 +295,9 @@ func pauseParseUntil(s string, now time.Time) (time.Time, error) {
 type resumeOpts struct {
 	tool, watch string
 	scope       controlScope
+	// keepDrain lifts the pauses alone: a drain for a reboot stays (the
+	// settings screen's resume, a script's own pause around a restart).
+	keepDrain bool
 }
 
 func newResumeCmd(c *Context) *cobra.Command {
@@ -296,7 +306,8 @@ func newResumeCmd(c *Context) *cobra.Command {
 		"Resume new work on the review daemon and the factory daemon (the factory only while its launchd job is "+
 			"installed; --review or --factory narrows it): lift `magnum pause` and the drain for a reboot (`magnum drain`) "+
 			"on each, and on the review daemon the infrastructure pause too (whose probe would otherwise lift it). "+
-			"A `magnum drain` that still waits says the drain was lifted and exits 0. It never lifts a restart's drain, "+
+			"A `magnum drain` that still waits says the drain was lifted and exits 0; --keep-drain lifts the pauses "+
+			"alone and leaves a drain for a reboot as it is. It never lifts a restart's drain, "+
 			"an agent kind's or a watch's pause, and never touches mutes, snoozes or pins: when one of them still holds "+
 			"work it says so, with its own remedy. "+
 			"--tool lifts a usage-limit, login, Codex-budget or hooks-review pause of an agent kind (codex, claude or "+
@@ -311,6 +322,7 @@ func newResumeCmd(c *Context) *cobra.Command {
 	fs := cmd.Flags()
 	fs.StringVar(&o.tool, "tool", "", "lift a pause of this agent kind (codex, claude, ...) or all, and forget its model limits")
 	fs.StringVar(&o.watch, "watch", "", "lift the identity-leak pause of a watch owner")
+	fs.BoolVar(&o.keepDrain, "keep-drain", false, "lift the pauses alone: a drain for a reboot (`magnum drain`) stays")
 	_ = cmd.RegisterFlagCompletionFunc("tool", completeFlag(c.completeKinds))
 	_ = cmd.RegisterFlagCompletionFunc("watch", completeFlag(c.completeWatches))
 	addScopeFlags(cmd, &o.scope)
@@ -358,7 +370,7 @@ func resumeMain(ctx context.Context, c *Context, d *actDeps, o resumeOpts) int {
 	out := controlOut{c: c, cmd: "resume", both: sc.both()}
 	code := 0
 	if sc.factory {
-		code = resumeFactory(ctx, c, out)
+		code = resumeFactory(ctx, c, out, o.keepDrain)
 	}
 	if sc.review {
 		rc := c
@@ -367,25 +379,36 @@ func resumeMain(ctx context.Context, c *Context, d *actDeps, o resumeOpts) int {
 			cp.Stdout, cp.Stderr = prefixLines(c.Stdout, daemonReview+": "), prefixLines(c.Stderr, daemonReview+": ")
 			rc = &cp
 		}
-		code = max(code, resumeReviewAll(ctx, rc, d))
+		code = max(code, resumeReviewAll(ctx, rc, d, o.keepDrain))
 	}
 	return code
 }
 
-// resumeReviewAll lifts the review daemon's drain for a reboot and its
-// pause (resumeReview), and names the holds it leaves, each with its own
-// remedy.
-func resumeReviewAll(ctx context.Context, c *Context, d *actDeps) int {
-	lifted, err := liftReviewRebootDrain(ctx, d)
-	if err != nil {
-		return cmdFail(c, "resume", err)
+// keptDrainText is the still-held line of a drain for a reboot that a
+// resume with keepDrain leaves.
+const keptDrainText = "a drain for a reboot (`magnum drain`): `magnum resume` lifts it"
+
+// resumeReviewAll lifts the review daemon's drain for a reboot (unless
+// keepDrain) and its pause (resumeReview), and names the holds it leaves,
+// each with its own remedy.
+func resumeReviewAll(ctx context.Context, c *Context, d *actDeps, keepDrain bool) int {
+	lifted := false
+	if !keepDrain {
+		var err error
+		if lifted, err = liftReviewRebootDrain(ctx, d); err != nil {
+			return cmdFail(c, "resume", err)
+		}
 	}
 	offline := controlReviewPID(c, d) == 0
 	code := resumeReview(ctx, c, d, resumeOpts{})
 	if lifted {
 		fmt.Fprintln(c.Stdout, "lifted the drain for a reboot: new work starts again")
 	}
-	for _, s := range reviewStillHeld(ctx, d, offline) {
+	held := reviewStillHeld(ctx, d, offline)
+	if v, ok, err := d.Store.GetKV(ctx, engine.KVDaemonRebootDrain); keepDrain && (err != nil || (ok && v != "")) {
+		held = append([]string{keptDrainText}, held...)
+	}
+	for _, s := range held {
 		fmt.Fprintln(c.Stdout, "still held: "+s)
 	}
 	return code
@@ -446,22 +469,37 @@ func reviewStillHeld(ctx context.Context, d *actDeps, offline bool) []string {
 }
 
 // resumeFactory lifts the factory's pause and its drain for a reboot (their
-// files), wakes the running factory daemon, and names the holds it leaves:
-// a restart's drain and the machine's holds the daemon keeps.
-func resumeFactory(ctx context.Context, c *Context, out controlOut) int {
+// files; the pause alone with keepDrain), wakes the running factory daemon,
+// and names the holds it leaves: a restart's drain, a kept drain for a
+// reboot and the machine's holds the daemon keeps. A file it cannot read is
+// said, then removed all the same: the daemon holds what it cannot read, and
+// only this removes it.
+func resumeFactory(ctx context.Context, c *Context, out controlOut, keepDrain bool) int {
 	l := c.Layout
-	var lifted []string
+	var lifted, kept []string
 	for _, f := range []struct {
-		what string
-		read func(paths.Layout) (string, error)
-		lift func(paths.Layout, string) error
-		path string
+		what   string
+		read   func(paths.Layout) (string, error)
+		lift   func(paths.Layout, string) error
+		remove func(paths.Layout) error
+		path   string
+		drain  bool
 	}{
-		{"the pause", factory.ReadPause, factory.LiftPause, l.FactoryPause()},
-		{"the drain for a reboot", factory.ReadRebootDrain, factory.LiftRebootDrain, l.FactoryRebootDrain()},
+		{"the pause", factory.ReadPause, factory.LiftPause, factory.RemovePause, l.FactoryPause(), false},
+		{"the drain for a reboot", factory.ReadRebootDrain, factory.LiftRebootDrain, factory.RemoveRebootDrain, l.FactoryRebootDrain(), true},
 	} {
 		v, err := f.read(l)
-		if err == nil && v != "" {
+		switch {
+		case f.drain && keepDrain:
+			if err != nil || v != "" {
+				kept = append(kept, keptDrainText)
+			}
+			continue
+		case err != nil:
+			out.say(daemonFactory, fmt.Sprintf("cannot read %s (%v): it is removed, since the daemon holds what it cannot read", inspTilde(f.path), err))
+			err = f.remove(l)
+			lifted = append(lifted, f.what)
+		case v != "":
 			err = f.lift(l, "")
 			lifted = append(lifted, f.what)
 		}
@@ -474,12 +512,17 @@ func resumeFactory(ctx context.Context, c *Context, out controlOut) int {
 	if pid > 0 {
 		_, _ = controlSys.FactoryKick(l)
 	}
-	if len(lifted) == 0 {
-		out.say(daemonFactory, "was not paused or draining")
-	} else {
+	switch {
+	case len(lifted) > 0 && len(kept) > 0:
+		out.say(daemonFactory, "lifted "+strings.Join(lifted, " and "))
+	case len(lifted) > 0:
 		out.say(daemonFactory, "lifted "+strings.Join(lifted, " and ")+": new work starts again")
+	case keepDrain:
+		out.say(daemonFactory, "was not paused")
+	default:
+		out.say(daemonFactory, "was not paused or draining")
 	}
-	for _, s := range factoryStillHeld(l, pid) {
+	for _, s := range append(kept, factoryStillHeld(l, pid)...) {
 		out.say(daemonFactory, "still held: "+s)
 	}
 	return 0

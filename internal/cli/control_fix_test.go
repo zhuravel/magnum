@@ -151,7 +151,8 @@ func TestADrainSaysWhenAnOlderBuildStartsWhileItWaits(t *testing.T) {
 	h, f := newControlHarness(t)
 	h.runDaemons(f)
 	h.onSleep = func(h *actHarness) {
-		h.pid = 9 // a daemon of an older build: no record of the controls for its pid
+		h.pid = 9 // a daemon of an older build: its start recorded its pid, and no record of the controls
+		_ = h.st.SetKV(h.ctx, store.KVDaemonPid, "9")
 		if d, ok := h.reviewDrain(); ok {
 			h.ackBoth(f, d.Generation, true, "")
 		}
@@ -196,9 +197,10 @@ func TestAnUnreadableDrainRecordShowsInStatus(t *testing.T) {
 	if err := factory.WriteRebootDrain(h.c.Layout, "{not a drain"); err != nil {
 		t.Fatal(err)
 	}
-	for _, dc := range []daemonControl{reviewControlOf(storeKV(h.ctx, h.st), false, 0), factoryControlOf(h.c.Layout, 0)} {
-		if got := dc.holdText(h.now, false); got != "draining (unreadable record): magnum resume ends it" {
-			t.Errorf("%s holds %q, want the unreadable drain said", dc.Name, got)
-		}
+	if got := reviewControlOf(storeKV(h.ctx, h.st), false, 0).holdText(h.now, false); got != "draining (unreadable record): magnum resume ends it" {
+		t.Errorf("review holds %q, want the unreadable drain said", got)
+	}
+	if got := factoryControlOf(h.c.Layout, 0).holdText(h.now, false); got != "draining (unreadable record): magnum resume --factory ends it" {
+		t.Errorf("factory holds %q, want the unreadable drain said", got)
 	}
 }

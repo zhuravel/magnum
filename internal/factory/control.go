@@ -128,6 +128,33 @@ func LiftRebootDrain(l paths.Layout, value string) error {
 	return liftControl(l.FactoryRebootDrain(), value)
 }
 
+// ReplacePause puts to back in pause.json while it still holds from
+// (`magnum pause` undoing what it wrote): a pause written meanwhile stays.
+func ReplacePause(l paths.Layout, from, to string) error {
+	return replaceControlIf(l.FactoryPause(), from, to)
+}
+
+// ReplaceRebootDrain puts to back in reboot-drain.json while it still holds
+// from (`magnum drain` undoing what it wrote): a drain written meanwhile
+// stays.
+func ReplaceRebootDrain(l paths.Layout, from, to string) error {
+	return replaceControlIf(l.FactoryRebootDrain(), from, to)
+}
+
+// RemovePause removes pause.json whatever it holds, one this user cannot
+// read included: `magnum resume --factory` on a file it said it cannot read.
+func RemovePause(l paths.Layout) error { return removeControl(l.FactoryPause()) }
+
+// RemoveRebootDrain removes reboot-drain.json as RemovePause does pause.json.
+func RemoveRebootDrain(l paths.Layout) error { return removeControl(l.FactoryRebootDrain()) }
+
+func removeControl(path string) error {
+	if err := os.RemoveAll(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
 func readControl(path string) (string, error) {
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -179,6 +206,45 @@ func removeControlIf(path, value string) error {
 		return rerr
 	}
 	return err
+}
+
+// replaceControlIf writes to at path while the file holds from, as one
+// compare-and-swap: the file moves aside under a name of this call's own;
+// what moved is replaced by to only when it holds from, else it goes back;
+// either way a file a writer put at path meanwhile stays (os.Link refuses
+// to replace it).
+func replaceControlIf(path, from, to string) error {
+	aside := fmt.Sprintf("%s.swap-%d-%d", path, os.Getpid(), time.Now().UnixNano())
+	if err := os.Rename(path, aside); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil // lifted meanwhile: nothing of this command's to put back
+		}
+		return err
+	}
+	src := aside
+	moved, err := readControl(aside)
+	if err == nil && moved == from {
+		tmp := aside + ".new"
+		if err = os.WriteFile(tmp, []byte(to+"\n"), 0o600); err == nil {
+			src = tmp
+		}
+	}
+	if lerr := linkBack(src, path); lerr != nil {
+		return errors.Join(err, lerr) // what moved stays aside: the error names it
+	}
+	_ = os.Remove(aside)
+	if src != aside {
+		_ = os.Remove(src)
+	}
+	return err
+}
+
+// linkBack puts src at path unless a file is there already (a newer write).
+func linkBack(src, path string) error {
+	if err := os.Link(src, path); err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	return nil
 }
 
 // controlState is what the engine keeps of the controls: the pause and the

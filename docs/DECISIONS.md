@@ -19220,6 +19220,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
     stops and hands back the yields that reached it there, so no request stays in flight. `magnum
     restart-sessions` (or a Codex login change) on a session that the drain's park had marked takes over the
     mark, so the lift of the drain keeps that restart.
+  - The same review closed these gaps in the commands (D2, D7 to D10, D18, D20). The settings screen's rows show
+    the review daemon's pauses alone, so its p pauses the review daemon alone and its r lifts its pauses alone
+    (`resume --keep-drain`): with no scope they had paused the factory too, and lifted both drains for a reboot.
+    `magnum resume --keep-drain` lifts the pauses and leaves a drain for a reboot, and magnum-improve's restart
+    onto a migration uses it with `--review`, so it never changes the factory's pause nor lifts your drain. A
+    pause of both daemons that fails on the review side puts back the factory pause it overwrote, as a drain's undo
+    does, and both put-backs are a compare-and-set (`SetKVIf`, a rename-based swap of the file), so a record
+    written meanwhile stays. `magnum resume --factory` says that it cannot read a pause.json or reboot-drain.json,
+    then removes it all the same, since the daemon holds what it cannot read; the status lines show such a file
+    with that remedy, and doctor no longer offers `magnum pause --factory`, which cannot write over it. `magnum
+    drain` waits for a daemon that is starting (its pidfile written before its record of the controls), where it
+    refused it as an older build. A drain whose command cannot read the Mac's boot leaves its boot unknown (it
+    lasts until resume, as the warning says): it took the boot of a drain that held, which can be an earlier
+    boot's, so the next start ended the new drain as after a reboot.
   - It ends at each daemon's first start on another boot: another `kern.bootsessionuuid`, which is unique per boot
     (`kern.boottime` moves when macOS steps the clock after a wake, so it decides only without a session, past two
     minutes); both read through the sysctl runner (`Deps.Boot` in tests). A crash, a new build or a restart by

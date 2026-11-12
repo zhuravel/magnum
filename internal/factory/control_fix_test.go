@@ -309,3 +309,40 @@ func TestTheLiftOfAControlRemovesOnlyTheValueItRead(t *testing.T) {
 		t.Fatalf("the lift left %q aside", left)
 	}
 }
+
+// The undo of a command that overwrote a control file puts back what it
+// overwrote only while the file still holds what the command wrote: a pause
+// written meanwhile stays, and a file lifted meanwhile is not made again.
+func TestThePutBackOfAControlReplacesOnlyTheValueItWrote(t *testing.T) {
+	h := newHarness(t)
+	if err := WritePause(h.layout, "another"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReplacePause(h.layout, "mine", "before"); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := ReadPause(h.layout); v != "another" {
+		t.Fatalf("pause.json holds %q after a put-back over another pause, want it kept", v)
+	}
+	if err := WritePause(h.layout, "mine"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReplacePause(h.layout, "mine", "before"); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := ReadPause(h.layout); v != "before" {
+		t.Fatalf("pause.json holds %q after the put-back, want the pause it overwrote", v)
+	}
+	if err := LiftPause(h.layout, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReplacePause(h.layout, "mine", "before"); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := ReadPause(h.layout); v != "" {
+		t.Fatalf("pause.json holds %q after a put-back of a lifted pause, want none", v)
+	}
+	if left, _ := filepath.Glob(h.layout.FactoryPause() + ".swap-*"); len(left) != 0 {
+		t.Fatalf("the put-back left %q aside", left)
+	}
+}

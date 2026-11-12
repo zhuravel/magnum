@@ -121,10 +121,12 @@ func settingsRuntimeEntry(name, label string, pauses []statusPause, now time.Tim
 	return e
 }
 
-// Pause pauses automation as `magnum pause` does (pauseMain, after the
-// checks of its flags); the text is its answer. The screen asked first.
+// Pause pauses automation as `magnum pause --review` does (pauseMain, after
+// the checks of its flags); the text is its answer. The screen asked first.
+// Its rows show the review daemon's pauses alone, so it pauses the review
+// daemon alone.
 func (s *screenActions) Pause(ctx context.Context, p tui.PauseSpec) (string, error) {
-	o := pauseOpts{dur: p.For, until: p.Until, reason: p.Reason}
+	o := pauseOpts{dur: p.For, until: p.Until, reason: p.Reason, scope: controlScope{review: true}}
 	if msg := o.refusal(); msg != "" {
 		return "", errors.New(msg)
 	}
@@ -139,8 +141,10 @@ func (s *screenActions) Pause(ctx context.Context, p tui.PauseSpec) (string, err
 	return res.Text, err
 }
 
-// Resume lifts a pause as `magnum resume` does (resumeMain, after its
-// check of the agent kind); the text is its answer. The screen asked first.
+// Resume lifts a pause as `magnum resume --review --keep-drain` does
+// (resumeMain, after its check of the agent kind); the text is its answer.
+// The screen asked first. Its question names the review daemon's pauses
+// alone, so it never lifts the factory's pause nor a drain for a reboot.
 func (s *screenActions) Resume(ctx context.Context, r tui.ResumeSpec) (string, error) {
 	if r.Tool != "" && r.Watch != "" {
 		return "", errors.New("resume an agent kind or a watch, not both")
@@ -149,7 +153,7 @@ func (s *screenActions) Resume(ctx context.Context, r tui.ResumeSpec) (string, e
 		if msg := resumeToolRefusal(d.Cfg, r.Tool); msg != "" {
 			return cmdFail(c, "resume", errors.New(msg))
 		}
-		return resumeMain(ctx, c, d, resumeOpts{tool: r.Tool, watch: r.Watch})
+		return resumeMain(ctx, c, d, resumeOpts{tool: r.Tool, watch: r.Watch, scope: controlScope{review: true}, keepDrain: true})
 	})
 	return res.Text, err
 }

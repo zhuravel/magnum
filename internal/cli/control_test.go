@@ -53,10 +53,14 @@ func newControlHarness(t *testing.T) (*actHarness, *fakeFactoryDaemon) {
 }
 
 // runDaemons has both daemons run on this build: the review daemon as pid 3
-// and the factory daemon as pid 4300, each with its record of the controls.
+// and the factory daemon as pid 4300, each with its record of the controls
+// (the review daemon's start records its pid too).
 func (h *actHarness) runDaemons(f *fakeFactoryDaemon) {
 	h.t.Helper()
 	h.pid, f.pid = 3, 4300
+	if err := h.st.SetKV(h.ctx, store.KVDaemonPid, "3"); err != nil {
+		h.t.Fatal(err)
+	}
 	if err := h.st.SetKV(h.ctx, engine.KVDaemonControls, engine.Controls{Version: engine.ControlsVersion, PID: 3}.Value()); err != nil {
 		h.t.Fatal(err)
 	}

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -109,15 +110,22 @@ func runDrain(c *Context, o drainOpts, pos []string) int {
 // starts while the command waits), the agents' turns it left in herdr while
 // it is down, its wake-up, and what its park left as it was.
 type drainTarget struct {
-	name     string
-	pid      int
-	knows    bool
-	read     func(ctx context.Context) (string, error)
-	write    func(ctx context.Context, v string) error
-	lift     func(ctx context.Context, v string) error
+	name  string
+	pid   int
+	knows bool
+	read  func(ctx context.Context) (string, error)
+	write func(ctx context.Context, v string) error
+	lift  func(ctx context.Context, v string) error
+	// swap writes to while the record still holds from, as one
+	// compare-and-set (a drain's undo puts back what it overwrote).
+	swap     func(ctx context.Context, from, to string) error
 	ack      func(ctx context.Context) string
 	alive    func(ctx context.Context) (int, error)
 	knowsPID func(ctx context.Context, pid int) bool
+	// starting reports whether the running daemon pid has not recorded yet
+	// what it knows (its pidfile comes before that record): it is no older
+	// build, and the wait asks it again.
+	starting func(ctx context.Context, pid int) bool
 	down     func(ctx context.Context) ([]string, error)
 	start    string // what starts it again, for a daemon that is down
 	kick     func()
@@ -137,6 +145,7 @@ func drainTargets(ctx context.Context, c *Context, d *actDeps, sc controlScope) 
 			read:  func(context.Context) (string, error) { return factory.ReadRebootDrain(l) },
 			write: func(_ context.Context, v string) error { return factory.WriteRebootDrain(l, v) },
 			lift:  func(_ context.Context, v string) error { return factory.LiftRebootDrain(l, v) },
+			swap:  func(_ context.Context, from, to string) error { return factory.ReplaceRebootDrain(l, from, to) },
 			ack: func(context.Context) string {
 				if rec, ok, err := factory.ReadWork(l); err == nil && ok && rec.RebootDrain != nil {
 					return rec.RebootDrain.Value()
@@ -145,8 +154,12 @@ func drainTargets(ctx context.Context, c *Context, d *actDeps, sc controlScope) 
 			},
 			alive:    func(ctx context.Context) (int, error) { return controlSys.FactoryPID(ctx, l) },
 			knowsPID: func(_ context.Context, pid int) bool { return factoryKnowsControls(l, pid) },
-			down:     func(ctx context.Context) ([]string, error) { return factoryTurnsDown(ctx, l) },
-			kick:     func() { _, _ = controlSys.FactoryKick(l) },
+			starting: func(_ context.Context, pid int) bool {
+				rec, ok, err := factory.ReadWork(l)
+				return err == nil && (!ok || rec.PID != pid) // no record of its own yet
+			},
+			down: func(ctx context.Context) ([]string, error) { return factoryTurnsDown(ctx, l) },
+			kick: func() { _, _ = controlSys.FactoryKick(l) },
 		}
 		out = append(out, t)
 	}
@@ -162,11 +175,19 @@ func drainTargets(ctx context.Context, c *Context, d *actDeps, sc controlScope) 
 				_, err := st.DeleteKVIf(ctx, engine.KVDaemonRebootDrain, v)
 				return err
 			},
+			swap: func(ctx context.Context, from, to string) error {
+				_, err := st.SetKVIf(ctx, engine.KVDaemonRebootDrain, from, to)
+				return err
+			},
 			ack:      func(ctx context.Context) string { v, _, _ := st.GetKV(ctx, engine.KVDaemonDrainAck); return v },
 			alive:    func(context.Context) (int, error) { return reviewPID(d) },
 			knowsPID: func(ctx context.Context, pid int) bool { return reviewKnowsControls(ctx, d, pid) },
-			down:     func(ctx context.Context) ([]string, error) { return reviewTurnsDown(ctx, st) },
-			kick:     func() { _, _ = d.Kick() },
+			starting: func(ctx context.Context, pid int) bool {
+				v, _, err := st.GetKV(ctx, store.KVDaemonPid)
+				return err == nil && v != strconv.Itoa(pid) // its start has not recorded its pid yet
+			},
+			down: func(ctx context.Context) ([]string, error) { return reviewTurnsDown(ctx, st) },
+			kick: func() { _, _ = d.Kick() },
 		}
 		out = append(out, t)
 	}
@@ -177,6 +198,13 @@ func drainTargets(ctx context.Context, c *Context, d *actDeps, sc controlScope) 
 		t.knows = t.pid == 0 || t.knowsPID(ctx, t.pid)
 	}
 	return out
+}
+
+// startingNow reports whether t's daemon runs but has not recorded yet what
+// it knows of the controls: it is starting, not an older build, so the drain
+// is written for it and the wait asks it again.
+func (t *drainTarget) startingNow(ctx context.Context) bool {
+	return !t.knows && t.pid > 0 && t.starting != nil && t.starting(ctx, t.pid)
 }
 
 // reviewPID is the running review daemon's pid (0: none), read without
@@ -190,9 +218,10 @@ func reviewPID(d *actDeps) (int, error) {
 }
 
 // drainRecord is the drain for a reboot this command writes: a generation of
-// its own, and, when a drain already holds, its start, its end (until
-// resume after --keep unless --keep says it now), its reason unless --reason
-// gives one, and its boot unless this one reads the boot.
+// its own, the boot it reads (none when it cannot: the drain then lasts
+// until resume), and, when a drain already holds, its start, its end (until
+// resume after --keep unless --keep says it now) and its reason unless
+// --reason gives one.
 func drainRecord(ctx context.Context, c *Context, targets []*drainTarget, now time.Time, o drainOpts) engine.RebootDrain {
 	rec := engine.RebootDrain{Generation: now.UnixNano(), Since: now, Until: engine.DrainUntilBoot, Reason: actClean(o.reason)}
 	var held *engine.RebootDrain
@@ -218,9 +247,7 @@ func drainRecord(ctx context.Context, c *Context, targets []*drainTarget, now ti
 	}
 	if boot, err := controlSys.Boot(ctx); err == nil {
 		rec.Boot = boot
-	} else if held != nil && held.Boot.Known() {
-		rec.Boot = held.Boot
-	} else {
+	} else { // never a held record's boot: it may be an earlier boot's, which the next start would take for a reboot
 		fmt.Fprintf(c.Stderr, "magnum drain: warning: cannot read the Mac's boot (%v): the drain lasts until `magnum resume`\n", err)
 	}
 	return rec
@@ -230,7 +257,7 @@ func drainMain(ctx context.Context, c *Context, d *actDeps, o drainOpts) int {
 	sc := o.scope.resolve(c)
 	out := controlOut{c: c, cmd: "drain", both: sc.both()}
 	targets := drainTargets(ctx, c, d, sc)
-	if !drainBuildsKnow(out, targets) {
+	if !drainBuildsKnow(ctx, out, targets) {
 		return 1
 	}
 	rec := drainRecord(ctx, c, targets, d.now(), o)
@@ -266,18 +293,20 @@ func drainMain(ctx context.Context, c *Context, d *actDeps, o drainOpts) int {
 
 // drainBuildsKnow refuses a drain a running daemon of an older build would
 // not hold: it names that daemon and how to go on, says the others are left
-// as they were, and reports false.
-func drainBuildsKnow(out controlOut, targets []*drainTarget) bool {
+// as they were, and reports false. A daemon that is starting (its record of
+// the controls not written yet) is no older build: the drain goes on, and
+// the wait asks it again.
+func drainBuildsKnow(ctx context.Context, out controlOut, targets []*drainTarget) bool {
 	ok := true
 	for _, t := range targets {
-		if !t.knows {
+		if !t.knows && !t.startingNow(ctx) {
 			out.fail(t.name, oldBuildText(t.name, t.pid, "`magnum drain`"))
 			ok = false
 		}
 	}
 	if !ok {
 		for _, t := range targets {
-			if t.knows {
+			if t.knows || t.startingNow(ctx) {
 				out.fail(t.name, "left as it was: nothing is drained")
 			}
 		}
@@ -287,7 +316,8 @@ func drainBuildsKnow(out controlOut, targets []*drainTarget) bool {
 
 // drainUndo undoes, on the daemons set before one failed, what this command
 // wrote, while its record is still this command's: it lifts a drain it
-// wrote where none was, and puts back the one it overwrote.
+// wrote where none was, and puts back the one it overwrote, each as one
+// compare-and-set (lift, swap), so a drain written meanwhile stays.
 func drainUndo(ctx context.Context, out controlOut, set []*drainTarget, value string) {
 	for _, t := range set {
 		var err error
@@ -297,11 +327,7 @@ func drainUndo(ctx context.Context, out controlOut, set []*drainTarget, value st
 				continue
 			}
 		} else {
-			var cur string
-			if cur, err = t.read(ctx); err == nil && cur == value {
-				err = t.write(ctx, t.prev)
-			}
-			if err == nil {
+			if err = t.swap(ctx, value, t.prev); err == nil {
 				out.fail(t.name, "its drain is put back as it was: the other daemon's failed")
 				continue
 			}
@@ -355,7 +381,10 @@ func (t *drainTarget) state(ctx context.Context, gen int64) (drainState, drainSt
 	if pid != t.pid || !t.knows { // a daemon writes its pidfile before its record of the controls: ask again
 		t.pid, t.knows = pid, t.knowsPID(ctx, pid)
 	}
-	if !t.knows {
+	switch {
+	case t.startingNow(ctx):
+		return drainState{text: "is starting: it holds the drain once it recorded what it knows"}, drainGoesOn
+	case !t.knows:
 		return drainState{text: oldBuildText(t.name, pid, "`magnum drain`")}, drainGoesOn
 	}
 	a, ok := engine.ParseDrainAck(t.ack(ctx))

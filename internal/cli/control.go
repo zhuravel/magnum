@@ -223,11 +223,13 @@ const (
 )
 
 // controlPause is a pause in force: since when, until when (nil: until
-// `magnum resume`) and why.
+// `magnum resume`) and why; Unreadable, a factory pause.json the CLI cannot
+// read (the daemon keeps the pause it held).
 type controlPause struct {
-	Since  *time.Time `json:"since,omitempty"`
-	Until  *time.Time `json:"until,omitempty"`
-	Reason string     `json:"reason,omitempty"`
+	Since      *time.Time `json:"since,omitempty"`
+	Until      *time.Time `json:"until,omitempty"`
+	Reason     string     `json:"reason,omitempty"`
+	Unreadable bool       `json:"unreadable,omitempty"`
 }
 
 // controlDrain is a drain in force: for a reboot (`magnum drain`) or a
@@ -313,21 +315,23 @@ func factoryControlOf(l paths.Layout, pid int) daemonControl {
 	if known {
 		dc.Build = rec.Build
 	}
-	if v, err := factory.ReadPause(l); err == nil {
-		if p, ok := factory.ParsePause(v); ok {
-			cp := &controlPause{Since: &p.Since, Reason: p.Reason}
-			if !p.Until.IsZero() {
-				cp.Until = &p.Until
-			}
-			dc.Pause = cp
+	if v, err := factory.ReadPause(l); err != nil {
+		dc.Pause = &controlPause{Unreadable: true} // the daemon keeps the pause it held: it is shown, with its remedy
+	} else if p, ok := factory.ParsePause(v); ok {
+		cp := &controlPause{Since: &p.Since, Reason: p.Reason}
+		if !p.Until.IsZero() {
+			cp.Until = &p.Until
 		}
+		dc.Pause = cp
 	}
 	ack := ""
 	if known && rec.RebootDrain != nil {
 		ack = rec.RebootDrain.Value()
 	}
-	reboot, _ := factory.ReadRebootDrain(l)
-	if dr := rebootDrainOf(reboot, ack, pid); dr != nil {
+	reboot, err := factory.ReadRebootDrain(l)
+	if err != nil {
+		dc.Drain = &controlDrain{For: drainForReboot, Unreadable: true} // the daemon holds a drain it cannot read
+	} else if dr := rebootDrainOf(reboot, ack, pid); dr != nil {
 		dc.Drain = dr
 	} else if v, _ := factory.ReadDrain(l); v != "" {
 		if d, ok := factory.ParseDrain(v); ok {
@@ -363,10 +367,14 @@ func rebootDrainOf(record, ack string, pid int) *controlDrain {
 // it is quiet).
 func (dc daemonControl) holdText(now time.Time, long bool) string {
 	var parts []string
+	resume := "magnum resume"
+	if dc.Name == daemonFactory {
+		resume += " --factory" // it removes a record the daemon cannot read, its plist installed or not
+	}
 	if d := dc.Drain; d != nil {
 		switch {
 		case d.Unreadable:
-			parts = append(parts, "draining (unreadable record): magnum resume ends it")
+			parts = append(parts, "draining (unreadable record): "+resume+" ends it")
 		case d.For == drainForReboot:
 			s := "draining since " + inspClock(now, d.Since) + ": magnum resume ends it"
 			switch {
@@ -388,7 +396,9 @@ func (dc daemonControl) holdText(now time.Time, long bool) string {
 			parts = append(parts, "draining for a restart since "+inspClock(now, d.Since))
 		}
 	}
-	if p := dc.Pause; p != nil {
+	if p := dc.Pause; p != nil && p.Unreadable {
+		parts = append(parts, "paused (unreadable pause.json): "+resume+" removes it")
+	} else if p != nil {
 		s := "paused by you"
 		if p.Until != nil {
 			s += " until " + inspClock(now, *p.Until)
