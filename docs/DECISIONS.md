@@ -18780,67 +18780,6 @@ skill versions); people add theirs to the sections before it, at the end of the 
   P3 or a rejected candidate does not count; a first review gets no key, and a stale file goes),
   TestInTheFixForReadsTheEarlierTitle, TestANewCaseOnARepeatPathIsTheOneStructuralFinding and
   TestSkillDescribesEveryMagnumField's new field.
-- **`magnum pause`, `magnum drain` and `magnum resume` act on both daemons; a drain for a reboot outlives its
-  command** (2026-11-12, the operator's decisions; design in
-  docs/superpowers/specs/2026-11-12-control-commands-design.md, from Claude's and Codex's reviews of the control
-  commands). Before a reboot the operator had two drains that did not do it: `daemon-restart --drain` and `factory
-  install --drain` hold new work only for the restart that follows, are tied to their command's pid and end at the
-  next start; the review drain decided "nothing in flight" from registry rows, with no acknowledgement, so a tick
-  that started earlier could still start a round; the factory's counted no agent turn; and `magnum pause` held the
-  review daemon alone. One set of verbs now acts on both daemons: with no flag the review daemon and the factory
-  daemon while its launchd job is installed, `--review` or `--factory` narrowing it.
-  - *pause* holds new automatic work and waits for nothing: the review daemon's as before, the factory's in
-    `pause.json` beside its `drain.json` (the factory section has its gates). With no daemon running both records
-    are written for its start.
-  - *drain* holds everything new, what the operator asks for too, and waits. Its record names no process:
-    `engine.RebootDrain` `{generation, since, until: boot|resume, boot, reason}`, in the review registry's kv row
-    `daemon.reboot_drain` and the factory's `reboot-drain.json` (no migration: neither CLI may migrate under its
-    daemon). `draining()` includes it, so every gate of a restart drain holds; the staging resolver takes no slot
-    for a queued job under it. The start paths that read no drain are closed under it: a staging deploy, an open's
-    restore, a provision, a repair, an adoption, a cleanup and a release are refused with why and how to go on (a
-    staging cancel, a dry run, a cleanup's plan and an open of a live session go on), the reconcile queues no slot
-    work (the start's own included), and a whiteboard checks the drain again once it holds its PR. The tick acknowledges it at its end, once every start path ran (`daemon.reboot_drain_ack`:
-    generation, pid, quiet, parked, the work: the reservations, a round's tail, the background jobs, the heavy
-    worker's jobs and GitHub writes as the operator, the registry's rounds, the requests answered off the tick, the
-    staging deploys queued or running and the resolver's jobs that took their slot), written again whenever its row
-    does not hold it. Both reviews named the resolver's jobs and the merges of the parent as outside the restart
-    drain: the resolver's are listed now, and a merge of the parent is a fix job in phase fixing, a reservation,
-    already counted (a test holds a real one at its push). Once quiet each check marks the sessions
-    `restart-sessions --tool all` would restart now and parks them through the early park (pinned PRs left alone;
-    one unpinned later is marked then); a session a dialog holds is named with its remedy, and a live session herdr
-    shows working that no round holds (a pinned PR's you type into) is work. The command says
-    "quiet: safe to reboot" only once both acknowledgements are of its generation, from the running pids, quiet and
-    parked; a daemon that is down is done only once its own store shows no agent's turn in flight (they outlive it
-    in herdr) and, for the factory, no record a crash left names work (a local review round's agents are in a
-    scratch registry), and one it cannot stat or read, or whose pidfile it cannot read, is never certified. It wakes the daemons at
-    most once a minute, since the review tick polls GitHub.
-  - It ends at each daemon's first start on another boot: another `kern.bootsessionuuid`, which is unique per boot
-    (`kern.boottime` moves when macOS steps the clock after a wake, so it decides only without a session, past two
-    minutes); both read through the sysctl runner (`Deps.Boot` in tests). A crash, a new build or a restart by
-    command on the same boot keeps it, `--keep` and an unreadable boot make it last until `resume`, and a drain run
-    again keeps its start, end and reason. ctrl+c and the timeout (3h30m) keep it and exit 1; a resume of both
-    ends the wait with exit 0, of one with exit 1 naming what still drains, a newer drain (another generation)
-    with exit 1, certifying nothing. An hour quiet with no reboot toasts once. A restart drain and a reboot drain
-    are two records; neither lifts the other. Under a drain for a reboot alone the answers name it (a held fix, a
-    refused merge of the parent, a queued retro or curation), and the toast of a held requested review times
-    from the drain's own record (it read daemon.draining as a bare time, which no drain since its JSON writes).
-  - *resume* lifts the pause and the reboot drain on the daemons it names (and the review infra pause, as before),
-    never a restart's drain, a kind's or a watch's pause, a mute, a snooze or a pin, and names what still holds
-    with its remedy.
-  - Safety: each daemon of this build records the controls it knows (`daemon.controls` `{version, pid}`,
-    work.json's `controls`); for a running daemon without it the CLI says "restart it on this build first" and
-    claims no hold, and a daemon that starts while the command waits is checked again at each poll while it says
-    no (its pidfile comes before its record of the controls); the status lines name a running daemon whose build
-    ignores a hold it is under. A write that fails on one
-    daemon undoes only what this command wrote, while it is still its own: it lifts a record written where none was
-    and puts back one it overwrote. resume says a drain lifted only when its compared delete took it. A record the
-    daemons cannot read shows as "draining (unreadable record): magnum resume ends it".
-  - Loud while it holds: `magnum status` and `magnum factory status` print one line per daemon (`review   running
-    · pid 4242 · paused by you until 15:30 (lunch): magnum resume`) and list `daemons` in their JSON; the board's
-    and the dashboard's title (`DaemonFacts.Controls`, first) and the factory screen's blocker line say
-    "draining since <time>: magnum resume ends it". Phase 2 (`restart`, `stop`, `start`, `install`, `uninstall`,
-    `kick` for both daemons, the old names as hidden aliases) is in the design, not built.
-
 - **A resolved merge that keeps the PR's own workflow changes is held for your y, then pushed with the
   Workflows token** (2026-11-12, approved by the operator; amends "A merge that carries the base's workflow
   files goes out with a Workflows token only the daemon mints"; the design is
@@ -19221,6 +19160,66 @@ skill versions); people add theirs to the sections before it, at the end of the 
     - TestTheLoopSaysItConfirmsThePushWhileGitHubDoesNotAnswer.
     In cli: TestALoopThatConfirmsItsPushSaysSoAndHoldsNoDrain. In factory: the new row of
     TestAPublishedTaskShowsItsPRsFixLoop. `settleFix` leaves the gocyclo ratchet.
+- **`magnum pause`, `magnum drain` and `magnum resume` act on both daemons; a drain for a reboot outlives its
+  command** (2026-11-12, the operator's decisions; design in
+  docs/superpowers/specs/2026-11-12-control-commands-design.md, from Claude's and Codex's reviews of the control
+  commands). Before a reboot the operator had two drains that did not do it: `daemon-restart --drain` and `factory
+  install --drain` hold new work only for the restart that follows, are tied to their command's pid and end at the
+  next start; the review drain decided "nothing in flight" from registry rows, with no acknowledgement, so a tick
+  that started earlier could still start a round; the factory's counted no agent turn; and `magnum pause` held the
+  review daemon alone. One set of verbs now acts on both daemons: with no flag the review daemon and the factory
+  daemon while its launchd job is installed, `--review` or `--factory` narrowing it.
+  - *pause* holds new automatic work and waits for nothing: the review daemon's as before, the factory's in
+    `pause.json` beside its `drain.json` (the factory section has its gates). With no daemon running both records
+    are written for its start.
+  - *drain* holds everything new, what the operator asks for too, and waits. Its record names no process:
+    `engine.RebootDrain` `{generation, since, until: boot|resume, boot, reason}`, in the review registry's kv row
+    `daemon.reboot_drain` and the factory's `reboot-drain.json` (no migration: neither CLI may migrate under its
+    daemon). `draining()` includes it, so every gate of a restart drain holds; the staging resolver takes no slot
+    for a queued job under it. The start paths that read no drain are closed under it: a staging deploy, an open's
+    restore, a provision, a repair, an adoption, a cleanup and a release are refused with why and how to go on (a
+    staging cancel, a dry run, a cleanup's plan and an open of a live session go on), the reconcile queues no slot
+    work (the start's own included), and a whiteboard checks the drain again once it holds its PR. The tick acknowledges it at its end, once every start path ran (`daemon.reboot_drain_ack`:
+    generation, pid, quiet, parked, the work: the reservations, a round's tail, the background jobs, the heavy
+    worker's jobs and GitHub writes as the operator, the registry's rounds, the requests answered off the tick, the
+    staging deploys queued or running and the resolver's jobs that took their slot), written again whenever its row
+    does not hold it. Both reviews named the resolver's jobs and the merges of the parent as outside the restart
+    drain: the resolver's are listed now, and a merge of the parent is a fix job in phase fixing, a reservation,
+    already counted (a test holds a real one at its push). Once quiet each check marks the sessions
+    `restart-sessions --tool all` would restart now and parks them through the early park (pinned PRs left alone;
+    one unpinned later is marked then); a session a dialog holds is named with its remedy, and a live session herdr
+    shows working that no round holds (a pinned PR's you type into) is work. The command says
+    "quiet: safe to reboot" only once both acknowledgements are of its generation, from the running pids, quiet and
+    parked; a daemon that is down is done only once its own store shows no agent's turn in flight (they outlive it
+    in herdr) and, for the factory, no record a crash left names work (a local review round's agents are in a
+    scratch registry), and one it cannot stat or read, or whose pidfile it cannot read, is never certified. It wakes the daemons at
+    most once a minute, since the review tick polls GitHub.
+  - It ends at each daemon's first start on another boot: another `kern.bootsessionuuid`, which is unique per boot
+    (`kern.boottime` moves when macOS steps the clock after a wake, so it decides only without a session, past two
+    minutes); both read through the sysctl runner (`Deps.Boot` in tests). A crash, a new build or a restart by
+    command on the same boot keeps it, `--keep` and an unreadable boot make it last until `resume`, and a drain run
+    again keeps its start, end and reason. ctrl+c and the timeout (3h30m) keep it and exit 1; a resume of both
+    ends the wait with exit 0, of one with exit 1 naming what still drains, a newer drain (another generation)
+    with exit 1, certifying nothing. An hour quiet with no reboot toasts once. A restart drain and a reboot drain
+    are two records; neither lifts the other. Under a drain for a reboot alone the answers name it (a held fix, a
+    refused merge of the parent, a queued retro or curation), and the toast of a held requested review times
+    from the drain's own record (it read daemon.draining as a bare time, which no drain since its JSON writes).
+  - *resume* lifts the pause and the reboot drain on the daemons it names (and the review infra pause, as before),
+    never a restart's drain, a kind's or a watch's pause, a mute, a snooze or a pin, and names what still holds
+    with its remedy.
+  - Safety: each daemon of this build records the controls it knows (`daemon.controls` `{version, pid}`,
+    work.json's `controls`); for a running daemon without it the CLI says "restart it on this build first" and
+    claims no hold, and a daemon that starts while the command waits is checked again at each poll while it says
+    no (its pidfile comes before its record of the controls); the status lines name a running daemon whose build
+    ignores a hold it is under. A write that fails on one
+    daemon undoes only what this command wrote, while it is still its own: it lifts a record written where none was
+    and puts back one it overwrote. resume says a drain lifted only when its compared delete took it. A record the
+    daemons cannot read shows as "draining (unreadable record): magnum resume ends it".
+  - Loud while it holds: `magnum status` and `magnum factory status` print one line per daemon (`review   running
+    · pid 4242 · paused by you until 15:30 (lunch): magnum resume`) and list `daemons` in their JSON; the board's
+    and the dashboard's title (`DaemonFacts.Controls`, first) and the factory screen's blocker line say
+    "draining since <time>: magnum resume ends it". Phase 2 (`restart`, `stop`, `start`, `install`, `uninstall`,
+    `kick` for both daemons, the old names as hidden aliases) is in the design, not built.
 
 ## The factory (2026-11-03)
 
@@ -26293,43 +26292,6 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestOOnATaskWhoseAgentWorksStillStepsIntoItsPane` and `TestTheFollowIsLessPlusF` in internal/tui;
   `TestStreamGetsTheOutputWhileTheCommandRuns`, `TestStreamTakesStderrWithoutStreamErrAndItsFailuresChangeNothing`
   and `TestFakeWritesARulesOutputToTheStreams` in internal/execx.
-- **The factory holds `magnum pause` and a drain for a reboot, which also holds new prompts and counts every
-  agent's turn** (2026-11-12; the Operations entry of the same day has the commands). The factory had no pause,
-  and a reboot kills herdr, so a turn in flight is lost: the attempt spends a resume, or a prompt of unknown
-  delivery waits for `let-go`. Each tick reads `pause.json` and `reboot-drain.json` into holds of the machine
-  (`HoldPause`, `HoldReboot`, which holds.json shows; the factory screen draws them from the daemons' lines, not
-  from holds.json). The pause holds new automatic work: `startsHeld` includes it, so new local review rounds,
-  checks and QA runs wait, and `mayLaunch` holds the launches and the claims, recording the wait on the task
-  (`pause: paused by you …`, cleared by a launch that goes through). Effects, talks and the QA sweep read the
-  narrower `drainsHeld`, and the runtime's starts outside a launch pass `MayLaunch`, which leaves the pause out:
-  a start queues, an answer, a retry, a talk and a push run, and no QA run is cut. The tick after its `until`
-  lifts it. The drain holds what a restart drain holds and every new prompt (`runtime.Deps.MayPrompt`, asked
-  first by `Send`); a restart drain still holds none (2026-11-07: those turns outlive a restart). Each tick
-  acknowledges it in work.json's `reboot_drain`: the record's items (a backoff repair aside, as for a restart) and
-  every run the agents store keeps pending, submitted or working, the liaisons' too (`Runtime.TurnsInFlight`; a
-  runtime that cannot list them counts as working). Once quiet it parks, once each, the tasks that are active,
-  waiting, need you or are published and have a live agent (`Runtime.LiveAgents`), through
-  `Runtime.ParkForReboot`, which reports a liaison at work as agents.ErrBusy where `Park` leaves it live and goes
-  through, you in its pane included (herdr's status of its agent: a turn you typed starts no run row); one it
-  leaves live, idle, because you are in its pane (runtime.ErrLiaisonLeftLive) is never counted parked: it is
-  looked at again at every tick and named in `left` while it idles. A busy refusal is never left: an agent at work in herdr with no run row (you typed into its pane, a build
-  in a shell) would be cut by the reboot, so the task is named as work and tried again at each tick. Any other
-  failure three ticks in a row is left, said once and named in the acknowledgement's `left`, so it cannot hold the
-  drain for good.
-  An hour quiet raises a NEEDS YOU blocker, with its one alert. work.json also names the build and the controls
-  version, which the CLI checks before it writes either file; a stop whose wait for the work off the loop ran out
-  keeps work.json, naming that work, so a drain after that exit is not certified. The daemon reads both files
-  before its startup's recovery, so it holds them from its first second. The first start on another boot ends a drain until boot
-  (`Deps.Boot`: kern.bootsessionuuid and kern.boottime through the quiet runner). Your retry and your answers under
-  the pause say that the task's next launch, claim or check waits for `magnum resume`. An unreadable pause.json or
-  reboot-drain.json is a warn event, once, with what to do, and a `magnum doctor` line (controls). Tests, each
-  failing first: TestAFactoryPauseHoldsNewWorkAndLetsYourPushAndTalkRun,
-  TestAFactoryPauseSurvivesARestartAndEndsAtItsUntil, TestTheFactoryDrainForARebootWaitsForAWritersTurnThenParks,
-  TestTheFactoryDrainForARebootWaitsForTheLiaisonsTurn, TestTheFactoryDrainForARebootEndsAtTheFirstStartOnANewBoot,
-  TestTheFactorysRestartDrainAndRebootDrainDoNotLiftEachOther, TestAQuietFactoryDrainForARebootSaysOnceAfterAnHour,
-  and TestTurnsInFlightNameTheTasksRolesAndItsLiaison and TestADrainForARebootHoldsANewPrompt in
-  internal/factory/runtime.
-
 - **A safe stop at the local review's cap goes on by itself, twice per task, and then passes after the writer's fix**
   (2026-11-12, asked by the operator). This amends "the task needs you" at the cap above. Task 9 (a large feature)
   stopped at the cap three times that day. Each time the writer fixed every finding it got (5 of 5, 4 of 4, 2 of 2),
@@ -26405,6 +26367,42 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestARoundAtTheCapThatDoesNotConvergeStops`, `TestTheExtraRoundsStopAtExtraCycles` and the second half of
   `TestTheSecondOpinionRunsPastTheLastRoundCyclesAllows` set `cap_go_on = 0`. They pin the stop for you, and their
   stops are safe ones now.
+- **The factory holds `magnum pause` and a drain for a reboot, which also holds new prompts and counts every
+  agent's turn** (2026-11-12; the Operations entry of the same day has the commands). The factory had no pause,
+  and a reboot kills herdr, so a turn in flight is lost: the attempt spends a resume, or a prompt of unknown
+  delivery waits for `let-go`. Each tick reads `pause.json` and `reboot-drain.json` into holds of the machine
+  (`HoldPause`, `HoldReboot`, which holds.json shows; the factory screen draws them from the daemons' lines, not
+  from holds.json). The pause holds new automatic work: `startsHeld` includes it, so new local review rounds,
+  checks and QA runs wait, and `mayLaunch` holds the launches and the claims, recording the wait on the task
+  (`pause: paused by you …`, cleared by a launch that goes through). Effects, talks and the QA sweep read the
+  narrower `drainsHeld`, and the runtime's starts outside a launch pass `MayLaunch`, which leaves the pause out:
+  a start queues, an answer, a retry, a talk and a push run, and no QA run is cut. The tick after its `until`
+  lifts it. The drain holds what a restart drain holds and every new prompt (`runtime.Deps.MayPrompt`, asked
+  first by `Send`); a restart drain still holds none (2026-11-07: those turns outlive a restart). Each tick
+  acknowledges it in work.json's `reboot_drain`: the record's items (a backoff repair aside, as for a restart) and
+  every run the agents store keeps pending, submitted or working, the liaisons' too (`Runtime.TurnsInFlight`; a
+  runtime that cannot list them counts as working). Once quiet it parks, once each, the tasks that are active,
+  waiting, need you or are published and have a live agent (`Runtime.LiveAgents`), through
+  `Runtime.ParkForReboot`, which reports a liaison at work as agents.ErrBusy where `Park` leaves it live and goes
+  through, you in its pane included (herdr's status of its agent: a turn you typed starts no run row); one it
+  leaves live, idle, because you are in its pane (runtime.ErrLiaisonLeftLive) is never counted parked: it is
+  looked at again at every tick and named in `left` while it idles. A busy refusal is never left: an agent at work in herdr with no run row (you typed into its pane, a build
+  in a shell) would be cut by the reboot, so the task is named as work and tried again at each tick. Any other
+  failure three ticks in a row is left, said once and named in the acknowledgement's `left`, so it cannot hold the
+  drain for good.
+  An hour quiet raises a NEEDS YOU blocker, with its one alert. work.json also names the build and the controls
+  version, which the CLI checks before it writes either file; a stop whose wait for the work off the loop ran out
+  keeps work.json, naming that work, so a drain after that exit is not certified. The daemon reads both files
+  before its startup's recovery, so it holds them from its first second. The first start on another boot ends a drain until boot
+  (`Deps.Boot`: kern.bootsessionuuid and kern.boottime through the quiet runner). Your retry and your answers under
+  the pause say that the task's next launch, claim or check waits for `magnum resume`. An unreadable pause.json or
+  reboot-drain.json is a warn event, once, with what to do, and a `magnum doctor` line (controls). Tests, each
+  failing first: TestAFactoryPauseHoldsNewWorkAndLetsYourPushAndTalkRun,
+  TestAFactoryPauseSurvivesARestartAndEndsAtItsUntil, TestTheFactoryDrainForARebootWaitsForAWritersTurnThenParks,
+  TestTheFactoryDrainForARebootWaitsForTheLiaisonsTurn, TestTheFactoryDrainForARebootEndsAtTheFirstStartOnANewBoot,
+  TestTheFactorysRestartDrainAndRebootDrainDoNotLiftEachOther, TestAQuietFactoryDrainForARebootSaysOnceAfterAnHour,
+  and TestTurnsInFlightNameTheTasksRolesAndItsLiaison and TestADrainForARebootHoldsANewPrompt in
+  internal/factory/runtime.
 
 ## Learned rules
 
