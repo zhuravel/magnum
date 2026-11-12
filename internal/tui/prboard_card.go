@@ -36,6 +36,7 @@ func boardActHints(judge string) []hint {
 		{"r", "review now (asks y/N); post-merge if merged"}, {"R", "fresh review in new agent sessions (asks y/N)"},
 		{"i", "review with /simplify (asks y/N)"}, {"f / F", "fix as the fixer / fix off or on (asks y/N)"},
 		{"d / P", "fix loop's calls done / merge base (asks y/N)"},
+		{heldMergeKey, "a held merge's diff in the pager; P pushes it"},
 		{"c / E", "fix CI / deploy to staging (choose, y/N)"},
 		{"o", "open the " + judgeName(judge) + " pane"},
 		{"b / t", "open the PR / its issue in the browser"}, {"w", "open the PR's whiteboard (asks y/N)"},
@@ -136,7 +137,7 @@ func (p *prbPainter) helpContent(width int) []string {
 	// arguedShown), drawn as the rows draw them.
 	for _, l := range []string{
 		p.stateWaitCell(PRBoardRow{State: "needs_attention", AttentionKind: "failed"}).render(nil) +
-			" or blocked, identity, fix, overload, no review",
+			" or blocked, identity, fix, merge ready, overload, no review",
 		p.stateWaitCell(PRBoardRow{State: "reviewed", Stalemate: []string{"-"}}).render(nil) +
 			" magnum stopped arguing in a thread: you decide",
 	} {

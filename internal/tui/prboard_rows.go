@@ -254,6 +254,10 @@ type PRBoardRow struct {
 	// question names; "" when the config does not say.
 	Fixer  string
 	FixOff bool
+	// HeldMerge is the held-merge.diff (absolute) of the merge of the
+	// parent magnum holds for your y on the PR (the engine's HeldMerge),
+	// which e opens in the pager and P's question pushes; "" for none.
+	HeldMerge string
 	// Whiteboard is the PR's whiteboard, the Whiteboard session that holds
 	// it and the head it describes (engine.KVPRWhiteboard, written after a
 	// review or by `magnum whiteboard`); nil when the PR has none. The card
@@ -883,6 +887,7 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	r.WaitNarrow, r.PinnedBy = cleanText(r.WaitNarrow), cleanText(r.PinnedBy)
 	r.CodexFlag, r.CodexFlagSentence, r.MuteReason = cleanText(r.CodexFlag), cleanText(r.CodexFlagSentence), cleanText(r.MuteReason)
 	r.Fixing, r.AttentionSum, r.Fixer = cleanText(r.Fixing), cleanText(r.AttentionSum), cleanText(r.Fixer)
+	r.HeldMerge = cleanText(r.HeldMerge)
 	if r.Open != nil {
 		o := *r.Open
 		o.Verdict, o.Why, o.Head = cleanText(o.Verdict), cleanText(o.Why), cleanText(o.Head)

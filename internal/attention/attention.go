@@ -461,8 +461,12 @@ func fixCause(line string) string {
 // the author did them all; then `magnum fix` for another loop once the
 // author answered what it left, and `magnum abort` for a loop still
 // running. The look's raise (LookRaise) has neither a report nor a pane,
-// and only GitHub lifts it: its remedy is LookLift.
+// and only GitHub lifts it: its remedy is LookLift. A held merge's
+// (MergeReady) is its push's y/N (MergeReadyNext).
 func fixRemedy(chain, output, ref string) string {
+	if MergeReady(chain) {
+		return MergeReadyNext(ref)
+	}
 	if LookRaise(chain) {
 		return LookLift + "; `magnum fix --done` does not apply to it"
 	}

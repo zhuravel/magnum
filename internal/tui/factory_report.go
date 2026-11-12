@@ -2,7 +2,9 @@ package tui
 
 // The reports e opens in the pager, asking nothing (spec 9.D: opening asks
 // nothing): magnum's fixer's on home's row of a published task or of your
-// PR whose fix loop left you items, and on the task card; the QA run's
+// PR whose fix loop left you items, and on the task card (held-merge.diff
+// in its place while magnum holds a merge of the parent for your y: the
+// factory's ScreenData names it as the card's FixReport); the QA run's
 // (summary.md) on the ready card of a change visual QA walked, and on the
 // task card of a task whose QA fix loop stopped on the writer's declines,
 // so you see the shots before A accepts them. The task card's FixReport
@@ -128,9 +130,12 @@ func (m factoryModel) oItem(r FactoryRow, row, acts bool) menuItem {
 // reportItem is the menu's item for e on task or row id: dimmed without a
 // report.
 func (m factoryModel) reportItem(id int64) menuItem {
-	path, _ := m.reportOf(id)
+	path, name := m.reportOf(id)
 	label := "read the fixer's report"
-	if c := m.data.Cards[id].Task; c.FixReport == "" && c.QAReport != "" {
+	switch c := m.data.Cards[id].Task; {
+	case name == heldMergeName: // held_merge.go: the merge magnum holds for your y
+		label = "read " + heldMergeName
+	case c.FixReport == "" && c.QAReport != "":
 		label = "read the QA report"
 	}
 	return menuItem{label, reportKey, reportKey, path != ""}

@@ -14,11 +14,13 @@ import (
 
 // MergeAsked is what a merge of the parent's y/N binds its merge to: the
 // PR's head, the parent (its base branch) and the tip of it the plan read,
-// how many files the merge conflicts in (0: none) and when the daemon
-// planned it.
+// how many files the merge conflicts in (0: none), the merge magnum holds
+// for your y whose push the plan names (Merge; "" for a merge to make,
+// held_merge.go) and when the daemon planned it.
 type MergeAsked struct {
 	Head, Base, Tip string
 	Conflicts       int
+	Merge           string
 	At              time.Time
 }
 

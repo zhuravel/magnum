@@ -235,6 +235,40 @@ func TestTheLooksRaiseNamesItsLiftOnGitHub(t *testing.T) {
 	}
 }
 
+// A merge of the parent that magnum holds for your y needs you for its
+// push alone: its attention reads as a held merge's (MergeReady, with its
+// "fix: " or without), its summary starts "fix: merge ready", and its next
+// step is the push's y/N and held-merge.diff, never the fixer's pane, a
+// fix loop or `magnum fix --done`, which takes no call from it.
+func TestAHeldMergesAttentionNamesItsPushAsTheNextStep(t *testing.T) {
+	msg := MergeReadyText("claude-fix merged master at c0c0c0c and resolved 5 conflicts. It changes .github/workflows/ci.yml and pronto.yml. " +
+		"fixer-app[bot] pushes it only after your y: P asks (e shows held-merge.diff).")
+	if !strings.HasPrefix(msg, "fix: merge ready: claude-fix merged master") {
+		t.Errorf("MergeReadyText = %q", msg)
+	}
+	for _, m := range []string{msg, strings.TrimPrefix(msg, "fix: ")} {
+		if !MergeReady(m) {
+			t.Errorf("MergeReady(%q) = false", m)
+		}
+		r := Explain(KindFix, m, "talkable#2")
+		if r.Kind != KindFix || !strings.HasPrefix(r.Summary, "fix: merge ready: claude-fix merged master at c0c0c0c") {
+			t.Errorf("%q: kind %q, summary %q", m, r.Kind, r.Summary)
+		}
+		if want := MergeReadyNext("talkable#2"); r.Fix != want || !strings.Contains(want, "`magnum merge-parent talkable#2`") ||
+			!strings.Contains(want, "held-merge.diff") {
+			t.Errorf("%q: fix %q, want %q naming the push's y/N and held-merge.diff", m, r.Fix, want)
+		}
+		if FixAsks(m) || fixDoneFits(m, "") {
+			t.Errorf("%q: `magnum fix --done` would take a held merge's attention", m)
+		}
+	}
+	for _, other := range []string{"fix: 2 findings need your call: /r/claude-fix.md", "fix: magnum did not push claude-fix's merge of the parent of x#2: merge ready"} {
+		if MergeReady(other) {
+			t.Errorf("MergeReady(%q) = true", other)
+		}
+	}
+}
+
 // A fix reason too long for the toast's one line keeps the counts, which come
 // first, and drops the report's path, which the next step names in full,
 // instead of cutting the path in the middle.

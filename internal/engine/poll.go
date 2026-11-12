@@ -271,7 +271,8 @@ func (e *Engine) pollRepo(ctx context.Context, w config.Watch, gh GitHub, rr git
 	// GitHub fields only from here on, and applyRadarPRs decides on the rows
 	// its upserts read.
 	awaited := e.awaitCIRuns(e.betweenCalls(ctx), w, full, rr.PRs, byNode, now) // fix_open_ci.go
-	details, needed := e.fetchDetails(e.betweenCalls(ctx), gh, repo.ID, full, rr.PRs, byNode, awaited)
+	held := e.heldMergesIn(ctx, full)                                           // fix_held_merge.go: their base's tip is in the Details alone
+	details, needed := e.fetchDetails(e.betweenCalls(ctx), gh, repo.ID, full, rr.PRs, byNode, withHeld(awaited, held))
 	errs, inRadar := e.applyRadarPRs(ctx, w, gh, repo, rr.PRs, byNode, details, needed, firstSync, now)
 
 	var missing []store.PR
@@ -283,6 +284,7 @@ func (e *Engine) pollRepo(ctx context.Context, w config.Watch, gh GitHub, rr git
 	if err := e.confirmMissing(ctx, gh, repo, missing, now); err != nil {
 		errs = append(errs, err)
 	}
+	e.dropStaleHeldMerges(ctx, repo, held, details) // after the rows took the radar's heads and bases and the confirmed closes
 
 	if firstSync && len(errs) == 0 {
 		repoRow.FirstSyncedAt = new(now)
@@ -338,7 +340,8 @@ func kvRepoDetailsEpoch(repoID int64) string { return fmt.Sprintf("repo.%d.detai
 // check that fails on a head whose rollup failed already leaves the state
 // as it was. A PR whose start of the CI workflow waits for its run
 // (awaited, awaitCIRuns) has its checks fetched on every poll, whatever
-// the rollup says. Until a poll of the repository on this build read them
+// the rollup says, and so has a PR whose merge of the parent magnum holds
+// for your y (withHeld), whose base's tip only the Details name. Until a poll of the repository on this build read them
 // (kvRepoDetailsEpoch), every open PR magnum reviewed at its head is
 // fetched too.
 func (e *Engine) fetchDetails(ctx context.Context, gh GitHub, repoID int64, full string, prs []github.PRRadar, byNode map[string]store.PR, awaited map[int]bool) (map[int]github.PRDetails, map[int]bool) {

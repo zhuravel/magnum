@@ -28,13 +28,25 @@ var mergePlanAsked = MergeAsked{Head: "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
 // "merge-parent talkable/talkable#5 bound to master at c0c0c0c, head
 // a1a1a1a, 0 conflicts, planned 10:00".
 func mergeCall(ref string, a MergeAsked) string {
-	return fmt.Sprintf("merge-parent %s bound to %s at %s, head %s, %d conflicts, planned %s", ref, a.Base, textx.ShortSHA(a.Tip),
+	s := fmt.Sprintf("merge-parent %s bound to %s at %s, head %s, %d conflicts, planned %s", ref, a.Base, textx.ShortSHA(a.Tip),
 		textx.ShortSHA(a.Head), a.Conflicts, a.At.UTC().Format("15:04"))
+	if a.Merge != "" {
+		s += ", the held merge " + textx.ShortSHA(a.Merge)
+	}
+	return s
 }
 
 func (f *fakeActions) MergeParentPlan(_ context.Context, ref string) (ActionResult, error) {
+	f.mu.Lock()
+	held := f.held
+	f.mu.Unlock()
 	res, err := f.record("merge-parent --dry-run " + ref)
-	if err == nil {
+	switch {
+	case err != nil:
+	case held != nil: // held_merge_test.go
+		asked := *held
+		res.Ask, res.Parent = heldPushAsk(ref), &asked
+	default:
 		asked := mergePlanAsked
 		res.Ask, res.Parent = mergePlanAsk(ref), &asked
 	}

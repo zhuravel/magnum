@@ -759,7 +759,7 @@ func TestPRBoardNavigationAndScroll(t *testing.T) {
 }
 
 func TestPRBoardHelpOverlay(t *testing.T) {
-	m, _, _ := newBoard(t, 120, 47, PRBoardOptions{}) // tall enough for every key line and the whole legend
+	m, _, _ := newBoard(t, 120, 48, PRBoardOptions{}) // tall enough for every key line and the whole legend
 	m, _ = send(t, m, keyMsg("?"))
 	v := viewOf(m)
 	mustContain(t, v, "Move and view", "Act on the PR", "Legend", "fresh review in new agent sessions (asks y/N)",
@@ -772,7 +772,7 @@ func TestPRBoardHelpOverlay(t *testing.T) {
 		"◉ full · ⚑ full before approval · ☑ audit; post-merge prefixes the kind",
 		"Enter shows the round's roles and why it ran",
 		// The words after the attention and the reviewed pills, and FINDINGS' held review.
-		"attention · failed or blocked, identity, fix, overload, no review",
+		"attention · failed or blocked, identity, fix, merge ready, overload, no review",
 		"reviewed · argued magnum stopped arguing in a thread: you decide",
 		"✔ held clean, the approval waits for a full pass")
 	a, _, _ := newBoard(t, 120, 42, PRBoardOptions{Icons: IconsASCII})

@@ -95,64 +95,98 @@ const workflowsWord = "with Workflows"
 // now and new to head (baseOnGitHub: never a ref of the slot, which the
 // fixer's pane can write) and every workflow file of the merge is as that
 // tip on GitHub has it, never with the PR's own, and then with a token of
-// the daemon's own with Workflows write (identity.App.DaemonPushEnv: in
-// the push's env alone, never in a file), released after the push. how is
-// workflowsWord for such a push; refused says why nothing was pushed (the
-// branch, the PR's own workflow changes, a base GitHub has otherwise, or
-// an App without Workflows: "needs Workflows on the App").
-func (e *Engine) pushMerge(ctx context.Context, job *fixJob, pg parentGit, id *config.Identity, head, merge string, b fixConflict) (how, refused string, err error) {
+// the daemon's own with Workflows write (workflowsToken), released after
+// the push. how is workflowsWord for such a push; refused says why nothing
+// was pushed (the branch, the PR's own workflow changes, a base GitHub has
+// otherwise, or an App without Workflows: "needs Workflows on the App"),
+// and for a merge of the tip GitHub names whose only fault is that it keeps
+// the PR's own workflow changes, which ones (pushRefusal.own): the settle
+// holds such a merge for your y (holdMerge).
+func (e *Engine) pushMerge(ctx context.Context, job *fixJob, pg parentGit, id *config.Identity, head, merge string, b fixConflict) (how string, refused pushRefusal, err error) {
 	if why := refusedHeadBranch(job.repo, job.pr, b.base); why != "" {
-		return "", why, nil
+		return "", pushRefusal{why: why}, nil
 	}
 	src := e.d.Identities[id.Name]
 	if src == nil {
-		return "", "", fmt.Errorf("identity %q is not configured", id.Name)
+		return "", pushRefusal{}, fmt.Errorf("identity %q is not configured", id.Name)
 	}
 	dir, at := job.slot.Path, fmt.Sprintf("the merge of %s at %s", b.base, textx.ShortSHA(b.sha))
 	workflows, err := pg.ChangedPaths(ctx, dir, head, merge, workflowsPath)
 	if err != nil {
-		return "", "", err
+		return "", pushRefusal{}, err
 	}
 	var env map[string]string
 	release := func() {}
 	if len(workflows) == 0 {
 		if env, err = src.Env(ctx); err != nil {
-			return "", "", fmt.Errorf("the token of %s: %w", id.Name, err)
+			return "", pushRefusal{}, fmt.Errorf("the token of %s: %w", id.Name, err)
 		}
 	} else {
 		files := textx.Count(len(workflows), "file", "files")
 		tip, why := e.baseOnGitHub(ctx, job, b, head)
 		if why != "" {
-			return "", fmt.Sprintf("%s brings workflow changes (%s), and %s", at, files, why), nil
+			return "", pushRefusal{why: fmt.Sprintf("%s brings workflow changes (%s), and %s", at, files, why)}, nil
 		}
 		own, err := pg.DifferingPaths(ctx, dir, merge, tip, workflowsPath)
 		if err != nil {
-			return "", "", fmt.Errorf("whether %s keeps the PR's own workflow changes: %w", at, err)
+			return "", pushRefusal{}, fmt.Errorf("whether %s keeps the PR's own workflow changes: %w", at, err)
 		}
-		dp, ok := src.(daemonPusher)
 		switch {
 		case len(own) > 0 && tip != b.sha:
-			return "", fmt.Sprintf("%s has workflow files that are not as the tip %s of %s on GitHub has them (%s), which %s never pushes",
-				at, textx.ShortSHA(tip), b.base, strings.Join(own[:min(3, len(own))], ", "), id.Login), nil
+			return "", pushRefusal{why: fmt.Sprintf("%s has workflow files that are not as the tip %s of %s on GitHub has them (%s), which %s never pushes",
+				at, textx.ShortSHA(tip), b.base, strings.Join(own[:min(3, len(own))], ", "), id.Login)}, nil
 		case len(own) > 0:
-			return "", fmt.Sprintf("%s keeps the PR's own workflow changes (%s), which %s never pushes", at, strings.Join(own[:min(3, len(own))], ", "), id.Login), nil
-		case !ok:
-			return "", fmt.Sprintf("%s brings its workflow changes (%s): %s mints no token that may write them", at, files, id.Name), nil
+			return "", pushRefusal{why: fmt.Sprintf("%s keeps the PR's own workflow changes (%s), which %s never pushes", at,
+				strings.Join(own[:min(3, len(own))], ", "), id.Login), own: own, files: workflows}, nil
 		}
-		env, release, err = dp.DaemonPushEnv(ctx, true)
-		switch {
-		case errors.Is(err, identity.ErrWorkflowsNotGranted):
-			return "", fmt.Sprintf("%s brings its workflow changes (%s): %s (%s lacks it)", at, files, needsWorkflowsWords, id.Login), nil
-		case err != nil:
-			return "", "", fmt.Errorf("a push token with Workflows for %s: %w", id.Name, err)
+		var why2 string
+		if env, release, why2, err = e.workflowsToken(ctx, id, at, files); err != nil || why2 != "" {
+			return "", pushRefusal{why: why2}, err
 		}
 		how = workflowsWord
 	}
 	defer release()
 	if err := pg.PushLeaseGitHubAs(ctx, dir, job.repo.Owner, job.repo.Name, merge, deref(job.pr.HeadRef), head, env); err != nil {
-		return "", "", fmt.Errorf("the push of the merge %s: %w", textx.ShortSHA(merge), err)
+		return "", pushRefusal{}, fmt.Errorf("the push of the merge %s: %w", textx.ShortSHA(merge), err)
 	}
-	return how, "", nil
+	return how, pushRefusal{}, nil
+}
+
+// pushRefusal is why pushMerge pushed nothing (why; "" when it pushed):
+// for a merge of the tip GitHub names for the base whose only fault is
+// that it keeps the PR's own workflow changes, own names them (the
+// workflow files that differ from that tip) and files the workflow files
+// the push changes against the head, so the settle may hold it for your y
+// (holdMerge); both are empty for any other refusal.
+type pushRefusal struct {
+	why   string
+	own   []string
+	files []string
+}
+
+// workflowsToken is the fix identity id's token with Workflows write for
+// the push of at (the merge in words, files its workflow files counted),
+// which the daemon mints for itself (identity.App.DaemonPushEnv: in the
+// push's env alone, never in a file), and its release after the push;
+// refused says why there is none: id mints no such token, or its App lacks
+// Workflows ("needs Workflows on the App").
+func (e *Engine) workflowsToken(ctx context.Context, id *config.Identity, at, files string) (env map[string]string, release func(), refused string, err error) {
+	release = func() {}
+	dp, ok := e.d.Identities[id.Name].(daemonPusher)
+	if !ok {
+		return nil, release, fmt.Sprintf("%s brings its workflow changes (%s): %s mints no token that may write them", at, files, id.Name), nil
+	}
+	env, rel, err := dp.DaemonPushEnv(ctx, true)
+	switch {
+	case errors.Is(err, identity.ErrWorkflowsNotGranted):
+		return nil, release, fmt.Sprintf("%s brings its workflow changes (%s): %s (%s lacks it)", at, files, needsWorkflowsWords, id.Login), nil
+	case err != nil:
+		return nil, release, "", fmt.Errorf("a push token with Workflows for %s: %w", id.Name, err)
+	}
+	if rel != nil {
+		release = rel
+	}
+	return env, release, "", nil
 }
 
 // refusedHeadBranch says why magnum never pushes to pr's branch, "" when
@@ -300,8 +334,8 @@ func (e *Engine) mergeParent(ctx context.Context, job *fixJob) (refused string, 
 		return "", err
 	}
 	data := map[string]any{"base": b.base, "tip": b.sha, "head": head, "merge": merge, "identity": id.Name, "cycle": job.state.Cycle}
-	how, refused, err := e.pushMerge(ctx, job, pg, id, head, merge, b)
-	switch {
+	how, refusal, err := e.pushMerge(ctx, job, pg, id, head, merge, b)
+	switch refused = refusal.why; {
 	case err != nil:
 		return "", err
 	case refused != "":
@@ -375,8 +409,10 @@ func (e fixHandRefused) Error() string { return e.why }
 // workflow file as that commit has it, with its own Workflows token),
 // and, for a merge bound to its y/N (job.asked), only when that commit is
 // the tip the question named (fix_parent_bind.go): nobody was asked about
-// another. Any other head is left to confirmPush. It returns why it pushed
-// nothing (fixHandRefused's words).
+// another. A merge pushMerge refuses only because it keeps the PR's own
+// workflow changes is held for your y (holdMerge), and the error is then
+// fixMergeHeld with the PR's attention. Any other head is left to
+// confirmPush. It returns why it pushed nothing (fixHandRefused's words).
 func (e *Engine) pushHanded(ctx context.Context, job *fixJob, head string) (string, error) {
 	pg, ok := e.d.Git.(parentGit)
 	id, who, app := e.fixerSignature(job.role.Identity)
@@ -398,8 +434,17 @@ func (e *Engine) pushHanded(ctx context.Context, job *fixJob, head string) (stri
 	}
 	b := fixConflict{base: base, sha: tip}
 	how, refused, err := e.pushMerge(ctx, job, pg, id, job.head, head, b)
-	if err != nil || refused != "" {
-		return refused, err
+	switch {
+	case err != nil:
+		return "", err
+	case len(refused.own) > 0: // fix_held_merge.go: yours to read and push
+		msg, err := e.holdMerge(ctx, job, id, job.head, head, b, refused)
+		if err != nil || msg == "" {
+			return refused.why, err
+		}
+		return "", fixMergeHeld{msg: msg}
+	case refused.why != "":
+		return refused.why, nil
 	}
 	e.event(ctx, "info", job.subject(), "fix.parent_pushed", fmt.Sprintf("magnum pushed %s's merge of %s at %s into %s as %s %s: the head is %s",
 		job.role.Name, base, textx.ShortSHA(tip), job.label(), id.Login, how, textx.ShortSHA(head)),
@@ -589,6 +634,15 @@ func (e *Engine) requestMerge(ctx context.Context, pr store.PR, dry bool, asked 
 	if e.draining(ctx) {
 		return "", errors.New("the daemon drains for a restart: ask again after it")
 	}
+	if h, ok := e.heldMergeOf(ctx, pr.ID); ok { // fix_held_merge.go: the merge magnum holds for your y
+		if res, handled, err := e.requestHeld(ctx, pr, h, dry, asked); handled {
+			return res, err
+		}
+	}
+	if asked != nil && asked.Merge != "" && !dry { // the question named a held merge that magnum no longer holds
+		return "", fmt.Errorf("PR #%d: the question named the held merge %s, which magnum no longer holds (its fix.held_dropped event says why): "+
+			"nothing was pushed; ask again", pr.Number, textx.ShortSHA(asked.Merge))
+	}
 	job, nothing, err := e.prepareMerge(ctx, pr, !e.d.DryRun)
 	switch {
 	case err != nil:
@@ -599,7 +653,7 @@ func (e *Engine) requestMerge(ctx context.Context, pr store.PR, dry bool, asked 
 	id, _, _ := e.fixerSignature(job.role.Identity)
 	what := job.mergeWords(id.Login)
 	if dry {
-		return MergePlan{Ref: job.label(), Asked: job.planned(e.now()), Text: fmt.Sprintf("dry run: would merge the parent of %s: %s", job.label(), what)}.result()
+		return MergePlan{Ref: job.label(), Asked: job.planned(e.now()), Text: fmt.Sprintf("%s%s: %s", mergeDryWords, job.label(), what)}.result()
 	}
 	if asked != nil {
 		if why := job.askedRefusal(*asked, e.now()); why != "" {

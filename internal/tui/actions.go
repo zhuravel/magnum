@@ -10,6 +10,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"os/exec"
 	"slices"
 	"strings"
 	"time"
@@ -83,6 +84,10 @@ type actionBar struct {
 	// flashStuck keeps a failure on screen until a key is pressed.
 	flashStuck bool
 	flashSeq   int
+
+	// pager is what e runs on a held merge's diff (held_merge.go):
+	// defaultPager, a test's own.
+	pager func(ctx context.Context, path string) *exec.Cmd
 }
 
 func newActionBar(ctx context.Context, act DashboardActions, log *ActionLog, now func() time.Time,
@@ -90,7 +95,7 @@ func newActionBar(ctx context.Context, act DashboardActions, log *ActionLog, now
 	if log == nil {
 		log = NewActionLog()
 	}
-	return actionBar{ctx: ctx, act: act, log: log, now: now, tick: tick}
+	return actionBar{ctx: ctx, act: act, log: log, now: now, tick: tick, pager: defaultPager}
 }
 
 // setFlash shows text in the footer for flashFor. The text may quote a

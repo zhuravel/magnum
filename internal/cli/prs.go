@@ -53,7 +53,8 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"(F takes it out of autofix or puts it back; on a PR whose fix loop left you calls, d says you did them all: "+
 			"back to reviewed, with no review), c fixes your PR's failed required CI as the fixer's login (asking y/N with the "+
 			"daemon's plan), P merges its base into it as the fixer App's bot (asking y/N with the daemon's "+
-			"plan), E deploys your PR to its staging envs (1-3 choose them, a all, enter asks y/N with the daemon's plan, as "+
+			"plan; while magnum holds a merge the fixer resolved for your y, it pushes that one, and e shows its "+
+			"held-merge.diff in the pager), E deploys your PR to its staging envs (1-3 choose them, a all, enter asks y/N with the daemon's plan, as "+
 			"`magnum staging --deploy` does), w opens its whiteboard, o opens the judge's pane, "+
 			"p/u pin and unpin, * stars it or unstars it (`magnum star`), x releases, M/U mute and unmute, b opens the "+
 			"PR in the browser and t its issue in the tracker; every one of them but o, p, u, *, b and t asks y/N "+
@@ -402,6 +403,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 		required := map[string]store.RequiredChecks{} // per repository, for this load
 		ignored := map[string][]string{}              // per repository, for this load
 		trackers := map[string][]config.Tracker{}     // per repository, for this load
+		held := heldMergeDiffs(ctx, st, layout)       // held_merge.go: the merges magnum holds for your y
 		out := make([]tui.PRBoardRow, 0, len(rows))
 		ids := make([]int64, 0, len(rows))
 		for _, r := range rows {
@@ -487,6 +489,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			}
 			row.Fixing, row.FixLoop, row.FixOff = boardFix(ctx, st, r.PRID)
 			row.Fixer = fixerLogin(cfg, full) // f's question names it
+			row.HeldMerge = held[r.PRID]      // e opens it, P pushes it
 			row.Whiteboard = boardWhiteboard(ctx, st, r.PRID)
 			if f, ok := codexFlagOf(ctx, st, r.PRID); ok { // codex_flag.go
 				row.CodexFlag, row.CodexFlagSentence = f.Short(), f.Sentence(actRefLabel(defaultRepo(cfg), full, r.Number))

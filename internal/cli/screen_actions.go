@@ -260,7 +260,8 @@ func (s *screenActions) MergeParentPlan(ctx context.Context, ref string) (tui.Ac
 		case r.State != tui.RequestDone:
 		case ok:
 			a := plan.Asked
-			res.Ask, res.Parent = mergeParentQuestion(plan), &tui.MergeAsked{Head: a.Head, Base: a.Base, Tip: a.Tip, Conflicts: a.Conflicts, At: a.At}
+			res.Ask, res.Parent = mergeParentQuestion(plan), &tui.MergeAsked{Head: a.Head, Base: a.Base, Tip: a.Tip, Conflicts: a.Conflicts,
+				Merge: a.Merge, At: a.At}
 		case mergePlanPredates(r.Result):
 			return res, errMergePlanPredates
 		}
@@ -273,7 +274,7 @@ func (s *screenActions) MergeParentPlan(ctx context.Context, ref string) (tui.Ac
 // screen asked y/N for named (MergeParentPlan's Parent): the daemon
 // refuses the merge when that moved since.
 func (s *screenActions) MergeParent(ctx context.Context, ref string, asked tui.MergeAsked) (tui.ActionResult, error) {
-	a := engine.MergeAsked{Head: asked.Head, Base: asked.Base, Tip: asked.Tip, Conflicts: asked.Conflicts, At: asked.At}
+	a := engine.MergeAsked{Head: asked.Head, Base: asked.Base, Tip: asked.Tip, Conflicts: asked.Conflicts, Merge: asked.Merge, At: asked.At}
 	return s.do(ctx, "merge-parent", func(ctx context.Context, c *Context, d *actDeps) int {
 		return fixMain(ctx, c, d, ref, fixOpts{merge: true, yes: true, asked: &a})
 	})

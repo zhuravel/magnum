@@ -943,11 +943,15 @@ var attentionCauses = map[string]string{
 }
 
 // attentionCause is the word after the attention pill of r ("failed"): its
-// reason kind's, while it needs attention; "" for any other state, or a
-// kind the board does not know (the pill alone).
+// reason kind's, while it needs attention, and "merge ready" for a merge
+// of the parent magnum holds for your y (mergeReadyShown); "" for any
+// other state, or a kind the board does not know (the pill alone).
 func attentionCause(r PRBoardRow) string {
-	if normState(rowState(r)) != "needs_attention" {
+	switch {
+	case normState(rowState(r)) != "needs_attention":
 		return ""
+	case mergeReadyShown(r): // held_merge.go: a fixer's merge magnum holds for your y
+		return mergeReadyCause
 	}
 	return attentionCauses[r.AttentionKind]
 }

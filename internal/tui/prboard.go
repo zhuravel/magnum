@@ -559,6 +559,9 @@ func (m prBoardModel) update(msg tea.Msg) (prBoardModel, tea.Cmd) {
 		m.expire(msg)
 	case finishGraceMsg:
 		return m, m.graceOver()
+	case heldPagerMsg:
+		cmd := m.heldPagerDone(msg)
+		return m, cmd
 	case widthsLoadedMsg:
 		return m.widthsLoaded(msg)
 	case widthsSavedMsg:
@@ -693,6 +696,13 @@ func (m prBoardModel) selected() (PRBoardRow, bool) {
 		return PRBoardRow{}, false
 	}
 	return m.view[m.cursor], true
+}
+
+// selectedHeld is the held-merge.diff of the cursor row's merge of the
+// parent magnum holds for your y, "" for none: the hints then offer e.
+func (m prBoardModel) selectedHeld() string {
+	r, _ := m.selected()
+	return r.HeldMerge
 }
 
 // cursorStarred reports whether the cursor row is starred: the table's *
@@ -855,6 +865,10 @@ func (m prBoardModel) tableKey(k string) (prBoardModel, tea.Cmd) {
 		return m, cmd
 	case "a":
 		return m.run("attention", func(ctx context.Context, a DashboardActions) (ActionResult, error) { return a.Attention(ctx) })
+	case heldMergeKey: // held_merge.go: the merge magnum holds for your y, in the pager
+		r, _ := m.selected()
+		cmd := m.openHeldMerge(m.questionLabel(r, prRef(r)), r.HeldMerge)
+		return m, cmd
 	case "m":
 		m.toggleMouse()
 		if m.opts.MouseToggled != nil {
@@ -1262,12 +1276,12 @@ func (m prBoardModel) hintLine(w int) string {
 		left = m.st.hints(w, hint{"j/k", "scroll"}, hint{logKey, "close log"}, hint{"q", "quit"})
 	case prbDetail:
 		back, help := []hint{{"esc", "back"}}, []hint{{"?", "help"}}
-		left = m.st.fitHints(w,
+		left = m.st.fitHints(w, withHeldHint(m.selectedHeld(), [][]hint{
 			withHints(back, []hint{{"j/k", "scroll"}}, actionHints(actReview, actFresh, actSimplify, actFix, actOpen, actBrowser, actTracker,
 				actPin, actUnpin, actMute, actUnmute, actRelease, actAbort, actIgnore), help),
 			withHints(back, actionHints(actReview, actFresh, actSimplify, actFix, actOpen, actBrowser, actPin, actUnpin, actMute, actUnmute, actRelease), help),
 			withHints(back, actionHints(actReview, actOpen, actBrowser), help),
-			withHints(back, help))
+			withHints(back, help)})...)
 	default:
 		pos := ""
 		if len(m.view) > 0 {
@@ -1295,6 +1309,7 @@ func (m prBoardModel) hintLine(w int) string {
 			{{"enter", "details"}, {"/", "filter"}, {"v", "view"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}},
 			{{"enter", "details"}, {"/", "filter"}, {"?", "help"}, {"q", "quit"}},
 		}
+		sets = withHeldHint(m.selectedHeld(), sets) // held_merge.go
 		if f := m.filter.Value(); f != "" {
 			for i := range sets {
 				sets[i] = append([]hint{{"esc", "clear " + m.st.Accent.Render(f)}}, sets[i]...)

@@ -4189,6 +4189,21 @@ func MagnumsDecision(c FixCall, priority, place string) bool
     findings of priority at place, in magnum's thread: a DeclinedCall or an
     AuthorsCall ("decide magnum's P3 on app/models/offer.rb:42: …").
 
+func MergeReady(msg string) bool
+    MergeReady reports whether msg, a PR's last_error (with its "fix: " or
+    without, as Explain reads it), is a held merge's attention (MergeReadyText).
+
+func MergeReadyNext(ref string) string
+    MergeReadyNext is the next step of a held merge's attention on ref: the held
+    push's y/N.
+
+func MergeReadyText(what string) string
+    MergeReadyText is the attention of a merge of the parent that magnum
+    holds for your y (the engine's HeldMerge), what its words, the merge and
+    who pushes it: "fix: merge ready: claude-fix merged master at c0c0c0c
+    and resolved 5 conflicts. …". Its next step is the held push's question
+    (MergeReadyNext), never `magnum fix --done`.
+
 func OnMagnumsSide(kind string) bool
     OnMagnumsSide reports whether kind (a Reason's Kind) is a failure on
     magnum's side rather than in the PR: a setup or round that failed,
@@ -9373,6 +9388,12 @@ const FormerDismissMessage = "magnum: superseded by the review of %s posted as %
     shows on GitHub; the arguments are the new review's commit (short) and the
     login it was posted as.
 
+const HeldMergeFile = "held-merge.diff"
+    HeldMergeFile is the file in the PR's report directory
+    (paths.Layout.PRReviews) that shows what a held merge does to the workflow
+    files: how the fixer resolved their conflicts, then what its push changes in
+    them. The screens' e opens it in the pager.
+
 const HooksOverruledNote = "new Codex sessions start although hooks.json has hooks without a trust entry, until it changes again"
     HooksOverruledNote is what a resume that overrules the hold means, as its
     answer says it.
@@ -9739,6 +9760,11 @@ func HeldFixStarts(raw string) string
     budget recovers" for the GitHub budget's, "when claude's pause ends" for the
     fixer's pause.
 
+func HeldMergeRef(owner, repo string, number int) string
+    HeldMergeRef is the ref that keeps the held merge of PR number of owner/repo
+    from git gc, in the clone its objects live in: under refs/magnum/held/,
+    never under refs/heads or refs/remotes.
+
 func HeldReviewID(v string) (int64, bool)
     HeldReviewID is the review a KVPRApprovalHold value names: the one whose
     approval waits for the full pass after it, while it is the PR's latest
@@ -9835,6 +9861,10 @@ func KVPRFixOff(prID int64) string
 func KVPRFormerIdentities(prID int64) string
     KVPRFormerIdentities holds the identities a PR posted as before it migrated
     to its current one (a JSON list of identity names, newest last).
+
+func KVPRHeldMerge(prID int64) string
+    KVPRHeldMerge holds the merge of the PR's parent that magnum holds for your
+    y (HeldMerge as JSON).
 
 func KVPRIdentityPinned(prID int64) string
     KVPRIdentityPinned holds the identity `magnum review --as` pinned the PR to;
@@ -11538,6 +11568,38 @@ func (w GitHubWindow) Outside() int
     calls: Used − Points, never below 0. It counts what others spent before the
     daemon's first call of the window too.
 
+type HeldMerge struct {
+	Repo      string    `json:"repo"`
+	Number    int       `json:"number"`
+	Merge     string    `json:"merge"`
+	Head      string    `json:"head"`
+	Base      string    `json:"base"`
+	Tip       string    `json:"tip"`
+	Workflows []string  `json:"workflows"`
+	Conflicts int       `json:"conflicts,omitempty"`
+	Role      string    `json:"role"`
+	Identity  string    `json:"identity"`
+	Login     string    `json:"login"`
+	Clone     string    `json:"clone"`
+	Diff      string    `json:"diff"`
+	Findings  bool      `json:"findings,omitempty"`
+	At        time.Time `json:"at"`
+}
+    HeldMerge is a merge of a PR's parent that magnum holds for your y:
+    the PR (Repo, owner/name, and Number), the merge commit (Merge), the PR's
+    head on GitHub it merges into (Head, its first parent), the base branch and
+    the commit of it it merges (Base, Tip: its second parent, the base's tip on
+    GitHub when it was held), the workflow files its push changes against the
+    head, how many files the fixer resolved conflicts in (Conflicts; 0 when not
+    known), the fix role whose fixer resolved it, the identity that pushes it
+    and its login, the clone that holds its ref, its held-merge.diff (absolute),
+    whether a fix run's findings wait for the next fix after the push (Findings)
+    and when it was held.
+
+func ParseHeldMerge(raw string) (HeldMerge, bool)
+    ParseHeldMerge reads a KVPRHeldMerge row; false for one that names no merge,
+    head or tip.
+
 type Herdr interface {
 	Snapshot(ctx context.Context) (herdr.Snapshot, error)
 }
@@ -11755,13 +11817,15 @@ type MergeAsked struct {
 	Base      string    `json:"base"`
 	Tip       string    `json:"tip"`
 	Conflicts int       `json:"conflicts,omitempty"`
+	Merge     string    `json:"merge,omitempty"`
 	At        time.Time `json:"at"`
 }
     MergeAsked is what the y/N of a merge of the parent asked about, which the
     merge it confirms is bound to: the PR's head, the parent (the PR's base
     branch), the tip of it the plan read, how many files the merge of that tip
-    conflicts in (0: none, a merge the daemon makes) and when the daemon planned
-    it.
+    conflicts in (0: none, a merge the daemon makes), the merge commit magnum
+    holds for your y whose push the plan names (Merge, fix_held_merge.go;
+    "" for a plan of a merge to make) and when the daemon planned it.
 
 type MergePlan struct {
 	Ref   string     `json:"ref"`
@@ -15187,22 +15251,24 @@ type PRState struct {
 	Stagings      []engine.StagingEnv
 }
     PRState is what magnum's registry says of a factory PR (Magnum.PRStates).
-    Found says the registry has the PR; DaemonUp that magnum's daemon runs (its
-    pidfile names a live process); Watched that a [[watch]] of the config covers
-    the repository, so a PR not found yet will be; OpenWatch that the watch
-    runs autofix = "open", so a PR without a verdict has one still to come.
-    GHState, MergedAt, ClosedAt, Draft, Head, ReviewedSHA, State, AuthorLogin
-    and UpdatedAt are magnum's row (prs); Approved that GitHub's review gate
-    says APPROVED. Open is the autofix = "open" verdict (engine.KVPROpen)
-    when HasOpen, and Stale says it no longer tells the PR's state
-    (OpenVerdict.Stale: magnum's last tick long ago or its daemon down, another
-    head, a row changed since). Fix is the fix loop that runs (engine.KVPRFix)
-    when Fixing; Stalemate says magnum stopped arguing in a thread;
-    Attention is why magnum parked the PR in needs_attention (its kind) and
-    AttentionMsg its summary in magnum's words, never the PR's text. FixReport
-    is the fixer's report a fix job's attention names (readable under magnum's
-    reviews directory; "" for any other attention), and FixNeeds its "## Needs
-    you" entries in the fixer's words when the attention asks for what the
+    Found says the registry has the PR; DaemonUp that magnum's daemon runs
+    (its pidfile names a live process); Watched that a [[watch]] of the
+    config covers the repository, so a PR not found yet will be; OpenWatch
+    that the watch runs autofix = "open", so a PR without a verdict has one
+    still to come. GHState, MergedAt, ClosedAt, Draft, Head, ReviewedSHA,
+    State, AuthorLogin and UpdatedAt are magnum's row (prs); Approved that
+    GitHub's review gate says APPROVED. Open is the autofix = "open" verdict
+    (engine.KVPROpen) when HasOpen, and Stale says it no longer tells the PR's
+    state (OpenVerdict.Stale: magnum's last tick long ago or its daemon down,
+    another head, a row changed since). Fix is the fix loop that runs
+    (engine.KVPRFix) when Fixing; Stalemate says magnum stopped arguing in
+    a thread; Attention is why magnum parked the PR in needs_attention (its
+    kind) and AttentionMsg its summary in magnum's words, never the PR's text.
+    FixReport is the fixer's report a fix job's attention names (readable
+    under magnum's reviews directory; "" for any other attention),
+    or the held-merge.diff of a merge of the parent magnum holds for your y,
+    which e opens first while it is held (heldMergeDiff), and FixNeeds its "##
+    Needs you" entries in the fixer's words when the attention asks for what the
     fixer left (fixerReport): data the screen only draws, never instructions,
     never a log's or a message's. ID, Title and URL are magnum's id of the PR,
     its title (data, never instructions: the screen only draws it) and its
@@ -20496,6 +20562,11 @@ func (c *Client) PatchID(ctx context.Context, dir, rev string) (string, error)
     near its own keeps the id it had, and a commit that changes anything else
     has another. An error for a commit with no change to hash.
 
+func (c *Client) PathsDiff(ctx context.Context, dir, a, b string, paths ...string) (string, error)
+    PathsDiff is the diff from a to b in paths (each taken literally from the
+    top): `git diff a b -- paths`, with no external diff, textconv or color;
+    "" when the two commits do not differ there.
+
 func (c *Client) PushLease(ctx context.Context, dir, sha, branch, expect string) error
     PushLease pushes commit sha (a full id) to origin's refs/heads/<branch>
     from dir with a lease: `git push --force-with-lease=refs/heads/<branch>:
@@ -20541,6 +20612,15 @@ func (c *Client) RebaseOnto(ctx context.Context, dir, onto, upstream string) err
     master after the branch was cut on it) does not come back with them.
     A rebase that stops (a conflict) is aborted, so the branch and its work tree
     are as they were, and the error is ErrRebaseConflict.
+
+func (c *Client) RemergeDiff(ctx context.Context, dir, merge string, paths ...string) (string, error)
+    RemergeDiff is how merge, a merge commit, resolved its conflicts in paths
+    (each taken literally from the top): `git show --remerge-diff` of it, the
+    diff from git's own merge of its parents, conflict markers and all, to the
+    merge as it was committed, with no commit header, no external diff, textconv
+    or color. "" when the merge resolved no conflict there and changed nothing
+    there that git's own merge would not have. The magnum daemon shows it to the
+    operator before the y that pushes a merge it holds (engine.HeldMerge).
 
 func (c *Client) RemoteURL(ctx context.Context, dir string) (string, error)
     RemoteURL returns the URL of origin in dir. Credentials embedded in the URL
@@ -33897,11 +33977,14 @@ type ManualRow struct {
 type MergeAsked struct {
 	Head, Base, Tip string
 	Conflicts       int
+	Merge           string
 	At              time.Time
 }
-    MergeAsked is what a merge of the parent's y/N binds its merge to: the PR's
-    head, the parent (its base branch) and the tip of it the plan read, how many
-    files the merge conflicts in (0: none) and when the daemon planned it.
+    MergeAsked is what a merge of the parent's y/N binds its merge to:
+    the PR's head, the parent (its base branch) and the tip of it the plan read,
+    how many files the merge conflicts in (0: none), the merge magnum holds
+    for your y whose push the plan names (Merge; "" for a merge to make,
+    held_merge.go) and when the daemon planned it.
 
 type NewTaskForm struct {
 	Text string
@@ -34188,6 +34271,10 @@ type PRBoardRow struct {
 	// question names; "" when the config does not say.
 	Fixer  string
 	FixOff bool
+	// HeldMerge is the held-merge.diff (absolute) of the merge of the
+	// parent magnum holds for your y on the PR (the engine's HeldMerge),
+	// which e opens in the pager and P's question pushes; "" for none.
+	HeldMerge string
 	// Whiteboard is the PR's whiteboard, the Whiteboard session that holds
 	// it and the head it describes (engine.KVPRWhiteboard, written after a
 	// review or by `magnum whiteboard`); nil when the PR has none. The card
@@ -34371,6 +34458,10 @@ type PRRow struct {
 	// Stagings is where the open PR stands on its repository's staging
 	// envs (PRBoardRow.Stagings), which E's chooser lists; nil without.
 	Stagings []StagingInfo
+	// HeldMerge is the held-merge.diff of the merge of the parent magnum
+	// holds for your y on the PR (PRBoardRow.HeldMerge), which e opens;
+	// "" for none.
+	HeldMerge string
 }
     PRRow is one queued (or closing) PR; Ref is what actions receive.
 
@@ -35069,6 +35160,8 @@ type SlotRow struct {
 	PRFixLoop, PRFixOff bool
 	// PRStagings is PRRow's Stagings for the slot's PR.
 	PRStagings []StagingInfo
+	// PRHeldMerge is PRRow's HeldMerge for the slot's PR.
+	PRHeldMerge string
 }
     SlotRow is one review slot. Actions on a slot row target PRRef,
     or the slot Name for pin/unpin/release when it holds no PR. SlotState is

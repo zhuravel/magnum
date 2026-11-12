@@ -118,6 +118,7 @@ type mergeGit struct {
 	schema    []string
 	commits   []string
 	pushes    []string
+	held      heldGitFake // fix_held_merge_test.go: the refs, parents and diffs of a held merge
 }
 
 func (g *mergeGit) DifferingPaths(_ context.Context, _, _, b string, paths ...string) ([]string, error) {

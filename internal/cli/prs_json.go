@@ -81,6 +81,7 @@ type prsJSONRow struct {
 	FixLoop          bool              `json:"fix_loop"`               // has a fix loop in either phase, the fixer at work or waiting for its re-review (magnum abort ends it)
 	FixOff           bool              `json:"fix_off"`                // switched out of autofix (magnum fix --off)
 	Fixer            string            `json:"fixer,omitempty"`        // the login its fixer pushes and replies as (a fixer App's bot, or yours)
+	HeldMerge        string            `json:"held_merge,omitempty"`   // held-merge.diff of the merge of the parent magnum holds for your y
 	Note             string            `json:"note"`
 	ProjectNote      string            `json:"project_note"` // the agents ran without the PR's own agent config changes or, for a record of residue, the checkout's files the PR's commits do not change (agents.ProjectSentences)
 	RequestedToMe    *prsJSONRequest   `json:"requested_to_me"`
@@ -413,6 +414,7 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		OpenRestores: r.OpenRestores, OpenHoldSeconds: wholeSeconds(r.OpenHold), ReleaseAfter: r.ReleaseAfter, DeltaCheck: r.DeltaCheck, Note: r.Note, ProjectNote: r.ProjectNote,
 		SnoozedUntil: r.SnoozedUntil, SnoozedAt: r.SnoozedAt, SnoozedBy: r.SnoozedBy,
 		CodexFlag: r.CodexFlag, CodexFlagDetail: r.CodexFlagSentence, MuteReason: r.MuteReason, Fixing: r.Fixing, FixLoop: r.FixLoop, FixOff: r.FixOff, Fixer: r.Fixer,
+		HeldMerge:     r.HeldMerge,
 		Whiteboard:    mapPtr(r.Whiteboard, func(w tui.PRWhiteboard) prsJSONWhiteboard { return prsJSONWhiteboard{Session: w.Session, Head: w.Head} }),
 		RequestedToMe: mapPtr(r.RequestedToMe, prsJSONRequestOf), LastRequest: mapPtr(r.LastRequest, prsJSONRequestOf),
 		Requests: mapList(r.Requests, prsJSONRequestOf), ClosedAt: r.ClosedAt, Recent: r.Recent, MergedUnreviewed: r.MergedUnreviewed, FlagDismissed: r.FlagDismissed,

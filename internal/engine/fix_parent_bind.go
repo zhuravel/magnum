@@ -16,6 +16,9 @@ package engine
 // merged then, and the words say what moved. A daemon run with --dry-run
 // fetches nothing and answers each merge with its plan. A merge without a
 // binding (`magnum merge-parent --yes`) merges the tip its fetch brings.
+// A merge magnum holds for your y (fix_held_merge.go) is planned as its
+// push, and the y binds its push to the merge's SHA too (MergeAsked.Merge);
+// --yes never pushes it.
 
 import (
 	"encoding/json"
@@ -35,13 +38,16 @@ const mergeAskedWait = 10 * time.Minute
 // MergeAsked is what the y/N of a merge of the parent asked about, which
 // the merge it confirms is bound to: the PR's head, the parent (the PR's
 // base branch), the tip of it the plan read, how many files the merge of
-// that tip conflicts in (0: none, a merge the daemon makes) and when the
-// daemon planned it.
+// that tip conflicts in (0: none, a merge the daemon makes), the merge
+// commit magnum holds for your y whose push the plan names (Merge,
+// fix_held_merge.go; "" for a plan of a merge to make) and when the daemon
+// planned it.
 type MergeAsked struct {
 	Head      string    `json:"head"`
 	Base      string    `json:"base"`
 	Tip       string    `json:"tip"`
 	Conflicts int       `json:"conflicts,omitempty"`
+	Merge     string    `json:"merge,omitempty"`
 	At        time.Time `json:"at"`
 }
 
@@ -93,7 +99,14 @@ func (j *fixJob) planned(at time.Time) MergeAsked {
 // mergeAskedWait or longer ago, or what moved since (mergeMoved); "" when
 // it runs.
 func (j *fixJob) askedRefusal(asked MergeAsked, now time.Time) string {
-	label := j.label()
+	return askedRefusalOf(j.label(), asked, j.planned(now), now)
+}
+
+// askedRefusalOf says why label's merge does not run as its y/N asked
+// (asked) at now, when it is planned as plan: a binding that names no
+// plan, a question mergeAskedWait or longer ago, or what moved since
+// (mergeMoved); "" when it runs.
+func askedRefusalOf(label string, asked, plan MergeAsked, now time.Time) string {
 	switch age := now.Sub(asked.At); {
 	case asked.Head == "" || asked.Base == "" || asked.Tip == "" || asked.At.IsZero():
 		return label + ": the merge names no plan it was asked about: nothing was merged; ask again (`magnum merge-parent " + label + "`)"
@@ -101,12 +114,13 @@ func (j *fixJob) askedRefusal(asked MergeAsked, now time.Time) string {
 		return label + ": asked " + textx.DurationWords(age.Truncate(time.Minute)) + " ago, longer than a merge of the parent waits for its y (" +
 			textx.DurationWords(mergeAskedWait) + "): nothing was merged; ask again"
 	}
-	return mergeMoved(label, asked, j.planned(now))
+	return mergeMoved(label, asked, plan)
 }
 
 // mergeMoved says what moved between asked, what the y/N of label's merge
 // asked about, and now, the merge as it is: the PR's head, its base (a
-// retarget), the base's tip or the merge's conflicts; "" when nothing did.
+// retarget), the base's tip, the merge's conflicts or the merge magnum
+// holds; "" when nothing did.
 func mergeMoved(label string, asked, now MergeAsked) string {
 	const nothing = " since you asked: nothing was merged; ask again"
 	short := textx.ShortSHA
@@ -120,6 +134,9 @@ func mergeMoved(label string, asked, now MergeAsked) string {
 	case asked.Conflicts != now.Conflicts:
 		return fmt.Sprintf("%s: the merge of %s at %s has %s now, and you were asked about %s: nothing was merged; ask again",
 			label, now.Base, short(now.Tip), conflictWords(now.Conflicts), conflictWords(asked.Conflicts))
+	case !strings.EqualFold(asked.Merge, now.Merge):
+		return fmt.Sprintf("%s: magnum holds the merge %s now, and you were asked about %s: nothing was merged; ask again",
+			label, short(now.Merge), short(asked.Merge))
 	}
 	return ""
 }

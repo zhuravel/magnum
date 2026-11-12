@@ -43,6 +43,31 @@ func LookRaise(msg string) bool {
 	return lookRaiseRe.MatchString(strings.TrimPrefix(textx.FirstLine(msg), KindFix+": "))
 }
 
+// mergeReadyWords start a held merge's attention after its kind
+// (MergeReadyText).
+const mergeReadyWords = "merge ready: "
+
+// MergeReadyText is the attention of a merge of the parent that magnum
+// holds for your y (the engine's HeldMerge), what its words, the merge and
+// who pushes it: "fix: merge ready: claude-fix merged master at c0c0c0c
+// and resolved 5 conflicts. …". Its next step is the held push's question
+// (MergeReadyNext), never `magnum fix --done`.
+func MergeReadyText(what string) string { return KindFix + ": " + mergeReadyWords + what }
+
+// MergeReady reports whether msg, a PR's last_error (with its "fix: " or
+// without, as Explain reads it), is a held merge's attention
+// (MergeReadyText).
+func MergeReady(msg string) bool {
+	return strings.HasPrefix(strings.TrimPrefix(textx.FirstLine(msg), KindFix+": "), mergeReadyWords)
+}
+
+// MergeReadyNext is the next step of a held merge's attention on ref: the
+// held push's y/N.
+func MergeReadyNext(ref string) string {
+	return "`magnum merge-parent " + ref + "` on a terminal (P on the screens) asks y/N and pushes it after your y; " +
+		"e on the screens opens held-merge.diff, what it does to the workflow files"
+}
+
 // FixReport is the fixer's report that a fix job's message msg (a PR's
 // last_error under KindFix) names: the last absolute path to a .md file of
 // its first line, as the remedy names the report (fixRemedy); "" when that

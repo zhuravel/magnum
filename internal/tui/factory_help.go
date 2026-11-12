@@ -111,7 +111,8 @@ var factoryKeyHelp = []struct {
 		{"M U", "on a row with a PR: mute its automatic reviews, unmute them (y/N); a task's PR's question says what it does to its fix loop"},
 		{"/", "filter the rows by key, title, repository or PR number as you type: enter keeps it, esc clears it"},
 		{"O", "the owner scope, the board's O: every owner, each one alone (daemon.default_repo's first), every one again; both screens open in the one you left (the walk a ignores it and the filter)"},
-		{reportKey, "the fixer's report (claude-fix.md) in the pager, on a row whose fix loop left you items, else QA's summary.md (asks nothing)"},
+		{reportKey, "the fixer's report (claude-fix.md) in the pager, on a row whose fix loop left you items, else QA's summary.md (asks nothing); " +
+			heldMergeName + " first while magnum holds a merge of the parent for your y, which P then pushes"},
 		{"n", "new task"},
 		{logKey, "the action log and the alerts"}, {"?", "this help"}, {settingsKey, "settings"},
 		{"m", "mouse on / off"}, {"ctrl+r", "refresh"}, {"q", "quit"}}},

@@ -765,6 +765,7 @@ func statusGatherPRs(ctx context.Context, d statusDeps, now time.Time, r *status
 	statusQueueMarks(ctx, st, r.Queue, now)
 	statusSortQueue(r.Queue)
 	r.fixLoops, r.fixOffs = statusFixMarks(ctx, st)
+	r.heldMerges = heldMergeDiffs(ctx, st, d.Layout)
 	if cfg := d.Config; cfg != nil {
 		r.fixer = func(repo string) string { return fixerLogin(cfg, repo) }
 	}

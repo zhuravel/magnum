@@ -136,6 +136,8 @@ type SlotRow struct {
 	PRFixLoop, PRFixOff bool
 	// PRStagings is PRRow's Stagings for the slot's PR.
 	PRStagings []StagingInfo
+	// PRHeldMerge is PRRow's HeldMerge for the slot's PR.
+	PRHeldMerge string
 }
 
 // PRRow is one queued (or closing) PR; Ref is what actions receive.
@@ -159,6 +161,10 @@ type PRRow struct {
 	// Stagings is where the open PR stands on its repository's staging
 	// envs (PRBoardRow.Stagings), which E's chooser lists; nil without.
 	Stagings []StagingInfo
+	// HeldMerge is the held-merge.diff of the merge of the parent magnum
+	// holds for your y on the PR (PRBoardRow.HeldMerge), which e opens;
+	// "" for none.
+	HeldMerge string
 }
 
 // AttentionRow is something that needs the user.
@@ -580,6 +586,9 @@ func (m dashboardModel) update(msg tea.Msg) (dashboardModel, tea.Cmd) {
 		m.expire(msg)
 	case finishGraceMsg:
 		return m, m.graceOver()
+	case heldPagerMsg:
+		cmd := m.heldPagerDone(msg)
+		return m, cmd
 	case widthsLoadedMsg:
 		return m.widthsLoaded(msg)
 	case widthsSavedMsg:
@@ -688,6 +697,10 @@ func (m dashboardModel) listKey(k string) (dashboardModel, tea.Cmd) {
 		return m, cmd
 	case "a":
 		return m.run("attention", func(ctx context.Context, a DashboardActions) (ActionResult, error) { return a.Attention(ctx) })
+	case heldMergeKey: // held_merge.go: the merge magnum holds for your y, in the pager
+		r, _ := m.selected()
+		cmd := m.openHeldMerge(r.prRef(), m.heldOf(r))
+		return m, cmd
 	case "enter":
 		return m.rowAction(actOpen)
 	default:
@@ -742,6 +755,18 @@ func (m dashboardModel) actRow() actRow {
 		row.muted, row.mutedKnown = true, true
 	}
 	return row
+}
+
+// heldOf is the held-merge.diff of the merge of the parent magnum holds for
+// your y on r's PR (its slot row's, else its queue row's), "" for none.
+func (m dashboardModel) heldOf(r dashRow) string {
+	if s := m.slotRow(r); s != nil && s.PRHeldMerge != "" {
+		return s.PRHeldMerge
+	}
+	if q, ok := m.queueRow(r.prRef()); ok {
+		return q.HeldMerge
+	}
+	return ""
 }
 
 // slotRow is the slot row of r: r itself, or the slot holding its PR; nil
@@ -1385,12 +1410,16 @@ func (m dashboardModel) hintLine(w int) string {
 		room = max(w-ansi.StringWidth(off)-2, 10)
 	}
 	open, attention := []hint{{"enter", "open"}}, []hint{{"a", "attention"}}
-	return spread(m.st.fitHints(room,
+	held := ""
+	if r, ok := m.selected(); ok {
+		held = m.heldOf(r)
+	}
+	return spread(m.st.fitHints(room, withHeldHint(held, [][]hint{ // held_merge.go
 		withHints([]hint{{"j/k", "move"}}, open, actionHints(actReview, actPin, actUnpin, actRelease), attention,
 			actionHints(actBrowser), []hint{{"w", "manual"}, {"tab", "PRs"}, {logKey, "log"}, {"?", "help"}, {"q", "quit"}}),
 		withHints(open, actionHints(actReview, actRelease), attention, []hint{{"tab", "PRs"}, {"?", "help"}, {"q", "quit"}}),
-		[]hint{{"tab", "PRs"}, {"?", "help"}, {"q", "quit"}},
-		[]hint{{"?", "help"}, {"q", "quit"}}), off, w)
+		{{"tab", "PRs"}, {"?", "help"}, {"q", "quit"}},
+		{{"?", "help"}, {"q", "quit"}}})...), off, w)
 }
 
 // dashboardKeys is the help overlay's content; judge names the judge role.
@@ -1405,6 +1434,7 @@ func dashboardKeys(judge string) []hint {
 		{"f", "fix the PR's findings as the fixer's login (asks y/N)"},
 		{"c", "fix your PR's failed required CI as the fixer's login (asks y/N with the daemon's plan)"},
 		{"P", "merge the PR's base into it as the fixer App's bot (asks y/N with the daemon's plan)"},
+		{heldMergeKey, heldMergeName + " of a merge of the parent magnum holds for your y, in the pager (asks nothing); P then pushes it"},
 		{"E", "deploy your PR to staging: 1-3 toggle an env, a all, enter asks y/N with the daemon's plan"},
 		{"F", "leave its findings to you: no autofix (asks y/N)"},
 		{"y", "answer yes; any other key, enter too, cancels"},
@@ -1524,13 +1554,13 @@ func sanitizeStatus(d StatusData) StatusData {
 		r.Name, r.Folder, r.PRRef, r.PRState = cleanText(r.Name), cleanText(r.Folder), cleanText(r.PRRef), cleanText(r.PRState)
 		r.SlotState, r.DBs, r.Disk, r.URL = cleanText(r.SlotState), cleanText(r.DBs), cleanText(r.Disk), cleanText(r.URL)
 		r.PRGHState, r.State = cleanText(r.PRGHState), cleanText(r.State)
-		r.PRStagings = cleanStagings(r.PRStagings)
+		r.PRStagings, r.PRHeldMerge = cleanStagings(r.PRStagings), cleanText(r.PRHeldMerge)
 	})
 	d.Queue = cleanEach(d.Queue, func(r *PRRow) {
 		r.Ref, r.Title, r.Author, r.State = cleanText(r.Ref), cleanText(r.Title), cleanText(r.Author), cleanText(r.State)
 		r.Next, r.Age, r.URL, r.GHState = cleanText(r.Next), cleanText(r.Age), cleanText(r.URL), cleanText(r.GHState)
 		r.Review, r.Fixer = cleanReviewFacts(r.Review), cleanText(r.Fixer)
-		r.Stagings = cleanStagings(r.Stagings)
+		r.Stagings, r.HeldMerge = cleanStagings(r.Stagings), cleanText(r.HeldMerge)
 	})
 	d.Attention = cleanEach(d.Attention, func(a *AttentionRow) {
 		a.Subject, a.Kind, a.Message, a.Fix = cleanText(a.Subject), cleanText(a.Kind), cleanText(a.Message), cleanText(a.Fix)

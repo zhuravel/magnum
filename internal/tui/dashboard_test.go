@@ -74,6 +74,9 @@ type fakeActions struct {
 	// ciRefuse is the ref whose FixCIPlan the daemon refuses
 	// (errNothingFailed).
 	ciRefuse string
+	// held is the plan of a held merge's push MergeParentPlan answers
+	// (held_merge_test.go; nil: mergePlanAsked's merge).
+	held *MergeAsked
 }
 
 func (f *fakeActions) record(s string) (ActionResult, error) {

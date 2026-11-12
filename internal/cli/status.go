@@ -36,7 +36,8 @@ func newStatusCmd(c *Context) *cobra.Command {
 			"(or o) opens its judge pane, r reviews (R fresh, i with /simplify), K kills the PR's running or queued "+
 			"review, I ignores the PR (kill, mute, free its slot), f fixes its findings as the fixer's login (F takes it out of "+
 			"autofix or puts it back), c fixes your PR's failed required CI as the fixer's login (asking y/N with the daemon's plan), "+
-			"P merges its base into it as the fixer App's bot (asking y/N with the daemon's plan), "+
+			"P merges its base into it as the fixer App's bot (asking y/N with the daemon's plan; while magnum holds a merge "+
+			"the fixer resolved for your y, it pushes that one, and e shows its held-merge.diff in the pager), "+
 			"E deploys your PR to its staging envs (1-3 choose them, a all, enter asks y/N with the daemon's plan), p/u pin and unpin, x releases, M/U mute and unmute (every review, fix, kill, "+
 			"ignore, release, mute and unmute key asks y/N first; only y confirms), g, "+
 			"ctrl+r or F5 refreshes now, b opens the PR in the browser, a jumps to what needs you, w shows the manual "+
@@ -223,6 +224,9 @@ type statusReport struct {
 	// fixer is the login repo's fixer pushes and replies as (fixerLogin),
 	// for the dashboard's f question; nil without a config.
 	fixer func(repo string) string
+	// heldMerges are the held-merge.diff files of the merges magnum holds
+	// for your y, by PR id (heldMergeDiffs), for the dashboard's e.
+	heldMerges map[int64]string
 
 	// pinnedPRs are the registry's pinned PRs and repoNames the repositories'
 	// full names by id, for the pins line (statusGatherPins; not printed).

@@ -81,7 +81,14 @@ const fixMovedTip = "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"
 func (g *mergeGit) RevParse(ctx context.Context, dir, ref string) (string, error) {
 	g.mu.Lock()
 	n, tips, baseErr := len(g.fetches), g.tips, g.baseErr
+	sha, held := g.held.refs[dir+" "+ref]
 	g.mu.Unlock()
+	if strings.HasPrefix(ref, "refs/magnum/held/") {
+		if !held {
+			return "", gitx.ErrNoSuchRef
+		}
+		return sha, nil
+	}
 	if strings.HasPrefix(ref, "refs/remotes/origin/") && baseErr == nil && n > 0 && len(tips) > 0 {
 		return tips[min(n, len(tips))-1], nil
 	}

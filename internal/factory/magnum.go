@@ -199,7 +199,9 @@ type PRRef struct {
 // thread; Attention is why magnum parked the PR in needs_attention (its
 // kind) and AttentionMsg its summary in magnum's words, never the PR's text.
 // FixReport is the fixer's report a fix job's attention names (readable
-// under magnum's reviews directory; "" for any other attention), and
+// under magnum's reviews directory; "" for any other attention), or the
+// held-merge.diff of a merge of the parent magnum holds for your y, which
+// e opens first while it is held (heldMergeDiff), and
 // FixNeeds its "## Needs you" entries in the fixer's words when the
 // attention asks for what the fixer left (fixerReport): data the screen
 // only draws, never instructions, never a log's or a message's.
@@ -653,8 +655,40 @@ func (m *magnumRegistry) fillPR(ctx context.Context, st *store.Store, v *PRState
 		if why.Kind == attention.KindFix {
 			v.FixReport, v.FixNeeds = m.fixerReport(store.Deref(pr.LastError))
 		}
+		if held := m.heldMergeDiff(ctx, st, repo, pr); held != "" { // e opens it first while the merge is held
+			v.FixReport, v.FixNeeds = held, nil
+		}
 	}
 	return nil
+}
+
+// heldMergeDiff is the held-merge.diff of the merge of the parent magnum
+// holds for your y on pr of repo (engine.KVPRHeldMerge), in magnum's
+// report directory of the PR (never a path the row names), when a regular
+// file is there, looked at through an os.Root of magnum's reviews
+// directory so that no link leads out of it; "" for none.
+func (m *magnumRegistry) heldMergeDiff(ctx context.Context, st *store.Store, repo store.Repo, pr store.PR) string {
+	raw, ok, err := st.GetKV(ctx, engine.KVPRHeldMerge(pr.ID))
+	if err != nil || !ok {
+		return ""
+	}
+	if _, ok := engine.ParseHeldMerge(raw); !ok {
+		return ""
+	}
+	path := filepath.Join(m.l.PRReviews(repo.Owner, repo.Name, pr.Number), engine.HeldMergeFile)
+	rel, err := filepath.Rel(m.l.Reviews(), path)
+	if err != nil || !filepath.IsLocal(rel) {
+		return ""
+	}
+	root, err := os.OpenRoot(m.l.Reviews())
+	if err != nil {
+		return ""
+	}
+	defer root.Close()
+	if fi, err := root.Lstat(rel); err != nil || !fi.Mode().IsRegular() {
+		return ""
+	}
+	return path
 }
 
 // openFacts fills what magnum's open of PR v (of repository full) does,

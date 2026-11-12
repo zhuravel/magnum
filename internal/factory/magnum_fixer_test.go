@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
@@ -146,5 +147,51 @@ func TestPRStatesReadsTheFixersNeedsYouFromItsReport(t *testing.T) {
 	}
 	if v := own[i]; v.FixReport != reportOf(l, 9) || !slices.Equal(v.FixNeeds, masked) {
 		t.Errorf("your PR #9: report %q, needs %q, want its fixer's report and items", v.FixReport, v.FixNeeds)
+	}
+}
+
+// heldOf records in magnum's registry a merge of the parent it holds for
+// your y on PR #n of example/shop, needing you with its attention.
+func heldOf(t *testing.T, st *store.Store, n int) {
+	t.Helper()
+	fixAttention(t, st, n, "fix", attention.MergeReadyText("claude-fix merged master at c0c0c0c. It changes .github/workflows/ci.yml. "+
+		"fixer-app[bot] pushes it only after your y: P asks (e shows held-merge.diff)."))
+	pr := magnumPR(t, st, n, strings.Repeat("ab", 20), nil)
+	setKV(t, st, engine.KVPRHeldMerge(pr.ID), engine.HeldMerge{Repo: "example/shop", Number: n, Merge: strings.Repeat("d3", 20),
+		Head: strings.Repeat("ab", 20), Base: "master", Tip: strings.Repeat("c0", 20), Diff: "/elsewhere/held-merge.diff"})
+}
+
+// While magnum holds a merge of the parent for your y, the factory screen's
+// e opens its held-merge.diff first: PRStates names it as the PR's
+// FixReport, in magnum's report directory of the PR (never the path the
+// registry's row names), with no items; a held merge whose file is not
+// there, or is a link, names none.
+func TestPRStatesNameAHeldMergesDiffFirst(t *testing.T) {
+	l, st := magnumLayout(t)
+	diffOf := func(n int) string { return filepath.Join(l.PRReviews("example", "shop", n), engine.HeldMergeFile) }
+	heldOf(t, st, 20)
+	writeReport(t, diffOf(20), "No conflict in a workflow file was resolved: …\n")
+	heldOf(t, st, 21) // no file
+	heldOf(t, st, 22)
+	if err := os.MkdirAll(filepath.Dir(diffOf(22)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "held-merge.diff")
+	writeReport(t, outside, "x\n")
+	if err := os.Symlink(outside, diffOf(22)); err != nil {
+		t.Fatal(err)
+	}
+	refs := []PRRef{{"example/shop", 20}, {"example/shop", 21}, {"example/shop", 22}}
+	views, err := NewMagnum(l, selfConfig()).PRStates(t.Context(), refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := views[refs[0]]; v.FixReport != diffOf(20) || v.FixNeeds != nil {
+		t.Errorf("#20: report %q, needs %q, want %q alone", v.FixReport, v.FixNeeds, diffOf(20))
+	}
+	for _, ref := range refs[1:] {
+		if v := views[ref]; v.FixReport != "" {
+			t.Errorf("#%d: report %q, want none", ref.Number, v.FixReport)
+		}
 	}
 }
