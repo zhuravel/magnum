@@ -26483,6 +26483,108 @@ skill versions); people add theirs to the sections before it, at the end of the 
   and TestTurnsInFlightNameTheTasksRolesAndItsLiaison and TestADrainForARebootHoldsANewPrompt in
   internal/factory/runtime.
 
+- **The factory heals its mechanical stops by itself, and what still stops asks a question, never "retry"**
+  (2026-11-12). The factory's registry held 12 retries by the operator. Not one needed a decision. Task 1's lint
+  exited 2 and named no offense, three times. Task 9's writer reached its fix-turn limit while it made
+  progress, three times. Task 9's spec run on the base hung. Task 5's review round left a tracked change.
+  Task 8 lost a pane. The local review's cap was the twelfth kind,
+  and another change handles it. The operator's rule: the factory waits for them only for architectural
+  decisions. A stop that only needs the retry key is a defect. So the factory now does this work by itself,
+  within a budget. Each automatic step writes an event and an alert. The alert does not stand, so `!` lists
+  it and the delivery drops it without a toast. What remains asks a question with concrete options on the
+  factory's question cards.
+  - *The stop questions* (`stops.go`). A stop past its budget returns `asksYou` from the agents stage.
+    `stageFailed` asks it (`askStop`). The ask goes to `stops.json` in the task's directory first. Then its
+    question (raised by `factory`) goes into a revision of its own, with the open questions carried over. The
+    task waits on you. Its NEEDS YOU line adds the decision to the questions' wait, for example `1 question
+    before coding goes on: <the stop>: skip this check for this task, run it with a longer bound or drop the
+    task?`. A restart between the record and the question stores the question then. The same stop asks once.
+    At the task's next pass, `decideStops` reads your answer. An option's label (or its first word) is that
+    option. Your own words are a bound or a direction. `stops.json` keeps the decision: the checks skipped or
+    accepted, and the bounds. A drop ends the task, as your drop input. The registry needs no migration. A
+    stop's answer changes the checks or the turns, never the plan, so `amendDue` leaves it out. Your retry
+    still works on every stop. A stop's question refuses no retry (`retryRefusal`, and the screen's own
+    guard). The retry closes the question (`closeStops`, a revision without it) and goes on as before the
+    question. It spends no budget. The options that skip or accept a check are your answer (an answer input),
+    and `appendKnown` names them in the PR body.
+  - *A check that crashed or hung* (`faults.go`). Some failures name no failure of the code. A lint exits
+    non-zero and names no offense. A spec run names no failing example. A jest run names no failing test. A
+    lint does not end within the cap. A run on the base goes past its bound. A crash of the
+    machine's environment stays the infrastructure hold's. `jestFailures` reads the FAIL, ✕ and ● lines.
+    Before, any non-zero exit of jest was the writer's, so task 9's "jest: pnpm exited 1" spent its fix turns.
+    Before the writer or you hear of such a failure, the precheck runs the check again. Then it runs the
+    repository's installs (the heal) and runs the check again. The heal is now a step of every fault, not only
+    of a missing gem. A run that hangs runs once more with its bound doubled, up to `precheck.cap_max`. The
+    cap that stopped a lint is spent. So the reruns of a lint run on a bound of their own (`onOwnBound`, with
+    the cap's timer seam). `check-faults.json` keeps the steps spent, by head and check. Each step is written
+    once its run ended. A step that the daemon's stop cut is not spent. So a restart neither doubles nor loses
+    a step, and a new head starts the steps again. A crash that the branch caused still goes to the writer
+    after the steps. A check that still names no failure asks: skip it for this task, run it with a longer
+    bound (`Run it with a longer bound: 40m`, else twice its last), or drop the task. A hang recommends the
+    longer bound, and a crash the skip. The factory never edits your configuration: the bound is the task's,
+    in `stops.json`. Your retry runs the check once more at the same head. As before, its answer tells you
+    that nothing changed since the failure (`asksOnCheckAt`).
+  - *The writer's fix turns* (`fix_go_on.go`). At its cap of fix turns, a role whose last 3 turns did not fail
+    the same way gets 2 more fix turns by itself. Fewer failing examples or offenses, another failure, or
+    another check that fails is progress. This happens at most `[factory] fix_go_on` times in the stage's
+    attempt (default 2, 0 to 10). After that, or without progress, the role gets one fresh session with 2 fix
+    turns. Its first prompt names the failure, its commits on the branch since the base
+    (`gitx.LogAfter`) and the end of the failing output. Then the question comes: accept the failing check as
+    known, give a direction, or drop the task. The acceptance is for a precheck check only, and a new failure
+    of it still fails. A direction goes with the next fix turn once, with 2 more turns. "Progress" compares
+    the failures that the precheck records (`failCheck`: the parsed offenses, red examples and jest failures,
+    and the proof's red examples). Without them it compares the first failing line. `fix-turns.json` keeps
+    them per run, with the grants. A check that named no failure of the code records no turn. `fixBudgetOf`
+    adds the grants and your answer's turns to the cap in force, by time. So your retry still gives its 2
+    turns and spends no grant. A fresh session goes through `Runtime.SendFresh`, which also starts the role's
+    loop ladder over. It is the next fix turn until a prompt that carries `freshFixLead` went, so a restart
+    neither doubles nor loses it. A change that `recheckFailed` checks again after your answer gets its fix
+    turn there.
+  - *A tracked change that a review round left* (`review_left.go`). The factory saves it to
+    `review-<n>-left.diff` (mode 0600). New files go under `review-<n>-left/`. These replace
+    `round-<n>-left.patch` and `round-<n>-left/`. Then it puts the change back by itself with `git restore
+    --source=HEAD --staged --worktree`, and the round's result stands. Two conditions must hold. First, no
+    agent of the task has a turn in flight in the copy, and you are in no pane of it (`inFlight`). The factory
+    asks this before the save and again before the put-back. Second, the copy is on the branch at the
+    head that the round reviewed.
+    Your input in a pane since the round began no longer holds it, as it did through `TouchedSince`. The save
+    comes first, so nothing is lost, and the brief names only the turn in flight and the head. A turn in
+    flight is a held wait, never NEEDS YOU, and the put-back runs once the turn ended. A failed save or
+    put-back asks you with the steps, as before.
+  - *A lost pane* (`runtime/recoveries.go`). A lost pane gets 3 recoveries in an attempt, after waits of 1, 5
+    and 15 minutes. Each wait comes before its recovery. It counts from the loss, or from the pass that found
+    that the last recovery made no progress. So a transient cause (a herdr restart, the Mac's memory) gets
+    time. The recoveries before the last resume the role's conversation. The last starts a fresh session from
+    the attempt's first prompt and the task's files. A role that took no prompt yet is relaunched each time.
+    Before, a role with no conversation got one fresh session, then it was lost. Task 8 stopped so, with `no
+    progress after 1 recoveries`. Each recovery is a `recover` event and an alert. The runtime counts the recoveries from
+    those events, since your newest retry or the role's last `starts over` event. So a restart neither doubles
+    nor loses one. The watchdog runs a recovery whose wait is over (`recoverDue`). Then the stage asks: start
+    the role again, give it a direction, or drop the task. The first two start a fresh session with its
+    context through `SendFresh`, and its recoveries count again. The stage hands that start once: the ledger
+    keeps the prompt that starts with `answerLead`.
+  - Not covered: the configuration's own stops (a denied or missing command, a missing `table_stats`) need an
+    edit and an install, so they still name the fix and the retry. A migration that hangs still asks with its
+    fix, because a rerun of a migration that ran part-way is no heal. A comment in review.go still names the
+    old guard of a round's leftovers. Another change works on the cap path of `runReview`, so this change
+    does not touch review.go.
+  Tests, failing first and each checked by a mutation: `TestALintThatNamesNoOffenseRunsAgainThenAfterTheInstalls`,
+  `TestABaseRunThatHangsGetsADoubledBoundThenAQuestion`, `TestYourAnswerToACheckQuestionSkipsItOrGivesItYourBound`,
+  `TestARestartInTheMiddleOfTheFaultStepsNeitherDoublesNorLosesOne`,
+  `TestYourRetryOfACheckQuestionRunsTheCheckOnceAndSpendsNoStep`,
+  `TestAtTheFixCapAWriterThatMakesProgressGoesOnAtMostFixGoOnTimes`, `TestFixGoOnZeroGivesNoGoOn`,
+  `TestWithoutProgressTheWriterGetsOneFreshSessionThenAQuestion`,
+  `TestYourAnswerToTheFixQuestionGivesADirectionOrAcceptsTheCheck`,
+  `TestACheckFaultNeverCountsAsAWritersTurnWithoutProgress`,
+  `TestARestartAtTheFixCapNeitherDoublesNorLosesTheFreshSession`, `TestYourRetryAtTheFixQuestionSpendsNoGrant`,
+  `TestARoundsTrackedChangeIsRestoredOnceNoTurnIsInFlight`, `TestALostPaneAfterItsRecoveriesAsksAQuestionNeverRetry`,
+  `TestYourAnswerToALostPanesQuestionStartsTheRoleAfresh`, `TestYourDropOfALostPanesQuestionStopsTheTask` and
+  `TestYourRetryOfALostPanesQuestionClosesItAndRecoversTheRole` in internal/factory.
+  In internal/factory/runtime: `TestALostPaneIsRecoveredThreeTimesAfterItsWaitsTheLastInAFreshSession`,
+  `TestARestartBetweenTheRecoveriesNeitherDoublesNorLosesOne`, `TestYourRetryStartsTheRecoveriesOverAndSpendsNone`,
+  `TestAFreshStartStartsTheRoleWithItsContextAndItsRecoveriesOver` and `TestAFreshSessionStartsTheLoopsLadderOver`.
+  In internal/config: `TestFactoryFixGoOnIsTwoByDefaultAndBounded`.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

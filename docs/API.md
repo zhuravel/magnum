@@ -4978,6 +4978,13 @@ const (
     The defaults and the limits of a repository's [factory.repo.qa] (FactoryQA).
 
 const (
+	DefaultFixGoOn = 2
+	MaxFixGoOn     = 10
+)
+    DefaultFixGoOn and MaxFixGoOn are the default and the most of [factory]
+    fix_go_on.
+
+const (
 	ContextUsedGroup = "used" // the percent of the context used
 	ContextLeftGroup = "left" // the percent left
 )
@@ -6468,6 +6475,14 @@ type Factory struct {
 	// it while the question stays open for you, and another answer of yours
 	// goes to the writer. false: every question waits for your answer.
 	ProvisionalLoneAnswer bool `toml:"provisional_lone_answer"`
+
+	// FixGoOn is how many times one stage's attempt gives a role whose
+	// change the factory's checks still refuse at its cap of fix turns 2
+	// more fix turns by itself, while its last turns make progress (fewer
+	// failures, a different failure, a different check failing); 0 to
+	// MaxFixGoOn, 0 turns it off. Without progress the role gets one fresh
+	// session, then the task asks you.
+	FixGoOn int `toml:"fix_go_on"`
 
 	// Sensitive are the path globs (MatchPath's: "**" matches whole
 	// directories) of the files whose change the ready card's FLAGS line
@@ -15617,6 +15632,8 @@ type PrecheckResult struct {
 	ForYou     bool
 	Unfinished string
 	Command    string
+
+	// Has unexported fields.
 }
     PrecheckResult is a precheck's end: whether it passed, the checks it
     recorded (the factory's), the migrations the branch adds with their flags,
@@ -16110,6 +16127,7 @@ type Runtime interface {
 	Owner(ctx context.Context, t registry.Task) (store.PR, error)
 	Launch(ctx context.Context, t registry.Task, a registry.Attempt, c Copy, roles []config.Role) error
 	Send(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (runID string, err error)
+	SendFresh(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, then string) (runID string, err error)
 	Observe(ctx context.Context) ([]runtime.Event, error)
 	Verify(ctx context.Context, runID string, ok bool, why string) error
 	Void(ctx context.Context, runID, why string) error
@@ -17631,9 +17649,6 @@ const (
 	// same before the watchdog takes its next step, and how long a
 	// recovery waits for progress before the next one.
 	NoProgressAfter = 10 * time.Minute
-	// MaxResumes is how often a lost pane's conversation is resumed in one
-	// attempt before a fresh session starts from the files.
-	MaxResumes = 2
 	// MaxStagePrompts is how many prompts a role gets in one stage before a
 	// loop without progress is assumed; MaxContext the share of its context
 	// (percent) past which it is; SameFailures how often the same failing
@@ -17651,6 +17666,12 @@ const LetGoWhy = "its prompt was let go"
 const LiaisonRole = "fx-liaison"
     LiaisonRole is the factory role of a task's liaison, the agent that talks
     with you about the task (Talk); no stage names it.
+
+const MaxRecoveries = 3
+    MaxRecoveries is how many recoveries a lost pane gets in one attempt before
+    the stage asks you; RecoveryWaits is the wait before each of them, counted
+    from the loss (or from the pass that found the recovery before it made no
+    progress).
 
 const PausedPrefix = "paused: "
     PausedPrefix leads the error of a run its CLI's pause ended (a usage limit,
@@ -17704,6 +17725,10 @@ var ErrNoProgress = errors.New("the agent makes no progress")
 var ErrOperatorInPane = errors.New("you're in that pane")
     ErrOperatorInPane is Send's answer while the operator types in the role's
     pane (agents.ErrHumanActive): the prompt waits; nothing was sent.
+
+var RecoveryWaits = [MaxRecoveries]time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute}
+    RecoveryWaits are the waits before the first, the second and the third
+    recovery of a lost pane.
 
 
 FUNCTIONS
@@ -18087,19 +18112,18 @@ func (r *Runtime) Recover(ctx context.Context, t registry.Task) ([]string, error
 
 func (r *Runtime) RecoverLost(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role) error
     RecoverLost recovers role (as it runs) of attempt a of task t whose pane
-    was lost, or whose last turn a recovery gave up with no turn in its place
-    (RecoveryPrefix, which a stage rebuilt after a restart reads): a resume of
-    its conversation (at most MaxResumes in the attempt), then a fresh session
-    from the files; then the recoveries ran out (EventLost, "no progress after
-    <n> recoveries", at the next Observe). Each recovery that shows no progress
-    within NoProgressAfter takes the next step (Watchdog). A role this runtime
-    already recovers is left to the watchdog. One whose steps ran out (stuck,
-    lost) is left so while a turn of it is at work in a live pane (its end,
-    or you in the pane, moves it); with nothing at work, its ladders start over:
-    the stage asks only once your retry rebuilt it. One whose recovery cannot
-    run now (a pause, you in its pane, a failure) is due it, and the watchdog
-    takes it once it may. One a heal of the factory's herdr server is to
-    relaunch is left to the heal.
+    was lost, or whose last turn a recovery gave up with no turn in its
+    place (RecoveryPrefix, which a stage rebuilt after a restart reads):
+    its next recovery of MaxRecoveries, after its wait (recoverRole); then the
+    recoveries ran out (EventLost, "no progress after <n> recoveries", at the
+    next Observe). Each recovery that shows no progress within NoProgressAfter
+    takes the next step (Watchdog). A role this runtime already recovers is
+    left to the watchdog. One whose steps ran out (stuck, lost) is left so
+    while a turn of it is at work in a live pane (its end, or you in the pane,
+    moves it); with nothing at work, its ladders start over: the stage asks only
+    once your retry rebuilt it. One whose recovery cannot run now (a pause, you
+    in its pane, a failure) is due it, and the watchdog takes it once it may.
+    One a heal of the factory's herdr server is to relaunch is left to the heal.
 
 func (r *Runtime) RunState(ctx context.Context, id string) (state, why string, err error)
     RunState is run id as the agents store keeps it: its state (store.Run*:
@@ -18135,6 +18159,18 @@ func (r *Runtime) Send(ctx context.Context, t registry.Task, a registry.Attempt,
     a first prompt herdr refuses because the agent is gone (agent_not_ready,
     agent_not_found) has the role's pane read for macOS's refusal of its copy
     (launchDenied).
+
+func (r *Runtime) SendFresh(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, then string) (string, error)
+    SendFresh starts role (as it runs) of attempt a of task t afresh,
+    on your answer to a question its stage asked (the role's pane lost after
+    its recoveries, the writer's fix turns spent) or for the writer's one fresh
+    session at its fix budget: its session quit, its runs handed over, and a
+    new session that starts from the attempt's first prompt with then after
+    it (fromFiles). Its ladders start over (the watchdog's, the recoveries',
+    counted from here: a "starts over" event, and its loop's in the stage,
+    counted from its next prompt), so it spends no recovery. The new run's id
+    comes back; a role that may not restart now (a pause, you in its pane) is
+    that error.
 
 func (r *Runtime) SettleWorkspaces(ctx context.Context) ([]Orphan, error)
     SettleWorkspaces settles, after a restart, the factory's workspaces (a label
@@ -20765,6 +20801,11 @@ func (c *Client) Isolated(ctx context.Context, dir string, fn func(iso string) e
     so that cat-file never needs a promisor fetch: slots are full clones, and
     only staging's mirrors use --filter. If a slot ever becomes a partial clone,
     Isolated's reads fail.
+
+func (c *Client) LogAfter(ctx context.Context, dir, from, to string, n int) ([]Commit, error)
+    LogAfter returns the last n commits of to that from lacks, newest first (git
+    log -n <n> ^from to), as FileLog does for a path: the commits a branch made
+    since from.
 
 func (c *Client) LsRemote(ctx context.Context, dir string, timeout time.Duration, patterns ...string) (string, error)
     LsRemote runs `git ls-remote <origin> patterns...` in dir, reaching origin
