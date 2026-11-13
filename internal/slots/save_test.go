@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/store"
@@ -188,6 +189,26 @@ func TestTheSaveSkipsIgnoredFilesAndNamesWhatTheCapSkipped(t *testing.T) {
 	}
 	if strings.Contains(note, "huge.log") || strings.Contains(ev, "huge.log") {
 		t.Fatalf("an ignored file is named:\n%s\n%s", note, ev)
+	}
+
+	// No path's patch fits: no patch, and every path is named.
+	h.m.saveCap = 10
+	h.now = h.now.Add(time.Minute)
+	strayEdit(t, sl.Path)
+	if err := h.m.Resync(h.ctx, h.slot(sl.Name), h.shaPR8); err != nil {
+		t.Fatalf("Resync: %v", err)
+	}
+	var second string
+	for _, s := range saves(t, h.layout.PRSaves("talkable", "talkable", pr.Number)) {
+		if s != save {
+			second = s
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(second, "changes.diff")); !os.IsNotExist(err) {
+		t.Fatalf("a save that kept no path's patch has changes.diff: %v", err)
+	}
+	if note := readFile(t, filepath.Join(second, "saved.txt")); !strings.Contains(note, "Gemfile.lock (") {
+		t.Fatalf("saved.txt does not name Gemfile.lock as left out:\n%s", note)
 	}
 }
 

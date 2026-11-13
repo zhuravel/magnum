@@ -254,7 +254,13 @@ func (m *Manager) savePatch(ctx context.Context, tree, dir string, paths []strin
 	if err := os.Remove(part); err != nil {
 		return 0, err
 	}
-	return used, out.Close()
+	if err := out.Close(); err != nil {
+		return 0, err
+	}
+	if used == 0 { // no path's patch fit: no patch
+		return 0, os.Remove(final)
+	}
+	return used, nil
 }
 
 // diffTo writes the patch of paths (none: every tracked change) of the
