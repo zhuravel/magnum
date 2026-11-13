@@ -950,8 +950,9 @@ max_rounds = 8                    # the most local review rounds over a task's l
                                   # "ended at the round limit (8 rounds)". Any other stop waits for you, naming the
                                   # limit; a retry hands its findings to the writer, then one round reviews the fix.
                                   # A task past the limit stops at the end of its round in flight. `magnum factory
-                                  # finish-review <task>` ends a task's local review the same way now: the round in
-                                  # flight finishes, none starts, and the card says it was "ended by you"
+                                  # finish-review <task>` (the task card's S) ends a task's local review the same way
+                                  # now: the round in flight finishes, none starts, and the card says it was "ended by
+                                  # you"
 later_without = ["claude-simplify"]   # the review roles that run in round 1 only
 second_judge = "wide"             # a second opinion: after a clean round whose judge runs on Codex, one more round
                                   # of the same roles with the watch's judge_fallback (a judge of another kind) in

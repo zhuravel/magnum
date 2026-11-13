@@ -27574,6 +27574,67 @@ skill versions); people add theirs to the sections before it, at the end of the 
     work's folder with them; the saves now go on their own, after 14 days, and the kept refs stay until T4a
     prunes them or a person deletes them. A failing save of a factory checkout gets the `slot.save_failed`
     event and `magnum doctor`'s line, no toast.
+- **The local review stops at a round limit, and `magnum factory finish-review` ends it now** (2026-11-13, the
+  operator's decision: cap the rounds, then publish; the factory must deliver). This amends the cap's go-on above.
+  Task 9 (PR-27708, 182 files, about 10,700 added lines) ran 14 local review rounds over about 60 hours. Each round
+  of about 2 hours found 2 to 5 new P2s in new places, so the loop never settled. About 17 hours went on waits for
+  the operator's retry at the cap and about 14 on a Codex usage hold, and `cap_go_on`'s budget would have let it
+  run about 10 more rounds.
+  - *The limit.* `[factory.local_review] max_rounds` (default 8, an integer from 0 to 30, 0 turns it off) counts
+    every round of a task's life: a fresh loop's after a retry, an extra round's, a go-on's, a second opinion's.
+    A task's round n is its registry cycle n (`BeginCycle` numbers them per task), so no migration counts them.
+    When a round ends at or past the limit and still blocks (`endBy`, checked in `decideRound` after the clean, the
+    oscillation and the left_blocks ends and before the cap), no round starts after it (`endAtRound`). A safe
+    stop, the same test as the go-on's (`unsafeWhy`, which `capSafe` now calls: no P0 or P1 new or still open, a
+    verdict that is not `blocking`, no finding the writer declined in the loop), passes the stage. The round's
+    open findings become the summary's leftovers (exit `round_limit`, a word of `review-summary.json` only; the
+    cycle ends `cap`, whose CHECK takes no new word without a migration), so the ready card lists them under KNOWN
+    and its line says `the local review ended at the round limit (8 rounds) with 3 findings still open, unfixed
+    (KNOWN)`, with `; it ran 14` for a task past it. The PR body's Known list says the loop ended there with them
+    unfixed instead of "none of it blocks", and the status file reads the exit as findings. Any other stop waits on
+    you as at the cap (`stopOnFindings`, split out of `stopAtCap`), its line naming the limit and why it is not
+    safe; your retry hands its findings to the writer first (`capFix`), then one round reviews the fix and its end
+    stops again. A task past the limit when the build arrives stops at the end of its round in flight. A clean
+    round at the limit gets no second opinion (`secondHeld`), since that is one round more. A head after the end
+    (QA's fix, a send back's commits) gets one round, whose end decides the same way (`endedAt`: `endFresh`).
+  - *Rejected: the writer's fix of the limit's findings before the card,* as `cap_go_on`'s budget does
+    (`passAfterCap`). The operator asked for the open findings under KNOWN, where the card's `w` sends them to the
+    writer when he wants it, and every fix more is a round more of the loop that did not settle.
+  - *Finish-review.* `magnum factory finish-review <task>` (id or Jira key) and the task card's `S` end a task's
+    loop now under the same rule. The guard (`FinishReviewRefusal`) takes a live task at a review stage of its
+    kind and refuses any other with the reason: another stage, a wait on you (its retry or your answers come
+    first), done or stopped. The command says what happens now (`FinishReviewPlan`) and asks y/N on a terminal;
+    only y sends the request, `--dry-run` says it and sends nothing, and off a terminal it asks and sends nothing,
+    as the screen's y/N alone confirms. The daemon (`ReqFinishReview`) keeps the request in `review-finish.json`.
+    The round in flight finishes, never cut, and its end decides as the limit's does, the summary's exit
+    `ended_by_you` and the cycle's the registry's `operator`, which nothing wrote before; the card says `the local
+    review was ended by you after 3 rounds`. The stop for you that an operator's end leaves takes the cap's paths
+    (`toldOfStop`, `capFix`, `closeFix` now take `operator` as `cap`). Between rounds, with the writer's fix of
+    the last round's findings closed at the task's head (`fixedAtHead`: the next round waits on magnum or on
+    Codex, say), no round starts (`finishBetween`): that round is read again, and a safe stop passes at the
+    writer's head with the findings it fixed under FIXED AFTER, as no round reviewed them, closing the loop there
+    (`CloseLoop`, `operator`); any other closes it and waits on you, and your retry starts a fresh loop
+    (`toldOfEnd` moves the task to you again if that move was lost). A head no round reviewed yet gets its one
+    round first: a card at a head no round looked at is what the review exists to prevent. A task that waits on
+    you at its review is refused: a stop for you there is the rule's own unsafe outcome, or the task waits for
+    your answers, so the request would change nothing before your retry or your answers. Rejected: cutting the
+    writer's fix turn in flight, which would leave a half-made commit in the copy.
+  - *Restart.* `review-end.json` records each end by its cycle before the cycle ends or closes, so a daemon that
+    stops midway decides alike (`endBy` reads it first), finishes a close and drops the request it answered
+    (`settleEnd`), and a pass after a safe end passes the stage at its head (`endedAt`: `endPass`). The request
+    goes once an end answers it, or when the stage passes otherwise (the loop ended clean first).
+  - *Not an input.* The finish is not recorded among your inputs, whose kinds take no new word without a
+    migration, so `magnum factory stats` does not count it; the request's own event and the review's keep it.
+  Tests, failing first: `TestTheLocalReviewStopsAtMaxRoundsAndGoesToTheReadyCardWithItsKnownFindings`,
+  `TestAnUnsafeStopAtMaxRoundsWaitsOnYou`, `TestATaskPastMaxRoundsStopsAtTheEndOfItsCurrentRound`,
+  `TestNoSecondOpinionRunsPastMaxRounds`, `TestFinishReviewLetsTheRoundFinishThenGoesToTheReadyCard`,
+  `TestFinishReviewBetweenRoundsPassesAtTheWritersFix`, `TestAnUnsafeFinishWaitsOnYou`,
+  `TestFinishReviewRefusesATaskOutsideItsLocalReview` and `TestTheTaskCardOffersFinishReviewOnALocalReviewAtWork`
+  in internal/factory (`TestMaxRoundsZeroKeepsTodaysLoop` passes before and after, a pin checked by mutation);
+  `TestFactoryFinishReviewAsksYNThenSendsTheRequest` and `TestFactoryFinishReviewRefusesATaskOutsideItsLocalReview`
+  in internal/cli; `TestTheFactoryScreensFinishKeyAsksYN` in internal/tui;
+  `TestFactoryLocalReviewMaxRoundsDefaultsToEightAndTakesZeroToThirty` in internal/config.
+  `TestACleanTenthRoundGetsItsSecondOpinionAsRoundEleven` sets `max_rounds = 0`, since it runs 11 rounds.
 
 ## Learned rules
 

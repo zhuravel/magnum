@@ -384,3 +384,5 @@ databases = [
 #                                          # recommended answer of a lone question after a batch you answered)
 # [factory.local_review]
 # cycles = 3                               # at most this many local review rounds
+# max_rounds = 8                           # the most rounds over a task's life (0 = no limit): at it, a safe stop goes
+#                                          # to the ready card with its open findings under KNOWN
