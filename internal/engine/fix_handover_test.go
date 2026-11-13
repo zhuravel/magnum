@@ -48,16 +48,29 @@ func handOverPR2(back bool) HandoverPayload {
 func factoryFixOn(h *harness) { h.cfg.Factory.Fix = config.FactoryFixOn }
 
 // While [factory] fix is not "on", nothing on the factory's side fixes a
-// PR: `magnum fix --handover` refuses one PR and every own PR, its dry run
-// too, naming the key, and writes no row; the way back still answers.
+// PR: `magnum fix --handover` refuses one PR and every own PR, naming the
+// key, and writes no row; the way back still answers. The dry run answers
+// the drain proof under either key (the morning list sends the operator to
+// it for the daemon's reservations), and says that the real run is refused
+// while the key is off (C11).
 func TestTheHandoverIsRefusedWhileTheFactoryDoesNotFix(t *testing.T) {
 	h, _ := fixHarness(t)
 	pr := fixablePR(h, "zhuravel", nil)
-	for _, p := range []HandoverPayload{handOverPR2(false), {PRTarget: PRTarget{Ref: "2"}, DryRun: true}, {All: true}, {All: true, DryRun: true}} {
+	for _, p := range []HandoverPayload{handOverPR2(false), {All: true}} {
 		r := h.handOver(p)
 		if r.State != store.RequestFailed || !strings.Contains(deref(r.Result), `[factory] fix is "off"`) ||
 			!strings.Contains(deref(r.Result), "nothing is handed over") {
 			t.Errorf("%+v: %s %q, want refused naming [factory] fix", p, r.State, deref(r.Result))
+		}
+	}
+	for p, want := range map[HandoverPayload]string{
+		{PRTarget: PRTarget{Ref: "2"}, DryRun: true}: "dry run: would hand talkable/talkable#2 to the factory now: none of magnum's fix work is in flight on it",
+		{All: true, DryRun: true}:                    "dry run: would hand every own PR to the factory: 1 now, 0 once their fix work ends",
+	} {
+		r := h.handOver(p)
+		if res := deref(r.Result); r.State != store.RequestDone || !strings.HasPrefix(res, want) ||
+			!strings.HasSuffix(res, `; the handover itself is refused while [factory] fix is "off"`) {
+			t.Errorf("%+v: %s %q, want the drain proof and the refusal of the real run", p, r.State, res)
 		}
 	}
 	if _, ok := ownerOf(h); ok {
@@ -72,6 +85,9 @@ func TestTheHandoverIsRefusedWhileTheFactoryDoesNotFix(t *testing.T) {
 		t.Errorf("back: %s %q", r.State, deref(r.Result))
 	}
 	factoryFixOn(h)
+	if r := h.handOver(HandoverPayload{PRTarget: PRTarget{Ref: "2"}, DryRun: true}); r.State != store.RequestDone || strings.Contains(deref(r.Result), "refused") {
+		t.Errorf("the dry run with [factory] fix on: %s %q", r.State, deref(r.Result))
+	}
 	if r := h.handOver(handOverPR2(false)); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "the factory fixes talkable/talkable#2 from now on") {
 		t.Errorf("with [factory] fix on: %s %q", r.State, deref(r.Result))
 	}

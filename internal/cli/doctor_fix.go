@@ -53,14 +53,20 @@ func doctorFixHandover(ctx context.Context, d doctorDeps) []doctorCheck {
 		held = fmt.Sprintf("; %s no PR back, each going with its PR for the factory to import",
 			textx.Count(len(keys), "held fix holds", "held fixes hold"))
 	}
+	// The drain proof answers under either key; the handover itself waits
+	// for it (C11, as the handover's dry run says).
+	refused := ""
+	if !d.Config.Factory.Fixes() {
+		refused = fmt.Sprintf("; the handover itself is refused while [factory] fix is %q", cmp.Or(d.Config.Factory.Fix, "off"))
+	}
 	switch {
 	case len(waiting) > 0:
 		out = append(out, doctorWarned(name, fmt.Sprintf("%d PRs wait to hand over to the factory until magnum's fix work on them ends: %s%s",
 			len(waiting), strings.Join(waiting, ", "), held), "`magnum fix --drained` names your action for each"))
 	case len(list) > 0:
-		out = append(out, doctorOK(name, fmt.Sprintf("magnum's fix work is in flight on %d PRs (`magnum fix --drained` lists it)%s", len(list), held)))
+		out = append(out, doctorOK(name, fmt.Sprintf("magnum's fix work is in flight on %d PRs (`magnum fix --drained` lists it)%s%s", len(list), held, refused)))
 	default:
-		out = append(out, doctorOK(name, "none of magnum's fix work is in flight: every PR can hand over to the factory"+held))
+		out = append(out, doctorOK(name, "none of magnum's fix work is in flight: every PR can hand over to the factory"+held+refused))
 	}
 	if c, ok := doctorHandoverKey(ctx, d); ok {
 		out = append(out, c)

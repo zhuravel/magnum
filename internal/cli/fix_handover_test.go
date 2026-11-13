@@ -272,6 +272,17 @@ func TestTheDoctorNamesTheHandoverAndTheLeasesThatFailedOpen(t *testing.T) {
 func TestTheDoctorSaysAHandoverWaitsForTheKey(t *testing.T) {
 	h := newActHarness(t)
 	d := doctorDeps{Store: h.st, Config: h.d.Cfg}
+	// The PASS line says that a handover is refused while the key is off,
+	// as the handover's dry run does (C11).
+	const refused = `; the handover itself is refused while [factory] fix is "off"`
+	if cs := doctorFixHandover(h.ctx, d); len(cs) != 1 || cs[0].Status != doctorPass || !strings.HasSuffix(cs[0].Detail, refused) {
+		t.Errorf("the PASS line with the key off = %+v", cs)
+	}
+	h.d.Cfg.Factory.Fix = config.FactoryFixOn
+	if cs := doctorFixHandover(h.ctx, d); len(cs) != 1 || strings.Contains(cs[0].Detail, "refused") {
+		t.Errorf("the PASS line with the key on = %+v", cs)
+	}
+	h.d.Cfg.Factory.Fix = config.FactoryFixOff
 	h.setKVJSON(engine.KVFixHandoverAll, map[string]any{"at": h.now, "by": "magnum fix --handover all"})
 	pr6 := h.seedPR("talkable/talkable", 6, store.PRReviewed)
 	h.setKVJSON(engine.KVPRFixHandover(pr6.ID), map[string]any{"at": h.now, "by": "magnum fix --handover"})

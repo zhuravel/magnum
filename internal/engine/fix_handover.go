@@ -126,20 +126,36 @@ func (e *Engine) handoverRefusal(ctx context.Context, pr store.PR, by string, pr
 }
 
 // requestHandover handles `magnum fix --handover` (HandoverPayload). A
-// handover, of one PR or of all, its dry run too, is refused while
-// [factory] fix is not "on": nothing on the factory's side would fix the
-// PRs (the engine owner's ruling). The way back goes whatever the key says.
+// handover, of one PR or of all, is refused while [factory] fix is not
+// "on": nothing on the factory's side would fix the PRs (the engine
+// owner's ruling). Its dry run answers under either key, since it is the
+// drain proof's check of the daemon's own reservations, which the morning
+// list sends the operator to (C11), and says that the real run is refused
+// while the key is off. The way back goes whatever the key says.
 func (e *Engine) requestHandover(ctx context.Context, p HandoverPayload) (string, error) {
 	named := p.Ref != "" || p.Number > 0
+	key := cmp.Or(e.cfg.Factory.Fix, config.FactoryFixOff)
+	off := !p.Back && !e.cfg.Factory.Fixes()
 	switch {
 	case p.All && named:
 		return "", errors.New("magnum fix --handover: all or one PR, not both")
-	case !p.Back && !e.cfg.Factory.Fixes():
+	case off && !p.DryRun:
 		return "", fmt.Errorf("[factory] fix is %q: the factory fixes no PR, so nothing is handed over (set [factory] fix = %q first)",
-			cmp.Or(e.cfg.Factory.Fix, config.FactoryFixOff), config.FactoryFixOn)
+			key, config.FactoryFixOn)
 	case p.All && p.Back:
 		return e.returnAllToMagnum(ctx, p.DryRun)
-	case p.All:
+	}
+	res, err := e.handOverOrBack(ctx, p)
+	if err == nil && off {
+		res += fmt.Sprintf("; the handover itself is refused while [factory] fix is %q", key)
+	}
+	return res, err
+}
+
+// handOverOrBack is requestHandover past its refusals: every own PR, or
+// the PR p names, to the factory, or that PR back.
+func (e *Engine) handOverOrBack(ctx context.Context, p HandoverPayload) (string, error) {
+	if p.All {
 		return e.handOverAll(ctx, p.DryRun)
 	}
 	repo, pr, err := e.resolve(ctx, p.PRTarget)
