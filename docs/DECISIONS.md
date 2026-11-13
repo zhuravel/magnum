@@ -27021,7 +27021,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
     the FAIL's own fix (lower the keys) gave a PASS while those copies' flush failed at every claim (the engine
     owner's C8 on T3b). With such a copy the detail names it and the fix no longer offers to lower the keys; an
     agents store that cannot be read turns a PASS into a WARN. `magnum config` still counts the configuration
-    alone. Test, failing first: `TestDoctorCountsTheCopiesAlreadyMadeForTheRedisDatabases`.
+    alone. Test, failing first: `TestDoctorCountsTheCopiesAlreadyMadeForTheRedisDatabases`. A `redis-cli`
+    missing from PATH (`exec.ErrNotFound`) is no Redis that does not answer: it read so, with "start the Redis"
+    as the fix of a Redis that ran (the engine owner's C9 on T3b). Doctor names `redis-cli` and its install as
+    the fix, a FAIL where the copies' `env` names `REDIS_DB_OFFSET`, since each claim flushes their databases with
+    it too and those claims fail, a WARN otherwise (`redisCLIMissing`). Test, failing first:
+    `TestDoctorNamesAMissingRedisCLIThatTheClaimsFlushNeedsToo`.
 
 ## Learned rules
 

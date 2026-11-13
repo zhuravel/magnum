@@ -2,8 +2,8 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -91,7 +91,7 @@ func TestDoctorSaysWhenRedisHasTooFewDatabasesForTheCopies(t *testing.T) {
 
 	fake.Rules = append([]execx.Rule{
 		{Prefix: []string{"redis-cli", "-h", "127.0.0.1", "-p", "6380"}, Result: execx.Result{Code: 1, Stderr: []byte("Could not connect to Redis at 127.0.0.1:6380: Connection refused\n")}},
-		{Prefix: []string{"redis-cli", "-h", "127.0.0.1", "-p", "6381"}, Err: errors.New(`exec: "redis-cli": executable file not found in $PATH`)},
+		{Prefix: []string{"redis-cli", "-h", "127.0.0.1", "-p", "6381"}, Err: &execx.RunError{Cmd: execx.Cmd{Name: "redis-cli"}, Err: context.DeadlineExceeded}},
 	}, base...)
 	m = checks()
 	for name, c := range m {
@@ -156,6 +156,35 @@ func TestDoctorCountsTheCopiesAlreadyMadeForTheRedisDatabases(t *testing.T) {
 	}
 	if c := m["redis example/cache"]; c.Status != doctorPass || !strings.Contains(c.Detail, "example/cache's copies need 32 Redis databases") {
 		t.Fatalf("example/cache, whose cache9 is another repository's = %+v, want a PASS naming 32", c)
+	}
+}
+
+// A redis-cli that is not on PATH is no Redis that does not answer: doctor
+// names redis-cli and says how to install it, never to start a Redis that
+// runs, and fails where the copies' claims flush their Redis databases with
+// it (REDIS_DB_OFFSET), since each such claim then fails. It read as "the
+// Redis does not answer", with "start the Redis" as the fix (C9 on T3b).
+func TestDoctorNamesAMissingRedisCLIThatTheClaimsFlushNeedsToo(t *testing.T) {
+	_, d, _, _ := doctorFixture(t)
+	fake := d.Run.(*execx.Fake)
+	cfg := *d.Config
+	cfg.Factory.Repos = redisRepos()[:2]
+	d.Config = &cfg
+	missing := &execx.RunError{Cmd: execx.Cmd{Name: "redis-cli"}, Err: &exec.Error{Name: "redis-cli", Err: exec.ErrNotFound}}
+	fake.Rules = append([]execx.Rule{{Prefix: []string{"redis-cli"}, Err: missing}}, fake.Rules...)
+	m := map[string]doctorCheck{}
+	for _, c := range doctorRun(context.Background(), d) {
+		m[c.Name] = c
+	}
+	tk := m["redis talkable/talkable"]
+	if tk.Status != doctorFail || !strings.Contains(tk.Detail, "redis-cli is not on PATH") || !strings.Contains(tk.Detail, "flush") ||
+		!strings.Contains(tk.Detail, "need 96") || !strings.Contains(tk.Fix, "install redis-cli") || strings.Contains(tk.Fix, "start the Redis") {
+		t.Fatalf("talkable, whose claims flush with redis-cli, without it = %+v, want a FAIL naming redis-cli and the flush, with its install as the fix", tk)
+	}
+	c := m["redis example/cache"]
+	if c.Status != doctorWarn || !strings.Contains(c.Detail, "redis-cli is not on PATH") || strings.Contains(c.Detail, "flush") ||
+		!strings.Contains(c.Fix, "install redis-cli") || strings.Contains(c.Fix, "start the Redis") {
+		t.Fatalf("example/cache, whose claims flush nothing, without redis-cli = %+v, want a WARN naming redis-cli, with its install as the fix", c)
 	}
 }
 

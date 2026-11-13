@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -30,8 +31,9 @@ var doctorRedisTimeout = 5 * time.Second
 // no copy. Fewer fail: the claims of the copies past them cannot flush
 // theirs. A Redis that does not answer, or whose answer has no number, is
 // unknown, a warning; so is an env that names no Redis, and a PASS while
-// the agents store cannot be read. No repository on Redis is a skip that
-// runs nothing.
+// the agents store cannot be read. A redis-cli that is not on PATH is named
+// as such (redisCLIMissing). No repository on Redis is a skip that runs
+// nothing.
 func doctorRedis(ctx context.Context, d doctorDeps) []doctorCheck {
 	made, unread := factoryCopiesMade(ctx, d.Layout.FactoryAgentsDB())
 	var out []doctorCheck
@@ -69,6 +71,9 @@ func doctorRedisRepo(ctx context.Context, d doctorDeps, r config.FactoryRepo, co
 			"set REDIS_URL (or REDIS_HOST and REDIS_PORT) in the env of "+r.Repo+"'s [[factory.repo]]")
 	}
 	out, err := doctorCmd(ctx, d, cmd)
+	if errors.Is(err, exec.ErrNotFound) {
+		return redisCLIMissing(name, needs, addr, r)
+	}
 	if err != nil {
 		return doctorWarned(name, fmt.Sprintf("%s; how many the Redis at %s has is unknown, since it does not answer: %s", needs, addr, err.Error()),
 			"start the Redis at "+addr+", then run `magnum doctor` again")
@@ -85,6 +90,20 @@ func doctorRedisRepo(ctx context.Context, d doctorDeps, r config.FactoryRepo, co
 			needs, addr, have, copies.unread.Error()), "let doctor read "+inspTilde(d.Layout.FactoryAgentsDB())+", then run `magnum doctor` again")
 	}
 	return doctorOK(name, fmt.Sprintf("%s, and the Redis at %s has %d", needs, addr, have))
+}
+
+// redisCLIMissing is repository r's check when redis-cli is not on PATH,
+// which is no Redis that does not answer: how many databases the Redis at
+// addr has is unknown, a WARN, and a FAIL where the copies' env names
+// REDIS_DB_OFFSET, since each claim of a copy flushes its Redis databases
+// with redis-cli too, and those claims fail.
+func redisCLIMissing(name, needs, addr string, r config.FactoryRepo) doctorCheck {
+	detail := fmt.Sprintf("%s; redis-cli is not on PATH, so how many the Redis at %s has is unknown", needs, addr)
+	fix := "install redis-cli (it comes with Redis) where the factory daemon's PATH finds it, then run `magnum doctor` again"
+	if _, flushes := r.Env[config.RedisOffsetEnv]; flushes {
+		return doctorFailed(name, detail+fmt.Sprintf(", and each claim of %s's copies flushes their Redis databases with it: those claims fail", r.Repo), fix)
+	}
+	return doctorWarned(name, detail, fix)
 }
 
 // redisTooFew is the FAIL of repository r's Redis at addr, which has have
