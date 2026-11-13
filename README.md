@@ -4649,7 +4649,9 @@ stages = [
   `[[factory.repo]]` whose `env` uses Redis offsets (`REDIS_DB_OFFSET` or `{n*16}`), and `magnum doctor`'s
   `redis <owner>/<name>` check reads `CONFIG GET databases` from the Redis the highest copy's `env` names: a FAIL
   when it has fewer (the claims of the copies past them cannot flush theirs), a WARN when that Redis does not
-  answer, since how many it has is then unknown. Each
+  answer, since how many it has is then unknown. Its highest copy is also one the factory already made past
+  `max_copies + fix_copies` (a pool slot of its agents store): a lower `max_copies` or `fix_copies` retires no
+  copy, and a task's claim takes such a copy, so the check counts it. Each
   of these is a step of `slot:<copy>:claim:<n>` with begin and ok or fail events (a failed one runs again at
   the next claim, a done one never), and each runs the copy's guard first: magnum's slot guard over the herdr
   sessions, the factory's and yours, and `[herdr] review_session` when it is a third, where the local review's

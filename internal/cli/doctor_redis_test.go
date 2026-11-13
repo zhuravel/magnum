@@ -11,6 +11,8 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // redisRepos are three [[factory.repo]]s: talkable/talkable, whose copies
@@ -109,6 +111,51 @@ func TestDoctorSaysWhenRedisHasTooFewDatabasesForTheCopies(t *testing.T) {
 	}
 	if n := len(fake.CallsWithPrefix("redis-cli")); n != before {
 		t.Fatalf("doctor ran redis-cli %d times with no repository on Redis", n-before)
+	}
+}
+
+// Doctor's Redis need counts the copies the factory already made, from the
+// pool slots of its agents store, not the configuration alone: a lower
+// max_copies or fix_copies retires no copy, and a task's claim takes one
+// past the range, so talkable's copies 4 and 5, made while it had 2 fix
+// copies, still need 96 databases once fix_copies is 0. It gave a PASS on
+// 64 then, while copies 4 and 5 failed their flush at every claim (C8 on
+// T3b). A per-PR checkout and another repository's copy do not count.
+func TestDoctorCountsTheCopiesAlreadyMadeForTheRedisDatabases(t *testing.T) {
+	_, d, _, _ := doctorFixture(t)
+	fake := d.Run.(*execx.Fake)
+	cfg := *d.Config
+	cfg.Factory.Repos = redisRepos()[:2]
+	cfg.Factory.Repos[0].FixCopies = 0 // lowered after copies 4 and 5 were made
+	d.Config = &cfg
+	fake.Rules = append([]execx.Rule{
+		{Prefix: []string{"redis-cli", "-h", "127.0.0.1"}, Result: execx.Result{Stdout: []byte("databases\n64\n")}},
+	}, fake.Rules...)
+	st := storetest.OpenFile(t, d.Layout.FactoryAgentsDB())
+	for _, s := range []store.Slot{
+		{Name: "factory1", RepoFullName: "talkable/talkable", Kind: store.SlotKindPool, Path: "/p/talkable.factory1"},
+		{Name: "factory4", RepoFullName: "talkable/talkable", Kind: store.SlotKindPool, Path: "/p/talkable.factory4"},
+		{Name: "factory5", RepoFullName: "talkable/talkable", Kind: store.SlotKindPool, Path: "/p/talkable.factory5"},
+		{Name: "fix-talkable/talkable#7", RepoFullName: "talkable/talkable", Kind: store.SlotKindPerPR, Path: "/p/checkouts/pr-7"},
+		{Name: "cache9", RepoFullName: "example/other", Kind: store.SlotKindPool, Path: "/p/other9"},
+	} {
+		s.MainClone, s.State = "/p/main", store.SlotFree
+		if _, err := st.CreateSlot(context.Background(), s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := map[string]doctorCheck{}
+	for _, c := range doctorRun(context.Background(), d) {
+		m[c.Name] = c
+	}
+	tk := m["redis talkable/talkable"]
+	if tk.Status != doctorFail || !strings.Contains(tk.Detail, "talkable/talkable's copies need 96 Redis databases") ||
+		!strings.Contains(tk.Detail, "copies 4 to 5 exist past max_copies + fix_copies") || !strings.Contains(tk.Fix, "databases 96") ||
+		strings.Contains(tk.Fix, "lower") {
+		t.Fatalf("talkable with copies 4 and 5 made and fix_copies 0, on a Redis with 64 = %+v, want a FAIL naming 96 and the copies made, never lowering the keys as its fix", tk)
+	}
+	if c := m["redis example/cache"]; c.Status != doctorPass || !strings.Contains(c.Detail, "example/cache's copies need 32 Redis databases") {
+		t.Fatalf("example/cache, whose cache9 is another repository's = %+v, want a PASS naming 32", c)
 	}
 }
 

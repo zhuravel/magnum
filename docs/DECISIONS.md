@@ -27015,7 +27015,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
     and no repository on Redis is one SKIP that runs nothing. The flush and the probe share one redis-cli command
     line (`redisEndpoint.cli`), and `RedisDBsPerCopy` and `RedisOffsetEnv` live in config, the factory's being
     theirs. Tests, failing first: `TestDoctorSaysWhenRedisHasTooFewDatabasesForTheCopies` and
-    `TestConfigCheckNamesTheRedisDatabasesTheCopiesNeed` in internal/cli.
+    `TestConfigCheckNamesTheRedisDatabasesTheCopiesNeed` in internal/cli. Doctor's highest copy is also the
+    highest one the factory made, a pool slot of its agents store read read-only (`factory.LastCopyMade`): no
+    code retires a copy past a lowered `max_copies` or `fix_copies`, and a task's claim takes it as its own, so
+    the FAIL's own fix (lower the keys) gave a PASS while those copies' flush failed at every claim (the engine
+    owner's C8 on T3b). With such a copy the detail names it and the fix no longer offers to lower the keys; an
+    agents store that cannot be read turns a PASS into a WARN. `magnum config` still counts the configuration
+    alone. Test, failing first: `TestDoctorCountsTheCopiesAlreadyMadeForTheRedisDatabases`.
 
 ## Learned rules
 

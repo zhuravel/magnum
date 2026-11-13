@@ -14656,6 +14656,13 @@ func KickWith(l paths.Layout, procs engine.Processes) (int, error)
     KickWith is Kick with the processes it asks about given, so a test needs no
     real process.
 
+func LastCopyMade(repo config.FactoryRepo, names []string) int
+    LastCopyMade is the highest number of repo's copies among names, the names
+    of its pool slots in the factory's agents store (0 for none): the copies
+    its claims made. A lower max_copies or fix_copies retires none of them,
+    and a task's claim takes one numbered past both as its own (ownsCopy),
+    so its Redis offset still counts.
+
 func LiftDrain(l paths.Layout, value string) error
     LiftDrain removes the drain asked of the factory daemon of layout l when it
     is value; a drain asked since by another command, or none, is left alone.

@@ -1335,6 +1335,21 @@ func copyNumber(repo config.FactoryRepo, name string) (int, bool) {
 	return n, true
 }
 
+// LastCopyMade is the highest number of repo's copies among names, the
+// names of its pool slots in the factory's agents store (0 for none): the
+// copies its claims made. A lower max_copies or fix_copies retires none of
+// them, and a task's claim takes one numbered past both as its own
+// (ownsCopy), so its Redis offset still counts.
+func LastCopyMade(repo config.FactoryRepo, names []string) int {
+	last := 0
+	for _, name := range names {
+		if n, ok := copyNumber(repo, name); ok {
+			last = max(last, n)
+		}
+	}
+	return last
+}
+
 // repoOf is the repository copy name is a copy of, and its number.
 func (c *copySet) repoOf(name string) (config.FactoryRepo, int, bool) {
 	for _, r := range c.cfg.Factory.Repos {
