@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -83,9 +84,8 @@ func (e *Engine) settleOptional(ctx context.Context, job *fixJob, entries, needs
 	var found []optionalCall
 	threads := map[int64]string{}
 	for _, entry := range entries {
-		n, ok := readNeedsYouEntry(entry)
-		id, err := strconv.ParseInt(n.ID, 10, 64)
-		if !ok || err != nil || n.Priority != "P3" || !strings.Contains(n.Place, ":") || job.pr.URL == "" || !e.optionalFinding(ctx, job, n, id, read) {
+		n, id, ok := fixwork.OptionalEntry(entry)
+		if !ok || job.pr.URL == "" || !e.optionalFinding(ctx, job, n, id, read) {
 			needs = append(needs, entry)
 			continue
 		}
@@ -106,16 +106,6 @@ func (e *Engine) settleOptional(ctx context.Context, job *fixJob, entries, needs
 	e.event(ctx, "info", job.subject(), "fix.optional", fmt.Sprintf("%s left you %s, which %s nothing before the merge: %s",
 		job.role.Name, optionalWords(found), textx.Plural(len(found), "holds", "hold"), strings.Join(optionalLinks(found), ", ")), data)
 	return needs, threads
-}
-
-// authorsCallSentence ends the Fix of a finding of magnum's whose options
-// are the author's to choose between (skills/magnum-review/SKILL.md).
-const authorsCallSentence = "This is the author's call."
-
-// optionalBody reports whether body, a comment of magnum's, is a P3 whose
-// Fix ends with the author's call.
-func optionalBody(body string) bool {
-	return strings.HasPrefix(strings.TrimSpace(body), "**[P3]") && strings.Contains(body, authorsCallSentence)
 }
 
 // optionalFinding reports whether magnum's own comment shows n, an entry

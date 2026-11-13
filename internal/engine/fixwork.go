@@ -281,3 +281,15 @@ type (
 	pushNotConfirmed = fixwork.PushNotConfirmed
 	pushUnanswered   = fixwork.PushUnanswered
 )
+
+// The settle's filters of what a fixer left the author, under the engine's
+// names.
+type (
+	laterWork = fixwork.LaterWork
+	threadNow = fixwork.ThreadNow
+)
+
+var (
+	answeredOf   = fixwork.AnsweredOf
+	optionalBody = fixwork.OptionalBody
+)

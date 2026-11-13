@@ -31,6 +31,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/attention"
+	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/github"
 )
 
@@ -44,76 +45,23 @@ func carryOn(carried []FixCarry, report string, needs []string, answered map[str
 	return append(slices.Clone(carried), FixCarry{Report: report, NeedsYou: slices.Clone(needs), Answered: answeredOf(needs, answered)})
 }
 
-// answeredOf are the comment ids of entries that answered holds, sorted.
-func answeredOf(entries []string, answered map[string]bool) []string {
-	var out []string
-	for _, entry := range entries {
-		if n, ok := readNeedsYouEntry(entry); ok && n.ID != "" && answered[n.ID] && !slices.Contains(out, n.ID) {
-			out = append(out, n.ID)
-		}
-	}
-	slices.Sort(out)
-	return out
-}
-
-// laterWork is what a later cycle's job was handed again of what an earlier
-// cycle may have left (carriedLeft): the description, when the review it
-// fixes has a `Description: ✗` line (fixJob.described), and the base,
-// when the job's guard checked it (fixJob.baseChecked: the conflict is the
-// fixer's to merge, or the head merges cleanly and it is gone) or the job
-// was given a conflict all the same (the tip prepareFix fetched).
-type laterWork struct{ description, base bool }
-
 // carriedLeft is carried without what the cycle whose report is report,
-// and whose fixer left entries, asks again or was handed again (took): an
-// entry with a comment id entries name (the later entry is the call now),
-// a conflict with the base and a description entry when took says so, and
-// an entry in another reviewer's thread, review body or comment that the
-// cycle's external file gave its fixer open (heldOpen). Every other entry
-// was never handed again, and goes on: a call in magnum's own thread, and
-// another reviewer's item the file lists answered (the author's reply
-// while the loop ran, which the next fixer leaves alone and a decision at
-// the loop's end may build), waiting, or not at all. A group left with no
-// entry goes.
+// and whose fixer left entries, asks again or was handed again (took), by
+// fixwork.CarriedLeft's rule: the cycle's external file beside report says
+// which items of other reviewers it gave its fixer open (heldOpen), and
+// the files beside each group's report whose thread an entry is in
+// (threadOwners). A group left with no entry goes.
 func carriedLeft(carried []FixCarry, report string, entries []string, took laterWork) []FixCarry {
 	if len(carried) == 0 {
 		return nil
 	}
-	asked := map[string]bool{}
-	for _, entry := range entries {
-		if n, ok := readNeedsYouEntry(entry); ok && n.ID != "" {
-			asked[n.ID] = true
-		}
+	var heldOpen func(needsYouEntry) bool
+	if x, handed := readExternalFile(filepath.Dir(report)); handed {
+		heldOpen = x.heldOpen
 	}
-	x, handed := readExternalFile(filepath.Dir(report))
-	var out []FixCarry
-	for _, c := range carried {
-		owners := readThreadOwners(filepath.Dir(c.Report))
-		kept := slices.DeleteFunc(slices.Clone(c.NeedsYou), func(entry string) bool {
-			n, ok := readNeedsYouEntry(entry)
-			switch {
-			case !ok:
-				return false
-			case n.ID != "" && asked[n.ID]:
-				return true
-			case n.Place == conflictPlace:
-				return took.base
-			case n.Place == "description":
-				return took.description
-			case !handed:
-				return false
-			case n.Place == remarkReview, n.Place == remarkComment:
-				return x.heldOpen(n)
-			}
-			magnums, known := owners.owner(n)
-			return known && !magnums && x.heldOpen(n)
-		})
-		if len(kept) == 0 {
-			continue
-		}
-		out = append(out, FixCarry{Report: c.Report, NeedsYou: kept, Answered: answeredOf(kept, c.AnsweredSet())})
-	}
-	return out
+	return fixwork.CarriedLeft(carried, entries, took, heldOpen, func(report string) func(needsYouEntry) (bool, bool) {
+		return readThreadOwners(filepath.Dir(report)).owner
+	})
 }
 
 // heldOpen reports whether x, an external file, gave its fixer the item of

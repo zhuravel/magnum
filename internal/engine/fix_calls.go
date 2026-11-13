@@ -42,6 +42,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/attention"
+	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/postreview"
@@ -264,13 +265,6 @@ func (e *Engine) threadsReader(ctx context.Context, job *fixJob) func() ([]githu
 	})
 }
 
-// threadNow is one of magnum's threads as freshNeedsYou reads it: whether
-// it is resolved, and the class of its answer (answerOf; "" for none).
-type threadNow struct {
-	resolved bool
-	answer   string
-}
-
 // answerOf is the class a thread's answer carries (pipeline.ReplyFixed,
 // ReplyNotABug, ReplyWontFix or ReplyOther; "" for none), from its replies
 // oldest first: the latest reply that is not magnum's own, unless magnum
@@ -325,20 +319,7 @@ func (e *Engine) freshNeedsYou(ctx context.Context, job *fixJob, entries []strin
 	if !ok {
 		return entries, known
 	}
-	kept, answered, resolved := []string{}, map[string]bool{}, 0
-	for _, entry := range entries {
-		n, id, mine := magnums(entry)
-		t, found := threads[id]
-		switch {
-		case !mine || !found:
-		case t.resolved:
-			resolved++
-			continue
-		case entryAnswered(n, t.answer):
-			answered[n.ID] = true
-		}
-		kept = append(kept, entry)
-	}
+	kept, answered, resolved := fixwork.FreshEntries(entries, magnums, threads, entryAnswered)
 	if resolved == 0 && len(answered) == 0 {
 		return entries, nil
 	}
@@ -397,7 +378,7 @@ func (e *Engine) threadsNow(ctx context.Context, job *fixJob, dir string, read f
 			}
 			replies = append(replies, r)
 		}
-		out[all[0].ID] = threadNow{resolved: t.Resolved, answer: answerOf(replies)}
+		out[all[0].ID] = threadNow{Resolved: t.Resolved, Answer: answerOf(replies)}
 	}
 	return out, "github", true
 }
@@ -440,7 +421,7 @@ func threadsFileNow(dir, report string) (map[int64]threadNow, bool) {
 				replies = append(replies, agents.ThreadReply{Own: true, Kind: r.Kind})
 			}
 		}
-		out[t.CommentID] = threadNow{resolved: t.Resolved, answer: answerOf(replies)}
+		out[t.CommentID] = threadNow{Resolved: t.Resolved, Answer: answerOf(replies)}
 	}
 	return out, true
 }

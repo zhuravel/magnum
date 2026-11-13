@@ -48,6 +48,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/postreview"
@@ -922,12 +923,7 @@ func (e *Engine) dropFixerAnswered(ctx context.Context, job *fixJob, entries []s
 	byFixer := func(c github.ThreadComment) bool {
 		return postreview.IsFixReply(c.Body) && asFixer(c.AuthorLogin, c.AuthorType, c.CreatedAt)
 	}
-	replied := map[int64]bool{}
-	for _, t := range threads {
-		if all := t.AllComments(); len(all) > 0 && look[all[0].ID] && slices.ContainsFunc(all[1:], byFixer) {
-			replied[all[0].ID] = true
-		}
-	}
+	replied := fixwork.FixerReplied(threads, func(root int64) bool { return look[root] }, byFixer)
 	if len(replied) == 0 {
 		return entries
 	}

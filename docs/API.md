@@ -18969,6 +18969,9 @@ var (
 
 FUNCTIONS
 
+func AnsweredOf(entries []string, answered map[string]bool) []string
+    AnsweredOf are the comment ids of entries that answered holds, sorted.
+
 func CICannotOf(needs []string) (class string, ci bool, rest []string)
     CICannotOf reads the fixer's ci entries under Needs you (needsYouEntryRe,
     place `ci`) apart from the rest: the class word of the first (unfixed for
@@ -19036,6 +19039,15 @@ func DecisionOf(items []Item, root int64) bool
     DecisionOf reports whether items hold your decision in the thread whose
     first comment is root (Item.Decision).
 
+func DecisionsLeft(entries []string, decided []Decision, replied map[int64]bool) (out []string, built map[int64]bool, back int)
+    DecisionsLeft is entries, the fixer's "## Needs you", with an entry of
+    magnum's for each of decided that the fixer neither built (replied: its
+    thread shows the fixer's reply) nor left there, and the decisions it built;
+    back counts the decisions that go back to the author, listed by the fixer
+    or added here. A person's decision never closes on the fixer's word alone:
+    magnum's entry reads as the fixer's own ("<id> <path>:<line>: not fixed.
+    …"), so its call asks the author to decide again.
+
 func EscapeControls(s string) string
     EscapeControls is s with every control character but tab and newline (C0,
     DEL and C1) and every bidi or invisible format character (hiddenFormat)
@@ -19057,11 +19069,27 @@ func FixNeedsAsked(msg string, entries []string) []string
     all and none otherwise, since it cannot say which went; one that asks for no
     call keeps none. The factory screen draws what it keeps.
 
+func FixerReplied(threads []github.Thread, look func(root int64) bool, by func(github.ThreadComment) bool) map[int64]bool
+    FixerReplied are the threads of threads, by their first comment's id,
+    that look holds (nil: every thread) and in which a comment after the first
+    is the fixer's reply (by: a fix-marked reply the fixer could have posted in
+    the run).
+
 func ForgedWords(at string, err error) string
     ForgedWords says why magnum pushes or holds nothing of at (the merge in
     words): err, an object a read of its workflow files went through, is not
     what its name says (gitx.ErrObjectMismatch), so what magnum read of the
     clone is not what GitHub would get.
+
+func FreshEntries(entries []string, mine func(entry string) (NeedsYouEntry, int64, bool), threads map[int64]ThreadNow,
+	answers func(n NeedsYouEntry, answer string) bool) (kept []string, answered map[string]bool, resolved int)
+    FreshEntries is entries as magnum's own threads show them now: an entry
+    with a call in one of magnum's threads (mine: the entry, its thread's
+    first comment and whether the thread is magnum's) whose thread (threads,
+    by that id) is resolved asks nothing and goes; one whose thread is open with
+    the answer its call asks for (answers, of the thread's answer) asks only to
+    resolve it, and is in answered by its comment id. Every other entry stays as
+    it is; resolved counts what went.
 
 func HeldDiff(ctx context.Context, hg HeldDiffGit, dir string, h HeldMerge) ([]byte, error)
     HeldDiff is held-merge.diff of h in dir's objects: a first line that names
@@ -19073,6 +19101,11 @@ func HeldDiff(ctx context.Context, hg HeldDiffGit, dir string, h HeldMerge) ([]b
     objects at the head, the tip and the merge are hashed again (WorkflowRead):
     no merge driver or attribute of the clone's runs, and a forged object is
     gitx.ErrObjectMismatch.
+
+func IsConflictEntry(entry string) bool
+    IsConflictEntry reports whether entry is a conflict of the base merge the
+    fixer aborted (ConflictPlace), which the settle drops once the push holds
+    the merged tip.
 
 func MagnumDue(f Facts) (why string, late bool, until time.Time)
     MagnumDue is rule 5: magnum has not reviewed the head (its reviewed head
@@ -19105,6 +19138,10 @@ func OpenMergeIsYours(g *store.ReviewGate) bool
 func OpenP3(sum store.ReviewSummary) int
     OpenP3 is the earlier P3s sum keeps open; 0 when its result gave only the
     number of open findings (OpenProblems counts them all then).
+
+func OptionalBody(body string) bool
+    OptionalBody reports whether body, a comment of magnum's, is a P3 whose Fix
+    ends with the author's call.
 
 func OptionalCallsWords(links []string) string
     OptionalCallsWords names the optional calls whose links are links,
@@ -19540,6 +19577,14 @@ func (c Conflict) Words() string
     Words say what the fixer does about c: "merges master at c0c0c0c (2
     conflicting files)".
 
+type Decision struct {
+	CommentID int64
+	Path      string
+	Line      int
+}
+    Decision is a decision of yours that the run's external file handed the
+    fixer: its thread's first comment, path and line.
+
 type Facts struct {
 	Now        time.Time
 	PR         store.PR
@@ -19624,6 +19669,20 @@ type FixCarry struct {
     own words, so never put in an event or a log), and the comment ids among
     them whose threads showed their answer and ask only for the resolution (as
     FixState.Answered).
+
+func CarriedLeft(carried []FixCarry, entries []string, took LaterWork, heldOpen func(NeedsYouEntry) bool,
+	whose func(report string) func(NeedsYouEntry) (magnums, known bool)) []FixCarry
+    CarriedLeft is carried without what the cycle whose fixer left entries
+    asks again or was handed again (took): an entry with a comment id entries
+    name (the later entry is the call now), a conflict with the base and a
+    description entry when took says so, and an entry in another reviewer's
+    thread, review body or comment that the cycle's external file gave
+    its fixer open (heldOpen; nil when the cycle had no external file).
+    whose says whose thread an entry of a group is in, by the files beside that
+    group's report (magnums: magnum's; known: the files place it). Every other
+    entry was never handed again, and goes on: a call in magnum's own thread,
+    and another reviewer's item the file lists answered, waiting, or not at all.
+    A group left with no entry goes.
 
 func (c FixCarry) AnsweredSet() map[string]bool
     AnsweredSet is Answered as a set (nil for none).
@@ -19921,6 +19980,12 @@ func SortOpen(items []Item, l Ledger) (work, needs []Item)
     bot's review body or comment is seen: a receipt, a summary or a note,
     it drops out.
 
+type LaterWork struct{ Description, Base bool }
+    LaterWork is what a later cycle's job was handed again of what an earlier
+    cycle may have left (CarriedLeft): the description, when the review it fixes
+    has a `Description: ✗` line, and the base, when the job's guard checked it
+    or the job was given a conflict all the same.
+
 type Ledger struct {
 	Handed      map[string]time.Time `json:"handed,omitempty"`
 	Reviews     []string             `json:"reviews,omitempty"`
@@ -20071,6 +20136,13 @@ type NeedsYouEntry struct {
     reviewer's item that asks for a product or business-logic choice ("not
     fixed. The author's call"). A conflict of the base merge the fixer aborted
     has no id: its Place is ConflictPlace and Paths are the paths it names.
+
+func OptionalEntry(entry string) (n NeedsYouEntry, id int64, ok bool)
+    OptionalEntry reads entry, one of a fixer's "## Optional calls", as an
+    optional call may be one: a P3 at a path and line, with its thread's first
+    comment's id (id); ok is false for any other entry, which holds as a Needs
+    you entry does. Whether magnum's own comment shows it to be one is the
+    engine's to read (optionalFinding).
 
 func ReadNeedsYouEntry(entry string) (NeedsYouEntry, bool)
     ReadNeedsYouEntry reads entry; ok is false when magnum cannot read its id
@@ -20347,6 +20419,13 @@ func (s Spell) Next(pr store.PR, quiet, gap time.Duration, now time.Time, loopin
     daemon slept, and the PR may have been quiet in between: the caller's gap is
     at least quiet, and longer than looks a few poll intervals apart); else s,
     seen now.
+
+type ThreadNow struct {
+	Resolved bool
+	Answer   string
+}
+    ThreadNow is one of magnum's threads as it is now: whether it is resolved,
+    and the class its answer carries ("" for none; the engine's answerOf).
 
 ```
 

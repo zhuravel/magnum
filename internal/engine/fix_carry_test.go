@@ -237,7 +237,7 @@ func TestACarriedCallGoesOnceALaterCycleTookItOn(t *testing.T) {
 		}
 		return out
 	}
-	took := laterWork{description: true, base: true}
+	took := laterWork{Description: true, Base: true}
 	if got := entries(carriedLeft(carried, report, nil, laterWork{})); !slices.Equal(got, carried[0].NeedsYou) {
 		t.Errorf("nothing handed again: carried %q, want every call", got)
 	}

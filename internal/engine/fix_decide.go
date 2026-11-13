@@ -49,6 +49,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/postreview"
 	"github.com/zhuravel/magnum/internal/store"
@@ -353,33 +354,15 @@ func (e *Engine) decisionsLeft(ctx context.Context, job *fixJob, entries []strin
 	replied := map[int64]bool{}
 	if threads, err := read(); err == nil {
 		asFixer := e.sinceFixStart(ctx, job)
-		for _, t := range threads {
-			if all := t.AllComments(); len(all) > 0 && slices.ContainsFunc(all[1:], func(c github.ThreadComment) bool {
-				return postreview.IsFixReply(c.Body) && asFixer(c.AuthorLogin, c.AuthorType, c.CreatedAt)
-			}) {
-				replied[all[0].ID] = true
-			}
-		}
+		replied = fixwork.FixerReplied(threads, nil, func(c github.ThreadComment) bool {
+			return postreview.IsFixReply(c.Body) && asFixer(c.AuthorLogin, c.AuthorType, c.CreatedAt)
+		})
 	}
-	listed := map[string]bool{}
-	for _, entry := range entries {
-		if n, ok := readNeedsYouEntry(entry); ok {
-			listed[n.ID] = true
-		}
-	}
-	out, built, back := slices.Clone(entries), map[int64]bool{}, 0
+	ds := make([]fixwork.Decision, 0, len(decided))
 	for _, t := range decided {
-		id := strconv.FormatInt(t.CommentID, 10)
-		switch {
-		case replied[t.CommentID]:
-			built[t.CommentID] = true
-		case listed[id]:
-			back++
-		default:
-			out = append(out, fmt.Sprintf("%s %s:%d: not fixed. magnum: GitHub shows no reply of the fixer's that builds your decision", id, t.Path, t.Line))
-			back++
-		}
+		ds = append(ds, fixwork.Decision{CommentID: t.CommentID, Path: t.Path, Line: t.Line})
 	}
+	out, built, back := fixwork.DecisionsLeft(entries, ds, replied)
 	var said []string
 	if n := len(built); n > 0 {
 		said = append(said, "built your "+textx.Plural(n, "decision", "decisions")+" in "+textx.Count(n, "thread", "threads"))

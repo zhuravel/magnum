@@ -222,7 +222,7 @@ func (e *Engine) settleReport(ctx context.Context, job *fixJob, rep FixReport, p
 		rep.NeedsYou, answered = e.freshNeedsYou(ctx, job, rep.NeedsYou, nil, "", read) // no re-review yet
 	}
 	// fix_carry.go: what earlier cycles left that this one did not ask again or take on
-	carried := carriedLeft(job.state.Carried, report, rep.NeedsYou, laterWork{description: job.described, base: job.baseChecked || job.conflict.SHA != ""})
+	carried := carriedLeft(job.state.Carried, report, rep.NeedsYou, laterWork{Description: job.described, Base: job.baseChecked || job.conflict.SHA != ""})
 	if len(carried) > 0 && !pushed { // the loop ends here: as magnum's threads show them now
 		carried = e.freshCarried(ctx, job, carried, "", read)
 	}
@@ -467,10 +467,7 @@ func (e *Engine) fixPushDescends(ctx context.Context, job *fixJob, seen, head st
 // fix.conflict_merged event counts what went.
 func (e *Engine) dropMergedConflicts(ctx context.Context, job *fixJob, entries []string, head string) []string {
 	tip := job.conflict.SHA
-	isConflict := func(entry string) bool {
-		n, ok := readNeedsYouEntry(entry)
-		return ok && n.Place == conflictPlace
-	}
+	isConflict := fixwork.IsConflictEntry
 	if tip == "" || e.d.Git == nil || !slices.ContainsFunc(entries, isConflict) {
 		return entries
 	}
