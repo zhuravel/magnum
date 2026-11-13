@@ -944,19 +944,23 @@ puts them back), and `saved.txt`, which says from where, at which HEAD and befor
 what it left out. A switch, a reset and an abort keep the untracked files, so their save only names them in
 `saved.txt`; a removal deletes them, so its save copies them into `untracked/`, every untracked file git does not
 ignore at its path, with its owner's permission bits and a symlink as the link (never what it points to), but not
-the files Magnum wrote there: the local mise file it renders, the `[[repo]]` copy_files and what the setup wrote
-(`cp -R <save>/untracked/. <slot>` puts them back). A file the removal cannot read or write (a mode-000 file, one
-gone meanwhile, a name the save's folder refuses) is left out and named with the reason, and the removal goes on.
+the files Magnum wrote there: the local mise file it renders, the copy_files of the `[[repo]]` or the `[[pool]]`,
+and what the setup wrote, the untracked files there after it that were not before it
+(`cp -R <save>/untracked/. <slot>` puts them back). A file the removal cannot read (a mode-000 file, one gone
+meanwhile) is left out and named with the reason, and the removal goes on; a write into the save that fails (a
+full disk, a quota, a name the save's folder refuses) fails the save, and the removal deletes nothing.
 A save keeps at most 50 MB: git is stopped at the cap, the patch then goes path by path and a file is left out,
 each named with its size, as is a repository inside the tree (untracked files whose names alone pass 8 MB are
 none saved, and the save says so); files git ignores are never saved. The `slot.discarded` event names the save
-and what it left out (`magnum logs <slot>`). A save whose patch is the same as the slot's last save in that
-folder, and that copies no file, is not kept: the event names that earlier save, so a lockfile Magnum's own
-setup rewrites is saved once, not at every round. Saves are kept 14 days: the next save in a folder and each
-daemon's prune (the review daemon at each reconcile, the factory hourly) delete the older ones. A save or a
-listing of the changes that fails fails the step, which then discards nothing and retries at its next attempt
-(a forced removal logs it and goes on); the first failure of a slot is raised once, a `slot.save_failed` event
-and a toast, and `magnum doctor` names the slot until a save works.
+and what it left out (`magnum logs <slot>`). A save that copies no file and repeats the slot's last save in that
+folder, one of the last 7 days (the same patch, the same files left out and kept in the tree), is not kept: the
+event names that earlier save, so a lockfile Magnum's own setup rewrites is saved once a week, not at every round.
+Saves are kept 14 days: the next save in a folder and each daemon's prune (the review daemon at each reconcile,
+the factory hourly) delete the older ones. A save or a listing of the changes that fails fails the step, which
+then discards nothing and retries at its next attempt; the first failure of a slot is raised once, a
+`slot.save_failed` event and a toast, and `magnum doctor` names the slot until a save works or the slot is
+removed. A forced removal goes on over a save that fails: its `slot.discarded` event, a warning, names what it
+deleted and says "forced, not saved".
 
 A round that fails three times on one head (a timeout, an error, a setup failure charged to the PR) parks
 its PR in needs attention. When the cause was Magnum's own (an unknown role, a launch line that broke), the

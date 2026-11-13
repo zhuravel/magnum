@@ -31552,7 +31552,8 @@ func ParseSaveFailure(v string) (SaveFailure, bool)
 
 func SaveFailures(ctx context.Context, st *store.Store) ([]SaveFailure, error)
     SaveFailures lists the slots of st whose save before a discard fails,
-    by slot name.
+    by slot name; never a removed slot's, whose removal is done (a record a
+    removal left that ended with no save, or that is not this package's).
 
 func (f SaveFailure) Sentence() string
     Sentence says what fails, since when and that the step retries.

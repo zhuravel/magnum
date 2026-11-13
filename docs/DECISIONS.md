@@ -606,6 +606,48 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `TestAPerPRCheckoutWhoseSaveFailsIsNotRemoved` (R15), `TestASaveLeavesOutOnlyTheMiseFileMagnumRendered`
     (R17: the old check used the ignored spelling and could not fail) and `TestTheCapIsSharedByThePatchAndTheFiles`
     (R18).
+- **Save before discard, after the engine owner's second check** (2026-11-13, T3c's second fix round, on his check
+  of the first). It lands with T3c, and changes what the two entries above say where they differ.
+  - A write into the save that fails fails the save (C2, P2). A full data disk, a quota or any other error writing
+    into the save (the folder of a file, its create, write or chmod, a symlink) was a per-file reason, "cannot be
+    written": `saved.txt`, a few KB, still fit, and the removal ran `worktree remove --force` over files the save
+    never held. A per-file reason is now the source's alone: the file cannot be read, it went, it is no regular file
+    or symlink. A write that fails fails the save, which refuses the removal, as the patch's own write already did
+    (R9); a forced removal goes on. The first fix round's "a name the save's folder refuses" is a write, so it fails
+    the save too: a name the tree holds fits the save's folder on the same disk, and failing closed costs a retry.
+  - What the setup wrote is what is new after it (C4, P2). The record of a per-PR worktree's own files took every
+    untracked file after its setup, on the ground that the worktree was new; setup also runs again over a worktree
+    kept from an earlier attempt (a row whose setup failed goes broken with its worktree, and a retry revives it),
+    so a person's notes made in it meanwhile were recorded as Magnum's, neither saved nor named, and deleted. The
+    setup step now lists the untracked files before it runs and records only those new after it, with the
+    copy_files (`recordingSetup`); a file the setup rewrote over one that was there stays a person's, and a listing
+    that fails records the copy_files alone, so the setup's files are then saved, never lost.
+  - A pool slot keeps the record too (C3): each render adds the `[[pool]]` copy_files, as a per-PR worktree's adds
+    its `[[repo]]`'s, and the provisioning's setup records what it wrote by the same rule, so a pool slot's removal
+    (the pool shrinking, `magnum slots remove`, a factory copy's) saves no key the main clone holds. A slot
+    provisioned before records its copy_files at its next checkout; what its setup wrote long ago is saved as a
+    person's.
+  - A save repeats the slot's last one only when it also names the same files left out and kept in the tree (C1),
+    as that save's `saved.txt` lists them, and only while that save is 7 days old at most (C6). The check compared
+    the patch alone: a removal over the last switch's residue that left out a file past the cap was dropped, its
+    reason recorded nowhere, and its event said the earlier save held the file. A repeat on the 13th day of the
+    save it stood on lived one day, until that save turned 14 days and went; past 7 days the repeat is kept and
+    lives its own 14, so post_checkout's residue is saved once a week.
+  - A forced removal whose save fails says so (C5): no `slot.save_failed` event or toast saying that the step
+    retries (it does not), and no `slot.save_ok` saying nothing was left to save once it deleted the changes, but a
+    `slot.discarded` event at level warn, written once the worktree went, that names the changes it deleted and
+    says "forced, not saved", with the save's error.
+  - A removal clears its slot's save failure as it marks the slot removed (C13), however it ended: its early
+    returns (the worktree's folder deleted by hand, so git lists it prunable; not listed; both paths gone) save
+    nothing and cleared nothing, so `magnum doctor` warned for good of a slot that no longer exists. Doctor also
+    names no removed slot's record, in the registry or in the factory's agents store, whose removal of a fix
+    checkout marks the row removed on its own.
+  - Tests, failing first: `TestAWriteIntoTheSaveThatFailsRefusesTheRemoval` (serial, the process's file size
+    limited), `TestASetupRunAgainRecordsOnlyTheFilesItWrote`, `TestAPoolSlotsRemovalSavesNothingMagnumWrote`,
+    `TestASaveRepeatsTheLastOnlyWithTheSameFilesLeftOutAndKept`, `TestASaveIsNotARepeatOfOneOlderThanAWeek`,
+    `TestAForcedRemovalWhoseSaveFailsSaysItsChangesWentUnsaved`, `TestARemovedSlotKeepsNoSaveFailure` and, in the
+    CLI, `TestDoctorNamesNoRemovedSlotsFailingSave`. Each check of C1, C4 and C13 was also proven by a mutation
+    that fails its test.
 
 ## Scheduling
 
