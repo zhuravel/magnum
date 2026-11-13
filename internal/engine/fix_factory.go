@@ -424,17 +424,20 @@ func (e *Engine) liftFactoryAttention(ctx context.Context, repo store.Repo, pr s
 // written before the PR's attention goes up, and a mark that cannot be
 // written fails the raise with nothing changed (C10): only the factory
 // lifts its attention, and `magnum fix --done` would lift one up without
-// its mark.
+// its mark. An attention already up in the same words (magnum's own fix
+// left it before the PR handed over) gets the mark too (C9): the factory
+// takes it as its raise from then on and waits on it.
 func (e *Engine) raiseFactoryAttention(ctx context.Context, repo store.Repo, pr store.PR, msg string, p fixwork.AttentionPayload) (string, error) {
 	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
-	switch {
-	case pr.State == store.PRNeedsAttention && deref(pr.LastError) == msg:
-		return fmt.Sprintf("%s needs you for that already", label), nil
-	case pr.State != store.PRReviewed:
+	already := pr.State == store.PRNeedsAttention && deref(pr.LastError) == msg
+	if !already && pr.State != store.PRReviewed {
 		return "", fmt.Errorf("%s is %s: the factory raises the attention of a reviewed PR alone", label, pr.State)
 	}
 	if err := e.markFactoryAttention(ctx, pr.ID, msg, p.Cause); err != nil {
 		return "", fmt.Errorf("%s: the factory's mark of its attention cannot be written (%w): nothing changed", label, err)
+	}
+	if already {
+		return fmt.Sprintf("%s needs you for that already", label), nil
 	}
 	err := e.st.TransitionPR(ctx, pr.ID, []string{store.PRReviewed}, store.PRNeedsAttention, func(u *store.PRUpdate) {
 		u.Set("last_error", msg)

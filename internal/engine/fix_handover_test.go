@@ -742,6 +742,33 @@ func TestTheFactorysRaiseFailsWhenItsMarkCannotBeWritten(t *testing.T) {
 	}
 }
 
+// The factory's raise of an attention already up in the same words (magnum's
+// own fix left it before the PR handed over, and the factory, importing its
+// calls, raises them again) marks it as the factory's too (C9): it answers
+// that the PR needs the operator for that already, the factory's loop waits
+// on that raise, and `magnum fix --done` refuses it as the factory's.
+func TestTheFactorysRaiseOfAnAttentionAlreadyUpMarksIt(t *testing.T) {
+	h := newHarness(t)
+	pr := h.reviewedPR(2, "b1")
+	const msg = "fix: 1 finding needs your call: https://github.com/talkable/talkable/pull/2#discussion_r4100"
+	if err := h.st.TransitionPR(h.ctx, pr.ID, []string{store.PRReviewed}, store.PRNeedsAttention, func(u *store.PRUpdate) {
+		u.Set("last_error", msg)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.e.setKV(h.ctx, KVPRAttention(pr.ID), "fix") // magnum's own fix left it
+	factoryOwns(h)
+	if r := factoryRaise(h); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "needs you for that already") {
+		t.Fatalf("the factory's raise: %s %q", r.State, deref(r.Result))
+	}
+	id := h.fix(FixPayload{Done: true, Seen: msg})
+	h.handle()
+	if r := h.request(id); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "the factory raised it") {
+		t.Errorf("magnum fix --done of the attention the factory raised again: %s %q", r.State, deref(r.Result))
+	}
+	h.wantState(2, store.PRNeedsAttention)
+}
+
 // The morning list's drops end the records that keep a PR from handing
 // over and do not end by themselves: `magnum fix --drop-push` drops the
 // record of a fixer's push kept for its late settle, and `magnum
