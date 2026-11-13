@@ -174,6 +174,52 @@ func TestAForcedRemovalWhoseSaveFailsSaysItsChangesWentUnsaved(t *testing.T) {
 	}
 }
 
+// A forced removal's warning that it deletes changes unsaved is written
+// before `git worktree remove --force` runs, so a removal that git stops
+// part way (here at a folder it may not write, mode 0555) still says what
+// it deleted, and the retry, which finds the worktree no longer listed and
+// ends the removal, adds no second one. The warning was written after the
+// removal worked, so that one deleted the files and said nothing.
+func TestAForcedRemovalWarnsBeforeGitDeletesAnything(t *testing.T) {
+	f := newPerPR(t, true)
+	h := f.h
+	sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, f.repoName(), f.pr, f.sha7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirty(t, sl.Path)
+	locked := filepath.Join(sl.Path, "zz-locked")
+	writeFile(t, filepath.Join(locked, "inner.txt"), "a tool's\n")
+	if err := os.Chmod(locked, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	h.failSaves(t)
+
+	if err := h.m.RemovePRWorktree(h.ctx, sl, true); err == nil {
+		t.Fatal("a forced removal git could not end: no error")
+	}
+	evs := h.discarded(t, sl.Name)
+	if len(evs) != 1 || evs[0].Level != "warn" {
+		t.Fatalf("slot.discarded events after git failed = %+v, want one warning", evs)
+	}
+	for _, want := range []string{"notes.txt", "Gemfile.lock", "forced, not saved"} {
+		if !strings.Contains(evs[0].Message, want) {
+			t.Fatalf("slot.discarded = %q, want it to say %q", evs[0].Message, want)
+		}
+	}
+
+	if err := h.m.RemovePRWorktree(h.ctx, h.slot(sl.Name), true); err != nil {
+		t.Fatalf("the forced removal again: %v", err)
+	}
+	if got := h.slot(sl.Name); got.State != store.SlotRemoved {
+		t.Fatalf("state = %s, want removed", got.State)
+	}
+	if evs := h.discarded(t, sl.Name); len(evs) != 1 {
+		t.Fatalf("slot.discarded events after the retry = %+v, want the one warning", evs)
+	}
+}
+
 // A removal clears its slot's recorded save failure when it marks the slot
 // removed, however it ends: here through a worktree whose folder was
 // deleted by hand after the save failed, which git lists as prunable, so
