@@ -8610,6 +8610,8 @@ Package dblock is the lock behind `magnum db-lock`: the roles of a review round
 checkout's databases. One exclusive flock per checkout (paths.Layout.DBLock),
 so a holder that crashes or is killed frees it; the holder writes who it is into
 the file for the roles that wait. It reads no config and opens no registry.
+`magnum push` takes the same kind of lock, once, per repository and branch
+(paths.Layout.PushLock), so one agent pushes a branch at a time.
 
 TYPES
 
@@ -27295,6 +27297,12 @@ func (l Layout) Pid() string
 
 func (l Layout) Plugin() string
     Plugin is the checkout's herdr plugin manifest; "" without a checkout.
+
+func (l Layout) PushLock(repo, branch string) string
+    PushLock is the lock file `magnum push` takes for a push to branch of repo
+    (owner/name): push-locks/<owner>-<name>-<hash>.lock under State, the hash
+    of the repository (case aside) and the branch, so one repository and branch
+    share the file whichever daemon's fixer pushes, and no two do.
 
 func (l Layout) ReviewDir(owner, repo string, number int, sha string) string
     ReviewDir is where one review round's reports live: a directory per head in

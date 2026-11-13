@@ -406,6 +406,22 @@ func (l Layout) DBLock(checkout string) string {
 	return filepath.Join(l.State(), "db-locks", filepath.Base(clean)+"-"+hex.EncodeToString(sum[:8])+".lock")
 }
 
+// PushLock is the lock file `magnum push` takes for a push to branch of
+// repo (owner/name): push-locks/<owner>-<name>-<hash>.lock under State, the
+// hash of the repository (case aside) and the branch, so one repository and
+// branch share the file whichever daemon's fixer pushes, and no two do.
+func (l Layout) PushLock(repo, branch string) string {
+	repo = strings.ToLower(repo)
+	sum := sha256.Sum256([]byte(repo + "\x00" + branch))
+	name := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-' {
+			return r
+		}
+		return '-'
+	}, repo)
+	return filepath.Join(l.State(), "push-locks", name+"-"+hex.EncodeToString(sum[:8])+".lock")
+}
+
 // Skill is the checkout's judge skill; "" without a checkout (the binary's
 // embedded copy is used).
 func (l Layout) Skill() string { return l.inHome("skills", "magnum-review", "SKILL.md") }

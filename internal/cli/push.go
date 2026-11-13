@@ -6,8 +6,12 @@ package cli
 // alone, as the App, with a lease on the head it read on GitHub: over
 // HTTPS to the PR's repository, whatever form origin has, with gh as git's
 // only credential helper (the pane's GH_CONFIG_DIR makes gh answer with the
-// App's token). It needs nothing but the pane's env and git: no config, no
-// registry, no daemon.
+// App's token). It needs nothing but the pane's env, git and the lock of
+// the branch, a file in magnum's state directory: no config, no registry,
+// no daemon. One agent pushes a branch at a time: the push holds the lock
+// of its repository and branch (paths.Layout.PushLock, dblock's flock) for
+// its run, and refuses while another agent's push holds it, so the fixers
+// of both daemons never push one PR's branch at once.
 
 import (
 	"cmp"
@@ -21,6 +25,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zhuravel/magnum/internal/agenthooks"
+	"github.com/zhuravel/magnum/internal/dblock"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/github"
@@ -112,7 +118,10 @@ func newPushCmd(c *Context) *cobra.Command {
 			"stderr. Exit 0: pushed, or the branch is at HEAD already; 2: refused, fix the line or the commits and never "+
 			"run the same line again; 3: fetch first; 4: magnum pushes the merge, push nothing more and end the run; "+
 			"1: anything else, run it again. It runs no git hook, reads no config "+
-			"and no registry, never talks to the daemon and writes no git config.",
+			"and no registry, never talks to the daemon and writes no git config.\n\n"+
+			"One agent pushes a branch at a time: it holds the lock of the PR's repository and branch, a file in magnum's state "+
+			"directory, for its run, and refuses (exit 2, nothing run on the network) while another agent's push holds it, "+
+			"naming that agent, and without a magnum state directory to keep the lock in.",
 		func(pos []string) int { return runPush(c, checkout, base, ci, pos) })
 	// The command needs no magnum layout: it runs wherever the fixer's pane is.
 	cmd.PersistentPreRunE = func(*cobra.Command, []string) error { return nil }
@@ -141,15 +150,51 @@ func pushPrint(c *Context, out pushOutcome, code int) int {
 }
 
 func runPush(c *Context, checkout, base string, ci bool, pos []string) int {
-	o, code := pushRun(checkout, base, ci, pos)
+	lockPath := func(repo, branch string) (string, error) {
+		switch {
+		case c.layoutErr != nil:
+			return "", c.layoutErr
+		case !c.Layout.Valid():
+			return "", errors.New("no magnum state directory")
+		}
+		return c.Layout.PushLock(repo, branch), nil
+	}
+	o, code := pushRun(checkout, base, ci, pos, lockPath)
 	return pushPrint(c, o, code)
+}
+
+// pushLock takes the lock of branch of repo (owner/name) at the path
+// lockPath gives, for this push (one try): ok is false, with the outcome
+// and the exit code push ends with, when another agent's push holds it
+// (refused: it names that push's agent) or it cannot be taken. agent is the
+// pane's agent (MAGNUM_AGENT), else the login it pushes as.
+func pushLock(ctx context.Context, lockPath func(repo, branch string) (string, error), repo, branch, agent string) (*dblock.Lock, pushOutcome, int, bool) {
+	out := pushOutcome{Status: pushStatusRefused, Branch: branch}
+	path, err := lockPath(repo, branch)
+	if err != nil {
+		out.Message = fmt.Sprintf("magnum push holds the lock of %s for its push, a file in magnum's state directory, and has none here (%v): "+
+			"push nothing; list it under Needs you", branch, err)
+		return nil, out, pushRefused, false
+	}
+	lock, err := dblock.Acquire(ctx, path, dblock.Holder{Role: agent, Command: "magnum push " + branch, PID: os.Getpid()}, 0, nil)
+	if te, held := errors.AsType[*dblock.TimeoutError](err); held {
+		out.Message = fmt.Sprintf("another agent pushes %s of %s now (%s): push nothing; list it under Needs you", branch, repo, te.Holder)
+		return nil, out, pushRefused, false
+	}
+	if err != nil {
+		out.Status, out.Message = pushStatusError, fmt.Sprintf("could not take the lock of %s: %v", branch, err)
+		return nil, out, pushFailed, false
+	}
+	return lock, pushOutcome{}, 0, true
 }
 
 // pushRun is push's decision and its one push, as (5) of the fixer App's
 // design lays it out; its outcome and exit code. base is --base, the PR's
 // base as the push line names it each cycle ("" = the pane's
-// MAGNUM_BASE_BRANCH, which the pane got when it was made).
-func pushRun(checkout, base string, ci bool, pos []string) (pushOutcome, int) {
+// MAGNUM_BASE_BRANCH, which the pane got when it was made). lockPath is the
+// lock file of a repository and branch (paths.Layout.PushLock), which the
+// push holds for its run (pushLock).
+func pushRun(checkout, base string, ci bool, pos []string, lockPath func(repo, branch string) (string, error)) (pushOutcome, int) {
 	get := pushGetenv
 	branch := get("MAGNUM_PUSH_BRANCH")
 	refused := func(format string, a ...any) (pushOutcome, int) {
@@ -182,6 +227,11 @@ func pushRun(checkout, base string, ci bool, pos []string) (pushOutcome, int) {
 
 	ctx, stop := signalContext()
 	defer stop()
+	lock, held, code, ok := pushLock(ctx, lockPath, owner+"/"+repo, branch, cmp.Or(get(agenthooks.EnvAgent), login))
+	if !ok {
+		return held, code
+	}
+	defer lock.Release()
 	r := pushRunner()
 	dir, err := gitWorkTree(ctx, r, checkout)
 	if err != nil {

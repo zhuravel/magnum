@@ -3,7 +3,9 @@
 // turns on a checkout's databases. One exclusive flock per checkout
 // (paths.Layout.DBLock), so a holder that crashes or is killed frees it;
 // the holder writes who it is into the file for the roles that wait. It
-// reads no config and opens no registry.
+// reads no config and opens no registry. `magnum push` takes the same kind
+// of lock, once, per repository and branch (paths.Layout.PushLock), so one
+// agent pushes a branch at a time.
 package dblock
 
 import (

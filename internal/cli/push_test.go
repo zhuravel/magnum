@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/zhuravel/magnum/internal/dblock"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/store/storetest"
 )
@@ -40,11 +42,19 @@ func withPane(t *testing.T, env map[string]string, r execx.Runner) {
 }
 
 // push runs `magnum push` with args and returns its exit code, its JSON
-// outcome and its stderr line.
+// outcome and its stderr line. Its context has a magnum layout of its own,
+// whose state directory holds the branch's lock, and no config.
 func push(t *testing.T, args ...string) (int, pushOutcome, string) {
 	t.Helper()
-	c, out, errb := bareContext(t)
-	c.layoutErr = os.ErrPermission // no magnum layout: the command needs none
+	c, _, _ := bareContext(t)
+	return pushWith(t, c, args...)
+}
+
+// pushWith is push in the context c.
+func pushWith(t *testing.T, c *Context, args ...string) (int, pushOutcome, string) {
+	t.Helper()
+	out, errb := &bytes.Buffer{}, &bytes.Buffer{}
+	c.Stdout, c.Stderr = out, errb
 	code := execute(c, append([]string{"push"}, args...))
 	var o pushOutcome
 	if err := json.Unmarshal(out.Bytes(), &o); err != nil {
@@ -617,16 +627,88 @@ func TestPushNeverForces(t *testing.T) {
 	}
 }
 
-// magnum push needs no magnum home, config or registry: the pane's env and
-// git are all it reads (push's context has no layout at all).
+// magnum push needs no config and no registry: the pane's env, git and the
+// branch's lock in magnum's state directory are all it reads. Without a
+// state directory to keep the lock in it refuses, with nothing run on the
+// network.
 func TestPushRunsWithoutConfigOrRegistry(t *testing.T) {
 	f := newFakePush(t, "git@github.com:talkable/talkable.git", fakeHead, nil)
 	withPane(t, paneEnv(), f)
 	c, out, _ := bareContext(t)
-	c.layoutErr = os.ErrPermission
 	c.cfgPath = filepath.Join(t.TempDir(), "missing.toml")
 	if code := execute(c, []string{"push", "--checkout", f.dir}); code != 0 {
 		t.Fatalf("exit %d: %s", code, out)
+	}
+	if _, err := os.Stat(c.Layout.DB()); !os.IsNotExist(err) {
+		t.Errorf("push made a registry: %v", err)
+	}
+
+	f = newFakePush(t, "git@github.com:talkable/talkable.git", fakeHead, nil)
+	withPane(t, paneEnv(), f)
+	c, _, _ = bareContext(t)
+	c.layoutErr = os.ErrPermission
+	code, o, _ := pushWith(t, c, "--checkout", f.dir)
+	if code != pushRefused || o.Status != pushStatusRefused || !strings.Contains(o.Message, "magnum's state directory") {
+		t.Fatalf("without a layout: exit %d, %+v", code, o)
+	}
+	if len(f.Calls) != 0 {
+		t.Fatalf("without a layout push ran %v", f.Calls)
+	}
+}
+
+// One agent pushes a PR's branch at a time: while another agent's push
+// holds the lock of the repository and branch (the factory's fixer and
+// magnum's, both on one PR), magnum push refuses (exit 2), naming that
+// agent, with nothing run on the network; once it is free the push goes,
+// and holds the lock itself while it runs. Another branch's lock holds
+// nothing back.
+func TestPushRefusesABranchAnotherAgentHolds(t *testing.T) {
+	f := newFakePush(t, "git@github.com:talkable/talkable.git", fakeHead, nil)
+	env := paneEnv()
+	env["MAGNUM_AGENT"] = "factory-fixer-7"
+	withPane(t, env, f)
+	c, _, _ := bareContext(t)
+	other, err := dblock.Acquire(t.Context(), c.Layout.PushLock("Talkable/Talkable", "feature"),
+		dblock.Holder{Role: "magnum-claude-fix-7", Command: "magnum push feature", PID: 4242}, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	elsewhere, err := dblock.Acquire(t.Context(), c.Layout.PushLock("talkable/talkable", "other-branch"),
+		dblock.Holder{Role: "someone", Command: "magnum push other-branch", PID: 4243}, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer elsewhere.Release()
+
+	code, o, errb := pushWith(t, c, "--checkout", f.dir)
+	if code != pushRefused || o.Status != pushStatusRefused || !strings.Contains(o.Message, "another agent pushes feature of talkable/talkable now") ||
+		!strings.Contains(o.Message, "magnum-claude-fix-7") {
+		t.Fatalf("exit %d, %+v (%s); want the refusal naming the agent that holds the branch", code, o, errb)
+	}
+	if len(f.Calls) != 0 || f.pushed {
+		t.Fatalf("the refused push ran %v", f.Calls)
+	}
+
+	other.Release()
+	path := c.Layout.PushLock("talkable/talkable", "feature")
+	f.Fake.Rules = append([]execx.Rule{{Prefix: []string{"git", "-C", f.dir, "-c", "credential.helper=", "-c",
+		"credential.helper=!gh auth git-credential", "push"}, Fn: func(execx.Cmd) (execx.Result, error) {
+		if h, ok := dblock.ReadHolder(path); !ok || h.Role != "factory-fixer-7" || h.PID != os.Getpid() {
+			t.Errorf("while it pushes, the lock's holder reads %+v (%v), want this push's agent", h, ok)
+		}
+		f.mu.Lock()
+		f.pushed = true
+		f.mu.Unlock()
+		return execx.Result{}, nil
+	}}}, f.Fake.Rules...)
+	if code, o, errb := pushWith(t, c, "--checkout", f.dir); code != 0 || o.Status != pushStatusPushed {
+		t.Fatalf("once the lock is free: exit %d, %+v (%s)", code, o, errb)
+	}
+	if !f.pushed {
+		t.Fatal("the push did not run")
+	}
+	if h, ok := dblock.ReadHolder(path); ok {
+		t.Fatalf("after the push the lock still names %+v", h)
 	}
 }
 
