@@ -265,6 +265,17 @@ type attentionBy struct {
 // attentionByFactory is attentionBy.By of the factory's raise.
 const attentionByFactory = "factory"
 
+// attentionByOf is PR prID's kvPRAttentionBy row (ok false: none, or one
+// that does not parse, which marks nothing).
+func (e *Engine) attentionByOf(ctx context.Context, prID int64) (attentionBy, bool) {
+	raw, ok := e.getKV(ctx, kvPRAttentionBy(prID))
+	var by attentionBy
+	if !ok || json.Unmarshal([]byte(raw), &by) != nil {
+		return attentionBy{}, false
+	}
+	return by, true
+}
+
 // factoryAttentionRefusal is `magnum fix --done`'s refusal of pr's
 // attention msg (ref, its owner/name#N) while the factory raised it and
 // fixes the PR (the engine owner's ruling on R6): the factory lifts it
@@ -274,9 +285,7 @@ const attentionByFactory = "factory"
 // for magnum's own attention, and once the PR is magnum's again, whose
 // factory lifts nothing.
 func (e *Engine) factoryAttentionRefusal(ctx context.Context, ref string, pr store.PR, msg string) error {
-	raw, ok := e.getKV(ctx, kvPRAttentionBy(pr.ID))
-	var by attentionBy
-	if !ok || json.Unmarshal([]byte(raw), &by) != nil || by.By != attentionByFactory || by.Message != msg {
+	if by, ok := e.attentionByOf(ctx, pr.ID); !ok || by.By != attentionByFactory || by.Message != msg {
 		return nil
 	}
 	switch o, _, owned, err := e.fixOwner(ctx, pr.ID); {
