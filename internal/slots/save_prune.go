@@ -5,10 +5,11 @@ package slots
 // folder (saveChanges) and by each daemon's prune of every folder of saves
 // (PruneSaves over paths.Layout.ReviewSaveFolders or FactorySaveFolders),
 // for the PRs that never save again. A save that copied no untracked file
-// and repeats the newest save of the same slot in its folder (its
-// changes.diff the same, byte for byte, and its saved.txt naming the same
-// files left out and kept in the tree) is not kept (repeatedSave):
-// post_checkout's residue saves once, not at every round.
+// and repeats the newest save of the same slot in its folder, one of the
+// last 7 days (its changes.diff the same, byte for byte, and its saved.txt
+// naming the same files left out and kept in the tree), is not kept
+// (repeatedSave): post_checkout's residue saves once a week, not at every
+// round.
 
 import (
 	"bytes"
@@ -24,6 +25,12 @@ import (
 
 // SaveKeep is how long a save before a discard is kept.
 const SaveKeep = 14 * 24 * time.Hour
+
+// repeatWithin is how old a save may be at most to stand for a later save
+// that repeats it (repeatedSave): half of SaveKeep, so what a discard drops
+// stays at least 7 days in the save that stands for it. A repeat of an
+// older save is kept, and lives its own 14 days.
+const repeatWithin = SaveKeep / 2
 
 // saveTimeLayout is the UTC time a save's folder's name starts with
 // (newSaveDir), before "-<slot>".
@@ -121,14 +128,18 @@ func pruneSaveFolder(folder string, now time.Time) (int, error) {
 }
 
 // repeatedSave is the newest save of slot in folder (lastSave) when save s,
-// at s.dir, which copied no file, repeats it: the same changes.diff
-// (samePatch), and the same files left out and kept in the tree, as its
-// saved.txt names them (savedLists); "" when it does not. A save left out
-// a file or kept one in the tree that the other did not, or for another
-// reason, is no repeat: the earlier save does not say so.
-func repeatedSave(folder, slot string, s saved) string {
+// at s.dir, which copied no file, repeats it at now: that save is
+// repeatWithin old at most, and holds the same changes.diff (samePatch)
+// and names the same files left out and kept in the tree in its saved.txt
+// (savedLists); "" when it does not. A save that left out a file or kept
+// one in the tree that the other did not, or for another reason, is no
+// repeat: the earlier save does not say so.
+func repeatedSave(folder, slot string, s saved, now time.Time) string {
 	last := lastSave(folder, s.dir, slot)
 	if last == "" || !samePatch(last, s.dir) {
+		return ""
+	}
+	if at, ok := saveTime(filepath.Base(last)); !ok || at.Before(now.Add(-repeatWithin)) {
 		return ""
 	}
 	kept, skipped, ok := savedLists(last)

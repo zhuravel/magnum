@@ -198,7 +198,7 @@ func (m *Manager) saveChanges(ctx context.Context, sl store.Slot, ch changes, un
 func (m *Manager) settleSave(folder string, sl store.Slot, s saved, head, what string) (saved, error) {
 	last := ""
 	if !s.empty() && s.untracked == 0 {
-		last = repeatedSave(folder, sl.Name, s)
+		last = repeatedSave(folder, sl.Name, s, m.now())
 	}
 	if !s.empty() && last == "" {
 		return s, s.writeNote(sl, head, what, m.saveCapOr(), m.now())

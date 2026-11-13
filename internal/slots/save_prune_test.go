@@ -109,6 +109,31 @@ func TestASaveRepeatsTheLastOnlyWithTheSameFilesLeftOutAndKept(t *testing.T) {
 	})
 }
 
+// A save stands for a later one that repeats it only while it is 7 days
+// old at most: past that the repeat is kept, so the only copy of what a
+// discard dropped lives 14 days. A repeat on the 13th day of the save it
+// stood on lived one day, until that save was pruned.
+func TestASaveIsNotARepeatOfOneOlderThanAWeek(t *testing.T) {
+	h := newHarness(t)
+	sl, pr := h.claimedCheckout(8, h.shaPR8)
+	folder := h.layout.PRSaves("talkable", "talkable", pr.Number)
+	resync := func(after time.Duration, want int) {
+		t.Helper()
+		h.now = h.now.Add(after)
+		strayEdit(t, sl.Path)
+		if err := h.m.Resync(h.ctx, h.slot(sl.Name), h.shaPR7); err != nil {
+			t.Fatalf("Resync: %v", err)
+		}
+		if got := saves(t, folder); len(got) != want {
+			t.Fatalf("saves after %s = %q, want %d", after, got, want)
+		}
+	}
+	resync(time.Minute, 1)    // against PR #8's head
+	resync(time.Minute, 2)    // against PR #7's: another patch
+	resync(6*24*time.Hour, 2) // a repeat of a save 6 days old
+	resync(2*24*time.Hour, 3) // of one 8 days old: kept
+}
+
 // fakeSave makes a save named name (its time and slot) in folder, as
 // saveChanges leaves one.
 func fakeSave(t *testing.T, folder, name string) string {
