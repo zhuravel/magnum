@@ -26685,6 +26685,24 @@ skill versions); people add theirs to the sections before it, at the end of the 
     send anything; `StartOver` now returns an error, and `applyStops` leaves the answer unapplied under
     the drain's wait, so the next pass after the lift starts the role over and its first prompt carries
     your answer. A prompt that `bringBack` follows goes through `Send`, which the drain holds first.
+  - *The engine owner's check of aa88f49a* (K1 to K8). A lint crash, a sign, the last stderr line and a hang
+    that go to the writer, and a jest run that names only its summary, name no failure either: they take the
+    unnamed path (`failUnnamedLines`), so no accept is offered and none is read for them. Before, a
+    `.rubocop.yml` plugin that cannot load got the accept, and after it every later precheck crashed the same
+    way and passed (K2). A Ruby warning is no longer skipped by its shape: `\S+:\d+: warning:` also matched
+    gcc's `path:line:col: warning:` rows (shellcheck `-f gcc`, swiftlint, clang), so a warning on a changed
+    line passed. Every row now counts unless its file is outside the copy, which is how a gem's warning is
+    dropped (K6). An absolute path is read through the copy's symlinks on both sides (`copyFile`), since
+    RuboCop and eslint print getcwd's physical path (K7). The writer's progress cuts each entry's check off
+    (`cutCheck`) before its key, so an offense that only moved is no progress (K1). Only a lint's failures are
+    keyed without numbers (`acceptKey` takes the check), so jest's "Tests: 5 failed" keeps its count (K3).
+    A number that is part of a name or a code (`Style/Rule1`, `SC2164`) or a limit after a slash stays in
+    the key: masking every digit made two shellcheck codes one offense. yarn v1's footer is noise (K4). A
+    script file causes a missing command only when the lines the change added to it name that command
+    (`envCrash.added`), and zsh's "command not found: <name>" names it after the words (K5). A no-progress
+    wait read back after a restart is never recovered in the pass that takes its first look, so a session
+    that works again since is seen to move. A run that ends before any pass built its role's state voids
+    the wait read back from its events: `ended` builds the state and writes its `due void` at once (K8).
   Tests, failing first and each checked by a mutation: `TestALintThatNamesNoOffenseRunsAgainThenAfterTheInstalls`,
   `TestABaseRunThatHangsGetsADoubledBoundThenAQuestion`, `TestYourAnswerToACheckQuestionSkipsItOrGivesItYourBound`,
   `TestARestartInTheMiddleOfTheFaultStepsNeitherDoublesNorLosesOne`,
@@ -26728,8 +26746,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestAScriptFileCausesOnlyTheMissingCommandItNames`, `TestAJestProofsFailureIsItsFailingTests`,
   `TestASecondAnswerForARoleStillLostBeforeItsFirstPromptIsApplied`,
   `TestAnotherRolesNeedsYouEventOutlivesAStopQuestion`, `TestTwoRolesNeedsYouEventsAreBothTold`,
-  `TestAGoOnAtAStoppedRoundsRunAgainSettlesItsQuestion` and
-  `TestAStartAnswerUnderTheDrainIsAppliedOnceItIsLifted` in internal/factory.
+  `TestAGoOnAtAStoppedRoundsRunAgainSettlesItsQuestion`,
+  `TestAStartAnswerUnderTheDrainIsAppliedOnceItIsLifted`, `TestALintCrashTheChangeCausedOffersNoAccept`,
+  `TestAJestRunThatNamesOnlyItsSummaryOffersNoAccept`, `TestAGccStyleWarningOnAChangedLineCounts`,
+  `TestAnOffenseUnderTheCopysPhysicalPathCounts`, `TestAnOffenseThatOnlyMovedIsNoProgress`,
+  `TestJestsSummaryKeepsItsCount` and `TestYarnsFooterIsNoFailureLine` in internal/factory.
   In internal/factory/runtime: `TestALostPaneIsRecoveredThreeTimesAfterItsWaitsTheLastInAFreshSession`,
   `TestARestartBetweenTheRecoveriesNeitherDoublesNorLosesOne`, `TestYourRetryStartsTheRecoveriesOverAndSpendsNone`,
   `TestAFreshStartStartsTheRoleWithItsContextAndItsRecoveriesOver`, `TestAFreshSessionStartsTheLoopsLadderOver`,
@@ -26740,7 +26761,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestAWaitedRecoveryOfASessionThatMovesAgainIsVoid`, `TestTheRecoveriesRunningOutHandTheRunOver`,
   `TestStartOverStartsALostRolesRecoveriesOver`, `TestANoProgressWaitOutlivesARestart`,
   `TestAVoidedWaitStaysVoidAfterARestart`, `TestAWaitedRecoveryWithNoTurnInFlightStaysDueUnderTheDrain`,
-  `TestASendFreshWaitsForTheDrain` and `TestStartOverWaitsForTheDrain`. In internal/execx: `TestARunASignalEndedReportsTheSignal`.
+  `TestASendFreshWaitsForTheDrain`, `TestStartOverWaitsForTheDrain`,
+  `TestANoProgressWaitReadBackPastItsDueLooksOnceMore` and `TestARunThatEndsAfterARestartVoidsItsWait`. In internal/execx: `TestARunASignalEndedReportsTheSignal`.
   In internal/config: `TestFactoryFixGoOnIsTwoByDefaultAndBounded`.
 
 ## Learned rules

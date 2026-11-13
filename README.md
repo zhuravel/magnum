@@ -4686,7 +4686,8 @@ stages = [
   its panes): then it cannot tell its changes from yours, leaves them, and the task needs you, naming them. A lint offense counts only
   on a changed line, read as `path:line[:column]: message` (rubocop's `--format emacs`, eslint's `--format
   unix`); a lint that exits non-zero naming no offense that way fails. An offense in a file outside the copy (a
-  gem's) and a warning Ruby prints for a file it loads (`path:N: warning: …`) are none. A fatal row of a file the
+  gem's, a warning Ruby prints for a file it loads) is none; a lint's absolute path is read through the copy's
+  symlinks too. A row of a file in the copy counts whatever its shape, gcc's `path:line:col: warning: …` too. A fatal row of a file the
   change touched is the writer's whatever its line: eslint's `Parsing error` or its `0:0` error (never a `0:0`
   warning such as `File ignored …`), RuboCop's `F:` severity or `Lint/Syntax`. The specs command's failures are read
   as rspec lists them (`rspec ./spec/x_spec.rb:12 # what it says`): a red one is run again on the base, and
@@ -4746,13 +4747,16 @@ stages = [
   packages). eslint's stylish report and stylelint's, whose rows of `line:column` sit under the line that names
   their file, are read by the changed lines as `path:line` offenses are. A failure no example or offense names is
   read the same on every run (the error's own line or a missed coverage threshold, past rspec's seed, its
-  progress and timing and a coverage table; hex addresses as `0x?`), so the writer's progress shows, but you
-  cannot accept it as known. Only a failure that names its examples, tests or offenses can be accepted, keyed
-  on those names: a lint's offense by its file, its cop or rule and its message, never its line and column, with
-  the numbers in its message (`[121/120]`, a complexity score) read as any. The accept counts the offenses of
-  each key, so a second equal offense in the same file fails. A report row that no file's line names (a cut
+  progress and timing and a coverage table, and yarn's footer; hex addresses as `0x?`), so the writer's progress
+  shows, but you cannot accept it as known. Neither can you accept a lint's crash, sign or hang, nor a jest run
+  that names only its summary (`Tests: 1 failed, …`). Only a failure that names its examples, tests or offenses
+  can be accepted, keyed on those names: a lint's offense by its file, its cop or rule and its message, never its
+  line and column, with the numbers in its message (`[121/120]`, a complexity score) read as any, but never a
+  number of a name or a code (`SC2164`). The accept counts the offenses of each key, so a second equal offense
+  in the same file fails. The writer's progress compares the same keys, so an offense that only moved is no
+  progress. A report row that no file's line names (a cut
   tail) makes the output unreadable, the writer's. A script file the change touched (`package.json`, a
-  `Makefile`, a rake task, `bin/`) causes a missing command only when it defines or names that command. A fault takes steps first: the precheck runs it again, then runs the repository's `installs` and
+  `Makefile`, a rake task, `bin/`) causes a missing command only when the lines the change added to it define or name that command. A fault takes steps first: the precheck runs it again, then runs the repository's `installs` and
   runs it again, and runs one that hangs once more with its bound doubled (up to `cap_max`), each step once at a
   head (`check-faults.json` in the task's folder keeps them across restarts; each is a `check` event and an
   alert, news whose toast counts nobody as waiting on you). A fault never passes: one whose run again the cap stops fails the precheck, and a lint whose hang spent
@@ -5700,7 +5704,7 @@ role whose pane is lost before its first prompt (its CLI exited at its start) is
 sends that prompt; a recovery with no progress within 10 minutes takes the next step, unless the session moves
 again during its wait. A waited recovery's due time is a `recover` event too, so a restart keeps it, and a task
 that waits on you keeps it due. After a restart, a wait that came of a no-progress finding takes a fresh look at the
-session and recovers it at its due time unless it moves. A wait that ends early (the role moved) writes `due void`,
+session, and a later pass recovers it at its due time unless it moved; a turn that ends voids the wait. A wait that ends early (the role moved) writes `due void`,
 so a restart never reads it back. A role lost before its first prompt starts on your answer with the stage's first
 prompt, your answer after it; when you answer again before that prompt went, your newest answer counts and its
 recoveries start over again. Each recovery is a `recover`
