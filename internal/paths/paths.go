@@ -352,8 +352,9 @@ func (l Layout) FactoryTaskSaves(id int64) string {
 
 // FactoryPRWork is the folder of the fix work of PR number of repo
 // (owner/name), <owner>/<name>/pr-<number> under factory/pr-work, nested
-// as FactoryCheckout is. The factory prunes it with the PR's kept refs
-// (refs/magnum/factory-kept/<number>/) once the PR closed or merged.
+// as FactoryCheckout is. The factory daemon prunes the saves in it past
+// 14 days (FactorySaveFolders, slots.PruneSaves); the PR's kept refs
+// (refs/magnum/factory-kept/<number>/) stay until a person deletes them.
 func (l Layout) FactoryPRWork(repo string, number int) string {
 	owner, name, _ := strings.Cut(repo, "/")
 	return filepath.Join(l.factoryDir(), "pr-work", owner, name, "pr-"+strconv.Itoa(number))
@@ -376,6 +377,21 @@ func (l Layout) PRSaves(owner, repo string, number int) string {
 // SlotSaves is where the saves of a checkout that holds no PR go, by its
 // name (a single path element): savesDir/<slot> in the data directory.
 func (l Layout) SlotSaves(slot string) string { return filepath.Join(l.data(), savesDir, slot) }
+
+// ReviewSaveFolders are the folders of saves the review daemon prunes
+// (slots.PruneSaves): PRSaves of every PR and SlotSaves of every checkout,
+// each a path whose "*" elements stand for any folder.
+func (l Layout) ReviewSaveFolders() []string {
+	return []string{filepath.Join(l.Reviews(), "*", "*", "*", savesDir), filepath.Join(l.data(), savesDir, "*")}
+}
+
+// FactorySaveFolders are the folders of saves the factory daemon prunes
+// (slots.PruneSaves): FactoryTaskSaves of every task and
+// FactoryPRWorkSaves of every PR's fix work, as ReviewSaveFolders names
+// them.
+func (l Layout) FactorySaveFolders() []string {
+	return []string{filepath.Join(l.FactoryTasks(), "*", savesDir), filepath.Join(l.factoryDir(), "pr-work", "*", "*", "*", savesDir)}
+}
 
 // FactoryPRStatus is the root of the status files the factory daemon writes
 // for the PRs its tasks published, pr-status/<owner>/<repo>/<number>.json

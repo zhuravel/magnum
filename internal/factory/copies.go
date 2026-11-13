@@ -162,9 +162,9 @@ func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx
 // saveDir is where magnum's slot code saves what a checkout of the
 // factory's held before a step discards it (slots.Manager.SetSaveDir), by
 // the owner row that holds it: a task's copy in the task's folder
-// (FactoryTaskSaves), a fix checkout in its PR work's (FactoryPRWorkSaves,
-// which the factory prunes with the PR's kept refs once the PR closed or
-// merged); "" for any other row, the slot code's own folder.
+// (FactoryTaskSaves), a fix checkout in its PR work's
+// (FactoryPRWorkSaves); "" for any other row, the slot code's own folder.
+// The daemon prunes them past 14 days (pruneSaves).
 func saveDir(l paths.Layout, owner store.PR) string {
 	if id, ok := runtime.OwnerTask(owner.NodeID); ok {
 		return l.FactoryTaskSaves(id)

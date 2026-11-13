@@ -410,8 +410,8 @@ type Engine struct {
 	holdsWritten []byte
 	holdsSaved   bool
 	// pruned is when the screen's own requests were last pruned
-	// (pruneScreenRequests).
-	pruned time.Time
+	// (pruneScreenRequests), savesPruned the checkouts' saves (pruneSaves).
+	pruned, savesPruned time.Time
 	// lastReveal is when a herdr hold last opened herdr's session;
 	// reviewRevealed when the local review last opened magnum's review
 	// session (reviewHerdrDown).
@@ -1083,6 +1083,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 
 	e.handleRequests(ctx)
 	e.pruneScreenRequests(ctx, now)
+	e.pruneSaves(now) // saves_prune.go
 	e.admit(ctx)
 	var refs map[int64]PRRef // the published tasks' PRs, read once for the passes that follow them
 	if e.d.Magnum != nil || e.d.Staging != nil {

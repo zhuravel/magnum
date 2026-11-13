@@ -105,16 +105,21 @@ func pathElement(name string) string {
 // saved is what saveChanges kept: its folder, how many paths its patch
 // holds and how many untracked files it saved, what it left out, each
 // "<path> (<why>)", and the untracked files the step keeps in the tree (a
-// switch's, a reset's, an abort's), which it names only.
+// switch's, a reset's, an abort's), which it names only. same says the
+// save was the slot's last one again, which dir names (lastSave).
 type saved struct {
 	dir                string
 	tracked, untracked int
 	skipped, kept      []string
+	same               bool
 }
 
 // note is what a slot.discarded event adds about the save: where it is,
 // and the first maxListed of what it left out.
 func (s saved) note() string {
+	if s.same {
+		return "; unchanged since the save " + s.dir + ", which holds them"
+	}
 	out := "; saved to " + s.dir
 	if len(s.skipped) > 0 {
 		out += fmt.Sprintf("; the save left out %d: %s", len(s.skipped), clipNames(s.skipped))
@@ -140,13 +145,19 @@ func clipNames(names []string) string {
 // left out and named, never a failure. The files magnum wrote into the
 // tree (the mise file it rendered, the copy_files and what setup wrote:
 // ownFiles) are neither saved nor named, and a save that would hold
-// nothing else is not kept (s.dir is ""). A save that fails (its folder,
-// the patch, the listing of the untracked files, saved.txt) leaves nothing
-// behind, and the step that called it discards nothing.
+// nothing else is not kept (s.dir is ""); nor is one whose patch is the
+// slot's last save's and that copied no file (s.same, s.dir that save).
+// Saves past SaveKeep in the folder go first (pruneSaveFolder). A save
+// that fails (its folder, the patch, the listing of the untracked files,
+// saved.txt) leaves nothing behind, and the step that called it discards
+// nothing.
 func (m *Manager) saveChanges(ctx context.Context, sl store.Slot, ch changes, untracked bool, what string) (s saved, err error) {
 	folder, err := m.savesFolder(ctx, sl)
 	if err != nil {
 		return saved{}, err
+	}
+	if _, err := pruneSaveFolder(folder, m.now()); err != nil {
+		m.logErr(ctx, err, "slots: prune the saves past %s in %s: %v", SaveKeep, folder, err)
 	}
 	if s.dir, err = newSaveDir(folder, m.now(), sl.Name); err != nil {
 		return saved{}, fmt.Errorf("slots: save the changes in %s: %w", sl.Path, err)
@@ -175,10 +186,29 @@ func (m *Manager) saveChanges(ctx context.Context, sl store.Slot, ch changes, un
 	} else if err := m.saveRemoved(ctx, sl, own, budget, &s); err != nil {
 		return s, err
 	}
-	if s.empty() { // magnum's own files alone: nothing of a person's to keep
-		return saved{}, os.RemoveAll(s.dir)
+	return m.settleSave(folder, sl, s, head, what)
+}
+
+// settleSave keeps save s of slot sl, in folder, with its saved.txt (HEAD
+// head, before what), and returns what the slot.discarded event names:
+// itself, nothing for a save that holds nothing (magnum's own files alone),
+// or the slot's last save (lastSave) when s copied no file and its patch is
+// that save's (samePatch), which then stands for it; s is removed in both.
+func (m *Manager) settleSave(folder string, sl store.Slot, s saved, head, what string) (saved, error) {
+	last := ""
+	if !s.empty() && s.untracked == 0 {
+		last = lastSave(folder, s.dir, sl.Name)
 	}
-	return s, s.writeNote(sl, head, what, m.saveCapOr(), m.now())
+	if !s.empty() && (last == "" || !samePatch(last, s.dir)) {
+		return s, s.writeNote(sl, head, what, m.saveCapOr(), m.now())
+	}
+	if err := os.RemoveAll(s.dir); err != nil {
+		return s, err
+	}
+	if last == "" {
+		return saved{}, nil
+	}
+	return saved{dir: last, same: true}, nil
 }
 
 // saveRemoved saves the untracked files of slot sl that a removal deletes

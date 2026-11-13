@@ -21,6 +21,24 @@ var kindSaveFailing = notify.Kind{One: "slot that cannot save", Many: "slots tha
 // long (a restart that lost the record of it).
 const saveFailedWindow = 7 * 24 * time.Hour
 
+// pruneSaves removes the review slots' saves past slots.SaveKeep: those of
+// every PR's folder and every slot's of no PR (slots.PruneSaves over the
+// layout's ReviewSaveFolders), once per reconcile, as pruneRetro does the
+// retro's runs. A save of a folder that saves again is pruned by that save
+// too.
+func (e *Engine) pruneSaves() {
+	if !e.d.Layout.Valid() {
+		return
+	}
+	n, err := slots.PruneSaves(e.d.Layout.ReviewSaveFolders(), e.now())
+	if err != nil {
+		e.log.Warn("prune the slots' saves", "err", err)
+	}
+	if n > 0 {
+		e.log.Info("pruned the slots' saves", "saves", n, "keep", slots.SaveKeep.String())
+	}
+}
+
 // toastSaveFailed is the toast of a slot whose save before a discard
 // fails (slots.Manager.SetSaveAlert, which raises it once per slot and
 // kind, never at each retry): it names the slot, what fails, since when

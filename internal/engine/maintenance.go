@@ -207,7 +207,8 @@ func (e *Engine) reconcile(ctx context.Context) error {
 // audit events and handled requests older than them are deleted, once per
 // reconcile; so are the retro's and the skill editor's run directories and
 // the notes curations' scratch directories past their 30 days (pruneRetro,
-// pruneEdits, pruneCurations).
+// pruneEdits, pruneCurations), and the slots' saves past their 14 days
+// (pruneSaves).
 // Nothing else is pruned: the notes' versions and proposals, the findings,
 // the misses and the judges' results stay in the registry. A dry run keeps
 // everything.
@@ -219,6 +220,7 @@ func (e *Engine) prune(ctx context.Context) error {
 	e.pruneEdits()
 	e.pruneCurations()
 	e.pruneCritiques() // notes_critic.go
+	e.pruneSaves()     // slot_saves.go
 	keepEvents, keepRequests := e.cfg.Daemon.KeepEvents.Duration, e.cfg.Daemon.KeepRequests.Duration
 	if keepEvents <= 0 && keepRequests <= 0 {
 		return nil
