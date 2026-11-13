@@ -197,7 +197,9 @@ func (e *Engine) secondJudges(w *config.Watch) (judge, other config.Role, why st
 // review stage, while last, the task's newest cycle, is the clean round it
 // follows and ended with the loop going on: a branch that moved since voids
 // it and starts a fresh loop (voidMoved); at the same head, a judge that can
-// no longer run drops it and ends the loop clean on that round (dropSecond).
+// no longer run, or a task that may run no round more (your request to end
+// its local review, max_rounds), drops it and ends the loop clean on that
+// round (dropSecond).
 // ended reports that the loop ended at last, whose exit is clean now.
 func (e *Engine) settleSecond(ctx context.Context, t registry.Task, last registry.Cycle) (ended bool, err error) {
 	so, ok := readSecondOpinion(e.d.Layout.FactoryTaskDir(t.ID))
@@ -211,8 +213,10 @@ func (e *Engine) settleSecond(ctx context.Context, t registry.Task, last registr
 }
 
 // dropSecond drops second opinion so, pending at the head of the clean round
-// it follows (last), when its judge can no longer run (secondJudgeGone) or
-// it was dropped before a stop: the drop is written first, its event next,
+// it follows (last), when its judge can no longer run (secondJudgeGone), the
+// task may run no round more (secondHeld: you asked to end its local review,
+// or it ran max_rounds rounds) or it was dropped before a stop: the drop is
+// written first, its event next,
 // then the clean round's summary, as that round would have written it, and
 // the loop ends clean on that round after all (CloseLoop), so the stage
 // passes there with no further round, and any wait of the task not on you
@@ -221,7 +225,7 @@ func (e *Engine) settleSecond(ctx context.Context, t registry.Task, last registr
 func (e *Engine) dropSecond(ctx context.Context, t registry.Task, last registry.Cycle, so secondOpinion) (dropped bool, err error) {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	if so.Dropped == "" {
-		why := e.secondJudgeGone(e.cfg.WatchFor(t.Repo))
+		why := cmp.Or(e.secondJudgeGone(e.cfg.WatchFor(t.Repo)), e.secondHeld(dir, last))
 		if why == "" {
 			return false, nil
 		}

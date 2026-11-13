@@ -1,9 +1,12 @@
 package factory
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/factory/registry"
 )
@@ -128,6 +131,66 @@ func TestFinishReviewBetweenRoundsPassesAtTheWritersFix(t *testing.T) {
 	}
 	if lines := fixedAfterLines(sum, false); len(lines) != 2 {
 		t.Errorf("FIXED AFTER %q, want round 1's two findings", lines)
+	}
+}
+
+// Your finish-review between a clean round and its second opinion, which
+// has not begun (it waits on magnum's real round), drops that opinion: no
+// round runs, and the loop ends clean on the round it followed, as when
+// its judge goes. The y/N says so, not that the writer fixed anything.
+func TestFinishReviewDropsASecondOpinionThatHasNotBegun(t *testing.T) {
+	r := newReviewRig(t, result(nitFinding), result())
+	task, head := r.wideReviewTask("PR-12529")
+	r.run(6, func() bool { return r.firstDecided(task.ID) })
+	r.magnum.set("magnum reviews example/shop#1")
+	r.run(2, nil)
+	if got := r.reload(task.ID); got.WaitsWho != waitMagnum || !r.readSecond(task.ID).live() {
+		t.Fatalf("the second opinion waits %q: %q, want a live one on magnum", got.WaitsWho, got.WaitsWhat)
+	}
+	answer := r.finish(task.ID)
+	for _, want := range []string{"round 1 of its local review ended clean", "its second opinion", "does not run", "ends clean on round 1"} {
+		if !strings.Contains(answer, want) {
+			t.Errorf("the answer %q lacks %q", answer, want)
+		}
+	}
+	if strings.Contains(answer, "writer's fix") || strings.Contains(answer, "FIXED AFTER") {
+		t.Errorf("the answer %q names a writer's fix of a clean round", answer)
+	}
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	got := r.reload(task.ID)
+	if got.Stage != "pr_body" || len(r.rv.calls()) != 1 || got.WaitsWho != "" {
+		t.Fatalf("task %s at %s waits %q: %q after rounds %v, want pr_body after round 1 alone", got.State, got.Stage, got.WaitsWho, got.WaitsWhat,
+			roundsOf(r.rv.calls()))
+	}
+	if cs := r.cycles(task.ID); len(cs) != 1 || cs[0].Exit != registry.ExitClean {
+		t.Fatalf("cycles %+v, want round 1's loop ended clean", cs)
+	}
+	if sum := r.summary(task.ID); sum.Exit != registry.ExitClean || sum.Head != head || sum.SecondJudge != "" {
+		t.Fatalf("summary %+v, want round 1's clean end at %s with no second opinion", sum, short(head))
+	}
+	if dropped := r.reviewEvents(task.ID, registry.PhaseInfo, "the second opinion after round 1 (cycle 1) does not run"); len(dropped) != 1 ||
+		!strings.Contains(dropped[0].Text, "you asked to end the local review") {
+		t.Fatalf("events %+v, want one drop saying you asked to end the review", dropped)
+	}
+	if fileIn(r.layout.FactoryTaskDir(task.ID), finishFile) {
+		t.Error("your request outlived the stage's pass")
+	}
+}
+
+// A cycle that ended with the loop going on at the task's head is the
+// writer's closed fix only when its round gave the writer findings
+// (review-<n>.json): the clean round a second opinion follows ends so too.
+func TestACleanRoundBeforeItsSecondOpinionIsNoWritersFix(t *testing.T) {
+	dir := t.TempDir()
+	last := registry.Cycle{ID: 3, N: 1, HeadBefore: "a1b2c3d", HeadAfter: "a1b2c3d", Ended: time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)}
+	if fixedAtHead(dir, last, last.HeadAfter) {
+		t.Error("a clean round with no review-1.json reads as the writer's fix")
+	}
+	if err := os.WriteFile(filepath.Join(dir, reviewFile(1)), []byte(`{"round": 1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !fixedAtHead(dir, last, last.HeadAfter) {
+		t.Error("a fixing round whose fix closed at the head is not the writer's fix")
 	}
 }
 

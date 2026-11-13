@@ -276,15 +276,16 @@ func summaryExitAt(dir, head string, exits ...string) bool {
 }
 
 // secondHeld is why the task's second opinion, one round more, does not
-// run after clean cycle cy (in task directory dir): the task ran
+// run after clean cycle cy (in task directory dir), when it is decided
+// (decideSecond) and while it waits to begin (dropSecond): the task ran
 // [factory.local_review] max_rounds rounds, or you asked to end its local
 // review; "" when it may.
 func (e *Engine) secondHeld(dir string, cy registry.Cycle) string {
 	if _, ok := readFinish(dir); ok {
-		return "you asked to end the local review, so no round starts"
+		return "you asked to end the local review"
 	}
 	if limit := e.cfg.Factory.LocalReview.MaxRounds; limit > 0 && cy.N >= limit {
-		return fmt.Sprintf("the task ran %s, at [factory.local_review] max_rounds %d, so no round starts", plural(cy.N, "round"), limit)
+		return fmt.Sprintf("the task ran %s, at [factory.local_review] max_rounds %d", plural(cy.N, "round"), limit)
 	}
 	return ""
 }

@@ -123,7 +123,9 @@ const finishThen = "no round starts after it. A safe stop (no P0 or P1, a verdic
 // finishes (or is read, or the writer's fix of its findings finishes), or,
 // between rounds, the review ends at once on the writer's fix of the last
 // round's findings, which no round reviews; a head no round reviewed yet
-// gets its round first. Then no round starts.
+// gets its round first. Then no round starts. A second opinion that has
+// not begun after a clean round does not run, and the review ends clean on
+// that round (secondPending, dropSecond).
 func FinishReviewPlan(ctx context.Context, reg *registry.Registry, l paths.Layout, t registry.Task) (string, error) {
 	cycles, err := reg.Cycles(ctx, t.ID)
 	if err != nil {
@@ -131,11 +133,15 @@ func FinishReviewPlan(ctx context.Context, reg *registry.Registry, l paths.Layou
 	}
 	dir := l.FactoryTaskDir(t.ID)
 	now := "no round of its local review ran yet: its first round runs and finishes, then"
+	plan := ""
 	if n := len(cycles); n > 0 {
 		last := cycles[n-1]
 		fixing := fmt.Sprintf("the writer fixes round %d's findings: its fix finishes, the review ends at once on it (FIXED AFTER on "+
 			"the card), and", last.N)
 		switch open := last.Ended.IsZero(); {
+		case !open && secondPending(dir, last, t.HeadSHA):
+			plan = fmt.Sprintf("round %d of its local review ended clean, and its second opinion, one round more, has not begun: it does not "+
+				"run, and the review ends clean on round %d at once", last.N, last.N)
 		case open && fsx.Exists(filepath.Join(dir, reviewFile(last.N))):
 			now = fixing
 		case open && fsx.Exists(filepath.Join(dir, reviewRoundFile(last.N))):
@@ -151,7 +157,9 @@ func FinishReviewPlan(ctx context.Context, reg *registry.Registry, l paths.Layou
 			now = "no round reviewed its head yet: one round runs and finishes, then"
 		}
 	}
-	plan := now + " " + finishThen
+	if plan == "" {
+		plan = now + " " + finishThen
+	}
 	if m, ok := readFinish(dir); ok {
 		plan += fmt.Sprintf(" (you asked already, at %s)", m.At.Local().Format("Jan 2 15:04"))
 	}
@@ -164,14 +172,24 @@ func FinishReviewQuestion(key, plan string) string {
 	return "End " + key + "'s local review: " + plan + "?"
 }
 
+// secondPending reports whether the task's second opinion (review-second.json
+// in dir) waits to begin after ended cycle last, the clean round it follows,
+// at head: a request to end the review drops it (dropSecond).
+func secondPending(dir string, last registry.Cycle, head string) bool {
+	so, ok := readSecondOpinion(dir)
+	return ok && so.Moved == "" && so.After == last.N && last.Exit == "" && (head == "" || head == so.Head)
+}
+
 // fixedAtHead reports whether the writer's fix of ended cycle last's
 // findings closed at head (task directory dir): a fixing round's cycle
-// ends at the head the factory's checks passed the fix at (closeFix), and
-// a stop's at its own head, its fix's head in review-stop.json.
+// (its review-<n>.json for the writer; the clean round a second opinion
+// follows has none) ends at the head the factory's checks passed the fix
+// at (closeFix), and a stop's at its own head, its fix's head in
+// review-stop.json.
 func fixedAtHead(dir string, last registry.Cycle, head string) bool {
 	switch last.Exit {
 	case "":
-		return head != "" && last.HeadAfter == head
+		return head != "" && last.HeadAfter == head && fsx.Exists(filepath.Join(dir, reviewFile(last.N)))
 	case registry.ExitCap, registry.ExitOperator:
 		s, ok := readReviewStop(dir)
 		return ok && s.Cycle == last.ID && s.Fixed && head != "" && s.FixedAt == head

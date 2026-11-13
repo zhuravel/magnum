@@ -479,7 +479,8 @@ func TestASecondOpinionThatEndedUnavailableRunsAgain(t *testing.T) {
 
 // A pending second opinion whose judge can no longer run at the clean
 // round's head (second_judge "never", no judge_fallback of another kind, or
-// a watch's judge that runs on Claude now) does not start: one event says why, the stage ends clean on that round
+// a watch's judge that runs on Claude now), or that is one round past the
+// task's max_rounds, does not start: one event says why, the stage ends clean on that round
 // with the summary it would have written, no further round runs, the task
 // never needs you for it, and the wait the pending opinion had (on magnum's
 // real round) is gone with it.
@@ -492,6 +493,9 @@ func TestAPendingSecondOpinionWithoutItsJudgeEndsTheStageClean(t *testing.T) {
 		{"no fallback", "judge_fallback names no judge of another kind", func(r *reviewRig) { r.cfg.Pipeline.JudgeFallback = "" }},
 		{"a claude judge now", "the review's judge claude-judge runs on claude", func(r *reviewRig) {
 			r.cfg.Watches[0].Roles = []string{"claude-judge", "claude-review", "codex-review"}
+		}},
+		{"max_rounds reached", "the task ran 1 round, at [factory.local_review] max_rounds 1", func(r *reviewRig) {
+			r.cfg.Factory.LocalReview.MaxRounds = 1 // a build with the limit came while the opinion waited: it is one round more
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
