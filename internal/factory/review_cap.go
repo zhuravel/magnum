@@ -77,13 +77,27 @@ func highPriority(res evalrun.LocalResult) bool {
 // and, from review-stop.json, the task card.
 func (e *Engine) stopAtCap(ctx context.Context, t registry.Task, st config.FactoryStage, cy registry.Cycle, loop []registry.Cycle,
 	res evalrun.LocalResult, live, questions, doubts []ReviewItem) error {
-	rf, err := e.writeReview(ctx, t, st, cy, slices.Concat(live, questions))
+	head := func() string {
+		return capHead(e.d.Layout.FactoryTaskDir(t.ID), loop, res, len(live)+len(questions)+len(doubts))
+	}
+	return e.stopOnFindings(ctx, t, st, cy, slices.Concat(live, questions), head, registry.ExitCap, "the local review's cap")
+}
+
+// stopOnFindings stops the loop for you on cycle cy with exit (stopWith):
+// its findings for the writer, items, go to review-<n>.json, as a fixing
+// round's do, for the fix turn of your "go on" at its head (capFix), and
+// headOf (read once that file is written: the loop's trend counts it) and
+// the first of them make the NEEDS YOU line, all of them the task card's
+// list (review-stop.json).
+func (e *Engine) stopOnFindings(ctx context.Context, t registry.Task, st config.FactoryStage, cy registry.Cycle, items []ReviewItem,
+	headOf func() string, exit, because string) error {
+	rf, err := e.writeReview(ctx, t, st, cy, items)
 	if err != nil {
 		return err
 	}
-	head := capHead(e.d.Layout.FactoryTaskDir(t.ID), loop, res, len(live)+len(questions)+len(doubts))
+	head := headOf()
 	s := reviewStop{Why: head + ": " + itemsLine(rf.Findings), Head: head, Findings: rf.Findings}
-	return e.stopWith(ctx, t, cy, registry.ExitCap, s, "the local review's cap")
+	return e.stopWith(ctx, t, cy, exit, s, because)
 }
 
 // capHead is the head of the line of a stop at the cap of loop (its last
@@ -110,26 +124,9 @@ func (e *Engine) capStops(ctx context.Context, t registry.Task, st config.Factor
 
 // capSafe reports whether a stop at the cap of loop (in task directory
 // dir), whose last round's result is res, is safe to go on from without
-// you: the round has no P0 or P1, new or still open (highPriority), its
-// judge's verdict does not block, and the writer declined no finding it got
-// in the loop (a reply of a round of it, review-reply-<n>.json, with a risk
-// or without). A reply that cannot be read is not known to decline
-// nothing.
+// you (unsafeWhy finds nothing against it).
 func capSafe(dir string, loop []registry.Cycle, res evalrun.LocalResult) bool {
-	if highPriority(res) || res.Verdict == store.VerdictBlocking {
-		return false
-	}
-	for _, cy := range loop {
-		b, err := os.ReadFile(filepath.Join(dir, reviewReplyFile(cy.N)))
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		var rep ReviewReply
-		if err != nil || json.Unmarshal(b, &rep) != nil || len(rep.declinedIDs()) > 0 {
-			return false
-		}
-	}
-	return true
+	return unsafeWhy(dir, loop, res) == ""
 }
 
 // exitCapFixed is the exit of review-summary.json of a loop that passed at

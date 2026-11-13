@@ -501,7 +501,8 @@ func TestTheProofAndTheReviewInTheStatusFile(t *testing.T) {
 	for exit, want := range map[string]prstatus.Verdict{"": prstatus.VerdictNone, registry.ExitClean: prstatus.VerdictClean,
 		registry.ExitOscillation: prstatus.VerdictFindings, registry.ExitCap: prstatus.VerdictFindings,
 		registry.ExitOperator: prstatus.VerdictFindings, registry.ExitUnavailable: prstatus.VerdictFailed, "a word of later": prstatus.VerdictNone,
-		exitCapFixed: prstatus.VerdictFindings} { // passed at the cap, its last fix reviewed by no round: never clean
+		exitCapFixed:   prstatus.VerdictFindings,   // passed at the cap, its last fix reviewed by no round: never clean
+		exitRoundLimit: prstatus.VerdictFindings} { // ended at the round limit with its findings open
 		if got := verdictOf(exit); got != want {
 			t.Errorf("exit %q: %s, want %s", exit, got, want)
 		}

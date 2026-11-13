@@ -657,6 +657,45 @@ func TestFactoryLocalReviewCapGoOnDefaultsToTwoAndTakesZeroToFive(t *testing.T) 
 	}
 }
 
+// The local review stops at 8 rounds over a task's life by default
+// (max_rounds); 0 turns the limit off, and only an integer from 0 to
+// MaxFactoryMaxRounds is taken, naming the key otherwise. A user's lone key
+// merges into the built-in table.
+func TestFactoryLocalReviewMaxRoundsDefaultsToEightAndTakesZeroToThirty(t *testing.T) {
+	for _, lr := range []FactoryLocalReview{Defaults().Factory.LocalReview, mustLoadDefaults(t).Factory.LocalReview} {
+		if lr.MaxRounds != 8 {
+			t.Errorf("local_review = %+v, want max_rounds 8", lr)
+		}
+	}
+	if MaxFactoryMaxRounds != 30 {
+		t.Errorf("MaxFactoryMaxRounds = %d, want 30", MaxFactoryMaxRounds)
+	}
+	cfg := validFactoryConfig()
+	for _, ok := range []int{0, 1, 8, MaxFactoryMaxRounds} {
+		cfg.Factory.LocalReview.MaxRounds = ok
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("max_rounds = %d: %v", ok, err)
+		}
+	}
+	for _, bad := range []int{-1, MaxFactoryMaxRounds + 1} {
+		cfg.Factory.LocalReview.MaxRounds = bad
+		wantError(t, cfg.Validate(), "factory.local_review.max_rounds", fmt.Sprint(bad))
+	}
+	loaded, err := loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml+"\n[factory.local_review]\nmax_rounds = 0\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lr := loaded.Factory.LocalReview; lr.MaxRounds != 0 || lr.Cycles != 3 || lr.CapGoOn != 2 {
+		t.Errorf("local_review = %+v, want max_rounds 0 and the built-in cycles and cap_go_on", lr)
+	}
+	for _, bad := range []string{`"eight"`, `1.5`, `true`, `31`} {
+		_, err := loadCommittedWithLocal(t, testLocalConfig+factoryRepoToml+"\n[factory.local_review]\nmax_rounds = "+bad+"\n")
+		if err == nil || !strings.Contains(err.Error(), "max_rounds") {
+			t.Errorf("max_rounds = %s: err = %v, want one naming the key", bad, err)
+		}
+	}
+}
+
 // The second-opinion round of the local review runs on wide changes by
 // default; second_judge takes "wide", "always" or "never" and refuses any
 // other word, naming the three; a user's lone key merges into the built-in

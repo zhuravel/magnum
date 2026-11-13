@@ -174,6 +174,14 @@ type FactoryLocalReview struct {
 	// writer fix the findings, and the stage passes once the factory's
 	// checks pass on the fix, the ready card and the PR body naming them.
 	CapGoOn int `toml:"cap_go_on"`
+	// MaxRounds is the most local review rounds a task runs over its life
+	// (0 to MaxFactoryMaxRounds; 0 turns the limit off), counting every
+	// round: a fresh loop's after your retry, an extra round's, a go-on's.
+	// At the end of a round that reaches it no round starts: a safe stop
+	// (as CapGoOn's) passes the stage with the round's open findings left
+	// for the ready card's KNOWN row, any other waits for you. A task past
+	// it stops at the end of its round in flight.
+	MaxRounds int `toml:"max_rounds"`
 }
 
 // FactoryRepo is a [[factory.repo]]: a repository the factory writes code
@@ -569,6 +577,9 @@ const (
 	MaxFactoryCycles     = 10
 	// MaxFactoryCapGoOn is the most [factory.local_review] cap_go_on takes.
 	MaxFactoryCapGoOn = 5
+	// MaxFactoryMaxRounds is the most [factory.local_review] max_rounds
+	// takes.
+	MaxFactoryMaxRounds = 30
 	// DefaultPrecheckCapPerFile and DefaultPrecheckCapMax are how much a
 	// precheck's cap grows per file of the change, and its most.
 	DefaultPrecheckCapPerFile = 15 * time.Second
@@ -669,7 +680,7 @@ func DefaultFactory() Factory {
 		Poll:           Duration{45 * time.Second},
 		HumanCooldown:  Duration{15 * time.Minute},
 		Sensitive:      []string{"Gemfile.lock", ".github/workflows/**", "config/**"},
-		LocalReview:    FactoryLocalReview{Cycles: 3, ExtraCycles: 2, CapGoOn: 2, LaterWithout: []string{RoleClaudeSimplify}, SecondJudge: FactorySecondJudgeWide},
+		LocalReview:    FactoryLocalReview{Cycles: 3, ExtraCycles: 2, CapGoOn: 2, MaxRounds: 8, LaterWithout: []string{RoleClaudeSimplify}, SecondJudge: FactorySecondJudgeWide},
 		Roles:          DefaultFactoryRoles(),
 		CodexFallback: map[string]string{"fx-cause": "fx-cause-claude", "fx-critic": "fx-critic-claude", "fx-critic-narrow": "fx-critic-claude",
 			"fx-points-codex": "fx-points"},
@@ -1108,6 +1119,9 @@ func (l FactoryLocalReview) validate() []error {
 	}
 	if l.CapGoOn < 0 || l.CapGoOn > MaxFactoryCapGoOn {
 		errs = append(errs, fmt.Errorf("factory.local_review.cap_go_on must be between 0 and %d, got %d", MaxFactoryCapGoOn, l.CapGoOn))
+	}
+	if l.MaxRounds < 0 || l.MaxRounds > MaxFactoryMaxRounds {
+		errs = append(errs, fmt.Errorf("factory.local_review.max_rounds must be between 0 and %d, got %d", MaxFactoryMaxRounds, l.MaxRounds))
 	}
 	if !slices.Contains(FactorySecondJudges, l.SecondJudge) {
 		errs = append(errs, fmt.Errorf("factory.local_review.second_judge must be %q, %q or %q, got %q",

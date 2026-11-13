@@ -705,6 +705,7 @@ func TestACleanTenthRoundGetsItsSecondOpinionAsRoundEleven(t *testing.T) {
 	answers = append(answers, rounds(2, result())...)
 	r := newReviewRig(t, answers...)
 	r.cfg.Factory.LocalReview.Cycles = 10
+	r.cfg.Factory.LocalReview.MaxRounds = 0 // the round limit (8) would end the loop at round 8
 	task, _ := r.wideReviewTask("PR-12395")
 	dir := r.layout.FactoryTaskDir(task.ID)
 	for n := 1; n <= 9; n++ {

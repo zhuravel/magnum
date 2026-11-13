@@ -224,6 +224,11 @@ type ReviewSummary struct {
 	// writer fixed after it with no round reviewing the fix (exit
 	// cap_fixed): the ready card and the PR body name them.
 	FixedAfter []ReviewItem `json:"fixed_after,omitempty"`
+	// Limit and TaskRounds are, for a loop that ended at the round limit
+	// (exit round_limit), [factory.local_review] max_rounds then and the
+	// rounds the task ran over its life; 0 for any other end.
+	Limit      int `json:"limit,omitempty"`
+	TaskRounds int `json:"task_rounds,omitempty"`
 }
 
 // localRound is a round that runs off the loop: its cycle (id and number),
@@ -306,8 +311,10 @@ func (e *Engine) sweepRounds(tasks []registry.Task) {
 // the factory's own after a safe one (goOnAtCap), first hands that round's
 // findings to the writer (capFix), and the fresh loop reviews the writer's
 // head; past the task's go-ons the writer's fix passes the stage instead
-// (passAfterCap). A build without the local reviewer, agents or git leaves
-// the task where it is.
+// (passAfterCap). A loop that ended at the round limit on a safe stop
+// (review-end.json: endedAt) passes the stage at the head it ended at, and
+// a head since starts a fresh loop at once. A build without the local
+// reviewer, agents or git leaves the task where it is.
 func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.FactoryStage) (bool, error) {
 	if e.d.Review == nil || e.d.Runtime == nil || e.d.Git == nil {
 		return false, nil
@@ -325,11 +332,18 @@ func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.Facto
 			last.Exit = registry.ExitClean // the clean round's loop ended there after all
 		}
 	}
-	if last != nil && !last.Ended.IsZero() && (last.Exit == registry.ExitClean || last.Exit == registry.ExitOscillation) &&
-		last.HeadBefore == t.HeadSHA {
-		return true, nil
+	act := endNone
+	if last != nil {
+		act = e.endedAt(t, *last)
 	}
-	if last != nil && !last.Ended.IsZero() && (last.Exit == registry.ExitUnavailable || last.Exit == registry.ExitCap) {
+	switch {
+	case act == endPass:
+		return true, nil
+	case act == endFresh: // a head since the loop's end at the round limit: a fresh loop
+	case last != nil && !last.Ended.IsZero() && (last.Exit == registry.ExitClean || last.Exit == registry.ExitOscillation) &&
+		last.HeadBefore == t.HeadSHA:
+		return true, nil
+	case last != nil && !last.Ended.IsZero() && (last.Exit == registry.ExitUnavailable || last.Exit == registry.ExitCap):
 		if told, err := e.toldOfStop(ctx, t, *last); err != nil || !told {
 			return false, err // the move to you was lost: made now, and no fresh loop starts
 		}
@@ -342,7 +356,7 @@ func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.Facto
 	if last != nil && last.Ended.IsZero() {
 		return e.goOnCycle(ctx, t, st, c, *last, loop)
 	}
-	if last != nil && last.Exit == registry.ExitCap {
+	if last != nil && last.Exit == registry.ExitCap && act == endNone {
 		rf, due, err := e.capFix(ctx, t, st, *last, cycles)
 		if err != nil {
 			return false, err
@@ -1152,7 +1166,10 @@ func roundTries(dir string, n int, why string) int {
 //     nothing (or only findings the writer declined with their risk) ends
 //     the loop clean, unless the task's second opinion runs first
 //     (decideSecond), only doubts on an oscillation (the stage passes for
-//     both, with the summary for the ready card), anything else at the cap
+//     both, with the summary for the ready card), anything else at or past
+//     the task's [factory.local_review] max_rounds-th round starts no other
+//     (endAtRound: a safe stop passes the stage with its findings left for
+//     the ready card, any other needs you), and at the cap
 //     (cycles rounds besides the second opinion) stops the loop (capStops:
 //     a safe stop goes on by itself, any other needs you with its
 //     findings) unless the loop converges (extraRound), and before it the
@@ -1175,6 +1192,7 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 	// raised it: the ready card and the PR body's "Known" name them.
 	all := slices.SortedFunc(maps.Values(readDeclined(dir)), func(a, b ReviewItem) int { return strings.Compare(a.Fingerprint, b.Fingerprint) })
 	sum := ReviewSummary{Rounds: round, Head: cy.HeadBefore, Leftovers: leftovers, Declined: all, Doubts: doubts, Missing: loopMissing(dir, loop)}
+	end, recorded, ending := e.endBy(dir, cy)
 	switch {
 	case !rr.blocks || len(live)+len(questions)+len(doubts) == 0:
 		// A finding posted at a blocking priority that the counts left out
@@ -1195,6 +1213,8 @@ func (e *Engine) decideRound(ctx context.Context, t registry.Task, st config.Fac
 			"makes them block: the loop ends clean, they stay for the card and its w", round, cy.N, plural(len(live), "P3 finding")))
 		sum.Exit, sum.Leftovers = registry.ExitClean, slices.Concat(leftovers, live, questions)
 		return e.endClean(ctx, t, c, cy, loop, sum)
+	case ending:
+		return e.endAtRound(ctx, t, st, cy, loop, res, rr, sum, end, recorded)
 	case e.atCap(dir, loop, round):
 		next, extra, ok := e.extraRound(dir, loop, round, res, len(live)+len(questions))
 		if !ok {

@@ -4948,6 +4948,9 @@ const (
 	MaxFactoryCycles     = 10
 	// MaxFactoryCapGoOn is the most [factory.local_review] cap_go_on takes.
 	MaxFactoryCapGoOn = 5
+	// MaxFactoryMaxRounds is the most [factory.local_review] max_rounds
+	// takes.
+	MaxFactoryMaxRounds = 30
 	// DefaultPrecheckCapPerFile and DefaultPrecheckCapMax are how much a
 	// precheck's cap grows per file of the change, and its most.
 	DefaultPrecheckCapPerFile = 15 * time.Second
@@ -6667,6 +6670,14 @@ type FactoryLocalReview struct {
 	// writer fix the findings, and the stage passes once the factory's
 	// checks pass on the fix, the ready card and the PR body naming them.
 	CapGoOn int `toml:"cap_go_on"`
+	// MaxRounds is the most local review rounds a task runs over its life
+	// (0 to MaxFactoryMaxRounds; 0 turns the limit off), counting every
+	// round: a fresh loop's after your retry, an extra round's, a go-on's.
+	// At the end of a round that reaches it no round starts: a safe stop
+	// (as CapGoOn's) passes the stage with the round's open findings left
+	// for the ready card's KNOWN row, any other waits for you. A task past
+	// it stops at the end of its round in flight.
+	MaxRounds int `toml:"max_rounds"`
 }
     FactoryLocalReview is [factory.local_review]. Round 1 runs the review roles
     of the repository's [[watch]]; later rounds run without LaterWithout.
@@ -16370,6 +16381,11 @@ type ReviewSummary struct {
 	// writer fixed after it with no round reviewing the fix (exit
 	// cap_fixed): the ready card and the PR body name them.
 	FixedAfter []ReviewItem `json:"fixed_after,omitempty"`
+	// Limit and TaskRounds are, for a loop that ended at the round limit
+	// (exit round_limit), [factory.local_review] max_rounds then and the
+	// rounds the task ran over its life; 0 for any other end.
+	Limit      int `json:"limit,omitempty"`
+	TaskRounds int `json:"task_rounds,omitempty"`
 }
     ReviewSummary is review-summary.json: how the local review ended (exit clean
     or oscillation, or cap_fixed for a loop that passed at its cap after the
