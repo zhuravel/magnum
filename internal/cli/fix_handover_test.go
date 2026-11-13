@@ -107,6 +107,26 @@ func TestTheDrainedListNamesHisActionForEachRecord(t *testing.T) {
 	}
 }
 
+// The morning list reads the registry alone: it says that the daemon's own
+// reservations (a fix job winding down) are not in it, and names the check
+// that counts them, the handover's dry run, which the daemon answers.
+func TestTheDrainedListSaysTheDaemonsReservationsAreNotShown(t *testing.T) {
+	h := newActHarness(t)
+	const note = "the daemon's own reservations of PRs (a fix job winding down) are not shown here: " +
+		"`magnum fix --handover <pr> --dry-run` asks the daemon, which counts them"
+	if code := h.cmd("fix", "--drained"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), note)
+	pr5 := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.setFixRow(pr5, engine.FixPhaseReviewing, 1)
+	h.out.Reset()
+	if code := h.cmd("fix", "--drained"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), "talkable#5", note)
+}
+
 // --handover asks y/N on a terminal, then queues the daemon's request: one
 // PR, every own PR, or back with one PR or all; --drop-push and
 // merge-parent's --drop queue the morning list's drops. Each goes alone.

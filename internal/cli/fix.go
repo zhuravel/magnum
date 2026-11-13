@@ -137,7 +137,8 @@ func newFixCmd(c *Context) *cobra.Command {
 			"import, and calls off a handover that waits; --handover back all lifts --handover all and returns every PR it may. "+
 			"Each asks y/N on a terminal (--yes does not). --drained prints the morning list: every PR whose fix work keeps it "+
 			"from handing over (a loop, a fixer's push record, a held merge, magnum's push waiting for its CI, a "+
-			"pending request, a fixer's run), with your action for each; a fix held for a restart, a pause or the GitHub budget "+
+			"pending request, a fixer's run), with your action for each, from the registry alone: the daemon's own reservations "+
+			"(a fix job winding down) are not in it, and --handover <pr> --dry-run asks the daemon, which counts them. A fix held for a restart, a pause or the GitHub budget "+
 			"holds no PR back: it goes with the PR, and the factory imports it. --drop-push drops the record of a fixer's push that "+
 			"magnum keeps for its late settle (up to 24h), which the morning list names when the PR's head moved past it.",
 		func(pos []string) int { return runFix(c, o, pos) })
@@ -805,7 +806,8 @@ func fixRunReplied(ctx context.Context, d *actDeps, runID string) bool {
 // runFixDrained is `magnum fix --drained`, the morning list: every PR whose
 // fix work in flight keeps it from handing over to the factory
 // (engine.FixInFlight, from the registry), each record with your action.
-// It takes no PR and changes nothing; empty is the deletion's gate.
+// It takes no PR and changes nothing; empty is the deletion's gate. It
+// says that the daemon's reservations are not in it (drainedUnseen).
 func runFixDrained(c *Context, o fixOpts, pos []string) int {
 	switch {
 	case len(pos) > 0:
@@ -851,8 +853,14 @@ func runFixDrained(c *Context, o fixOpts, pos []string) int {
 	if held, err := d.Store.KVKeys(ctx, "pr.*.fix_held"); err == nil && len(held) > 0 {
 		fmt.Fprintf(c.Stdout, "%s no PR back: each goes with its PR, and the factory imports it\n", textx.Count(len(held), "held fix holds", "held fixes hold"))
 	}
+	fmt.Fprintln(c.Stdout, drainedUnseen)
 	return 0
 }
+
+// drainedUnseen is what the morning list cannot see, read from the registry
+// alone (engine.FixInFlight), and the check that can.
+const drainedUnseen = "the daemon's own reservations of PRs (a fix job winding down) are not shown here: " +
+	"`magnum fix --handover <pr> --dry-run` asks the daemon, which counts them"
 
 // runFixHandover is `magnum fix --handover all|<pr>|back <pr|all>`: it asks
 // y/N on a terminal (--yes, a dry run and a script do not), then the

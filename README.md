@@ -4167,7 +4167,8 @@ held fix and the late settle of a push all refuse it ("the factory fixes this PR
   becomes "returning", when neither daemon starts a fixer, and the next tick that finds the factory still
   idle on it gives it back. `--handover back all` lifts `--handover all` and returns every PR it may.
 - `magnum fix --drained` is the morning list: every PR whose fix work keeps it from handing over, with your
-  action for each. A loop at work, a fixer's run, Magnum's push waiting for its CI (2 minutes) and a pending
+  action for each. It reads the registry alone: the daemon's own reservations of PRs (a fix job winding down)
+  are not in it, as its last line says; `magnum fix --handover <pr> --dry-run` asks the daemon, which counts them. A loop at work, a fixer's run, Magnum's push waiting for its CI (2 minutes) and a pending
   request end by themselves. A merge of the parent held for your y waits for `P`, or `magnum merge-parent
   --drop <pr>`, which drops it and pushes nothing. A fixer's push that Magnum keeps for its late settle (up to
   24 hours) settles once GitHub shows it as the PR's head; when the head moved past it, `magnum fix
