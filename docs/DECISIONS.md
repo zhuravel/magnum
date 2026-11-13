@@ -27959,3 +27959,16 @@ versions, newest last. People add their entries to the sections above, never her
   planned; an earlier proposal's prompt shapes moved no replay, so those rules sit in the skill. To make
   room the skill drops 'or skipped and why', 'the reproduction above', 'in plain English', 'Read every
   report.', 'a deadlock' and three cross-references; no rule was dropped.
+- **The judge checks that a migration adding a foreign key to a busy table, or altering one, sets a
+  short lock timeout, and reads the snapshot tests that serialize a key a change adds to a payload, as
+  it reads a changed method's other consumers; the reviewers and the judge's own pass also look for a
+  customer's own provider credential whose billing, spend-limit or model-access failures reach a generic
+  message and the developers' alerts** (2026-11-13, the skill editor's proposal for m959, m958, m957,
+  m956, m950, m894, m885, m882, m860, m816, m812, m673, m672, m548, m546, m502, m222, d1192, d1188,
+  d1178, d1114, d161, d157). Why: the ALTER waits for an exclusive metadata lock and every later query
+  on the table queues behind it; a stale snapshot fails CI while the feature works; each run on an
+  unmapped provider failure pages the team. The two skill clauses sit in section 2 and the three shapes
+  in the uncapped prompts. To make room the skill shortens the comment example's test wrapper, the
+  orphan-file sentence, 'in the comment' and 'problem'; no rule was dropped. The inputs an earlier
+  proposal failed on stay skipped: it put their shapes in the prompts and moved no replay, and the skill
+  has no room for a second wording.
