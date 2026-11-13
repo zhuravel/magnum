@@ -31,7 +31,7 @@ func fixRecordState() FixState {
 		Role: "claude-fix", ForcedAt: fixRecordAt.Add(time.Minute), Held: true, Context: "compacted 82% → 31%",
 		OthersUnread: "not read (HTTP 502)",
 		Carried:      []FixCarry{{Report: "/reviews/talkable/2/fix-0.md", NeedsYou: []string{"- 4000: a call"}, Answered: []string{"4000"}}},
-		Waits:        []string{"thread:4200@4201"}, Mode: "ci", CIChecks: []string{"rspec"},
+		Waits:        []string{"thread:4200@4201"}, Mode: FixModeCI, CIChecks: []string{"rspec"},
 		ParentRefused: "needs Workflows on the App", Confirm: &FixConfirm{Head: "e6c1f37000000000000000000000000000000000", Since: fixRecordAt},
 		Late: true,
 	}
