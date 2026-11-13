@@ -19432,6 +19432,17 @@ const (
     ItemCI is the look's work item of a CI fix (class ClassCI).
 
 const (
+	// OwnerFactory: the factory fixes the PR, and magnum starts no fixer
+	// on it.
+	OwnerFactory = "factory"
+	// OwnerReturning: the PR goes back to magnum, which takes the row away
+	// once the factory's lease shows no work of the factory's since its
+	// import; meanwhile neither daemon starts a fixer on it.
+	OwnerReturning = "returning"
+)
+    Owners of a PR's fixes (FixOwner.Owner).
+
+const (
 	// FixPhaseFixing: the fixer works on the head the cycle fixes.
 	FixPhaseFixing = "fixing"
 	// FixPhaseReviewing: the fixer pushed, and a review round runs on the new head.
@@ -19496,6 +19507,11 @@ const OpenStalePolls = 4
     a verdict's reader) make it behind: the run loop waits a whole interval
     after each tick ends, so ticks start an interval plus a tick's length apart,
     and one failed poll puts the last good one two such spans back.
+
+const ReqFixAttention = "fix_attention"
+    ReqFixAttention raises or lifts a PR's attention for the factory
+    (AttentionPayload): silently, with no toast, since the factory alerts you
+    itself.
 
 const WorkflowsPath = ".github/workflows"
     WorkflowsPath is where a repository's GitHub workflows live: a merge that
@@ -19654,6 +19670,10 @@ func IsConflictEntry(entry string) bool
     fixer aborted (ConflictPlace), which the settle drops once the push holds
     the merged tip.
 
+func KVPRFixOwner(prID int64) string
+    KVPRFixOwner holds who fixes the PR prID when it is not magnum (FixOwner as
+    JSON); no row: magnum.
+
 func MagnumDue(f Facts) (why string, late bool, until time.Time)
     MagnumDue is rule 5: magnum has not reviewed the head (its reviewed head
     is another, or a round is due or running): the wait's words, whether it
@@ -19811,6 +19831,22 @@ type ApprovalCount struct {
 }
     ApprovalCount is the count of the commits on Head after the approved commit
     SHA (-1: not counted).
+
+type AttentionPayload struct {
+	Repo   string    `json:"repo"`
+	Number int       `json:"number"`
+	Raise  bool      `json:"raise,omitempty"`
+	Cause  string    `json:"cause"`
+	Why    string    `json:"why"`
+	At     time.Time `json:"at,omitzero"`
+}
+    AttentionPayload is a ReqFixAttention request on the PR Number of Repo
+    ("owner/name"): Raise moves it from reviewed to needs attention with Why
+    as its message (the factory's words: never PR text), and Lift (Raise false)
+    puts it back to reviewed while its attention is still the one the factory
+    raised with Why. Cause is the factory's short word for it ("needs_you",
+    "capped", "failed"), which the event names. Magnum takes it only for a PR
+    the factory fixes (OwnerFactory). At is when the factory asked.
 
 type CIAttempt struct {
 	Attempt    int    `json:"attempt"`
@@ -20259,6 +20295,39 @@ func ParseFixOff(s string) (FixOff, bool)
     ParseFixOff reads a KVPRFixOff value; ok is false for one that is not an
     opt-out.
 
+type FixOwner struct {
+	Owner string    `json:"owner"`
+	At    time.Time `json:"at"`
+	By    string    `json:"by,omitempty"`
+}
+    FixOwner is a PR's KVPRFixOwner row: Owner, since At (when magnum flipped
+    the row to Owner: the factory keys its one import of the PR's records by
+    the At of the flip to OwnerFactory), and By, what flipped it ("magnum fix
+    --handover", "magnum fix --handover all").
+
+func ParseFixOwner(raw string) (FixOwner, error)
+    ParseFixOwner reads a KVPRFixOwner row. A row that is no JSON, names an
+    owner this build does not know or no time is an error: a reader that took it
+    for no row would let magnum fix a PR the factory may fix.
+
+func (o FixOwner) Factory() bool
+    Factory reports whether the factory fixes the PR (OwnerFactory): the only
+    owner a factory's fixer may start on.
+
+func (o FixOwner) Value() (string, error)
+    Value is the row as this build writes it.
+
+type FixRef struct {
+	Work  int64  `json:"work"`
+	Cycle int    `json:"cycle"`
+	Head  string `json:"head"`
+}
+    FixRef is the factory's fix that a forced re-review is for: the PR work
+    record (Work, the factory's id of it), its cycle and the head its fixer
+    pushed. Magnum keeps it with the round's request and passes it on to the
+    round's end, where the factory reads which round reviewed its push; it takes
+    the place ForcedAt takes for magnum's own loop.
+
 type FixReport struct {
 	// Pushed are the commits on GitHub, none for "nothing".
 	Pushed []FixCommit
@@ -20642,6 +20711,18 @@ type LedgerRead struct {
     (openPrint), when it read, at which head, what GitHub cut short, the other
     reviewers' items and magnum's threads it found, and when a read failed last
     (zero: the last read did not fail).
+
+type LocalRound struct {
+	SHA        string `json:"sha"`
+	PromptHash string `json:"prompt_hash,omitempty"`
+	SkillHash  string `json:"skill_hash,omitempty"`
+	File       string `json:"file,omitempty"`
+}
+    LocalRound is the factory's local review round of a fix at SHA, the prompt
+    and skill hashes it ran with and the file that holds its reports (File, a
+    path in the factory's task or PR work directory). A re-review whose request
+    carries it may build on it (T5b); magnum keeps it with the round's request
+    until then and does nothing with it.
 
 type MagnumThread struct {
 	RootID     int64     `json:"root_id"`
