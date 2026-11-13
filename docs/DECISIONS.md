@@ -27060,7 +27060,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
     made are matched to a `[[factory.repo]]` without case, as the store matches `repo_full_name` and the factory
     then claims them: matched with case, copies made as `Talkable/Talkable` did not count once the key read
     `talkable/talkable`, and a Redis of 64 databases got C8's PASS again (the engine owner's C6 of T3b's third
-    check). Test, failing first: `TestDoctorCountsTheCopiesMadeWhateverTheRepositorysCase`.
+    check). Test, failing first: `TestDoctorCountsTheCopiesMadeWhateverTheRepositorysCase`. `magnum config`'s
+    line says its number is the configuration's (`by the configuration (max_copies + fix_copies)`) and that
+    doctor also counts the copies made past it: it read as the copies' whole need, the sentence doctor uses with
+    the copies made counted (the engine owner's word on C5 of T3b's third check). Its test,
+    `TestConfigCheckNamesTheRedisDatabasesTheCopiesNeed`, pins the line, failing first.
 
 ## Learned rules
 

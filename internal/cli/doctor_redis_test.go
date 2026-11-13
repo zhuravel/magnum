@@ -312,7 +312,8 @@ max_copies = 2
 	}
 	out := f.Out.String()
 	for _, want := range []string{
-		"redis:   talkable/talkable's copies need 96 Redis databases",
+		"redis:   talkable/talkable's copies need 96 Redis databases (5 copies, 16 each from database 16) by the configuration " +
+			"(max_copies + fix_copies); `magnum doctor` also counts the copies made past them and reads how many its Redis has\n",
 		"redis:   zhuravel/cache's copies need 32 Redis databases",
 	} {
 		if !strings.Contains(out, want) {

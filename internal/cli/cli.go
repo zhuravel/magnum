@@ -259,7 +259,8 @@ func newConfigCmd(c *Context) *cobra.Command {
 			fmt.Fprintf(c.Stdout, "spend:   %s for the review and the factory roles; `magnum roles` shows their models and efforts\n", rolesSpend(c.Config))
 			for _, r := range c.Config.Factory.Repos {
 				if r.RedisDatabases() > 0 {
-					fmt.Fprintf(c.Stdout, "redis:   %s; `magnum doctor` reads how many its Redis has\n", redisNeed(r, r.LastCopy()))
+					fmt.Fprintf(c.Stdout, "redis:   %s by the configuration (max_copies + fix_copies); `magnum doctor` also counts the copies "+
+						"made past them and reads how many its Redis has\n", redisNeed(r, r.LastCopy()))
 				}
 			}
 			for _, w := range c.Config.Warnings() {
