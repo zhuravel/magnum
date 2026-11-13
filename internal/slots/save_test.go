@@ -646,6 +646,48 @@ func TestASetupRunAgainRecordsOnlyTheFilesItWrote(t *testing.T) {
 	}
 }
 
+// A pool slot's removal saves nothing magnum wrote either: the pool's
+// copy_files, which each render copies from the main clone (a key among
+// them), and what the pool's setup wrote, by the same rule as a per-PR
+// worktree's setup (a setup that runs again over the slot's worktree
+// leaves a person's file there theirs). Only a per-PR worktree kept a
+// record, so a pool slot's removal copied the main clone's key and the
+// setup's files into the saves.
+func TestAPoolSlotsRemovalSavesNothingMagnumWrote(t *testing.T) {
+	h := newHarness(t)
+	writeFile(t, filepath.Join(h.main, "config", "master.key"), "main clone secret\n")
+	h.pool.CopyFiles = append(h.pool.CopyFiles, filepath.Join("config", "master.key"))
+	h.pool.Setup = append(h.pool.Setup, "touch .env.setup")
+	h.failScript["touch .env.setup"] = 1
+	if err := h.m.ProvisionPool(h.ctx, h.pool, 1); err == nil {
+		t.Fatal("ProvisionPool with a setup that fails: no error")
+	}
+	writeFile(t, filepath.Join(h.slot(h.pool.Slot(1)).Path, "notes.txt"), "mine\n")
+	sl := h.provisioned(1)
+	for _, p := range []string{filepath.Join("config", "master.key"), ".env.setup"} {
+		if !fsx.Exists(filepath.Join(sl.Path, p)) {
+			t.Fatalf("the provisioning did not write %s", p)
+		}
+	}
+
+	if err := h.m.Remove(h.ctx, sl, h.pool, false); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	save := h.onlySave(t, h.layout.SlotSaves(sl.Name), sl.Name)
+	var files []string
+	if err := filepath.WalkDir(filepath.Join(save, "untracked"), func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			files = append(files, filepath.Base(p))
+		}
+		return err
+	}); err != nil || !slices.Equal(files, []string{"notes.txt"}) {
+		t.Fatalf("the save's untracked files = %q, %v; want the person's notes.txt alone", files, err)
+	}
+	if note := readFile(t, filepath.Join(save, "saved.txt")); strings.Contains(note, "master.key") || strings.Contains(note, ".env.setup") {
+		t.Fatalf("saved.txt names magnum's own files:\n%s", note)
+	}
+}
+
 // A removal whose untracked files are all left out keeps no untracked/
 // folder in its save, as a save with no path's patch keeps no changes.diff.
 func TestASaveThatCopiesNoUntrackedFileHasNoUntrackedFolder(t *testing.T) {

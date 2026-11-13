@@ -215,7 +215,9 @@ func (m *Manager) provisionSteps(ctx context.Context, subject string, sl store.S
 		return err
 	}
 	if err := m.step(ctx, subject, "setup", func(ctx context.Context) error {
-		return m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.Setup, "setup", ProvisionLog(sl.Name), SetupTimeout)
+		return m.recordingSetup(ctx, sl, copiedFiles(sl.MainClone, pool.CopyFiles), func() error { // a removal saves none of them
+			return m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.Setup, "setup", ProvisionLog(sl.Name), SetupTimeout)
+		})
 	}); err != nil {
 		return err
 	}

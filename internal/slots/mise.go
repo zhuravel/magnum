@@ -149,9 +149,10 @@ func keepLocalTimes(v any) any {
 
 // renderMise writes the slot's local mise file from the main clone's, under
 // its name (MiseLocalName; DefaultStripEnv and the pool's strip_env removed,
-// slot env set), copies the pool's other copy_files verbatim, and trusts the
-// rendered file with mise. Every write stays inside the checkout
-// (WriteCheckoutFile).
+// slot env set), copies the pool's other copy_files verbatim, adds them to
+// the slot's record of the files magnum wrote, which a removal never saves
+// (recordOwnFiles), and trusts the rendered file with mise. Every write
+// stays inside the checkout (WriteCheckoutFile).
 func (m *Manager) renderMise(ctx context.Context, sl store.Slot, pool config.Pool) error {
 	name := MiseLocalName(sl.MainClone)
 	src, err := os.ReadFile(filepath.Join(sl.MainClone, name))
@@ -168,6 +169,7 @@ func (m *Manager) renderMise(ctx context.Context, sl store.Slot, pool config.Poo
 	if err := copyIntoCheckout(sl.MainClone, sl.Path, pool.CopyFiles); err != nil {
 		return err
 	}
+	m.recordOwnFiles(ctx, sl, copiedFiles(sl.MainClone, pool.CopyFiles), false) // a removal saves none of them
 	_, err = m.d.Run.Run(ctx, execx.Cmd{
 		Name: m.mise, Args: []string{"-C", sl.Path, "trust", filepath.Join(sl.Path, name)}, Dir: sl.Path,
 		Mutates: true, Label: "mise trust " + sl.Name,
