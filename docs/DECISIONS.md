@@ -543,6 +543,69 @@ skill versions); people add theirs to the sections before it, at the end of the 
     mise file are not; a clean switch saves nothing), `TestAnAbortAndAReleaseSaveWhatTheyDrop` and
     `TestTheSaveSkipsIgnoredFilesAndNamesWhatTheCapSkipped` (a cap of 1500 bytes: the patch path by path, a file
     past the cap, a symlink, named in the event and in `saved.txt`; an ignored file neither saved nor named).
+- **Save before discard, after the engine owner's check** (2026-11-13, T3c's fix round, the engine owner's
+  rulings on his check of T3c). It lands with T3c, and changes what the entry above says where they differ.
+  - Untracked files are copied by a removal alone (R1, P2). One untracked file the save could not copy (a name of
+    238 to 255 bytes, whose atomic write's temporary name passed APFS's 255; a mode-000 or root-owned file; a
+    file deleted between two reads) failed every save, so every switch, release reset and removal of that slot
+    failed at every retry, and on the review pool the round's PR was parked, for a file a switch never touches.
+    A switch, a reset and an abort keep the untracked files: their save is the patch alone, and `saved.txt`
+    names the untracked files the tree keeps (git status's listing, at most 1000). A removal copies them, and
+    there a file it cannot read or write is left out with its reason, as a listing past 8 MB is. The save as a
+    whole still fails closed: its folder, the patch, the listing, `saved.txt`.
+  - What a removal never saves (ruling 3): the files magnum wrote, as the rendered mise file already was: the
+    `[[repo]]` copy_files (the main clone's own files, secrets among them) and whatever the setup wrote. A
+    per-PR worktree keeps a record of them (kv `slot.<id>.own_files`: the copy_files each render_mise copies, a
+    folder as a prefix, and the untracked files the setup step leaves in the new worktree, where nothing else
+    wrote yet); a worktree made before it knows the copy_files of its next checkout alone. A save that would
+    hold nothing else is not kept. A symlink is saved as the link, never what it points to, so a link to
+    `~/.ssh` copies no key. The mise file stays out by its marker, so a person's file of that name is saved.
+  - How a file is written (R3, R10, R13, R19): straight into the save's own folder, with no temporary file and no
+    disk flush per file (`saved.txt`, written last and durably, marks the save whole), with its owner's
+    permission bits; `saved.txt` says `cp -R`, since `-p` set the tree's own folders to the save's 0700.
+    `untracked/` is made at the first file saved.
+  - The patch (R4, R5, R7, R9): git writes it on stdout (`gitx.DiffHeadWrite`, which replaces `DiffHeadTo`'s
+    `--output`) into the save's file through a capped writer that stops git at the cap and fails on a write that
+    fails: with `--output` a patch past the cap was written whole, then again path by path, and git ignored its
+    own write errors, so a patch a full disk cut short counted as whole. A path whose patch cannot fit even its
+    first line is left out with no git run. A whole patch of 0 bytes (a submodule's untracked content) writes no
+    `changes.diff` and counts no path.
+  - Failures raised (ruling 1, R15): a save or a listing of the changes that fails stays fatal for the step,
+    which discards nothing and retries at its next attempt. Its first failure of a kind is raised once per slot:
+    kv `slot.<id>.save_failed`, a `slot.save_failed` event at level error whose words say the step retries, and
+    the review daemon's toast (`slots.Manager.SetSaveAlert`, keyed by the streak's start). `magnum doctor`'s
+    `saves` check names each such slot, from the review registry and from the factory's agents store, until a
+    save works, which clears it with `slot.save_ok` (a forced removal that went on too). A factory checkout gets
+    the event and the doctor line, no toast: the factory's alerts are its tasks'.
+  - Prune and repeats (ruling 2, R2, R8, R20): a save is kept 14 days (`slots.SaveKeep`), then pruned by the next
+    save in its folder and by each daemon: the review daemon at each reconcile (`reviews/*/*/*/saves`,
+    `saves/*`), the factory daemon hourly (its tasks' and its PR work's saves). A save that copies no file and
+    whose `changes.diff` is, byte for byte, the newest save's of the same slot in its folder is not kept, and the
+    event names that save, so post_checkout's residue is saved once, not at every round. The entry above said
+    no prune was needed since saves are small; the untracked files copied at every round made them large. With
+    the prune built, the words of the factory's docs that it prunes the PR work's saves are true
+    (`paths.Layout.FactoryPRWork` and `saveDir` now say what it prunes: saves past 14 days; the kept refs stay).
+  - Two discards save nothing (ruling 4). The pipeline's mid-round restore (`restoreTree`: `git reset --hard`
+    and `git clean -fd` after a role left the round's checkout modified) drops the round's own agents' changes:
+    a reviewer that edits the checkout breaks its review, the `round.checkout_dirty` event names what it left,
+    and the next role needs the checkout at the head under review; no person's change is there, since the
+    round's checkout is magnum's while it runs. Cleanup's reset of a manual worktree the operator forces
+    (`magnum cleanup --external --force`) is no slot's step: the worktree has no PR folder to save in, you asked
+    for the reset, and its `cleanup.discarded` event names the tracked changes and the commits HEAD and the
+    placeholder branch were at.
+  - Tests, failing first: `TestASwitchKeepsItsUntrackedFilesAndOnlyNamesThem`,
+    `TestARemovalLeavesOutAnUntrackedFileItCannotCopy`, `TestARemovalSavesAFileWhoseNameLeavesNoRoomForATemporaryOne`,
+    `TestARemovalKeepsTheOwnersBitsOfASavedFile`, `TestASaveThatCopiesNoUntrackedFileHasNoUntrackedFolder`,
+    `TestAWholePatchOfNoBytesWritesNoChangesDiff`, `TestTheSaveStopsGitAtTheCap` and
+    `TestAPatchCutShortFailsTheSave` (both serial, with the process's file size limited to 64 KB),
+    `TestARemovalSavesNothingMagnumWroteAndASymlinkAsTheLink`, `TestASaveThatKeepsFailingIsRaisedOncePerSlot`,
+    `TestASaveTheSameAsTheSlotsLastIsNotKept`, `TestSavesOlderThanTwoWeeksArePruned`, and in other packages
+    `TestASlotsFailingSaveToastsOnceAndSaysTheStepRetries`, `TestThePrunePrunesTheReviewSlotsSavesPastTwoWeeks`,
+    `TestDoctorNamesTheSlotsWhoseSaveFails` and `TestTheFactoryPrunesItsSavesPastTwoWeeks`. Proven by mutation,
+    the code being right: `TestAFailedSaveDiscardsNothing`, `TestAFailedListingDiscardsNothing`,
+    `TestAPerPRCheckoutWhoseSaveFailsIsNotRemoved` (R15), `TestASaveLeavesOutOnlyTheMiseFileMagnumRendered`
+    (R17: the old check used the ignored spelling and could not fail) and `TestTheCapIsSharedByThePatchAndTheFiles`
+    (R18).
 
 ## Scheduling
 
@@ -27414,6 +27477,22 @@ skill versions); people add theirs to the sections before it, at the end of the 
     (cli/factory_daemon.go) was another builder's file at the time; `NewCopies` sets it before any use. Tests,
     failing first: `TestATaskCopysReleaseSavesItsChangesBeforeTheReset` and
     `TestAPerPRCheckoutsRemovalSavesItsChangesFirst` (a per-PR checkout's removal, then a fix copy's release).
+- **The fix checkouts after T3c's check** (2026-11-13, T3c's fix round, the engine owner's rulings 2 and 6; Save
+  before discard, after the engine owner's check, in Checkouts and pools, has the rest).
+  - A fix copy's release ends a bisect it kept (ruling 6). The entry above left the bisect in place once its
+    commits were kept, so the copy's next claim found HEAD in a bisect its fixer never started. After the
+    release's keep (`releaseHead`), `endBisect` runs `git bisect reset` to the bisect's start (`gitx.BisectReset`),
+    kept or pushed now, and records that HEAD as the checkout's own (`fixOwnHead`) so the release's guard finds
+    it recorded; the release's save and reset then move it to `origin/<base>`. Where the bisect names no start,
+    or the tree's changes refuse the checkout of it, it ends where HEAD is, so the release never sticks on it;
+    a `factory.fix_bisect_ended` event names where. A per-PR checkout's removal deletes the bisect with the
+    worktree, as before. Tests, failing first: `TestAFixCopysReleaseEndsTheBisectItKept` and
+    `TestBisectResetEndsABisectAtTheCommitGiven`.
+  - The factory's saves are pruned (ruling 2): the factory daemon deletes its tasks' and its PR work's saves past
+    14 days, hourly on its tick (`pruneSaves`). The entry above said T4a's prune of the kept refs deletes the PR
+    work's folder with them; the saves now go on their own, after 14 days, and the kept refs stay until T4a
+    prunes them or a person deletes them. A failing save of a factory checkout gets the `slot.save_failed`
+    event and `magnum doctor`'s line, no toast.
 
 ## Learned rules
 

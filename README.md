@@ -940,13 +940,23 @@ revert left in progress) or removes a per-PR worktree with what it holds, Magnum
 its own in the PR's folder of reports, `reviews/<owner>/<repo>/<N>/saves/<time>-<slot>/` in its data directory
 (`~/.local/share/magnum`; a slot that holds no PR saves under `saves/<slot>/` there): `changes.diff`, the binary
 patch of the tracked changes against HEAD (`git -C <slot> apply <save>/changes.diff` on a checkout at that HEAD
-puts them back), `untracked/`, every untracked file git does not ignore at its path (not the local mise file
-Magnum renders), and `saved.txt`, which says from where, at which HEAD and before what, how to put it back and
-what it left out. A save keeps at most 50 MB: past that, the patch goes path by path and a file is left out,
-each named with its size, as are a symlink (with its target) and a repository inside the tree (untracked files
-whose names alone pass 8 MB are none saved, and the save says so); files git ignores are never saved. The `slot.discarded` event names the save and what it left out (`magnum logs <slot>`). A save
-that fails fails the step, which then discards nothing (a forced removal logs it and goes on). Nothing prunes
-the saves yet.
+puts them back), and `saved.txt`, which says from where, at which HEAD and before what, how to put it back, and
+what it left out. A switch, a reset and an abort keep the untracked files, so their save only names them in
+`saved.txt`; a removal deletes them, so its save copies them into `untracked/`, every untracked file git does not
+ignore at its path, with its owner's permission bits and a symlink as the link (never what it points to), but not
+the files Magnum wrote there: the local mise file it renders, the `[[repo]]` copy_files and what the setup wrote
+(`cp -R <save>/untracked/. <slot>` puts them back). A file the removal cannot read or write (a mode-000 file, one
+gone meanwhile, a name the save's folder refuses) is left out and named with the reason, and the removal goes on.
+A save keeps at most 50 MB: git is stopped at the cap, the patch then goes path by path and a file is left out,
+each named with its size, as is a repository inside the tree (untracked files whose names alone pass 8 MB are
+none saved, and the save says so); files git ignores are never saved. The `slot.discarded` event names the save
+and what it left out (`magnum logs <slot>`). A save whose patch is the same as the slot's last save in that
+folder, and that copies no file, is not kept: the event names that earlier save, so a lockfile Magnum's own
+setup rewrites is saved once, not at every round. Saves are kept 14 days: the next save in a folder and each
+daemon's prune (the review daemon at each reconcile, the factory hourly) delete the older ones. A save or a
+listing of the changes that fails fails the step, which then discards nothing and retries at its next attempt
+(a forced removal logs it and goes on); the first failure of a slot is raised once, a `slot.save_failed` event
+and a toast, and `magnum doctor` names the slot until a save works.
 
 A round that fails three times on one head (a timeout, an error, a setup failure charged to the PR) parks
 its PR in needs attention. When the cause was Magnum's own (an unknown role, a launch line that broke), the
@@ -4809,14 +4819,17 @@ stages = [
   (held as `dirty_worktree` too, so they stay held once that session ends). The steps after the switch move no
   HEAD, so their guard keeps nothing and leaves HEAD as it is; the next switch or the release keeps its commits.
   What the switch, a release's reset or a per-PR checkout's removal drops from the checkout's tree is saved
-  first, as a review slot's is (`changes.diff`, `untracked/` and `saved.txt`, at most 50 MB; the
-  `slot.discarded` event names the save), in the PR work's folder,
-  `factory/pr-work/<owner>/<name>/pr-<N>/saves/` in magnum's data directory, which the fix lane is to prune with
-  the PR's kept refs once the PR merged or closed; a task's copy saves what its release drops in the task's
-  folder, `factory/tasks/<id>/saves/`, and its `handoff.md` says so.
+  first, as a review slot's is (`changes.diff` and `saved.txt`, and `untracked/` for a removal, at most 50 MB;
+  the `slot.discarded` event names the save), in the PR work's folder,
+  `factory/pr-work/<owner>/<name>/pr-<N>/saves/` in magnum's data directory; a task's copy saves what its
+  release drops in the task's folder, `factory/tasks/<id>/saves/`, and its `handoff.md` says so. The factory
+  daemon deletes these saves after 14 days, as the review daemon does its slots'; the kept refs stay.
   The checkout goes once the PR's fix work ends: the PR merged or closed (magnum's registry says so), or its
   work stayed idle for 10 minutes. A fix copy goes back to its pool on its placeholder, a per-PR checkout is
-  removed with its fix ref, each with a `fix.release` event. The release fetches the PR's head first, so what
+  removed with its fix ref, each with a `fix.release` event. A fix copy's release ends a `git bisect` left in
+  progress once it kept its commits (`git bisect reset` to its start, or where HEAD is when the tree's changes
+  refuse that checkout; a `factory.fix_bisect_ended` event), so the copy's next claim does not inherit it. The
+  release fetches the PR's head first, so what
   was pushed counts as pushed, as do the heads the claims switched to, even of a switch cut short (a force-push
   of the PR keeps nothing), but never a HEAD `magnum unpin` took as the checkout's,
   and keeps any other commit on no remote as the claim does. Beyond a session or a process at work in the

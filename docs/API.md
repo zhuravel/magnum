@@ -22818,6 +22818,14 @@ func (c *Client) BisectHeads(ctx context.Context, repo string) (bad, start strin
     refs/bisect/ and BISECT_START are a worktree's own: its removal deletes
     them. Read-only.
 
+func (c *Client) BisectReset(ctx context.Context, repo, commit string) (bool, error)
+    BisectReset ends a `git bisect` in progress in repo at commit, a full
+    commit id (`git bisect reset <commit>`: HEAD checked out there, detached,
+    then the bisect's state deleted: refs/bisect/, BISECT_START and its other
+    files), and reports whether one was in progress (BISECT_START). With none
+    it runs nothing. A checkout the work tree's changes refuse is an error,
+    and the bisect stays.
+
 func (c *Client) BlameLine(ctx context.Context, dir, rev, path string, line int) (sha string, at time.Time, err error)
     BlameLine is the commit that last wrote line (from 1) of path at rev, and
     when it was authored (`git blame --porcelain -L <line>,<line> rev -- path`;
@@ -22931,14 +22939,17 @@ func (c *Client) DiffHead(ctx context.Context, dir string, paths ...string) ([]b
     runs no external diff or textconv. A patch over execx.MaxOutput is an error,
     never part of one. It is read-only and does not take the index lock.
 
-func (c *Client) DiffHeadTo(ctx context.Context, dir, file string, paths ...string) error
-    DiffHeadTo writes the binary patch of the work tree at dir against HEAD to
-    file, an absolute path git creates or truncates, as DiffHead makes it but
-    with no rename pairs (`git diff --binary --no-renames HEAD`): a deletion
-    and an addition each patch their own path, so the patch of one path is
-    that path's alone. paths are taken literally from the top; none is every
-    tracked change. Nothing bounds it but the disk: the caller reads its size.
-    It reads the work tree only and does not take the index lock.
+func (c *Client) DiffHeadWrite(ctx context.Context, dir string, out io.Writer, paths ...string) error
+    DiffHeadWrite writes the binary patch of the work tree at dir against HEAD
+    to out as git writes it on stdout, as DiffHead makes it but with no rename
+    pairs (`git diff --binary --no-renames HEAD`): a deletion and an addition
+    each patch their own path, so the patch of one path is that path's alone.
+    paths are taken literally from the top; none is every tracked change.
+    Nothing of the patch is kept in memory and nothing bounds it: out does, and
+    a caller that wants git to stop cancels ctx (git then ends with an error;
+    its writes to out stop counting). out's write errors are its own to keep:
+    the stream ignores them, and git writes on. It reads the work tree only and
+    does not take the index lock.
 
 func (c *Client) DiffLines(ctx context.Context, dir, base, head string, skip ...string) ([]FileLines, error)
     DiffLines is the diff head made relative to its merge base with base,
@@ -27610,9 +27621,10 @@ func (l Layout) FactoryPRStatus() string
 
 func (l Layout) FactoryPRWork(repo string, number int) string
     FactoryPRWork is the folder of the fix work of PR number of repo
-    (owner/name), <owner>/<name>/pr-<number> under factory/pr-work, nested
-    as FactoryCheckout is. The factory prunes it with the PR's kept refs
-    (refs/magnum/factory-kept/<number>/) once the PR closed or merged.
+    (owner/name), <owner>/<name>/pr-<number> under factory/pr-work,
+    nested as FactoryCheckout is. The factory daemon prunes the saves in it
+    past 14 days (FactorySaveFolders, slots.PruneSaves); the PR's kept refs
+    (refs/magnum/factory-kept/<number>/) stay until a person deletes them.
 
 func (l Layout) FactoryPRWorkSaves(repo string, number int) string
     FactoryPRWorkSaves is where the saves of the fix checkouts of PR number of
@@ -27634,6 +27646,11 @@ func (l Layout) FactoryQALock() string
 func (l Layout) FactoryRebootDrain() string
     FactoryRebootDrain is reboot-drain.json, the drain for a reboot `magnum
     drain` asks of the factory daemon (engine.RebootDrain), beside FactoryDrain.
+
+func (l Layout) FactorySaveFolders() []string
+    FactorySaveFolders are the folders of saves the factory daemon prunes
+    (slots.PruneSaves): FactoryTaskSaves of every task and FactoryPRWorkSaves of
+    every PR's fix work, as ReviewSaveFolders names them.
 
 func (l Layout) FactorySeen() string
     FactorySeen is seen.json, when you last saw the factory screen's home
@@ -27757,6 +27774,11 @@ func (l Layout) PushLock(repo, branch string) string
 func (l Layout) ReviewDir(owner, repo string, number int, sha string) string
     ReviewDir is where one review round's reports live: a directory per head in
     PRReviews.
+
+func (l Layout) ReviewSaveFolders() []string
+    ReviewSaveFolders are the folders of saves the review daemon prunes
+    (slots.PruneSaves): PRSaves of every PR and SlotSaves of every checkout,
+    each a path whose "*" elements stand for any folder.
 
 func (l Layout) Reviews() string
     Reviews is the root of the review reports in the data directory.
@@ -30697,6 +30719,13 @@ const (
     (MiseLocalName), MiseLocal when the main clone has none.
 
 const (
+	SaveFailedSave    = "save"
+	SaveFailedListing = "listing"
+)
+    The kinds of a SaveFailure: the save itself, or the listing of the tree's
+    changes it starts from.
+
+const (
 	SetupTimeout    = 45 * time.Minute
 	DepsTimeout     = 30 * time.Minute
 	ResetDBTimeout  = 30 * time.Minute
@@ -30740,6 +30769,14 @@ const Refused3730 = "MySQL error 3730 (a table the schema does not know refers t
 const SaveCap = 50 << 20
     SaveCap bounds what one save keeps, the patch and the untracked files
     together: past it, a path's patch or a file is left out and named.
+
+const SaveFailedGlob = "slot.*.save_failed"
+    SaveFailedGlob matches every slot's SaveFailure key (a GLOB of the kv
+    store), for a reader of another store than this package's (doctor's of the
+    factory's agents store).
+
+const SaveKeep = 14 * 24 * time.Hour
+    SaveKeep is how long a save before a discard is kept.
 
 const SchemaFile = "db/schema.rb"
     SchemaFile is read for the `define(version: …)` the slot's dev database must
@@ -30920,6 +30957,14 @@ func PerPREnv(rc *config.Repo, number int, path, clone string) map[string]string
 func ProvisionLog(name string) string
     ProvisionLog is the name of slot name's provisioning log in layout.Logs(),
     its setup and post_checkout scripts' (RunLogged).
+
+func PruneSaves(folders []string, now time.Time) (int, error)
+    PruneSaves removes the saves older than SaveKeep at now in every folder of
+    saves folders names (a path whose "*" elements stand for any folder; nothing
+    else in it is special) and returns how many it removed. A folder whose name
+    is no save's is left alone, and so is the folder of saves itself (a save
+    may be making its own folder in it). A save it cannot remove is an error,
+    after the others went.
 
 func ReadMarker(dir string) (string, error)
     ReadMarker returns dir's MarkerFile, the database slug its setup wrote,
@@ -31274,10 +31319,12 @@ func (m *Manager) PreparePerPR(ctx context.Context, sl store.Slot, p PerPRPlan) 
     PreparePerPR renders the main clone's local mise file into the worktree
     under its name (MiseLocalName; strip list removed, the per-PR env set;
     trusted with mise when it is available) and copies the plan's copy_files
-    that exist (p.Copy, the [[repo]]'s), from sl.MainClone into sl.Path,
-    at the worktree's creation and at each round's checkout (render_mise),
-    every write confined to the worktree (WriteCheckoutFile). Without a local
-    mise file in the main clone nothing is rendered.
+    that exist (p.Copy, the [[repo]]'s), from sl.MainClone into sl.Path, at the
+    worktree's creation and at each round's checkout (render_mise), every write
+    confined to the worktree (WriteCheckoutFile), and adds those copy_files to
+    the worktree's record of the files magnum wrote, which a removal never saves
+    (recordOwnFiles). Without a local mise file in the main clone nothing is
+    rendered.
 
 func (m *Manager) ProvisionPool(ctx context.Context, pool config.Pool, n int) error
     ProvisionPool provisions pool slot number n (name pool.Slot(n),
@@ -31432,6 +31479,10 @@ func (m *Manager) RunLogged(ctx context.Context, c execx.Cmd, logName string) er
     is decided before the begin line for the largest block a command can append,
     so a command's lines land in one file and a log stays under SlotLogMax.
 
+func (m *Manager) SetSaveAlert(alert func(ctx context.Context, f SaveFailure))
+    SetSaveAlert names what raises a slot's save that fails, once per slot and
+    kind (the review daemon's toast); nil raises none but the event.
+
 func (m *Manager) SetSaveDir(dir func(sl store.Slot, pr store.PR) string)
     SetSaveDir names where the saves of a slot's changes go (saveChanges):
     dir answers the folder for slot sl and the PR row that holds it (the zero PR
@@ -31483,6 +31534,28 @@ func PlanPerPR(rc *config.Repo, repo, slug, path, clone, base string) (PerPRPlan
     (PRSlug of the number for a PR's own worktree; the env is WorktreeEnv's,
     and wt.toml's {{ branch }} is slug) for a PR based on base. A wt.toml that
     cannot be read, parsed or templated is ErrHook.
+
+type SaveFailure struct {
+	Slot  string    `json:"slot"`
+	Kind  string    `json:"kind"`
+	What  string    `json:"what"`
+	Error string    `json:"error"`
+	Since time.Time `json:"since"`
+}
+    SaveFailure is a slot's save before a discard that fails: the slot, the
+    kind, the step it stops (its words: "the switch to PR #8's head 1a2b3c4"),
+    the error's first line and since when.
+
+func ParseSaveFailure(v string) (SaveFailure, bool)
+    ParseSaveFailure reads a SaveFailure record (the value of a key
+    SaveFailedGlob matches); false for one that is not.
+
+func SaveFailures(ctx context.Context, st *store.Store) ([]SaveFailure, error)
+    SaveFailures lists the slots of st whose save before a discard fails,
+    by slot name.
+
+func (f SaveFailure) Sentence() string
+    Sentence says what fails, since when and that the step retries.
 
 type SchemaCheck struct {
 	// Need is true when the slot's databases must be reloaded (the pool's
