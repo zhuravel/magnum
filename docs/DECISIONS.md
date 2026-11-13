@@ -19302,16 +19302,25 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - The fixer side fails closed. Every path that can create a fix row reads the owner row first and refuses a
     PR magnum does not fix, and a failed read refuses too: the request handler (each mode of `magnum fix`, a
     merge of the parent and the push of a held merge), prepareFix and prepareMerge (autofix after a round, the
-    look's start, a held fix, a loop's next cycle), holdFix, startHeldFix (the held fix is dropped, with why),
-    the look of autofix = "open" (it skips the PR) and the late settle of an unconfirmed push. claimFixRow reads
+    look's start, a loop's next cycle), holdFix, startHeldFix (the restart's and every continue-held path: the
+    held fix is left as it is), the look of autofix = "open" (it skips the PR) and the late settle of an
+    unconfirmed push. claimFixRow reads
     the row again under the PR's reservation, right before a loop's row is written; the flip takes the same
     reservation, so a start and a flip never interleave. TestEveryStartPathRefusesAFactoryOwnedPR enumerates
     fifteen paths.
   - The drain proof. fixQuiet is false while any of magnum's fix work is in flight on the PR: a loop's row, a
-    fixer's push record, a held merge, a held fix, magnum's push waiting for its CI, a pending fix or abort
-    request, a fix run whose verdict is not written, a fix job's reservation. Each record names the operator's
-    action (FixRecord): the morning list, `magnum fix --drained`, and a doctor line print them. Two records
-    do not end by themselves and get their drops: `magnum fix --drop-push` and `magnum merge-parent --drop`.
+    fixer's push record, a held merge, magnum's push waiting for its CI, a pending fix or abort request, a fix
+    run whose verdict is not written, a fix job's reservation. Each record names the operator's action
+    (FixRecord): the morning list, `magnum fix --drained`, and a doctor line print them. Two records do not end
+    by themselves and get their drops: `magnum fix --drop-push` and `magnum merge-parent --drop`.
+  - A held fix does not block the drain (plan section 3: one left at the switch is imported as a queued
+    request). A fix held for a restart, a pause or the GitHub budget runs no fixer yet, and quiet hours or a low
+    budget could hold it for hours, so fixQuiet ignores `pr.<id>.fix_held`: the PR flips with it, the flip keeps
+    the row in magnum.db for the factory's import (T4a), and nothing of magnum's starts or drops it from then
+    on: startHeldFix leaves the row of a PR it does not own (or cannot read the owner of), at the restart and
+    after a drain, a pause or the budget, and dropHeldFix (`magnum abort`, ignore, a close) leaves it too
+    (TestAHeldFixDoesNotBlockTheFlipAndStaysForTheImport). `--drained` and the doctor count such held fixes
+    apart, as holding no PR back.
   - The handover. A request kind of its own, fix_handover, takes one PR, `all` (every own PR, now and later:
     `fix.handover_all`), `back <pr>` or `back all`. The handover is written first (`pr.<id>.fix_handover`), so
     no loop nobody asked for starts from then on and a loop in flight ends at its cycle boundary with no next
@@ -19338,10 +19347,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
     the round that takes it ends, which no lease holds, and the round's end names it in fix.factory_round, in
     the place ForcedAt has for magnum's own loop. LocalRound is kept and passed on, and not acted on until T5b.
     fix_attention (fixwork.ReqFixAttention) raises or lifts the attention of a PR the factory fixes, silently.
-    The abort of the factory's forced round is magnum's abort request, unchanged. A kind an older build does
-    not know fails as unknown, and a re-review naming the factory's fix fails on a build before this one with
-    the field it predates (TestAnOlderBuildAnswersTheNewKindsAsUnknown): never run a build older than this one
-    while a PR is factory-owned.
+    The factory's abort of its forced round is magnum's abort request naming the fix (TargetPayload.FixRef): it
+    stops only a round in flight whose request carried that same fix (the round's reservation keeps it,
+    roundHandle.fixRef), or takes back a forced re-review of it still in line; any other round runs on, and the
+    request is refused with why (TestTheFactorysAbortStopsOnlyItsOwnRound). The operator's abort, naming no
+    fix, is unchanged. A kind an older build does not know fails as unknown, and a re-review or an abort
+    naming the factory's fix fails on a build before this one with the field it predates
+    (TestAnOlderBuildAnswersTheNewKindsAsUnknown): never run a build older than this one while a PR is
+    factory-owned.
 
 ## The factory (2026-11-03)
 
