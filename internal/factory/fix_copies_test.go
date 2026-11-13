@@ -1147,3 +1147,45 @@ func TestAFixClaimWaitsWhileNoCheckoutIsFreeAndFailsOnAnyOtherError(t *testing.T
 		t.Fatalf("%d claims after the failure, want a third one at once", n)
 	}
 }
+
+// The checkout of fix work idle since 9m59s stays, and goes at 10 minutes:
+// fixIdleEnd is the 10 minutes README and DECISIONS name. A refused release
+// is tried again after claimBackoff, never on the ticks before it. The test
+// of the idle end moved the clock by fixIdleEnd itself and never ticked
+// inside the backoff (R15 on T3b).
+func TestAFixCheckoutOfIdleWorkGoesAtTenMinutesAndARefusedReleaseWaits(t *testing.T) {
+	h := newHarness(t)
+	w := harnessWork(h, 7)
+	if err := h.reg.UpdatePRWork(h.ctx, w.ID, nil, registry.PRWorkIdle, nil); err != nil {
+		t.Fatal(err)
+	}
+	released := func() int {
+		h.copies.mu.Lock()
+		defer h.copies.mu.Unlock()
+		return len(h.copies.fix.released)
+	}
+	h.copies.mu.Lock()
+	h.copies.fix.reserved = []FixReservation{{WorkID: w.ID, Checkout: "fix-talkable/talkable#7", PerPR: true, Repo: "talkable/talkable", Number: 7}}
+	h.copies.fix.releaseErr = slots.ErrHold{Reason: slots.HoldUnpushed, Detail: "HEAD has 1 commit(s) on no remote"}
+	h.copies.mu.Unlock()
+	h.clock.Add(9*time.Minute + 59*time.Second)
+	h.tick()
+	if n := released(); n != 0 {
+		t.Fatalf("%d releases of work idle for 9m59s, want none", n)
+	}
+	h.clock.Add(time.Second)
+	h.tick()
+	if n := released(); n != 1 {
+		t.Fatalf("%d releases of work idle for 10 minutes, want one", n)
+	}
+	h.clock.Add(claimBackoff(1) - time.Second)
+	h.tick()
+	if n := released(); n != 1 {
+		t.Fatalf("%d releases on a tick inside the backoff, want still one", n)
+	}
+	h.clock.Add(time.Second)
+	h.tick()
+	if n := released(); n != 2 {
+		t.Fatalf("%d releases once the backoff passed, want two", n)
+	}
+}
