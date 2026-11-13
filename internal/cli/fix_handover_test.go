@@ -308,24 +308,37 @@ func TestTheDoctorSaysAHandoverWaitsForTheKey(t *testing.T) {
 
 // While [factory] fix is not "on", the factory fixes no PR, and magnum fixes
 // none whose owner row names the factory or "returning": the doctor WARNs
-// for each, naming the way back and the hand (C8), and its PASS line no
-// longer says that every PR can hand over. With the key on, no such line.
+// for each open one, naming the way back and the hand (C8), and its PASS
+// line no longer says that every PR can hand over. A merged or closed PR,
+// or one gone from the registry, needs no fixer: it is left out, so the
+// WARN clears once no open PR is left (C5). With the key on, no such line.
 func TestTheDoctorNamesTheFactorysPRsWhileItFixesNone(t *testing.T) {
 	h := newActHarness(t)
 	d := doctorDeps{Store: h.st, Config: h.d.Cfg}
-	owns := func(n int, owner string) {
+	ownerRow := func(prID int64, owner string) {
 		t.Helper()
-		pr := h.seedPR("talkable/talkable", n, store.PRReviewed)
 		raw, err := fixwork.FixOwner{Owner: owner, At: h.now, By: "magnum fix --handover"}.Value()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := h.st.SetKV(h.ctx, fixwork.KVPRFixOwner(pr.ID), raw); err != nil {
+		if err := h.st.SetKV(h.ctx, fixwork.KVPRFixOwner(prID), raw); err != nil {
 			t.Fatal(err)
 		}
 	}
-	owns(4, fixwork.OwnerReturning)
-	owns(3, fixwork.OwnerFactory)
+	owns := func(n int, owner, state, gh string) store.PR {
+		t.Helper()
+		pr := h.seedPR("talkable/talkable", n, state)
+		if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("gh_state", gh) }); err != nil {
+			t.Fatal(err)
+		}
+		ownerRow(pr.ID, owner)
+		return pr
+	}
+	open4 := owns(4, fixwork.OwnerReturning, store.PRReviewed, store.GHOpen)
+	open3 := owns(3, fixwork.OwnerFactory, store.PRReviewed, store.GHOpen)
+	owns(7, fixwork.OwnerFactory, store.PRClosed, store.GHMerged)
+	owns(8, fixwork.OwnerReturning, store.PRReleased, store.GHClosed)
+	ownerRow(9999, fixwork.OwnerFactory) // a PR gone from the registry
 	if err := h.st.SetKV(h.ctx, fixwork.KVPRFixOwner(h.seedPR("talkable/talkable", 5, store.PRReviewed).ID), `{"owner":"someone newer"}`); err != nil {
 		t.Fatal(err)
 	}
@@ -361,6 +374,19 @@ func TestTheDoctorNamesTheFactorysPRsWhileItFixesNone(t *testing.T) {
 	}
 	if !warned {
 		t.Error("no WARN of the factory's PRs under --handover all")
+	}
+	// The open PRs leave the factory: the merged and closed ones, and the
+	// one gone, keep no WARN up, and the PASS line says every PR can hand
+	// over again.
+	for _, id := range []int64{open3.ID, open4.ID} {
+		if err := h.st.DeleteKV(h.ctx, fixwork.KVPRFixOwner(id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range doctorFixHandover(h.ctx, d) {
+		if strings.Contains(c.Detail, "which fixes none") || c.Status == doctorPass && !strings.Contains(c.Detail, "every PR can hand over") {
+			t.Errorf("with only merged, closed and gone PRs the factory's: %+v", c)
+		}
 	}
 	h.d.Cfg.Factory.Fix = config.FactoryFixOn
 	for _, c := range doctorFixHandover(h.ctx, d) {

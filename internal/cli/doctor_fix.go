@@ -10,6 +10,7 @@ package cli
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/fixwork"
+	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -86,12 +88,16 @@ func doctorFixHandover(ctx context.Context, d doctorDeps) []doctorCheck {
 	return append(out, doctorLeaseUnreads(ctx, d, unread)...)
 }
 
-// doctorFactorysPRs is the WARN of the PRs whose owner row names the factory
-// or "returning" while [factory] fix is not "on" (C8): magnum starts no
-// fixer on them, and the factory fixes none, so nothing fixes them until
-// the way back returns those the factory has not worked, or the operator
-// fixes them by hand. ok false: the key is on, or no such PR. A row that
-// does not parse is the owner row line's (doctorLeaseUnreads).
+// doctorFactorysPRs is the WARN of the open PRs whose owner row names the
+// factory or "returning" while [factory] fix is not "on" (C8): magnum
+// starts no fixer on them, and the factory fixes none, so nothing fixes
+// them until the way back returns those the factory has not worked, or the
+// operator fixes them by hand. A merged or closed PR, or one gone from the
+// registry, needs no fixer and is left out (C5): no owner row goes at a
+// close, so the WARN would never clear while the key is off. One that
+// cannot be read is named by its id. ok false: the key is on, or no such
+// PR. A row that does not parse is the owner row line's
+// (doctorLeaseUnreads).
 func doctorFactorysPRs(ctx context.Context, d doctorDeps) (doctorCheck, bool) {
 	if d.Config.Factory.Fixes() {
 		return doctorCheck{}, false
@@ -112,7 +118,14 @@ func doctorFactorysPRs(ctx context.Context, d doctorDeps) (doctorCheck, bool) {
 			continue
 		}
 		label := fmt.Sprintf("PR %d", id)
-		if pr, err := d.Store.PRByID(ctx, id); err == nil {
+		pr, err := d.Store.PRByID(ctx, id)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			continue
+		case err != nil: // named by its id
+		case pr.GHState != store.GHOpen || slices.Contains(reviewClosing, pr.State):
+			continue
+		default:
 			if repo, err := d.Store.RepoByID(ctx, pr.RepoID); err == nil {
 				label = actRefLabel(d.Config.Daemon.DefaultRepo, repo.FullName(), pr.Number)
 			}

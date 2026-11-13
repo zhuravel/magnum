@@ -4183,7 +4183,7 @@ or whether `--handover all` stands, `d` asks you to try again shortly.
   becomes "returning", when neither daemon starts a fixer, and the next tick that finds the factory still
   idle on it gives it back. `--handover back all` lifts `--handover all` and returns every PR it may. While
   `[factory] fix` is not `"on"`, nothing fixes a PR the factory owns or that is returning: `magnum doctor`
-  warns for each, and its line no longer says that every PR can hand over.
+  warns for each that is still open, and its line no longer says that every PR can hand over.
 - `magnum fix --drained` is the morning list: every PR whose fix work keeps it from handing over, with your
   action for each. It reads the registry alone: the daemon's own reservations of PRs (a fix job winding down)
   are not in it, as its last line says; `magnum fix --handover <pr> --dry-run` asks the daemon, which counts

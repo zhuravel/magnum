@@ -19485,6 +19485,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
     factory's is still fixed by hand. When the row of `--handover all` cannot be read the refusal offers no
     way back and asks again shortly, since `back all` on a misread would return every such PR. The doctor's
     WARN of the factory's PRs names `back all` the same way while that row stands.
+  - The doctor's WARN of the factory's PRs while `[factory] fix` is not "on" names open PRs alone (C5). No
+    owner row goes when its PR merges or closes, so after a rollback the WARN listed every merged PR the
+    factory ever took, grew with each, hid the PRs that do lack a fixer, and never cleared. A PR gone from
+    the registry, or not open on GitHub, or in a closing state, needs no fixer and is left out; one whose
+    read fails is still named, by its id.
 
 ## The factory (2026-11-03)
 
