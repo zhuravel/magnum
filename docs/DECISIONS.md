@@ -26855,7 +26855,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
     read only (`factoryread.LeaseOf`): the factory fixes the PR now only in one of those three phases under a lease
     that runs, so a factory that stopped holds no review and a queued, reviewing or held loop holds none either; no
     row, no table (an older factory) and no registry give the zero lease and no error, and an unreadable file is an
-    error for the review side to decide on (T2).
+    error for the review side to decide on (T2). The migration is additive, and its rollback gives a binary from
+    before it its schema back (it refuses a registry at 9): `DROP TABLE pr_work;`, then `PRAGMA user_version = 8;`
+    on the factory registry, run only with the factory daemon stopped (`magnum factory uninstall`; the registry
+    stays). The two indexes go with the table, and no table references it.
   - The factory's one write into magnum.db is a request plus a wake of magnum's daemon (`MagnumWriter`), opened with
     every migration refused: a magnum.db of another schema, or none, is refused and left as it was.
   - The PR request kinds (`fix`, `fix_off`, `fix_on`, `fix_done`, `fix_decide`, `fix_ci`, `merge_parent`,
