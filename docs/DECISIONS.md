@@ -26668,8 +26668,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     answer of a role takes the place of older ones, G9). Every role's needs-you event of a pass is asked or
     told: with no question the task waits on all of them in one line, and with one the other events stay in
     the task's inbox for the pass after your answer (G10). A wait after a no-progress finding says so in its
-    due event (`on no progress`), so a restart keeps it, takes a fresh look at the session and recovers it
-    at its due time unless it moves (G11). A wait voided in memory writes `due void` (`voidDue`,
+    due event (`on no progress`), so a restart reads it back (G11; the check of 4acaaaeb below re-arms it
+    there). A wait voided in memory writes `due void` (`voidDue`,
     `flushVoids`), at the watchdog's pass and before any new due event, so a restart never reads it back
     (G12). startRound's run again settles a go-on once its look finds the copy clean, as the round's end
     does (G13, G14).
@@ -26700,9 +26700,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
     the key: masking every digit made two shellcheck codes one offense. yarn v1's footer is noise (K4). A
     script file causes a missing command only when the lines the change added to it name that command
     (`envCrash.added`), and zsh's "command not found: <name>" names it after the words (K5). A no-progress
-    wait read back after a restart is never recovered in the pass that takes its first look, so a session
-    that works again since is seen to move. A run that ends before any pass built its role's state voids
+    wait read back after a restart is never recovered in the pass that takes its first look (the check of
+    4acaaaeb below re-arms it instead). A run that ends before any pass built its role's state voids
     the wait read back from its events: `ended` builds the state and writes its `due void` at once (K8).
+  - *The engine owner's check of 4acaaaeb* (L1 to L5, L5 being L3). A lint's row counts only for a file git
+    tracks in the copy at the head (`trackedFile`) or one the lint was given. K6 counted every row inside the
+    copy, so a Ruby warning of a gem under `vendor/bundle` named an offense, and a RuboCop that then crashed
+    (exit 2) passed as "1 offense, none on a changed line" (L1). jest's own banners (`● Validation
+    Warning:`, `● Validation Error:`, `● Deprecation Warning:`, `● Multiple configurations found:`) name no
+    failing test, so a run that names nothing else takes the unnamed path and offers no accept (L2). A
+    no-progress wait read back after a restart is re-armed, never kept: the first look voids it (`due
+    void`) and takes the baseline, and the session needs a fresh `NoProgressAfter` finding and that
+    finding's wait before any recovery. K8 decided it one observe pass (5 s) after the first look, so a
+    session that worked again during the downtime and sat on a quiet step for 5 s was quit (L3). A lost
+    pane's wait keeps its read-back due. The README now says that the limit after the slash stays in a
+    lint's key (`[121/120]` keys as `[#/120]`, L4).
   Tests, failing first and each checked by a mutation: `TestALintThatNamesNoOffenseRunsAgainThenAfterTheInstalls`,
   `TestABaseRunThatHangsGetsADoubledBoundThenAQuestion`, `TestYourAnswerToACheckQuestionSkipsItOrGivesItYourBound`,
   `TestARestartInTheMiddleOfTheFaultStepsNeitherDoublesNorLosesOne`,
@@ -26750,7 +26762,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestAStartAnswerUnderTheDrainIsAppliedOnceItIsLifted`, `TestALintCrashTheChangeCausedOffersNoAccept`,
   `TestAJestRunThatNamesOnlyItsSummaryOffersNoAccept`, `TestAGccStyleWarningOnAChangedLineCounts`,
   `TestAnOffenseUnderTheCopysPhysicalPathCounts`, `TestAnOffenseThatOnlyMovedIsNoProgress`,
-  `TestJestsSummaryKeepsItsCount` and `TestYarnsFooterIsNoFailureLine` in internal/factory.
+  `TestJestsSummaryKeepsItsCount`, `TestYarnsFooterIsNoFailureLine`,
+  `TestARubyWarningOfAGemUnderTheCopyIsNoOffense` and `TestJestsBannersNameNoFailingTest` in internal/factory.
   In internal/factory/runtime: `TestALostPaneIsRecoveredThreeTimesAfterItsWaitsTheLastInAFreshSession`,
   `TestARestartBetweenTheRecoveriesNeitherDoublesNorLosesOne`, `TestYourRetryStartsTheRecoveriesOverAndSpendsNone`,
   `TestAFreshStartStartsTheRoleWithItsContextAndItsRecoveriesOver`, `TestAFreshSessionStartsTheLoopsLadderOver`,
@@ -26759,10 +26772,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestTheFixBudgetsFreshSessionKeepsThePanesRecoveries`, `TestTheGoOnsStartTheLoopLadderOver`,
   `TestAWaitedRecoveryOutlivesARestart`, `TestADueRecoveryWaitsForATaskThatWaitsOnYou`,
   `TestAWaitedRecoveryOfASessionThatMovesAgainIsVoid`, `TestTheRecoveriesRunningOutHandTheRunOver`,
-  `TestStartOverStartsALostRolesRecoveriesOver`, `TestANoProgressWaitOutlivesARestart`,
+  `TestStartOverStartsALostRolesRecoveriesOver`, `TestANoProgressWaitIsReArmedAfterARestart`,
   `TestAVoidedWaitStaysVoidAfterARestart`, `TestAWaitedRecoveryWithNoTurnInFlightStaysDueUnderTheDrain`,
   `TestASendFreshWaitsForTheDrain`, `TestStartOverWaitsForTheDrain`,
-  `TestANoProgressWaitReadBackPastItsDueLooksOnceMore` and `TestARunThatEndsAfterARestartVoidsItsWait`. In internal/execx: `TestARunASignalEndedReportsTheSignal`.
+  and `TestARunThatEndsAfterARestartVoidsItsWait`. In internal/execx: `TestARunASignalEndedReportsTheSignal`.
   In internal/config: `TestFactoryFixGoOnIsTwoByDefaultAndBounded`.
 
 ## Learned rules
