@@ -160,7 +160,7 @@ func (e *Engine) openPauses(ctx context.Context, now time.Time) []openHold {
 		case ev.Kind == "daemon.paused" && from.IsZero():
 			from = ev.At
 		case ev.Kind == "daemon.resumed" && !from.IsZero():
-			holds = append(holds, openHold{from: from, to: ev.At})
+			holds = append(holds, openHold{From: from, To: ev.At})
 			from = time.Time{}
 		}
 	}
@@ -170,9 +170,9 @@ func (e *Engine) openPauses(ctx context.Context, now time.Time) []openHold {
 // openSettle are the configuration's keys of autofix = "open".
 func (e *Engine) openSettle() openSettle {
 	p := e.cfg.Pipeline
-	return openSettle{quiet: p.SettleQuiet.Duration, max: p.SettleMax.Duration, late: p.MagnumLateAfter.Duration,
-		handsOff: p.HandsOffAfterPush.Duration, checks: p.SettleChecks, maxLoops: cmp.Or(p.AutofixMaxLoops, config.DefaultAutofixMaxLoops),
-		quietHours: e.cfg.Daemon.QuietHours}
+	return openSettle{Quiet: p.SettleQuiet.Duration, Max: p.SettleMax.Duration, Late: p.MagnumLateAfter.Duration,
+		HandsOff: p.HandsOffAfterPush.Duration, Checks: p.SettleChecks, MaxLoops: cmp.Or(p.AutofixMaxLoops, config.DefaultAutofixMaxLoops),
+		QuietHours: e.cfg.Daemon.QuietHours}
 }
 
 // quietRules is the configuration's.
@@ -187,66 +187,66 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	pr, repo := c.pr, c.repo
 	now := e.now()
 	l := c.ledger
-	f := openFacts{now: now, pr: pr, settle: e.openSettle(), off: e.openOff(ctx, pr, *c.w)}
+	f := openFacts{Now: now, PR: pr, Settle: e.openSettle(), Off: e.openOff(ctx, pr, *c.w)}
 	hasRow := e.openLoopRow(ctx, repo, &l, &f)
 	if raw, ok := e.getKV(ctx, KVPRFixHeld(pr.ID)); ok {
-		f.held = heldWhyOf(raw)
+		f.Held = heldWhyOf(raw)
 	}
 	if pr.State == store.PRNeedsAttention {
 		kind, _ := e.getKV(ctx, KVPRAttention(pr.ID))
-		f.attention = cmp.Or(kind, "attention")
+		f.Attention = cmp.Or(kind, "attention")
 	}
 	if raw, ok := e.getKV(ctx, KVPRStalemate(pr.ID)); ok {
 		if s, ok := ParseStalemate(raw); ok {
 			for _, t := range s.Threads {
-				f.stalemate = append(f.stalemate, t.URL)
+				f.Stalemate = append(f.Stalemate, t.URL)
 			}
 		}
 	}
-	f.pending = len(pr.PendingReplies())
-	f.raised = l.RaisedHere(pr, f.attention) // fix_open_needs.go
-	f.sum = c.sum
-	if f.pause = e.userPause(ctx); f.pause != "" { // it holds the look's starts, as it held "own"'s rounds
-		f.pauseUntil, _ = e.kvTime(ctx, store.KVDaemonPausedUntil)
+	f.Pending = len(pr.PendingReplies())
+	f.Raised = l.RaisedHere(pr, f.Attention) // fix_open_needs.go
+	f.Sum = c.sum
+	if f.Pause = e.userPause(ctx); f.Pause != "" { // it holds the look's starts, as it held "own"'s rounds
+		f.PauseUntil, _ = e.kvTime(ctx, store.KVDaemonPausedUntil)
 	}
-	f.pauses = pauses
+	f.Pauses = pauses
 	fp := openPrint(pr)
-	_, f.low = e.githubLow(c.w.PollIdentity)
-	f.pollStale = e.pollBehind(ctx, *c.w, now)
+	_, f.Low = e.githubLow(c.w.PollIdentity)
+	f.PollStale = e.pollBehind(ctx, *c.w, now)
 	e.openLookRead(ctx, c, &l, &f, fp, hasRow, reads)
 	if c := l.Conflict; c.Unchecked && c.Head == pr.HeadSHA {
-		f.mergeUnchecked = c.Base
+		f.MergeUnchecked = c.Base
 	}
-	f.ci = e.openCI(ctx, repo.FullName(), pr)
-	f.ciWorkflow, f.ciStart = e.openCIStartOf(ctx, repo.FullName(), pr, f.ci) // fix_open_ci.go
-	if len(f.ci.missing) > 0 {
-		f.ciRerun = e.ciRerunAt(ctx, pr)            // ci_rerun.go
-		f.ci = ciShape3(f.ci, f.ciStart, f.ciRerun) // ci_fix.go: magnum's run of the head that ended failure
+	f.CI = e.openCI(ctx, repo.FullName(), pr)
+	f.CIWorkflow, f.CIStart = e.openCIStartOf(ctx, repo.FullName(), pr, f.CI) // fix_open_ci.go
+	if len(f.CI.Missing) > 0 {
+		f.CIRerun = e.ciRerunAt(ctx, pr)            // ci_rerun.go
+		f.CI = ciShape3(f.CI, f.CIStart, f.CIRerun) // ci_fix.go: magnum's run of the head that ended failure
 	}
-	_, f.ciLow = e.githubLow(e.cfg.CIDispatchAs(repo.FullName()))
-	f.approved, f.afterCount = e.openApproval(ctx, *c.w, pr, &l)
+	_, f.CILow = e.githubLow(e.cfg.CIDispatchAs(repo.FullName()))
+	f.Approved, f.AfterCount = e.openApproval(ctx, *c.w, pr, &l)
 	l.Starts = slices.DeleteFunc(l.Starts, func(at time.Time) bool { return now.Sub(at) >= 24*time.Hour })
 	if !e.d.DryRun && e.openLift(ctx, repo, pr, &l, f) { // fix_open_needs.go: you answered what the look raised, or its reviewer approved it
 		pr.State, pr.LastError = store.PRReviewed, nil
-		f.pr, f.attention, f.raised = pr, "", false
-		if f.pending > 0 { // replies.go: the replies that waited behind the raise get their round, as after a round's end
+		f.PR, f.Attention, f.Raised = pr, "", false
+		if f.Pending > 0 { // replies.go: the replies that waited behind the raise get their round, as after a round's end
 			if err := e.considerReplies(ctx, repo, *c.w, pr.ID, now); err != nil {
 				e.log.Info("autofix open: the replies after the lift", "subject", prSubject(repo, pr.Number), "err", err)
 			}
 		}
 	}
-	if f.whole && !f.failed && len(f.cut) == 0 {
-		openPrune(&l, f.items)
+	if f.Whole && !f.Failed && len(f.Cut) == 0 {
+		openPrune(&l, f.Items)
 	}
 	// fix_open_needs.go: pushback counts from the loop's hand-off, however late the look reads it
-	l.SeedWaited(f.items)
-	gap := max(f.settle.quiet, openStalePolls*e.cfg.Daemon.PollInterval.Duration) // longer than the looks' own spacing
-	l.Spell = l.Spell.Next(pr, f.settle.quiet, gap, now, f.fix != nil || f.fixBad || f.held != "")
-	f.ledger = l
-	f.ciFix = e.ciFixFactsOf(ctx, repo, pr, f, l) // ci_fix.go
+	l.SeedWaited(f.Items)
+	gap := max(f.Settle.Quiet, openStalePolls*e.cfg.Daemon.PollInterval.Duration) // longer than the looks' own spacing
+	l.Spell = l.Spell.Next(pr, f.Settle.Quiet, gap, now, f.Fix != nil || f.FixBad || f.Held != "")
+	f.Ledger = l
+	f.CIFix = e.ciFixFactsOf(ctx, repo, pr, f, l) // ci_fix.go
 	v, work, needs := decideOpen(f)
 	if !e.d.DryRun && v.ReadCIBase { // ci_fix.go: rule 11 reads the base's CI of the failed required check, once per head, failed set and tip
-		f.ciFix = e.readCIBase(ctx, repo, *c.w, pr, f, l)
+		f.CIFix = e.readCIBase(ctx, repo, *c.w, pr, f, l)
 		v, work, needs = decideOpen(f)
 	}
 	acts := e.ciActions(e.ciDispatchIdentity(repo.FullName(), *c.w)) // ci_actions.go: one token for the look's Actions calls
@@ -264,13 +264,13 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	case e.d.DryRun:
 	case v.Leftovers && e.openRaise(ctx, repo, pr, &l, needs): // fix_open_needs.go
 		pr.State = store.PRNeedsAttention
-		f.pr, f.attention, f.ledger = pr, attention.KindFix, l
+		f.PR, f.Attention, f.Ledger = pr, attention.KindFix, l
 		v, work, _ = decideOpen(f)
 	case v.Late:
 		e.openLate(ctx, repo, pr, &l, v.Why)
 	case v.Dispatch: // fix_open_ci.go: a required check did not run at the head
-		if s, ok := e.openStartCI(ctx, acts, repo, pr, f.ciWorkflow, missingWhat(f.ci.missing)); ok {
-			f.ciStart = s
+		if s, ok := e.openStartCI(ctx, acts, repo, pr, f.CIWorkflow, missingWhat(f.CI.Missing)); ok {
+			f.CIStart = s
 			v, work, _ = decideOpen(f)
 		}
 	}
@@ -278,10 +278,10 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	// fix_open_needs.go: a change request their reviewers make from now on waits for you, in the loop below too
 	l.NoteWaited(needs, now)
 	// a person's handed items wait, those their reviewer accepted, and their reviewers' pushback: a loop's fixer leaves them alone
-	waits := l.LoopWaits(f.items, needs)
+	waits := l.LoopWaits(f.Items, needs)
 	switch {
 	case ci: // ci_fix.go: the record first, so a restart never starts a fourth; its next cycles, on findings, read the other reviewers too
-		v = e.openStart(ctx, repo, pr, &l, v, work, FixState{Mode: FixModeCI, CIChecks: ciEntries(f.ci.failedRuns), Waits: waits}, fp)
+		v = e.openStart(ctx, repo, pr, &l, v, work, FixState{Mode: FixModeCI, CIChecks: ciEntries(f.CI.FailedRuns), Waits: waits}, fp)
 	case v.Verdict == OpenFixing && len(work) > 0:
 		v = e.openStart(ctx, repo, pr, &l, v, work, FixState{Waits: waits}, fp)
 	}
@@ -295,7 +295,7 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 // the ledger's count of loops (Since) now, or at the start of the loop
 // that runs, which then counts whole. It reports whether the PR has a row.
 func (e *Engine) openLoopRow(ctx context.Context, repo store.Repo, l *openLedger, f *openFacts) bool {
-	pr, now := f.pr, f.now
+	pr, now := f.PR, f.Now
 	st, _, hasRow, rowErr := e.fixRow(ctx, pr.ID)
 	first := l.Since.IsZero() // the look's first look at the PR: it tracks the loops from here on
 	if first {
@@ -306,9 +306,9 @@ func (e *Engine) openLoopRow(ctx context.Context, repo store.Repo, l *openLedger
 	}
 	switch {
 	case rowErr != nil:
-		f.fixBad = true
+		f.FixBad = true
 	case hasRow:
-		f.fix = &st
+		f.Fix = &st
 		if st.Phase == FixPhaseReviewing {
 			l.FixerHeads = addFixerHead(l.FixerHeads, st.Head)
 		}
@@ -328,28 +328,28 @@ func (e *Engine) openLoopRow(ctx context.Context, repo store.Repo, l *openLedger
 // operator's optional calls and your decisions on the fixer's calls. fp is
 // openPrint's.
 func (e *Engine) openLookRead(ctx context.Context, c *openCand, l *openLedger, f *openFacts, fp string, hasRow bool, reads *int) {
-	pr, repo, now := f.pr, c.repo, f.now
+	pr, repo, now := f.PR, c.repo, f.Now
 	if readWanted(*f) {
-		if openReadDue(l.Read, fp, pr.HeadSHA, now) && !f.low && *reads < openReadsPerTick {
+		if openReadDue(l.Read, fp, pr.HeadSHA, now) && !f.Low && *reads < openReadsPerTick {
 			*reads++
 			e.openRead(ctx, repo, *c.w, pr, l, fp, now)
 		}
 		e.openConflictCheck(ctx, repo, pr, l, now)
 	}
-	f.whole, f.failed = openWhole(l.Read, fp, pr.HeadSHA)
-	if f.whole {
-		f.cut = l.Read.Cut
-		handed := !hasRow && f.sum != nil && l.HandedReview(f.sum.RunID)
+	f.Whole, f.Failed = openWhole(l.Read, fp, pr.HeadSHA)
+	if f.Whole {
+		f.Cut = l.Read.Cut
+		handed := !hasRow && f.Sum != nil && l.HandedReview(f.Sum.RunID)
 		var optional map[int64]bool
-		if !f.failed && len(f.cut) == 0 { // fix_optional.go: the operator's optional calls, as the read shows them
-			f.optional, optional = e.openOptional(ctx, pr.ID, l.Read.Mine, f.sum)
-			f.optionalP3 = optionalSplit(l.Read.Mine, f.sum, optional)
+		if !f.Failed && len(f.Cut) == 0 { // fix_optional.go: the operator's optional calls, as the read shows them
+			f.Optional, optional = e.openOptional(ctx, pr.ID, l.Read.Mine, f.Sum)
+			f.OptionalP3 = optionalSplit(l.Read.Mine, f.Sum, optional)
 		}
-		f.described = f.sum != nil && e.reviewDescribed(repo, pr.Number, f.sum.SHA) // fix.go: the review's Description line is work
-		f.items = append(slices.Clone(l.Read.Others), magnumItemsOf(l.Read.Mine, f.sum, handed, openFixConflict(l.Conflict, pr.HeadSHA), pr.HeadSHA, optional,
-			f.described)...)
-		if f.attention == attention.KindFix && !f.failed && len(f.cut) == 0 { // fix_decide.go: your decisions answer the fixer's calls
-			f.decided = callsDecided(deref(pr.LastError), func(root int64) bool { return decisionOf(f.items, root) })
+		f.Described = f.Sum != nil && e.reviewDescribed(repo, pr.Number, f.Sum.SHA) // fix.go: the review's Description line is work
+		f.Items = append(slices.Clone(l.Read.Others), magnumItemsOf(l.Read.Mine, f.Sum, handed, openFixConflict(l.Conflict, pr.HeadSHA), pr.HeadSHA, optional,
+			f.Described)...)
+		if f.Attention == attention.KindFix && !f.Failed && len(f.Cut) == 0 { // fix_decide.go: your decisions answer the fixer's calls
+			f.Decided = callsDecided(deref(pr.LastError), func(root int64) bool { return decisionOf(f.Items, root) })
 		}
 	}
 }
@@ -482,11 +482,11 @@ func openWhole(r openRead, fp, head string) (whole, failed bool) {
 // Otherwise the read waits, and spends no GitHub budget on a PR whose
 // verdict it cannot move.
 func readWanted(f openFacts) bool {
-	if f.off != "" || f.fix != nil || f.fixBad || f.held != "" || len(f.stalemate) > 0 || f.pending > 0 && !f.raised {
+	if f.Off != "" || f.Fix != nil || f.FixBad || f.Held != "" || len(f.Stalemate) > 0 || f.Pending > 0 && !f.Raised {
 		return false
 	}
-	if f.pr.State == store.PRNeedsAttention { // its leftovers, and the lift (fix_open_needs.go), need the read
-		return deref(f.pr.ReviewedSHA) == f.pr.HeadSHA
+	if f.PR.State == store.PRNeedsAttention { // its leftovers, and the lift (fix_open_needs.go), need the read
+		return deref(f.PR.ReviewedSHA) == f.PR.HeadSHA
 	}
 	why, _, _ := magnumDue(f)
 	return why == ""
@@ -589,7 +589,7 @@ func (e *Engine) openConflictCheck(ctx context.Context, repo store.Repo, pr stor
 	if err != nil {
 		next.Unchecked = true
 	} else {
-		next.Tip, next.Paths = fc.sha, fc.paths
+		next.Tip, next.Paths = fc.SHA, fc.Paths
 		if next.Tip == "" { // a clean merge names no tip: the base's CI is read at the one fetched (ci_fix.go)
 			next.Tip, _ = e.d.Git.RevParse(ctx, dir, "refs/remotes/origin/"+base)
 		}
@@ -603,7 +603,7 @@ func openFixConflict(c openConflict, head string) fixConflict {
 	if c.Head != head || len(c.Paths) == 0 {
 		return fixConflict{}
 	}
-	return fixConflict{base: c.Base, sha: c.Tip, paths: c.Paths}
+	return fixConflict{Base: c.Base, SHA: c.Tip, Paths: c.Paths}
 }
 
 // openCI is rule 11's CI of pr's head, of repository full (openCIOf),
@@ -616,11 +616,11 @@ func openFixConflict(c openConflict, head string) fixConflict {
 func (e *Engine) openCI(ctx context.Context, full string, pr store.PR) openCI {
 	required, err := e.st.RequiredChecks(ctx, full, e.cfg.RequiredChecks(full))
 	if err != nil {
-		return openCI{pending: true}
+		return openCI{Pending: true}
 	}
 	g, _, err := e.st.GitHubRequiredChecks(ctx, full)
 	if err != nil {
-		return openCI{pending: true}
+		return openCI{Pending: true}
 	}
 	ignore := e.cfg.IgnoreChecks(full)
 	if len(required.Checks) > 0 {

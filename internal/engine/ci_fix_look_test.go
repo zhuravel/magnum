@@ -650,27 +650,6 @@ func TestACIFixPushGoesToItsForcedReReviewAndTheNextCycleFixesFindings(t *testin
 	}
 }
 
-// The fixer's ci entries under Needs you name the job and one class word:
-// the settle reads only that word, never the reason.
-func TestNeedsYouEntryReadsACIEntryAndItsClass(t *testing.T) {
-	class, ci, rest := ciCannotOf([]string{"129341926468 ci: not fixed. infra: the runner lost its disk",
-		"2101 P2 app/a.rb:4: not fixed. contested", "77 ci: not fixed. the log is cut"})
-	if class != "infra" || !ci || len(rest) != 1 || !strings.HasPrefix(rest[0], "2101 P2") {
-		t.Errorf("class %q, ci %v, rest %q", class, ci, rest)
-	}
-	for entry, want := range map[string]string{
-		"5 ci: not fixed. flaky: passes again": "flaky", "5 ci: not fixed. secret: STRIPE_KEY": "secret", "5 ci: not fixed. config: a step": "config",
-		"5 ci: not fixed. base: master fails too": "base", "5 ci: not fixed. whatever": "unfixed",
-	} {
-		if got, ok, _ := ciCannotOf([]string{entry}); got != want || !ok {
-			t.Errorf("%q: class %q, %v; want %q", entry, got, ok, want)
-		}
-	}
-	if m := needsYouEntryRe.FindStringSubmatch("2101 P1 app/models/offer.rb:42: not fixed. The author's call: a or b"); m == nil || m[7] == "" || m[8] != "" {
-		t.Errorf("the author's call: %q", m)
-	}
-}
-
 // The daemon's push of a merge of the parent (a loop's first cycle, a CI
 // fix's included, merges a base tip the head lacks first) is magnum's, not
 // the operator's: its head is the fixer's, so hands_off_after_push does

@@ -129,26 +129,6 @@ func (w Wait) kind() string {
 	return "review"
 }
 
-// waitClock is t as a screen shows it relative to now: "14:09" today or
-// within the next 24 hours (the cap's midnight is "00:00"), "Tue 14:09"
-// within a week, else "Jan 2 14:09". A t within a minute is rounded up to
-// the next whole minute: a wait that ends at 14:08:51 has not ended at
-// 14:08, so it shows "14:09".
-func waitClock(t, now time.Time) string {
-	t, now = t.Local(), now.Local()
-	if m := t.Truncate(time.Minute); m.Before(t) {
-		t = m.Add(time.Minute)
-	}
-	ahead := t.Sub(now)
-	switch y1, m1, d1 := t.Date(); {
-	case y1 == now.Year() && m1 == now.Month() && d1 == now.Day(), ahead > 0 && ahead < 24*time.Hour:
-		return t.Format("15:04")
-	case ahead > 0 && ahead < 6*24*time.Hour:
-		return t.Format("Mon 15:04")
-	}
-	return t.Format("Jan 2 15:04")
-}
-
 // Short is the compact form for a table cell, e.g. "re-review · cap 6/6 →
 // 00:00", "re-review · quiet → 14:09", "review · codex paused → 15:00",
 // "re-review · small delta 8/30 lines → 16:40", "re-review · requested by

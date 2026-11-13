@@ -672,23 +672,3 @@ func TestAFixThatFailedOtherwiseIsNeverSettledLate(t *testing.T) {
 		t.Error("the record of another kind stays")
 	}
 }
-
-// While the settle confirms the push, the loop says so: the board's state
-// cell, the PR's status line (the look's verdict) and the dispatch wait.
-func TestTheLoopSaysItConfirmsThePushWhileGitHubDoesNotAnswer(t *testing.T) {
-	const head = "e6c1f37" + "000000000000000000000000000000000"
-	st := FixState{Cycle: 1, Cap: 5, Phase: FixPhaseFixing, Role: "claude-fix", Confirm: &FixConfirm{Head: head}}
-	if got, want := st.Short(), "fixing 1/5 · confirming e6c1f37"; got != want {
-		t.Errorf("Short = %q, want %q", got, want)
-	}
-	if got, want := st.Confirming(), "confirming the push of e6c1f37 (GitHub does not answer)"; got != want {
-		t.Errorf("Confirming = %q, want %q", got, want)
-	}
-	if got := (FixState{Cycle: 1, Cap: 5, Phase: FixPhaseFixing, Role: "claude-fix"}).Confirming(); got != "" {
-		t.Errorf("Confirming of a loop at work = %q, want none", got)
-	}
-	f := openFacts{fix: &st, pr: store.PR{HeadSHA: fixHead}}
-	if v, _, _ := decideOpen(f); v.Verdict != OpenFixing || v.Why != "fixing, confirming the push of e6c1f37 (GitHub does not answer)" {
-		t.Errorf("the verdict = %s %q", v.Verdict, v.Why)
-	}
-}

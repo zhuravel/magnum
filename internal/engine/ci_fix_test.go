@@ -20,10 +20,10 @@ var completionRequired = store.RequiredChecks{Checks: []string{"Completion"}, So
 // fix may start.
 func ciFailedFacts() openFacts {
 	f := idleFacts()
-	f.pr.CI = &store.CIStatus{SHA: fixHead, Complete: true, ByWorkflowFile: true, Checks: []store.CheckResult{
+	f.PR.CI = &store.CIStatus{SHA: fixHead, Complete: true, ByWorkflowFile: true, Checks: []store.CheckResult{
 		{Name: "Completion", Workflow: "CI", WorkflowFile: "ci.yml", State: store.CheckFailed, At: openNow.Add(-40 * time.Minute)}}}
-	f.ci = openCIOf(f.pr, completionRequired, false, nil)
-	f.ciFix = ciFixFacts{on: true, base: ciBasePassed, baseSHA: ciBaseSHA, baseName: "main"}
+	f.CI = openCIOf(f.PR, completionRequired, false, nil)
+	f.CIFix = ciFixFacts{On: true, Base: ciBasePassed, BaseSHA: ciBaseSHA, BaseName: "main"}
 	return f
 }
 
@@ -47,7 +47,7 @@ func TestAFailedRequiredCheckGreenOnTheBaseStartsACIFix(t *testing.T) {
 		t.Fatalf("work = %+v, want the CI item", work)
 	}
 	f := ciFailedFacts()
-	f.ciFix.starts = 1
+	f.CIFix.Starts = 1
 	v, _, _ = decideOpen(f)
 	wantVerdict(t, v, OpenFixing, "(CI fix 2 of 3)")
 }
@@ -56,13 +56,13 @@ func TestAFailedRequiredCheckGreenOnTheBaseStartsACIFix(t *testing.T) {
 // makes the work that alone, and the CI waits for the push it brings.
 func TestCIFixWaitsForFindingsFirst(t *testing.T) {
 	f := ciFailedFacts()
-	f.items = []openItem{personThread(4100)}
+	f.Items = []openItem{personThread(4100)}
 	_, work, _ := decideOpen(f)
 	if len(work) != 1 || work[0].Kind != itemThread {
 		t.Fatalf("work = %+v, want the thread alone", work)
 	}
 	f = ciFailedFacts()
-	f.items = []openItem{{Key: reviewKey("r1"), Class: classMagnum, Kind: itemFindings, URL: prPage}}
+	f.Items = []openItem{{Key: reviewKey("r1"), Class: classMagnum, Kind: itemFindings, URL: prPage}}
 	v, work, _ := decideOpen(f)
 	if len(work) != 1 || work[0].Kind != itemFindings || strings.Contains(v.Why, "CI fix") {
 		t.Fatalf("verdict %q, work = %+v, want magnum's review alone", v.Why, work)
@@ -75,29 +75,29 @@ func TestCIFixWaitsForFindingsFirst(t *testing.T) {
 // was not read yet asks for the read.
 func TestARequiredCheckRedOnTheBaseNeedsYou(t *testing.T) {
 	f := ciFailedFacts()
-	f.ciFix.base = ciBaseFailed
+	f.CIFix.Base = ciBaseFailed
 	v, work, _ := decideOpen(f)
 	wantNeedsCI(t, v, work, "required check Completion failed at a1a1a1a, and on main at c0c0c0c too: magnum fixes only a check that passes on the base")
 }
 
 func TestARequiredCheckTheBaseNeverRanNeedsYou(t *testing.T) {
 	f := ciFailedFacts()
-	f.ciFix.base, f.ciFix.baseSHA = ciBaseNever, ""
+	f.CIFix.Base, f.CIFix.BaseSHA = ciBaseNever, ""
 	v, work, _ := decideOpen(f)
 	wantNeedsCI(t, v, work, "required check Completion failed at a1a1a1a; main's last 5 commits never ran it: magnum fixes only a check that passes on the base")
-	f.ciFix.base, f.ciFix.baseSHA = ciBaseRunning, ciBaseSHA
+	f.CIFix.Base, f.CIFix.BaseSHA = ciBaseRunning, ciBaseSHA
 	v, work, _ = decideOpen(f)
 	wantVerdict(t, v, OpenWaits, "required check Completion failed at a1a1a1a; it still runs on main at c0c0c0c")
 	if len(work) != 0 {
 		t.Fatal(work)
 	}
-	f.ciFix.base, f.ciFix.baseDue = "", true
+	f.CIFix.Base, f.CIFix.BaseDue = "", true
 	v, work, _ = decideOpen(f)
 	wantVerdict(t, v, OpenWaits, "required check Completion failed at a1a1a1a; reading main's CI")
 	if !v.ReadCIBase || len(work) != 0 {
 		t.Fatalf("readCIBase %v, work %v", v.ReadCIBase, work)
 	}
-	f.low = true
+	f.Low = true
 	v, _, _ = decideOpen(f)
 	wantVerdict(t, v, OpenWaits, "reading main's CI waits for the GitHub budget")
 	if v.ReadCIBase {
@@ -109,8 +109,8 @@ func TestARequiredCheckTheBaseNeverRanNeedsYou(t *testing.T) {
 // change the failed set.
 func TestCIFixWaitsWhileARequiredCheckStillRuns(t *testing.T) {
 	f := ciFailedFacts()
-	f.pr.CI.Checks = append(f.pr.CI.Checks, store.CheckResult{Name: "Build", WorkflowFile: "build.yml", State: store.CheckPending})
-	f.ci = openCIOf(f.pr, store.RequiredChecks{Checks: []string{"Completion", "Build"}, Source: store.RequiredFromGitHub}, false, nil)
+	f.PR.CI.Checks = append(f.PR.CI.Checks, store.CheckResult{Name: "Build", WorkflowFile: "build.yml", State: store.CheckPending})
+	f.CI = openCIOf(f.PR, store.RequiredChecks{Checks: []string{"Completion", "Build"}, Source: store.RequiredFromGitHub}, false, nil)
 	v, work, _ := decideOpen(f)
 	wantVerdict(t, v, OpenWaits, "required check Completion failed at a1a1a1a; a required check still runs")
 	if len(work) != 0 || len(v.Needs) != 0 {
@@ -121,7 +121,7 @@ func TestCIFixWaitsWhileARequiredCheckStillRuns(t *testing.T) {
 // After three CI fixes the PR's CI is the operator's.
 func TestThreeCIFixesNeedYou(t *testing.T) {
 	f := ciFailedFacts()
-	f.ciFix.starts = ciFixMax
+	f.CIFix.Starts = ciFixMax
 	v, work, _ := decideOpen(f)
 	wantNeedsCI(t, v, work, "required check Completion failed at a1a1a1a after 3 CI fixes: the CI is yours")
 }
@@ -131,34 +131,34 @@ func TestThreeCIFixesNeedYou(t *testing.T) {
 // whose words keep the factory's "f starts another".
 func TestCIFixKeepsHandsOffSettlePauseQuietHoursAndTheDailyCap(t *testing.T) {
 	f := ciFailedFacts()
-	f.ledger.FixerHeads = nil
-	f.pr.HeadChangedAt = openNow.Add(-10 * time.Minute)
+	f.Ledger.FixerHeads = nil
+	f.PR.HeadChangedAt = openNow.Add(-10 * time.Minute)
 	v, work, _ := decideOpen(f)
-	wantVerdict(t, v, OpenWaits, "you pushed a1a1a1a at "+waitClock(f.pr.HeadChangedAt, openNow)+"; hands off until "+
-		waitClock(f.pr.HeadChangedAt.Add(30*time.Minute), openNow))
+	wantVerdict(t, v, OpenWaits, "you pushed a1a1a1a at "+waitClock(f.PR.HeadChangedAt, openNow)+"; hands off until "+
+		waitClock(f.PR.HeadChangedAt.Add(30*time.Minute), openNow))
 	if len(work) != 0 {
 		t.Fatal(work)
 	}
 	f = ciFailedFacts()
-	f.pr.HeadChangedAt = openNow.Add(-10 * time.Minute)
+	f.PR.HeadChangedAt = openNow.Add(-10 * time.Minute)
 	activity := openNow.Add(-time.Minute)
-	f.pr.ActivityAt = &activity
+	f.PR.ActivityAt = &activity
 	v, _, _ = decideOpen(f)
 	wantVerdict(t, v, OpenWaits, "settling: the CI fix of required check Completion waits until "+waitClock(activity.Add(3*time.Minute), openNow))
 	f = ciFailedFacts()
-	f.pause = "magnum paused"
+	f.Pause = "magnum paused"
 	v, _, _ = decideOpen(f)
 	wantVerdict(t, v, OpenWaits, "magnum paused: the CI fix of required check Completion waits for `magnum resume`")
 	f = ciFailedFacts()
-	f.settle.quietHours = "03:00-10:00"
-	f.now = time.Date(2026, 11, 7, 4, 0, 0, 0, time.Local)
-	f.pr.HeadChangedAt, f.ledger.Spell = f.now.Add(-time.Hour), openSpell{}
-	quietActivity := f.now.Add(-30 * time.Minute)
-	f.pr.ActivityAt = &quietActivity
+	f.Settle.QuietHours = "03:00-10:00"
+	f.Now = time.Date(2026, 11, 7, 4, 0, 0, 0, time.Local)
+	f.PR.HeadChangedAt, f.Ledger.Spell = f.Now.Add(-time.Hour), openSpell{}
+	quietActivity := f.Now.Add(-30 * time.Minute)
+	f.PR.ActivityAt = &quietActivity
 	v, _, _ = decideOpen(f)
 	wantVerdict(t, v, OpenWaits, "quiet hours (03:00-10:00): the CI fix of required check Completion waits until 10:00")
 	f = ciFailedFacts()
-	f.ledger.Starts = []time.Time{openNow.Add(-time.Hour), openNow.Add(-2 * time.Hour), openNow.Add(-3 * time.Hour)}
+	f.Ledger.Starts = []time.Time{openNow.Add(-time.Hour), openNow.Add(-2 * time.Hour), openNow.Add(-3 * time.Hour)}
 	v, work, _ = decideOpen(f)
 	wantVerdict(t, v, OpenNeedsYou, "3 loops today: f starts another, c a CI fix")
 	if len(work) != 0 || len(v.Needs) != 1 || v.Needs[0].Kind != "loop" {
@@ -175,15 +175,15 @@ func TestTheFixerSaidCannotNeedsYouAndStartsNothingAgainAtTheHead(t *testing.T) 
 		"config": "a CI config change it may not make", "base": "a failure on the base", "unfixed": "a failure it could not fix",
 	} {
 		f := ciFailedFacts()
-		f.ciFix.starts = 1
-		f.ciFix.atHead = ciFixStart{Head: fixHead, Outcome: ciOutcomeCannot, Why: class}
+		f.CIFix.Starts = 1
+		f.CIFix.AtHead = ciFixStart{Head: fixHead, Outcome: ciOutcomeCannot, Why: class}
 		v, work, _ := decideOpen(f)
 		wantNeedsCI(t, v, work, "required check Completion failed at a1a1a1a: the CI fix found "+words)
 	}
 	for _, outcome := range []string{ciOutcomeFailed, ciOutcomeLost} {
 		f := ciFailedFacts()
-		f.ciFix.starts = 1
-		f.ciFix.atHead = ciFixStart{Head: fixHead, Outcome: outcome}
+		f.CIFix.Starts = 1
+		f.CIFix.AtHead = ciFixStart{Head: fixHead, Outcome: outcome}
 		v, work, _ := decideOpen(f)
 		wantNeedsCI(t, v, work, "required check Completion failed at a1a1a1a: the CI fix at a1a1a1a failed; it is yours")
 	}
@@ -195,7 +195,7 @@ func TestTheFixerSaidCannotNeedsYouAndStartsNothingAgainAtTheHead(t *testing.T) 
 // fix, which could only answer config and spend one of 3, nor one whose
 // file list GitHub cut short; one not listed at the head waits for the list.
 func TestAPRThatChangesItsCIConfigGetsNoCIFix(t *testing.T) {
-	runs := ciFailedFacts().ci.failedRuns
+	runs := ciFailedFacts().CI.FailedRuns
 	for _, files := range [][]string{{".github/workflows/ci.yml"}, {".github/actions/setup/action.yml"}, {"tools/action.yaml"},
 		{".github/bin/rspec-shard"}, {".GitHub/Bin/rspec-shard"}} {
 		refused, wait := ciFixRefusal(store.PRFiles{HeadSHA: fixHead, Paths: append([]string{"app/a.rb"}, files...)}, true, fixHead, runs)
@@ -213,7 +213,7 @@ func TestAPRThatChangesItsCIConfigGetsNoCIFix(t *testing.T) {
 		t.Errorf("the PR's own code: %q, wait %v", refused, wait)
 	}
 	f := ciFailedFacts()
-	f.ciFix.refused = "the PR changes its own CI config (a workflow, an action, a script of .github/bin), so its CI is yours"
+	f.CIFix.Refused = "the PR changes its own CI config (a workflow, an action, a script of .github/bin), so its CI is yours"
 	v, work, _ := decideOpen(f)
 	wantNeedsCI(t, v, work, "required check Completion failed at a1a1a1a: the PR changes its own CI config (a workflow, an action, a script of .github/bin), so its CI is yours")
 }
@@ -245,21 +245,21 @@ func TestAFailureOfNoActionsJobNeedsYou(t *testing.T) {
 // failed job of its workflow file it is a failed required check, whose
 // base comparison is that job's.
 func TestACompletionSkippedBesideAFailedJobOfItsWorkflowIsAFailedRequiredCheck(t *testing.T) {
-	pr := idleFacts().pr
+	pr := idleFacts().PR
 	pr.CI = &store.CIStatus{SHA: fixHead, Complete: true, ByWorkflowFile: true, Checks: []store.CheckResult{
 		{Name: "Capybara", Workflow: "CI", WorkflowFile: "ci.yml", State: store.CheckFailed},
 		{Name: "RSpec", Workflow: "CI", WorkflowFile: "ci.yml", State: store.CheckPassed},
 		{Name: "Completion", Workflow: "CI", WorkflowFile: "ci.yml", State: store.CheckSkipped},
 		{Name: "Dependency Audit", Workflow: "Audit", WorkflowFile: "audit.yml", State: store.CheckFailed}}}
 	ci := openCIOf(pr, completionRequired, false, nil)
-	if ci.failed != "required check Completion" || len(ci.failedRuns) != 1 {
+	if ci.Failed != "required check Completion" || len(ci.FailedRuns) != 1 {
 		t.Fatalf("ci = %+v", ci)
 	}
-	if r := ci.failedRuns[0]; r.Entry != "Completion" || r.Name != "Completion" || r.WorkflowFile != "ci.yml" || strings.Join(r.Compare, ",") != "Capybara" {
+	if r := ci.FailedRuns[0]; r.Entry != "Completion" || r.Name != "Completion" || r.WorkflowFile != "ci.yml" || strings.Join(r.Compare, ",") != "Capybara" {
 		t.Errorf("failed run = %+v, want Completion compared by its failed job", r)
 	}
 	pr.CI.Checks[0].State = store.CheckPassed // a skip with no failure beside it (a path filter) is no failure
-	if ci := openCIOf(pr, completionRequired, false, nil); ci.failed != "" {
+	if ci := openCIOf(pr, completionRequired, false, nil); ci.Failed != "" {
 		t.Errorf("a skip beside no failure of its workflow: %+v", ci)
 	}
 }
@@ -270,25 +270,25 @@ func TestACompletionSkippedBesideAFailedJobOfItsWorkflowIsAFailedRequiredCheck(t
 // not run; a run that ended success or cancelled without it stays missing.
 func TestARunMagnumStartedThatEndedFailureIsAFailedCheckNotCIMissing(t *testing.T) {
 	f := idleFacts()
-	f.pr.CI = &store.CIStatus{SHA: fixHead, Complete: true, ByWorkflowFile: true, Checks: []store.CheckResult{{Name: "Pronto", State: store.CheckPassed}}}
-	f.ci = openCIOf(f.pr, completionRequired, false, []string{"Completion"})
-	if len(f.ci.missing) != 1 {
-		t.Fatalf("ci = %+v", f.ci)
+	f.PR.CI = &store.CIStatus{SHA: fixHead, Complete: true, ByWorkflowFile: true, Checks: []store.CheckResult{{Name: "Pronto", State: store.CheckPassed}}}
+	f.CI = openCIOf(f.PR, completionRequired, false, []string{"Completion"})
+	if len(f.CI.Missing) != 1 {
+		t.Fatalf("ci = %+v", f.CI)
 	}
-	f.ciWorkflow = "ci.yml"
-	f.ciStart = ciStart{Head: fixHead, Workflow: "ci.yml", At: openNow.Add(-50 * time.Minute), Run: &ciRun{ID: 77, Status: "completed", Conclusion: "failure"}}
-	f.ci = ciShape3(f.ci, f.ciStart, f.ciRerun)
-	f.ciFix = ciFixFacts{on: true, base: ciBasePassed, baseSHA: ciBaseSHA, baseName: "main", starts: ciFixMax}
+	f.CIWorkflow = "ci.yml"
+	f.CIStart = ciStart{Head: fixHead, Workflow: "ci.yml", At: openNow.Add(-50 * time.Minute), Run: &ciRun{ID: 77, Status: "completed", Conclusion: "failure"}}
+	f.CI = ciShape3(f.CI, f.CIStart, f.CIRerun)
+	f.CIFix = ciFixFacts{On: true, Base: ciBasePassed, BaseSHA: ciBaseSHA, BaseName: "main", Starts: ciFixMax}
 	v, work, _ := decideOpen(f)
 	wantNeedsCI(t, v, work, "required check Completion failed at a1a1a1a (magnum's run of ci.yml ended failure) after 3 CI fixes")
-	if r := f.ci.failedRuns; len(r) != 1 || r[0].Run != 77 || r[0].WorkflowFile != "ci.yml" || r[0].Entry != "Completion" {
+	if r := f.CI.FailedRuns; len(r) != 1 || r[0].Run != 77 || r[0].WorkflowFile != "ci.yml" || r[0].Entry != "Completion" {
 		t.Errorf("failed runs = %+v", r)
 	}
 	for _, end := range []string{"success", "cancelled"} {
-		s := f.ciStart
+		s := f.CIStart
 		s.Run = &ciRun{ID: 77, Status: "completed", Conclusion: end}
-		ci := ciShape3(openCIOf(f.pr, completionRequired, false, []string{"Completion"}), s, ciRerun{})
-		if ci.failed != "" || len(ci.missing) != 1 {
+		ci := ciShape3(openCIOf(f.PR, completionRequired, false, []string{"Completion"}), s, ciRerun{})
+		if ci.Failed != "" || len(ci.Missing) != 1 {
 			t.Errorf("a run that ended %s: %+v, want the check missing", end, ci)
 		}
 	}
@@ -300,12 +300,12 @@ func TestARunMagnumStartedThatEndedFailureIsAFailedCheckNotCIMissing(t *testing.
 // fix of Dependency Audit.
 func TestTheEnforcedMissingCheckGoesBeforeTheRollupsFailureOfAnother(t *testing.T) {
 	failure := "FAILURE"
-	pr := idleFacts().pr
+	pr := idleFacts().PR
 	pr.CIState = &failure
 	pr.CI = &store.CIStatus{SHA: fixHead, State: failure, Complete: true, ByWorkflowFile: true, Checks: []store.CheckResult{
 		{Name: "Dependency Audit", Workflow: "Audit", WorkflowFile: "dependency-audit.yml", State: store.CheckFailed}}}
 	ci := openCIOf(pr, completionRequired, false, []string{"Completion"})
-	if ci.failed != "" || len(ci.missing) != 1 || ci.missing[0] != "Completion" {
+	if ci.Failed != "" || len(ci.Missing) != 1 || ci.Missing[0] != "Completion" {
 		t.Errorf("ci = %+v, want Completion missing", ci)
 	}
 }
@@ -314,9 +314,9 @@ func TestTheEnforcedMissingCheckGoesBeforeTheRollupsFailureOfAnother(t *testing.
 // checks hold its newest run.
 func TestAReRunThatPassedIsNoFailure(t *testing.T) {
 	f := ciFailedFacts()
-	f.pr.CI.Checks = append(f.pr.CI.Checks, store.CheckResult{Name: "Completion", Workflow: "CI", WorkflowFile: "ci-dispatch.yml",
+	f.PR.CI.Checks = append(f.PR.CI.Checks, store.CheckResult{Name: "Completion", Workflow: "CI", WorkflowFile: "ci-dispatch.yml",
 		State: store.CheckPassed, At: openNow.Add(-10 * time.Minute)})
-	f.ci = openCIOf(f.pr, completionRequired, false, nil)
+	f.CI = openCIOf(f.PR, completionRequired, false, nil)
 	v, work, _ := decideOpen(f)
 	wantVerdict(t, v, OpenIdle, "nothing open at a1a1a1a")
 	if len(work) != 0 {
@@ -328,27 +328,27 @@ func TestAReRunThatPassedIsNoFailure(t *testing.T) {
 // re-reviewed, while CI runs again on the push, and once that passed.
 func TestTheVerdictWhileTheCIFixRunsWhileItsPushIsReReviewedWhileCIRerunsAndAfterSuccess(t *testing.T) {
 	f := ciFailedFacts()
-	f.ciFix.starts = 1
-	f.fix = &FixState{Cycle: 1, Cap: 5, Phase: FixPhaseFixing, Head: fixHead, Mode: FixModeCI, CIChecks: []string{"Completion"}}
+	f.CIFix.Starts = 1
+	f.Fix = &FixState{Cycle: 1, Cap: 5, Phase: FixPhaseFixing, Head: fixHead, Mode: FixModeCI, CIChecks: []string{"Completion"}}
 	v, _, _ := decideOpen(f)
 	wantVerdict(t, v, OpenFixing, "fixing CI: required check Completion at a1a1a1a, cycle 1 of 5 (CI fix 1 of 3)")
 	pushed := strings.Repeat("b2", 20)
-	f.fix.Phase, f.fix.Head = FixPhaseReviewing, pushed
+	f.Fix.Phase, f.Fix.Head = FixPhaseReviewing, pushed
 	v, _, _ = decideOpen(f)
 	wantVerdict(t, v, OpenFixing, "fixing, re-review of b2b2b2b (the CI fix's push)")
 
 	after := idleFacts()
-	after.pr.HeadSHA, after.pr.ReviewedSHA = pushed, &pushed
-	after.sum.SHA = pushed
-	after.ledger.FixerHeads = []string{pushed}
-	after.pr.CI = &store.CIStatus{SHA: pushed, Complete: true, ByWorkflowFile: true, Checks: []store.CheckResult{
+	after.PR.HeadSHA, after.PR.ReviewedSHA = pushed, &pushed
+	after.Sum.SHA = pushed
+	after.Ledger.FixerHeads = []string{pushed}
+	after.PR.CI = &store.CIStatus{SHA: pushed, Complete: true, ByWorkflowFile: true, Checks: []store.CheckResult{
 		{Name: "Completion", Workflow: "CI", WorkflowFile: "ci.yml", State: store.CheckPending}}}
-	after.ci = openCIOf(after.pr, completionRequired, false, nil)
-	after.ciFix = ciFixFacts{starts: 1, last: ciFixStart{Head: fixHead, Entries: []string{"Completion"}, Outcome: ciOutcomePushed, Pushed: pushed}, lastN: 1}
+	after.CI = openCIOf(after.PR, completionRequired, false, nil)
+	after.CIFix = ciFixFacts{Starts: 1, Last: ciFixStart{Head: fixHead, Entries: []string{"Completion"}, Outcome: ciOutcomePushed, Pushed: pushed}, LastN: 1}
 	v, _, _ = decideOpen(after)
 	wantVerdict(t, v, OpenWaits, "CI at b2b2b2b after CI fix 1 of 3")
-	after.pr.CI.Checks[0].State = store.CheckPassed
-	after.ci = openCIOf(after.pr, completionRequired, false, nil)
+	after.PR.CI.Checks[0].State = store.CheckPassed
+	after.CI = openCIOf(after.PR, completionRequired, false, nil)
 	v, _, _ = decideOpen(after)
 	wantVerdict(t, v, OpenIdle, "nothing open at b2b2b2b · approved, merge is yours · CI fix 1 of 3 made required check Completion pass")
 }
@@ -360,14 +360,14 @@ func TestTheIdleWordsCreditTheCIFixOnlyAtItsPush(t *testing.T) {
 	pushed := strings.Repeat("b2", 20)
 	at := func(head string) openFacts {
 		f := idleFacts()
-		f.pr.HeadSHA, f.pr.ReviewedSHA = head, &head
-		f.sum.SHA = head
-		f.ledger.FixerHeads = []string{pushed}
-		f.pr.CI = &store.CIStatus{SHA: head, Complete: true, ByWorkflowFile: true, Checks: []store.CheckResult{
+		f.PR.HeadSHA, f.PR.ReviewedSHA = head, &head
+		f.Sum.SHA = head
+		f.Ledger.FixerHeads = []string{pushed}
+		f.PR.CI = &store.CIStatus{SHA: head, Complete: true, ByWorkflowFile: true, Checks: []store.CheckResult{
 			{Name: "Completion", Workflow: "CI", WorkflowFile: "ci.yml", State: store.CheckPassed}}}
-		f.ci = openCIOf(f.pr, completionRequired, false, nil)
-		f.ciFix = ciFixFacts{starts: 1, last: ciFixStart{Head: fixHead, Entries: []string{"Completion"}, Outcome: ciOutcomePushed, Pushed: pushed},
-			lastN: 1}
+		f.CI = openCIOf(f.PR, completionRequired, false, nil)
+		f.CIFix = ciFixFacts{Starts: 1, Last: ciFixStart{Head: fixHead, Entries: []string{"Completion"}, Outcome: ciOutcomePushed, Pushed: pushed},
+			LastN: 1}
 		return f
 	}
 	v, _, _ := decideOpen(at(pushed))

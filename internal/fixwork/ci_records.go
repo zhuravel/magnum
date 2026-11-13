@@ -30,7 +30,7 @@ type CIFixStart struct {
 	Pushed  string    `json:"pushed,omitempty"`
 }
 
-// Count is the CI fixes that count against ciFixMax: every start but an
+// Count is the CI fixes that count against CIFixMax: every start but an
 // unstarted one (a start whose end was lost counts).
 func (r CIFixRecord) Count() int {
 	n := 0

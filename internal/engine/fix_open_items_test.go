@@ -243,7 +243,7 @@ func TestAFindingTheFixerSkippedWithoutAWordNeedsYou(t *testing.T) {
 // A conflict of the head with the PR's own base is an item keyed by the
 // head, never by the base's tip, which moves several times a day.
 func TestAConflictIsAnItemKeyedByTheHead(t *testing.T) {
-	c := fixConflict{base: "feature", sha: fixBaseTip, paths: []string{"a.rb"}}
+	c := fixConflict{Base: "feature", SHA: fixBaseTip, Paths: []string{"a.rb"}}
 	got := openItemsOf(itemsInput{read: readFor(nil, nil, nil, nil, nil), sum: cleanSum(), head: fixHead, conflict: c})
 	if len(got) != 1 || got[0].Key != "conflict:"+fixHead[:12] || got[0].Class != classConflict {
 		t.Errorf("items = %+v, want the conflict keyed by the head", got)
@@ -428,11 +428,11 @@ func TestAnOptionalCallIsNoFixersWork(t *testing.T) {
 		t.Errorf("a new P3 of a review that keeps the call no more: items = %v, want the review", got)
 	}
 	later.Counts[3], later.OpenCounts = 0, &[4]int{0, 0, 0, 2}
-	if reviewWork(*later, p3Calls{kept: 2}, false) || !reviewWork(*later, p3Calls{kept: 1}, false) || !reviewWork(*later, p3Calls{}, false) {
+	if reviewWork(*later, p3Calls{Kept: 2}, false) || !reviewWork(*later, p3Calls{Kept: 1}, false) || !reviewWork(*later, p3Calls{}, false) {
 		t.Error("reviewWork does not leave out the optional calls among the open P3s")
 	}
 	later.Counts[3], later.OpenCounts = 1, &[4]int{0, 0, 0, 0}
-	if !reviewWork(*later, p3Calls{kept: 1}, false) || reviewWork(*later, p3Calls{fresh: 1}, false) {
+	if !reviewWork(*later, p3Calls{Kept: 1}, false) || reviewWork(*later, p3Calls{Fresh: 1}, false) {
 		t.Error("reviewWork leaves a later review's new P3 out for an earlier review's call, or keeps its own call in")
 	}
 }

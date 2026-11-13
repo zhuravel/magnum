@@ -204,20 +204,3 @@ func (e *Engine) ignoredChecksNote(full string, pr store.PR) string {
 	}
 	return note
 }
-
-// shownCheckName reports whether name, a check's workflow and name, is
-// plain text an event or the log may carry: ASCII letters, digits, spaces
-// and "._-/+@:()[],#", at most 120 bytes, not blank.
-func shownCheckName(name string) bool {
-	if strings.TrimSpace(name) == "" || len(name) > 120 {
-		return false
-	}
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', strings.ContainsRune(" ._-/+@:()[],#", r):
-		default:
-			return false
-		}
-	}
-	return true
-}

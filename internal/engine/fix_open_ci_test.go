@@ -436,31 +436,6 @@ func TestAFailedStartOfTheCIWorkflowNeedsYouAndIsNotRepeated(t *testing.T) {
 	}
 }
 
-// The start waits for the end of `magnum pause` and for the GitHub budget
-// of the identity it starts as; without either, the verdict asks the look
-// to start it.
-func TestTheStartOfTheCIWorkflowWaitsForThePauseAndTheBudget(t *testing.T) {
-	f := idleFacts()
-	f.ci = openCI{missing: []string{"Completion"}}
-	f.ciWorkflow = "ci.yml"
-	v, _, _ := decideOpen(f)
-	if !v.Dispatch || v.Verdict != OpenNeedsYou {
-		t.Fatalf("verdict = %+v, want the start asked for", v)
-	}
-	f.pause, f.pauseUntil = "daemon paused", openNow.Add(time.Hour)
-	v, _, _ = decideOpen(f)
-	wantVerdict(t, v, OpenWaits, "CI at a1a1a1a: required check Completion did not run; magnum starts ci.yml once the pause ends")
-	if v.Dispatch || !v.Until.Equal(f.pauseUntil) {
-		t.Errorf("dispatch %v, until %s under the pause", v.Dispatch, v.Until)
-	}
-	f.pause, f.pauseUntil, f.low = "", time.Time{}, true
-	v, _, _ = decideOpen(f)
-	wantVerdict(t, v, OpenWaits, "CI at a1a1a1a: required check Completion did not run; magnum starts ci.yml once the GitHub budget allows")
-	if v.Dispatch {
-		t.Error("asked to start it below the GitHub floor")
-	}
-}
-
 // A required check its workflow creates only when the jobs it needs end
 // (Completion `needs:` the other CI jobs) has no run at the head while that
 // workflow runs, however long it takes: the look waits for it as CI at the

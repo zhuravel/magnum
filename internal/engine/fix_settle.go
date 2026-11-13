@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/attention"
+	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/steps"
@@ -188,7 +189,7 @@ func (e *Engine) settleReport(ctx context.Context, job *fixJob, rep FixReport, p
 		e.event(ctx, "info", subject, "fix.pushed", fmt.Sprintf("%s pushed %s: the head is %s", job.role.Name,
 			textx.Count(len(rep.Pushed), "commit", "commits"), textx.ShortSHA(target)), data)
 		e.notePush(ctx, job.pr.ID, target) // ci_dispatch.go: its CI starts after the grace
-		if job.conflict.sha != "" {        // fix_parent.go: the fixer's merge of the base may change the schema
+		if job.conflict.SHA != "" {        // fix_parent.go: the fixer's merge of the base may change the schema
 			e.parentSchema(ctx, job, job.head, target, false)
 		}
 	}
@@ -221,7 +222,7 @@ func (e *Engine) settleReport(ctx context.Context, job *fixJob, rep FixReport, p
 		rep.NeedsYou, answered = e.freshNeedsYou(ctx, job, rep.NeedsYou, nil, "", read) // no re-review yet
 	}
 	// fix_carry.go: what earlier cycles left that this one did not ask again or take on
-	carried := carriedLeft(job.state.Carried, report, rep.NeedsYou, laterWork{description: job.described, base: job.baseChecked || job.conflict.sha != ""})
+	carried := carriedLeft(job.state.Carried, report, rep.NeedsYou, laterWork{description: job.described, base: job.baseChecked || job.conflict.SHA != ""})
 	if len(carried) > 0 && !pushed { // the loop ends here: as magnum's threads show them now
 		carried = e.freshCarried(ctx, job, carried, "", read)
 	}
@@ -239,7 +240,7 @@ func (e *Engine) settleReport(ctx context.Context, job *fixJob, rep FixReport, p
 		switch {
 		case pushed:
 			job.ciOutcome, job.ciPushed = ciOutcomePushed, target
-		case job.merged.sha != "": // with the class of a ci entry: the merge's head is no new chance for the same cause
+		case job.merged.SHA != "": // with the class of a ci entry: the merge's head is no new chance for the same cause
 			job.ciOutcome, job.ciPushed, job.ciWhy = ciOutcomeMerged, job.head, ciClass
 		default:
 			job.ciOutcome, job.ciWhy = ciOutcomeCannot, cmp.Or(ciClass, "unfixed")
@@ -319,7 +320,7 @@ func (e *Engine) endCIFix(ctx context.Context, job *fixJob, cannot bool, data ma
 	}
 	e.finishFixRun(ctx, job.run, store.RunVerified, outcome, "")
 	e.endFixState(ctx, job)
-	why := "the CI fix found " + ciCannotClasses[cmp.Or(job.ciWhy, "unfixed")]
+	why := "the CI fix found " + fixwork.CICannotWords(cmp.Or(job.ciWhy, "unfixed"))
 	switch {
 	case job.ciOutcome == ciOutcomeMerged && job.ciWhy != "":
 		why += ", on magnum's merge of the parent " + textx.ShortSHA(job.head)
@@ -465,10 +466,10 @@ func (e *Engine) fixPushDescends(ctx context.Context, job *fixJob, seen, head st
 // its fixes) or a look that fails (logged) keeps every entry. A
 // fix.conflict_merged event counts what went.
 func (e *Engine) dropMergedConflicts(ctx context.Context, job *fixJob, entries []string, head string) []string {
-	tip := job.conflict.sha
+	tip := job.conflict.SHA
 	isConflict := func(entry string) bool {
 		n, ok := readNeedsYouEntry(entry)
-		return ok && n.place == conflictPlace
+		return ok && n.Place == conflictPlace
 	}
 	if tip == "" || e.d.Git == nil || !slices.ContainsFunc(entries, isConflict) {
 		return entries
@@ -486,7 +487,7 @@ func (e *Engine) dropMergedConflicts(ctx context.Context, job *fixJob, entries [
 	data := job.eventData()
 	data["conflict_sha"], data["head"], data["dropped"] = tip, head, dropped
 	e.event(ctx, "info", job.subject(), "fix.conflict_merged", fmt.Sprintf("%s merged %s at %s and pushed it in %s: its %s %s nothing",
-		job.role.Name, job.conflict.base, textx.ShortSHA(tip), textx.ShortSHA(head), textx.Plural(dropped, "conflict entry", "conflict entries"),
+		job.role.Name, job.conflict.Base, textx.ShortSHA(tip), textx.ShortSHA(head), textx.Plural(dropped, "conflict entry", "conflict entries"),
 		textx.Plural(dropped, "asks", "ask")), data)
 	return kept
 }

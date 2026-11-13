@@ -386,7 +386,7 @@ func TestAFixerAppThatMayNotUseActionsNeedsYouWithWhatToGrant(t *testing.T) {
 	}
 	mints, _ := h.ids[fixerAppName].actionsTokens()
 	h.withActionsErr(nil) // granted: the next read, settle_max on, re-runs the run
-	h.advance(h.e.openSettle().max)
+	h.advance(h.e.openSettle().Max)
 	h.tick()
 	if again, _ := h.ids[fixerAppName].actionsTokens(); again == mints {
 		t.Fatal("the read was not asked again settle_max on")

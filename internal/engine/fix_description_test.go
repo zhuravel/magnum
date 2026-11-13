@@ -87,9 +87,9 @@ func TestAReviewsDescriptionLineIsTheFixersWork(t *testing.T) {
 		t.Errorf("items = %v, want the review", got)
 	}
 	f := idleFacts()
-	f.described = true
-	f.ledger.Reviews = []string{"review:r1"}
-	f.items = []openItem{{Key: "mthread:5000@5002", Class: classMagnum, Kind: itemMagnum, URL: prPage + "#discussion_r5000"}}
+	f.Described = true
+	f.Ledger.Reviews = []string{"review:r1"}
+	f.Items = []openItem{{Key: "mthread:5000@5002", Class: classMagnum, Kind: itemMagnum, URL: prPage + "#discussion_r5000"}}
 	v, work, _ := decideOpen(f)
 	wantVerdict(t, v, OpenFixing, "starts a fix loop on 1 reply of magnum's")
 	if len(work) != 1 {

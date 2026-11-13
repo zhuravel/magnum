@@ -61,10 +61,10 @@ var fixConfirmBackoff = []time.Duration{5 * time.Second, 10 * time.Second, 20 * 
 func kvPRFixPush(prID int64) string { return fmt.Sprintf("pr.%d.fix_push", prID) }
 
 func mergeRecord(c fixConflict) *fixPushMerge {
-	if c.sha == "" {
+	if c.SHA == "" {
 		return nil
 	}
-	return &fixPushMerge{Base: c.base, SHA: c.sha, Paths: c.paths}
+	return &fixPushMerge{Base: c.Base, SHA: c.SHA, Paths: c.Paths}
 }
 
 // conflictOf is the fixConflict that m keeps (zero for none).
@@ -72,7 +72,7 @@ func conflictOf(m *fixPushMerge) fixConflict {
 	if m == nil {
 		return fixConflict{}
 	}
-	return fixConflict{base: m.Base, sha: m.SHA, paths: m.Paths}
+	return fixConflict{Base: m.Base, SHA: m.SHA, Paths: m.Paths}
 }
 
 // pushRecord is the record of head, the push of the job's fixer, as kind.

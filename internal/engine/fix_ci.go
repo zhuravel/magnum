@@ -106,20 +106,20 @@ func (a CIFixAsked) movedSince(head string, entries []string, count int, now tim
 // tip it fetched) and the CI fix facts.
 func (e *Engine) ciFactsNow(ctx context.Context, repo store.Repo, w config.Watch, pr store.PR) (openFacts, openLedger) {
 	full := repo.FullName()
-	f := openFacts{now: e.now(), pr: pr, settle: e.openSettle()}
-	_, f.low = e.githubLow(w.PollIdentity)
-	f.ci = e.openCI(ctx, full, pr)
-	f.ciWorkflow, f.ciStart = e.openCIStartOf(ctx, full, pr, f.ci)
-	if len(f.ci.missing) > 0 {
-		f.ciRerun = e.ciRerunAt(ctx, pr)
-		f.ci = ciShape3(f.ci, f.ciStart, f.ciRerun)
+	f := openFacts{Now: e.now(), PR: pr, Settle: e.openSettle()}
+	_, f.Low = e.githubLow(w.PollIdentity)
+	f.CI = e.openCI(ctx, full, pr)
+	f.CIWorkflow, f.CIStart = e.openCIStartOf(ctx, full, pr, f.CI)
+	if len(f.CI.Missing) > 0 {
+		f.CIRerun = e.ciRerunAt(ctx, pr)
+		f.CI = ciShape3(f.CI, f.CIStart, f.CIRerun)
 	}
 	var l openLedger
 	if raw, ok := e.getKV(ctx, kvPRFixSeen(pr.ID)); ok {
 		_ = json.Unmarshal([]byte(raw), &l) // none: the PR's base_sha is the tip
 	}
-	f.ledger = l
-	f.ciFix = e.ciFixFactsOf(ctx, repo, pr, f, l)
+	f.Ledger = l
+	f.CIFix = e.ciFixFactsOf(ctx, repo, pr, f, l)
 	return f, l
 }
 
@@ -145,14 +145,14 @@ func (e *Engine) requestCIFix(ctx context.Context, pr store.PR, dry bool, asked 
 	short := textx.ShortSHA(pr.HeadSHA)
 	f, l := e.ciFactsNow(ctx, repo, *w, pr)
 	switch {
-	case f.ci.failed == "" && len(f.ci.missing) > 0:
-		return "", fmt.Errorf("%s did not run at %s: nothing failed to fix (ci_dispatch starts it, or you run it)", missingWhat(f.ci.missing), short)
-	case f.ci.failed == "" && f.ci.pending:
+	case f.CI.Failed == "" && len(f.CI.Missing) > 0:
+		return "", fmt.Errorf("%s did not run at %s: nothing failed to fix (ci_dispatch starts it, or you run it)", missingWhat(f.CI.Missing), short)
+	case f.CI.Failed == "" && f.CI.Pending:
 		return "", fmt.Errorf("CI at %s still runs: nothing failed yet", short)
-	case f.ci.failed == "":
+	case f.CI.Failed == "":
 		return "", fmt.Errorf("nothing to fix: no required check failed at %s", short)
-	case len(f.ci.failedRuns) == 0:
-		return "", fmt.Errorf("%s failed at %s, and no required check names the failure: magnum fixes a failed required check alone", f.ci.failed, short)
+	case len(f.CI.FailedRuns) == 0:
+		return "", fmt.Errorf("%s failed at %s, and no required check names the failure: magnum fixes a failed required check alone", f.CI.Failed, short)
 	case deref(pr.ReviewedSHA) != pr.HeadSHA:
 		return "", fmt.Errorf("magnum has not reviewed %s yet: its review comes first", short)
 	}
@@ -167,11 +167,11 @@ func (e *Engine) requestCIFix(ctx context.Context, pr store.PR, dry bool, asked 
 	if reviewWork(sum, p3Calls{}, e.reviewDescribed(repo, pr.Number, sum.SHA)) {
 		return "", fmt.Errorf("magnum's review of %s leaves work: f fixes it first, then the CI after its push", textx.ShortSHA(sum.SHA))
 	}
-	f.sum = &sum
-	byHand := func(c ciFixFacts) ciFixFacts { c.atHead = ciFixStart{}; return c } // a try by hand may follow a cannot at the head
-	f.ciFix = byHand(f.ciFix)
-	if f.ciFix.baseDue && !f.low && !e.d.DryRun {
-		f.ciFix = byHand(e.readCIBase(ctx, repo, *w, pr, f, l))
+	f.Sum = &sum
+	byHand := func(c ciFixFacts) ciFixFacts { c.AtHead = ciFixStart{}; return c } // a try by hand may follow a cannot at the head
+	f.CIFix = byHand(f.CIFix)
+	if f.CIFix.BaseDue && !f.Low && !e.d.DryRun {
+		f.CIFix = byHand(e.readCIBase(ctx, repo, *w, pr, f, l))
 	}
 	refusal := func() error {
 		if _, ok := ciWorkOf(f, nil, nil); ok {
@@ -189,10 +189,10 @@ func (e *Engine) requestCIFix(ctx context.Context, pr store.PR, dry bool, asked 
 		acts := e.ciActions(e.ciDispatchIdentity(repo.FullName(), *w)) // ci_actions.go
 		e.ensureCIRead(ctx, acts, repo, pr, &f)
 		acts.end()
-		if f.ci.failed == "" { // noteRunMoved: the run the look named ran again since it failed
-			again := f.ciStart.Workflow + " was run again at " + short + " after magnum's run of it failed"
-			if f.ciStart.Moved.IsZero() && f.ciRerun.Run != nil {
-				again = f.ciRerun.Run.Named() + " was run again at " + short + " after magnum's re-run of it failed"
+		if f.CI.Failed == "" { // noteRunMoved: the run the look named ran again since it failed
+			again := f.CIStart.Workflow + " was run again at " + short + " after magnum's run of it failed"
+			if f.CIStart.Moved.IsZero() && f.CIRerun.Run != nil {
+				again = f.CIRerun.Run.Named() + " was run again at " + short + " after magnum's re-run of it failed"
 			}
 			return "", errors.New(again + ": nothing failed to fix")
 		}
@@ -200,7 +200,7 @@ func (e *Engine) requestCIFix(ctx context.Context, pr store.PR, dry bool, asked 
 			return "", err
 		}
 	}
-	entries, count := ciEntries(f.ci.failedRuns), f.ciFix.starts
+	entries, count := ciEntries(f.CI.FailedRuns), f.CIFix.Starts
 	// fix_open_needs.go: its next cycles, on findings, leave alone what waits for you, as the look's CI fix does
 	prev := FixState{Mode: FixModeCI, CIChecks: entries, Waits: l.LastReadWaits()}
 	if dry {
@@ -215,7 +215,7 @@ func (e *Engine) requestCIFix(ctx context.Context, pr store.PR, dry bool, asked 
 		if job.slot.ID == 0 {
 			where = "a slot it claims"
 		}
-		text := fmt.Sprintf("%s%s: %s fixes %s at %s (%s) in %s as %s, CI fix %d of %d", CIFixDry, label, job.role.Name, f.ci.failed, short,
+		text := fmt.Sprintf("%s%s: %s fixes %s at %s (%s) in %s as %s, CI fix %d of %d", CIFixDry, label, job.role.Name, f.CI.Failed, short,
 			textx.Count(job.ciJobs, "failed job", "failed jobs"), where, e.fixerLoginOf(job), count+1, ciFixMax)
 		for _, n := range job.notes {
 			text += "; " + n

@@ -1,4 +1,4 @@
-package engine
+package fixwork
 
 // The fixer's report. The fix job's agent writes it last, after the push and
 // the replies (skills/magnum-fix/SKILL.md, section 7): the run's marker on
@@ -19,7 +19,7 @@ package engine
 //	- <comment id> <priority> <path>:<line>: fixed in <sha7>. <why>   or "none";
 //	- <comment id> <priority> <path>:<line>: not fixed. <reason>      the words
 //	                              after the place say what the fixer did
-//	                              (fix_calls.go reads them); another
+//	                              (calls.go reads them); another
 //	                              reviewer's item has no priority, and a
 //	                              review body's or comment's place is
 //	                              "review" or "comment"
@@ -37,8 +37,9 @@ package engine
 // for the operator. Magnum does not read it, and a report without it (one
 // from before the external file) is still whole.
 //
-// ParseFixReport reads it the way reportProblem reads a reviewer's report:
-// strict about the marker and the headings, lenient about whitespace.
+// ParseFixReport reads it the way the engine's reportProblem reads a
+// reviewer's report: strict about the marker and the headings, lenient
+// about whitespace.
 
 import (
 	"errors"

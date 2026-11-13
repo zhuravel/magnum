@@ -203,20 +203,6 @@ type fixJob struct {
 // past it the base counts as unchecked, as after a failed fetch.
 const fixRequestFetch = 30 * time.Second
 
-// fixConflict is a merge of the PR's base into its head that conflicts:
-// the base branch, the tip of it magnum fetched and the conflicting paths,
-// sorted (zero: none).
-type fixConflict struct {
-	base, sha string
-	paths     []string
-}
-
-// words say what the fixer does about c: "merges master at c0c0c0c (2
-// conflicting files)".
-func (c fixConflict) words() string {
-	return fmt.Sprintf("merges %s at %s (%s)", c.base, textx.ShortSHA(c.sha), textx.Count(len(c.paths), "conflicting file", "conflicting files"))
-}
-
 func (j *fixJob) label() string   { return fmt.Sprintf("%s#%d", j.repo.FullName(), j.pr.Number) }
 func (j *fixJob) subject() string { return prSubject(j.repo, j.pr.Number) }
 
@@ -244,8 +230,8 @@ func (j *fixJob) asRound() *roundJob {
 // nothing)".
 func (j *fixJob) fixes() string {
 	s := j.work()
-	if j.conflict.sha != "" && !j.forMerge {
-		s = j.conflict.words() + ", then " + s
+	if j.conflict.SHA != "" && !j.forMerge {
+		s = j.conflict.Words() + ", then " + s
 	}
 	return s
 }
@@ -272,12 +258,12 @@ func (j *fixJob) work() string {
 	switch {
 	case j.mode == FixModeCI: // ci_fix.go
 		return fmt.Sprintf("fixes the failed CI at %s (%s) in %s", textx.ShortSHA(j.head), textx.Count(j.ciJobs, "failed job", "failed jobs"), where)
-	case j.mode == FixModeMerge && j.conflict.sha != "":
-		return fmt.Sprintf("%s in %s, the merge of the PR's parent alone", j.conflict.words(), where)
+	case j.mode == FixModeMerge && j.conflict.SHA != "":
+		return fmt.Sprintf("%s in %s, the merge of the PR's parent alone", j.conflict.Words(), where)
 	case j.mode == FixModeMerge:
-		return fmt.Sprintf("merges %s at %s in %s, with no conflict", j.behind.base, textx.ShortSHA(j.behind.sha), where)
-	case j.forMerge && j.conflict.sha != "":
-		return fmt.Sprintf("%s in %s (%s)", j.conflict.words(), where, note)
+		return fmt.Sprintf("merges %s at %s in %s, with no conflict", j.behind.Base, textx.ShortSHA(j.behind.SHA), where)
+	case j.forMerge && j.conflict.SHA != "":
+		return fmt.Sprintf("%s in %s (%s)", j.conflict.Words(), where, note)
 	case j.alone && j.othersDeferred:
 		return fmt.Sprintf("answers what the other reviewers left unanswered, read once the GitHub budget recovers, in %s (magnum's review of %s found nothing)",
 			where, textx.ShortSHA(j.review.SHA))
@@ -296,49 +282,6 @@ func (j *fixJob) work() string {
 	}
 	return fmt.Sprintf("fixes the %s of the review on %s, %d of them open from earlier reviews, in %s",
 		textx.Count(n, "finding", "findings"), sha, open, where)
-}
-
-// reviewWork reports whether sum, magnum's review, leaves the fixer work of
-// its own: new findings (P0 to P3), simplifications, or earlier findings it
-// keeps open, the optional P3s among them (rule A1: an optional finding
-// counts as open until a fix or a fix-marked reply), but for calls of its
-// P3s that a fixer left the operator as optional calls (fix_optional.go):
-// the operator's, never the fixer's again. A call counts against the P3s
-// of its own review alone (calls.fresh against sum's new P3s, calls.kept
-// against the earlier ones sum keeps open), so a call of an earlier review
-// never hides a P3 a later review posts. described: its body's
-// `Description: ✗` line (reviewDescribes), which the fixer of the
-// operator's own PR fixes (skills/magnum-fix/SKILL.md, section 5), is work
-// too. prepareFix starts a job on such a review without asking the other
-// reviewers (no calls: a start asked for may hand the fixer a call again),
-// and autofix = "open" counts the review as an item (openItemsOf) by the
-// same rule with the calls its read shows open, so the look never starts
-// what prepareFix refuses.
-func reviewWork(sum store.ReviewSummary, calls p3Calls, described bool) bool {
-	p3 := max(sum.Counts[3]-calls.fresh, 0) + max(openP3(sum)-calls.kept, 0)
-	return described || sum.Counts[0]+sum.Counts[1]+sum.Counts[2]+sum.Simplifications+sum.OpenProblems()+p3 > 0
-}
-
-// p3Calls counts the operator's open optional calls against a review's
-// P3s (reviewWork): fresh are those in threads of the review's own new
-// P3s, kept those of an earlier review's, which it may keep open.
-type p3Calls struct{ fresh, kept int }
-
-// optionalSplit counts the optional calls whose threads optional holds
-// (by their first comment's id) against sum (p3Calls): a call whose thread
-// mine places in sum's review is fresh, any other kept.
-func optionalSplit(mine []magnumThread, sum *store.ReviewSummary, optional map[int64]bool) p3Calls {
-	var c p3Calls
-	for _, mt := range mine {
-		switch {
-		case !optional[mt.RootID]:
-		case sum != nil && mt.ReviewID != 0 && mt.ReviewID == sum.ReviewID:
-			c.fresh++
-		default:
-			c.kept++
-		}
-	}
-	return c
 }
 
 // descriptionLineRe finds a review body's `Description: ✗` line: a claim of
@@ -368,15 +311,6 @@ func (e *Engine) reviewDescribed(repo store.Repo, number int, sha string) bool {
 		return false
 	}
 	return reviewDescribes(e.d.Layout.ReviewDir(repo.Owner, repo.Name, number, sha))
-}
-
-// openP3 is the earlier P3s sum keeps open; 0 when its result gave only the
-// number of open findings (OpenProblems counts them all then).
-func openP3(sum store.ReviewSummary) int {
-	if sum.OpenCounts == nil {
-		return 0
-	}
-	return sum.OpenCounts[3]
 }
 
 // fixPin is what prepareFix does about a pinned PR or slot.
@@ -763,7 +697,7 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	// The conflict is asked for only when nothing else waits: the merge is then the job's whole work.
 	job := &fixJob{repo: repo, watch: *w, pool: e.cfg.PoolFor(full), pr: pr, slot: slot, role: role, review: sum, head: pr.HeadSHA,
 		round: reviewRun.Round, login: src.Login(), notes: notes, state: prev, others: others, alone: alone, described: described,
-		conflict: conflict, forMerge: conflict.sha != "" && !ciMode}
+		conflict: conflict, forMerge: conflict.SHA != "" && !ciMode}
 	if ciMode {
 		job.mode, job.ciFile, job.ciJobs = FixModeCI, ciRead.File, ciRead.Jobs
 	}
@@ -1030,7 +964,7 @@ func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 	if err == nil {
 		if err = steps.Step(ctx, e.st, subject, "fix.guard", func(ctx context.Context) error { return e.fixGuard(ctx, job) }); err != nil {
 			failed = "fix guard failed: "
-		} else if job.behind.sha != "" {
+		} else if job.behind.SHA != "" {
 			if err = steps.Step(ctx, e.st, subject, "fix.parent", func(ctx context.Context) error {
 				var err error
 				refused, err = e.mergeParent(ctx, job)
@@ -1038,10 +972,10 @@ func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 			}); err != nil {
 				failed = "fix merge failed: "
 			}
-			merged = err == nil && refused == "" && job.merged.sha != ""
+			merged = err == nil && refused == "" && job.merged.SHA != ""
 		}
 	}
-	if err == nil && (job.mode != FixModeMerge || job.conflict.sha != "") { // a merge the daemon made or refused needs no fixer
+	if err == nil && (job.mode != FixModeMerge || job.conflict.SHA != "") { // a merge the daemon made or refused needs no fixer
 		if err = steps.Step(ctx, e.st, subject, "fix.start", func(ctx context.Context) error { return e.fixStart(ctx, job) }); err != nil {
 			failed = "fix run failed: "
 		} else if err = steps.Step(ctx, e.st, subject, "fix.wait", func(ctx context.Context) error { return e.fixWait(ctx, job) }); err != nil {
@@ -1286,8 +1220,8 @@ func (e *Engine) checkFixBase(ctx context.Context, job *fixJob) error {
 		return ctx.Err()
 	case err != nil:
 		then := job.role.Name + " starts without the merge step"
-		if job.conflict.sha != "" {
-			then = fmt.Sprintf("%s merges the tip %s that the request fetched", job.role.Name, textx.ShortSHA(job.conflict.sha))
+		if job.conflict.SHA != "" {
+			then = fmt.Sprintf("%s merges the tip %s that the request fetched", job.role.Name, textx.ShortSHA(job.conflict.SHA))
 		}
 		base := deref(job.pr.BaseRef)
 		what := fmt.Sprintf("could not check %s for a conflict with its base %s", job.label(), base)
@@ -1300,16 +1234,16 @@ func (e *Engine) checkFixBase(ctx context.Context, job *fixJob) error {
 		e.event(ctx, "warn", job.subject(), "fix.conflict_unchecked", fmt.Sprintf("%s: %s; %s", what, oneLine(err.Error(), 300), then),
 			map[string]any{"role": job.role.Name, "base": base, "cycle": job.state.Cycle})
 		return nil
-	case c.sha == "" && job.forMerge && job.mode != FixModeMerge:
-		return fixConflictGone{head: job.head, base: job.conflict.base, review: job.review.SHA}
+	case c.SHA == "" && job.forMerge && job.mode != FixModeMerge:
+		return fixConflictGone{head: job.head, base: job.conflict.Base, review: job.review.SHA}
 	}
 	job.conflict, job.baseChecked = c, true
-	job.forMerge = job.forMerge && c.sha != ""
+	job.forMerge = job.forMerge && c.SHA != ""
 	// The parent first (fix_parent.go): a head that lacks the base's tip
 	// and merges it cleanly is merged by the daemon, on a loop's first
 	// cycle and in the merge mode; a later cycle merges only a conflict,
 	// which is the fixer's.
-	if c.sha == "" && (job.state.Cycle <= 1 || job.mode == FixModeMerge) {
+	if c.SHA == "" && (job.state.Cycle <= 1 || job.mode == FixModeMerge) {
 		b, err := e.behindBase(ctx, job)
 		switch {
 		case err != nil && job.mode == FixModeMerge:
@@ -1319,7 +1253,7 @@ func (e *Engine) checkFixBase(ctx context.Context, job *fixJob) error {
 		}
 		job.behind = b
 	}
-	if job.mode == FixModeMerge && c.sha == "" && job.behind.sha == "" {
+	if job.mode == FixModeMerge && c.SHA == "" && job.behind.SHA == "" {
 		return fixNothingToMerge{label: job.label(), base: deref(job.pr.BaseRef)}
 	}
 	if job.mode == FixModeMerge && job.asked != nil { // fix_parent_bind.go: the base moved since the request looked
@@ -1402,7 +1336,7 @@ func (e *Engine) baseConflict(ctx context.Context, repo store.Repo, pr store.PR,
 	if err != nil || len(paths) == 0 {
 		return fixConflict{}, err
 	}
-	return fixConflict{base: base, sha: tip, paths: paths}, nil
+	return fixConflict{Base: base, SHA: tip, Paths: paths}, nil
 }
 
 // requestBaseCheck is prepareFix's look at whether pr's head conflicts with
@@ -1429,7 +1363,7 @@ func (e *Engine) requestBaseCheck(ctx context.Context, repo store.Repo, pr store
 			err = fmt.Errorf("its merge with %s could not be checked: %w", cmp.Or(deref(pr.BaseRef), "its base"), err)
 		}
 		*into = c
-		return c.sha != "", err
+		return c.SHA != "", err
 	}
 }
 
@@ -1546,7 +1480,7 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 			e.log.Warn("fix: record the other reviewers' items as unread", "subject", job.subject(), "err", err)
 		}
 	}
-	if external == "" && job.alone && job.conflict.sha == "" { // the other reviewers' items are the job's whole work
+	if external == "" && job.alone && job.conflict.SHA == "" { // the other reviewers' items are the job's whole work
 		err := errors.New("the review found nothing, and the file of the other reviewers' threads and comments, all the fixer would answer, could not be written beside the report")
 		e.abandonFixRun(ctx, run, err.Error())
 		return err
@@ -1594,12 +1528,12 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		NoFindings:      job.alone,
 		OwnPR:           e.ownPR(pr) && job.mode != FixModeMerge, // prepareFix refused any other: it lets the fixer edit the description
 		NotesParts:      notesParts,
-		ConflictBase:    job.conflict.base,
-		ConflictSHA:     job.conflict.sha,
-		ConflictPaths:   job.conflict.paths,
+		ConflictBase:    job.conflict.Base,
+		ConflictSHA:     job.conflict.SHA,
+		ConflictPaths:   job.conflict.Paths,
 		MergeOnly:       job.mode == FixModeMerge,
-		MergedBase:      job.merged.base,
-		MergedSHA:       job.merged.sha,
+		MergedBase:      job.merged.Base,
+		MergedSHA:       job.merged.SHA,
 		CIOnly:          job.mode == FixModeCI,
 		CIFile:          ciFile,
 	})
@@ -1631,12 +1565,12 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 		msg += "; " + job.schema
 		data["schema"] = job.schema
 	}
-	if c := job.conflict; c.sha != "" { // checkFixBase: the fixer merges the base first, as fixes says
-		data["conflict_base"], data["conflict_sha"], data["conflict_files"] = c.base, c.sha, len(c.paths)
+	if c := job.conflict; c.SHA != "" { // checkFixBase: the fixer merges the base first, as fixes says
+		data["conflict_base"], data["conflict_sha"], data["conflict_files"] = c.Base, c.SHA, len(c.Paths)
 	}
-	if m := job.merged; m.sha != "" { // mergeParent: the fixer starts from magnum's merge of the parent
-		msg += fmt.Sprintf("; on magnum's merge of %s at %s", m.base, textx.ShortSHA(m.sha))
-		data["merged_base"], data["merged_sha"] = m.base, m.sha
+	if m := job.merged; m.SHA != "" { // mergeParent: the fixer starts from magnum's merge of the parent
+		msg += fmt.Sprintf("; on magnum's merge of %s at %s", m.Base, textx.ShortSHA(m.SHA))
+		data["merged_base"], data["merged_sha"] = m.Base, m.SHA
 	}
 	if job.mode == FixModeCI { // ci_fix.go: no review worked on (the look hands nothing), no check's or job's name
 		delete(data, "review_run")

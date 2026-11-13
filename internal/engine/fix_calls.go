@@ -35,7 +35,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -48,54 +47,6 @@ import (
 	"github.com/zhuravel/magnum/internal/postreview"
 	"github.com/zhuravel/magnum/internal/textx"
 )
-
-// needsYouEntry is what magnum reads of a "## Needs you" entry
-// (needsYouEntryRe): the finding's comment id (the review's for the
-// description finding), its priority ("" when it has none), its place
-// (path:line, or "description"), and what the fixer did: fixedIn is the
-// commit it says fixed it ("fixed in <sha>."), notFixed says it did not
-// ("not fixed."); neither when the entry does not say. authorsCall: a
-// finding it did not fix because its Fix leaves the choice to the author,
-// or another reviewer's item that asks for a product or business-logic
-// choice ("not fixed. The author's call"). A conflict of the base merge the fixer
-// aborted has no id: its place is conflictPlace and paths are the paths it
-// names.
-type needsYouEntry struct {
-	id, priority, place string
-	fixedIn             string
-	notFixed            bool
-	authorsCall         bool
-	paths               []string
-}
-
-// readNeedsYouEntry reads entry; ok is false when magnum cannot read its id
-// and place, or a conflict's paths.
-func readNeedsYouEntry(entry string) (needsYouEntry, bool) {
-	m := needsYouEntryRe.FindStringSubmatch(strings.TrimSpace(entry))
-	switch {
-	case m == nil:
-		return needsYouEntry{}, false
-	case m[4] != "":
-		var paths []string
-		for p := range strings.SplitSeq(m[4], ",") {
-			paths = append(paths, strings.TrimSpace(p))
-		}
-		return needsYouEntry{place: conflictPlace, paths: paths}, true
-	}
-	return needsYouEntry{id: m[1], priority: m[2], place: m[3], fixedIn: strings.ToLower(m[5]), notFixed: m[6] != "", authorsCall: m[6] != "" && m[7] != ""}, true
-}
-
-// name is the entry in the older words: "2101 P1 app/models/offer.rb:42",
-// "conflict in app/a.rb, db/schema.rb".
-func (n needsYouEntry) name() string {
-	switch {
-	case n.place == conflictPlace:
-		return "conflict in " + strings.Join(n.paths, ", ")
-	case n.priority == "":
-		return n.id + " " + n.place
-	}
-	return n.id + " " + n.priority + " " + n.place
-}
 
 // threadOwners says whose the threads of the review a fix report answers
 // are, from the files beside the report: magnums are the first comments of
@@ -155,17 +106,17 @@ func readThreadOwners(dir string) threadOwners {
 // at n's place whose priority is n's, is magnum's; any other is another
 // reviewer's once the threads file was read, and unknown without it.
 func (o threadOwners) owner(n needsYouEntry) (magnums, known bool) {
-	id, err := strconv.ParseInt(n.id, 10, 64)
+	id, err := strconv.ParseInt(n.ID, 10, 64)
 	if err == nil && o.others[id] {
 		return false, true
 	}
 	if err == nil && o.magnums[id] {
 		return true, true
 	}
-	if i := strings.LastIndexByte(n.place, ':'); i > 0 {
-		path, line := n.place[:i], n.place[i+1:]
+	if i := strings.LastIndexByte(n.Place, ':'); i > 0 {
+		path, line := n.Place[:i], n.Place[i+1:]
 		if slices.ContainsFunc(o.comments, func(c ownComment) bool {
-			return c.Path == path && strconv.Itoa(c.Line) == line && (n.priority == "" || strings.HasPrefix(c.Body, "**["+n.priority+"]"))
+			return c.Path == path && strconv.Itoa(c.Line) == line && (n.Priority == "" || strings.HasPrefix(c.Body, "**["+n.Priority+"]"))
 		}) {
 			return true, true
 		}
@@ -173,19 +124,7 @@ func (o threadOwners) owner(n needsYouEntry) (magnums, known bool) {
 	return false, o.listed
 }
 
-// asks reports whether n says what the fixer did in a thread: fixed in a
-// commit or not fixed, of a finding with a thread (not the description, nor
-// another reviewer's review body or comment, nor a conflict of the base
-// merge).
-func (n needsYouEntry) asks() bool {
-	switch n.place {
-	case "description", remarkReview, remarkComment, conflictPlace:
-		return false
-	}
-	return n.fixedIn != "" || n.notFixed
-}
-
-// call is n's call (ok false when magnum cannot read one: the entry does
+// entryCall is n's call (ok false when magnum cannot read one: the entry does
 // not say what the fixer did, names the description or another reviewer's
 // review body or comment, which have no thread, or its thread cannot be
 // placed): the thread's link on the PR's page prURL, and `magnum fix ref`
@@ -196,27 +135,27 @@ func (n needsYouEntry) asks() bool {
 // resolve it. A
 // conflict of the base merge asks the author to merge the base on the PR's
 // page and decide the conflict (attention.ConflictCall).
-func (n needsYouEntry) call(o threadOwners, prURL, ref string, answered bool) (attention.FixCall, bool) {
-	if n.place == conflictPlace && prURL != "" {
-		return attention.ConflictCall(n.paths, prURL), true
+func entryCall(n needsYouEntry, o threadOwners, prURL, ref string, answered bool) (attention.FixCall, bool) {
+	if n.Place == conflictPlace && prURL != "" {
+		return attention.ConflictCall(n.Paths, prURL), true
 	}
-	if !n.asks() || prURL == "" {
+	if !n.Asks() || prURL == "" {
 		return attention.FixCall{}, false
 	}
 	magnums, known := o.owner(n)
 	if !known {
 		return attention.FixCall{}, false
 	}
-	url := prURL + "#discussion_r" + n.id
+	url := prURL + "#discussion_r" + n.ID
 	switch {
 	case magnums && answered:
-		return attention.ResolveCall(n.id, url), true
-	case n.fixedIn != "":
-		return attention.FixedCall(n.id, url, n.fixedIn, magnums), true
-	case n.authorsCall:
-		return attention.AuthorsCall(n.id, url, n.priority, n.place, ref, magnums), true
+		return attention.ResolveCall(n.ID, url), true
+	case n.FixedIn != "":
+		return attention.FixedCall(n.ID, url, n.FixedIn, magnums), true
+	case n.AuthorsCall:
+		return attention.AuthorsCall(n.ID, url, n.Priority, n.Place, ref, magnums), true
 	}
-	return attention.DeclinedCall(n.id, url, n.priority, n.place, ref, magnums), true
+	return attention.DeclinedCall(n.ID, url, n.Priority, n.Place, ref, magnums), true
 }
 
 // needsYouCalls are the calls of the entries magnum can read so (call),
@@ -236,7 +175,7 @@ func needsYouCallsOf(entries []string, answered map[string]bool, report, prURL, 
 	for _, entry := range entries {
 		n, ok := readNeedsYouEntry(entry)
 		if ok {
-			if c, ok := n.call(owners, prURL, ref, answered[n.id]); ok {
+			if c, ok := entryCall(n, owners, prURL, ref, answered[n.ID]); ok {
 				calls = append(calls, c)
 				continue
 			}
@@ -277,83 +216,6 @@ func needsYouText(entries []string, answered map[string]bool, report, prURL, ref
 	return needYourCall(entries) + ": " + report
 }
 
-// fixCountRe reads the count of a fix job's message that only counts what
-// the fixer left the author (needYourCall, the settle's "2 findings need
-// your call: <report>"): findings or conflicts (group 1), and the conflicts
-// after findings (group 2). A message that names them has "(" after "your
-// call", and the older words after calls say "N more", so neither matches.
-var fixCountRe = regexp.MustCompile(`\b(\d+) (?:findings?|conflicts?)(?: and (\d+) conflicts?)? needs? your call: `)
-
-// FixNeedsAsked keeps of entries, the "## Needs you" of the fixer's report
-// that msg (a fix job's message, a PR's last_error) names, those that msg
-// still asks the author for. The settle and the loop's end leave out the
-// entries whose magnum thread is resolved or that the fixer answered
-// (freshNeedsYou, dropFixerAnswered) before they write the message, and its
-// first line names each one left: by its call's link or its comment id in
-// the older words (needsYouNames), a conflict by its paths, and the entries
-// magnum cannot read by their count, whatever the loop's own words before
-// them. A message that only counts them keeps all of entries when it counts
-// them all and none otherwise, since it cannot say which went; one that
-// asks for no call keeps none. The factory screen draws what it keeps.
-func FixNeedsAsked(msg string, entries []string) []string {
-	line := textx.FirstLine(msg)
-	if !attention.FixAsks(line) {
-		return nil
-	}
-	if m := fixCountRe.FindStringSubmatch(line); m != nil {
-		n, _ := strconv.Atoi(m[1])
-		k, _ := strconv.Atoi(cmp.Or(m[2], "0"))
-		if n+k != len(entries) {
-			return nil
-		}
-		return slices.Clone(entries)
-	}
-	var kept []string
-	for _, entry := range entries {
-		n, ok := readNeedsYouEntry(entry)
-		var named bool
-		switch {
-		case !ok:
-			named = strings.Contains(line, " magnum could not read")
-		case n.place == conflictPlace:
-			named = strings.Contains(line, "conflict in "+strings.Join(n.paths[:min(len(n.paths), maxNamedConflictPaths)], ", "))
-		default:
-			named = namesNeedsYouID(line, n.id)
-		}
-		if named {
-			kept = append(kept, entry)
-		}
-	}
-	return kept
-}
-
-// maxNamedConflictPaths is how many paths of a conflict both its call
-// (attention.ConflictCall) and the older words name at least.
-const maxNamedConflictPaths = 20
-
-// namesNeedsYouID reports whether line, a fix job's message, names the
-// entry whose comment id is id: in a call's link ("#discussion_r<id>", not
-// followed by a digit) or in the older words, where an entry's name starts
-// a list or follows a comma ("(<id> P1 …", ", <id> description").
-func namesNeedsYouID(line, id string) bool {
-	for _, before := range []string{"#discussion_r", "(", ", "} {
-		for rest := line; ; {
-			i := strings.Index(rest, before+id)
-			if i < 0 {
-				break
-			}
-			rest = rest[i+len(before)+len(id):]
-			switch {
-			case before == "#discussion_r" && (rest == "" || rest[0] < '0' || rest[0] > '9'):
-				return true
-			case before != "#discussion_r" && strings.HasPrefix(rest, " "):
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // FixCalls are the calls of the findings the fixer of the loop st left to
 // the author when it pushed (FixState.NeedsYou, kept while the loop waits
 // for the re-review of its push), with those its earlier cycles left and
@@ -368,15 +230,15 @@ func FixCalls(st FixState, prURL, ref string) []attention.FixCall {
 	return calls
 }
 
-// answeredBy reports whether a thread whose answer has class (answerOf)
+// entryAnswered reports whether a thread whose answer has class (answerOf)
 // answers what n's call asks: "Fixed in" a fix, "Won't fix" or "Not a bug"
 // a decline.
-func (n needsYouEntry) answeredBy(class string) bool {
+func entryAnswered(n needsYouEntry, class string) bool {
 	switch class {
 	case pipeline.ReplyFixed:
-		return n.fixedIn != ""
+		return n.FixedIn != ""
 	case pipeline.ReplyWontFix, pipeline.ReplyNotABug:
-		return n.notFixed
+		return n.NotFixed
 	}
 	return false
 }
@@ -432,7 +294,7 @@ func answerOf(replies []agents.ThreadReply) string {
 // for the resolution. An entry with a call in one of magnum's threads (the
 // files beside the job's report place it, threadOwners) whose thread is
 // resolved asks nothing and is left out; one whose thread is open with the
-// answer its call asks for (answeredBy the class answerOf reads) asks only
+// answer its call asks for (entryAnswered of the class answerOf reads) asks only
 // to resolve it (attention.ResolveCall). Every other entry keeps its call,
 // those in other reviewers' threads among them: magnum asks for a reply
 // there and never for a resolution, and dropFixerAnswered has looked at
@@ -449,10 +311,10 @@ func (e *Engine) freshNeedsYou(ctx context.Context, job *fixJob, entries []strin
 	owners := readThreadOwners(filepath.Dir(report))
 	magnums := func(entry string) (needsYouEntry, int64, bool) {
 		n, ok := readNeedsYouEntry(entry)
-		if !ok || !n.asks() {
+		if !ok || !n.Asks() {
 			return n, 0, false
 		}
-		id, err := strconv.ParseInt(n.id, 10, 64)
+		id, err := strconv.ParseInt(n.ID, 10, 64)
 		mine, _ := owners.owner(n)
 		return n, id, err == nil && mine
 	}
@@ -472,8 +334,8 @@ func (e *Engine) freshNeedsYou(ctx context.Context, job *fixJob, entries []strin
 		case t.resolved:
 			resolved++
 			continue
-		case n.answeredBy(t.answer):
-			answered[n.id] = true
+		case entryAnswered(n, t.answer):
+			answered[n.ID] = true
 		}
 		kept = append(kept, entry)
 	}

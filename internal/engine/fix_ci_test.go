@@ -201,7 +201,7 @@ func TestACIFixThatCannotOnTheParentsMergeKeepsItsClass(t *testing.T) {
 			t.Errorf("the merge's head reads %+v, want the CI fix that said cannot", at)
 		}
 		f := ciFailedFacts()
-		f.ciFix.starts, f.ciFix.atHead = 1, ciFixStart{Head: "e0e0", Outcome: ciOutcomeMerged, Why: "secret", Pushed: fixHead}
+		f.CIFix.Starts, f.CIFix.AtHead = 1, ciFixStart{Head: "e0e0", Outcome: ciOutcomeMerged, Why: "secret", Pushed: fixHead}
 		v, work, _ := decideOpen(f)
 		wantNeedsCI(t, v, work, "required check Completion failed at a1a1a1a: the CI fix found a missing secret")
 	})

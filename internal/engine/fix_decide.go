@@ -224,11 +224,11 @@ func (e *Engine) decisionThreads(ctx context.Context, pr store.PR) (threads []in
 		owners := readThreadOwners(filepath.Dir(report))
 		for _, entry := range FixNeedsAsked(msg, rep.NeedsYou) {
 			n, ok := readNeedsYouEntry(entry)
-			if !ok || n.fixedIn != "" || !strings.Contains(n.place, ":") {
+			if !ok || n.FixedIn != "" || !strings.Contains(n.Place, ":") {
 				continue // a fix asks for a reply, not a decision; the description, a remark and a conflict have no thread
 			}
 			if magnums, known := owners.owner(n); known && !magnums {
-				add(n.id)
+				add(n.ID)
 			}
 		}
 	}
@@ -364,7 +364,7 @@ func (e *Engine) decisionsLeft(ctx context.Context, job *fixJob, entries []strin
 	listed := map[string]bool{}
 	for _, entry := range entries {
 		if n, ok := readNeedsYouEntry(entry); ok {
-			listed[n.id] = true
+			listed[n.ID] = true
 		}
 	}
 	out, built, back := slices.Clone(entries), map[int64]bool{}, 0

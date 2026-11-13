@@ -51,63 +51,8 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-// FixModeCI is the mode of a fix loop's first cycle that fixes the PR's
-// failed required CI (FixState.Mode, FixPayload.Mode).
-const FixModeCI = "ci"
-
-// ciFixMax is how many CI fixes a PR gets across its heads.
-const ciFixMax = 3
-
-// itemCI is the look's work item of a CI fix (class classCI).
-const (
-	itemCI  = "ci"
-	classCI = "ci"
-)
-
-// ciCannotClasses are the class words a fixer's ci entry under Needs you
-// gives (skills/magnum-fix/SKILL.md, section 8), with the verdict's words.
-var ciCannotClasses = map[string]string{
-	"flaky":   "a flaky test, not the PR's code",
-	"infra":   "an infrastructure failure",
-	"secret":  "a missing secret",
-	"config":  "a CI config change it may not make",
-	"base":    "a failure on the base",
-	"unfixed": "a failure it could not fix",
-}
-
-// ciBaseDepth is how many first-parent commits of the base the base read
-// looks at (github.FirstParentDepth), in the verdict's words.
-const ciBaseDepth = github.FirstParentDepth
-
 // kvPRCIFix holds the PR's CI fixes (ciFixRecord as JSON).
 func kvPRCIFix(prID int64) string { return fmt.Sprintf("pr.%d.ci_fix", prID) }
-
-// ciFixFacts are what the look knows of a CI fix of f.ci's failed checks
-// at the head (ciFixFactsOf): on, the look gathered them; why the failure
-// is never the fixer's (refused) or the files to tell are not listed at the
-// head yet (filesWait); the CI fixes the PR had (starts) and the one at
-// this head (atHead); the base's word (base, its commit baseSHA, the base
-// branch in words baseName, baseDue: a read is due, baseFailed: the last
-// read failed, retried at baseRetry); the CI reader's standing read at the
-// head (read: zero when none, or one due again); and the newest CI fix that
-// pushed (last, its number lastN), whose head the waits and the idle
-// verdict name.
-type ciFixFacts struct {
-	on         bool
-	refused    string
-	filesWait  bool
-	starts     int
-	atHead     ciFixStart
-	base       string
-	baseSHA    string
-	baseName   string
-	baseDue    bool
-	baseFailed bool
-	baseRetry  time.Time
-	read       ciFailRead
-	last       ciFixStart
-	lastN      int
-}
 
 // ciFixRefusal is why the failed runs of a PR's head whose files are files
 // (listed: the poll listed them) get no CI fix ("" = none), and whether the
@@ -129,112 +74,6 @@ func ciFixRefusal(files store.PRFiles, listed bool, head string, runs []ciFailed
 		return "GitHub did not list every file of the PR, so magnum cannot tell whether it changes its CI", false
 	}
 	return "", false
-}
-
-// ciWorkOf is the CI fix item of f, when rule 11's failure is the fixer's
-// and nothing else is open (findings first): the look gathered the facts, a
-// failed required check that is an Actions job, no required check still
-// running, files that change no CI config, a base that ran it green, fewer
-// than ciFixMax CI fixes, none at this head yet, and no standing read of
-// the failed jobs that says why not.
-func ciWorkOf(f openFacts, work, needs []openItem) (openItem, bool) {
-	c := f.ciFix
-	r := c.read
-	switch {
-	case !c.on, f.ci.failed == "", len(f.ci.failedRuns) == 0, f.ci.pending, len(work) > 0, len(needs) > 0, f.sum == nil,
-		c.refused != "", c.filesWait, c.base != ciBasePassed, c.baseDue, c.starts >= ciFixMax, c.atHead.Head != "",
-		r.Head != "" && (r.Unread || r.Running || r.Jobs == 0):
-		return openItem{}, false
-	}
-	return openItem{Key: "ci:" + textx.ShortSHA(f.pr.HeadSHA), Class: classCI, Kind: itemCI, URL: f.pr.URL}, true
-}
-
-// ciFixWords is rule 11's verdict on a failed required check that is no
-// work (no CI fix starts now): needs you with why, or waits; readBase asks
-// the look to read the base (lookOpen), and recheck to check a read that
-// listed no failed job of a run the look named against the head's runs
-// (ensureCIRead, ciRunMoved: at most once a settle_quiet), so a re-run of
-// it by hand is read again. A check the look gathered nothing for (a
-// rollup's failure, no facts) needs you as before CI fix mode.
-func ciFixWords(f openFacts, short string) (verdict, why string, until time.Time, readBase, recheck bool) {
-	c := f.ciFix
-	failed := ciFailedAt(f, short)
-	base := cmp.Or(c.baseName, "the base")
-	clock := func(t time.Time) string { return waitClock(t, f.now) }
-	if !c.on || len(f.ci.failedRuns) == 0 {
-		return OpenNeedsYou, failed, time.Time{}, false, false
-	}
-	if at := c.atHead; at.Head != "" {
-		switch {
-		case at.Outcome == ciOutcomeCannot, at.Outcome == ciOutcomeMerged && at.Why != "": // a cannot, or one on the parent's merge
-			return OpenNeedsYou, failed + ": the CI fix found " + cmp.Or(ciCannotClasses[at.Why], ciCannotClasses["unfixed"]), time.Time{}, false, false
-		case at.Outcome == ciOutcomeStopped:
-			return OpenNeedsYou, failed + ": the CI fix at " + short + " was stopped; it is yours", time.Time{}, false, false
-		case at.Outcome == ciOutcomePushed, at.Outcome == ciOutcomeMerged:
-			return OpenNeedsYou, failed + ": the CI fix at " + short + " ended; it is yours", time.Time{}, false, false
-		}
-		return OpenNeedsYou, failed + ": the CI fix at " + short + " failed; it is yours", time.Time{}, false, false
-	}
-	switch {
-	case c.refused != "":
-		return OpenNeedsYou, failed + ": " + c.refused, time.Time{}, false, false
-	case c.starts >= ciFixMax:
-		return OpenNeedsYou, fmt.Sprintf("%s after %s: the CI is yours", failed, textx.Count(c.starts, "CI fix", "CI fixes")), time.Time{}, false, false
-	case f.ci.pending:
-		return OpenWaits, failed + "; a required check still runs", time.Time{}, false, false
-	case c.filesWait:
-		return OpenWaits, failed + "; magnum reads the PR's files with the next poll", time.Time{}, false, false
-	case c.base == "" && c.baseDue && f.low:
-		return OpenWaits, failed + "; reading " + base + "'s CI waits for the GitHub budget", time.Time{}, false, false
-	case c.base == "" && c.baseDue:
-		return OpenWaits, failed + "; reading " + base + "'s CI", time.Time{}, true, false
-	case c.base == "" && c.baseFailed:
-		return OpenUnknown, failed + "; reading " + base + "'s CI failed; trying again at " + clock(c.baseRetry), c.baseRetry, false, false
-	case c.base == ciBaseFailed:
-		return OpenNeedsYou, fmt.Sprintf("%s, and on %s at %s too: magnum fixes only a check that passes on the base", failed, base,
-			textx.ShortSHA(c.baseSHA)), time.Time{}, false, false
-	case c.base == ciBaseNever:
-		return OpenNeedsYou, fmt.Sprintf("%s; %s's last %d commits never ran it: magnum fixes only a check that passes on the base", failed, base,
-			ciBaseDepth), time.Time{}, false, false
-	case c.base == ciBaseRunning:
-		return OpenWaits, fmt.Sprintf("%s; it still runs on %s at %s", failed, base, textx.ShortSHA(c.baseSHA)), time.Time{}, c.baseDue && !f.low, false
-	case c.read.UnreadWhy != "":
-		return OpenNeedsYou, failed + ": magnum cannot read why (" + c.read.UnreadWhy + ")", time.Time{}, false, false
-	case c.read.Unread:
-		retry := c.read.At.Add(f.settle.max)
-		return OpenUnknown, failed + "; reading the failed jobs failed; trying again at " + clock(retry), retry, false, false
-	case c.read.Running:
-		retry := c.read.At.Add(f.settle.max)
-		return OpenWaits, failed + "; a re-run of its run has not ended", retry, false, false
-	case c.read.Head != "" && c.read.Jobs == 0:
-		return OpenNeedsYou, failed + ": its run lists no failed job magnum can read; it is yours", time.Time{}, false,
-			slices.ContainsFunc(f.ci.failedRuns, func(c ciFailedCheck) bool { return c.Run != 0 }) // a run the look named may run again
-	}
-	return OpenNeedsYou, failed, time.Time{}, false, false
-}
-
-// ciAfter is what the waits and the idle verdict of f's head add when the
-// head is a CI fix's push: " after CI fix 1 of 3" ("" otherwise).
-func ciAfter(f openFacts) string {
-	if c := f.ciFix; c.last.Pushed != "" && c.last.Pushed == f.pr.HeadSHA {
-		return fmt.Sprintf(" after CI fix %d of %d", c.lastN, ciFixMax)
-	}
-	return ""
-}
-
-// ciWorkWords names the CI fix the look starts or holds: "the CI fix of
-// required check Completion".
-func ciWorkWords(f openFacts) string { return "the CI fix of " + f.ci.failed }
-
-// ciRunning is rule 3's words of a CI loop's fixer at work: "fixing CI:
-// required check Completion at a1a1a1a, cycle 1 of 5 (CI fix 1 of 3)".
-func ciRunning(f openFacts) string {
-	what := "required CI"
-	if len(f.fix.CIChecks) > 0 {
-		what = missingWhat(f.fix.CIChecks)
-	}
-	return fmt.Sprintf("fixing CI: %s at %s, cycle %d of %d (CI fix %d of %d)", what, textx.ShortSHA(f.fix.Head), f.fix.Cycle, f.fix.Cap,
-		max(f.ciFix.starts, 1), ciFixMax)
 }
 
 // failedRequired are the failed required checks of pr's head by entries
@@ -304,7 +143,7 @@ func ciEntries(runs []ciFailedCheck) []string {
 // workflow the look found (s.Moved, noteRunMoved): "the newest run of
 // ci.yml ended failure"; the re-run's attempt one by hand (r.Moved).
 func ciShape3(ci openCI, s ciStart, r ciRerun) openCI {
-	if len(ci.missing) == 0 || ci.running {
+	if len(ci.Missing) == 0 || ci.Running {
 		return ci
 	}
 	var run int64
@@ -327,14 +166,14 @@ func ciShape3(ci openCI, s ciStart, r ciRerun) openCI {
 		return ci
 	}
 	var failed []ciFailedCheck
-	for _, m := range ci.missing {
+	for _, m := range ci.Missing {
 		c := ciFailedCheck{Entry: m, WorkflowFile: workflow, Run: run, Dispatched: dispatched}
 		if !strings.HasPrefix(m, store.RequiredWorkflowPrefix) {
 			c.Name = m
 		}
 		failed = append(failed, c)
 	}
-	return openCI{failed: missingWhat(ci.missing), failedRuns: failed, how: how}
+	return openCI{Failed: missingWhat(ci.Missing), FailedRuns: failed, How: how}
 }
 
 // runFailed reports whether a run's conclusion is a failure of its jobs.
@@ -410,44 +249,44 @@ func ciKeyAt(runs []ciFailedCheck) string {
 func (e *Engine) ciFixFactsOf(ctx context.Context, repo store.Repo, pr store.PR, f openFacts, l openLedger) ciFixFacts {
 	var c ciFixFacts
 	rec, err := e.ciFixRecordOf(ctx, pr.ID)
-	failed := f.ci.failed != "" && len(f.ci.failedRuns) > 0
+	failed := f.CI.Failed != "" && len(f.CI.FailedRuns) > 0
 	if err != nil {
 		e.warnUnlessStopped(ctx, err, "autofix open: the PR's CI fixes", "pr", pr.ID)
-		c.on, c.refused = failed, "the record of its CI fixes cannot be read"
+		c.On, c.Refused = failed, "the record of its CI fixes cannot be read"
 		return c
 	}
-	c.starts = rec.Count()
-	c.last, c.lastN = rec.LastPushed()
+	c.Starts = rec.Count()
+	c.Last, c.LastN = rec.LastPushed()
 	if !failed {
 		return c
 	}
-	c.on = true
+	c.On = true
 	files, listed, err := e.st.PRFilesOf(ctx, pr.ID)
 	if err != nil {
-		c.filesWait = true
+		c.FilesWait = true
 	} else {
-		c.refused, c.filesWait = ciFixRefusal(files, listed, pr.HeadSHA, f.ci.failedRuns)
+		c.Refused, c.FilesWait = ciFixRefusal(files, listed, pr.HeadSHA, f.CI.FailedRuns)
 	}
-	c.atHead = rec.AtHead(pr.HeadSHA)
+	c.AtHead = rec.AtHead(pr.HeadSHA)
 	base := cmp.Or(deref(pr.BaseRef), repo.DefaultBranch)
-	c.baseName = "the base"
+	c.BaseName = "the base"
 	if base != "" && gitx.ShellSafeRef(base) {
-		c.baseName = base
+		c.BaseName = base
 	}
-	key, tip := ciKeyAt(f.ci.failedRuns), ciBaseTip(pr, l, base)
+	key, tip := ciKeyAt(f.CI.FailedRuns), ciBaseTip(pr, l, base)
 	b := rec.Base
 	if b.Head == pr.HeadSHA && b.Key == key && b.Tip == tip {
-		c.base, c.baseSHA = b.Word()
-		c.baseFailed, c.baseRetry = b.Failed, b.At.Add(f.settle.max)
-		c.baseDue = (b.Failed || c.base == ciBaseRunning) && !f.now.Before(c.baseRetry)
+		c.Base, c.BaseSHA = b.Word()
+		c.BaseFailed, c.BaseRetry = b.Failed, b.At.Add(f.Settle.Max)
+		c.BaseDue = (b.Failed || c.Base == ciBaseRunning) && !f.Now.Before(c.BaseRetry)
 		if b.Failed {
-			c.base = ""
+			c.Base = ""
 		}
 	} else {
-		c.baseDue = true
+		c.BaseDue = true
 	}
-	if r := rec.Read; r.Head == pr.HeadSHA && r.Key == key && (!r.Unread && !r.Running || f.now.Before(r.At.Add(f.settle.max))) {
-		c.read = r
+	if r := rec.Read; r.Head == pr.HeadSHA && r.Key == key && (!r.Unread && !r.Running || f.Now.Before(r.At.Add(f.Settle.Max))) {
+		c.Read = r
 	}
 	return c
 }
@@ -469,7 +308,7 @@ var _ firstParentChecker = (*github.Client)(nil)
 func (e *Engine) readCIBase(ctx context.Context, repo store.Repo, w config.Watch, pr store.PR, f openFacts, l openLedger) ciFixFacts {
 	base := cmp.Or(deref(pr.BaseRef), repo.DefaultBranch)
 	tip := ciBaseTip(pr, l, base)
-	read := ciBaseRead{Head: pr.HeadSHA, Key: ciKeyAt(f.ci.failedRuns), Tip: tip, At: e.now()}
+	read := ciBaseRead{Head: pr.HeadSHA, Key: ciKeyAt(f.CI.FailedRuns), Tip: tip, At: e.now()}
 	gh := e.gh(w.PollIdentity)
 	fp, ok := gh.(firstParentChecker)
 	var commits []github.CommitWithChecks
@@ -490,7 +329,7 @@ func (e *Engine) readCIBase(ctx context.Context, repo store.Repo, w config.Watch
 		}
 	}
 	if !read.Failed {
-		for _, c := range f.ci.failedRuns {
+		for _, c := range f.CI.FailedRuns {
 			read.Checks = append(read.Checks, ciBaseOf(commits, c))
 		}
 		word, sha := read.Word()
@@ -610,24 +449,24 @@ func ciChecksFor(runs []ciFailedCheck, b ciBaseRead) []ciFailedCheck {
 // start or the re-run instead (noteRunMoved), which takes the failure out
 // of f, records no read, and reports true.
 func (e *Engine) ensureCIRead(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR, f *openFacts) bool {
-	if f.ciFix.read.Head != "" && !e.ciRunMoved(ctx, acts, repo, pr, f) {
+	if f.CIFix.Read.Head != "" && !e.ciRunMoved(ctx, acts, repo, pr, f) {
 		return false
 	}
 	rec, err := e.ciFixRecordOf(ctx, pr.ID)
 	if err != nil {
 		return false
 	}
-	read := e.readCIFailures(ctx, acts, repo, pr, ciChecksFor(f.ci.failedRuns, rec.Base))
+	read := e.readCIFailures(ctx, acts, repo, pr, ciChecksFor(f.CI.FailedRuns, rec.Base))
 	if read.Moved != nil {
 		e.noteRunMoved(ctx, repo, pr, f, *read.Moved)
 		return true
 	}
-	read.Key = ciKeyAt(f.ci.failedRuns)
+	read.Key = ciKeyAt(f.CI.FailedRuns)
 	if err := e.updateCIFix(ctx, pr.ID, func(r *ciFixRecord) bool { r.Read = read; return true }); err != nil {
 		e.warnUnlessStopped(ctx, err, "autofix open: record the read of the failed CI", "pr", pr.ID)
 		return false
 	}
-	f.ciFix.read = read
+	f.CIFix.Read = read
 	return true
 }
 
@@ -643,9 +482,9 @@ func (e *Engine) ensureCIRead(ctx context.Context, acts *ciActions, repo store.R
 // no named run, or one that fails (tried again a settle_quiet later, as
 // one that found nothing moved), leaves the read standing.
 func (e *Engine) ciRunMoved(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR, f *openFacts) bool {
-	r := f.ciFix.read
-	named := slices.ContainsFunc(f.ci.failedRuns, func(c ciFailedCheck) bool { return c.Run != 0 })
-	if !named || f.now.Before(later(r.At, r.Checked).Add(f.settle.quiet)) {
+	r := f.CIFix.Read
+	named := slices.ContainsFunc(f.CI.FailedRuns, func(c ciFailedCheck) bool { return c.Run != 0 })
+	if !named || f.Now.Before(later(r.At, r.Checked).Add(f.Settle.Quiet)) {
 		return false
 	}
 	checked := func() bool { // the read stands; the next check is a settle_quiet away
@@ -659,7 +498,7 @@ func (e *Engine) ciRunMoved(ctx context.Context, acts *ciActions, repo store.Rep
 		}); err != nil {
 			e.warnUnlessStopped(ctx, err, "autofix open: record the check of the failed CI's runs", "pr", pr.ID)
 		}
-		f.ciFix.read.Checked = now
+		f.CIFix.Read.Checked = now
 		return false
 	}
 	gh, err := acts.client(ctx)
@@ -675,7 +514,7 @@ func (e *Engine) ciRunMoved(ctx context.Context, acts *ciActions, repo store.Rep
 		e.log.Info("autofix open: the head's runs before a CI fix", "subject", prSubject(repo, pr.Number), "err", err)
 		return checked()
 	}
-	for _, c := range f.ci.failedRuns {
+	for _, c := range f.CI.FailedRuns {
 		run, moved := ciRunNow(runs, c)
 		switch {
 		case moved: // a newer attempt or run that has not ended or did not fail
@@ -704,26 +543,26 @@ func (e *Engine) ciRunMoved(ctx context.Context, acts *ciActions, repo store.Rep
 // run again.
 func (e *Engine) noteRunMoved(ctx context.Context, repo store.Repo, pr store.PR, f *openFacts, run github.WorkflowRun) {
 	now := e.now()
-	switch r := f.ciRerun; {
-	case slices.ContainsFunc(f.ci.failedRuns, func(c ciFailedCheck) bool { return c.Dispatched }):
-		s := f.ciStart
+	switch r := f.CIRerun; {
+	case slices.ContainsFunc(f.CI.FailedRuns, func(c ciFailedCheck) bool { return c.Dispatched }):
+		s := f.CIStart
 		s.Run, s.Moved = &ciRun{ID: run.ID, Status: run.Status, Conclusion: run.Conclusion}, now
 		e.writeCIStart(ctx, pr, s)
-		f.ciStart = s
+		f.CIStart = s
 	case r.Run != nil && r.Run.ID == run.ID:
 		r.Seen, r.Moved = &ciAttempt{Attempt: run.Attempt, Status: run.Status, Conclusion: run.Conclusion}, now
 		if err := writeKVJSON(ctx, e, kvPRCIRerun(pr.ID), "the look's re-run", r); err != nil {
 			e.warnUnlessStopped(ctx, err, "autofix open: record the re-run's attempt by hand", "pr", pr.ID)
 		}
-		f.ciRerun = r
+		f.CIRerun = r
 	default: // no record names the run: the failure stays out of this look
-		f.ci = e.openCI(ctx, repo.FullName(), pr)
+		f.CI = e.openCI(ctx, repo.FullName(), pr)
 		return
 	}
 	e.log.Info("autofix open: a run that failed ran again", "subject", prSubject(repo, pr.Number), "head", textx.ShortSHA(pr.HeadSHA),
 		"workflow", run.Workflow, "run", run.ID, "attempt", run.Attempt, "status", run.Status, "conclusion", run.Conclusion)
-	f.ci = ciShape3(e.openCI(ctx, repo.FullName(), pr), f.ciStart, f.ciRerun)
-	f.ciFix = e.ciFixFactsOf(ctx, repo, pr, *f, f.ledger)
+	f.CI = ciShape3(e.openCI(ctx, repo.FullName(), pr), f.CIStart, f.CIRerun)
+	f.CIFix = e.ciFixFactsOf(ctx, repo, pr, *f, f.Ledger)
 }
 
 // noteCIFixStart records a CI fix of entries at pr's head by by before its
@@ -776,22 +615,4 @@ func (e *Engine) noteCIFixEnd(ctx context.Context, job *fixJob) {
 		return
 	}
 	e.noteCIFixOutcome(ctx, job.pr.ID, job.state.Since, cmp.Or(job.ciOutcome, ciOutcomeLost), job.ciWhy, job.ciPushed)
-}
-
-// ciCannotOf reads the fixer's ci entries under Needs you (needsYouEntryRe,
-// place `ci`) apart from the rest: the class word of the first (unfixed for
-// one without a class) and the other entries.
-func ciCannotOf(needs []string) (class string, ci bool, rest []string) {
-	for _, n := range needs {
-		m := needsYouEntryRe.FindStringSubmatch(n)
-		if m == nil || m[3] != ciPlace {
-			rest = append(rest, n)
-			continue
-		}
-		if !ci {
-			class = cmp.Or(m[8], "unfixed")
-		}
-		ci = true
-	}
-	return class, ci, rest
 }

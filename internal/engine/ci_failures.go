@@ -62,29 +62,6 @@ const (
 	ciLineBytes = 2 << 10
 )
 
-// ciFailedCheck is one failed required check at a head (openCIOf,
-// ciShape3) that the reader reads: the required entry ("Completion",
-// "workflow:CI"), the check run's name ("" for a workflow entry's missing
-// check), its workflow's file, the run that failed where the look knows it
-// (Run: magnum's start of the workflow or its re-run; 0: the newest of
-// WorkflowFile at the head), when the rollup says it finished (At: a re-run
-// that fails again is a new failure), the check names the base read
-// compares (Compare: its own, or the failed jobs beside a skipped one;
-// none: the entry's runs), and the base's word on it (zero: not read).
-// Dispatched: Run is magnum's start of ci_dispatch's workflow, which no
-// rollup shows, nor a re-run of it or a later start of the workflow at the
-// head (ciRunNow).
-type ciFailedCheck struct {
-	Entry        string
-	Name         string
-	WorkflowFile string
-	Run          int64
-	Dispatched   bool
-	At           time.Time
-	Compare      []string
-	Base         ciBaseCheck
-}
-
 // ciFailuresJSON is ci-failures.json.
 type ciFailuresJSON struct {
 	PR     string          `json:"pr"`

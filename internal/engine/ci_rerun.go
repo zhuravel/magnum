@@ -32,7 +32,6 @@ import (
 	"path"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
@@ -292,13 +291,13 @@ func (e *Engine) openRerunCI(ctx context.Context, acts *ciActions, repo store.Re
 func (e *Engine) openCIRerun(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR, f *openFacts, v OpenVerdict, work []openItem) (OpenVerdict, []openItem) {
 	if v.ReadRuns {
 		if r, ok := e.openReadRuns(ctx, acts, repo, pr); ok {
-			f.ciRerun = r
+			f.CIRerun = r
 			v, work, _ = decideOpen(*f)
 		}
 	}
 	if v.Rerun {
-		if r, ok := e.openRerunCI(ctx, acts, repo, pr, f.ciRerun, missingWhat(f.ci.missing)); ok {
-			f.ciRerun = r
+		if r, ok := e.openRerunCI(ctx, acts, repo, pr, f.CIRerun, missingWhat(f.CI.Missing)); ok {
+			f.CIRerun = r
 			v, work, _ = decideOpen(*f)
 		}
 	}
@@ -369,91 +368,4 @@ func (e *Engine) seeRerun(ctx context.Context, acts *ciActions, owner, name stri
 			map[string]any{"head": r.Head, "run": r.Run.ID, "workflow": r.Run.Workflow, "attempt": seen.Attempt, "conclusion": seen.Conclusion,
 				"identity": identity})
 	}
-}
-
-// openRerunVerdict is rule 11's verdict by the look's read of the head's
-// runs and its re-run of the one that started no job (f.ciRerun), past the
-// waits for the head's checks and before ci_dispatch's start: ok false
-// leaves the verdict to the rest of rule 11 (no run that started no job,
-// or a read that failed). Where the head's runs are due a read it asks for
-// it (v.readRuns) unless the GitHub budget is low, and waits for the budget
-// where nothing was read and no ci_dispatch would start the workflow
-// instead; it needs you, with what to grant, while GitHub would not mint
-// the token that reads them (UnreadWhy; a start would fail on the same
-// mint); it waits while a run of the head has not ended (queuedWhy), asks
-// for the re-run (v.rerun) when nothing holds it (`magnum pause`, the
-// budget), waits for the re-run's attempt until settle_max after it, and
-// needs you when magnum or GitHub refused the re-run, when its attempt
-// started no job either, ended without the check, or never came.
-func openRerunVerdict(f openFacts, v *OpenVerdict, waits func(string, time.Time) OpenVerdict, needsYou func(string) OpenVerdict, what string) (OpenVerdict, bool) {
-	r, low := f.ciRerun, f.low || f.ciLow
-	due := r.ReadDue(f.pr.HeadSHA, f.now, f.settle.max)
-	if due {
-		v.ReadRuns = !low
-	}
-	if r.Head == f.pr.HeadSHA && r.Unread && r.UnreadWhy != "" { // ci_actions.go: GitHub will not mint the token that reads them
-		return needsYou(fmt.Sprintf("magnum cannot read the head's runs (%s); run its workflow on the PR's branch, or push", r.UnreadWhy)), true
-	}
-	if due {
-		if r.Head != f.pr.HeadSHA || r.Unread {
-			if low && f.ciWorkflow == "" {
-				return waits(what+" did not run; magnum reads the head's runs once the GitHub budget allows", time.Time{}), true
-			}
-			return OpenVerdict{}, false
-		}
-	}
-	if r.Queued != 0 {
-		return waits(queuedWhy(r.Queued, r.QueuedStatus), r.ReadAt.Add(f.settle.max)), true
-	}
-	if r.Run == nil {
-		return OpenVerdict{}, false
-	}
-	const onGitHub = "; re-run it on GitHub"
-	run := r.Run.Named()
-	switch {
-	case r.Refused != "":
-		return needsYou(fmt.Sprintf("magnum does not re-run %s (%s)%s", run, r.Refused, onGitHub)), true
-	case r.Failed != "":
-		return needsYou(fmt.Sprintf("magnum's re-run of %s failed (%s)%s", run, r.Failed, onGitHub)), true
-	case r.Asked() && r.Seen.Ended() && r.Seen.NoJob:
-		return needsYou(fmt.Sprintf("%s failed to start twice%s%s, or push", run, runEnd(r.Seen.Conclusion), onGitHub)), true
-	case r.Asked() && f.now.Before(later(r.At, r.Moved).Add(f.settle.max)):
-		return waits(rerunWhy(f, what), later(r.At, r.Moved).Add(f.settle.max)), true
-	case r.Asked() && r.Seen.Ended() && !r.Moved.IsZero():
-		return needsYou(fmt.Sprintf("%s; that attempt ended%s without it%s", rerunWhy(f, what), runEnd(r.Seen.Conclusion), onGitHub)), true
-	case r.Asked() && r.Seen.Ended():
-		return needsYou(fmt.Sprintf("magnum re-ran %s at %s and it ended%s without it%s", run, waitClock(r.At, f.now), runEnd(r.Seen.Conclusion), onGitHub)), true
-	case r.Asked():
-		return needsYou(fmt.Sprintf("magnum re-ran %s at %s and no new attempt came%s", run, waitClock(r.At, f.now), onGitHub)), true
-	case f.pause != "":
-		return waits(fmt.Sprintf("%s did not run; magnum re-runs %s once the pause ends", what, run), f.pauseUntil), true
-	case low:
-		return waits(fmt.Sprintf("%s did not run; magnum re-runs %s once the GitHub budget allows", what, run), time.Time{}), true
-	}
-	v.Rerun = true
-	return needsYou("magnum re-runs " + run), true
-}
-
-// queuedWhy is the wait beside run id of the head, which had not ended at
-// the read, by status, its status then: one GitHub has not given a runner
-// yet (requested, queued, pending) "run 42673098082 has started no job
-// yet", and any other (in_progress, waiting for an environment) "run
-// 42673098082 has not ended".
-func queuedWhy(id int64, status string) string {
-	switch status {
-	case "requested", "queued", "pending":
-		return fmt.Sprintf("run %d has started no job yet", id)
-	}
-	return fmt.Sprintf("run %d has not ended", id)
-}
-
-// rerunWhy is the wait for the look's re-run of f: "magnum re-ran run
-// 42673098082 of ci.yml at 20:47, as required check build did not run", or
-// for an attempt by hand after its attempt failed (Moved): "run
-// 42673098082 of ci.yml was run again after magnum's re-run of it failed".
-func rerunWhy(f openFacts, what string) string {
-	if !f.ciRerun.Moved.IsZero() {
-		return f.ciRerun.Run.Named() + " was run again after magnum's re-run of it failed"
-	}
-	return fmt.Sprintf("magnum re-ran %s at %s, as %s did not run", f.ciRerun.Run.Named(), waitClock(f.ciRerun.At, f.now), what)
 }

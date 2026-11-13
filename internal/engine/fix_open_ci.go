@@ -31,7 +31,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -79,7 +78,7 @@ func (e *Engine) ciDispatchIdentity(full string, w config.Watch) string {
 // required check did not run at the head ("" otherwise), and its start at
 // the head (zero: none).
 func (e *Engine) openCIStartOf(ctx context.Context, full string, pr store.PR, ci openCI) (string, ciStart) {
-	if len(ci.missing) == 0 {
+	if len(ci.Missing) == 0 {
 		return "", ciStart{}
 	}
 	workflow := e.cfg.CIDispatch(full)
@@ -125,7 +124,7 @@ func (e *Engine) ciStartAt(ctx context.Context, pr store.PR) ciStart {
 // head's checks and its runs (seeRerun).
 func (e *Engine) awaitCIRuns(ctx context.Context, w config.Watch, full string, prs []github.PRRadar, byNode map[string]store.PR, now time.Time) map[int]bool {
 	owner, name, _ := strings.Cut(full, "/")
-	identity, dispatch, settleMax := e.ciDispatchIdentity(full, w), e.cfg.CIDispatch(full) != "", e.openSettle().max
+	identity, dispatch, settleMax := e.ciDispatchIdentity(full, w), e.cfg.CIDispatch(full) != "", e.openSettle().Max
 	acts := e.ciActions(identity) // ci_actions.go: one token for the poll's reads of the repository
 	defer acts.end()
 	var awaited map[int]bool
@@ -141,7 +140,7 @@ func (e *Engine) awaitCIRuns(ctx context.Context, w config.Watch, full string, p
 			s = e.ciStartAt(ctx, pr)
 		}
 		start := !s.At.IsZero() && s.Failed == "" && (now.Before(later(s.At, s.Moved).Add(settleMax)) || s.Run.Running())
-		if !rerun && !start || len(e.openCI(ctx, full, pr).missing) == 0 {
+		if !rerun && !start || len(e.openCI(ctx, full, pr).Missing) == 0 {
 			continue
 		}
 		if awaited == nil {
@@ -199,120 +198,6 @@ func (e *Engine) dispatchedRun(ctx context.Context, acts *ciActions, owner, name
 		}
 	}
 	return ciRun{}, false
-}
-
-// openMissingCI is rule 11's verdict v of f's head, at which the required
-// checks f.ci.missing names have no run (their words: missingWhat): while a
-// check of the head has not finished (f.ci.running: a job that needs others
-// is created only once they end, however long they run) and until
-// settle_max after the head moved, it waits for them to start (CI at the
-// head). After that they did not run, and it needs you with how to start
-// them, unless the look starts the workflow ci_dispatch names
-// (f.ciWorkflow): it asks for the start (v.dispatch) when nothing holds it,
-// waits for the end of `magnum pause` and for the GitHub budget (the poll
-// identity's, f.low, and ci_dispatch_as's, f.ciLow), and waits
-// for the run of a start it made (f.ciStart) while the head's checks run,
-// while the run is queued or runs (ciStart.Run) and until settle_max after
-// the start, or after the look found that run run again (ciStart.Moved:
-// "ci.yml was run again after magnum's run of it failed"). A start that
-// failed, one magnum refused, one whose run ended without the checks (in
-// words of the run's conclusion, runEnd) and one whose run never came need
-// you. Before either, where no start was made
-// at the head, the look's read of the head's runs and its re-run of the
-// one that started no job decide (openRerunVerdict, ci_rerun.go), and the
-// re-run's attempt is waited for as a start's run is.
-func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
-	short, what := textx.ShortSHA(f.pr.HeadSHA), missingWhat(f.ci.missing)
-	waits := func(why string, until time.Time) OpenVerdict {
-		if !until.After(f.now) {
-			until = time.Time{} // unknown: until the head's checks end
-		}
-		v.Verdict, v.Why, v.Until = OpenWaits, "CI at "+short+": "+why+ciAfter(f), until
-		return v
-	}
-	needsYou := func(how string) OpenVerdict {
-		v.Needs = append(v.Needs, OpenNeed{Kind: "ci_missing", URL: f.pr.URL})
-		v.Verdict, v.Why = OpenNeedsYou, fmt.Sprintf("%s did not run at %s: %s", what, short, how)
-		return v
-	}
-	wf, s := f.ciWorkflow, f.ciStart
-	started := !s.At.IsZero() && s.Failed == ""
-	again := wf + " was run again after magnum's run of it failed" // ciStart.Moved: a re-run by hand, a later start
-	startedWhy := func() string {
-		if !s.Moved.IsZero() {
-			return again
-		}
-		return fmt.Sprintf("magnum started %s at %s, as %s did not run", wf, waitClock(s.At, f.now), what)
-	}
-	startWait := later(s.At, s.Moved).Add(f.settle.max)
-	due := f.pr.HeadChangedAt.Add(f.settle.max)
-	switch {
-	case (f.ci.running || s.Run.Running()) && started:
-		return waits(startedWhy(), startWait)
-	case (f.ci.running || f.ciRerun.Seen.Running()) && f.ciRerun.Asked(): // ci_rerun.go
-		return waits(rerunWhy(f, what), later(f.ciRerun.At, f.ciRerun.Moved).Add(f.settle.max))
-	case f.ci.running || f.now.Before(due):
-		return waits(what+" has not started", due)
-	}
-	if s.At.IsZero() && s.Refused == "" { // ci_rerun.go: a run of the head that started no job, before any start
-		if rv, ok := openRerunVerdict(f, &v, waits, needsYou, what); ok {
-			return rv
-		}
-	}
-	const byHand = "; run it on the PR's branch"
-	switch {
-	case wf == "":
-		return needsYou("run its workflow on the PR's branch, or push")
-	case s.Refused != "":
-		return needsYou(fmt.Sprintf("magnum does not start %s (%s)%s", wf, s.Refused, byHand))
-	case s.Failed != "":
-		return needsYou(fmt.Sprintf("magnum's start of %s failed (%s)%s", wf, s.Failed, byHand))
-	case started && f.now.Before(startWait):
-		return waits(startedWhy(), startWait)
-	case started && s.Run.Ended() && !s.Moved.IsZero():
-		return needsYou(fmt.Sprintf("%s; that run ended%s without it%s", again, runEnd(s.Run.Conclusion), byHand))
-	case started && s.Run.Ended():
-		return needsYou(fmt.Sprintf("magnum started %s at %s and its run ended%s without it%s", wf, waitClock(s.At, f.now), runEnd(s.Run.Conclusion), byHand))
-	case started:
-		return needsYou(fmt.Sprintf("magnum started %s at %s and no run came%s", wf, waitClock(s.At, f.now), byHand))
-	case f.pause != "":
-		return waits(fmt.Sprintf("%s did not run; magnum starts %s once the pause ends", what, wf), f.pauseUntil)
-	case f.low || f.ciLow:
-		return waits(fmt.Sprintf("%s did not run; magnum starts %s once the GitHub budget allows", what, wf), time.Time{})
-	}
-	v.Dispatch = true
-	return needsYou("magnum starts " + wf)
-}
-
-// conclusionRe is a run's conclusion as GitHub writes one ("timed_out").
-var conclusionRe = regexp.MustCompile(`^[a-z_]{1,32}$`)
-
-// runEnd is how a run of the CI workflow ended, by its conclusion, in the
-// verdict's words (" (timed out)"); "" for none, or one that is not
-// GitHub's plain word.
-func runEnd(conclusion string) string {
-	if !conclusionRe.MatchString(conclusion) {
-		return ""
-	}
-	return " (" + strings.ReplaceAll(conclusion, "_", " ") + ")"
-}
-
-// missingWhat names missing, required entries with no run on a head, in
-// the verdict's words: the first ("required check Completion", "required
-// workflow CI" for a workflow entry), and how many more ("and 1 more"). An
-// entry is the repository's configuration or GitHub's rulesets, never PR
-// text; one that is not plain text (shownCheckName) is "a required check".
-func missingWhat(missing []string) string {
-	what := "a required check"
-	if workflow, ok := strings.CutPrefix(missing[0], store.RequiredWorkflowPrefix); ok && shownCheckName(workflow) {
-		what = "required workflow " + workflow
-	} else if !ok && shownCheckName(missing[0]) {
-		what = "required check " + missing[0]
-	}
-	if n := len(missing) - 1; n > 0 {
-		what += fmt.Sprintf(" and %d more", n)
-	}
-	return what
 }
 
 // openStartCI starts workflow, [[repo]] ci_dispatch, on the branch of pr,

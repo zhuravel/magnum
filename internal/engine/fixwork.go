@@ -5,7 +5,10 @@ package engine
 // factory"): the engine reads and writes the same rows under the names it
 // had, through these aliases, until its fix code goes.
 
-import "github.com/zhuravel/magnum/internal/fixwork"
+import (
+	"github.com/zhuravel/magnum/internal/fixwork"
+	"github.com/zhuravel/magnum/internal/store"
+)
 
 // Phases of a fix loop (FixState.Phase).
 const (
@@ -130,12 +133,92 @@ const (
 )
 
 var (
-	lastActivity  = fixwork.LastActivity
-	pushedBack    = fixwork.PushedBack
-	pushbacksOf   = fixwork.PushbacksOf
-	acceptedWaits = fixwork.AcceptedWaits
-	sortOpen      = fixwork.SortOpen
-	waitsOf       = fixwork.WaitsOf
-	threadKey     = fixwork.ThreadKey
-	reviewKey     = fixwork.ReviewKey
+	pushedBack  = fixwork.PushedBack
+	pushbacksOf = fixwork.PushbacksOf
+	sortOpen    = fixwork.SortOpen
+	threadKey   = fixwork.ThreadKey
+	reviewKey   = fixwork.ReviewKey
+)
+
+// FixModeCI is the mode of a fix request and loop that fixes the PR's
+// failed required CI (FixPayload.Mode, FixState.Mode).
+const FixModeCI = fixwork.FixModeCI
+
+// FixReport is what the fixer reports: fixwork.FixReport.
+type FixReport = fixwork.FixReport
+
+// FixCommit is a commit the fixer says it pushed: fixwork.FixCommit.
+type FixCommit = fixwork.FixCommit
+
+// The errors of ParseFixReport: fixwork's.
+var (
+	// ErrFixReportMarker is the error for a report whose first line is not
+	// the marker of the run asked for.
+	ErrFixReportMarker = fixwork.ErrFixReportMarker
+	// ErrFixReportPartial is the error for a report with a section missing,
+	// empty or out of order.
+	ErrFixReportPartial = fixwork.ErrFixReportPartial
+)
+
+// ParseFixReport reads the fixer's report of the run runID
+// (fixwork.ParseFixReport).
+func ParseFixReport(text string, runID string) (FixReport, error) {
+	return fixwork.ParseFixReport(text, runID)
+}
+
+// FixNeedsAsked keeps of entries those that msg still asks the author for
+// (fixwork.FixNeedsAsked).
+func FixNeedsAsked(msg string, entries []string) []string { return fixwork.FixNeedsAsked(msg, entries) }
+
+// OpenMergeIsYours reports whether GitHub's review gate g leaves the merge
+// of an own PR with nothing open to the operator (fixwork.OpenMergeIsYours).
+func OpenMergeIsYours(g *store.ReviewGate) bool { return fixwork.OpenMergeIsYours(g) }
+
+// OptionalCallsWords names the optional calls whose links are links
+// (fixwork.OptionalCallsWords).
+func OptionalCallsWords(links []string) string { return fixwork.OptionalCallsWords(links) }
+
+// The verdict's facts, the Needs you entry and the CI fix's facts, under
+// the engine's names.
+type (
+	openFacts     = fixwork.Facts
+	openSettle    = fixwork.Settle
+	openCI        = fixwork.OpenCI
+	openHold      = fixwork.Hold
+	fixConflict   = fixwork.Conflict
+	p3Calls       = fixwork.P3Calls
+	needsYouEntry = fixwork.NeedsYouEntry
+	ciFailedCheck = fixwork.CIFailedCheck
+	ciFixFacts    = fixwork.CIFixFacts
+)
+
+const (
+	conflictPlace = fixwork.ConflictPlace
+	ciPlace       = fixwork.CIPlace
+	itemCI        = fixwork.ItemCI
+	ciFixMax      = fixwork.CIFixMax
+	heldRestart   = fixwork.HeldRestart
+	openHoldsBack = fixwork.OpenHoldsBack
+)
+
+var (
+	decideOpen        = fixwork.DecideOpen
+	magnumDue         = fixwork.MagnumDue
+	magnumItemsOf     = fixwork.MagnumItemsOf
+	decisionOf        = fixwork.DecisionOf
+	reviewWork        = fixwork.ReviewWork
+	openP3            = fixwork.OpenP3
+	optionalSplit     = fixwork.OptionalSplit
+	optionalLinks     = fixwork.OptionalLinks
+	workWords         = fixwork.WorkWords
+	missingWhat       = fixwork.MissingWhat
+	runEnd            = fixwork.RunEnd
+	shownCheckName    = fixwork.ShownCheckName
+	readNeedsYouEntry = fixwork.ReadNeedsYouEntry
+	ciWorkOf          = fixwork.CIWorkOf
+	ciFixWords        = fixwork.CIFixWords
+	ciCannotOf        = fixwork.CICannotOf
+	waitClock         = fixwork.WaitClock
+	quietHoursHold    = fixwork.QuietHoursHold
+	quietHoursEnd     = fixwork.QuietHoursEnd
 )

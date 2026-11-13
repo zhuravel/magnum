@@ -13,10 +13,6 @@ package engine
 
 import (
 	"fmt"
-	"time"
-
-	"github.com/zhuravel/magnum/internal/config"
-	"github.com/zhuravel/magnum/internal/eligibility"
 )
 
 // judgeOnly reports whether the job is a re-review of the judge alone: a
@@ -39,50 +35,4 @@ func (e *Engine) quietHoursGate(job *roundJob) gate {
 	}
 	return gate{reason: WaitQuietHours,
 		text: fmt.Sprintf("quiet hours (%s): first reviews and full re-reviews wait; delta checks, reply rounds, CI checks and `magnum review` still run", spec)}
-}
-
-// quietHoursHold reports whether [daemon] quiet_hours (spec) hold, at now, a
-// round nobody forced; judgeAlone: it is a re-review of the judge alone,
-// which they let start (eligibility.QuietHoursHold).
-func quietHoursHold(spec string, now time.Time, judgeAlone bool) bool {
-	return spec != "" && eligibility.QuietHoursHold(spec, now.Local(), judgeAlone)
-}
-
-// quietHoursEnd is the next local time quiet_hours ("HH:MM-HH:MM") end
-// after now; zero when spec cannot be read.
-func quietHoursEnd(spec string, now time.Time) time.Time {
-	w, ok, err := config.ParseQuietHours(spec)
-	if err != nil || !ok {
-		return time.Time{}
-	}
-	n := now.Local()
-	at := time.Date(n.Year(), n.Month(), n.Day(), w.End/60, w.End%60, 0, 0, n.Location())
-	if !at.After(n) {
-		at = at.AddDate(0, 0, 1)
-	}
-	return at
-}
-
-// quietWindows are the windows of [daemon] quiet_hours (spec, local time)
-// that ended after from and at or before to, oldest first, at most
-// openHoldsBack before to; none when spec is empty or cannot be read.
-func quietWindows(spec string, from, to time.Time) []openHold {
-	w, ok, err := config.ParseQuietHours(spec)
-	if err != nil || !ok {
-		return nil
-	}
-	from = later(from, to.Add(-openHoldsBack))
-	var out []openHold
-	f := from.Local()
-	for d := time.Date(f.Year(), f.Month(), f.Day()-1, 0, 0, 0, 0, f.Location()); !d.After(to); d = d.AddDate(0, 0, 1) {
-		start := time.Date(d.Year(), d.Month(), d.Day(), w.Start/60, w.Start%60, 0, 0, d.Location())
-		end := time.Date(d.Year(), d.Month(), d.Day(), w.End/60, w.End%60, 0, 0, d.Location())
-		if !end.After(start) { // it crosses midnight
-			end = end.AddDate(0, 0, 1)
-		}
-		if end.After(from) && !end.After(to) {
-			out = append(out, openHold{from: start, to: end})
-		}
-	}
-	return out
 }

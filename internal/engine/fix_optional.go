@@ -84,12 +84,12 @@ func (e *Engine) settleOptional(ctx context.Context, job *fixJob, entries, needs
 	threads := map[int64]string{}
 	for _, entry := range entries {
 		n, ok := readNeedsYouEntry(entry)
-		id, err := strconv.ParseInt(n.id, 10, 64)
-		if !ok || err != nil || n.priority != "P3" || !strings.Contains(n.place, ":") || job.pr.URL == "" || !e.optionalFinding(ctx, job, n, id, read) {
+		id, err := strconv.ParseInt(n.ID, 10, 64)
+		if !ok || err != nil || n.Priority != "P3" || !strings.Contains(n.Place, ":") || job.pr.URL == "" || !e.optionalFinding(ctx, job, n, id, read) {
 			needs = append(needs, entry)
 			continue
 		}
-		found, threads[id] = append(found, optionalCall{Thread: id, URL: job.pr.URL + "#discussion_r" + n.id, At: e.now().UTC()}), n.place
+		found, threads[id] = append(found, optionalCall{Thread: id, URL: job.pr.URL + "#discussion_r" + n.ID, At: e.now().UTC()}), n.Place
 	}
 	if len(found) == 0 {
 		return needs, nil
@@ -132,8 +132,8 @@ func optionalBody(body string) bool {
 func (e *Engine) optionalFinding(ctx context.Context, job *fixJob, n needsYouEntry, id int64, read func() ([]github.Thread, error)) bool {
 	owners := readThreadOwners(filepath.Dir(deref(job.run.ReportPath)))
 	at, listed := owners.places[id]
-	if i := strings.LastIndexByte(n.place, ':'); i > 0 && !owners.others[id] && (!listed || at == n.place) {
-		path, line := n.place[:i], n.place[i+1:]
+	if i := strings.LastIndexByte(n.Place, ':'); i > 0 && !owners.others[id] && (!listed || at == n.Place) {
+		path, line := n.Place[:i], n.Place[i+1:]
 		if slices.ContainsFunc(owners.comments, func(c ownComment) bool { return c.Path == path && strconv.Itoa(c.Line) == line && optionalBody(c.Body) }) {
 			return true
 		}
@@ -156,15 +156,6 @@ func (e *Engine) optionalFinding(ctx context.Context, job *fixJob, n needsYouEnt
 // optionalWords counts calls: "1 optional call", "2 optional calls".
 func optionalWords(calls []optionalCall) string {
 	return textx.Count(len(calls), "optional call", "optional calls")
-}
-
-// optionalLinks are the calls' links.
-func optionalLinks(calls []optionalCall) []string {
-	out := make([]string, len(calls))
-	for i, c := range calls {
-		out[i] = c.URL
-	}
-	return out
 }
 
 // openOptional are the PR's optional calls whose thread mine (magnum's
@@ -240,14 +231,4 @@ func (e *Engine) openOptionalAt(ctx context.Context, job *fixJob, read func() ([
 	}
 	author := github.Account(deref(job.pr.AuthorLogin), deref(job.pr.AuthorType))
 	return openOptionalIn(calls, magnumThreadsOf(threads, e.fixLogins(ctx, job), author))
-}
-
-// OptionalCallsWords names the optional calls whose links are links, as
-// the idle verdict and the factory screen's merge move end with them: "1
-// optional call: <link>", "2 optional calls: <link>, <link>"; "" for none.
-func OptionalCallsWords(links []string) string {
-	if len(links) == 0 {
-		return ""
-	}
-	return textx.Count(len(links), "optional call", "optional calls") + ": " + strings.Join(links, ", ")
 }

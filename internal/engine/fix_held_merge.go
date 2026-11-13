@@ -145,7 +145,7 @@ func (e *Engine) holdMerge(ctx context.Context, job *fixJob, id *config.Identity
 	if pr, err := e.st.PRByID(ctx, job.pr.ID); err != nil || !e.ownPR(pr) {
 		return HeldMerge{}, r.why
 	}
-	at, files := fmt.Sprintf("the merge of %s at %s", b.base, textx.ShortSHA(b.sha)), textx.Count(len(r.files), "file", "files")
+	at, files := fmt.Sprintf("the merge of %s at %s", b.Base, textx.ShortSHA(b.SHA)), textx.Count(len(r.files), "file", "files")
 	_, release, why, err := e.workflowsToken(ctx, id, at, files) // no merge is held that no y could push
 	release()
 	switch {
@@ -156,12 +156,12 @@ func (e *Engine) holdMerge(ctx context.Context, job *fixJob, id *config.Identity
 		return HeldMerge{}, why
 	}
 	conflicts := 0
-	if strings.EqualFold(job.conflict.sha, b.sha) {
-		conflicts = len(job.conflict.paths)
+	if strings.EqualFold(job.conflict.SHA, b.SHA) {
+		conflicts = len(job.conflict.Paths)
 	}
 	clone := cmp.Or(job.slot.MainClone, job.slot.Path)
 	dir := e.d.Layout.PRReviews(job.repo.Owner, job.repo.Name, job.pr.Number)
-	h := HeldMerge{Repo: job.repo.FullName(), Number: job.pr.Number, Merge: merge, Head: head, Base: b.base, Tip: b.sha,
+	h := HeldMerge{Repo: job.repo.FullName(), Number: job.pr.Number, Merge: merge, Head: head, Base: b.Base, Tip: b.SHA,
 		Workflows: slices.Clone(r.files), Conflicts: conflicts, Role: job.role.Name, Identity: id.Name, Login: id.Login, Clone: clone,
 		Diff: filepath.Join(dir, HeldMergeFile), Findings: heldFindings(job), At: e.now().UTC()}
 	h.Attention = heldMergeAttention(h)

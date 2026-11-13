@@ -800,7 +800,7 @@ func (e *Engine) writeExternal(ctx context.Context, job *fixJob, dir string) (pa
 		if ctx.Err() == nil {
 			then := job.role.Name + " answers magnum's findings alone"
 			switch {
-			case job.alone && job.conflict.sha != "":
+			case job.alone && job.conflict.SHA != "":
 				then = "the review found nothing, so " + job.role.Name + " only merges the base"
 			case job.alone:
 				then = "the review found nothing, so " + job.role.Name + " has nothing to answer"
@@ -1040,10 +1040,10 @@ func (e *Engine) nameUnmarkedReplies(ctx context.Context, job *fixJob, read func
 // did not answer ("fixed in <sha>.") in a thread x lists.
 func fixedInExternal(entry string, x externalItems) (int64, bool) {
 	n, ok := readNeedsYouEntry(entry)
-	if !ok || n.fixedIn == "" {
+	if !ok || n.FixedIn == "" {
 		return 0, false
 	}
-	id, err := strconv.ParseInt(n.id, 10, 64)
+	id, err := strconv.ParseInt(n.ID, 10, 64)
 	if err != nil || !slices.ContainsFunc(x.Threads, func(t externalThread) bool { return t.CommentID == id }) {
 		return 0, false
 	}

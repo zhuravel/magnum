@@ -243,7 +243,7 @@ type PushJob struct {
 }
 
 // PushMerge is a conflict of the head with its base (the engine's
-// fixConflict) as a record keeps it.
+// Conflict) as a record keeps it.
 type PushMerge struct {
 	Base  string   `json:"base"`
 	SHA   string   `json:"sha"`

@@ -261,15 +261,22 @@ func TestATasksPRAndYoursSayTheSameMoveForTheSameReason(t *testing.T) {
 // reads the engine's source: a reword there fails here, where the move would
 // otherwise fall back to the PR's page without a word.
 func TestTheEnginesWordsThatTheMoveReadsAreStillTheEngines(t *testing.T) {
-	read := func(name string) string {
-		b, err := os.ReadFile(filepath.Join("..", "engine", name))
-		if err != nil {
-			t.Fatal(err)
+	read := func(names ...string) string {
+		var src string
+		for _, name := range names {
+			b, err := os.ReadFile(filepath.Join("..", name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			src += string(b)
 		}
-		return string(b)
+		return src
 	}
-	ci, verdict := read("fix_open_ci.go"), read("fix_open_verdict.go")
-	cifix := read("ci_fix.go")
+	// The verdict's words moved with decideOpen into internal/fixwork, which
+	// the engine's look calls (DECISIONS "The fix loop moves into the
+	// factory"); the CI fix's refusals of a PR's files stay in ci_fix.go.
+	ci, verdict := read("fixwork/open_ci.go"), read("fixwork/open.go")
+	cifix := read("engine/ci_fix.go", "fixwork/open_ci.go")
 	for name, c := range map[string]struct{ src, want string }{
 		"a required check that did not run": {ci, `"%s` + didNotRunWords + `%s: %s"`},
 		"a required check that failed":      {verdict, `"%s` + failedWords + `%s"`},

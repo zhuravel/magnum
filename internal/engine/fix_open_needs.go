@@ -95,11 +95,11 @@ func (e *Engine) openRaise(ctx context.Context, repo store.Repo, pr store.PR, l 
 // here. It reports whether it lifted.
 func (e *Engine) openLift(ctx context.Context, repo store.Repo, pr store.PR, l *openLedger, f openFacts) bool {
 	switch {
-	case !l.RaisedHere(pr, f.attention), f.fix != nil || f.fixBad, !f.whole || f.failed || len(f.cut) > 0, deref(pr.ReviewedSHA) != pr.HeadSHA:
+	case !l.RaisedHere(pr, f.Attention), f.Fix != nil || f.FixBad, !f.Whole || f.Failed || len(f.Cut) > 0, deref(pr.ReviewedSHA) != pr.HeadSHA:
 		return false
 	}
 	open, accepted := map[string]bool{}, map[string]string{}
-	for _, it := range f.items {
+	for _, it := range f.Items {
 		if it.Accepted { // its reviewer approved since: it waits for no one (sortOpen)
 			accepted[it.Key] = strings.ToLower(it.By)
 		} else {

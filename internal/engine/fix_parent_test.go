@@ -475,7 +475,7 @@ func TestALaterCycleMergesTheParentOnlyOnAConflict(t *testing.T) {
 		if err := h.e.checkFixBase(h.ctx, job); err != nil {
 			t.Fatal(err)
 		}
-		if got := job.behind.sha != ""; got != tc.behind {
+		if got := job.behind.SHA != ""; got != tc.behind {
 			t.Errorf("cycle %d: behind = %+v, want merged first: %v", tc.cycle, job.behind, tc.behind)
 		}
 	}

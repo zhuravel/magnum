@@ -43,10 +43,8 @@ package engine
 
 import (
 	"cmp"
-	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/postreview"
@@ -258,49 +256,3 @@ func othersItemsOf(read externalRead, quiet quietRules) []openItem {
 	}
 	return out
 }
-
-// magnumItemsOf are magnum's items: its threads of mine whose rebuttal after
-// sum (magnum's last review that stands at the head; nil: none) waits for
-// an answer, the findings of sum the fixer skipped once a finished loop was
-// handed it (handed), sum itself when it leaves the fixer work, and the
-// conflict of head with its base (zero: none). optional are the threads,
-// by their first comment's id, of the operator's open optional calls
-// (fix_optional.go): no skipped finding, and no work in sum. described: sum's
-// body has a `Description: ✗` line, which is work (reviewWork).
-func magnumItemsOf(mine []magnumThread, sum *store.ReviewSummary, handed bool, conflict fixConflict, head string, optional map[int64]bool,
-	described bool) []openItem {
-	var out []openItem
-	var since time.Time
-	if sum != nil {
-		since = sum.At
-	}
-	for _, mt := range mine {
-		if mt.Rebuttal && mt.LatestAt.After(since) {
-			out = append(out, openItem{Key: fmt.Sprintf("mthread:%d@%d", mt.RootID, mt.LatestID), Class: classMagnum, Kind: itemMagnum, URL: mt.URL})
-		}
-	}
-	if handed && sum != nil {
-		for _, mt := range mine {
-			if mt.ReviewID != 0 && mt.ReviewID == sum.ReviewID && !mt.Answered && !optional[mt.RootID] {
-				out = append(out, openItem{Key: fmt.Sprintf("rthread:%d", mt.RootID), Class: classMagnum, Kind: itemFinding, URL: mt.URL})
-			}
-		}
-	}
-	if sum != nil && reviewWork(*sum, optionalSplit(mine, sum, optional), described) {
-		out = append(out, openItem{Key: reviewKey(sum.RunID), Class: classMagnum, Kind: itemFindings, URL: sum.URL})
-	}
-	if conflict.sha != "" && head != "" {
-		out = append(out, openItem{Key: conflictKey(head), Class: classConflict, Kind: itemConflict})
-	}
-	return out
-}
-
-// decisionOf reports whether items hold your decision in the thread whose
-// first comment is root (openItem.Decision).
-func decisionOf(items []openItem, root int64) bool {
-	prefix := fmt.Sprintf("thread:%d@", root)
-	return slices.ContainsFunc(items, func(it openItem) bool { return it.Decision && strings.HasPrefix(it.Key, prefix) })
-}
-
-// conflictKey is the key of a conflict of head with its base.
-func conflictKey(head string) string { return "conflict:" + head[:min(12, len(head))] }

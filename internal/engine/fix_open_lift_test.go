@@ -150,15 +150,15 @@ func TestALoopsNeedsYouWithAReplyKeepsItsRules(t *testing.T) {
 // round can take, is read despite the reply.
 func TestOnlyTheLooksOwnRaiseIsReadDespiteAReply(t *testing.T) {
 	f := idleFacts()
-	f.pr.State, f.attention, f.pending = store.PRNeedsAttention, attention.KindFix, 1
+	f.PR.State, f.Attention, f.Pending = store.PRNeedsAttention, attention.KindFix, 1
 	if readWanted(f) {
 		t.Error("a loop's needs you with a reply is read")
 	}
-	f.raised = true
+	f.Raised = true
 	if !readWanted(f) {
 		t.Error("the look's own needs you with a reply is not read")
 	}
-	f.fix = &FixState{}
+	f.Fix = &FixState{}
 	if readWanted(f) {
 		t.Error("read while a loop runs")
 	}
@@ -406,27 +406,6 @@ func TestAnApprovalAcceptsTheReviewersEarlierItemsOnly(t *testing.T) {
 	}
 }
 
-// An accepted item waits for no one where it would wait for you (handed to
-// a loop, a thread a fixer resolved): no work and no need. One never handed
-// is work as before: a reviewer's comment and a separate approval still ask
-// for the fix.
-func TestAnAcceptedItemWaitsForNoOneButWorkStaysWork(t *testing.T) {
-	handed, fresh, resolved := personThread(4100), personThread(4200), personThread(4300)
-	handed.Accepted, fresh.Accepted = true, true
-	resolved.Resolved, resolved.Accepted = true, true
-	f := idleFacts()
-	f.items = []openItem{handed, fresh, resolved}
-	f.ledger.Handed = map[string]time.Time{handed.Key: openNow}
-	v, work, needs := decideOpen(f)
-	wantVerdict(t, v, OpenFixing, "starts a fix loop on 1 thread of a person")
-	if len(work) != 1 || work[0].Key != fresh.Key || len(needs) != 0 {
-		t.Errorf("work %v, needs %v; want the never-handed thread as work alone", work, needs)
-	}
-	if got := waitsOf(acceptedWaits(f.items, f.ledger)); !slices.Equal(got, []string{handed.Key}) {
-		t.Errorf("waits = %v, want the handed accepted thread", got)
-	}
-}
-
 // revAnnComments adds rev-ann's conversation comment on PR #2 now, and
 // polls the PR.
 func (h *harness) revAnnComments(id int64, body string) {
@@ -495,15 +474,15 @@ func TestAChangeRequestWaitsForYouOnceTheReviewersItemWaited(t *testing.T) {
 	comment := openItem{Key: "remark:802", Class: classPerson, Kind: itemComment, URL: prPage + "#issuecomment-802", By: "rev-ann"}
 	alices := openItem{Key: "remark:9003", Class: classPerson, Kind: itemReview, URL: prPage + "#pullrequestreview-9003", By: "alice", ChangesAt: openNow.Add(-time.Minute)}
 	f := idleFacts()
-	f.items = []openItem{pushback, earlier, comment, alices}
-	f.ledger.NoteWaited([]openItem{
+	f.Items = []openItem{pushback, earlier, comment, alices}
+	f.Ledger.NoteWaited([]openItem{
 		{Key: "thread:100@100", Class: classPerson, Kind: itemThread, By: "rev-ann"},
 		{Key: "thread:200@200", Class: classBot, Kind: itemThread, By: "lint-bot[bot]"},
 		{Key: "rthread:300", Class: classMagnum, Kind: itemFinding},
 	}, openNow.Add(-time.Hour))
-	f.ledger.NoteWaited([]openItem{{Key: "thread:100@101", Class: classPerson, Kind: itemThread, By: "rev-ann"}}, openNow)
-	if want := map[string]time.Time{"rev-ann": openNow.Add(-time.Hour)}; !maps.Equal(f.ledger.Waited, want) {
-		t.Errorf("waited = %v, want %v", f.ledger.Waited, want)
+	f.Ledger.NoteWaited([]openItem{{Key: "thread:100@101", Class: classPerson, Kind: itemThread, By: "rev-ann"}}, openNow)
+	if want := map[string]time.Time{"rev-ann": openNow.Add(-time.Hour)}; !maps.Equal(f.Ledger.Waited, want) {
+		t.Errorf("waited = %v, want %v", f.Ledger.Waited, want)
 	}
 	v, work, needs := decideOpen(f)
 	if got := openKeys(work); len(needs) != 1 || needs[0].Key != pushback.Key || !slices.Equal(got, openKeys([]openItem{earlier, comment, alices})) {
@@ -641,36 +620,6 @@ func TestAChangeRequestAfterTheLoopHandedHerItemWaitsForYouBeforeAnyReadSawIt(t 
 	pr = h.wantState(2, store.PRNeedsAttention)
 	if msg := deref(pr.LastError); !strings.Contains(msg, prPage+"#pullrequestreview-9002") || !strings.Contains(msg, prPage+"#discussion_r4322458360") {
 		t.Errorf("last_error = %q, want her thread and her change request", msg)
-	}
-}
-
-// A reviewer's pushback counts from the earliest hand-off of one of their
-// person's items to a loop (Handed), unless an earlier time stands: not
-// from a bot's, nor from an item never handed. A CI fix by hand seeds it
-// the same way from the look's last read (lastReadWaits), and leaves the
-// ledger it read as it was.
-func TestPushbackCountsFromTheLoopsHandOff(t *testing.T) {
-	ann1, ann2, fresh, alices := personThread(4100), personThread(4200), personThread(4300), personThread(4400)
-	ann1.By, ann2.By, fresh.By, alices.By = "rev-ann", "Rev-Ann", "carol", "alice"
-	bot := openItem{Key: threadKey(4500, 4500), Class: classBot, Kind: itemThread, By: "lint-bot[bot]"}
-	l := openLedger{
-		Handed: map[string]time.Time{ann1.Key: openNow.Add(-time.Hour), ann2.Key: openNow.Add(-2 * time.Hour), alices.Key: openNow.Add(-3 * time.Hour),
-			bot.Key: openNow.Add(-4 * time.Hour)},
-		Waited: map[string]time.Time{"alice": openNow.Add(-5 * time.Hour)},
-	}
-	items := []openItem{ann1, ann2, fresh, alices, bot}
-	l.Read.Others = items
-	waited := maps.Clone(l.Waited)
-	keys := l.LastReadWaits()
-	if want := "changes:rev-ann@" + strconv.FormatInt(openNow.Add(-2*time.Hour).UnixNano(), 10); !slices.Contains(keys, want) {
-		t.Errorf("a CI fix by hand's waits = %v, want %s", keys, want)
-	}
-	if !maps.Equal(l.Waited, waited) {
-		t.Errorf("lastReadWaits wrote the ledger it read: waited %v", l.Waited)
-	}
-	l.SeedWaited(items)
-	if want := map[string]time.Time{"rev-ann": openNow.Add(-2 * time.Hour), "alice": openNow.Add(-5 * time.Hour)}; !maps.Equal(l.Waited, want) {
-		t.Errorf("waited = %v, want %v", l.Waited, want)
 	}
 }
 

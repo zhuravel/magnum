@@ -254,7 +254,7 @@ type Spell struct {
 // between: the caller's gap is at least quiet, and longer than looks a few
 // poll intervals apart); else s, seen now.
 func (s Spell) Next(pr store.PR, quiet, gap time.Duration, now time.Time, looping bool) Spell {
-	activity := LastActivity(pr)
+	activity := lastActivity(pr)
 	if looping || !now.Before(activity.Add(quiet)) {
 		return Spell{}
 	}
@@ -265,8 +265,8 @@ func (s Spell) Next(pr store.PR, quiet, gap time.Duration, now time.Time, loopin
 	return s
 }
 
-// LastActivity is pr's last activity: its head's move, or a later one.
-func LastActivity(pr store.PR) time.Time {
+// lastActivity is pr's last activity: its head's move, or a later one.
+func lastActivity(pr store.PR) time.Time {
 	if pr.ActivityAt != nil && pr.ActivityAt.After(pr.HeadChangedAt) {
 		return *pr.ActivityAt
 	}
@@ -360,10 +360,10 @@ func PushbacksOf(keys []string) map[string]time.Time {
 
 // LoopWaits are the FixState.Waits of a loop the look starts beside needs:
 // the keys of needs and of the items it would wait for you on that their
-// reviewer accepted (AcceptedWaits), then a pushback key for each reviewer
+// reviewer accepted (acceptedWaits), then a pushback key for each reviewer
 // of Waited (pushbackKey), sorted.
 func (l Ledger) LoopWaits(items, needs []Item) []string {
-	keys := WaitsOf(append(slices.Clone(needs), AcceptedWaits(items, l)...))
+	keys := waitsOf(append(slices.Clone(needs), acceptedWaits(items, l)...))
 	var pushbacks []string
 	for by, since := range l.Waited {
 		pushbacks = append(pushbacks, pushbackKey(by, since))
@@ -435,13 +435,13 @@ func (l Ledger) acceptedLeftover(it Item) bool {
 	return it.Accepted && (l.leftToAuthor(it) || it.Resolved || it.Kind == ItemThread && it.FixerReplies >= 2)
 }
 
-// AcceptedWaits are the items of items that would wait for you and whose
+// acceptedWaits are the items of items that would wait for you and whose
 // reviewer approved the PR since (acceptedLeftover): no longer work or
 // needs, they are still left alone by a loop's fixer, as the ones that wait
-// are (WaitsOf), since an earlier fixer left them to you. Its file lists
+// are (waitsOf), since an earlier fixer left them to you. Its file lists
 // them unanswered, and a fixer that answered one would answer for you, or
 // name it under Needs you, a loop's own attention the look never lifts.
-func AcceptedWaits(items []Item, l Ledger) []Item {
+func acceptedWaits(items []Item, l Ledger) []Item {
 	return slices.DeleteFunc(slices.Clone(items), func(it Item) bool { return !l.acceptedLeftover(it) })
 }
 
@@ -476,11 +476,11 @@ func SortOpen(items []Item, l Ledger) (work, needs []Item) {
 	return work, needs
 }
 
-// WaitsOf are the keys of the items of needs that a fixer's external file
+// waitsOf are the keys of the items of needs that a fixer's external file
 // lists (another reviewer's open thread, review body or comment: not one a
 // fixer resolved, which the file leaves out), sorted: the loop the look
 // starts beside them marks them waiting (FixState.Waits).
-func WaitsOf(needs []Item) []string {
+func waitsOf(needs []Item) []string {
 	var keys []string
 	for _, it := range needs {
 		if it.Class == ClassPerson && !it.Resolved && (it.Kind == ItemThread || it.Kind == ItemReview || it.Kind == ItemComment) {

@@ -150,14 +150,14 @@ const workflowsWord = "with Workflows"
 // the PR's own workflow changes, which ones (pushRefusal.own): the settle
 // holds such a merge for your y (holdMerge).
 func (e *Engine) pushMerge(ctx context.Context, job *fixJob, pg parentGit, id *config.Identity, head, merge string, b fixConflict) (how string, refused pushRefusal, err error) {
-	if why := refusedHeadBranch(job.repo, job.pr, b.base); why != "" {
+	if why := refusedHeadBranch(job.repo, job.pr, b.Base); why != "" {
 		return "", pushRefusal{why: why}, nil
 	}
 	src := e.d.Identities[id.Name]
 	if src == nil {
 		return "", pushRefusal{}, fmt.Errorf("identity %q is not configured", id.Name)
 	}
-	dir, at := job.slot.Path, fmt.Sprintf("the merge of %s at %s", b.base, textx.ShortSHA(b.sha))
+	dir, at := job.slot.Path, fmt.Sprintf("the merge of %s at %s", b.Base, textx.ShortSHA(b.SHA))
 	var workflows []string // a wrong none pushes with the App's token, which GitHub refuses for a workflow change
 	if err := pg.Isolated(ctx, dir, func(iso string) (err error) {
 		workflows, err = pg.ChangedPaths(ctx, iso, head, merge, workflowsPath)
@@ -187,9 +187,9 @@ func (e *Engine) pushMerge(ctx context.Context, job *fixJob, pg parentGit, id *c
 			return "", pushRefusal{}, fmt.Errorf("whether %s keeps the PR's own workflow changes: %w", at, err)
 		}
 		switch {
-		case len(own) > 0 && tip != b.sha:
+		case len(own) > 0 && tip != b.SHA:
 			return "", pushRefusal{why: fmt.Sprintf("%s has workflow files that are not as the tip %s of %s on GitHub has them (%s), which %s never pushes",
-				at, textx.ShortSHA(tip), b.base, strings.Join(own[:min(3, len(own))], ", "), id.Login)}, nil
+				at, textx.ShortSHA(tip), b.Base, strings.Join(own[:min(3, len(own))], ", "), id.Login)}, nil
 		case len(own) > 0:
 			return "", pushRefusal{why: fmt.Sprintf("%s keeps the PR's own workflow changes (%s), which %s never pushes", at,
 				strings.Join(own[:min(3, len(own))], ", "), id.Login), own: own, files: workflows}, nil
@@ -270,30 +270,30 @@ func refusedHeadBranch(repo store.Repo, pr store.PR, base string) string {
 func (e *Engine) baseOnGitHub(ctx context.Context, job *fixJob, b fixConflict, head string) (tip, refused string) {
 	gh := e.gh(job.watch.PollIdentity)
 	if gh == nil {
-		return "", fmt.Sprintf("no GitHub client of %s says where the tip of %s is", job.watch.PollIdentity, b.base)
+		return "", fmt.Sprintf("no GitHub client of %s says where the tip of %s is", job.watch.PollIdentity, b.Base)
 	}
 	det, _, err := gh.Details(ctx, job.repo.Owner, job.repo.Name, []int{job.pr.Number})
 	d, ok := det[job.pr.Number]
 	switch {
 	case err != nil:
-		return "", fmt.Sprintf("GitHub does not say where the tip of %s is: %s", b.base, oneLine(err.Error(), 200))
+		return "", fmt.Sprintf("GitHub does not say where the tip of %s is: %s", b.Base, oneLine(err.Error(), 200))
 	case !ok || d.BaseTipOid == "":
-		return "", fmt.Sprintf("GitHub does not say where the tip of %s is", b.base)
-	case d.BaseRefName != b.base:
-		return "", fmt.Sprintf("the PR's base on GitHub is %s now, not %s", d.BaseRefName, b.base)
+		return "", fmt.Sprintf("GitHub does not say where the tip of %s is", b.Base)
+	case d.BaseRefName != b.Base:
+		return "", fmt.Sprintf("the PR's base on GitHub is %s now, not %s", d.BaseRefName, b.Base)
 	}
-	dir, short := job.slot.Path, textx.ShortSHA(b.sha)
-	switch on, err := e.d.Git.IsAncestor(ctx, dir, b.sha, d.BaseTipOid); {
+	dir, short := job.slot.Path, textx.ShortSHA(b.SHA)
+	switch on, err := e.d.Git.IsAncestor(ctx, dir, b.SHA, d.BaseTipOid); {
 	case err != nil:
-		return "", fmt.Sprintf("whether %s is on %s as GitHub has it (its tip is %s) could not be checked: %s", short, b.base, textx.ShortSHA(d.BaseTipOid), oneLine(err.Error(), 200))
+		return "", fmt.Sprintf("whether %s is on %s as GitHub has it (its tip is %s) could not be checked: %s", short, b.Base, textx.ShortSHA(d.BaseTipOid), oneLine(err.Error(), 200))
 	case !on:
-		return "", fmt.Sprintf("%s is not on %s as GitHub has it (its tip is %s)", short, b.base, textx.ShortSHA(d.BaseTipOid))
+		return "", fmt.Sprintf("%s is not on %s as GitHub has it (its tip is %s)", short, b.Base, textx.ShortSHA(d.BaseTipOid))
 	}
-	switch in, err := e.d.Git.IsAncestor(ctx, dir, b.sha, head); {
+	switch in, err := e.d.Git.IsAncestor(ctx, dir, b.SHA, head); {
 	case err != nil:
 		return "", fmt.Sprintf("whether the head has %s already could not be checked: %s", short, oneLine(err.Error(), 200))
 	case in:
-		return "", fmt.Sprintf("the head has %s already: the merge brings nothing of %s", short, b.base)
+		return "", fmt.Sprintf("the head has %s already: the merge brings nothing of %s", short, b.Base)
 	}
 	return d.BaseTipOid, ""
 }
@@ -338,7 +338,7 @@ func (e *Engine) behindBase(ctx context.Context, job *fixJob) (fixConflict, erro
 	case has:
 		return fixConflict{}, nil
 	}
-	return fixConflict{base: base, sha: tip}, nil
+	return fixConflict{Base: base, SHA: tip}, nil
 }
 
 // fixNothingToMerge is the guard's end of a merge of the parent whose head
@@ -370,25 +370,25 @@ func (e *Engine) mergeParent(ctx context.Context, job *fixJob) (refused string, 
 		return errNoParentGit.Error(), nil
 	case !app:
 		refused = fmt.Sprintf("magnum merges a parent as a fixer App, and the fix role's identity %s is not one", job.role.Identity)
-		e.event(ctx, "info", job.subject(), "fix.parent_skipped", fmt.Sprintf("%s lacks the tip %s of %s: %s", job.label(), textx.ShortSHA(b.sha), b.base, refused),
-			map[string]any{"base": b.base, "tip": b.sha, "cycle": job.state.Cycle})
+		e.event(ctx, "info", job.subject(), "fix.parent_skipped", fmt.Sprintf("%s lacks the tip %s of %s: %s", job.label(), textx.ShortSHA(b.SHA), b.Base, refused),
+			map[string]any{"base": b.Base, "tip": b.SHA, "cycle": job.state.Cycle})
 		return refused, nil
 	}
 	branch, dir, head := deref(job.pr.HeadRef), job.slot.Path, job.head
-	tree, conflicts, err := pg.MergeTree(ctx, dir, head, b.sha)
+	tree, conflicts, err := pg.MergeTree(ctx, dir, head, b.SHA)
 	switch {
 	case err != nil:
 		return "", err
 	case len(conflicts) > 0: // the base moved since the guard looked
-		job.conflict = fixConflict{base: b.base, sha: b.sha, paths: conflicts}
+		job.conflict = fixConflict{Base: b.Base, SHA: b.SHA, Paths: conflicts}
 		job.forMerge = job.mode == FixModeMerge
 		return "", nil
 	}
-	merge, err := pg.CommitTree(ctx, dir, tree, []string{head, b.sha}, fmt.Sprintf("Merge branch '%s' into %s", b.base, branch), who)
+	merge, err := pg.CommitTree(ctx, dir, tree, []string{head, b.SHA}, fmt.Sprintf("Merge branch '%s' into %s", b.Base, branch), who)
 	if err != nil {
 		return "", err
 	}
-	data := map[string]any{"base": b.base, "tip": b.sha, "head": head, "merge": merge, "identity": id.Name, "cycle": job.state.Cycle}
+	data := map[string]any{"base": b.Base, "tip": b.SHA, "head": head, "merge": merge, "identity": id.Name, "cycle": job.state.Cycle}
 	how, refusal, err := e.pushMerge(ctx, job, pg, id, head, merge, b)
 	switch refused = refusal.why; {
 	case err != nil:
@@ -412,7 +412,7 @@ func (e *Engine) mergeParent(ctx context.Context, job *fixJob) (refused string, 
 	if how != "" {
 		as, data["workflows"] = as+" "+how, true
 	}
-	msg := fmt.Sprintf("magnum merged %s at %s into %s as %s: the head is %s", b.base, textx.ShortSHA(b.sha), job.label(), as, textx.ShortSHA(merge))
+	msg := fmt.Sprintf("magnum merged %s at %s into %s as %s: the head is %s", b.Base, textx.ShortSHA(b.SHA), job.label(), as, textx.ShortSHA(merge))
 	if schema := e.parentSchema(ctx, job, head, merge, job.mode != FixModeMerge); schema != "" {
 		job.schema = schema
 		msg += "; " + schema
@@ -487,7 +487,7 @@ func (e *Engine) pushHanded(ctx context.Context, job *fixJob, head string) (stri
 	if err := e.fetchBase(ctx, cmp.Or(job.slot.MainClone, job.slot.Path), base, fixRequestFetch); err != nil {
 		return "", fmt.Errorf("the fetch of %s: %w", base, err)
 	}
-	b := fixConflict{base: base, sha: tip}
+	b := fixConflict{Base: base, SHA: tip}
 	how, refused, err := e.pushMerge(ctx, job, pg, id, job.head, head, b)
 	switch {
 	case err != nil:
@@ -579,9 +579,9 @@ func (e *Engine) parentSchema(ctx context.Context, job *fixJob, from, to string,
 func (e *Engine) endParentMerged(ctx context.Context, job *fixJob) {
 	e.endFixState(ctx, job)
 	m := job.merged
-	why := fmt.Sprintf("merged %s at %s with no conflict: the head is %s", m.base, textx.ShortSHA(m.sha), textx.ShortSHA(job.head))
+	why := fmt.Sprintf("merged %s at %s with no conflict: the head is %s", m.Base, textx.ShortSHA(m.SHA), textx.ShortSHA(job.head))
 	data := job.eventData()
-	data["merged_base"], data["merged_sha"], data["head"] = m.base, m.sha, job.head
+	data["merged_base"], data["merged_sha"], data["head"] = m.Base, m.SHA, job.head
 	e.event(ctx, "info", job.subject(), "fix.ended", "the merge of the parent ends: "+why, data)
 	title := fmt.Sprintf("magnum: merged the parent of %s#%d", job.repo.Name, job.pr.Number)
 	e.info(notify.Item{Key: fmt.Sprintf("parent-merged:%d:%s", job.pr.ID, job.head), Title: title, Body: job.pr.URL + "\n" + why,
@@ -637,12 +637,12 @@ func withParentRefused(msg string, job *fixJob) string {
 // App also names the grant and `magnum merge-parent`.
 func (j *fixJob) mergeByHand(why string) string {
 	what := "merge it on GitHub (Update branch)"
-	if c := j.conflict; c.sha != "" {
-		paths := strings.Join(c.paths[:min(3, len(c.paths))], ", ")
-		if more := len(c.paths) - 3; more > 0 {
+	if c := j.conflict; c.SHA != "" {
+		paths := strings.Join(c.Paths[:min(3, len(c.Paths))], ", ")
+		if more := len(c.Paths) - 3; more > 0 {
 			paths += fmt.Sprintf(" and %d more", more)
 		}
-		what = fmt.Sprintf("merge %s into %s by hand and resolve %s (GitHub offers no Update branch on a conflict)", c.base, deref(j.pr.HeadRef), paths)
+		what = fmt.Sprintf("merge %s into %s by hand and resolve %s (GitHub offers no Update branch on a conflict)", c.Base, deref(j.pr.HeadRef), paths)
 	}
 	if strings.Contains(why, needsWorkflowsWords) {
 		what += fmt.Sprintf(", or grant Workflows on the App and run `magnum merge-parent %s` again", j.label())
@@ -733,10 +733,10 @@ func (e *Engine) requestMerge(ctx context.Context, pr store.PR, dry bool, asked 
 // fixer-app[bot]".
 func (j *fixJob) mergeWords(login string) string {
 	branch := deref(j.pr.HeadRef)
-	if c := j.conflict; c.sha != "" {
-		return fmt.Sprintf("%s %s into %s as %s", j.role.Name, c.words(), branch, login)
+	if c := j.conflict; c.SHA != "" {
+		return fmt.Sprintf("%s %s into %s as %s", j.role.Name, c.Words(), branch, login)
 	}
-	return fmt.Sprintf("magnum merges %s at %s into %s as %s, with no conflict", j.behind.base, textx.ShortSHA(j.behind.sha), branch, login)
+	return fmt.Sprintf("magnum merges %s at %s into %s as %s, with no conflict", j.behind.Base, textx.ShortSHA(j.behind.SHA), branch, login)
 }
 
 // prepareMerge decides whether a merge of pr's parent may start, as
@@ -822,8 +822,8 @@ func (e *Engine) prepareMerge(ctx context.Context, pr store.PR, fetch bool) (*fi
 		return nil, "", fmt.Errorf("%s: %w", label, err)
 	}
 	job := &fixJob{repo: repo, watch: *w, pool: e.cfg.PoolFor(full), pr: pr, slot: slot, role: role, head: pr.HeadSHA,
-		round: e.lastRound(ctx, pr), conflict: c, forMerge: c.sha != "", mode: FixModeMerge, state: FixState{Cap: 1, Mode: FixModeMerge}}
-	if c.sha == "" {
+		round: e.lastRound(ctx, pr), conflict: c, forMerge: c.SHA != "", mode: FixModeMerge, state: FixState{Cap: 1, Mode: FixModeMerge}}
+	if c.SHA == "" {
 		probe := *job
 		if !has {
 			probe.slot.Path = e.cloneOf(repo)
@@ -832,7 +832,7 @@ func (e *Engine) prepareMerge(ctx context.Context, pr store.PR, fetch bool) (*fi
 		switch {
 		case err != nil:
 			return nil, "", fmt.Errorf("%s: its merge with %s could not be checked: %w", label, deref(pr.BaseRef), err)
-		case b.sha == "":
+		case b.SHA == "":
 			return nil, fmt.Sprintf("nothing to merge: %s has the tip of %s already", label, deref(pr.BaseRef)), nil
 		}
 		job.behind = b

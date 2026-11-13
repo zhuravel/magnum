@@ -87,9 +87,9 @@ func (p MergePlan) result() (string, error) {
 // and the tip of its base it conflicts with (and in how many files), else
 // the tip it lacks and merges cleanly.
 func (j *fixJob) planned(at time.Time) MergeAsked {
-	a := MergeAsked{Head: j.head, Base: j.behind.base, Tip: j.behind.sha, At: at.UTC()}
-	if c := j.conflict; c.sha != "" {
-		a.Base, a.Tip, a.Conflicts = c.base, c.sha, len(c.paths)
+	a := MergeAsked{Head: j.head, Base: j.behind.Base, Tip: j.behind.SHA, At: at.UTC()}
+	if c := j.conflict; c.SHA != "" {
+		a.Base, a.Tip, a.Conflicts = c.Base, c.SHA, len(c.Paths)
 	}
 	return a
 }

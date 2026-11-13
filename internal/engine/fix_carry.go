@@ -48,8 +48,8 @@ func carryOn(carried []FixCarry, report string, needs []string, answered map[str
 func answeredOf(entries []string, answered map[string]bool) []string {
 	var out []string
 	for _, entry := range entries {
-		if n, ok := readNeedsYouEntry(entry); ok && n.id != "" && answered[n.id] && !slices.Contains(out, n.id) {
-			out = append(out, n.id)
+		if n, ok := readNeedsYouEntry(entry); ok && n.ID != "" && answered[n.ID] && !slices.Contains(out, n.ID) {
+			out = append(out, n.ID)
 		}
 	}
 	slices.Sort(out)
@@ -81,8 +81,8 @@ func carriedLeft(carried []FixCarry, report string, entries []string, took later
 	}
 	asked := map[string]bool{}
 	for _, entry := range entries {
-		if n, ok := readNeedsYouEntry(entry); ok && n.id != "" {
-			asked[n.id] = true
+		if n, ok := readNeedsYouEntry(entry); ok && n.ID != "" {
+			asked[n.ID] = true
 		}
 	}
 	x, handed := readExternalFile(filepath.Dir(report))
@@ -94,15 +94,15 @@ func carriedLeft(carried []FixCarry, report string, entries []string, took later
 			switch {
 			case !ok:
 				return false
-			case n.id != "" && asked[n.id]:
+			case n.ID != "" && asked[n.ID]:
 				return true
-			case n.place == conflictPlace:
+			case n.Place == conflictPlace:
 				return took.base
-			case n.place == "description":
+			case n.Place == "description":
 				return took.description
 			case !handed:
 				return false
-			case n.place == remarkReview, n.place == remarkComment:
+			case n.Place == remarkReview, n.Place == remarkComment:
 				return x.heldOpen(n)
 			}
 			magnums, known := owners.owner(n)
@@ -121,13 +121,13 @@ func carriedLeft(carried []FixCarry, report string, entries []string, took later
 // review body or comment of its id and kind, unanswered or holding the
 // author's decision, and not waiting for the author.
 func (x externalItems) heldOpen(n needsYouEntry) bool {
-	id, err := strconv.ParseInt(n.id, 10, 64)
+	id, err := strconv.ParseInt(n.ID, 10, 64)
 	if err != nil {
 		return false
 	}
-	if n.place == remarkReview || n.place == remarkComment {
+	if n.Place == remarkReview || n.Place == remarkComment {
 		return slices.ContainsFunc(x.Conversation, func(r externalRemark) bool {
-			return r.ID == id && r.Kind == n.place && !r.Answered && !r.Waits
+			return r.ID == id && r.Kind == n.Place && !r.Answered && !r.Waits
 		})
 	}
 	return slices.ContainsFunc(x.Threads, func(t externalThread) bool {
@@ -174,7 +174,7 @@ func (e *Engine) carriedCallTimes(ctx context.Context, job *fixJob) map[int64]ti
 		}
 		for _, entry := range c.NeedsYou {
 			n, ok := readNeedsYouEntry(entry)
-			if id, err := strconv.ParseInt(n.id, 10, 64); ok && err == nil {
+			if id, err := strconv.ParseInt(n.ID, 10, 64); ok && err == nil {
 				if _, seen := out[id]; !seen {
 					out[id] = at
 				}
@@ -210,14 +210,14 @@ func loopCalls(carried []FixCarry, entries []string, answered map[string]bool, r
 		calls = slices.DeleteFunc(calls, func(c attention.FixCall) bool { return c.Thread != "" && seen[c.Thread] })
 		left = slices.DeleteFunc(left, func(entry string) bool {
 			n, ok := readNeedsYouEntry(entry)
-			return ok && n.id != "" && seen[n.id]
+			return ok && n.ID != "" && seen[n.ID]
 		})
 		for _, c := range calls {
 			seen[c.Thread] = c.Thread != "" || seen[c.Thread]
 		}
 		for _, entry := range left {
-			if n, ok := readNeedsYouEntry(entry); ok && n.id != "" {
-				seen[n.id] = true
+			if n, ok := readNeedsYouEntry(entry); ok && n.ID != "" {
+				seen[n.ID] = true
 			}
 		}
 		parts[i] = part{calls: calls, left: left}

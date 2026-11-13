@@ -427,46 +427,6 @@ func TestCIDispatchReRunsARunThatStartedNoJobAndDispatchesAHeadWithNone(t *testi
 	h2.wantOpen(OpenWaits, "CI at a1a1a1a: magnum started ci.yml at ")
 }
 
-// The re-run waits for the end of `magnum pause` and for the GitHub budget
-// of the identity it re-runs as (the poll identity's, f.low, and
-// ci_dispatch_as's, f.ciLow), as a start does, and so does the read of
-// the head's runs for the budget; without either, the verdict asks the
-// look to read, then to re-run.
-func TestTheReRunWaitsForThePauseAndTheBudget(t *testing.T) {
-	f := idleFacts()
-	f.ci = openCI{missing: []string{"build"}}
-	v, _, _ := decideOpen(f)
-	if !v.ReadRuns || v.Rerun {
-		t.Fatalf("verdict = %+v, want the read of the head's runs asked for", v)
-	}
-	f.low = true
-	v, _, _ = decideOpen(f)
-	wantVerdict(t, v, OpenWaits, "CI at a1a1a1a: required check build did not run; magnum reads the head's runs once the GitHub budget allows")
-	if v.ReadRuns {
-		t.Errorf("read asked for below the floor")
-	}
-	f.low = false
-	f.ciRerun = ciRerun{Head: fixHead, ReadAt: openNow.Add(-time.Minute),
-		Run: &ciNoJob{ID: liveRunID, Workflow: "ci.yml", Attempt: 1, Conclusion: "failure"}}
-	v, _, _ = decideOpen(f)
-	if !v.Rerun || v.ReadRuns || v.Verdict != OpenNeedsYou {
-		t.Fatalf("verdict = %+v, want the re-run asked for", v)
-	}
-	wantVerdict(t, v, OpenNeedsYou, "required check build did not run at a1a1a1a: magnum re-runs run 42673098082 of ci.yml")
-	f.pause, f.pauseUntil = "daemon paused", openNow.Add(time.Hour)
-	v, _, _ = decideOpen(f)
-	wantVerdict(t, v, OpenWaits, "CI at a1a1a1a: required check build did not run; magnum re-runs run 42673098082 of ci.yml once the pause ends")
-	if v.Rerun || !v.Until.Equal(f.pauseUntil) {
-		t.Errorf("rerun %v, until %s under the pause", v.Rerun, v.Until)
-	}
-	f.pause, f.pauseUntil, f.ciLow = "", time.Time{}, true
-	v, _, _ = decideOpen(f)
-	wantVerdict(t, v, OpenWaits, "CI at a1a1a1a: required check build did not run; magnum re-runs run 42673098082 of ci.yml once the GitHub budget allows")
-	if v.Rerun {
-		t.Errorf("re-run asked for below the floor")
-	}
-}
-
 // Under `magnum pause` the look reads the head's runs but re-runs nothing,
 // and says so; the first look after `magnum resume` re-runs it. Below the
 // floor of the identity it reads as (the poll identity's, then

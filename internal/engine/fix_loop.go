@@ -24,7 +24,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -43,38 +42,6 @@ const AutofixBy = "autofix"
 
 // autofixBy is AutofixBy, as the engine names it.
 const autofixBy = AutofixBy
-
-// needsYouEntryRe reads a "## Needs you" entry's comment id, priority and
-// place ("2101 P1 app/models/offer.rb:42: <reason>"; "5485002407
-// description: <reason>" for the review body's "Description: ✗" finding,
-// which has the review's id and no priority; "4100 review: <reason>" and
-// "4100 comment: <reason>" for another reviewer's review body or comment of
-// the external file, fix_external.go), the place in plain path characters
-// only, so no control character or other text of the fixer's reaches a
-// message, and the words the fix skill starts the reason with: "fixed in
-// <sha>." (group 5: the commit) or "not fixed." (group 6), as fix_calls.go
-// reads them (readNeedsYouEntry). A conflict of the base merge that the
-// fixer aborted has no comment id: "conflict: app/a.rb, db/schema.rb:
-// <the decision it needs>" (group 4: the paths, plain path characters
-// joined by ", ", up to the colon). After "not fixed." the skill's fixed
-// words "The author's call" (group 7) mark a finding whose Fix left the
-// choice to the author. A CI fix's job it could not fix has the job's id
-// and the place `ci` ("129341926468 ci: not fixed. flaky: <reason>"), and
-// after "not fixed." its class word (group 8: flaky, infra, secret, config,
-// base or unfixed; skills/magnum-fix/SKILL.md, section 8). The reason is
-// the fixer's own words about the PR, so it is never read.
-var needsYouEntryRe = regexp.MustCompile(`^(?:(\d{1,20}) +(?:(P[0-3]) +)?([A-Za-z0-9._/@+-]+:\d{1,9}|description|review|comment|` + ciPlace + `)(?::|\s|$)` +
-	`|` + conflictPlace + `: +([A-Za-z0-9._/@+-]+(?:, *[A-Za-z0-9._/@+-]+)*)(?::|$))` +
-	`(?:\s*(?i:fixed in ([0-9a-f]{7,40})|(not fixed))(?:[.,;:]|\s|$)` +
-	`(?:\s*(?:(?i:(the author's call))|(flaky|infra|secret|config|base|unfixed))(?:[.,;:]|\s|$))?)?`)
-
-// ciPlace is the place of a "## Needs you" entry for a CI fix's job
-// (needsYouEntryRe).
-const ciPlace = "ci"
-
-// conflictPlace is the place of a "## Needs you" entry for a conflict of the
-// base merge (needsYouEntryRe), which has no comment id.
-const conflictPlace = "conflict"
 
 // fixAfterRound decides what the end of a review round (rj, as dispatch
 // launched it) means for the PR's fix loop: a loop waiting for this
@@ -773,7 +740,7 @@ func needsYourCall(entries []string, report string) string {
 func needYourCall(entries []string) string {
 	conflicts := 0
 	for _, entry := range entries {
-		if n, ok := readNeedsYouEntry(entry); ok && n.place == conflictPlace {
+		if n, ok := readNeedsYouEntry(entry); ok && n.Place == conflictPlace {
 			conflicts++
 		}
 	}
@@ -802,7 +769,7 @@ func needsYouNames(entries []string) []string {
 			other++
 			continue
 		}
-		names = append(names, n.name())
+		names = append(names, n.Name())
 	}
 	if other > 0 {
 		names = append(names, textx.Count(other, "entry", "entries")+" magnum could not read")
