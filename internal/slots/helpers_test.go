@@ -286,7 +286,7 @@ func schemaRB(v string) string {
 // the process-wide git environment, so tests need no t.Setenv).
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	t.Parallel()
+	storetest.Parallel(t) // a test that changes the whole process calls storetest.Serial first
 	fx := fixtures(t).talkable
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {

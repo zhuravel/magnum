@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"path/filepath"
 	"regexp"
@@ -105,6 +106,10 @@ type call struct {
 	env map[string]string
 	// stdin is written to git (cat-file --batch's object names).
 	stdin []byte
+	// stdout, when set, gets what git writes on stdout as it writes it,
+	// and the result keeps none of it (its stderr is kept as always):
+	// output the caller bounds itself (DiffHeadWrite's patch).
+	stdout io.Writer
 }
 
 // git runs `git -C dir args...`. Errors are wrapped with the label and keep the
@@ -148,6 +153,11 @@ func gitCommand(dir string, k call, args []string) execx.Cmd {
 	}
 	if k.noExit != 0 {
 		cmd.Expected = func(r execx.Result) bool { return r.Code == k.noExit }
+	}
+	if k.stdout != nil {
+		// stderr stays out of the stream; the capture keeps stdout's last
+		// byte alone, not a copy of up to execx.MaxOutput.
+		cmd.Stream, cmd.StreamErr, cmd.KeepTail = k.stdout, io.Discard, 1
 	}
 	// -C is resolved against the process cwd, so only an absolute dir may also
 	// become Dir (a relative one would be applied twice).

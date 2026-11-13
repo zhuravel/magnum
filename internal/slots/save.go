@@ -7,7 +7,7 @@ package slots
 // with --force), saveChanges writes what the tree holds to a folder of its
 // own, in the folder of the PR the slot holds (savesFolder):
 //   - changes.diff, the binary patch of the tracked changes against HEAD
-//     (gitx.DiffHeadTo), which `git apply` puts back on a checkout at that
+//     (gitx.DiffHeadWrite), which `git apply` puts back on a checkout at that
 //     HEAD;
 //   - untracked/, for a removal alone, each untracked file git does not
 //     ignore at its path, but the local mise file magnum rendered: a
@@ -226,18 +226,20 @@ func (c changes) patchPaths() []string {
 
 // savePatch writes the patch of the tracked changes of the tree at tree
 // against HEAD to the save's changes.diff, at most budget bytes, and
-// returns its size. A patch past budget is written path by path (paths),
-// each that still fits, and the paths left out are named in s.
+// returns its size; git is stopped at the cap (diffTo), so no more than
+// budget bytes of it are written. A patch past budget is written path by
+// path (paths), each that still fits, and the paths left out are named in
+// s.
 func (m *Manager) savePatch(ctx context.Context, tree, dir string, paths []string, budget int64, s *saved) (int64, error) {
 	part, final := filepath.Join(dir, saveDiff+".part"), filepath.Join(dir, saveDiff)
-	size, err := m.diffTo(ctx, tree, part)
-	if err != nil {
-		return 0, err
-	}
+	size, over, err := m.diffTo(ctx, tree, part, budget)
 	switch {
+	case err != nil:
+		return 0, err
+	case over:
 	case size == 0: // a submodule's untracked content: a change git diff writes nothing for
 		return 0, os.Remove(part)
-	case size <= budget:
+	default:
 		s.tracked = len(paths)
 		return size, os.Rename(part, final)
 	}
@@ -248,14 +250,19 @@ func (m *Manager) savePatch(ctx context.Context, tree, dir string, paths []strin
 	defer out.Close()
 	var used int64
 	for _, p := range paths {
-		size, err := m.diffTo(ctx, tree, part, p)
+		left := budget - used
+		if left < int64(2*len(p)+len("diff --git a/ b/\n")) { // not even its patch's first line fits
+			s.skipped = append(s.skipped, p+" (past the cap)")
+			continue
+		}
+		size, over, err := m.diffTo(ctx, tree, part, left, p)
 		switch {
 		case err != nil:
 			return 0, err
-		case size == 0:
+		case over:
+			s.skipped = append(s.skipped, fmt.Sprintf("%s (over %s of patch, past the cap)", p, sizeWord(left)))
 			continue
-		case used+size > budget:
-			s.skipped = append(s.skipped, fmt.Sprintf("%s (%s of patch, past the cap)", p, sizeWord(size)))
+		case size == 0:
 			continue
 		}
 		if err := appendFile(out, part); err != nil {
@@ -277,24 +284,64 @@ func (m *Manager) savePatch(ctx context.Context, tree, dir string, paths []strin
 }
 
 // diffTo writes the patch of paths (none: every tracked change) of the
-// tree at tree against HEAD to file, private, and returns its size.
-func (m *Manager) diffTo(ctx context.Context, tree, file string, paths ...string) (int64, error) {
-	// git keeps the mode of the file it truncates.
+// tree at tree against HEAD to file, private, at most limit bytes, and
+// returns its size: git writes it into a pipe (gitx.DiffHeadWrite), which
+// this reads into file. Past limit it stops git and says over (file then
+// holds no patch). A write to file that fails (a full disk) is an error,
+// so a patch cut short never counts as whole: git's own --output ignored
+// its write errors and exited 0.
+func (m *Manager) diffTo(ctx context.Context, tree, file string, limit int64, paths ...string) (size int64, over bool, err error) {
 	f, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	if err := f.Close(); err != nil {
-		return 0, err
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
+	w := &cappedWriter{w: f, limit: limit, stop: stop}
+	err = m.git.DiffHeadWrite(ctx, tree, w, paths...)
+	if cerr := f.Close(); w.err == nil {
+		w.err = cerr
 	}
-	if err := m.git.DiffHeadTo(ctx, tree, file, paths...); err != nil {
-		return 0, err
+	switch {
+	case w.err != nil:
+		return 0, false, w.err
+	case w.over:
+		return 0, true, nil
+	case err != nil:
+		return 0, false, err
 	}
-	fi, err := os.Stat(file)
+	return w.n, false, nil
+}
+
+// cappedWriter writes to w at most limit bytes. Past them, or at w's first
+// failed write, it writes nothing more, says why (over, err) and calls stop,
+// which ends the writer's source (git). It takes every write, so its
+// source never blocks on it.
+type cappedWriter struct {
+	w     io.Writer
+	limit int64
+	stop  func()
+	n     int64
+	over  bool
+	err   error
+}
+
+func (c *cappedWriter) Write(p []byte) (int, error) {
+	if c.over || c.err != nil {
+		return len(p), nil
+	}
+	if c.n+int64(len(p)) > c.limit {
+		c.over = true
+		c.stop()
+		return len(p), nil
+	}
+	n, err := c.w.Write(p)
+	c.n += int64(n)
 	if err != nil {
-		return 0, err
+		c.err = err
+		c.stop()
 	}
-	return fi.Size(), nil
+	return len(p), nil
 }
 
 // appendFile appends the file at name to out.

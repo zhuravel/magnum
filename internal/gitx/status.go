@@ -3,6 +3,7 @@ package gitx
 import (
 	"context"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 
@@ -156,17 +157,18 @@ func (c *Client) DiffHead(ctx context.Context, dir string, paths ...string) ([]b
 	return res.Stdout, nil
 }
 
-// DiffHeadTo writes the binary patch of the work tree at dir against HEAD
-// to file, an absolute path git creates or truncates, as DiffHead makes it
-// but with no rename pairs (`git diff --binary --no-renames HEAD`): a
-// deletion and an addition each patch their own path, so the patch of one
-// path is that path's alone. paths are taken literally from the top; none
-// is every tracked change. Nothing bounds it but the disk: the caller reads
-// its size. It reads the work tree only and does not take the index lock.
-func (c *Client) DiffHeadTo(ctx context.Context, dir, file string, paths ...string) error {
-	if err := checkAbsPath(file); err != nil {
-		return fmt.Errorf("gitx: diff HEAD: %w", err)
-	}
+// DiffHeadWrite writes the binary patch of the work tree at dir against
+// HEAD to out as git writes it on stdout, as DiffHead makes it but with no
+// rename pairs (`git diff --binary --no-renames HEAD`): a deletion and an
+// addition each patch their own path, so the patch of one path is that
+// path's alone. paths are taken literally from the top; none is every
+// tracked change. Nothing of the patch is kept in memory and nothing
+// bounds it: out does, and a caller that wants git to stop cancels ctx
+// (git then ends with an error; its writes to out stop counting). out's
+// write errors are its own to keep: the stream ignores them, and git
+// writes on. It reads the work tree only and does not take the index
+// lock.
+func (c *Client) DiffHeadWrite(ctx context.Context, dir string, out io.Writer, paths ...string) error {
 	var specs []string
 	if len(paths) > 0 {
 		var err error
@@ -174,9 +176,9 @@ func (c *Client) DiffHeadTo(ctx context.Context, dir, file string, paths ...stri
 			return fmt.Errorf("gitx: diff HEAD: %w", err)
 		}
 	}
-	_, err := c.git(ctx, dir, call{label: "diff --binary HEAD --output", timeout: worktreeTimeout},
+	_, err := c.git(ctx, dir, call{label: "diff --binary HEAD", timeout: worktreeTimeout, stdout: out},
 		append([]string{"diff", "--binary", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/",
-			"--dst-prefix=b/", "--output=" + file, "HEAD", "--"}, specs...)...)
+			"--dst-prefix=b/", "HEAD", "--"}, specs...)...)
 	return err
 }
 
