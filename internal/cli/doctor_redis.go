@@ -39,7 +39,7 @@ func doctorRedis(ctx context.Context, d doctorDeps) []doctorCheck {
 	var out []doctorCheck
 	for _, r := range d.Config.Factory.Repos {
 		if r.UsesRedis() {
-			made := factory.LastCopyMade(r, made[r.Repo])
+			made := factory.LastCopyMade(r, made[strings.ToLower(r.Repo)])
 			out = append(out, doctorRedisRepo(ctx, d, r, redisCopies{last: max(r.LastCopy(), made), made: made, unread: unread}))
 		}
 	}
@@ -157,8 +157,10 @@ func redisNeed(r config.FactoryRepo, last int) string {
 }
 
 // factoryCopiesMade lists the names of the pool slots in the factory's
-// agents store at path by repository (owner/name): the copies its claims
-// made, read-only. None when the store does not exist.
+// agents store at path by repository (owner/name, lower case: the store
+// matches repo_full_name without case, so the factory claims a copy made
+// under another case of the key's name): the copies its claims made,
+// read-only. None when the store does not exist.
 func factoryCopiesMade(ctx context.Context, path string) (map[string][]string, error) {
 	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -183,7 +185,8 @@ func factoryCopiesMade(ctx context.Context, path string) (map[string][]string, e
 		if err := rows.Scan(&repo, &name); err != nil {
 			return nil, err
 		}
-		out[repo] = append(out[repo], name)
+		key := strings.ToLower(repo)
+		out[key] = append(out[key], name)
 	}
 	return out, rows.Err()
 }

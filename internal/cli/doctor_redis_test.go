@@ -207,6 +207,39 @@ func TestDoctorOffersLowerKeysOnlyWhileNoCopyPastTheRedisExists(t *testing.T) {
 	}
 }
 
+// The copies made count whatever the case of the repository's name: the
+// factory claims a copy made as Talkable/Talkable once the key reads
+// talkable/talkable (the store matches repo_full_name without case), so
+// its Redis offset counts too. Doctor matched the name with case and gave
+// a PASS on 64 databases while copies 4 and 5 failed their flush (C6 of
+// T3b's third check).
+func TestDoctorCountsTheCopiesMadeWhateverTheRepositorysCase(t *testing.T) {
+	_, d, _, _ := doctorFixture(t)
+	fake := d.Run.(*execx.Fake)
+	cfg := *d.Config
+	cfg.Factory.Repos = redisRepos()[:1]
+	cfg.Factory.Repos[0].FixCopies = 0
+	d.Config = &cfg
+	fake.Rules = append([]execx.Rule{
+		{Prefix: []string{"redis-cli", "-h", "127.0.0.1"}, Result: execx.Result{Stdout: []byte("databases\n64\n")}},
+	}, fake.Rules...)
+	st := storetest.OpenFile(t, d.Layout.FactoryAgentsDB())
+	for _, n := range []string{"factory4", "factory5"} {
+		if _, err := st.CreateSlot(context.Background(), store.Slot{Name: n, RepoFullName: "Talkable/Talkable", Kind: store.SlotKindPool,
+			Path: "/p/talkable." + n, MainClone: "/p/main", State: store.SlotFree}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checks := doctorRun(context.Background(), d)
+	i := slices.IndexFunc(checks, func(c doctorCheck) bool { return c.Name == "redis talkable/talkable" })
+	if i < 0 {
+		t.Fatal("no redis check of talkable/talkable")
+	}
+	if c := checks[i]; c.Status != doctorFail || !strings.Contains(c.Detail, "need 96") {
+		t.Fatalf("talkable with copies 4 and 5 made as Talkable/Talkable, on a Redis with 64 = %+v, want a FAIL naming 96", c)
+	}
+}
+
 // A redis-cli that is not on PATH is no Redis that does not answer: doctor
 // names redis-cli and says how to install it, never to start a Redis that
 // runs, and fails where the copies' claims flush their Redis databases with
