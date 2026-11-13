@@ -26777,6 +26777,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestASendFreshWaitsForTheDrain`, `TestStartOverWaitsForTheDrain`,
   and `TestARunThatEndsAfterARestartVoidsItsWait`. In internal/execx: `TestARunASignalEndedReportsTheSignal`.
   In internal/config: `TestFactoryFixGoOnIsTwoByDefaultAndBounded`.
+- **The stops' follow-ups: a lint row git cannot place, stylelint's syntax rows, every line of an unnamed
+  failure** (2026-11-13). The engine owner's last check of the entry above listed three P3s, and the operator
+  wants follow-ups done, not parked. When git cannot tell whether a lint row's file is tracked (`trackedFile`'s
+  ls-tree fails), the report is one the factory cannot read (`lintRun.unreadable`): the writer's, unnamed, with
+  no crash path and no fault step. Before, such a row counted as tracked, so a gem's warning under the copy
+  plus a git failure still let a crashed lint pass. stylelint's `CssSyntaxError` row in a file the change
+  touched is fatal whatever its line, as eslint's `Parsing error` and RuboCop's `Lint/Syntax` are (`fatalRow`).
+  An unnamed failure with no error line of its own is keyed on every meaningful line it prints, each once and
+  at most `maxFailingLines` (100), not on its first line alone. So a lint whose c.js the writer fixed while
+  a.js still fails shows progress. Its why names the first 3 and how many more (`failingWords`). Tests,
+  failing first: `TestARowGitCannotPlaceMakesTheReportUnreadable`,
+  `TestAStylelintSyntaxRowOfATouchedFileIsTheWriters` and `TestEveryLineOfAnUnnamedFailureIsItsKey` in
+  internal/factory.
 
 ## Learned rules
 

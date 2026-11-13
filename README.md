@@ -4688,9 +4688,11 @@ stages = [
   unix`); a lint that exits non-zero naming no offense that way fails. An offense in a file outside the copy, or in
   one git does not track there, is none (a gem's under `vendor/bundle`, a warning Ruby prints for a file it
   loads); a lint's absolute path is read through the copy's symlinks too. A row of a file git tracks in the
-  copy, or of one the lint was given, counts whatever its shape, gcc's `path:line:col: warning: …` too. A fatal row of a file the
-  change touched is the writer's whatever its line: eslint's `Parsing error` or its `0:0` error (never a `0:0`
-  warning such as `File ignored …`), RuboCop's `F:` severity or `Lint/Syntax`. The specs command's failures are read
+  copy, or of one the lint was given, counts whatever its shape, gcc's `path:line:col: warning: …` too. When git
+  cannot tell whether a row's file is tracked, the report is one the factory cannot read: the writer's. A fatal
+  row of a file the change touched is the writer's whatever its line: eslint's `Parsing error` or its `0:0`
+  error (never a `0:0` warning such as `File ignored …`), RuboCop's `F:` severity or `Lint/Syntax`, and
+  stylelint's `CssSyntaxError`. The specs command's failures are read
   as rspec lists them (`rspec ./spec/x_spec.rb:12 # what it says`): a red one is run again on the base, and
   one red there too is recorded as not the change's (`not_ours`) and passes. The proof runs its spec files
   with `specs` (with `jest` when every one is JavaScript). A precheck stops at its cap, which grows with the
@@ -4747,9 +4749,9 @@ stages = [
   a lint's sign on a change that touches what the lint loads (its configuration, its cops, the gems and
   packages). eslint's stylish report and stylelint's, whose rows of `line:column` sit under the line that names
   their file, are read by the changed lines as `path:line` offenses are. A failure no example or offense names is
-  read the same on every run (the error's own line or a missed coverage threshold, past rspec's seed, its
-  progress and timing and a coverage table, and yarn's footer; hex addresses as `0x?`), so the writer's progress
-  shows, but you cannot accept it as known. Neither can you accept a lint's crash, sign or hang, nor a jest run
+  read the same on every run (the error's own lines or a missed coverage threshold, else every line that may say
+  why, each once, past rspec's seed, its progress and timing and a coverage table, and yarn's footer; hex
+  addresses as `0x?`), so the writer's progress shows, a line that goes included, but you cannot accept it as known. Neither can you accept a lint's crash, sign or hang, nor a jest run
   that names only its summary (`Tests: 1 failed, …`) or its own banners (`● Validation Warning:`). Only a failure that names its examples, tests or offenses
   can be accepted, keyed on those names: a lint's offense by its file, its cop or rule and its message, never its
   line and column, with the counts in its message read as any (a complexity score; the 121 of `[121/120]`,
