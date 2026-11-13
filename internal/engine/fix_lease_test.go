@@ -9,6 +9,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factoryread"
+	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -143,10 +144,53 @@ func TestTheFactorysFixerHoldsTheRoundAndRefusesAReview(t *testing.T) {
 	if r := h.request(review); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "the factory fixes it (cycle 1 of 3, its fixer at work") {
 		t.Errorf("magnum review: %s %q", r.State, deref(r.Result))
 	}
-	lease.set(FixLease{Fixing: true, Phase: FixPhaseReviewing, Head: "b2", Cycle: 1, Cap: 3}, nil)
+	// The lease of a loop waiting for its re-review, as factoryread reads it.
+	lease.set(leaseFromFactory(factoryread.Lease{Phase: registry.PRWorkReviewing, Head: "b2", Cycle: 1, Cap: 3}, time.Time{}), nil)
 	h.tick()
 	if got := len(h.rd.all()); got != rounds+1 {
 		t.Errorf("rounds = %d, want %d: the re-review of the factory's push runs", got, rounds+1)
+	}
+}
+
+// While the factory waits for magnum's re-review of its push (its lease in
+// phase reviewing, as factoryread reads it: no fixer at work), `magnum
+// review` is refused, and so it is while the factory's re-review waits in
+// line (forced, its fix kept), whatever the lease says: the operator's
+// review would take its place and drop its fix. The factory's round then
+// runs and names the fix.
+func TestMagnumReviewIsRefusedWhileTheFactoryWaitsForItsReReview(t *testing.T) {
+	lease := &fakeLease{}
+	lease.set(leaseFromFactory(factoryread.Lease{Phase: registry.PRWorkReviewing, Head: "b2", Cycle: 1, Cap: 3, Worked: true}, time.Time{}), nil)
+	h := leaseHarness(t, lease)
+	pr := h.pr(2)
+	rounds := len(h.rd.all())
+	review := func() store.Request {
+		t.Helper()
+		id := h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}})
+		h.handle()
+		return h.request(id)
+	}
+	if r := review(); r.State != store.RequestFailed ||
+		!strings.Contains(deref(r.Result), "the factory fixes it (cycle 1 of 3, waiting for the re-review of its push at b2)") {
+		t.Errorf("magnum review while the factory waits in reviewing: %s %q", r.State, deref(r.Result))
+	}
+	ref := fixwork.FixRef{Work: 7, Cycle: 1, Head: "b2"}
+	if r := h.reReviewOf(ref); r.State != store.RequestDone {
+		t.Fatalf("the factory's re-review: %s %q", r.State, deref(r.Result))
+	}
+	lease.set(FixLease{}, nil) // a lease that says nothing: the fix in line still refuses
+	if r := review(); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "the factory's re-review of its push of b2 (cycle 1) waits in line") {
+		t.Errorf("magnum review while the factory's re-review waits: %s %q", r.State, deref(r.Result))
+	}
+	if kept, raw := h.e.fixRefOf(h.ctx, pr.ID); kept == nil || kept.FixRef != ref {
+		t.Fatalf("the factory's fix = %s, want %+v kept", raw, ref)
+	}
+	h.tick()
+	if got := len(h.rd.all()); got != rounds+1 {
+		t.Fatalf("rounds = %d, want %d: the factory's re-review runs", got, rounds+1)
+	}
+	if ev, ok := h.fixEvent("fix.factory_round"); !ok || !strings.Contains(ev.Message, "the re-review of the factory's push of b2 (cycle 1)") {
+		t.Errorf("fix.factory_round = %+v, %v", ev, ok)
 	}
 }
 

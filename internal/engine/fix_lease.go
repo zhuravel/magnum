@@ -109,6 +109,13 @@ type leaseView struct {
 // in any phase).
 func (v leaseView) fixing() bool { return v.owned && v.err == nil && v.lease.Fixing }
 
+// reviewing reports whether the factory's loop waits for magnum's re-review
+// of its push (phase reviewing, a lease that holds no agent, as factoryread
+// reads it).
+func (v leaseView) reviewing() bool {
+	return v.owned && v.err == nil && v.lease.Phase == FixPhaseReviewing
+}
+
 // holds reports whether the factory's fixer works on the PR (phase
 // fixing): its rounds wait.
 func (v leaseView) holds() bool { return v.fixing() && v.lease.Phase == FixPhaseFixing }
@@ -256,14 +263,21 @@ func (e *Engine) factoryWaitOf(ctx context.Context, pr store.PR) (Wait, bool) {
 }
 
 // factoryReviewRefusal is `magnum review`'s refusal of pr (label) while the
-// factory fixes it: its lease held, in any phase (its push's re-review is
-// the factory's own request), or a failed read within its grace, which it
+// factory fixes it: its fixer at work, or its loop waiting for the
+// re-review of its push (phase reviewing: that re-review is the factory's
+// own request), its re-review waiting in line (forced, its fix kept,
+// whatever the lease says: the operator's review would take its place and
+// drop its fix, keepFixRef), or a failed read within its grace, which it
 // records as dispatch does (noteLease). "" = it may review. With no reader
 // it refuses nothing.
 func (e *Engine) factoryReviewRefusal(ctx context.Context, pr store.PR, label string) string {
 	v, ok := e.leaseOf(ctx, pr)
 	if !ok {
 		return ""
+	}
+	if r, _ := e.fixRefOf(ctx, pr.ID); r != nil && pr.Forced {
+		return fmt.Sprintf("%s: the factory's re-review of its push of %s (cycle %d) waits in line; a review of yours would take its place",
+			label, textx.ShortSHA(r.FixRef.Head), r.FixRef.Cycle)
 	}
 	held := e.noteLease(ctx, pr, v)
 	switch {
@@ -274,7 +288,7 @@ func (e *Engine) factoryReviewRefusal(ctx context.Context, pr store.PR, label st
 		}
 		return fmt.Sprintf("%s: the factory's lease of it cannot be read (%s); ask again after %s, when magnum reviews it anyway",
 			label, leaseErrWords(v.err), waitClock(since.Add(fixLeaseGrace), e.now()))
-	case v.err == nil && v.fixing():
+	case v.fixing() || v.reviewing():
 		cycle := fmt.Sprintf("cycle %d", v.lease.Cycle)
 		if v.lease.Cap > 0 {
 			cycle = fmt.Sprintf("cycle %d of %d", v.lease.Cycle, v.lease.Cap)
