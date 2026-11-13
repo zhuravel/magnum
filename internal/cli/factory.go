@@ -275,9 +275,10 @@ type factoryTaskJSON struct {
 	PRNumber  int       `json:"pr_number,omitempty"`
 	Updated   time.Time `json:"updated"`
 	// HeldBy is the hold of the running factory daemon that stops the task's
-	// next step, for an active task that names no wait of its own (a hold that
-	// stops every stage: herdr's, the machine's infrastructure hold); none
-	// for any other.
+	// next step, for an active task that names no wait of its own
+	// (factory.StoppingHold): a hold that stops every stage (herdr's, the
+	// machine's infrastructure hold), else a drain (`magnum factory install
+	// --drain`'s, the one for a reboot); none for any other.
 	HeldBy *factoryHoldJSON `json:"held_by,omitempty"`
 }
 
