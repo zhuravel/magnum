@@ -15554,8 +15554,9 @@ func ReadHolds(l paths.Layout) ([]Hold, error)
 func StoppingHold(hs []Hold, t registry.Task) (Hold, bool)
     StoppingHold is the hold in hs that stops the next step of task t: t is a
     task the loop advances (active, or waiting) that names no wait of its own.
-    false for a task with one, and for a task the loop leaves alone (it needs
-    you, it is published, it ended).
+    A hold that stops every stage comes first, then a drain (isDrain). false
+    for a task with a wait, and for a task the loop leaves alone (it needs you,
+    it is published, it ended).
 
 func (h Hold) StopsEveryStage() bool
     StopsEveryStage reports whether hold h stops the next step of every task:

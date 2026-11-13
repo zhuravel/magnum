@@ -8,11 +8,15 @@ package factory
 // printed "-" under WAITS ON for it and the screen drew the step it would
 // run, while the daemon held every stage and printed the hold above the
 // table. The hold is that task's wait now, in one place for the status
-// command and the screen: "held: MySQL does not answer (since 17:03)". A task
-// with a wait of its own keeps it, which is more specific; the holds that
-// stop launches (disk, memory) or one repository's copies, and the pause and
-// the drains, name themselves in the wait of the launch they stop (heldError),
-// since the tick still runs its stages.
+// command and the screen: "held: MySQL does not answer (since 17:03)". So are
+// the drains, `magnum factory install --drain`'s (HoldDrain) and the one for
+// a reboot (HoldReboot): the tick still runs the stages, but nothing new
+// starts, and what they hold back records no wait (a heldError of
+// holdRestart skips waitOn), so a task with none would show "-" for as long
+// as a reboot's drain lasts. A task with a wait of its own keeps it, which is
+// more specific; the holds that stop launches (disk, memory) or one
+// repository's copies, and the pause, name themselves in the wait of the
+// launch they stop (heldError).
 
 import (
 	"time"
@@ -31,17 +35,26 @@ func (h Hold) StopsEveryStage() bool {
 	return h.Repo == "" && (h.Kind == HoldInfra || h.Kind == HoldHerdr)
 }
 
+// isDrain reports whether hold h is a drain (HoldDrain, HoldReboot): nothing
+// new starts, and what it holds back records no wait of the task's.
+func (h Hold) isDrain() bool {
+	return h.Kind == HoldDrain || h.Kind == HoldReboot
+}
+
 // StoppingHold is the hold in hs that stops the next step of task t: t is a
 // task the loop advances (active, or waiting) that names no wait of its own.
-// false for a task with one, and for a task the loop leaves alone (it needs
+// A hold that stops every stage comes first, then a drain (isDrain). false
+// for a task with a wait, and for a task the loop leaves alone (it needs
 // you, it is published, it ended).
 func StoppingHold(hs []Hold, t registry.Task) (Hold, bool) {
 	if !isLive(t) || t.WaitsWho != "" || t.WaitsWhat != "" {
 		return Hold{}, false
 	}
-	for _, h := range hs {
-		if h.StopsEveryStage() {
-			return h, true
+	for _, stops := range []func(Hold) bool{Hold.StopsEveryStage, Hold.isDrain} {
+		for _, h := range hs {
+			if stops(h) {
+				return h, true
+			}
 		}
 	}
 	return Hold{}, false

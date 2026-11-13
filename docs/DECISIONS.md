@@ -27724,9 +27724,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   repository; a repository's hold holds its copies alone), `StoppingHold` picks the hold for a task (one the
   loop advances, active or waiting, with no `waits_who` and no `waits_what`) and `HoldWait` words it: who `held`,
   what `<reason> (since <time>)`, the date before the time unless it is today's. The disk and memory holds stop
-  launches, and the pause and the drains stop what starts; the tick still runs the stages, which name them in
-  the wait of the launch they stop (`heldError`), so they are no task's wait here. A task with a wait of its own
-  keeps it, which is more specific. `magnum factory status` prints the hold in the row (`held: MySQL does not
+  launches, and the pause stops what starts; the tick still runs the stages, which name them in the wait of the
+  launch they stop (`heldError`), so they are no task's wait here. The drains, `magnum factory install --drain`'s
+  (`HoldDrain`) and the one for a reboot (`HoldReboot`), are: the tick runs the stages, but nothing new starts and
+  what they hold back records no wait (a `heldError` of `holdRestart` skips `waitOn`), so a task with none would
+  show `-` for as long as a reboot's drain lasts. `StoppingHold` takes a hold that stops every stage first, then
+  a drain (`Hold.isDrain`), and under a drain `o` says `nothing runs: it waits on held: <reason> (since
+  <time>)`; the engine owner's review asked for it. A task with a wait of its own keeps it, which is more
+  specific. `magnum factory status` prints the hold in the row (`held: MySQL does not
   answer (since 17:03)`) and `--json` gives it as the task's `waits_who` and `waits_what`, so a reader of
   those two fields sees what the row says, and as `held_by` (`kind`, `reason`, `since`), so one who needs the
   registry's own empty wait can tell it from a wait. Only a running daemon's holds count, as for the header's
@@ -27744,11 +27749,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
   nothing runs: a local review round runs in magnum's review session (`no pane to open: it waits on review:
   round 2 of the local review runs`), a copy's claim runs before its log exists, and magnum reviews a published
   task's PR in its own daemon, none of them in a pane of the factory's (`TestOSaysNothingRunsOnlyWhereNothingDoes`).
-  A task whose agent is idle in a live pane is still stepped into, as before. The pause, the reboot drain and the restart's drain
-  stay out of this on purpose: a stage meets each where it launches and says it in its own wait, as it did.
+  A task whose agent is idle in a live pane is still stepped into, as before. The pause stays out of this on
+  purpose: a stage meets it where it launches and says it in its own wait, as it did; the drains are in it, since
+  they record none (`TestAnActiveTaskWithNoWaitShowsTheDrains`, status text and JSON, and
+  `TestTheScreenNamesTheDrainsOnATaskWithNoWait`).
   Tests, failing first: `TestAnActiveTaskWithNoWaitShowsTheDaemonsHold` (status text and JSON),
   `TestATasksOwnWaitWinsOverTheDaemonsHold`, `TestTheScreensOpenKeySaysWhyNothingOpens`, with
-  `TestTheScreenNamesTheDaemonsHoldOnATaskWithNoWait`, `TestOnlyAHoldThatStopsEveryStageIsATasksWait`,
+  `TestTheScreenNamesTheDaemonsHoldOnATaskWithNoWait`, `TestOnlyAHoldThatStopsEveryStageOrADrainIsATasksWait`,
   `TestTheTaskCardSaysWhyOOpensNothing` and `TestNoTaskNamesTheHoldOfAFactoryDaemonThatIsGone`. No migration.
 
 - **An infrastructure hold whose cause is MySQL tries at once when MySQL answers again** (2026-11-13). DBngin's

@@ -793,6 +793,10 @@ func (s *screen) opensNothing(v *taskView, row tui.FactoryRow) string {
 		return ""
 	}
 	if h, ok := StoppingHold(s.holds, v.t); ok {
+		if !h.StopsEveryStage() { // a drain: the stages run, but nothing new starts
+			who, what := HoldWait(h, s.now)
+			return "nothing runs: it waits on " + who + ": " + what
+		}
 		return fmt.Sprintf("nothing runs: the factory holds every stage (%s since %s)", h.Reason, holdClock(s.now, h.Since))
 	}
 	if len(row.WaitsOn) == 0 {

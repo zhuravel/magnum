@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -74,14 +75,14 @@ func TestTheScreenNamesTheDaemonsHoldOnATaskWithNoWait(t *testing.T) {
 
 // The holds that stop launches or one repository's copies, not every stage,
 // are no task's wait: the disk and the memory, a repository's infrastructure
-// hold, the pause and the drains name themselves where a stage meets them
-// (a launch's own wait), and with the daemon down no hold is in force.
-func TestOnlyAHoldThatStopsEveryStageIsATasksWait(t *testing.T) {
+// hold and the pause name themselves where a stage meets them (a launch's
+// own wait), and with the daemon down no hold is in force. The drains are a
+// task's wait (TestTheScreenNamesTheDrainsOnATaskWithNoWait).
+func TestOnlyAHoldThatStopsEveryStageOrADrainIsATasksWait(t *testing.T) {
 	r := newScreenRig(t)
 	r.task("PR-12393", "bug", "At its local review", registry.TaskActive, "local_review", "", "")
 	for _, h := range []Hold{{Kind: HoldDisk, Reason: "3.0 GB free"}, {Kind: HoldMemory, Reason: "swap 91% used"},
-		{Kind: HoldInfra, Repo: "example/talkable", Reason: "every copy broke"}, {Kind: HoldPause, Reason: "paused by you"},
-		{Kind: HoldDrain, Reason: "install: nothing new starts until the restart"}, {Kind: HoldReboot, Reason: "draining for a reboot"}} {
+		{Kind: HoldInfra, Repo: "example/talkable", Reason: "every copy broke"}, {Kind: HoldPause, Reason: "paused by you"}} {
 		h.Since = heldSince
 		r.holds(h)
 		if w := rowOf(t, r.data(screenNow), "PR-12393").WaitsOn; len(w) != 1 || w[0].Who != "magnum" {
@@ -96,6 +97,56 @@ func TestOnlyAHoldThatStopsEveryStageIsATasksWait(t *testing.T) {
 	}
 	if w := rowOf(t, d, "PR-12393").WaitsOn; len(w) != 1 || w[0].Who != "magnum" {
 		t.Errorf("with the daemon down: waits on %+v, want no hold of the last daemon's", w)
+	}
+}
+
+// The drains (`magnum factory install --drain`'s and the one for a reboot)
+// record no wait in the tasks they hold back: a launch, a claim, a round or
+// a check the drain stops sets none. So a task that names no wait drew its
+// stage's step ("magnum: local review") as if it would run, though nothing
+// new starts, and a reboot's drain can last long. Its row, its task card and
+// the help line name the drain now, as they name a hold that stops every
+// stage, and o says that nothing runs and why. A task's own wait still wins,
+// an agent at work stays first, and a hold that stops every stage comes
+// before a drain.
+func TestTheScreenNamesTheDrainsOnATaskWithNoWait(t *testing.T) {
+	r := newScreenRig(t)
+	stage := r.task("PR-12393", "bug", "At its local review", registry.TaskActive, "local_review", "", "")
+	r.task("PR-12390", "bug", "Waits for a copy", registry.TaskActive, "coding", waitCopy, "preparing factory3")
+	working := r.task("PR-12395", "bug", "Writing", registry.TaskActive, "coding", "", "")
+	r.session(working, "fx-writer", "working", screenNow.Add(-8*time.Minute), screenNow.Add(-20*time.Second))
+	drain := Hold{Kind: HoldDrain, Reason: "`magnum factory install --drain` (pid 4300): nothing new starts until the restart", Since: heldSince}
+	reboot := Hold{Kind: HoldReboot, Reason: "draining for a reboot: nothing new starts; `magnum resume` ends it", Since: heldSince}
+	for _, h := range []Hold{drain, reboot} {
+		r.holds(h)
+		d := r.data(screenNow)
+		words := h.Reason + " (since 09:00)"
+		row := rowOf(t, d, "PR-12393")
+		want := tui.WaitsOn{Who: "held", What: words, Short: h.Reason}
+		if len(row.WaitsOn) != 1 || row.WaitsOn[0] != want || row.Mark != tui.MarkWaits {
+			t.Errorf("%s: waits on %+v, mark %v, want [%+v] and waiting", h.Kind, row.WaitsOn, row.Mark, want)
+		}
+		if got := d.Cards[stage.ID].Task.WaitingFor; got != "held: "+words {
+			t.Errorf("%s: the card waits for %q, want the drain", h.Kind, got)
+		}
+		if row.Help != "held: "+words {
+			t.Errorf("%s: the help line %q, want the drain", h.Kind, row.Help)
+		}
+		if got, want := d.Cards[stage.ID].Task.OpensNothing, "nothing runs: it waits on held: "+words; got != want {
+			t.Errorf("%s: o says %q, want %q", h.Kind, got, want)
+		}
+		if w := rowOf(t, d, "PR-12390").WaitsOn; len(w) == 0 || w[0].Who != waitCopy || slices.ContainsFunc(w, func(w tui.WaitsOn) bool { return w.Who == "held" }) {
+			t.Errorf("%s: the task that waits for a copy waits on %+v, want its own wait alone", h.Kind, w)
+		}
+		if row := rowOf(t, d, "PR-12395"); len(row.WaitsOn) != 2 || row.WaitsOn[0].Who != "agent" || row.WaitsOn[1] != want ||
+			row.Mark != tui.MarkWorking {
+			t.Errorf("%s: the task with an agent at work waits on %+v, mark %v, want the agent first, the drain after it", h.Kind, row.WaitsOn, row.Mark)
+		}
+	}
+
+	r.holds(drain, mysqlHold()) // a hold that stops every stage says more than a drain
+	if w := rowOf(t, r.data(screenNow), "PR-12393").WaitsOn; len(w) != 1 || w[0].What != "MySQL does not answer (since 09:00)" {
+		t.Errorf("under a drain and the infra hold: waits on %+v, want the infra hold", w)
 	}
 }
 

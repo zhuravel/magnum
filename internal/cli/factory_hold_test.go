@@ -126,6 +126,77 @@ func TestAnActiveTaskWithNoWaitShowsTheDaemonsHold(t *testing.T) {
 	}
 }
 
+// The drains record no wait in the tasks they hold back (a launch, a claim,
+// a round or a check the drain stops sets none), so an active task with no
+// wait of its own showed "-" while `magnum factory install --drain` or the
+// drain for a reboot held it, and a reboot's drain can last long. Its row
+// and --json name the drain now, as they name a hold that stops every stage;
+// a task with a wait of its own keeps it.
+func TestAnActiveTaskWithNoWaitShowsTheDrains(t *testing.T) {
+	for _, h := range []factory.Hold{
+		{Kind: factory.HoldDrain, Reason: "`magnum factory install --drain` (pid 4300, since 14:02:11): nothing new starts until the restart"},
+		{Kind: factory.HoldReboot, Reason: "draining for a reboot since Nov 13 14:02: nothing new starts; `magnum resume` ends it"},
+	} {
+		t.Run(h.Kind, func(t *testing.T) {
+			dt, _ := factoryInstallTest(t)
+			holdStatusTasks(t, dt)
+			h.Since = time.Now().Add(-40 * time.Minute)
+			writeHolds(t, dt, h)
+			words := h.Reason + " (since " + inspClock(time.Now(), h.Since) + ")"
+
+			if code := dt.run("factory", "status"); code != 0 {
+				t.Fatalf("exit %d, stderr %s", code, dt.stderr)
+			}
+			rows := map[string]string{}
+			for line := range strings.SplitSeq(dt.stdout.String(), "\n") {
+				if f := strings.Fields(line); len(f) > 1 && strings.HasPrefix(f[1], "PR-") {
+					rows[f[1]] = strings.TrimSpace(line)
+				}
+			}
+			if got := rows["PR-12340"]; !strings.HasSuffix(got, "held: "+words) {
+				t.Errorf("the row of the task with no wait: %q, want it to end with %q", got, "held: "+words)
+			}
+			if got := rows["PR-12341"]; !strings.HasSuffix(got, "copy: preparing factory3") {
+				t.Errorf("the row of the task that waits for a copy: %q, want its own wait", got)
+			}
+			if got := rows["PR-12342"]; !strings.HasSuffix(got, "you: 2 questions before coding") {
+				t.Errorf("the row of the task that waits on you: %q, want its own wait", got)
+			}
+
+			dt.stdout.Reset()
+			if code := dt.run("factory", "status", "--json"); code != 0 {
+				t.Fatalf("--json: exit %d, stderr %s", code, dt.stderr)
+			}
+			var got struct {
+				Tasks []struct {
+					Key       string `json:"key"`
+					WaitsWho  string `json:"waits_who"`
+					WaitsWhat string `json:"waits_what"`
+					HeldBy    *struct {
+						Kind   string `json:"kind"`
+						Reason string `json:"reason"`
+					} `json:"held_by"`
+				} `json:"tasks"`
+			}
+			if err := json.Unmarshal(dt.stdout.Bytes(), &got); err != nil {
+				t.Fatalf("%v: %s", err, dt.stdout)
+			}
+			if len(got.Tasks) != 3 {
+				t.Fatalf("tasks %+v, want 3", got.Tasks)
+			}
+			if first := got.Tasks[0]; first.WaitsWho != "held" || first.WaitsWhat != words || first.HeldBy == nil ||
+				first.HeldBy.Kind != h.Kind || first.HeldBy.Reason != h.Reason {
+				t.Errorf("the task with no wait: %+v (held_by %+v), want waits_who held, %q and the drain named", first, first.HeldBy, words)
+			}
+			for _, own := range got.Tasks[1:] {
+				if own.HeldBy != nil || own.WaitsWho == "held" {
+					t.Errorf("%s names the drain %+v with a wait of its own: %+v", own.Key, own.HeldBy, own)
+				}
+			}
+		})
+	}
+}
+
 // The holds of a daemon that is gone are not in force: no row names one.
 func TestNoTaskNamesTheHoldOfAFactoryDaemonThatIsGone(t *testing.T) {
 	dt, _ := factoryInstallTest(t)
