@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -234,6 +235,51 @@ func TestTheFactorysAbortStopsItsOwnRoundPausedMidTurn(t *testing.T) {
 	if r, raw := h.e.fixRefOf(h.ctx, pr.ID); r != nil {
 		t.Errorf("the PR keeps the fix: %s", raw)
 	}
+}
+
+// The factory's abort reads which round holds the PR under the same lock
+// its stop order goes in with: whatever holds the PR by then and is not a
+// round of its fix (a whiteboard writer that took the PR as the factory's
+// round ended) gets no order and runs on, and only a round of that fix is
+// stopped, its order marked as the factory's.
+func TestTheFactorysAbortChoosesItsRoundUnderTheStopsLock(t *testing.T) {
+	h := leaseHarness(t, &fakeLease{})
+	repo, pr, err := h.e.resolve(h.ctx, PRTarget{Ref: "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := fixwork.FixRef{Work: 7, Cycle: 1, Head: "b2"}
+	var cancels atomic.Int32
+	hold := func(rh *roundHandle) *roundHandle {
+		t.Helper()
+		rh.cancel = func() { cancels.Add(1) }
+		if !h.e.reserve(pr.ID, rh) {
+			t.Fatal("the PR could not be reserved")
+		}
+		return rh
+	}
+	wb := hold(&roundHandle{whiteboard: true})
+	id := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}, FixRef: &ref})
+	if !h.e.stopHeld(h.ctx, id, repo, pr, false, &ref) {
+		t.Fatal("stopHeld reports no holder")
+	}
+	if r := h.request(id); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "is not the factory's re-review of b2 (cycle 1): it runs on") {
+		t.Errorf("the factory's abort of a whiteboard writer: %s %q", r.State, deref(r.Result))
+	}
+	if n := cancels.Load(); n != 0 || len(wb.stop.reqs) != 0 {
+		t.Errorf("the whiteboard writer got the factory's stop: %d cancels, orders %+v", n, wb.stop.reqs)
+	}
+	h.e.unreserve(pr.ID) // which cancels the writer's context
+	cancels.Store(0)
+	round := hold(&roundHandle{fixRef: &ref})
+	id = h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}, FixRef: &ref})
+	if !h.e.stopHeld(h.ctx, id, repo, pr, false, &ref) || cancels.Load() != 1 {
+		t.Fatal("the round of the factory's fix was not stopped")
+	}
+	if len(round.stop.reqs) != 1 || !round.stop.reqs[0].fix {
+		t.Errorf("orders = %+v, want the factory's", round.stop.reqs)
+	}
+	h.e.unreserve(pr.ID)
 }
 
 // The factory raises the attention of a reviewed PR it fixes, silently (no

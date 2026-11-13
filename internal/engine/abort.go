@@ -10,6 +10,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
@@ -128,10 +129,12 @@ func (e *Engine) stopClosedRound(prID int64, c closeStop) context.CancelFunc {
 	return h.cancel
 }
 
-// stopOrder is one abort (ignore=false) or ignore request.
+// stopOrder is one abort (ignore=false) or ignore request; fix: the
+// factory's abort, which names its fix (fix_factory.go).
 type stopOrder struct {
 	id     int64
 	ignore bool
+	fix    bool
 }
 
 // requestAbort handles `magnum abort` (ignore=false) and `magnum ignore`.
@@ -163,7 +166,7 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 		return
 	}
 
-	if e.stopHeld(ctx, id, repo, pr, ignore) {
+	if e.stopHeld(ctx, id, repo, pr, ignore, nil) {
 		return
 	}
 
@@ -226,15 +229,23 @@ func (e *Engine) stopReserved(rctx context.Context, id int64, repo store.Repo, p
 // job gets the order (its context is cancelled; the round's afterRound or
 // the fix job's stopFix completes the request), and anything else holding
 // the PR (an open, a round already ending, an earlier stop) answers that
-// the stop should be asked again shortly.
-func (e *Engine) stopHeld(ctx context.Context, id int64, repo store.Repo, pr store.PR, ignore bool) bool {
+// the stop should be asked again shortly. fix is the factory's abort's fix
+// (nil: the operator's stop, which stops any round): it stops only a round
+// whose request carried that same fix, read under the lock its order goes
+// in with, so a round that ended meanwhile and whatever took the PR after
+// it (a whiteboard writer) run on, and the request is refused, saying so.
+func (e *Engine) stopHeld(ctx context.Context, id int64, repo store.Repo, pr store.PR, ignore bool, fix *fixwork.FixRef) bool {
 	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
 	verb := map[bool]string{false: "abort", true: "ignore"}[ignore]
 	e.mu.Lock()
 	h, held := e.rounds[pr.ID]
 	switch {
+	case held && fix != nil && (h.fixRef == nil || *h.fixRef != *fix):
+		e.mu.Unlock()
+		e.complete(ctx, id, fmt.Errorf("%s: the round in flight is not %s: it runs on", label, factoryReReviewWords(*fix)), "")
+		return true
 	case held && !h.open && !h.stop.ended && !h.stop.stopping:
-		h.stop.reqs = append(h.stop.reqs, stopOrder{id: id, ignore: ignore})
+		h.stop.reqs = append(h.stop.reqs, stopOrder{id: id, ignore: ignore, fix: fix != nil})
 		e.inflight[id] = true
 		cancel, what := h.cancel, "the running review"
 		if h.fix {

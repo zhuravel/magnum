@@ -940,7 +940,7 @@ func (e *Engine) abortFixLoop(ctx context.Context, id int64, repo store.Repo, pr
 			}
 			return false
 		}
-		if e.stopHeld(ctx, id, repo, pr, false) {
+		if e.stopHeld(ctx, id, repo, pr, false, nil) {
 			return true
 		}
 		if note := e.endFixLoopRow(ctx, repo, pr, st, raw, err, "magnum abort", false); note != "" {

@@ -92,7 +92,7 @@ func TestAWhiteboardTurnedAwayByTheDrainAnswersTheStopsThatReachedIt(t *testing.
 	w.e.d.whiteboardReserved = func(prID int64) { // the tick's handlers on the new reservation, then the drain
 		abort = w.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
 		review = w.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}})
-		if !w.e.stopHeld(w.ctx, abort, repo, pr, false) || !w.e.yieldWhiteboard(prID, review, "magnum review") {
+		if !w.e.stopHeld(w.ctx, abort, repo, pr, false, nil) || !w.e.yieldWhiteboard(prID, review, "magnum review") {
 			t.Error("the reservation took no stop or yield")
 		}
 		if err := w.st.SetKV(w.ctx, KVDaemonRebootDrain, RebootDrain{Generation: 61, Since: w.clock.Now(), Until: DrainUntilBoot, Boot: bootOne}.Value()); err != nil {

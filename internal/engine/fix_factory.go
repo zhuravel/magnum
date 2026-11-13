@@ -119,6 +119,11 @@ func cmpOrOutcome(o string) string {
 	return o
 }
 
+// factoryReReviewWords names the factory's re-review of fix.
+func factoryReReviewWords(fix fixwork.FixRef) string {
+	return fmt.Sprintf("the factory's re-review of %s (cycle %d)", textx.ShortSHA(fix.Head), fix.Cycle)
+}
+
 // requestFactoryAbort serves the factory's abort (request id, TargetPayload
 // with FixRef ref) of pr, of repo: only the round of its own fix stops. A
 // round in flight whose request carried that same fix is stopped as `magnum
@@ -131,7 +136,7 @@ func cmpOrOutcome(o string) string {
 // names no fix, is requestAbort's own.
 func (e *Engine) requestFactoryAbort(ctx context.Context, id int64, repo store.Repo, pr store.PR, ref fixwork.FixRef, ignore bool) {
 	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
-	fix := fmt.Sprintf("the factory's re-review of %s (cycle %d)", textx.ShortSHA(ref.Head), ref.Cycle)
+	fix := factoryReReviewWords(ref)
 	refuse := func(why string) { e.complete(ctx, id, fmt.Errorf("%s: %s", label, why), "") }
 	switch o, _, ok, err := e.fixOwner(ctx, pr.ID); {
 	case ignore:
@@ -144,16 +149,7 @@ func (e *Engine) requestFactoryAbort(ctx context.Context, id int64, repo store.R
 		refuse("the factory does not fix this PR: its rounds are magnum's to stop")
 		return
 	}
-	e.mu.Lock()
-	h, held := e.rounds[pr.ID]
-	ours := held && h.fixRef != nil && *h.fixRef == ref
-	e.mu.Unlock()
-	switch {
-	case held && !ours:
-		refuse("the round in flight is not " + fix + ": it runs on")
-		return
-	case held:
-		e.stopHeld(ctx, id, repo, pr, false)
+	if e.stopHeld(ctx, id, repo, pr, false, &ref) { // a round of its fix stops, and any other holder runs on
 		return
 	}
 	// No round holds the PR: its re-review of the fix waits in line, or its
