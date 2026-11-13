@@ -20,6 +20,7 @@ package engine
 // PRs.
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -92,13 +93,20 @@ const fixLeaseGrace = 10 * time.Minute
 func KVPRFixLeaseUnread(prID int64) string { return fmt.Sprintf("pr.%d.fix_lease_unread", prID) }
 
 // LeaseUnread is a KVPRFixLeaseUnread row: the first failed read (Since),
-// the last one's error in a line (Err, a registry's words, never PR text)
-// and Open, the grace ended and magnum reviews the PR without the lease.
+// the last one's error in a line (Err, a registry's words, never PR text),
+// Open, the grace ended and magnum reviews the PR without the lease, and
+// Source, what failed: the factory's lease ("") or the PR's owner row in
+// magnum's own registry, which this build cannot parse (LeaseFromOwner).
 type LeaseUnread struct {
-	Since time.Time `json:"since"`
-	Err   string    `json:"err"`
-	Open  bool      `json:"open,omitempty"`
+	Since  time.Time `json:"since"`
+	Err    string    `json:"err"`
+	Open   bool      `json:"open,omitempty"`
+	Source string    `json:"source,omitempty"`
 }
+
+// LeaseFromOwner is LeaseUnread.Source of a PR whose owner row in magnum's
+// registry does not parse (a newer build wrote it, or it is damaged).
+const LeaseFromOwner = "owner"
 
 // leaseView is what the review side reads of the factory's fixes of a PR:
 // owned, the PR has an owner row (the factory's, or returning), its lease,
@@ -107,10 +115,27 @@ type LeaseUnread struct {
 // (the owner row, or the PR's repository): who fixes the PR is not known,
 // so it is no failed read of the factory's lease.
 type leaseView struct {
-	owned   bool
-	lease   FixLease
-	err     error
-	unknown error
+	owned     bool
+	lease     FixLease
+	err       error
+	fromOwner bool // err is the owner row's, which does not parse, not the factory's lease's
+	unknown   error
+}
+
+// source is LeaseUnread.Source of v's failed read.
+func (v leaseView) source() string {
+	if v.fromOwner {
+		return LeaseFromOwner
+	}
+	return ""
+}
+
+// unreadWords names what v could not read, as a wait says it.
+func (v leaseView) unreadWords() string {
+	if v.fromOwner {
+		return "its owner row, which this build cannot read"
+	}
+	return "the factory's lease, which cannot be read"
 }
 
 // fixing reports whether the factory works on the PR now (its lease held,
@@ -140,7 +165,7 @@ func (e *Engine) leaseOf(ctx context.Context, pr store.PR) (v leaseView, ok bool
 	case err != nil && raw == "": // the registry's read failed: who fixes the PR is not known
 		return leaseView{unknown: err}, true
 	case err != nil: // an owner row this build cannot parse (a newer build's, or damaged): there is one
-		return leaseView{owned: true, err: err}, true
+		return leaseView{owned: true, err: err, fromOwner: true}, true
 	case !owned:
 		return leaseView{}, true
 	}
@@ -181,7 +206,7 @@ func (e *Engine) leaseWait(v leaseView, u LeaseUnread, recorded bool) (Wait, boo
 			return Wait{}, false
 		}
 		return Wait{Reason: WaitFixing, Subject: waitFactory, Until: until,
-			Detail: fmt.Sprintf("the factory's lease, which cannot be read (%s)", leaseErrWords(v.err))}, true
+			Detail: fmt.Sprintf("%s (%s)", v.unreadWords(), leaseErrWords(v.err))}, true
 	}
 	if !v.holds() {
 		return Wait{}, false
@@ -242,7 +267,7 @@ func (e *Engine) noteLease(ctx context.Context, pr store.PR, v leaseView) bool {
 		return held
 	}
 	if !recorded {
-		u = LeaseUnread{Since: e.now().UTC(), Err: leaseErrWords(v.err)}
+		u = LeaseUnread{Since: e.now().UTC(), Err: leaseErrWords(v.err), Source: v.source()}
 		if !e.d.DryRun {
 			e.setKV(ctx, KVPRFixLeaseUnread(pr.ID), rowJSON(u))
 		}
@@ -250,10 +275,15 @@ func (e *Engine) noteLease(ctx context.Context, pr store.PR, v leaseView) bool {
 	}
 	_, held := e.leaseWait(v, u, true)
 	if !held && !u.Open && !e.d.DryRun {
-		u.Open, u.Err = true, leaseErrWords(v.err)
+		u.Open, u.Err, u.Source = true, leaseErrWords(v.err), v.source()
 		e.setKV(ctx, KVPRFixLeaseUnread(pr.ID), rowJSON(u))
-		e.event(ctx, "warn", subject, "fix.lease_open", fmt.Sprintf("the factory's lease of the PR cannot be read since %s (%s): magnum reviews it "+
-			"without the lease after the %s grace", waitClock(u.Since, e.now()), u.Err, humanDuration(fixLeaseGrace)), map[string]any{"since": u.Since})
+		what := "the factory's lease of the PR cannot be read"
+		if v.fromOwner {
+			what = "the PR's owner row cannot be read by this build"
+		}
+		e.event(ctx, "warn", subject, "fix.lease_open", fmt.Sprintf("%s since %s (%s): magnum reviews it "+
+			"without the lease after the %s grace", what, waitClock(u.Since, e.now()), u.Err, humanDuration(fixLeaseGrace)),
+			map[string]any{"since": u.Since, "source": cmp.Or(u.Source, "lease")})
 	}
 	return held
 }
@@ -314,8 +344,12 @@ func (e *Engine) factoryReviewRefusal(ctx context.Context, pr store.PR, label st
 		if u, ok := e.leaseUnreadOf(ctx, pr.ID); ok {
 			since = u.Since
 		}
-		return fmt.Sprintf("%s: the factory's lease of it cannot be read (%s); ask again after %s, when magnum reviews it anyway",
-			label, leaseErrWords(v.err), waitClock(since.Add(fixLeaseGrace), e.now()))
+		what := "the factory's lease of it cannot be read"
+		if v.fromOwner {
+			what = "its owner row cannot be read by this build"
+		}
+		return fmt.Sprintf("%s: %s (%s); ask again after %s, when magnum reviews it anyway",
+			label, what, leaseErrWords(v.err), waitClock(since.Add(fixLeaseGrace), e.now()))
 	case v.fixing() || v.reviewing():
 		cycle := fmt.Sprintf("cycle %d", v.lease.Cycle)
 		if v.lease.Cap > 0 {

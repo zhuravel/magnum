@@ -208,3 +208,25 @@ func TestTheDoctorNamesTheHandoverAndTheLeasesThatFailedOpen(t *testing.T) {
 		t.Errorf("lease = %+v", c)
 	}
 }
+
+// A failed read whose source is magnum's own owner row (one this build
+// cannot parse) sends the operator to magnum's registry, never to the
+// factory's, which reads fine.
+func TestTheDoctorNamesAnOwnerRowThatDoesNotParseAsMagnumsOwn(t *testing.T) {
+	h := newActHarness(t)
+	d := doctorDeps{Store: h.st, Config: h.d.Cfg}
+	pr6 := h.seedPR("talkable/talkable", 6, store.PRReviewed)
+	if err := h.st.SetKV(h.ctx, engine.KVPRFixLeaseUnread(pr6.ID),
+		fmt.Sprintf(`{"since":%q,"err":"fix owner: unknown owner \"someone newer\"","source":"owner"}`, h.now.UTC().Format(time.RFC3339))); err != nil {
+		t.Fatal(err)
+	}
+	cs := doctorFixHandover(h.ctx, d)
+	if len(cs) != 2 {
+		t.Fatalf("checks = %+v", cs)
+	}
+	c := cs[1]
+	if c.Status != doctorWarn || !strings.Contains(c.Detail, "talkable#6") || !strings.Contains(c.Detail, "its owner row in magnum's registry") ||
+		!strings.Contains(c.Fix, "pr.*.fix_owner") || strings.Contains(c.Fix, "the factory's registry cannot be read") {
+		t.Errorf("owner row = %+v", c)
+	}
+}

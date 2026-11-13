@@ -245,6 +245,34 @@ func TestAnOwnerRowThatCannotBeReadIsNoFailedLeaseRead(t *testing.T) {
 	}
 }
 
+// An owner row this build cannot parse (a newer build's, or a damaged one)
+// is a failed read within the grace, as the factory's lease is, but it is
+// named as magnum's own row, never as the factory's registry: in the wait,
+// in `magnum review`'s refusal and in the row the doctor reads.
+func TestAnOwnerRowThatDoesNotParseIsNamedAsMagnumsOwn(t *testing.T) {
+	h := leaseHarness(t, &fakeLease{})
+	pr := h.pr(2)
+	if err := h.st.SetKV(h.ctx, fixwork.KVPRFixOwner(pr.ID), `{"owner":"someone newer"}`); err != nil {
+		t.Fatal(err)
+	}
+	rounds := len(h.rd.all())
+	h.tick()
+	if got := len(h.rd.all()); got != rounds {
+		t.Fatalf("rounds = %d, want %d: the grace holds the round", got, rounds)
+	}
+	if raw, _ := kvValue(h, KVPRFixLeaseUnread(pr.ID)); !strings.Contains(raw, `"source":"owner"`) {
+		t.Errorf("the failed read = %s, want its source the owner row", raw)
+	}
+	if w := waitOf(t, h, 2); !strings.Contains(w.Detail, "its owner row, which this build cannot read") || strings.Contains(w.Detail, "lease") {
+		t.Errorf("wait = %q, want the owner row named", w.Detail)
+	}
+	review := h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.handle()
+	if r := h.request(review); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "its owner row cannot be read by this build") {
+		t.Errorf("magnum review: %s %q", r.State, deref(r.Result))
+	}
+}
+
 // leaseUnread is PR prID's recorded failed lease read (ok false: none).
 func (h *harness) leaseUnread(prID int64) (LeaseUnread, bool) {
 	h.t.Helper()

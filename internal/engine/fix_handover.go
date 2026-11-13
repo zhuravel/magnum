@@ -292,7 +292,7 @@ func (e *Engine) handoverPRs(ctx context.Context, all bool) ([]handoverPR, error
 		}
 		switch _, _, owned, err := e.fixOwner(ctx, id); {
 		case err != nil:
-			continue // the flip's own read refuses it, and the doctor names the row
+			continue // the flip's own read refuses it; the PR waits, and its handover with it
 		case owned: // it is the factory's, or returning: nothing waits for it any more
 			e.delKV(ctx, KVPRFixHandover(id))
 			continue

@@ -73,6 +73,7 @@ func doctorLeaseUnreads(ctx context.Context, d doctorDeps, unread map[int64]engi
 		return doctorCheck{}, false
 	}
 	var open, waits []string
+	owners, leases := false, false
 	for _, id := range slices.Sorted(maps.Keys(unread)) {
 		u := unread[id]
 		label := fmt.Sprintf("PR %d", id)
@@ -81,7 +82,13 @@ func doctorLeaseUnreads(ctx context.Context, d doctorDeps, unread map[int64]engi
 				label = actRefLabel(d.Config.Daemon.DefaultRepo, repo.FullName(), pr.Number)
 			}
 		}
-		what := fmt.Sprintf("%s since %s (%s)", label, u.Since.Local().Format("Jan 2 15:04"), cmp.Or(actClean(u.Err), "no error"))
+		why := cmp.Or(actClean(u.Err), "no error")
+		if u.Source == engine.LeaseFromOwner { // magnum's own row, not the factory's registry
+			why, owners = "its owner row in magnum's registry: "+why, true
+		} else {
+			leases = true
+		}
+		what := fmt.Sprintf("%s since %s (%s)", label, u.Since.Local().Format("Jan 2 15:04"), why)
 		if u.Open {
 			open = append(open, what)
 		} else {
@@ -96,8 +103,15 @@ func doctorLeaseUnreads(ctx context.Context, d doctorDeps, unread map[int64]engi
 	if len(waits) > 0 {
 		parts = append(parts, fmt.Sprintf("%d PRs' rounds wait for the factory's lease, which cannot be read: %s", len(waits), strings.Join(waits, ", ")))
 	}
-	return doctorWarned("factory lease", strings.Join(parts, "; "),
-		"the factory's registry cannot be read; `magnum factory status` says whether its daemon runs"), true
+	var fixes []string
+	if leases {
+		fixes = append(fixes, "the factory's registry cannot be read; `magnum factory status` says whether its daemon runs")
+	}
+	if owners {
+		fixes = append(fixes, "magnum's registry holds an owner row (pr.*.fix_owner) this build cannot parse: a newer build wrote it, "+
+			"or it is damaged; run the build that wrote it")
+	}
+	return doctorWarned("factory lease", strings.Join(parts, "; "), strings.Join(fixes, "; ")), true
 }
 
 // recordKinds are recs' kinds, in a few words.
