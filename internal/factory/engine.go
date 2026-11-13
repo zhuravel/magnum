@@ -479,6 +479,15 @@ type Engine struct {
 	// (payReleaseDebts); claimMu guards the map, and a debt's fields are
 	// the loop's own.
 	debts map[int64]*releaseDebt
+	// The same for the fixes of your PRs, by pr_work id (claimFix): the
+	// claims of their checkouts off the loop, the waits of those that ended
+	// without one, the checkout each fix holds (for its cycle), and the
+	// releases of the checkouts of fix work that ended that did not go
+	// through (payFixDebts); claimMu guards the four.
+	fixClaims map[int64]*claimRun
+	fixWaits  map[int64]*claimWait
+	fixHeld   map[int64]heldFix
+	fixDebts  map[int64]*releaseDebt
 
 	// talking are the tasks whose talk request runs off the loop
 	// (talkRequest); talkMu guards the set.
@@ -649,6 +658,10 @@ func New(d Deps) *Engine {
 		claimWaits:   map[int64]*claimWait{},
 		held:         map[int64]Copy{},
 		debts:        map[int64]*releaseDebt{},
+		fixClaims:    map[int64]*claimRun{},
+		fixWaits:     map[int64]*claimWait{},
+		fixHeld:      map[int64]heldFix{},
+		fixDebts:     map[int64]*releaseDebt{},
 		statusErrs:   map[int64]bool{},
 		statusFinal:  map[int64]bool{},
 		stg:          newStagingReads(),
@@ -1039,6 +1052,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.sweepChecks(tasks)
 	e.sweepRounds(tasks)
 	e.payReleaseDebts(ctx, tasks)
+	e.payFixDebts(ctx)
 	herdrUp := e.checkHerdr(ctx, now)
 	if herdrUp { // herdr says who is in a copy: without it no copy is touched
 		e.retryRecovery(ctx, tasks)

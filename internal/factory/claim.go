@@ -15,7 +15,9 @@ package factory
 // claim event that began and never ended, and the claim's steps of the
 // agents store as far as they got (each resumes after its guard, a done one
 // never runs again): the next claim of the task picks up from there, and
-// the startup's recovery reads that state.
+// the startup's recovery reads that state. A PR's fix work claims its
+// checkout the same way (claimFix), apart from the tasks: max_active never
+// counts its claims.
 
 import (
 	"cmp"
@@ -33,19 +35,54 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-// claimRun is a claim of a copy for a task that runs off the loop: when it
-// started, done closed when it ended, cancel to end it, the wait it keeps
-// while it runs (a retry's: the reason of the claim before it; "" for a
-// first claim, which waits "preparing"), the waits before it, and its
-// result (written before done closes).
+// claimRun is a claim of a copy for a task, or of a checkout for a PR's
+// fix work (work), that runs off the loop: when it started, done closed
+// when it ended, cancel to end it, the wait it keeps while it runs (a
+// retry's: the reason of the claim before it; "" for a first claim, which
+// waits "preparing"), the waits before it, and its result, the task's copy
+// or the fix's checkout (written before done closes).
 type claimRun struct {
 	started  time.Time
 	done     chan struct{}
 	cancel   context.CancelFunc
 	waitWhat string
 	tries    int
+	work     registry.PRWork
 	copy     Copy
+	fix      FixCheckout
 	err      error
+}
+
+// newClaimRun is a claim's run, on a context of its own under the engine's
+// (a stop of its work or a drain ends it), after wait, the claim before it
+// that waited (nil for a first claim).
+func (e *Engine) newClaimRun(wait *claimWait) (*claimRun, context.Context) {
+	cctx, cancel := context.WithCancel(e.bgCtx)
+	run := &claimRun{started: e.now(), done: make(chan struct{}), cancel: cancel}
+	if wait != nil {
+		run.waitWhat, run.tries = wait.what, wait.tries
+	}
+	return run, cctx
+}
+
+// goClaim runs claim for run off the loop on cctx, named what in the record
+// of the work a restart would cut (taskID: its task, 0 for none); a panic
+// ends it with an error, never the daemon.
+func (e *Engine) goClaim(cctx context.Context, run *claimRun, taskID int64, what string, claim func(ctx context.Context) error) {
+	endWork := e.beginWork(WorkClaim, taskID, what)
+	e.bg.Go(func() {
+		defer endWork()
+		defer close(run.done)
+		defer run.cancel()
+		defer func() {
+			if r := recover(); r != nil {
+				e.log.Error("panic in a claim; the daemon goes on", "task", taskID, "work", what, "panic", fmt.Sprint(r),
+					"stack", execx.Redact(string(debug.Stack())))
+				run.err = fmt.Errorf("the claim panicked: %v", r)
+			}
+		}()
+		run.err = claim(cctx)
+	})
 }
 
 // ended reports whether the claim's goroutine has ended.
@@ -163,37 +200,26 @@ func (e *Engine) beginClaim(ctx context.Context, t registry.Task, w *claimWait) 
 	if e.d.Copies == nil {
 		return heldError{who: waitCopy, what: "this build has no copies yet"}
 	}
-	cctx, cancel := context.WithCancel(e.bgCtx)
-	run := &claimRun{started: e.now(), done: make(chan struct{}), cancel: cancel}
+	run, cctx := e.newClaimRun(w)
 	text := "claims a copy, off the loop"
 	if w != nil {
-		run.waitWhat, run.tries = w.what, w.tries
 		text = fmt.Sprintf("claims a copy again (try %d after: %s)", w.tries+1, w.what)
 	}
 	e.claimMu.Lock()
 	if n := len(e.claims); n >= max(1, e.cfg.Factory.MaxActive) {
 		e.claimMu.Unlock()
-		cancel()
+		run.cancel()
 		what := fmt.Sprintf("%d claims run, at most max_active", n)
 		e.waitOn(ctx, t, waitCopy, what)
 		return heldError{who: waitCopy, what: what}
 	}
 	e.claims[t.ID] = run
 	e.claimMu.Unlock()
-	endWork := e.beginWork(WorkClaim, t.ID, "claim of a copy for "+TaskKey(t))
 	e.event(ctx, t.ID, "claim", registry.PhaseBegin, text)
-	e.bg.Go(func() {
-		defer endWork()
-		defer close(run.done)
-		defer cancel()
-		defer func() {
-			if r := recover(); r != nil {
-				e.log.Error("panic in a claim; the daemon goes on", "task", t.ID, "panic", fmt.Sprint(r),
-					"stack", execx.Redact(string(debug.Stack())))
-				run.copy, run.err = Copy{}, fmt.Errorf("the claim panicked: %v", r)
-			}
-		}()
-		run.copy, run.err = e.d.Copies.Claim(cctx, t)
+	e.goClaim(cctx, run, t.ID, "claim of a copy for "+TaskKey(t), func(ctx context.Context) error {
+		var err error
+		run.copy, err = e.d.Copies.Claim(ctx, t)
+		return err
 	})
 	return e.preparing(ctx, t, run)
 }
@@ -268,20 +294,7 @@ func (e *Engine) claimFailed(ctx context.Context, t registry.Task, run *claimRun
 		e.toOperator(ctx, t, what, "a claim's switch was refused")
 		return heldError{who: waitsYou, what: what}
 	}
-	what, held := "", err
-	if nc, ok := errors.AsType[noCopy](err); ok {
-		what = nc.what
-	} else if h, ok := slots.AsHold(err); ok {
-		what = "held: " + h.Reason
-		if h.Detail != "" {
-			what += ": " + h.Detail
-		}
-	} else if errors.Is(err, ErrPaneInCopy) {
-		what = "a pane runs in it"
-		if _, detail, ok := strings.Cut(err.Error(), ErrPaneInCopy.Error()+": "); ok {
-			what += ": " + detail
-		}
-	}
+	what := claimWaitWhat(err)
 	if what == "" {
 		e.claimMu.Lock()
 		delete(e.claimWaits, t.ID)
@@ -289,17 +302,52 @@ func (e *Engine) claimFailed(ctx context.Context, t registry.Task, run *claimRun
 		e.event(ctx, t.ID, "claim", registry.PhaseFail, err.Error())
 		return err
 	}
-	if !errors.Is(held, ErrHeld) {
-		held = heldError{who: waitCopy, what: what}
-	}
-	w := &claimWait{what: what, tries: run.tries + 1, err: held}
-	w.next = e.now().Add(claimBackoff(w.tries))
+	w := e.waitAfter(run, what)
 	e.claimMu.Lock()
 	e.claimWaits[t.ID] = w
 	e.claimMu.Unlock()
 	e.event(ctx, t.ID, "claim", registry.PhaseFail, fmt.Sprintf("no copy yet: %s; claims again at %s", what, w.next.Local().Format("15:04")))
 	e.waitOn(ctx, t, waitCopy, what)
-	return held
+	return w.err
+}
+
+// claimWaitWhat is the wait a claim's error costs its work nothing for, in
+// a wait's words: no copy free (its reason, "all 3 busy"), a guard that
+// holds the copy ("held: <reason>: <detail>") and a factory pane in it ("a
+// pane runs in it: <detail>"); "" for any other error.
+func claimWaitWhat(err error) string {
+	if nc, ok := errors.AsType[noCopy](err); ok {
+		return nc.what
+	}
+	if h, ok := slots.AsHold(err); ok {
+		what := "held: " + h.Reason
+		if h.Detail != "" {
+			what += ": " + h.Detail
+		}
+		return what
+	}
+	if errors.Is(err, ErrPaneInCopy) {
+		what := "a pane runs in it"
+		if _, detail, ok := strings.Cut(err.Error(), ErrPaneInCopy.Error()+": "); ok {
+			what += ": " + detail
+		}
+		return what
+	}
+	return ""
+}
+
+// waitAfter is the wait after run, a claim that ended with a wait that
+// costs nothing (what, claimWaitWhat): its held error (the claim's own
+// when it is held, else "copy: <what>"), and the next claim after
+// claimBackoff.
+func (e *Engine) waitAfter(run *claimRun, what string) *claimWait {
+	held := run.err
+	if !errors.Is(held, ErrHeld) {
+		held = heldError{who: waitCopy, what: what}
+	}
+	w := &claimWait{what: what, tries: run.tries + 1, err: held}
+	w.next = e.now().Add(claimBackoff(w.tries))
+	return w
 }
 
 // heldCopy is the copy task id holds, as its claim handed it over.
@@ -404,8 +452,8 @@ func (e *Engine) stopBackground() {
 		e.log.Warn("read the tasks at the drain: the copies of their claims are released after the restart", "err", err)
 	}
 	e.claimMu.Lock()
-	runs := e.claims
-	e.claims = map[int64]*claimRun{}
+	runs, fixRuns := e.claims, e.fixClaims
+	e.claims, e.fixClaims = map[int64]*claimRun{}, map[int64]*claimRun{}
 	e.claimMu.Unlock()
 	for id, run := range runs {
 		if !run.ended() {
@@ -413,6 +461,14 @@ func (e *Engine) stopBackground() {
 			continue
 		}
 		e.endClaim(ctx, registry.Task{ID: id}, run, "the daemon stopped before a stage took it: the next claim resumes it")
+	}
+	for _, run := range fixRuns {
+		if !run.ended() {
+			e.event(ctx, run.work.TaskID, "fix.claim", registry.PhaseFail, "the daemon stopped during the fix claim of "+
+				workKey(run.work)+": the next claim resumes its steps")
+			continue
+		}
+		e.endFixClaim(ctx, run, "the daemon stopped before the fix took it: the next claim resumes it")
 	}
 }
 
@@ -460,4 +516,161 @@ func (e *Engine) sweepClaims(ctx context.Context, tasks []registry.Task) {
 		}
 		e.event(ctx, g.t.ID, "claim", registry.PhaseInfo, "released what the claim reserved: the task ended during it")
 	}
+}
+
+// claimFix is how the fix of PR work w gets its checkout (Copies.ClaimFix:
+// a fix copy, or its per-PR checkout, at the PR's remote head), as
+// claimCopy is a stage's for its task. The checkout the fix holds for its
+// cycle (w.Cycle) comes at once; a new cycle claims it again, which
+// fetches the PR's head and switches the checkout the PR holds to it.
+// Otherwise the first call starts a claim off the loop (never while the
+// daemon drains or a hold of the machine holds launches) and every call
+// while it runs returns a held error: "copy: preparing a fix checkout
+// (setup <elapsed>)". The call after the claim ended takes its result: the
+// checkout, or the claim's error. No checkout free ("copy: all 2 busy"), a
+// guard that holds it and a factory pane in it are waits that cost the fix
+// nothing: the claim leaves the PR's phase as it was (queued), the next
+// claim runs after claimBackoff, and the held error says the wait meanwhile.
+// Any other error is the fix's failure. The fixes' claims are apart from
+// the tasks': max_active never counts them, and [factory] fix_max_active
+// bounds the fix loops (the fix lane's).
+func (e *Engine) claimFix(ctx context.Context, w registry.PRWork) (FixCheckout, error) {
+	e.claimMu.Lock()
+	if h, ok := e.fixHeld[w.ID]; ok && h.cycle == w.Cycle {
+		e.claimMu.Unlock()
+		return h.checkout, nil
+	}
+	delete(e.fixHeld, w.ID) // a new cycle claims its head again
+	run, wait := e.fixClaims[w.ID], e.fixWaits[w.ID]
+	ended := run != nil && run.ended()
+	if ended {
+		delete(e.fixClaims, w.ID)
+	}
+	e.claimMu.Unlock()
+	switch {
+	case run != nil && !ended:
+		return FixCheckout{}, e.fixPreparing(run)
+	case run != nil:
+		return e.fixClaimed(ctx, w, run)
+	case wait != nil && e.now().Before(wait.next):
+		return FixCheckout{}, wait.err
+	}
+	return FixCheckout{}, e.beginFixClaim(ctx, w, wait)
+}
+
+// beginFixClaim starts PR work w's claim off the loop (Copies.ClaimFix),
+// after wait, the claim before it that waited (nil for a first claim),
+// named in the record of the work a restart would cut.
+func (e *Engine) beginFixClaim(ctx context.Context, w registry.PRWork, wait *claimWait) error {
+	if who, what, ok := e.mayLaunch(); !ok {
+		return heldError{who: who, what: what}
+	}
+	if e.d.Copies == nil {
+		return heldError{who: waitCopy, what: "this build has no copies yet"}
+	}
+	run, cctx := e.newClaimRun(wait)
+	run.work = w
+	text := "claims a fix checkout of " + workKey(w) + ", off the loop"
+	if wait != nil {
+		text = fmt.Sprintf("claims a fix checkout of %s again (try %d after: %s)", workKey(w), wait.tries+1, wait.what)
+	}
+	e.claimMu.Lock()
+	e.fixClaims[w.ID] = run
+	e.claimMu.Unlock()
+	e.event(ctx, w.TaskID, "fix.claim", registry.PhaseBegin, text)
+	e.goClaim(cctx, run, w.TaskID, "claim of a fix checkout for "+workKey(w), func(ctx context.Context) error {
+		var err error
+		run.fix, err = e.d.Copies.ClaimFix(ctx, w)
+		return err
+	})
+	return e.fixPreparing(run)
+}
+
+// fixPreparing is the wait of a fix whose claim runs: a retry keeps the
+// reason the claim before it waited on, a first claim says it prepares.
+func (e *Engine) fixPreparing(run *claimRun) error {
+	what := run.waitWhat
+	if what == "" {
+		what = fmt.Sprintf("%s a fix checkout (setup %s)", preparingWhat, setupAge(e.now().Sub(run.started)))
+	}
+	return heldError{who: waitCopy, what: what}
+}
+
+// heldFix is the checkout a fix holds, and the cycle of its fix work it
+// was claimed for.
+type heldFix struct {
+	checkout FixCheckout
+	cycle    int
+}
+
+// fixClaimed takes the result of PR work w's claim that ended: the
+// checkout, which the fix holds from now on for the cycle the claim began
+// in, or the claim's error, a wait that costs nothing (claimWaitWhat),
+// which the fix keeps until its next claim after claimBackoff, or the
+// fix's failure. Each ends the claim's begin with an ok or a fail event.
+func (e *Engine) fixClaimed(ctx context.Context, w registry.PRWork, run *claimRun) (FixCheckout, error) {
+	if run.err == nil {
+		e.claimMu.Lock()
+		e.fixHeld[w.ID] = heldFix{checkout: run.fix, cycle: run.work.Cycle}
+		delete(e.fixWaits, w.ID)
+		e.claimMu.Unlock()
+		e.event(ctx, w.TaskID, "fix.claim", registry.PhaseOK, fmt.Sprintf("claimed %s for %s at %s in %s", run.fix.Name, workKey(w),
+			textx.ShortSHA(run.fix.Head), setupAge(e.now().Sub(run.started))))
+		return run.fix, nil
+	}
+	what := claimWaitWhat(run.err)
+	if what == "" {
+		e.claimMu.Lock()
+		delete(e.fixWaits, w.ID)
+		e.claimMu.Unlock()
+		e.event(ctx, w.TaskID, "fix.claim", registry.PhaseFail, run.err.Error())
+		return FixCheckout{}, run.err
+	}
+	wait := e.waitAfter(run, what)
+	e.claimMu.Lock()
+	e.fixWaits[w.ID] = wait
+	e.claimMu.Unlock()
+	e.event(ctx, w.TaskID, "fix.claim", registry.PhaseFail, fmt.Sprintf("no checkout for %s yet: %s; claims again at %s",
+		workKey(w), what, wait.next.Local().Format("15:04")))
+	return FixCheckout{}, wait.err
+}
+
+// endFixClaim ends the begin of a fix claim whose answer the fix never
+// took, saying why.
+func (e *Engine) endFixClaim(ctx context.Context, run *claimRun, why string) {
+	if run.err == nil {
+		e.event(ctx, run.work.TaskID, "fix.claim", registry.PhaseOK, fmt.Sprintf("claimed %s for %s, but %s", run.fix.Name, workKey(run.work), why))
+		return
+	}
+	e.event(ctx, run.work.TaskID, "fix.claim", registry.PhaseFail, fmt.Sprintf("the claim for %s ended (%s), and %s", workKey(run.work),
+		textx.Clip(textx.FirstLine(run.err.Error()), panicRunes), why))
+}
+
+// releaseFix lets PR work w's checkout go (Copies.ReleaseFix: a fix copy
+// back to its pool, a per-PR checkout removed) and forgets the fix's
+// claims; checkout names it. A claim that still runs is cancelled instead
+// (its commands end with it), and released once it ended. released reports
+// that the release went through now; a refused one is owed (oweFix).
+func (e *Engine) releaseFix(ctx context.Context, w registry.PRWork, checkout, reason string) (released bool) {
+	e.claimMu.Lock()
+	run := e.fixClaims[w.ID]
+	running := run != nil && !run.ended()
+	if !running {
+		delete(e.fixClaims, w.ID)
+	}
+	delete(e.fixHeld, w.ID)
+	delete(e.fixWaits, w.ID)
+	e.claimMu.Unlock()
+	if running {
+		run.cancel()
+		return false
+	}
+	if run != nil { // it ended, and the fix never took its answer
+		e.endFixClaim(ctx, run, "its fix work ended first")
+	}
+	if err := e.d.Copies.ReleaseFix(ctx, w, reason); err != nil {
+		e.oweFix(ctx, w, checkout, err) // tried again until the checkout is free
+		return false
+	}
+	return true
 }

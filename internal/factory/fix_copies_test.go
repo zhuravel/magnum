@@ -271,7 +271,9 @@ func TestAFixClaimsAFixCopyAtThePRsRemoteHead(t *testing.T) {
 
 // The fix copies are apart from the tasks': a fix takes one while every
 // task copy is busy, a task's claim and Free never count one, and a fix
-// waits for a fix copy (fix_copies bounds them), never for max_copies.
+// waits for a fix copy (fix_copies bounds them), never for max_copies. In
+// the engine a fix's claim off the loop is no task's claim: a task's
+// claim and a queued task's start go on beside it under max_active = 1.
 func TestFixesDoNotCountTowardMaxActive(t *testing.T) {
 	r := newFixRig(t, 1, 1)
 	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
@@ -304,6 +306,39 @@ func TestFixesDoNotCountTowardMaxActive(t *testing.T) {
 	_, err := r.c.ClaimFix(r.ctx, r.prWork("talkable/talkable", 8))
 	if !errors.Is(err, ErrNoCopy) || !errors.Is(err, ErrHeld) || err.Error() != "copy: all 1 busy" {
 		t.Fatalf("a second fix's claim = %v, want a wait for the one fix copy, copy: all 1 busy", err)
+	}
+
+	h := newHarness(t)
+	h.cfg.Factory.MaxActive = 1
+	h.copies.fix.block = make(chan struct{})
+	h.copies.fix.claimed = FixCheckout{Name: "factory2", Path: "/copies/factory2", Number: 2}
+	fix, err = h.reg.EnsurePRWork(h.ctx, "example/shop", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.e.claimFix(h.ctx, fix); !errors.Is(err, ErrHeld) || err.Error() != "copy: preparing a fix checkout (setup <1m)" {
+		t.Fatalf("claimFix while its claim runs = %v, want copy: preparing a fix checkout (setup <1m)", err)
+	}
+	waitFor(t, "the fix's claim to start", func() bool { return h.copies.fixClaims() == 1 })
+	h.copies.claimed = Copy{Name: "factory1", Path: "/copies/factory1", Number: 1}
+	busy := h.task("PR-2", registry.TaskActive, "investigate")
+	if _, err := h.e.claimCopy(h.ctx, busy); !errors.Is(err, ErrHeld) || strings.Contains(err.Error(), "max_active") {
+		t.Fatalf("the task's claimCopy beside the fix's claim = %v, want its own claim to run", err)
+	}
+	waitFor(t, "the task's claim to start beside the fix's", func() bool { return h.copies.claimCount() == 1 })
+	close(h.copies.fix.block)
+	h.e.waitBackground()
+	if c, err := h.e.claimCopy(h.ctx, h.reload(busy.ID)); err != nil || c.Name != "factory1" {
+		t.Fatalf("the task's claim = %+v, %v, want factory1", c, err)
+	}
+	if fc, err := h.e.claimFix(h.ctx, fix); err != nil || fc.Name != "factory2" {
+		t.Fatalf("claimFix once its claim ended = %+v, %v, want factory2", fc, err)
+	}
+	if who, what := h.e.startGate(memoryGate{}, []registry.Task{h.reload(busy.ID)}, 0); who != waitCopy || what != "all 1 busy" {
+		t.Fatalf("the start gate with the task at work and the fix holding its checkout = %q %q, want copy: all 1 busy for the task alone", who, what)
+	}
+	if who, _ := h.e.startGate(memoryGate{}, nil, 0); who != "" {
+		t.Fatalf("the start gate with only the fix at work holds a task (%q): the fix counts toward max_active", who)
 	}
 }
 
@@ -423,8 +458,10 @@ func TestAFixPrefersThePRsLastCopy(t *testing.T) {
 	}
 }
 
-// A restart keeps a fix's claim and its copy: the copy stays the PR's, and
-// the next claim of the same head runs only the steps a cut left undone.
+// A restart keeps a fix's claim and its copy: the copy stays the PR's, the
+// next claim of the same head runs only the steps a cut left undone, and a
+// tick lets go no checkout of fix work that goes on. In the engine a stop
+// during the claim ends its begin, and the next start's claim resumes it.
 func TestAFixClaimSurvivesAFactoryRestart(t *testing.T) {
 	r := newFixRig(t, 1, 1)
 	head := r.pushPR(r.origin, 7, "fix.txt", "v1\n")
@@ -455,5 +492,141 @@ func TestAFixClaimSurvivesAFactoryRestart(t *testing.T) {
 	}
 	if n := len(r.calls("bin/worktree-setup", "")); n != 1 {
 		t.Fatalf("the setup ran %d times, want once: the restart kept the copy", n)
+	}
+
+	// The engine: the daemon stops while the claim installs.
+	block := make(chan struct{})
+	r.mu.Lock()
+	r.blocks["bundle install factory2"] = block
+	r.mu.Unlock()
+	r.write(filepath.Join(r.root, "author-origin.git", "Gemfile.lock"), "GEM v2\n")
+	newer := r.pushPR(r.origin, 7, "fix.txt", "v2\n")
+	h := newHarness(t, func(d *Deps) {
+		d.Registry, d.Copies, d.Clock = r.reg, r.c, r.clock.Now
+		d.Magnum = &fakeMagnum{}
+	})
+	if _, err := h.e.claimFix(h.ctx, r.work(w.ID)); !errors.Is(err, ErrHeld) {
+		t.Fatalf("claimFix = %v, want a wait while its claim runs", err)
+	}
+	select {
+	case got := <-r.entered:
+		if got != "bundle install factory2" {
+			t.Fatalf("the claim blocked in %q", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the claim never reached its install")
+	}
+	h.deps.Copies = r.newCopies()
+	stopped := h.e.bgCtx
+	go func() { <-stopped.Done(); close(block) }() // the install ends with the stop's cancel, as its process group does
+	h.restart()
+	if evs := h.events(0, "fix.claim"); len(evs) != 2 || evs[1].Phase != registry.PhaseFail ||
+		!strings.Contains(evs[1].Text, "the daemon stopped before the fix took it: the next claim resumes it") {
+		t.Fatalf("fix.claim events %+v, want the begin closed by the stop", evs)
+	}
+	h.tick()
+	if res, err := h.deps.Copies.FixReserved(h.ctx); err != nil || len(res) != 1 {
+		t.Fatalf("FixReserved after the restart's tick = %+v, %v, want the PR's copy kept", res, err)
+	}
+	if _, err := h.e.claimFix(h.ctx, r.work(w.ID)); !errors.Is(err, ErrHeld) {
+		t.Fatalf("claimFix after the restart = %v, want its claim to run again", err)
+	}
+	h.e.waitBackground()
+	fc, err = h.e.claimFix(h.ctx, r.work(w.ID))
+	if err != nil || fc.Name != "factory2" || fc.Head != newer {
+		t.Fatalf("claimFix once the resumed claim ended = %+v, %v, want factory2 at %s", fc, err, newer)
+	}
+	if got, _ := r.head(fc.Path); got != newer {
+		t.Fatalf("the copy is at %s, want %s", got, newer)
+	}
+	if n := r.stepBegins("slot:factory2:fix:", "switch"); n != 2 {
+		t.Fatalf("the switch began %d times, want twice: once per head", n)
+	}
+
+	// The same cycle keeps its checkout; the next cycle claims the PR's head
+	// again, in the copy the PR holds.
+	newest := r.pushPR(r.origin, 7, "fix.txt", "v3\n")
+	if again, err := h.e.claimFix(h.ctx, r.work(w.ID)); err != nil || again.Head != newer {
+		t.Fatalf("claimFix in the same cycle = %+v, %v, want the checkout it holds at %s", again, err, newer)
+	}
+	if err := r.reg.UpdatePRWork(r.ctx, w.ID, nil, "", func(u *registry.PRWorkUpdate) { u.Set("cycle", 2) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.e.claimFix(h.ctx, r.work(w.ID)); !errors.Is(err, ErrHeld) {
+		t.Fatalf("claimFix in the next cycle = %v, want its claim to run", err)
+	}
+	h.e.waitBackground()
+	if fc, err := h.e.claimFix(h.ctx, r.work(w.ID)); err != nil || fc.Name != "factory2" || fc.Head != newest {
+		t.Fatalf("claimFix in the next cycle = %+v, %v, want factory2 at %s", fc, err, newest)
+	}
+}
+
+// A per-PR checkout goes once the PR's fix work ends: at once when the PR
+// merges or closes, once its work stayed idle for fixIdleEnd, never while
+// the work goes on. Its worktree, its fix ref and its row's hold on it go,
+// with a fix.release event.
+func TestAPerPRCheckoutIsRemovedWhenThePRsWorkEnds(t *testing.T) {
+	r := newFixRig(t, 1, 0)
+	shop := r.addShop()
+	clone := filepath.Join(r.root, "shop")
+	works := map[int]registry.PRWork{}
+	paths := map[int]string{}
+	for _, n := range []int{4, 5, 6} {
+		r.pushPR(shop, n, "fix"+strconv.Itoa(n)+".txt", "v1\n")
+		works[n] = r.prWork("example/shop", n)
+		paths[n] = r.claimFix(works[n]).Path
+	}
+	if err := r.reg.UpdatePRWork(r.ctx, works[5].ID, nil, registry.PRWorkFixing, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reg.UpdatePRWork(r.ctx, works[4].ID, nil, registry.PRWorkReviewing, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reg.UpdatePRWork(r.ctx, works[6].ID, nil, registry.PRWorkIdle, nil); err != nil {
+		t.Fatal(err)
+	}
+	mag := &fakeMagnum{prs: map[PRRef]PRState{{Repo: "example/shop", Number: 5}: {GHState: store.GHMerged}}}
+	h := newHarness(t, func(d *Deps) {
+		d.Registry, d.Copies, d.Clock, d.Magnum = r.reg, r.c, r.clock.Now, mag
+	})
+	removed := func(n int) bool {
+		_, err := os.Stat(paths[n])
+		return errors.Is(err, os.ErrNotExist) && r.slot("fix-example/shop#"+strconv.Itoa(n)).State == store.SlotRemoved
+	}
+
+	h.tick()
+	if !removed(5) {
+		t.Fatalf("the checkout of the merged PR is still there (%s)", r.slot("fix-example/shop#5").State)
+	}
+	if got := r.ref(clone, fixRef(5)); got != "" {
+		t.Fatalf("%s is still %s after its checkout went", fixRef(5), got)
+	}
+	if listed := r.gitIn(clone, "worktree", "list", "--porcelain"); strings.Contains(listed, paths[5]) {
+		t.Fatalf("the clone still lists %s:\n%s", paths[5], listed)
+	}
+	if removed(6) || removed(4) {
+		t.Fatal("a checkout went before its work ended for good")
+	}
+	evs := h.events(0, "fix.release")
+	if len(evs) != 1 || !strings.Contains(evs[0].Text, "removed fix-example/shop#5 of example/shop#5: the PR merged") {
+		t.Fatalf("fix.release events %+v, want the merged PR's removal", evs)
+	}
+
+	r.clock.Add(fixIdleEnd)
+	h.tick()
+	if !removed(6) {
+		t.Fatal("the checkout of work idle for 10 minutes is still there")
+	}
+	if removed(4) {
+		t.Fatal("the checkout of work that waits for its re-review went")
+	}
+	res, err := r.c.FixReserved(r.ctx)
+	if err != nil || !slices.Equal(res, []FixReservation{{WorkID: works[4].ID, Checkout: "fix-example/shop#4", PerPR: true}}) {
+		t.Fatalf("FixReserved = %+v, %v, want only the checkout of the work that goes on", res, err)
+	}
+
+	// The work comes back: the PR gets a checkout again.
+	if fc := r.claimFix(r.prWork("example/shop", 6)); fc.Path != paths[6] {
+		t.Fatalf("the claim of work that came back = %+v, want its checkout at %s again", fc, paths[6])
 	}
 }
