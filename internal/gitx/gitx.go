@@ -1132,11 +1132,11 @@ func (c *Client) UnpushedRef(ctx context.Context, dir, ref string) (int, error) 
 	return c.unpushed(ctx, dir, ref)
 }
 
-// UnpushedPast is Unpushed with the commits reachable from each of known
-// (commit SHAs) counted as pushed too: a head a checkout was switched to
-// that a force-push of its PR moved off every ref. Read-only.
-func (c *Client) UnpushedPast(ctx context.Context, dir string, known ...string) (int, error) {
-	return c.unpushed(ctx, dir, "HEAD", known...)
+// UnpushedPast is UnpushedRef with the commits reachable from each of
+// known (commit SHAs) counted as pushed too: a head a checkout was switched
+// to that a force-push of its PR moved off every ref. Read-only.
+func (c *Client) UnpushedPast(ctx context.Context, dir, ref string, known ...string) (int, error) {
+	return c.unpushed(ctx, dir, ref, known...)
 }
 
 // unpushed counts the commits reachable from ref on no remote-tracking ref,

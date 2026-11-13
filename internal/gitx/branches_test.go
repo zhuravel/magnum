@@ -421,6 +421,66 @@ func TestInProgressSeesARebase(t *testing.T) {
 	}
 }
 
+// InProgressStart names the commit an abort of the operation in progress
+// puts HEAD back on, in a linked worktree as a fix checkout is: a rebase's
+// original tip, which only its state and the reflog name while it replays
+// (rebase-merge/orig-head), and a cherry-pick sequence's start
+// (sequencer/head); none for a merge or a pick of one commit, which leave
+// HEAD where it is, nor with nothing in progress.
+func TestInProgressStartIsWhereAnAbortPutsHEAD(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	wt := filepath.Join(filepath.Dir(fx.clone), "wt")
+	fx.git(fx.clone, "worktree", "add", "--quiet", "--detach", wt, "main")
+	start := func() (string, string) {
+		t.Helper()
+		op, sha, err := fx.c.InProgressStart(ctx, wt)
+		if err != nil {
+			t.Fatalf("InProgressStart: %v", err)
+		}
+		return op, sha
+	}
+	if op, sha := start(); op != "" || sha != "" {
+		t.Fatalf("a quiet worktree = %q %q, want nothing", op, sha)
+	}
+	fx.git(fx.clone, "checkout", "--quiet", "-b", "other")
+	other := fx.commit(fx.clone, "README.md", "hello, other\n", "other")
+	pick := fx.commit(fx.clone, "b.txt", "b\n", "b")
+	p1 := fx.commit(wt, "a.txt", "p1\n", "p1")
+	p2 := fx.commit(wt, "README.md", "hello, p2\n", "p2")
+
+	// A replay onto other that replayed p1 and stopped on p2.
+	if _, err := fx.r.Run(ctx, gitCmd(wt, "rebase", "--onto", other, p1+"~1")); err == nil {
+		t.Fatal("the rebase did not stop")
+	}
+	if got := fx.git(wt, "rev-parse", "HEAD"); got == p1 || got == p2 {
+		t.Fatalf("HEAD during the rebase = %s, want the replayed p1", got)
+	}
+	if op, sha := start(); op != "rebase" || sha != p2 {
+		t.Fatalf("during the rebase = %q %q, want rebase and its original tip %s", op, sha, p2)
+	}
+	fx.git(wt, "rebase", "--abort")
+
+	// A merge that stopped, and a pick of one commit that did.
+	for _, cmd := range [][]string{{"merge", other}, {"cherry-pick", other}} {
+		if _, err := fx.r.Run(ctx, gitCmd(wt, cmd...)); err == nil {
+			t.Fatalf("the %s did not stop", cmd[0])
+		}
+		if op, sha := start(); op != cmd[0] || sha != "" {
+			t.Fatalf("during the %s = %q %q, want %s and no start: HEAD stays where it is", cmd[0], op, sha, cmd[0])
+		}
+		fx.git(wt, cmd[0], "--abort")
+	}
+
+	// A sequence of picks that picked one and stopped on the next.
+	if _, err := fx.r.Run(ctx, gitCmd(wt, "cherry-pick", pick, other)); err == nil {
+		t.Fatal("the sequence of picks did not stop")
+	}
+	if op, sha := start(); op != "cherry-pick" || sha != p2 {
+		t.Fatalf("during the sequence of picks = %q %q, want cherry-pick and its start %s", op, sha, p2)
+	}
+}
+
 // AbortOperation ends what InProgress names, a rebase as a merge (the
 // slot's abort step before a switch), and refuses anything else before git
 // runs: the op becomes git's subcommand.

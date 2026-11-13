@@ -5,7 +5,8 @@ package gitx
 // restored as an earlier commit had them (a revert), a fast-forward of the
 // checkout's branch, a rebase that aborts itself on a conflict, a commit's
 // patch id, which of some paths are dirty, the branches under a prefix, the
-// branch checked out and the operation a repository is in the middle of.
+// branch checked out and the operation a repository is in the middle of,
+// with the commit it started from.
 // And the fixer's `magnum fix-sync`: the commits a branch gained, a head's
 // own diff against its base as one patch id, and a replay of a checkout's
 // own commits onto a branch's new tip that aborts itself on a conflict.
@@ -21,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -734,6 +736,50 @@ func (c *Client) InProgress(ctx context.Context, repo string) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// inProgressStart are the files that name the commit an operation in
+// progress started from, by the name InProgress gives it, the first that
+// exists winning.
+var inProgressStart = map[string][]string{
+	"rebase":      {"rebase-merge/orig-head", "rebase-apply/orig-head"},
+	"cherry-pick": {"sequencer/head"},
+	"revert":      {"sequencer/head"},
+}
+
+// InProgressStart names the operation repo is in the middle of, as
+// InProgress does, and the commit it started from, which `git <op>
+// --abort` puts HEAD back on: a rebase's original tip (its orig-head, which
+// only the rebase's state and the reflog name while it replays), a
+// cherry-pick or revert sequence's start (sequencer/head). start is "" for
+// a merge and for a cherry-pick or revert of one commit, which leave HEAD
+// where it is, and with nothing in progress. Read-only.
+func (c *Client) InProgressStart(ctx context.Context, repo string) (op, start string, err error) {
+	if op, err = c.InProgress(ctx, repo); err != nil || len(inProgressStart[op]) == 0 {
+		return op, "", err
+	}
+	args := []string{"rev-parse", "--path-format=absolute"}
+	for _, f := range inProgressStart[op] {
+		args = append(args, "--git-path", f)
+	}
+	res, err := c.git(ctx, repo, call{label: "rev-parse --git-path"}, args...)
+	if err != nil {
+		return op, "", err
+	}
+	for p := range strings.SplitSeq(res.Out(), "\n") {
+		b, err := os.ReadFile(filepath.Clean(p))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return op, "", fmt.Errorf("gitx: the start of the %s in progress: %w", op, err)
+		}
+		if sha := strings.TrimSpace(string(b)); isOID(sha) {
+			return op, sha, nil
+		}
+		return op, "", fmt.Errorf("gitx: the start of the %s in progress: %s holds no commit id", op, p)
+	}
+	return op, "", nil
 }
 
 // WorktreeDiscard removes the worktree at dir of repo, modified and

@@ -507,29 +507,28 @@ func fixKeptRef(number int, sha string) string {
 	return fixKeptPrefix + strconv.Itoa(number) + "/" + sha
 }
 
-// keepUnpushed keeps got, checkout sl's HEAD, under fixKeptRef in its main
-// clone, with a factory.fix_kept event that names the ref and what comes
-// next (before), when it carries commits on no remote or magnum ref past
-// the head the PR's last claim switched to (unpushedPastClaim): a claim's
-// switch or a release leaves them on no ref, and the removal of a per-PR
-// checkout deletes the reflog that still names them. A HEAD at head, the
-// PR's remote head fetched just now, or with no such commit (the PR's own
-// old head after a force-push among them) keeps nothing. Once kept, the
-// commits count as pushed, so a step run again keeps nothing twice.
-func (c *copySet) keepUnpushed(ctx context.Context, w registry.PRWork, sl store.Slot, got, head, before string) error {
-	if got == head {
-		return nil
-	}
-	n, err := c.unpushedPastClaim(ctx, sl)
+// keepUnpushed keeps commit sha of checkout sl, what (HEAD, or the start
+// of an operation in progress, which its abort puts HEAD back on), under
+// fixKeptRef in its main clone, with a factory.fix_kept event that names
+// the ref and what comes next (before), when it carries commits on no
+// remote or magnum ref past the head the PR's last claim switched to
+// (unpushedPastClaim): a claim's switch or a release leaves them on no ref,
+// and the removal of a per-PR checkout deletes the reflog and the
+// operation's state that still name them. A commit with no such commit
+// (the PR's own old head after a force-push among them) keeps nothing.
+// Once kept, the commits count as pushed, so a step run again keeps
+// nothing twice.
+func (c *copySet) keepUnpushed(ctx context.Context, w registry.PRWork, sl store.Slot, what, sha, before string) error {
+	n, err := c.unpushedPastClaim(ctx, sl, sha)
 	if err != nil || n == 0 {
 		return err
 	}
-	ref := fixKeptRef(w.Number, got)
-	if err := c.git.KeepCommit(ctx, sl.Path, ref, got); err != nil {
+	ref := fixKeptRef(w.Number, sha)
+	if err := c.git.KeepCommit(ctx, sl.Path, ref, sha); err != nil {
 		return err
 	}
-	c.event(ctx, sl.Name, "info", "factory.fix_kept", fmt.Sprintf("HEAD %s of %s carries %d commit(s) on no remote: kept as %s before %s",
-		textx.ShortSHA(got), sl.Name, n, ref, before))
+	c.event(ctx, sl.Name, "info", "factory.fix_kept", fmt.Sprintf("%s %s of %s carries %d commit(s) on no remote: kept as %s before %s",
+		what, textx.ShortSHA(sha), sl.Name, n, ref, before))
 	return nil
 }
 
@@ -553,13 +552,19 @@ func (c *copySet) fixGuard(ctx context.Context, w registry.PRWork, owner store.P
 // PR work w's claim or its release (before, which the event names) changes
 // it, with head the PR's remote head the claim or the release fetched just
 // now ("" when the release could not): the commits of HEAD on no remote or
-// magnum ref past the PR's last claimed head are kept first (keepUnpushed),
-// so none is left on no ref, then a HEAD that moved off the recorded
-// checkout is recorded as it (checked_out_sha), with a factory.fix_head
-// event, whatever you typed into the PR's fix panes since the checkout. So
-// no commit, whoever made it, is lost or holds the checkout (head_drift,
-// unpushed_commits); only changes in its tree do, which magnum's slot guard
-// and removeWorktree hold over your typing (dirty_worktree).
+// magnum ref past the PR's last claimed head are kept first (keepUnpushed;
+// a HEAD at head has none), then those of the start of a rebase or a
+// sequence of picks left in progress (gitx.InProgressStart: `magnum
+// fix-sync` killed mid-replay leaves HEAD on a replayed commit and the
+// fixer's own tip in the rebase's state alone), which the abort of the
+// switch or the release puts HEAD back on before it moves HEAD away (a
+// start HEAD descends from was kept with HEAD), so none is left on no ref.
+// Then a HEAD that moved off the recorded checkout is recorded as it
+// (checked_out_sha), with a factory.fix_head event, whatever you typed
+// into the PR's fix panes since the checkout. So no commit, whoever made
+// it, is lost or holds the checkout (head_drift, unpushed_commits); only
+// changes in its tree do, which magnum's slot guard and removeWorktree hold
+// over your typing (dirty_worktree).
 func (c *copySet) fixOwnHead(ctx context.Context, w registry.PRWork, sl store.Slot, head, before string) error {
 	cur, err := c.st.SlotByID(ctx, sl.ID)
 	if err != nil || !fsx.Exists(cur.Path) {
@@ -569,8 +574,19 @@ func (c *copySet) fixOwnHead(ctx context.Context, w registry.PRWork, sl store.Sl
 	if err != nil {
 		return err
 	}
-	if err := c.keepUnpushed(ctx, w, cur, got, head, before); err != nil {
+	op, start, err := c.git.InProgressStart(ctx, cur.Path)
+	if err != nil {
 		return err
+	}
+	if got != head {
+		if err := c.keepUnpushed(ctx, w, cur, "HEAD", got, before); err != nil {
+			return err
+		}
+	}
+	if start != "" && start != got {
+		if err := c.keepUnpushed(ctx, w, cur, "the start of the "+op+" in progress,", start, before); err != nil {
+			return err
+		}
 	}
 	want := store.Deref(cur.CheckedOutSHA)
 	if want == "" || got == want {
@@ -584,12 +600,12 @@ func (c *copySet) fixOwnHead(ctx context.Context, w registry.PRWork, sl store.Sl
 	return nil
 }
 
-// unpushedPastClaim counts the commits of checkout sl's HEAD on no remote
-// or magnum ref and past the head its claim switched to (its open
+// unpushedPastClaim counts the commits of commit sha of checkout sl on no
+// remote or magnum ref and past the head its claim switched to (its open
 // assignment's): that head was the PR's remote head, so a force-push of the
 // PR, which moves the fix ref off it at the release's fetch, leaves it
 // pushed.
-func (c *copySet) unpushedPastClaim(ctx context.Context, sl store.Slot) (int, error) {
+func (c *copySet) unpushedPastClaim(ctx context.Context, sl store.Slot, sha string) (int, error) {
 	var claimed []string
 	switch a, err := c.st.OpenAssignmentBySlot(ctx, sl.ID); {
 	case err == nil && store.Deref(a.HeadSHA) != "":
@@ -597,7 +613,7 @@ func (c *copySet) unpushedPastClaim(ctx context.Context, sl store.Slot) (int, er
 	case err != nil && !errors.Is(err, store.ErrNotFound):
 		return 0, err
 	}
-	return c.git.UnpushedPast(ctx, sl.Path, claimed...)
+	return c.git.UnpushedPast(ctx, sl.Path, sha, claimed...)
 }
 
 // ReleaseFix hands PR work w's checkout back: a fix copy goes back to its

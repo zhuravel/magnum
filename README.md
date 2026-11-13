@@ -4701,9 +4701,11 @@ stages = [
   guard: a claim a restart cut runs only the steps it left undone, and a restart keeps the checkout the PR's.
   The guard keeps the commits on no remote that the checkout's HEAD carries, the fixer's or yours, under
   `refs/magnum/factory-kept/<N>/<sha>` of the main clone (a `factory.fix_kept` event names the ref; nothing
-  deletes it, so `git update-ref -d` it once you looked), then takes that HEAD as the checkout's own, whatever
-  you typed in its panes: a commit never holds a fix checkout, and only changes in its tree that your typing
-  explains do (`dirty_worktree`).
+  deletes it, so `git update-ref -d` it once you looked), and those of the commit a rebase or a sequence of
+  picks left in progress started from (`magnum fix-sync` killed mid-replay), which its abort puts HEAD back on
+  before the switch or the release moves it away, then takes that HEAD as the checkout's own, whatever you typed
+  in its panes: a commit never holds a fix checkout, and only changes in its tree that your typing explains do
+  (`dirty_worktree`).
   The checkout goes once the PR's fix work ends: the PR merged or closed (magnum's registry says so), or its
   work stayed idle for 10 minutes. A fix copy goes back to its pool on its placeholder, a per-PR checkout is
   removed with its fix ref, each with a `fix.release` event. The release fetches the PR's head first, so what

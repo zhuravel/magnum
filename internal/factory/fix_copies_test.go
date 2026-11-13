@@ -1152,6 +1152,93 @@ func TestACutSwitchLeavesTheNewerHeadAsTheClaims(t *testing.T) {
 	}
 }
 
+// stopRebase leaves a replay of the fixer's commits in progress in checkout
+// dir, claimed at PR number's head claimed, as `magnum fix-sync` killed
+// mid-replay does: the fixer commits p1 and p2, the PR's author pushes a
+// change of fix.txt on claimed to origin, and `git rebase --onto <new head>
+// <claimed>` replays p1 and stops on p2, which changes fix.txt too. It
+// returns HEAD, the replayed p1, and the rebase's original tip, p2.
+func (r *copiesRig) stopRebase(origin string, number int, dir, claimed string) (replayed, orig string) {
+	r.t.Helper()
+	r.commit(dir, "fixer.txt", "p1\n")
+	orig = r.commit(dir, "fix.txt", "the fixer's\n")
+	head := r.pushPR(origin, number, "fix.txt", "the author's after "+textx.ShortSHA(claimed)+"\n")
+	r.gitIn(dir, "fetch", "--quiet", "origin", "refs/pull/"+strconv.Itoa(number)+"/head")
+	if _, err := r.real.Run(r.ctx, gitCmd(dir, "rebase", "--onto", head, claimed)); err == nil {
+		r.t.Fatal("the replay of the fixer's commits did not stop")
+	}
+	replayed = r.gitIn(dir, "rev-parse", "HEAD")
+	if r.gitIn(dir, "rev-parse", replayed+"^") != head {
+		r.t.Fatalf("HEAD %s during the replay is no replayed commit on the PR's new head %s", replayed, head)
+	}
+	return replayed, orig
+}
+
+// kept reports whether clone keeps commit sha of PR number's fix checkout
+// under its own ref (fixKeptRef).
+func (r *copiesRig) kept(clone string, number int, sha string) bool {
+	r.t.Helper()
+	return r.ref(clone, fixKeptRef(number, sha)) == sha
+}
+
+// A replay left in progress (`magnum fix-sync` killed after it replayed
+// one commit onto the PR's new head and stopped on the next) holds the
+// fixer's commits in two places: HEAD, the replayed commit, and the
+// rebase's original tip, which only the rebase's state and the reflog name.
+// The release of a fix copy (whose abort puts HEAD back on that tip, then
+// whose reset moves it to the base), the removal of a per-PR checkout
+// (which deletes the rebase's state and the reflog with the worktree) and a
+// claim's switch (whose abort runs after its guard) keep both under
+// refs/magnum/factory-kept/<N>/<sha>. Only HEAD was kept, so the original
+// tip, with the commit that stopped the replay, was lost (C1 of T3b's
+// third check).
+func TestARebaseLeftInProgressKeepsItsReplayedAndItsOriginalTip(t *testing.T) {
+	r := newFixRig(t, 1, 1)
+	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
+	w := r.prWork("talkable/talkable", 7)
+	fc := r.claimFix(w)
+	replayed, orig := r.stopRebase(r.origin, 7, fc.Path, fc.Head)
+	r.releaseFix(w)
+	if sl := r.slot(fc.Name); sl.State != store.SlotFree || sl.HoldReason != nil {
+		t.Fatalf("%s after the release = %s, hold %q, want free", fc.Name, sl.State, store.Deref(sl.HoldReason))
+	}
+	if !r.kept(r.main, 7, replayed) || !r.kept(r.main, 7, orig) {
+		t.Fatalf("the fix copy's release kept %q, want the replayed %s and the original tip %s", r.keptRefs(r.main), replayed, orig)
+	}
+	if !r.eventsSay(fc.Name, "factory.fix_kept", fixKeptRef(7, orig)) {
+		t.Fatalf("no factory.fix_kept event names %s", fixKeptRef(7, orig))
+	}
+
+	// A per-PR checkout's removal.
+	shop := r.addShop()
+	r.pushPR(shop, 5, "fix.txt", "v1\n")
+	ws := r.prWork("example/shop", 5)
+	pc := r.claimFix(ws)
+	replayed, orig = r.stopRebase(shop, 5, pc.Path, pc.Head)
+	r.releaseFix(ws)
+	if sl := r.slot(pc.Name); sl.State != store.SlotRemoved || fsx.Exists(pc.Path) {
+		t.Fatalf("%s after the release = %s, want removed", pc.Name, sl.State)
+	}
+	clone := filepath.Join(r.root, "shop")
+	if !r.kept(clone, 5, replayed) || !r.kept(clone, 5, orig) {
+		t.Fatalf("the per-PR checkout's removal kept %q, want the replayed %s and the original tip %s", r.keptRefs(clone), replayed, orig)
+	}
+
+	// A claim's switch to the PR's newer head.
+	fc = r.claimFix(r.work(w.ID))
+	replayed, orig = r.stopRebase(r.origin, 7, fc.Path, fc.Head)
+	newer := r.pushPR(r.origin, 7, "other.txt", "v1\n")
+	if again := r.claimFix(r.work(w.ID)); again.Name != fc.Name || again.Head != newer {
+		t.Fatalf("the claim at the newer head = %+v, want %s at %s", again, fc.Name, newer)
+	}
+	if got, _ := r.head(fc.Path); got != newer {
+		t.Fatalf("%s is at %s after the claim, want the newer head %s", fc.Name, got, newer)
+	}
+	if !r.kept(r.main, 7, replayed) || !r.kept(r.main, 7, orig) {
+		t.Fatalf("the claim's switch kept %q, want the replayed %s and the original tip %s", r.keptRefs(r.main), replayed, orig)
+	}
+}
+
 // A per-PR checkout goes once the PR's fix work ends: at once when the PR
 // merges or closes, once its work stayed idle for fixIdleEnd, never while
 // the work goes on. Its worktree, its fix ref and its row's hold on it go,

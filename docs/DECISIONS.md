@@ -26979,7 +26979,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
     since only the claimed head counted as pushed (C2). And a commit in the checkout of the other kind held
     `dropOtherCheckout`, so the claim waited for good with no fixer to push it (C7). A commit kept is never
     lost, so a hold over it bought nothing but a checkout reserved for good; the claim's head_drift over a
-    commit after your typing went with the same rule.
+    commit after your typing went with the same rule. A rebase or a sequence of picks left in progress
+    (`magnum fix-sync` killed mid-replay, or its own abort failed) holds the fixer's commits in two places:
+    HEAD, the commit replayed last, and the operation's start (the rebase's `orig-head`, the sequence's
+    `sequencer/head`), which only its state and the reflog name. The abort of the release or the switch puts
+    HEAD back on the start, then the reset or the switch moves it away, and a per-PR checkout's removal deletes
+    the state and the reflog with the worktree; so the keep reads the start too (`gitx.InProgressStart`) and
+    keeps it as HEAD, when it carries commits on no ref past the claimed head (a start HEAD descends from is
+    kept with HEAD). Only HEAD was kept, so the commit that stopped the replay, and any after it, were lost
+    where round 1 held the release (the engine owner's C1 of T3b's third check).
   - Tests, each checked against a mutation of the code it protects: `TestAFixClaimsAFixCopyAtThePRsRemoteHead`,
     `TestFixesDoNotCountTowardMaxActive`, `TestARepoWithoutCopiesGetsAPerPRCheckoutWithoutDatabases`,
     `TestATasksCopyIsNeverAFixCopy`, `TestAFixPrefersThePRsLastCopy`, `TestAFixClaimSurvivesAFactoryRestart` and
@@ -27000,7 +27008,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `TestAReleaseFreesTheCheckoutTheFixerPushedAfterYouTypedOnceThePRMovedPastIt` (C1),
     `TestAReleaseKeepsTheFixersPushAForcePushLeftBehindAndFreesTheCheckout` (C2) and
     `TestAChangeOfFixCopiesKeepsTheFixersCommitAndClaims` (C7), each failing first, and
-    `TestACutSwitchLeavesTheNewerHeadAsTheClaims` (C4, failing first).
+    `TestACutSwitchLeavesTheNewerHeadAsTheClaims` (C4, failing first); the third check,
+    `TestARebaseLeftInProgressKeepsItsReplayedAndItsOriginalTip` (C1, failing first) with
+    `TestInProgressStartIsWhereAnAbortPutsHEAD` in internal/gitx.
   - The Redis databases. Copy n's 16 Redis databases start at n × 16 and the fix copies are numbered past the
     tasks', so a repository whose copies use Redis offsets (its `env` names `REDIS_DB_OFFSET` or renders `{n*16}`:
     `config.FactoryRepo.UsesRedis`) needs `(max_copies + fix_copies + 1) × 16` databases on that Redis, the highest

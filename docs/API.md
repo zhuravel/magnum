@@ -22783,6 +22783,15 @@ func (c *Client) InProgress(ctx context.Context, repo string) (string, error)
     InProgress names the operation repo is in the middle of: "rebase", "merge",
     "cherry-pick", "revert", or "" for none.
 
+func (c *Client) InProgressStart(ctx context.Context, repo string) (op, start string, err error)
+    InProgressStart names the operation repo is in the middle of, as InProgress
+    does, and the commit it started from, which `git <op> --abort` puts HEAD
+    back on: a rebase's original tip (its orig-head, which only the rebase's
+    state and the reflog name while it replays), a cherry-pick or revert
+    sequence's start (sequencer/head). start is "" for a merge and for a
+    cherry-pick or revert of one commit, which leave HEAD where it is, and with
+    nothing in progress. Read-only.
+
 func (c *Client) IsAncestor(ctx context.Context, dir, ancestor, rev string) (bool, error)
     IsAncestor reports whether ancestor is in rev's history (`git merge-base
     --is-ancestor`; a commit is its own ancestor). Its exit 1 is the answer no,
@@ -23156,8 +23165,8 @@ func (c *Client) Unpushed(ctx context.Context, dir string) (int, error)
     ref and no refs/magnum/* ref, i.e. work a human committed in a slot that a
     reset would orphan. A HEAD sitting on a fetched PR ref counts as zero.
 
-func (c *Client) UnpushedPast(ctx context.Context, dir string, known ...string) (int, error)
-    UnpushedPast is Unpushed with the commits reachable from each of known
+func (c *Client) UnpushedPast(ctx context.Context, dir, ref string, known ...string) (int, error)
+    UnpushedPast is UnpushedRef with the commits reachable from each of known
     (commit SHAs) counted as pushed too: a head a checkout was switched to that
     a force-push of its PR moved off every ref. Read-only.
 
