@@ -224,9 +224,11 @@ type ReviewSummary struct {
 	// writer fixed after it with no round reviewing the fix (exit
 	// cap_fixed): the ready card and the PR body name them.
 	FixedAfter []ReviewItem `json:"fixed_after,omitempty"`
-	// Limit and TaskRounds are, for a loop that ended at the round limit
-	// (exit round_limit), [factory.local_review] max_rounds then and the
-	// rounds the task ran over its life; 0 for any other end.
+	// Limit is, for a loop that ended at the round limit (exit
+	// round_limit), [factory.local_review] max_rounds then; 0 for any
+	// other end. TaskRounds is, for that end and for one by you (exit
+	// ended_by_you), the rounds the task ran over its life, which the
+	// ready card and the PR body name; 0 for any other end.
 	Limit      int `json:"limit,omitempty"`
 	TaskRounds int `json:"task_rounds,omitempty"`
 }

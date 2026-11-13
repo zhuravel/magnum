@@ -14798,7 +14798,9 @@ func FinishReviewPlan(ctx context.Context, reg *registry.Registry, l paths.Layou
     is read, or the writer's fix of its findings finishes), or, between rounds,
     the review ends at once on the writer's fix of the last round's findings,
     which no round reviews; a head no round reviewed yet gets its round first.
-    Then no round starts.
+    Then no round starts. A second opinion that has not begun after a clean
+    round does not run, and the review ends clean on that round (secondPending,
+    dropSecond).
 
 func FinishReviewQuestion(key, plan string) string
     FinishReviewQuestion is the y/N of finish-review on the task of key,
@@ -16412,9 +16414,11 @@ type ReviewSummary struct {
 	// writer fixed after it with no round reviewing the fix (exit
 	// cap_fixed): the ready card and the PR body name them.
 	FixedAfter []ReviewItem `json:"fixed_after,omitempty"`
-	// Limit and TaskRounds are, for a loop that ended at the round limit
-	// (exit round_limit), [factory.local_review] max_rounds then and the
-	// rounds the task ran over its life; 0 for any other end.
+	// Limit is, for a loop that ended at the round limit (exit
+	// round_limit), [factory.local_review] max_rounds then; 0 for any
+	// other end. TaskRounds is, for that end and for one by you (exit
+	// ended_by_you), the rounds the task ran over its life, which the
+	// ready card and the PR body name; 0 for any other end.
 	Limit      int `json:"limit,omitempty"`
 	TaskRounds int `json:"task_rounds,omitempty"`
 }
