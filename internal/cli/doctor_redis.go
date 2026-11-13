@@ -35,8 +35,9 @@ var doctorRedisTimeout = 5 * time.Second
 // theirs. A Redis that does not answer, or whose answer has no number, is
 // unknown, a warning; so is an env that names no Redis, and a PASS while
 // the agents store cannot be read. A redis-cli that is not on doctor's PATH
-// is named as such, against the factory daemon's PATH (redisCLIMissing). No
-// repository on Redis is a skip that runs nothing.
+// is named as such, against the factory daemon's PATH (redisCLIMissing), and
+// the Redis is read with the redis-cli that PATH finds. No repository on
+// Redis is a skip that runs nothing.
 func doctorRedis(ctx context.Context, d doctorDeps) []doctorCheck {
 	made, unread := factoryCopiesMade(ctx, d.Layout.FactoryAgentsDB())
 	var out []doctorCheck
@@ -66,6 +67,16 @@ type redisCopies struct {
 // copy's offset plus RedisDBsPerCopy.
 func (c redisCopies) need() int { return (c.last + 1) * config.RedisDBsPerCopy }
 
+// redisCheck is one repository's Redis check: what it says first (name and
+// needs), the Redis it reads (addr), the repository, how far its copies
+// reach, and the probe that reads the Redis's databases.
+type redisCheck struct {
+	name, needs, addr string
+	repo              config.FactoryRepo
+	copies            redisCopies
+	probe             execx.Cmd
+}
+
 // doctorRedisRepo is doctorRedis for repository r, whose copies reach
 // copies.last.
 func doctorRedisRepo(ctx context.Context, d doctorDeps, r config.FactoryRepo, copies redisCopies) doctorCheck {
@@ -75,58 +86,75 @@ func doctorRedisRepo(ctx context.Context, d doctorDeps, r config.FactoryRepo, co
 		return doctorWarned(name, needs+", and doctor cannot tell how many its Redis has: "+err.Error(),
 			"set REDIS_URL (or REDIS_HOST and REDIS_PORT) in the env of "+r.Repo+"'s [[factory.repo]]")
 	}
+	rc := redisCheck{name: name, needs: needs, addr: addr, repo: r, copies: copies, probe: cmd}
 	out, err := doctorCmd(ctx, d, cmd)
 	if errors.Is(err, exec.ErrNotFound) {
-		return redisCLIMissing(ctx, d, name, needs, addr, r)
+		return redisCLIMissing(ctx, d, rc)
 	}
+	return rc.verdict(d, out, err)
+}
+
+// verdict is the check once the probe ran: out and err are what
+// `CONFIG GET databases` answered. A Redis that does not answer, or whose
+// answer has no number, is unknown, a WARN; fewer databases than the copies
+// need a FAIL; the copies made unread, a WARN; otherwise a PASS.
+func (rc redisCheck) verdict(d doctorDeps, out string, err error) doctorCheck {
 	if err != nil {
-		return doctorWarned(name, fmt.Sprintf("%s; how many the Redis at %s has is unknown, since it does not answer: %s", needs, addr, err.Error()),
-			"start the Redis at "+addr+", then run `magnum doctor` again")
+		return doctorWarned(rc.name, fmt.Sprintf("%s; how many the Redis at %s has is unknown, since it does not answer: %s", rc.needs, rc.addr, err.Error()),
+			"start the Redis at "+rc.addr+", then run `magnum doctor` again")
 	}
 	have, ok := redisDatabasesOf(out)
 	switch {
 	case !ok:
-		return doctorWarned(name, fmt.Sprintf("%s; how many the Redis at %s has is unknown: CONFIG GET databases answered %q", needs, addr,
-			textx.Clip(textx.FirstLine(out), 80)), "let the Redis at "+addr+" answer CONFIG GET databases (a renamed CONFIG or an ACL hides it)")
-	case have < copies.need():
-		return redisTooFew(name, needs, addr, r, copies, have)
-	case copies.unread != nil:
-		return doctorWarned(name, fmt.Sprintf("%s, and the Redis at %s has %d; which copies the factory made, past max_copies + fix_copies, is unknown: %s",
-			needs, addr, have, copies.unread.Error()), "let doctor read "+inspTilde(d.Layout.FactoryAgentsDB())+", then run `magnum doctor` again")
+		return doctorWarned(rc.name, fmt.Sprintf("%s; how many the Redis at %s has is unknown: CONFIG GET databases answered %q", rc.needs, rc.addr,
+			textx.Clip(textx.FirstLine(out), 80)), "let the Redis at "+rc.addr+" answer CONFIG GET databases (a renamed CONFIG or an ACL hides it)")
+	case have < rc.copies.need():
+		return redisTooFew(rc.name, rc.needs, rc.addr, rc.repo, rc.copies, have)
+	case rc.copies.unread != nil:
+		return doctorWarned(rc.name, fmt.Sprintf("%s, and the Redis at %s has %d; which copies the factory made, past max_copies + fix_copies, is unknown: %s",
+			rc.needs, rc.addr, have, rc.copies.unread.Error()), "let doctor read "+inspTilde(d.Layout.FactoryAgentsDB())+", then run `magnum doctor` again")
 	}
-	return doctorOK(name, fmt.Sprintf("%s, and the Redis at %s has %d", needs, addr, have))
+	return doctorOK(rc.name, fmt.Sprintf("%s, and the Redis at %s has %d", rc.needs, rc.addr, have))
 }
 
-// redisCLIMissing is repository r's check when redis-cli is not on
-// doctor's own PATH, which is no Redis that does not answer: how many
-// databases the Redis at addr has is unknown. Where the factory daemon's
-// PATH finds it (doctorDaemonLookPath), its claims flush: a WARN that names
-// doctor's PATH. Where doctor cannot tell (the login shell did not answer),
-// a WARN. Where it does not, a WARN, and a FAIL where the copies' env names
-// REDIS_DB_OFFSET, since each claim of a copy flushes its Redis databases
-// with redis-cli too, and those claims fail. Each says, when the daemon
-// recorded no PATH, that doctor rebuilt the daemon's from today's
+// redisCLIMissing is the check when redis-cli is not on doctor's own PATH,
+// which is no Redis that does not answer. Where the factory daemon's PATH
+// finds it (doctorDaemonLookPath), doctor reads the Redis's databases with
+// that redis-cli, as the claims' flush runs it: the usual verdict, with a
+// note on doctor's PATH, and "so its claims flush" only where the count
+// passes. Where doctor cannot tell (the login shell did not answer), a WARN.
+// Where the daemon's PATH lacks it too, a WARN, and a FAIL where the copies'
+// env names REDIS_DB_OFFSET, since each claim of a copy flushes its Redis
+// databases with redis-cli too, and those claims fail. Each says, when the
+// daemon recorded no PATH, that doctor rebuilt the daemon's from today's
 // configuration.
-func redisCLIMissing(ctx context.Context, d doctorDeps, name, needs, addr string, r config.FactoryRepo) doctorCheck {
+func redisCLIMissing(ctx context.Context, d doctorDeps, rc redisCheck) doctorCheck {
 	fix := "install redis-cli (it comes with Redis) where the factory daemon's PATH finds it, then run `magnum doctor` again"
 	look := doctorDaemonLookPath(ctx, d, "redis-cli")
 	switch {
 	case look.at != "":
-		return doctorWarned(name, fmt.Sprintf("%s; redis-cli is not on doctor's PATH, so how many the Redis at %s has is unknown, "+
-			"while the factory daemon's PATH finds it at %s, so its claims flush%s", needs, addr, inspTilde(look.at), look.note()),
-			"run `magnum doctor` from a shell whose PATH finds redis-cli, as the factory daemon's does")
+		rc.probe.Name = look.at
+		out, err := doctorCmd(ctx, d, rc.probe)
+		c := rc.verdict(d, out, err)
+		c.Detail += fmt.Sprintf("; redis-cli is not on doctor's PATH, so doctor read the Redis with the one the factory daemon's PATH finds at %s",
+			inspTilde(look.at))
+		if c.Status == doctorPass {
+			c.Detail += ", so its claims flush"
+		}
+		c.Detail += look.note()
+		return c
 	case !look.known:
-		return doctorWarned(name, fmt.Sprintf("%s; redis-cli is not on doctor's PATH, so how many the Redis at %s has is unknown, "+
+		return doctorWarned(rc.name, fmt.Sprintf("%s; redis-cli is not on doctor's PATH, so how many the Redis at %s has is unknown, "+
 			"and whether the factory daemon's PATH finds it is unknown: the login shell, whose PATH [daemon] shell_path adds to it, "+
-			"did not answer%s", needs, addr, look.note()), fix)
+			"did not answer%s", rc.needs, rc.addr, look.note()), fix)
 	}
 	detail := fmt.Sprintf("%s; redis-cli is not on PATH, neither doctor's nor the factory daemon's, so how many the Redis at %s has is unknown",
-		needs, addr)
-	if _, flushes := r.Env[config.RedisOffsetEnv]; flushes {
-		return doctorFailed(name, detail+fmt.Sprintf(", and each claim of %s's copies flushes their Redis databases with it: those claims fail%s",
-			r.Repo, look.note()), fix)
+		rc.needs, rc.addr)
+	if _, flushes := rc.repo.Env[config.RedisOffsetEnv]; flushes {
+		return doctorFailed(rc.name, detail+fmt.Sprintf(", and each claim of %s's copies flushes their Redis databases with it: those claims fail%s",
+			rc.repo.Repo, look.note()), fix)
 	}
-	return doctorWarned(name, detail+look.note(), fix)
+	return doctorWarned(rc.name, detail+look.note(), fix)
 }
 
 // daemonLook is where the PATH the factory daemon runs with finds a file

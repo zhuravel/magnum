@@ -4652,8 +4652,9 @@ stages = [
   answer, since how many it has is then unknown. A `redis-cli` that is not on doctor's PATH is named as such, and
   weighed against the PATH the running factory daemon recorded at its start (launchd's, with your login shell's
   directories under `[daemon] shell_path`, as its start appended them; an older daemon, or none running, recorded
-  none, and doctor then rebuilds that PATH from today's configuration and says so): a WARN that says where that
-  PATH finds it, else, with its install as the fix, a FAIL when the
+  none, and doctor then rebuilds that PATH from today's configuration and says so): where that PATH finds one,
+  doctor reads the Redis with it, as the claims' flush does, and gives the verdict above (a PASS says "so its claims
+  flush"); else, with its install as the fix, a FAIL when the
   `env` names `REDIS_DB_OFFSET`, since each claim's flush needs it too, a WARN otherwise. Its highest copy is
   also one the factory already made past
   `max_copies + fix_copies` (a pool slot of its agents store): a lower `max_copies` or `fix_copies` retires no

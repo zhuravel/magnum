@@ -27093,7 +27093,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   configuration". No migration: a kv row. Tests, failing first:
   `TestDoctorWeighsAMissingRedisCLIAgainstThePATHTheRunningFactoryDaemonRecorded` (the record decides over
   `shell_path` and a new ask both ways, with no ask of the shell; another pid's record and no daemon running are
-  rebuilt and said so) and `TestTheFactoryDaemonRecordsThePATHItRunsWith`.
+  rebuilt and said so) and `TestTheFactoryDaemonRecordsThePATHItRunsWith`. Where that PATH finds a `redis-cli`
+  that doctor's own PATH lacks, doctor reads the Redis's databases with it (`redisCLIMissing`: the same probe with
+  the command's name set to the path found, then the usual verdict, `redisCheck.verdict`), as the claims' flush
+  runs it. The check returned at once with a WARN that said "so its claims flush" and read nothing, so a Redis
+  of 64 databases under copies 4 and 5 showed no FAIL from a doctor run in the herdr popup, whose PATH lacks
+  `/opt/homebrew/bin`, and the words asserted what doctor had not checked (C4). Now fewer databases are the
+  FAIL of `redisTooFew`, a Redis that does not answer or an answer with no number a WARN, and only a PASS says
+  "so its claims flush"; each carries "redis-cli is not on doctor's PATH, so doctor read the Redis with the one
+  the factory daemon's PATH finds at" and its path. A count that suffices is a PASS, not the WARN of before: nothing
+  is left unread, and a doctor PATH without redis-cli is no fault of the daemon's. Test, failing first:
+  `TestDoctorReadsTheRedisWithTheRedisCLIThatTheDaemonsPATHFinds` (a count that suffices, one with too few, a
+  Redis down, an answer with no number; the command that ran is the one found, its password in
+  `REDISCLI_AUTH` only), and `TestDoctorFailsAMissingRedisCLIOnlyWhenTheDaemonsPATHLacksItToo` and the
+  recorded-PATH test now expect that PASS.
 
 ## Learned rules
 
