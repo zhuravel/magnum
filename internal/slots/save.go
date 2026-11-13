@@ -375,22 +375,24 @@ type cappedWriter struct {
 	n     int64
 	over  bool
 	err   error
+	done  bool // over, or err: nothing more is written
 }
 
+// Write writes p to w, or nothing once the writer is done; it never
+// fails its caller, whose output the writer keeps or drops (over, err).
 func (c *cappedWriter) Write(p []byte) (int, error) {
-	if c.over || c.err != nil {
-		return len(p), nil
-	}
-	if c.n+int64(len(p)) > c.limit {
-		c.over = true
+	switch {
+	case c.done:
+	case c.n+int64(len(p)) > c.limit:
+		c.over, c.done = true, true
 		c.stop()
-		return len(p), nil
-	}
-	n, err := c.w.Write(p)
-	c.n += int64(n)
-	if err != nil {
-		c.err = err
-		c.stop()
+	default:
+		n, err := c.w.Write(p)
+		c.n += int64(n)
+		if err != nil {
+			c.err, c.done = err, true
+			c.stop()
+		}
 	}
 	return len(p), nil
 }

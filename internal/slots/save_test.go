@@ -246,6 +246,7 @@ func TestARemovalSavesTheUntrackedFilesWithinTheCap(t *testing.T) {
 // file or one the patch did not share passed it too.
 func TestTheCapIsSharedByThePatchAndTheFiles(t *testing.T) {
 	remove := func(t *testing.T, write func(dir string)) (save, note string) {
+		t.Helper()
 		f := newPerPR(t, true)
 		h := f.h
 		h.m.saveCap = 1500
@@ -463,6 +464,7 @@ func TestAWholePatchOfNoBytesWritesNoChangesDiff(t *testing.T) {
 // is saved. The old check used the ignored spelling and could not fail.
 func TestASaveLeavesOutOnlyTheMiseFileMagnumRendered(t *testing.T) {
 	newRendered := func(t *testing.T) (*perPRFixture, store.Slot) {
+		t.Helper()
 		f := newPerPR(t, true)
 		writeFile(t, filepath.Join(f.main, MiseLocal), "[env]\nA = \"1\"\n")
 		sl, err := f.h.m.CreatePRWorktree(f.h.ctx, f.watch, f.repoName(), f.pr, f.sha7)
@@ -532,6 +534,7 @@ func TestASaveLeavesOutOnlyTheMiseFileMagnumRendered(t *testing.T) {
 // to a folder of keys copies no key into the saves.
 func TestARemovalSavesNothingMagnumWroteAndASymlinkAsTheLink(t *testing.T) {
 	setup := func(t *testing.T) (*perPRFixture, store.Slot) {
+		t.Helper()
 		f := newPerPR(t, true)
 		h := f.h
 		writeFile(t, filepath.Join(f.main, "master.key"), "main clone secret\n")
