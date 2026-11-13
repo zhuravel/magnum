@@ -668,6 +668,14 @@ func (e *Engine) settleConfirmedPush(ctx context.Context, repo store.Repo, pr st
 		return
 	}
 	defer e.unreserve(pr.ID)
+	if rec.Kind == fixPushUnconfirmed { // fix_owner.go: the late settle writes the loop's row again, as a start does
+		if err := e.ownerRefusal(ctx, fmt.Sprintf("%s#%d", repo.FullName(), pr.Number), pr.ID); err != nil {
+			if e.logOnce(fmt.Sprintf("late-settle-owner:%d", pr.ID), err.Error(), e.now()) {
+				e.log.Warn("fix: an unconfirmed push is not settled late", "subject", prSubject(repo, pr.Number), "why", err.Error())
+			}
+			return
+		}
+	}
 	ctx = github.WithOp(context.WithoutCancel(ctx), opFixSettle) // github_cost.go
 	subject := prSubject(repo, pr.Number)
 	job, err := e.pushJob(ctx, repo, pr, rec)

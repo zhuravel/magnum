@@ -684,6 +684,9 @@ func (e *Engine) prepareMerge(ctx context.Context, pr store.PR, fetch bool) (*fi
 	}
 	full := repo.FullName()
 	label := fmt.Sprintf("%s#%d", full, pr.Number)
+	if err := e.ownerRefusal(ctx, label, pr.ID); err != nil { // fix_owner.go
+		return nil, "", err
+	}
 	w := e.cfg.WatchFor(full)
 	if w == nil {
 		return nil, "", fmt.Errorf("%s is not watched (no [[watch]] covers it)", full)

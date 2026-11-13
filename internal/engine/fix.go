@@ -358,6 +358,10 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 		return "", err
 	}
 	subject := prSubject(repo, pr.Number)
+	// fix_owner.go: a PR magnum does not fix gets none of its fix requests
+	if err := e.ownerRefusal(ctx, fmt.Sprintf("%s#%d", repo.FullName(), pr.Number), pr.ID); err != nil {
+		return "", err
+	}
 	switch {
 	case p.Mode != "" && p.Mode != FixModeMerge && p.Mode != FixModeCI:
 		return "", fmt.Errorf("magnum fix: no mode %q", p.Mode)
@@ -537,6 +541,9 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState, pin
 	}
 	full := repo.FullName()
 	label := fmt.Sprintf("%s#%d", full, pr.Number)
+	if err := e.ownerRefusal(ctx, label, pr.ID); err != nil { // fix_owner.go
+		return nil, err
+	}
 	w := e.cfg.WatchFor(full)
 	if w == nil {
 		return nil, fmt.Errorf("%s is not watched (no [[watch]] covers it)", full)
@@ -906,8 +913,14 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 // needs the PR still without a row; a next cycle needs the row still to be
 // prev's loop waiting at prev's cycle, and replaces that very row
 // (Store.SetKVIf), or it is refused with errFixLoopGone. From the
-// reservation on, a stop goes to the job instead.
+// reservation on, a stop goes to the job instead. The PR's owner row is
+// read again first, under the reservation, which the handover's flip
+// takes too (fix_owner.go): a PR the factory took since prepareFix looked
+// gets no row.
 func (e *Engine) claimFixRow(ctx context.Context, job *fixJob, prev, st FixState) error {
+	if err := e.ownerRefusal(ctx, job.label(), job.pr.ID); err != nil {
+		return err
+	}
 	cur, raw, ok, err := e.fixRow(ctx, job.pr.ID)
 	switch {
 	case err != nil:

@@ -139,6 +139,9 @@ func (e *Engine) holdFix(ctx context.Context, pr store.PR, dry bool, by string, 
 	if h, ok, err := readKVJSON[heldFix](ctx, e, key, "held fix"); err == nil && ok {
 		return fmt.Sprintf("held already (asked %s); %s", h.At.Local().Format("15:04"), stands), nil
 	}
+	if err := e.ownerRefusal(ctx, label, pr.ID); err != nil { // fix_owner.go: a held fix is one a fixer starts from
+		return "", err
+	}
 	if err := writeKVJSON(ctx, e, key, "held fix", rec); err != nil {
 		return "", fmt.Errorf("%s: %s, and the fix could not be held %s: %w", label, why, what, err)
 	}
@@ -224,7 +227,10 @@ func (e *Engine) startHeldFix(ctx context.Context, prID int64, after string) boo
 	if readErr == nil && h.By == autofixBy {
 		gone = e.autofixGone(ctx, repo, pr) // nobody asked: autofix's own checks again (fix_loop.go)
 	}
+	owner := e.ownerRefusal(ctx, fmt.Sprintf("%s#%d", repo.FullName(), pr.Number), pr.ID) // fix_owner.go
 	switch {
+	case owner != nil:
+		why = owner.Error()
 	case readErr != nil:
 		why = "its record does not read"
 	case pr.HeadSHA != h.Head:

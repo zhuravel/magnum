@@ -105,6 +105,13 @@ func (e *Engine) autofixOpen(ctx context.Context) error {
 			}
 			continue
 		}
+		// fix_owner.go: a PR magnum does not fix gets no look, which starts loops and writes the ledger the factory imported
+		if err := e.ownerRefusal(ctx, fmt.Sprintf("%s#%d", repo.FullName(), pr.Number), pr.ID); err != nil {
+			if e.logOnce(fmt.Sprintf("open-owner:%d", pr.ID), err.Error(), e.now()) {
+				e.log.Info("autofix open: no look at the PR", "subject", prSubject(repo, pr.Number), "why", err.Error())
+			}
+			continue
+		}
 		c := openCand{pr: pr, repo: repo, w: w}
 		if raw, ok := e.getKV(ctx, kvPRFixSeen(pr.ID)); ok {
 			c.raw = raw
