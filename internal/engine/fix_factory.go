@@ -61,15 +61,17 @@ func (e *Engine) fixRefRefusal(ctx context.Context, pr store.PR, label string, p
 	return ""
 }
 
-// keepFixRef keeps with PR prID the factory's fix that the forced round p
-// asks for re-reviews (kvPRFixRef), or, for any other forced round, drops
-// one an earlier request left.
-func (e *Engine) keepFixRef(ctx context.Context, prID int64, p ReviewPayload) {
+// keepFixRef keeps with pr the factory's fix that the forced round p asks
+// for re-reviews (kvPRFixRef), or, for any other forced round (by: who
+// forces it), ends one an earlier request left (endFixRef: stopped, by),
+// whose round this one takes the place of: no end of the factory's fix
+// goes unsaid.
+func (e *Engine) keepFixRef(ctx context.Context, repo store.Repo, pr store.PR, p ReviewPayload, by string) {
 	if p.FixRef == nil {
-		e.delKV(ctx, kvPRFixRef(prID))
+		e.endFixRef(ctx, repo, pr, pipeline.OutcomeStopped, by)
 		return
 	}
-	e.setKV(ctx, kvPRFixRef(prID), rowJSON(fixRefRow{FixRef: *p.FixRef, LocalRound: p.LocalRound, At: e.now().UTC()}))
+	e.setKV(ctx, kvPRFixRef(pr.ID), rowJSON(fixRefRow{FixRef: *p.FixRef, LocalRound: p.LocalRound, At: e.now().UTC()}))
 }
 
 // fixRefOf is the factory's fix PR prID's forced round re-reviews (nil:
@@ -89,14 +91,23 @@ func (e *Engine) fixRefOf(ctx context.Context, prID int64) (*fixRefRow, string) 
 // fixRefAfterRound passes on the factory's fix the round of job
 // re-reviewed (roundJob.fixRef, taken at its dispatch): the round's end,
 // its outcome, head and review, with the fix and its local round, in a
-// fix.factory_round event, which the factory reads; the PR's row of it goes
-// while it is the one the round took. A round whose judge turn paused on a
-// usage limit or a lost login (pauseContinues) has not ended: the turn
-// continues as the same round once the pause lifts, so the row stays for
-// the continue to take at its dispatch, and no event says it ended (as
-// magnum's own loop waits for it, continueFixLoop).
+// fix.factory_round event, which the factory reads. The event is written
+// once: only when the round's own delete takes the PR's row of the fix, the
+// one the round took, so a stop that ended the fix first (between the
+// round's unreserve and this, endFixRef) leaves it unsaid here. A round
+// whose judge turn paused on a usage limit or a lost login (pauseContinues)
+// has not ended: the turn continues as the same round once the pause
+// lifts, so the row stays for the continue to take at its dispatch, and no
+// event says it ended (as magnum's own loop waits for it, continueFixLoop).
 func (e *Engine) fixRefAfterRound(ctx context.Context, job *roundJob, res pipeline.RoundResult) {
 	if job.fixRef == nil || e.pauseContinues(ctx, job.pr, res.Outcome) {
+		return
+	}
+	switch gone, err := e.st.DeleteKVIf(ctx, kvPRFixRef(job.pr.ID), job.fixRefRaw); {
+	case err != nil:
+		e.warnUnlessStopped(ctx, err, "drop the factory's fix of a round", "pr", job.pr.ID)
+		return
+	case !gone: // another end of the fix took the row: it said so
 		return
 	}
 	r := job.fixRef
@@ -109,9 +120,6 @@ func (e *Engine) fixRefAfterRound(ctx context.Context, job *roundJob, res pipeli
 	}
 	e.event(ctx, "info", prSubject(job.repo, job.pr.Number), "fix.factory_round", fmt.Sprintf("%s ended %s: the re-review of the factory's push of %s (cycle %d)",
 		roundName(res), cmpOrOutcome(res.Outcome), textx.ShortSHA(r.FixRef.Head), r.FixRef.Cycle), data)
-	if _, err := e.st.DeleteKVIf(ctx, kvPRFixRef(job.pr.ID), job.fixRefRaw); err != nil {
-		e.warnUnlessStopped(ctx, err, "drop the factory's fix of a round", "pr", job.pr.ID)
-	}
 }
 
 // factoryAbortBy is who stops the factory's re-review when the factory
@@ -123,11 +131,21 @@ const factoryAbortBy = "the factory's abort"
 // its end (stopPR, dropQueued, endFixRefAtClose): fix.factory_round names
 // the fix with the outcome (stopped, or closed) and who stopped it (by:
 // `magnum abort`, `magnum ignore`, the factory's abort, the PR's close), so
-// the factory's loop stops waiting for the round, and the row goes. A row
-// that does not read goes without an event; a PR with none is left alone.
+// the factory's loop stops waiting for the round, and the row goes. The
+// event is written once: only when this delete takes the row read, so the
+// round's own end, or another stop, that took it first said so already. A
+// row that does not read goes without an event; a PR with none is left
+// alone.
 func (e *Engine) endFixRef(ctx context.Context, repo store.Repo, pr store.PR, outcome, by string) {
 	r, raw := e.fixRefOf(ctx, pr.ID)
 	if raw == "" {
+		return
+	}
+	switch gone, err := e.st.DeleteKVIf(ctx, kvPRFixRef(pr.ID), raw); {
+	case err != nil:
+		e.warnUnlessStopped(ctx, err, "drop the factory's fix of a stopped round", "pr", pr.ID)
+		return
+	case !gone:
 		return
 	}
 	if r != nil {
@@ -137,9 +155,6 @@ func (e *Engine) endFixRef(ctx context.Context, repo store.Repo, pr store.PR, ou
 		}
 		e.event(ctx, "info", prSubject(repo, pr.Number), "fix.factory_round", fmt.Sprintf("the re-review of the factory's push of %s (cycle %d) ended %s: %s",
 			textx.ShortSHA(r.FixRef.Head), r.FixRef.Cycle, outcome, by), data)
-	}
-	if _, err := e.st.DeleteKVIf(ctx, kvPRFixRef(pr.ID), raw); err != nil {
-		e.warnUnlessStopped(ctx, err, "drop the factory's fix of a stopped round", "pr", pr.ID)
 	}
 }
 

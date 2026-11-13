@@ -210,6 +210,69 @@ func pausedFactoryRound(t *testing.T, ref fixwork.FixRef) *harness {
 	return h
 }
 
+// The end of the factory's re-review is written once, by whichever end
+// takes the PR's fix row first (C6): a stop served between a round's
+// unreserve and its fixRefAfterRound ends the fix, and the round's own end
+// then writes nothing; a round's end that came first leaves a later stop
+// nothing to end; and the operator's review that takes the place of a fix
+// kept without a forced round ends it once, by "magnum review", so no
+// deleter of the row is silent.
+func TestTheEndOfTheFactorysReReviewIsWrittenOnce(t *testing.T) {
+	storetest.Parallel(t)
+	ref := fixwork.FixRef{Work: 7, Cycle: 1, Head: "b2"}
+	// job is the round of PR #2 that took the fix, as dispatch takes it.
+	job := func(h *harness) *roundJob {
+		h.t.Helper()
+		if r := h.reReviewOf(ref); r.State != store.RequestDone {
+			h.t.Fatalf("the factory's re-review: %s %q", r.State, deref(r.Result))
+		}
+		repo, pr, err := h.e.resolve(h.ctx, PRTarget{Ref: "2"})
+		if err != nil {
+			h.t.Fatal(err)
+		}
+		j := &roundJob{pr: pr, repo: repo}
+		if j.fixRef, j.fixRefRaw = h.e.fixRefOf(h.ctx, pr.ID); j.fixRef == nil {
+			h.t.Fatal("no fix kept")
+		}
+		return j
+	}
+	ended := pipeline.RoundResult{Outcome: pipeline.OutcomeError, Round: 2, TargetSHA: "b2"}
+	t.Run("a stop, then the round's end", func(t *testing.T) {
+		h := leaseHarness(t, &fakeLease{})
+		j := job(h)
+		h.e.endFixRef(h.ctx, j.repo, j.pr, pipeline.OutcomeStopped, "magnum abort")
+		h.e.fixRefAfterRound(h.ctx, j, ended)
+		if outcome, by := factoryRoundOf(t, h, ref); outcome != pipeline.OutcomeStopped || by != "magnum abort" {
+			t.Errorf("fix.factory_round = %s by %q, want the stop's alone", outcome, by)
+		}
+	})
+	t.Run("the round's end, then a stop", func(t *testing.T) {
+		h := leaseHarness(t, &fakeLease{})
+		j := job(h)
+		h.e.fixRefAfterRound(h.ctx, j, ended)
+		h.e.endFixRef(h.ctx, j.repo, j.pr, pipeline.OutcomeStopped, "magnum abort")
+		if outcome, _ := factoryRoundOf(t, h, ref); outcome != pipeline.OutcomeError {
+			t.Errorf("fix.factory_round = %s, want the round's alone", outcome)
+		}
+	})
+	t.Run("your review takes the place of a fix kept without its round", func(t *testing.T) {
+		h := leaseHarness(t, &fakeLease{})
+		j := job(h)
+		if err := h.st.UpdatePR(h.ctx, j.pr.ID, func(u *store.PRUpdate) { u.Set("forced", false) }); err != nil {
+			t.Fatal(err)
+		}
+		review := h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}})
+		h.handle()
+		if r := h.request(review); r.State != store.RequestDone {
+			t.Fatalf("magnum review: %s %q", r.State, deref(r.Result))
+		}
+		h.e.fixRefAfterRound(h.ctx, j, ended)
+		if outcome, by := factoryRoundOf(t, h, ref); outcome != pipeline.OutcomeStopped || by != "magnum review" {
+			t.Errorf("fix.factory_round = %s by %q, want stopped by your review", outcome, by)
+		}
+	})
+}
+
 // closePR2 merges PR #2 on GitHub and lets the poll confirm it (twice, a
 // confirmGap apart): the PR moves to closed.
 func closePR2(h *harness) {

@@ -603,7 +603,7 @@ func (e *Engine) forceReview(ctx context.Context, repo store.Repo, pr store.PR, 
 	} else {
 		e.delKV(ctx, kvPRRedecide(pr.ID)) // this request is a review, whatever an earlier one asked
 	}
-	e.keepFixRef(ctx, pr.ID, p) // fix_factory.go: the factory's fix this round re-reviews, or none
+	e.keepFixRef(ctx, repo, pr, p, by) // fix_factory.go: the factory's fix this round re-reviews, or none
 	if p.FixRef != nil {
 		by = factoryFixBy
 	}
