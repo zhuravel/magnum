@@ -368,7 +368,7 @@ func TestConfigFailsOnACriticPromptThisBuildCannotRender(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.Pipeline.PromptsDir = dir
-	c := &Context{Version: "test", Layout: f.Ctx.Layout, Config: cfg, Stdout: f.Out, Stderr: f.Err}
+	c := &Context{Version: "test", Layout: f.Ctx.Layout, preset: cfg, Stdout: f.Out, Stderr: f.Err} // loaded by the command
 	if code := execute(c, []string{"config"}); code != 1 {
 		t.Fatalf("exit %d, want 1: %s", code, f.Out.String())
 	}
