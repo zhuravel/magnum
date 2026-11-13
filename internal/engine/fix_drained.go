@@ -213,6 +213,53 @@ func (f fixFlight) records(pr store.PR, label string, handing bool, now time.Tim
 	return out
 }
 
+// endOrphanFixRuns ends the fixer's runs of pr (of repo) whose verdict is
+// not written while no fix loop backs them (a settle whose run update
+// failed after the loop's row went: the morning list names each, `magnum
+// abort` its action), for `magnum abort` (abortFixLoop): under a
+// reservation of its own, so that no fix job starts meanwhile, the loop's
+// row is read again and, with none, each such run is abandoned. It says
+// what it ended ("": none, or a loop backs them now); a PR something holds
+// is an error, to ask again.
+func (e *Engine) endOrphanFixRuns(ctx context.Context, repo store.Repo, pr store.PR) (string, error) {
+	orphans := func() ([]store.Run, error) {
+		runs, err := e.st.ActiveRuns(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return slices.DeleteFunc(runs, func(r store.Run) bool { return r.Kind != store.RunFix || r.PRID != pr.ID }), nil
+	}
+	if runs, err := orphans(); err != nil || len(runs) == 0 {
+		return "", err
+	}
+	if e.d.DryRun {
+		return "dry run: would end the fixer's runs no fix loop backs", nil
+	}
+	if !e.reserve(pr.ID, &roundHandle{cancel: func() {}, stop: roundStop{stopping: true}}) {
+		return "", fmt.Errorf("%s; run `magnum abort %s#%d` again shortly", e.heldReason(pr.ID), repo.FullName(), pr.Number)
+	}
+	defer e.unreserve(pr.ID)
+	if _, raw, _, err := e.fixRow(ctx, pr.ID); raw != "" || err != nil {
+		return "", err // a loop backs them now: the abort is the loop's
+	}
+	runs, err := orphans()
+	if err != nil {
+		return "", err
+	}
+	var ended []string
+	for _, r := range runs {
+		if e.abandonFixRun(ctx, r, "ended by magnum abort: no fix loop backs it") {
+			ended = append(ended, r.ID)
+		}
+	}
+	if len(ended) == 0 {
+		return "", nil
+	}
+	e.event(ctx, "info", prSubject(repo, pr.Number), "fix.run_ended", "magnum abort ended the fixer's runs no fix loop backs: "+strings.Join(ended, ", "),
+		map[string]any{"runs": ended})
+	return fmt.Sprintf("ended the fixer's %s %s, which no fix loop backs", textx.Plural(len(ended), "run", "runs"), strings.Join(ended, ", ")), nil
+}
+
 // loopRecord is a loop's row raw as fix work in flight on the PR label.
 func loopRecord(raw, label string, handing bool) FixRecord {
 	rec := FixRecord{Kind: FixRecLoop, What: "a fix loop whose row does not read", Action: fmt.Sprintf("`magnum abort %s` clears it", label)}

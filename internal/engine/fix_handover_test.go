@@ -483,6 +483,35 @@ func TestBackAllsDryRunJudgesThePRsAsAfterTheLift(t *testing.T) {
 	}
 }
 
+// A fixer's run whose verdict was never written while no fix loop backs it
+// (its settle's run update failed after the loop's row went) keeps its PR
+// from handing over, and the morning list's action for it, `magnum abort`,
+// ends it: the run is abandoned, and the PR is quiet.
+func TestAbortEndsAFixRunNoLoopBacks(t *testing.T) {
+	h, _ := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", nil)
+	run, err := h.st.CreateRun(h.ctx, store.Run{ID: "fix-run-1", PRID: pr.ID, Round: 1, Role: "claude-fix", Kind: store.RunFix,
+		TargetSHA: fixHead, Identity: "zhuravel", State: store.RunEnded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, recs, err := h.e.fixQuiet(h.ctx, h.heldRepo(), pr)
+	if err != nil || len(recs) != 1 || recs[0].Kind != FixRecRun || !strings.Contains(recs[0].Action, "`magnum abort talkable/talkable#2` ends it") {
+		t.Fatalf("records = %+v (%v), want the run with magnum abort as its action", recs, err)
+	}
+	id := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.handle()
+	if r := h.request(id); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "fix-run-1") {
+		t.Errorf("magnum abort: %s %q", r.State, deref(r.Result))
+	}
+	if cur, err := h.st.RunByID(h.ctx, run.ID); err != nil || cur.State != store.RunAbandoned {
+		t.Errorf("the run = %s (%v), want abandoned", cur.State, err)
+	}
+	if q, recs, err := h.e.fixQuiet(h.ctx, h.heldRepo(), pr); err != nil || !q {
+		t.Errorf("quiet = %v, %+v, %v; want quiet once the run ended", q, recs, err)
+	}
+}
+
 // The morning list's drops end the records that keep a PR from handing
 // over and do not end by themselves: `magnum fix --drop-push` drops the
 // record of a fixer's push kept for its late settle, and `magnum

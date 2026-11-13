@@ -927,14 +927,23 @@ const abortFixLoopTries = 3
 // works under; with no reservation, the row read goes (endFixLoopRow, a
 // compare-and-set), and a row that changed since it was read (a cycle took
 // the loop on) is looked at again. A PR without a loop has its held fix
-// taken back (dropHeldFix). It reports whether it
-// answered the request (false: the PR has neither).
+// taken back (dropHeldFix), and the fixer's runs no loop backs ended
+// (endOrphanFixRuns, fix_drained.go: the morning list's action for them).
+// It reports whether it answered the request (false: the PR has none).
 func (e *Engine) abortFixLoop(ctx context.Context, id int64, repo store.Repo, pr store.PR) bool {
 	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
 	for range abortFixLoopTries {
 		st, raw, _, err := e.fixRow(ctx, pr.ID)
 		if raw == "" {
 			if note := e.dropHeldFix(ctx, repo, pr, "magnum abort"); note != "" {
+				e.complete(ctx, id, nil, "aborted "+label+": "+note)
+				return true
+			}
+			switch note, err := e.endOrphanFixRuns(ctx, repo, pr); {
+			case err != nil:
+				e.complete(ctx, id, fmt.Errorf("%s: %w", label, err), "")
+				return true
+			case note != "":
 				e.complete(ctx, id, nil, "aborted "+label+": "+note)
 				return true
 			}
