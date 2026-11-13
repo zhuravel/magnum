@@ -91,21 +91,33 @@ func factoryLeaseReader(path string, now func() time.Time) func(ctx context.Cont
 // reviews it anyway (the review side fails open).
 const fixLeaseGrace = 10 * time.Minute
 
+// fixLeaseGap is how long after the last failed read of a PR's lease a
+// failed read is a first one again, whose grace starts anew: each tick
+// reads it (sweepLeaseUnreads), every poll interval, so a gap this long
+// means no tick ran (the daemon stopped, or the Mac slept).
+const fixLeaseGap = fixLeaseGrace / 2
+
 // KVPRFixLeaseUnread holds, while it lasts, the failed read of the
 // factory's lease of PR prID (LeaseUnread as JSON): the doctor names it.
 func KVPRFixLeaseUnread(prID int64) string { return fmt.Sprintf("pr.%d.fix_lease_unread", prID) }
 
-// LeaseUnread is a KVPRFixLeaseUnread row: the first failed read (Since),
-// the last one's error in a line (Err, a registry's words, never PR text),
-// Open, the grace ended and magnum reviews the PR without the lease, and
-// Source, what failed: the factory's lease ("") or the PR's owner row in
-// magnum's own registry, which this build cannot parse (LeaseFromOwner).
+// LeaseUnread is a KVPRFixLeaseUnread row: the first failed read (Since)
+// and the last one (Last: a row written before it was kept counts from
+// Since), the last one's error in a line (Err, a registry's words, never
+// PR text), Open, the grace ended and magnum reviews the PR without the
+// lease, and Source, what failed: the factory's lease ("") or the PR's
+// owner row in magnum's own registry, which this build cannot parse
+// (LeaseFromOwner).
 type LeaseUnread struct {
 	Since  time.Time `json:"since"`
+	Last   time.Time `json:"last,omitzero"`
 	Err    string    `json:"err"`
 	Open   bool      `json:"open,omitempty"`
 	Source string    `json:"source,omitempty"`
 }
+
+// lastFailure is when u's last failed read was.
+func (u LeaseUnread) lastFailure() time.Time { return cmp.Or(u.Last, u.Since) }
 
 // LeaseFromOwner is LeaseUnread.Source of a PR whose owner row in magnum's
 // registry does not parse (a newer build wrote it, or it is damaged).
@@ -273,17 +285,18 @@ func (e *Engine) noteLease(ctx context.Context, pr store.PR, v leaseView) bool {
 		_, held := e.leaseWait(v, u, recorded)
 		return held
 	}
+	now := e.now()
+	if recorded && now.Sub(u.lastFailure()) > fixLeaseGap { // no failed read for a while: the daemon stopped, or the Mac slept
+		recorded = false
+	}
 	if !recorded {
-		u = LeaseUnread{Since: e.now().UTC(), Err: leaseErrWords(v.err), Source: v.source()}
-		if !e.d.DryRun {
-			e.setKV(ctx, KVPRFixLeaseUnread(pr.ID), rowJSON(u))
-		}
+		u = LeaseUnread{Since: now.UTC()}
 		e.log.Warn("the factory's lease of a PR cannot be read; its round waits", "subject", subject, "grace", fixLeaseGrace, "err", v.err)
 	}
+	u.Last, u.Err, u.Source = now.UTC(), leaseErrWords(v.err), v.source()
 	_, held := e.leaseWait(v, u, true)
 	if !held && !u.Open && !e.d.DryRun {
-		u.Open, u.Err, u.Source = true, leaseErrWords(v.err), v.source()
-		e.setKV(ctx, KVPRFixLeaseUnread(pr.ID), rowJSON(u))
+		u.Open = true
 		what := "the factory's lease of the PR cannot be read"
 		if v.fromOwner {
 			what = "the PR's owner row cannot be read by this build"
@@ -291,6 +304,9 @@ func (e *Engine) noteLease(ctx context.Context, pr store.PR, v leaseView) bool {
 		e.event(ctx, "warn", subject, "fix.lease_open", fmt.Sprintf("%s since %s (%s): magnum reviews it "+
 			"without the lease after the %s grace", what, waitClock(u.Since, e.now()), u.Err, humanDuration(fixLeaseGrace)),
 			map[string]any{"since": u.Since, "source": cmp.Or(u.Source, "lease")})
+	}
+	if !e.d.DryRun {
+		e.setKV(ctx, KVPRFixLeaseUnread(pr.ID), rowJSON(u)) // each failed read: its time is the gap's start
 	}
 	return held
 }

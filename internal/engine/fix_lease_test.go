@@ -68,8 +68,13 @@ func TestMagnumReviewsAfterTheGraceWithAWarnAndADoctorLine(t *testing.T) {
 		t.Error("the warn came within the grace")
 	}
 
-	h.advance(fixLeaseGrace)
-	h.tick()
+	for range fixLeaseGrace / time.Minute { // the daemon's ticks, each of which fails to read the lease
+		if got := len(h.rd.all()); got != rounds {
+			t.Fatalf("rounds = %d at %s, want %d: a round started within the grace", got, h.clock.Now().Sub(failed), rounds)
+		}
+		h.advance(time.Minute)
+		h.tick()
+	}
 	if got := len(h.rd.all()); got != rounds+1 {
 		t.Errorf("rounds = %d, want %d: magnum reviews after the grace", got, rounds+1)
 	}
@@ -310,6 +315,33 @@ func TestAFailedLeaseReadGoesOnceItReadsOrThePRLeaves(t *testing.T) {
 				t.Errorf("the failed read recorded: %v, want %v", ok, !tc.gone)
 			}
 		})
+	}
+}
+
+// The grace counts from the first of failed reads that follow each other: a
+// read that fails after a gap with none (the daemon stopped, the Mac
+// slept) is a first failure again, which holds the round for a new grace,
+// rather than one that fails open at once on a first failure hours old.
+func TestAFailureAfterAGapStartsTheGraceAgain(t *testing.T) {
+	lease := &fakeLease{}
+	lease.set(FixLease{}, errors.New("database is locked"))
+	h := leaseHarness(t, lease)
+	pr := h.pr(2)
+	rounds := len(h.rd.all())
+	h.tick()
+	if u, ok := h.leaseUnread(pr.ID); !ok || u.Open {
+		t.Fatalf("the first failed read = %+v, %v", u, ok)
+	}
+	h.advance(2 * time.Hour) // no tick: the daemon was stopped
+	h.tick()
+	if got := len(h.rd.all()); got != rounds {
+		t.Errorf("rounds = %d, want %d: a failure after a gap holds the round for a new grace", got, rounds)
+	}
+	if u, ok := h.leaseUnread(pr.ID); !ok || u.Open || !u.Since.Equal(h.clock.Now()) {
+		t.Errorf("the failed read = %+v, %v; want a first failure now, not open", u, ok)
+	}
+	if ev, ok := h.fixEvent("fix.lease_open"); ok {
+		t.Errorf("it failed open at once: %q", ev.Message)
 	}
 }
 
