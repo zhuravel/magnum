@@ -43,7 +43,9 @@ func newDoctorCmd(c *Context) *cobra.Command {
 			"(whether [learn] editor can run, and why it is off), the Whiteboard "+
 			"CLI and server (when a watch has whiteboards on), the role prompts and "+
 			"prompts_dir, gh and each identity (and a watch that polls as an App with no gh identity to stand for your login), the Jira token file (when [jira] is on; MAGNUM_LIVE_JIRA=1 also asks Jira whether it "+
-			"accepts it), MySQL (when a [[pool]] declares databases), the main clones and their SSH "+
+			"accepts it), MySQL (when a [[pool]] declares databases), the Redis databases the factory's copies need (for each "+
+			"[[factory.repo]] whose env uses Redis offsets, CONFIG GET databases on its Redis: a FAIL below the highest copy's "+
+			"offset plus 16, a WARN when that Redis does not answer), the main clones and their SSH "+
 			"origins, a pool's reset_db when it names schema_paths, mise (when a pool, the LaunchAgent or your PATH uses it), the login shell "+
 			"(whether the `zsh -lc` shell the agents run their tools in sees mise's shims), free disk, the machine's memory "+
 			"pressure and swap (a WARN at critical pressure; nothing in magnum acts on it), codex staging, the launchd agent "+
@@ -194,7 +196,7 @@ func doctorPrint(c *Context, cs []doctorCheck, asJSON bool) int {
 // a fixed order.
 func doctorRun(ctx context.Context, d doctorDeps) []doctorCheck {
 	groups := []func(context.Context, doctorDeps) []doctorCheck{
-		doctorConfig, doctorHerdrChecks, doctorAgentChecks, doctorSessionHooks, doctorHooksTrust, doctorAgentHooks, doctorHookSocket, doctorSkill, doctorFixRole, doctorWhiteboard, doctorPrompts, doctorGH, doctorIdentities, doctorJira, doctorMySQLCheck,
+		doctorConfig, doctorHerdrChecks, doctorAgentChecks, doctorSessionHooks, doctorHooksTrust, doctorAgentHooks, doctorHookSocket, doctorSkill, doctorFixRole, doctorWhiteboard, doctorPrompts, doctorGH, doctorIdentities, doctorJira, doctorMySQLCheck, doctorRedis,
 		doctorClones, doctorFixerPushURL, doctorFixerRepos, doctorSchemaReset, doctorMise, doctorLoginShell, doctorDisk, doctorMemory, doctorStaging, doctorLaunchd, doctorLaunchdMise, doctorTerminal, doctorPluginCheck,
 		doctorLearnEditor, doctorRegistry, doctorControls,
 	}

@@ -26954,6 +26954,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `TestAPerPRCheckoutIsRemovedWhenThePRsWorkEnds` in internal/factory, `TestAFixCopysNameAndPortAreCheckedAsACopys`
     in internal/config and `TestFetchPRIntoFetchesOnlyIntoARefOfItsOwn` in internal/gitx; the per-PR checkout's
     folder, `TestAPerPRCheckoutLivesUnderItsOwnRepositorysFolder` (failing first).
+  - The Redis databases. Copy n's 16 Redis databases start at n × 16 and the fix copies are numbered past the
+    tasks', so a repository whose copies use Redis offsets (its `env` names `REDIS_DB_OFFSET` or renders `{n*16}`:
+    `config.FactoryRepo.UsesRedis`) needs `(max_copies + fix_copies + 1) × 16` databases on that Redis, the highest
+    copy's offset plus 16 (`RedisDatabases`). The operator's Redis had 64, and talkable's 3 task copies and 2 fix
+    copies need 96: the flush of fix copies 4 and 5 would fail at every claim. `magnum config` prints the number
+    for each such repository (`redis:   talkable/talkable's copies need 96 Redis databases (5 copies, 16 each from
+    database 16)`); it reads no Redis. `magnum doctor`'s `redis <owner>/<name>` check reads `CONFIG GET databases`
+    through the runner (`factory.RedisDatabasesProbe`: the Redis the highest copy's `env` names, as its claims'
+    flush reads it, its password in `REDISCLI_AUTH`) and compares: fewer is a FAIL naming the copies past them and
+    `databases <n>` in redis.conf as the fix (CONFIG SET cannot change it), as many or more a PASS. A Redis that
+    does not answer, an answer with no number or an `env` that names no Redis is unknown, a WARN and never a FAIL,
+    and no repository on Redis is one SKIP that runs nothing. The flush and the probe share one redis-cli command
+    line (`redisEndpoint.cli`), and `RedisDBsPerCopy` and `RedisOffsetEnv` live in config, the factory's being
+    theirs. Tests, failing first: `TestDoctorSaysWhenRedisHasTooFewDatabasesForTheCopies` and
+    `TestConfigCheckNamesTheRedisDatabasesTheCopiesNeed` in internal/cli.
 
 ## Learned rules
 

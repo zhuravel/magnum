@@ -45,12 +45,12 @@ import (
 
 // RedisDBsPerCopy is how many Redis databases a copy has: copy n's start at
 // n × RedisDBsPerCopy (REDIS_DB_OFFSET).
-const RedisDBsPerCopy = 16
+const RedisDBsPerCopy = config.RedisDBsPerCopy
 
 // RedisOffsetEnv is the variable a copy's Redis configuration reads its
 // first database from. A repository whose env names it gets each copy's own
 // offset there, whatever value the env gives it.
-const RedisOffsetEnv = "REDIS_DB_OFFSET"
+const RedisOffsetEnv = config.RedisOffsetEnv
 
 // HandoffFile is the file of a task's directory a release writes: how the
 // task left its copy, for whoever claims a copy for it next.
@@ -894,26 +894,31 @@ func (c *copySet) flushRedis(ctx context.Context, cp Copy) error {
 	if err != nil {
 		return fmt.Errorf("flush the Redis databases of %s: %w", cp.Name, err)
 	}
-	var env map[string]string
-	if ep.pass != "" {
-		env = map[string]string{"REDISCLI_AUTH": ep.pass} // never on the command line
-	}
 	for db := offset; db < offset+RedisDBsPerCopy; db++ {
 		n := strconv.Itoa(db)
-		args := []string{"-h", ep.host, "-p", ep.port}
-		if ep.tls {
-			args = append(args, "--tls")
-		}
-		if ep.user != "" {
-			args = append(args, "--user", ep.user)
-		}
-		args = append(args, "-n", n, "FLUSHDB")
-		if _, err := c.run.Run(ctx, execx.Cmd{Name: "redis-cli", Args: args, Env: env, Unset: c.unset(), Timeout: redisFlushTimeout,
-			Mutates: true, Label: "redis-cli flushdb " + n + " of " + cp.Name + " on " + ep.host + ":" + ep.port}); err != nil {
-			return fmt.Errorf("flush Redis database %d of %s on %s:%s: %w", db, cp.Name, ep.host, ep.port, err)
+		cmd := ep.cli(redisFlushTimeout, "-n", n, "FLUSHDB")
+		cmd.Unset, cmd.Mutates, cmd.Label = c.unset(), true, "redis-cli flushdb "+n+" of "+cp.Name+" on "+ep.addr()
+		if _, err := c.run.Run(ctx, cmd); err != nil {
+			return fmt.Errorf("flush Redis database %d of %s on %s: %w", db, cp.Name, ep.addr(), err)
 		}
 	}
 	return nil
+}
+
+// RedisDatabasesProbe is the read-only command that asks the Redis of
+// repo's copies how many databases it has (`redis-cli -h <host> -p <port>
+// CONFIG GET databases`, which answers "databases" and the number on two
+// lines), and that Redis as host:port. It is the Redis the env of repo's
+// highest copy names (redisOf), as that copy's claims flush it; an env that
+// names none is an error.
+func RedisDatabasesProbe(repo config.FactoryRepo, timeout time.Duration) (execx.Cmd, string, error) {
+	ep, err := redisOf(copyEnv(repo, repo.LastCopy()))
+	if err != nil {
+		return execx.Cmd{}, "", err
+	}
+	cmd := ep.cli(timeout, "CONFIG", "GET", "databases")
+	cmd.Probe, cmd.Label = true, "redis-cli config get databases on "+ep.addr()
+	return cmd, ep.addr(), nil
 }
 
 // redisEndpoint is a Redis server: its host and port, the user and the
@@ -921,6 +926,27 @@ func (c *copySet) flushRedis(ctx context.Context, cp Copy) error {
 type redisEndpoint struct {
 	host, port, user, pass string
 	tls                    bool
+}
+
+// addr is the Redis as host:port.
+func (ep redisEndpoint) addr() string { return ep.host + ":" + ep.port }
+
+// cli is `redis-cli -h <host> -p <port> [--tls] [--user <user>] args…` on
+// the Redis, bounded by timeout, its password in REDISCLI_AUTH, never on
+// the command line.
+func (ep redisEndpoint) cli(timeout time.Duration, args ...string) execx.Cmd {
+	argv := []string{"-h", ep.host, "-p", ep.port}
+	if ep.tls {
+		argv = append(argv, "--tls")
+	}
+	if ep.user != "" {
+		argv = append(argv, "--user", ep.user)
+	}
+	var env map[string]string
+	if ep.pass != "" {
+		env = map[string]string{"REDISCLI_AUTH": ep.pass}
+	}
+	return execx.Cmd{Name: "redis-cli", Args: append(argv, args...), Env: env, Timeout: timeout}
 }
 
 // redisOf is the Redis the copy's env names: REDIS_URL (redis:// or

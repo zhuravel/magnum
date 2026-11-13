@@ -5401,6 +5401,16 @@ const NotesRoleName = "notes"
 const PlaceholderNum = "{num}"
     PlaceholderNum is the issue number in a [board] trackers template.
 
+const RedisDBsPerCopy = 16
+    RedisDBsPerCopy is how many Redis databases a factory copy has: copy
+    n's start at its Redis offset, n × RedisDBsPerCopy ({n*16} in its env,
+    and RedisOffsetEnv).
+
+const RedisOffsetEnv = "REDIS_DB_OFFSET"
+    RedisOffsetEnv is the variable of a [[factory.repo]]'s env that copy n gets
+    its Redis offset in whatever the value; the factory flushes the copy's
+    databases from that offset at each claim.
+
 const RequiredWorkflowPrefix = "workflow:"
     RequiredWorkflowPrefix marks a required_checks entry naming a whole GitHub
     Actions workflow ("workflow:CI"); store.RequiredWorkflowPrefix, which the
@@ -6765,7 +6775,8 @@ type FactoryRepo struct {
 	// fixes of your PRs (0, the default: none, and a fix works in a per-PR
 	// checkout without databases): apart from MaxCopies and from [factory]
 	// max_active, and never a task's copy. They are copies MaxCopies+1 to
-	// MaxCopies+FixCopies of CopyName and Copies.
+	// MaxCopies+FixCopies of CopyName and Copies, so with Redis offsets their
+	// Redis needs more databases (RedisDatabases).
 	FixCopies int `toml:"fix_copies"`
 	// Setup, Teardown, PostCheckout and ResetDB are the commands of a
 	// copy's life, as a [[pool]] has them.
@@ -6850,11 +6861,26 @@ func (r FactoryRepo) JiraMovesShadow() bool
     JiraMovesShadow reports whether the factory plans the repository's Jira
     moves in shadow.
 
+func (r FactoryRepo) LastCopy() int
+    LastCopy is the number of the repository's highest copy, its last fix copy
+    or else its last task copy: max_copies + fix_copies.
+
 func (r FactoryRepo) Pool() Pool
     Pool is the repository's copies as the Pool the slot code provisions:
     slots named CopyName at Copies, at most MaxCopies of them, none kept ready
     (Min 0), the commands and databases the repository sets. The slices and the
     map are copies.
+
+func (r FactoryRepo) RedisDatabases() int
+    RedisDatabases is how many databases the Redis of the repository's
+    copies must have: its highest copy's offset plus RedisDBsPerCopy, that is
+    (max_copies + fix_copies + 1) × 16, since copy n's databases start at n ×
+    16 and the fix copies are numbered past the tasks'. 0 when its copies use no
+    Redis offset (UsesRedis).
+
+func (r FactoryRepo) UsesRedis() bool
+    UsesRedis reports whether the repository's copies use Redis offsets: its env
+    names RedisOffsetEnv or renders {n*16}.
 
 type FactoryStage struct {
 	Name     string   `toml:"name"`
@@ -14436,11 +14462,11 @@ const ReasonKnown = "known"
     defects of the card's review (knownDefects): the factory writes its note
     from the card, so it takes no note of yours.
 
-const RedisDBsPerCopy = 16
+const RedisDBsPerCopy = config.RedisDBsPerCopy
     RedisDBsPerCopy is how many Redis databases a copy has: copy n's start at n
     × RedisDBsPerCopy (REDIS_DB_OFFSET).
 
-const RedisOffsetEnv = "REDIS_DB_OFFSET"
+const RedisOffsetEnv = config.RedisOffsetEnv
     RedisOffsetEnv is the variable a copy's Redis configuration reads its first
     database from. A repository whose env names it gets each copy's own offset
     there, whatever value the env gives it.
@@ -14713,6 +14739,14 @@ func ReadyRecommendation(ctx context.Context, reg *registry.Registry, t registry
     `magnum factory decide` prints it: from card and the checks the factory ran
     itself at its head, read from reg (a registry that cannot be read counts
     none failed).
+
+func RedisDatabasesProbe(repo config.FactoryRepo, timeout time.Duration) (execx.Cmd, string, error)
+    RedisDatabasesProbe is the read-only command that asks the Redis of repo's
+    copies how many databases it has (`redis-cli -h <host> -p <port> CONFIG
+    GET databases`, which answers "databases" and the number on two lines),
+    and that Redis as host:port. It is the Redis the env of repo's highest copy
+    names (redisOf), as that copy's claims flush it; an env that names none is
+    an error.
 
 func RemovePause(l paths.Layout) error
     RemovePause removes pause.json whatever it holds, one this user cannot read

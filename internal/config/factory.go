@@ -199,7 +199,8 @@ type FactoryRepo struct {
 	// fixes of your PRs (0, the default: none, and a fix works in a per-PR
 	// checkout without databases): apart from MaxCopies and from [factory]
 	// max_active, and never a task's copy. They are copies MaxCopies+1 to
-	// MaxCopies+FixCopies of CopyName and Copies.
+	// MaxCopies+FixCopies of CopyName and Copies, so with Redis offsets their
+	// Redis needs more databases (RedisDatabases).
 	FixCopies int `toml:"fix_copies"`
 	// Setup, Teardown, PostCheckout and ResetDB are the commands of a
 	// copy's life, as a [[pool]] has them.
@@ -813,6 +814,46 @@ func (c *Config) FactoryRole(name string) (Role, bool) {
 // copyCount is how many copies the repository may have: max_copies for the
 // tasks and fix_copies past them for the fixes (numbered max_copies+1 on).
 func (r FactoryRepo) copyCount() int { return r.MaxCopies + max(r.FixCopies, 0) }
+
+// RedisDBsPerCopy is how many Redis databases a factory copy has: copy n's
+// start at its Redis offset, n × RedisDBsPerCopy ({n*16} in its env, and
+// RedisOffsetEnv).
+const RedisDBsPerCopy = 16
+
+// RedisOffsetEnv is the variable of a [[factory.repo]]'s env that copy n
+// gets its Redis offset in whatever the value; the factory flushes the
+// copy's databases from that offset at each claim.
+const RedisOffsetEnv = "REDIS_DB_OFFSET"
+
+// UsesRedis reports whether the repository's copies use Redis offsets:
+// its env names RedisOffsetEnv or renders {n*16}.
+func (r FactoryRepo) UsesRedis() bool {
+	if _, ok := r.Env[RedisOffsetEnv]; ok {
+		return true
+	}
+	for _, v := range r.Env {
+		if strings.Contains(v, "{n*16}") {
+			return true
+		}
+	}
+	return false
+}
+
+// RedisDatabases is how many databases the Redis of the repository's
+// copies must have: its highest copy's offset plus RedisDBsPerCopy, that is
+// (max_copies + fix_copies + 1) × 16, since copy n's databases start at
+// n × 16 and the fix copies are numbered past the tasks'. 0 when its copies
+// use no Redis offset (UsesRedis).
+func (r FactoryRepo) RedisDatabases() int {
+	if !r.UsesRedis() {
+		return 0
+	}
+	return (r.copyCount() + 1) * RedisDBsPerCopy
+}
+
+// LastCopy is the number of the repository's highest copy, its last fix
+// copy or else its last task copy: max_copies + fix_copies.
+func (r FactoryRepo) LastCopy() int { return r.copyCount() }
 
 // Pool is the repository's copies as the Pool the slot code provisions:
 // slots named CopyName at Copies, at most MaxCopies of them, none kept

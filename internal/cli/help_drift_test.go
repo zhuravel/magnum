@@ -125,7 +125,7 @@ var doctorHelpEntries = []doctorHelpEntry{
 	{"whiteboard", "Whiteboard CLI and server"},
 	{"prompt", "role prompts and prompts_dir"}, {"prompts", "role prompts and prompts_dir"},
 	{"gh", "gh and each identity"}, {"identity", "gh and each identity"}, {"jira", "Jira token file"},
-	{"mysql", "MySQL"},
+	{"mysql", "MySQL"}, {"redis", "Redis databases the factory's copies need"},
 	{"clone", "main clones and their SSH origins"}, {"origin", "main clones and their SSH origins"},
 	{"schema", "reset_db"},
 	{"mise exec", "mise ("}, {"login shell", "login shell"},
