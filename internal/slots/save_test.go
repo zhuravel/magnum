@@ -446,6 +446,45 @@ func TestAReadThatFailsForTheWholeProcessFailsTheSave(t *testing.T) {
 	}
 }
 
+// A comparison of a file magnum copied with the main clone's that fails
+// for the whole process (too many open files in it or in the system, no
+// memory) fails the save, and the removal deletes nothing, as such a read
+// of a person's file does: the next attempt compares it, and names the
+// copy a person edited. No test failed when editedOwn named such a
+// comparison as one that "cannot be compared", and `worktree remove
+// --force` then deleted the tree.
+func TestAComparisonThatFailsForTheWholeProcessFailsTheSave(t *testing.T) {
+	for _, errno := range []syscall.Errno{syscall.EMFILE, syscall.ENFILE, syscall.ENOMEM} {
+		t.Run(errno.Error(), func(t *testing.T) {
+			f, sl := ownFilesWorktree(t)
+			h := f.h
+			writeFile(t, filepath.Join(sl.Path, "master.key"), "a key I tried\n")
+			writeFile(t, filepath.Join(sl.Path, "notes.txt"), "mine\n")
+			h.m.sameMain = func(src *os.Root, mainClone, p string) (bool, error) {
+				if p == "master.key" {
+					return false, &fs.PathError{Op: "open", Path: p, Err: errno}
+				}
+				return sameAsMain(src, mainClone, p)
+			}
+
+			if err := h.m.RemovePRWorktree(h.ctx, sl, false); !errors.Is(err, errno) {
+				t.Fatalf("RemovePRWorktree over a comparison that failed with %v: %v, want that error", errno, err)
+			}
+			for p, want := range map[string]string{"master.key": "a key I tried\n", "notes.txt": "mine\n"} {
+				if got := readFile(t, filepath.Join(sl.Path, p)); got != want {
+					t.Fatalf("%s = %q, want it kept", p, got)
+				}
+			}
+			if got := h.slot(sl.Name); got.State == store.SlotRemoved {
+				t.Fatalf("state = %s, want the removal refused", got.State)
+			}
+			if got := saves(t, h.layout.PRSaves("zhuravel", "widget", f.pr.Number)); len(got) != 0 {
+				t.Fatalf("saves = %q, want none left by the failed save", got)
+			}
+		})
+	}
+}
+
 // A removal writes each untracked file it saves straight into the save's
 // own folder, with no temporary file and no disk flush per file: a name of
 // 238 to 255 bytes is saved (an atomic write's temporary name passed 255

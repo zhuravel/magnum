@@ -236,14 +236,14 @@ func withoutOwn(mainClone string, untracked, own []string) []string {
 }
 
 // editedOwn names the files of mine (sortOwn's, in the tree at tree) that
-// differ from the main clone's copy at mainClone, which a person edited
-// since magnum copied it, each "<path> (<why>)": a removal saves none of
-// magnum's files, which hold the main clone's secrets, but names those.
-// A file the main clone holds none of, what the setup wrote, is not
-// compared; nor is one gone from the tree. A comparison that fails is
-// named with its error, but an error of the whole process (processWide),
-// which fails the save.
-func editedOwn(tree, mainClone string, mine []string) ([]string, error) {
+// differ from the main clone's copy at mainClone (compare: sameAsMain),
+// which a person edited since magnum copied it, each "<path> (<why>)": a
+// removal saves none of magnum's files, which hold the main clone's
+// secrets, but names those. A file the main clone holds none of, what the
+// setup wrote, is not compared; nor is one gone from the tree. A
+// comparison that fails is named with its error, but an error of the
+// whole process (processWide), which fails the save.
+func editedOwn(tree, mainClone string, mine []string, compare sameFunc) ([]string, error) {
 	if len(mine) == 0 {
 		return nil, nil
 	}
@@ -254,7 +254,7 @@ func editedOwn(tree, mainClone string, mine []string) ([]string, error) {
 	defer src.Close()
 	var out []string
 	for _, p := range mine {
-		same, err := sameAsMain(src, mainClone, p)
+		same, err := compare(src, mainClone, p)
 		switch {
 		case err != nil && processWide(err):
 			return nil, err
@@ -265,6 +265,19 @@ func editedOwn(tree, mainClone string, mine []string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// sameFunc compares file p of the tree at src with the main clone's at
+// mainClone: sameAsMain, or a test's stand-in (Manager.sameMain).
+type sameFunc func(src *os.Root, mainClone, p string) (bool, error)
+
+// sameMainOr is the comparison of a removal's files with the main clone's:
+// a test's stand-in, else sameAsMain.
+func (m *Manager) sameMainOr() sameFunc {
+	if m.sameMain != nil {
+		return m.sameMain
+	}
+	return sameAsMain
 }
 
 // sameAsMain reports whether file p of the tree at src is the same as the

@@ -179,6 +179,9 @@ type Manager struct {
 	// readTree is a test's stand-in for a removal's save's read of a file
 	// of the tree (nil: fsx.ReadRegularIn).
 	readTree func(root *os.Root, name string, limit int64) ([]byte, error)
+	// sameMain is a test's stand-in for a removal's comparison of a file
+	// magnum copied into the tree with the main clone's (nil: sameAsMain).
+	sameMain func(src *os.Root, mainClone, p string) (bool, error)
 	// saveAlert is SetSaveAlert's function (nil: none).
 	saveAlert atomic.Pointer[func(context.Context, SaveFailure)]
 }

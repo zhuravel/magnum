@@ -701,6 +701,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `TestAPoolSlotsRemovalSavesNothingMagnumWrote` now has both cases, and
     `TestARepairOverAKeptPoolWorktreeRecordsOnlyTheCopiedFiles` checks the kept branch of the pool's worktree_add
     (a repair after a failed render), which no test failed without.
+  - The comparison of Magnum's own files with the main clone's has its test of rule (a) (the engine owner's ruling
+    4): `TestAComparisonThatFailsForTheWholeProcessFailsTheSave` gives the removal a comparison that fails with
+    EMFILE, ENFILE or ENOMEM (a test's comparison, `Manager.sameMain`) and wants the removal refused with nothing
+    deleted. It fails when editedOwn names such a comparison as one that "cannot be compared"; the code was right.
 
 ## Scheduling
 

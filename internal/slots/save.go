@@ -292,7 +292,7 @@ func (m *Manager) saveRemoved(ctx context.Context, sl store.Slot, own []string, 
 		return err
 	}
 	theirs, mine := sortOwn(sl.MainClone, withoutRenderedMiseLocal(sl.Path, files), own)
-	edited, err := editedOwn(sl.Path, sl.MainClone, mine)
+	edited, err := editedOwn(sl.Path, sl.MainClone, mine, m.sameMainOr())
 	if err != nil {
 		return err
 	}
