@@ -1016,3 +1016,33 @@ func TestFirstPostedRoundReadsMagnumsFirstPostedRoundSinceThePublish(t *testing.
 		t.Error("FirstPostedRound created magnum's registry")
 	}
 }
+
+// The factory reads your overrule of Codex's reading where `magnum resume
+// --tool codex` writes it, magnum's registry, and writes nothing: the
+// mark's time when it is set, zero when it is not (the review daemon
+// deleted it once Codex reported again), when it is no time, or when there
+// is no registry, which it never creates.
+func TestTheFactoryReadsYourCodexOverruleInMagnumsRegistry(t *testing.T) {
+	l, st := magnumLayout(t)
+	ctx := t.Context()
+	m := NewMagnum(l, config.Defaults())
+	if at, err := m.CodexOverrule(ctx); err != nil || !at.IsZero() {
+		t.Fatalf("no mark: %v, %v; want zero", at, err)
+	}
+	resumed := time.Date(2026, 11, 13, 11, 3, 0, 0, time.UTC)
+	setKV(t, st, engine.KVUsageCodexOverruledAt, store.FormatTime(resumed))
+	if at, err := m.CodexOverrule(ctx); err != nil || !at.Equal(resumed) {
+		t.Fatalf("the mark: %v, %v; want %v", at, err, resumed)
+	}
+	setKV(t, st, engine.KVUsageCodexOverruledAt, "soon")
+	if at, err := m.CodexOverrule(ctx); err != nil || !at.IsZero() {
+		t.Fatalf("a mark that is no time: %v, %v; want zero", at, err)
+	}
+	none := paths.Layout{Home: t.TempDir()}
+	if at, err := NewMagnum(none, nil).CodexOverrule(ctx); err != nil || !at.IsZero() {
+		t.Fatalf("no registry: %v, %v; want zero", at, err)
+	}
+	if fsx.Exists(none.DB()) {
+		t.Error("CodexOverrule created magnum's registry")
+	}
+}

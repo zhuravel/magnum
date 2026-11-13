@@ -47,6 +47,7 @@ import (
 	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/factory/runtime"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/pipeline"
@@ -694,19 +695,22 @@ func (e *Engine) runsCodex(roles []string) bool {
 	})
 }
 
-// codexSoft says that Codex is at or past [usage] codex_soft, "" when it is
-// not, the cap is off or no gauge reads (the round's own health checks stop
-// at a limit then).
+// codexSoft says that Codex is at or past [usage] codex_soft, and names the
+// command that overrules a stale reading; "" when it is not, the cap is off,
+// no gauge reads (the round's own health checks stop at a limit then) or
+// you overruled the reading (e.overrule: `magnum resume --tool codex`, until
+// Codex reports again).
 func (e *Engine) codexSoft(ctx context.Context) string {
 	u := e.cfg.Usage
 	if u.CodexSoft <= 0 && u.CodexHard <= 0 {
 		return ""
 	}
 	snap, err := e.codexUsage(ctx)
-	if err != nil || usage.Decide(snap, u.CodexSoft, u.CodexHard) == usage.OK {
+	if err != nil || usage.Decide(snap, u.CodexSoft, u.CodexHard) == usage.OK || e.overrule.Covers(ctx, snap) {
 		return ""
 	}
-	return fmt.Sprintf("codex at %.0f%%, at or past [usage] codex_soft %.0f%%: the local review yields to magnum's reviews", snap.Used(), u.CodexSoft)
+	return fmt.Sprintf("codex at %.0f%%, at or past [usage] codex_soft %.0f%%: the local review yields to magnum's reviews; %s",
+		snap.Used(), u.CodexSoft, runtime.CodexOverruleRemedy)
 }
 
 // codexUsage reads Codex's budget now: Deps.Usage, else usage.Codex of
@@ -719,6 +723,16 @@ func (e *Engine) codexUsage(ctx context.Context) (usage.Snapshot, error) {
 		read = func(ctx context.Context, now time.Time) (usage.Snapshot, error) { return usage.Codex(ctx, home, now) }
 	}
 	return read(ctx, e.now())
+}
+
+// readOverrule reads your overrule of Codex's reading in magnum's registry
+// (Magnum.CodexOverrule), the mark e.overrule judges Codex's reading by;
+// zero without a Magnum.
+func (e *Engine) readOverrule(ctx context.Context) (time.Time, error) {
+	if e.d.Magnum == nil {
+		return time.Time{}, nil
+	}
+	return e.d.Magnum.CodexOverrule(ctx)
 }
 
 // reviewRoles are the roles round `round` of task t's local review runs:

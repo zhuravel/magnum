@@ -808,13 +808,56 @@ func TestLaunchWaitsWhenCodexIsOverItsSoftCap(t *testing.T) {
 	err := g.r.Launch(g.ctx, g.task, g.attempt, g.claimed(), g.roles("fx-cause"))
 
 	var w *WaitError
-	if !errors.As(err, &w) || err.Error() != "usage: codex at 96%, waits till 16:00" {
-		t.Fatalf("Launch = %v, want the wait usage: codex at 96%%, waits till 16:00", err)
+	want := "usage: codex at 96%, waits till 16:00; `magnum resume --tool codex` overrules a stale reading"
+	if !errors.As(err, &w) || err.Error() != want {
+		t.Fatalf("Launch = %v, want the wait %s", err, want)
 	}
 	if len(g.h.creates) != 0 || len(g.h.startCalls()) != 0 {
 		t.Fatalf("a held launch made workspaces %d and starts %d", len(g.h.creates), len(g.h.startCalls()))
 	}
 	g.launch("fx-repro") // Claude's roles do not wait on Codex's budget
+}
+
+// You overrule a stale Codex reading with `magnum resume --tool codex`,
+// which marks the time in magnum's registry (Deps.CodexOverrule reads it):
+// the launch's gate starts a Codex role while Codex's newest reading is
+// stamped at or before the mark, as the review daemon's caps do, and
+// judges a reading stamped after it as before. A mark that cannot be read
+// keeps the gate's wait, and the log names the failure once while the
+// reads fail.
+func TestALaunchOfACodexRoleGoesOnOnAReadingYouOverruled(t *testing.T) {
+	at96 := func(at time.Time) usage.Snapshot {
+		return usage.Snapshot{Window: usage.Window{UsedPercent: 96, WindowMinutes: 300, ResetsAt: t0.Add(7 * time.Hour)}, At: at}
+	}
+	t.Run("a reading at or before the mark", func(t *testing.T) {
+		g := newRig(t)
+		g.setOverrule(t0, nil)
+		g.setUsage(at96(t0))
+		g.launch("fx-cause")
+	})
+	t.Run("a reading after the mark", func(t *testing.T) {
+		g := newRig(t)
+		g.setOverrule(t0, nil)
+		g.setUsage(at96(t0.Add(time.Minute)))
+		err := g.r.Launch(g.ctx, g.task, g.attempt, g.claimed(), g.roles("fx-cause"))
+		if w, ok := errors.AsType[*WaitError](err); !ok || !strings.HasPrefix(w.What, "codex at 96%") {
+			t.Fatalf("Launch = %v, want the wait on Codex's reading after the overrule", err)
+		}
+	})
+	t.Run("a mark that cannot be read", func(t *testing.T) {
+		g := newRig(t)
+		g.setOverrule(time.Time{}, errors.New("magnum's registry: disk I/O error"))
+		g.setUsage(at96(t0.Add(-time.Hour)))
+		for range 2 {
+			err := g.r.Launch(g.ctx, g.task, g.attempt, g.claimed(), g.roles("fx-cause"))
+			if w, ok := errors.AsType[*WaitError](err); !ok || !strings.HasPrefix(w.What, "codex at 96%") {
+				t.Fatalf("Launch = %v, want the wait on Codex's reading", err)
+			}
+		}
+		if n := strings.Count(g.logs.String(), "disk I/O error"); n != 1 {
+			t.Fatalf("the log names the failed read %d times, want once:\n%s", n, g.logs.String())
+		}
+	})
 }
 
 func TestVerifyMovesEndedRunsOutOfActiveRuns(t *testing.T) {

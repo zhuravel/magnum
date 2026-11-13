@@ -15540,16 +15540,20 @@ type Magnum interface {
 	OwnPRs(ctx context.Context) ([]PRState, error)
 	FixRecords(ctx context.Context, refs []PRRef) (map[PRRef]FixRecord, error)
 	FirstPostedRound(ctx context.Context, ref PRRef, since time.Time) (PostedRound, bool, error)
+	CodexOverrule(ctx context.Context) (time.Time, error)
 }
     Magnum is the review daemon as the factory sees it: busy while its real
     rounds in flight and due fill its limit (max_concurrent_reviews), so a
     local round takes a free round or waits; and what its registry says of the
     factory's PRs (PRStates: the row, the verdict, the loop), which the screen
     draws and the tick follows, of their fix loops over time (FixRecords),
-    which the PRs' status files count, of your own open PRs (OwnPRs), which the
-    screen lists, and of its first round on a PR that posted a review since a
-    time (FirstPostedRound), which the escape check of a published task's local
-    review reads (escapes.go).
+    which the PRs' status files count, of your own open PRs (OwnPRs),
+    which the screen lists, of its first round on a PR that posted a review
+    since a time (FirstPostedRound), which the escape check of a published
+    task's local review reads (escapes.go), and of your overrule of Codex's
+    reading (CodexOverrule: `magnum resume --tool codex`, zero for none),
+    which the local review's and the stages' waits on Codex's reading honor,
+    as magnum's caps do (runtime.CodexOverrule).
 
 func NewMagnum(l paths.Layout, cfg *config.Config) Magnum
     NewMagnum is magnum's review daemon of layout l, configured by cfg, as the
@@ -18062,6 +18066,10 @@ const (
 )
     The runtime's timing and budgets (spec sections 5 and 10.1).
 
+const CodexOverruleRemedy = "`magnum resume --tool codex` overrules a stale reading"
+    CodexOverruleRemedy names the command that overrules a stale Codex reading,
+    the words that end each wait of the factory's on that reading.
+
 const LetGoWhy = "its prompt was let go"
     LetGoWhy is why a run that held only prompts you let go (LetGo) was
     abandoned: its turn was never watched (RunState says it).
@@ -18212,6 +18220,24 @@ func WorkspaceLabel(t registry.Task, a registry.Attempt) string
 
 TYPES
 
+type CodexOverrule struct {
+	Read func(ctx context.Context) (time.Time, error)
+	Log  *slog.Logger
+	// Has unexported fields.
+}
+    CodexOverrule judges a Codex reading by your overrule (Covers). Read is
+    magnum's mark, zero when none is set (the review daemon deletes it once
+    Codex reports again); nil reads none. Log takes the failure of a read,
+    once; nil logs nothing. It is safe for concurrent use, and is used through a
+    pointer.
+
+func (o *CodexOverrule) Covers(ctx context.Context, snap usage.Snapshot) bool
+    Covers reports whether snap is a Codex reading you overruled: a mark is set
+    and snap is stamped at or before it, so the caps take Codex as under them,
+    as the review daemon's do, until a reading stamped after the mark comes,
+    which they judge as before. A read of the mark that fails covers nothing,
+    so the caps hold as they did, and is logged once until a read goes through.
+
 type Copy struct {
 	Name, Path   string
 	Number, Port int
@@ -18236,19 +18262,20 @@ func (e *DeniedError) Error() string
     else DeniedLine.
 
 type Deps struct {
-	Config      *config.Config
-	Layout      paths.Layout
-	Herdr       agents.Herdr
-	Store       *store.Store
-	Registry    *registry.Registry
-	Runner      execx.Runner
-	Memory      func(ctx context.Context) engine.MemorySample
-	MayStart    func() (who, what string, ok bool)
-	MayPrompt   func() (who, what string, ok bool)
-	IdentityEnv func(name string) (map[string]string, bool)
-	FixerEnv    func(identity string) map[string]string
-	Clock       func() time.Time
-	Log         *slog.Logger
+	Config        *config.Config
+	Layout        paths.Layout
+	Herdr         agents.Herdr
+	Store         *store.Store
+	Registry      *registry.Registry
+	Runner        execx.Runner
+	Memory        func(ctx context.Context) engine.MemorySample
+	MayStart      func() (who, what string, ok bool)
+	MayPrompt     func() (who, what string, ok bool)
+	IdentityEnv   func(name string) (map[string]string, bool)
+	FixerEnv      func(identity string) map[string]string
+	CodexOverrule func(ctx context.Context) (time.Time, error)
+	Clock         func() time.Time
+	Log           *slog.Logger
 }
     Deps are the runtime's collaborators. Config, Herdr, Store,
     Registry and Runner are required. Store is the factory's agents store
@@ -18266,7 +18293,10 @@ type Deps struct {
     Config.FactoryFixerFor) acts as that identity, and its pane carries that
     identity's token and no other (onlyIdentityToken); nil for either gives
     none, and a fixer's start then fails, as magnum's does when its identity
-    does not resolve. Clock nil is time.Now; Log nil discards.
+    does not resolve. CodexOverrule reads your overrule of Codex's reading in
+    magnum's registry (`magnum resume --tool codex`: the time, zero for none),
+    which the gate honors (CodexOverrule.Covers); nil reads none. Clock nil is
+    time.Now; Log nil discards.
 
 type Event struct {
 	TaskID  int64
@@ -18752,11 +18782,13 @@ type WaitError struct {
     codex at 96%, waits till 16:00"), until Until when it is known.
 
 func CodexBudgetWait(u config.Usage, snap usage.Snapshot, now time.Time) *WaitError
-    CodexBudgetWait is the wait of a launch of a Codex role while Codex's budget
-    snap is at or past usage codex_soft (or codex_hard), now being the clock's
-    time ("codex at 96%, waits till 16:00", until the binding window's reset
-    when snap names one); nil below the caps. Runtime.Launch holds every Codex
-    role on it, so a stage's yield (the engine's) comes before the launch.
+    CodexBudgetWait is the wait of a launch of a Codex role while Codex's
+    budget snap is at or past usage codex_soft (or codex_hard), now being the
+    clock's time ("codex at 96%, waits till 16:00; `magnum resume --tool codex`
+    overrules a stale reading", until the binding window's reset when snap names
+    one); nil below the caps. Runtime.Launch holds every Codex role on it but on
+    a reading you overruled, so a stage's yield (the engine's) comes before the
+    launch.
 
 func (w *WaitError) Error() string
     Error implements error.

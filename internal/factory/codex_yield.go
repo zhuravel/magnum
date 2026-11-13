@@ -57,18 +57,20 @@ type yield struct {
 // codexYield is why a stage's Codex roles yield now, "" when they do not:
 // Codex is paused on a usage limit a run hit (the runtime's pause, which
 // the limit's reset lifts), or its budget is at or past [usage] codex_soft
-// (or codex_hard), read as the local review reads it (codexUsage). Caps
-// that are off, or a gauge with no reading yet, yield nothing. A read that
-// fails yields nothing either: the launch goes on as before (the runtime's
-// own gate reads the budget again), and the failure is logged once until a
-// read goes through.
-func (e *Engine) codexYield(ctx context.Context) string {
+// (or codex_hard), read as the local review reads it (codexUsage); reading
+// says it is the latter, a reading `magnum resume --tool codex` may
+// overrule. Caps that are off, a gauge with no reading yet, or a reading
+// you overruled (e.overrule, until Codex reports again) yield nothing. A
+// read that fails yields nothing either: the launch goes on as before (the
+// runtime's own gate reads the budget again), and the failure is logged
+// once until a read goes through.
+func (e *Engine) codexYield(ctx context.Context) (why string, reading bool) {
 	if w := e.d.Runtime.Paused(config.KindCodex); w != nil && w.Who == waitUsage {
-		return "Codex is paused on its usage limit (" + w.What + ")"
+		return "Codex is paused on its usage limit (" + w.What + ")", false
 	}
 	u := e.cfg.Usage
 	if u.CodexSoft <= 0 && u.CodexHard <= 0 {
-		return ""
+		return "", false
 	}
 	snap, err := e.codexUsage(ctx)
 	if err != nil && !errors.Is(err, usage.ErrNoData) {
@@ -76,17 +78,17 @@ func (e *Engine) codexYield(ctx context.Context) string {
 			e.codexUnread = true
 			e.log.Warn("read Codex's budget before a stage's launch; its Codex roles launch as before", "err", err)
 		}
-		return ""
+		return "", false
 	}
 	e.codexUnread = false
-	if err != nil || usage.Decide(snap, u.CodexSoft, u.CodexHard) == usage.OK {
-		return ""
+	if err != nil || usage.Decide(snap, u.CodexSoft, u.CodexHard) == usage.OK || e.overrule.Covers(ctx, snap) {
+		return "", false
 	}
 	name, limit := "codex_soft", u.CodexSoft
 	if limit <= 0 {
 		name, limit = "codex_hard", u.CodexHard
 	}
-	return fmt.Sprintf("codex at %.0f%%, at or past [usage] %s %.0f%%, and magnum's reviews come first", snap.Used(), name, limit)
+	return fmt.Sprintf("codex at %.0f%%, at or past [usage] %s %.0f%%, and magnum's reviews come first", snap.Used(), name, limit), true
 }
 
 // codexFallback is role's codex_fallback as the role a yield or a handover
@@ -116,8 +118,9 @@ func (e *Engine) codexFallback(role config.Role) (config.Role, bool) {
 // run.started) is quit, idle, so the stage never waits for the budget's
 // reset while a fallback exists. A Codex role with no Claude fallback holds
 // the launch: the task waits on the budget, in the local review's words,
-// naming the role and the stage (a heldError, which costs the task nothing),
-// and nothing launches or is recorded. A role that sits out has what an
+// naming the role and the stage and, on Codex's reading, the command that
+// overrules a stale one (a heldError, which costs the task nothing), and
+// nothing launches or is recorded. A role that sits out has what an
 // earlier attempt of it left set aside (setAsideStale): the judge's
 // findings-*.md never takes it for this attempt's reading.
 func (e *Engine) yieldAtLaunch(ctx context.Context, t registry.Task, st config.FactoryStage, a registry.Attempt, run *agentsRun) error {
@@ -125,13 +128,16 @@ func (e *Engine) yieldAtLaunch(ctx context.Context, t registry.Task, st config.F
 	if !slices.ContainsFunc(run.roles, codex) {
 		return nil
 	}
-	why := e.codexYield(ctx)
+	why, reading := e.codexYield(ctx)
 	if why == "" {
 		return nil
 	}
 	for _, r := range run.roles {
 		if _, ok := e.codexFallback(r.role); codex(r) && !ok {
 			what := why + "; " + r.role.Name + " has no codex_fallback to run in its place, so the " + stageWhat(st.Name) + " stage waits"
+			if reading {
+				what += "; " + runtime.CodexOverruleRemedy
+			}
 			e.waitOn(ctx, t, waitUsage, what)
 			return heldError{who: waitUsage, what: what}
 		}

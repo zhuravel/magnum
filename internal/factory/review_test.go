@@ -72,7 +72,9 @@ func (f *fakeReviewer) calls() []evalrun.LocalCase {
 // zero record), and fixErr fails FixRecords; posted are the PRs' rounds
 // that posted a review, in the order they began, which FirstPostedRound
 // reads (postedReads counts its calls, postedErr fails it, and postedGate,
-// when set, holds it until the test closes it).
+// when set, holds it until the test closes it); overruledAt is your
+// overrule of Codex's reading that CodexOverrule reads (zero: none), and
+// overruleErr fails that read.
 type fakeMagnum struct {
 	mu          sync.Mutex
 	busy        string
@@ -88,6 +90,23 @@ type fakeMagnum struct {
 	postedReads int
 	postedErr   error
 	postedGate  chan struct{}
+	overruledAt time.Time
+	overruleErr error
+}
+
+func (f *fakeMagnum) CodexOverrule(context.Context) (time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.overruledAt, f.overruleErr
+}
+
+// overrule makes magnum's registry hold your overrule of Codex's reading
+// made at at (`magnum resume --tool codex`; zero: none), or fail its read
+// with err.
+func (f *fakeMagnum) overrule(at time.Time, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.overruledAt, f.overruleErr = at, err
 }
 
 func (f *fakeMagnum) FirstPostedRound(ctx context.Context, ref PRRef, since time.Time) (PostedRound, bool, error) {
@@ -247,12 +266,13 @@ func (f *fakeMagnum) set(why string) {
 
 // reviewRig is the coding rig with the local review wired: the fake
 // reviewer and magnum, a watch of the repository, the review candidate,
-// and a Codex gauge that reads used percent.
+// and a Codex gauge that reads used percent, from a Codex event stamped at.
 type reviewRig struct {
 	*codingRig
 	rv     *fakeReviewer
 	magnum *fakeMagnum
 	used   float64
+	at     time.Time
 }
 
 func newReviewRig(t *testing.T, answers ...func(evalrun.LocalCase) evalrun.LocalResult) *reviewRig {
@@ -266,7 +286,7 @@ func newReviewRig(t *testing.T, answers ...func(evalrun.LocalCase) evalrun.Local
 	for _, d := range []*Deps{&r.deps, &r.e.d} {
 		d.Review, d.Magnum, d.ReviewCandidate = r.rv, r.magnum, dir
 		d.Usage = func(context.Context, time.Time) (usage.Snapshot, error) {
-			return usage.Snapshot{Window: usage.Window{UsedPercent: r.used}}, nil
+			return usage.Snapshot{Window: usage.Window{UsedPercent: r.used}, At: r.at}, nil
 		}
 	}
 	return r

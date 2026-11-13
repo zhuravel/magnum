@@ -245,6 +245,8 @@ func (m ownOnlyMagnum) FirstPostedRound(context.Context, factory.PRRef, time.Tim
 	return factory.PostedRound{}, false, nil
 }
 
+func (m ownOnlyMagnum) CodexOverrule(context.Context) (time.Time, error) { return time.Time{}, nil }
+
 // Without the factory's registry (no task was ever started) the screen
 // still lists your own open PRs from magnum's registry, and creates
 // nothing: with [board] own_prs = "factory" the board leaves them out, so

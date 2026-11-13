@@ -583,6 +583,10 @@ type rig struct {
 	unreadable bool
 	held       [2]string
 	logs       logBuffer
+	// overruledAt is your overrule of Codex's reading in magnum's registry
+	// (Deps.CodexOverrule; zero: none), and overruleErr fails its read.
+	overruledAt time.Time
+	overruleErr error
 
 	layout               paths.Layout
 	claudeDir, codexHome string
@@ -646,7 +650,7 @@ func (g *rig) restart() {
 	t.Helper()
 	r, err := newWith(Deps{Config: g.cfg, Layout: g.layout, Herdr: g.h, Store: g.st, Registry: g.reg, Runner: g.run,
 		Memory: g.memory, Clock: g.clock.Now, Log: slog.New(slog.NewTextHandler(&g.logs, nil)), MayStart: g.mayStart,
-		IdentityEnv: g.identityEnv, FixerEnv: g.fixerEnv}, seams{
+		IdentityEnv: g.identityEnv, FixerEnv: g.fixerEnv, CodexOverrule: g.codexOverrule}, seams{
 		sleep: func(ctx context.Context, d time.Duration) error {
 			g.mu.Lock()
 			g.slept = append(g.slept, d)
@@ -733,6 +737,22 @@ func (g *rig) setUsage(s usage.Snapshot) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.snap = s
+}
+
+// setOverrule makes magnum's registry hold your overrule of Codex's reading
+// made at at (`magnum resume --tool codex`; zero: none), or fail its read
+// with err.
+func (g *rig) setOverrule(at time.Time, err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.overruledAt, g.overruleErr = at, err
+}
+
+// codexOverrule reads the overrule setOverrule set (Deps.CodexOverrule).
+func (g *rig) codexOverrule(context.Context) (time.Time, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.overruledAt, g.overruleErr
 }
 
 func (g *rig) setLogin(fp string) {

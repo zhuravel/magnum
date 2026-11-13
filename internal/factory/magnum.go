@@ -1040,3 +1040,28 @@ func (m *magnumRegistry) FirstPostedRound(ctx context.Context, ref PRRef, since 
 	}
 	return out, true, nil
 }
+
+// CodexOverrule is when you last overruled Codex's reading at a [usage] cap
+// (`magnum resume --tool codex` or `all`: engine.KVUsageCodexOverruledAt,
+// written by the review daemon or, with none running, by the CLI), zero
+// while no overrule waits for Codex's next reading: the review daemon
+// deletes the mark once Codex reported again. No registry holds none, and
+// a mark no build writes is none, as the review daemon reads it at its
+// start. It reads and never writes or migrates the registry, as PRStates;
+// a read that fails is an error.
+func (m *magnumRegistry) CodexOverrule(ctx context.Context) (time.Time, error) {
+	st, err := m.open()
+	if st == nil || err != nil {
+		return time.Time{}, err
+	}
+	defer st.Close()
+	v, ok, err := st.GetKV(ctx, engine.KVUsageCodexOverruledAt)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("magnum's registry: %w", err)
+	}
+	at, perr := store.ParseTime(v)
+	if !ok || perr != nil {
+		return time.Time{}, nil
+	}
+	return at, nil
+}

@@ -150,9 +150,12 @@ type fakeRuntime struct {
 	noRecord map[string]bool
 	// budget reads Codex's budget for Launch's gate, which holds a Codex
 	// role at [usage] codex_soft as the runtime's does
-	// (runtime.CodexBudgetWait); nil: no gate. now is the harness's clock.
-	budget func(ctx context.Context, now time.Time) (usage.Snapshot, error)
-	now    func() time.Time
+	// (runtime.CodexBudgetWait) but on a reading overrule covers (your
+	// overrule in the harness's Magnum); nil: no gate. now is the harness's
+	// clock.
+	budget   func(ctx context.Context, now time.Time) (usage.Snapshot, error)
+	overrule *runtime.CodexOverrule
+	now      func() time.Time
 }
 
 // Paused is the pause in force of agent kind, nil for none.
@@ -319,14 +322,14 @@ func (f *fakeRuntime) Launch(ctx context.Context, t registry.Task, a registry.At
 		names, prompts = append(names, r.Name), append(prompts, r.Prompt)
 	}
 	f.launchRoles, f.launchPrompts = append(f.launchRoles, names), append(f.launchPrompts, prompts)
-	err, reg, lost, budget, now := f.launchErr, f.reg, maps.Clone(f.noRecord), f.budget, f.now
+	err, reg, lost, budget, overrule, now := f.launchErr, f.reg, maps.Clone(f.noRecord), f.budget, f.overrule, f.now
 	f.mu.Unlock()
 	if err != nil || reg == nil || a.ID == "" {
 		return err
 	}
 	if budget != nil && slices.ContainsFunc(roles, func(r config.Role) bool { return r.AgentKind() == config.KindCodex }) {
 		if snap, err := budget(ctx, now()); err == nil {
-			if w := runtime.CodexBudgetWait(f.cfg.Usage, snap, now()); w != nil {
+			if w := runtime.CodexBudgetWait(f.cfg.Usage, snap, now()); w != nil && !overrule.Covers(ctx, snap) {
 				return w // the runtime's gate: a Codex role waits at the cap, and nothing starts
 			}
 		}
@@ -1121,11 +1124,13 @@ type harness struct {
 	codex *codexGauge
 }
 
-// codexGauge is a Codex budget for Deps.Usage: used percent, or err; reads
-// counts the reads.
+// codexGauge is a Codex budget for Deps.Usage: used percent, from a Codex
+// event stamped at (zero unless a test sets it), or err; reads counts the
+// reads.
 type codexGauge struct {
 	mu    sync.Mutex
 	used  float64
+	at    time.Time
 	err   error
 	reads int
 }
@@ -1137,7 +1142,7 @@ func (g *codexGauge) read(context.Context, time.Time) (usage.Snapshot, error) {
 	if g.err != nil {
 		return usage.Snapshot{}, g.err
 	}
-	return usage.Snapshot{Window: usage.Window{UsedPercent: g.used}}, nil
+	return usage.Snapshot{Window: usage.Window{UsedPercent: g.used}, At: g.at}, nil
 }
 
 // set makes the gauge read used percent, or fail with err.
@@ -1145,6 +1150,13 @@ func (g *codexGauge) set(used float64, err error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.used, g.err = used, err
+}
+
+// setAt makes the gauge read used percent from a Codex event stamped at.
+func (g *codexGauge) setAt(used float64, at time.Time) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.used, g.at, g.err = used, at, nil
 }
 
 // restart builds a new engine over the same registry and collaborators, as
@@ -1171,6 +1183,9 @@ func newHarness(t *testing.T, edit ...func(d *Deps)) *harness {
 	}
 	h.reg, h.rt.reg = d.Registry, d.Registry   // an edit may give the test a registry of its own, a file's
 	h.rt.budget, h.rt.now = d.Usage, clock.Now // the fake Launch's gate reads the budget the engine reads
+	if m := d.Magnum; m != nil {               // and your overrule of it in magnum's registry, as the daemon wires them
+		h.rt.overrule = &runtime.CodexOverrule{Read: m.CodexOverrule}
+	}
 	h.deps = d
 	h.e = New(d)
 	t.Cleanup(h.e.stopBackground) // no claim or overlap outlives the test

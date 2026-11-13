@@ -27278,6 +27278,30 @@ skill versions); people add theirs to the sections before it, at the end of the 
   Redis down, an answer with no number; the command that ran is the one found, its password in
   `REDISCLI_AUTH` only), and `TestDoctorFailsAMissingRedisCLIOnlyWhenTheDaemonsPATHLacksItToo` and the
   recorded-PATH test now expect that PASS.
+- **The factory follows your overrule of a stale Codex reading** (2026-11-13). Task 9 waited at its local review
+  on "usage: codex at 96%, at or past [usage] codex_soft 95%: the local review yields to magnum's reviews". Codex's
+  limit had been reset, and at 13:03 the operator ran `magnum resume --tool codex`. The review daemon took that as
+  an overrule: its caps wait for Codex's next reading (`overruleBudget`, `budgetLevel`, the mark
+  `usage.codex_overruled_at` in magnum's registry). The factory read Codex's newest session reading directly, in
+  the local review's `codexSoft` and a stage's `codexYield`, so the task stayed held, and neither its screen nor
+  `magnum factory status` named a way on. Now the factory reads the mark too, read only, as it reads magnum's
+  registry for its rounds (`Magnum.CodexOverrule`; no registry, or a mark that is no time, is none). While a mark
+  is set and Codex's newest reading is stamped at or before it, the local review, a stage's yield and the
+  runtime's launch gate treat Codex as under its caps (`runtime.CodexOverrule.Covers`, one rule for the three).
+  The first reading stamped after the mark decides again, as the review daemon's does when it deletes the mark;
+  the factory never writes or deletes it. The launch gate follows too, since the stage's Codex roles would
+  otherwise launch and then wait at the gate's own read of the same reading (`Deps.CodexOverrule`, wired by the
+  factory daemon to the same registry read). A read of the mark that fails keeps the waits as they were, and the
+  log names it once until a read goes through. Each wait of the factory's on Codex's reading ends with "`magnum
+  resume --tool codex` overrules a stale reading": the local review's, a stage's whose Codex role has no
+  fallback, and the launch gate's (`runtime.CodexOverruleRemedy`). The wait on the usage limit a factory run
+  hit does not, since the resume does not lift that pause. The yield events, which hold nothing, stay as they
+  were. Tests, failing first: `TestTheFactorysLocalReviewGoesOnAfterTheOperatorOverrulesCodexsReading`,
+  `TestAReadingAfterTheOverruleDecidesTheFactorysCodexHoldAgain`, `TestTheFactorysCodexWaitNamesTheOverrule`,
+  `TestAnOverruleThatCannotBeReadKeepsTheFactorysCodexHoldAndLogsOnce` and
+  `TestALaunchOfACodexRoleGoesOnOnAReadingYouOverruled`; `TestLaunchWaitsWhenCodexIsOverItsSoftCap` now expects
+  the command in the gate's wait, and `TestTheFactoryReadsYourCodexOverruleInMagnumsRegistry` reads the mark from
+  a registry file. No migration: the review daemon's kv row.
 
 ## Learned rules
 

@@ -224,15 +224,19 @@ func (m MergeMethods) String() string {
 // the factory's PRs (PRStates: the row, the verdict, the loop), which the
 // screen draws and the tick follows, of their fix loops over time
 // (FixRecords), which the PRs' status files count, of your own open PRs
-// (OwnPRs), which the screen lists, and of its first round on a PR that
+// (OwnPRs), which the screen lists, of its first round on a PR that
 // posted a review since a time (FirstPostedRound), which the escape check
-// of a published task's local review reads (escapes.go).
+// of a published task's local review reads (escapes.go), and of your
+// overrule of Codex's reading (CodexOverrule: `magnum resume --tool
+// codex`, zero for none), which the local review's and the stages' waits
+// on Codex's reading honor, as magnum's caps do (runtime.CodexOverrule).
 type Magnum interface {
 	Busy(ctx context.Context) (busy bool, why string, err error)
 	PRStates(ctx context.Context, refs []PRRef) (map[PRRef]PRState, error)
 	OwnPRs(ctx context.Context) ([]PRState, error)
 	FixRecords(ctx context.Context, refs []PRRef) (map[PRRef]FixRecord, error)
 	FirstPostedRound(ctx context.Context, ref PRRef, since time.Time) (PostedRound, bool, error)
+	CodexOverrule(ctx context.Context) (time.Time, error)
 }
 
 // LocalReviewer runs one round of magnum's review on a task's change in its
@@ -502,6 +506,9 @@ type Engine struct {
 	// launch failed, which codexYield logged once: the next failure is not
 	// logged again until a read goes through.
 	codexUnread bool
+	// overrule is your overrule of Codex's reading in magnum's registry
+	// (Magnum.CodexOverrule), which codexSoft and codexYield honor.
+	overrule *runtime.CodexOverrule
 
 	// qaSessions are the qa stages' runs that hold the Mac, by task (qa.go):
 	// the loop's own but for each boot's answer, which its goroutine writes
@@ -688,6 +695,7 @@ func New(d Deps) *Engine {
 		trackSendWait:   sendWait,
 	}
 	e.trk.done = make(chan trackBatch, 1)
+	e.overrule = &runtime.CodexOverrule{Read: e.readOverrule, Log: log}
 	e.drainerAlive, e.procStart = e.liveDrainer, processStart
 	e.runners[config.FactoryStageAgents] = e.runAgents
 	e.runners[config.FactoryStageGate] = e.runGate

@@ -305,9 +305,13 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	// The fixer (the one factory role with an identity) acts as its watch's
 	// fix identity: its pane gets that identity's env and its git env.
 	ids := newFixerIdentities(cfg, l, run, d.Log)
+	// Magnum's registry, read only: the local review's waits on magnum's
+	// rounds, and your overrule of Codex's reading (`magnum resume --tool
+	// codex`), which the runtime's launch gate honors as the engine does.
+	magnum := factory.NewMagnum(l, cfg)
 	if d.Runtime, err = runtime.New(runtime.Deps{Config: cfg, Layout: l, Herdr: h, Store: d.Agents, Registry: d.Registry,
 		Runner: run, Memory: memory, MayStart: mayStart, MayPrompt: mayPrompt, IdentityEnv: ids.env, FixerEnv: identity.FixerEnv(cfg),
-		Log: d.Log}); err != nil {
+		CodexOverrule: magnum.CodexOverrule, Log: d.Log}); err != nil {
 		return nil, fmt.Errorf("factory: runtime: %w", err)
 	}
 	deps := factory.Deps{
@@ -380,7 +384,7 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	if err != nil {
 		return nil, fmt.Errorf("factory: review candidate: %w", err)
 	}
-	deps.Magnum, deps.ReviewCandidate = factory.NewMagnum(l, cfg), candidate
+	deps.Magnum, deps.ReviewCandidate = magnum, candidate
 	// Its rounds open their panes in magnum's review session: a round waits
 	// while that does not answer, and the factory opens a named one.
 	deps.ReviewHerdrUp, deps.ReviewReveal = factoryReviewSession(reviewCfg, run,

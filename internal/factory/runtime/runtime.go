@@ -129,21 +129,25 @@ func (w *WaitError) Error() string { return w.Who + ": " + w.What }
 // Config.FactoryFixerFor) acts as that identity, and its pane carries that
 // identity's token and no other (onlyIdentityToken); nil for either gives
 // none, and a fixer's start then fails, as magnum's does when its identity
-// does not resolve. Clock nil is time.Now; Log nil discards.
+// does not resolve. CodexOverrule reads your overrule of Codex's reading in
+// magnum's registry (`magnum resume --tool codex`: the time, zero for none),
+// which the gate honors (CodexOverrule.Covers); nil reads none. Clock nil
+// is time.Now; Log nil discards.
 type Deps struct {
-	Config      *config.Config
-	Layout      paths.Layout
-	Herdr       agents.Herdr
-	Store       *store.Store
-	Registry    *registry.Registry
-	Runner      execx.Runner
-	Memory      func(ctx context.Context) engine.MemorySample
-	MayStart    func() (who, what string, ok bool)
-	MayPrompt   func() (who, what string, ok bool)
-	IdentityEnv func(name string) (map[string]string, bool)
-	FixerEnv    func(identity string) map[string]string
-	Clock       func() time.Time
-	Log         *slog.Logger
+	Config        *config.Config
+	Layout        paths.Layout
+	Herdr         agents.Herdr
+	Store         *store.Store
+	Registry      *registry.Registry
+	Runner        execx.Runner
+	Memory        func(ctx context.Context) engine.MemorySample
+	MayStart      func() (who, what string, ok bool)
+	MayPrompt     func() (who, what string, ok bool)
+	IdentityEnv   func(name string) (map[string]string, bool)
+	FixerEnv      func(identity string) map[string]string
+	CodexOverrule func(ctx context.Context) (time.Time, error)
+	Clock         func() time.Time
+	Log           *slog.Logger
 }
 
 // onlyIdentityToken is f, an identity's env (Deps.IdentityEnv), with every
@@ -197,6 +201,9 @@ type Runtime struct {
 	reg *registry.Registry
 	log *slog.Logger
 	s   seams
+	// overrule is your overrule of Codex's reading, as the gate reads it
+	// (Deps.CodexOverrule).
+	overrule *CodexOverrule
 
 	// launchMu makes the staggered launches take turns, talkMu the liaisons'
 	// starts (Talk). A Talk also holds its task's lock (talkLock) for its
@@ -360,7 +367,7 @@ func newWith(d Deps, s seams) (*Runtime, error) {
 	if s.codexHome == "" {
 		s.codexHome = d.Config.Usage.CodexHome
 	}
-	r := &Runtime{d: d, cfg: &cfg, st: d.Store, reg: d.Registry, log: log, s: s,
+	r := &Runtime{d: d, cfg: &cfg, st: d.Store, reg: d.Registry, log: log, s: s, overrule: &CodexOverrule{Read: d.CodexOverrule, Log: log},
 		keys: map[int64]string{}, roles: map[roleKey]*roleState{}, loops: map[loopKey]*loopState{},
 		pauses: map[string]*pause{}, misses: map[int64]time.Time{}, shifts: map[string]time.Duration{},
 		once: map[string]bool{}, checked: map[int64]time.Time{}, refused: map[int64]bool{}, versions: map[string]cliVersion{},
@@ -871,7 +878,8 @@ func (r *Runtime) liveLiaison(ctx context.Context, pr store.PR, role string) (st
 // gate reads what a launch of role waits on: a pause of its kind, the
 // Mac's memory (critical waits; the level comes back for the stagger) and,
 // for Codex, the budget, judged by [usage]: at its soft cap the factory's
-// new stages wait before magnum's reviews do.
+// new stages wait before magnum's reviews do, but on a reading you
+// overruled (CodexOverrule.Covers), as magnum's caps do.
 func (r *Runtime) gate(ctx context.Context, role config.Role) (level int, err error) {
 	kind := role.AgentKind()
 	if w := r.paused(kind); w != nil {
@@ -900,7 +908,7 @@ func (r *Runtime) gate(ctx context.Context, role config.Role) (level int, err er
 		}
 		return level, nil
 	}
-	if w := CodexBudgetWait(u, snap, r.now()); w != nil {
+	if w := CodexBudgetWait(u, snap, r.now()); w != nil && !r.overrule.Covers(ctx, snap) {
 		return level, w
 	}
 	return level, nil
@@ -908,10 +916,11 @@ func (r *Runtime) gate(ctx context.Context, role config.Role) (level int, err er
 
 // CodexBudgetWait is the wait of a launch of a Codex role while Codex's
 // budget snap is at or past [usage] codex_soft (or codex_hard), now being
-// the clock's time ("codex at 96%, waits till 16:00", until the binding
-// window's reset when snap names one); nil below the caps. Runtime.Launch
-// holds every Codex role on it, so a stage's yield (the engine's) comes
-// before the launch.
+// the clock's time ("codex at 96%, waits till 16:00; `magnum resume --tool
+// codex` overrules a stale reading", until the binding window's reset when
+// snap names one); nil below the caps. Runtime.Launch holds every Codex
+// role on it but on a reading you overruled, so a stage's yield (the
+// engine's) comes before the launch.
 func CodexBudgetWait(u config.Usage, snap usage.Snapshot, now time.Time) *WaitError {
 	if usage.Decide(snap, u.CodexSoft, u.CodexHard) == usage.OK {
 		return nil
@@ -923,7 +932,7 @@ func CodexBudgetWait(u config.Usage, snap usage.Snapshot, now time.Time) *WaitEr
 	} else {
 		what += fmt.Sprintf(", waits till it is below %.0f%%", u.CodexSoft)
 	}
-	return &WaitError{Who: "usage", What: what, Until: reset}
+	return &WaitError{Who: "usage", What: what + "; " + CodexOverruleRemedy, Until: reset}
 }
 
 // binding is the window of snap that runs out first.
