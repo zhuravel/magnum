@@ -13,8 +13,8 @@ func factoryRoleOf(cfg *Config, name string) Role {
 }
 
 // builtinFactoryModels are the model and effort of every built-in factory
-// role as config.defaults.toml writes them: opus for fx-judge and fx-writer,
-// the CLI's default model for the rest.
+// role as config.defaults.toml writes them: opus for fx-judge, fx-writer and
+// fx-fixer (claude-fix's), the CLI's default model for the rest.
 var builtinFactoryModels = map[string][2]string{
 	"fx-repro":         {"", "high"},
 	"fx-cause":         {"", "high"},
@@ -30,6 +30,7 @@ var builtinFactoryModels = map[string][2]string{
 	"fx-writer":        {"opus", "high"},
 	"fx-qa":            {"", "high"},
 	"fx-liaison":       {"", "high"},
+	"fx-fixer":         {"opus", "high"},
 }
 
 // Under the default config every factory role resolves to the model and the

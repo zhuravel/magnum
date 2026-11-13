@@ -1437,13 +1437,20 @@ func TestFactoryGoDefaultsEqualTheEmbeddedFile(t *testing.T) {
 }
 
 // The factory reads its prompts from files that exist, are templates and
-// stay out of the review pipeline's data shapes.
+// stay out of the review pipeline's data shapes; the fixer alone takes the
+// fix role's prompt (fix.md), whose data is the fix job's.
 func TestFactoryRolesNameEmbeddedPrompts(t *testing.T) {
 	cfg := mustLoadDefaults(t)
 	for _, r := range cfg.Factory.Roles {
 		p, err := cfg.RolePrompt(r, PromptInitial)
 		if err != nil {
 			t.Errorf("role %s: %v", r.Name, err)
+			continue
+		}
+		if r.Name == FactoryFixerRole {
+			if p.Name != DefaultFixPrompt {
+				t.Errorf("the fixer's prompt is %s, want %s", p.Name, DefaultFixPrompt)
+			}
 			continue
 		}
 		if !strings.HasPrefix(p.Name, "factory-") {

@@ -788,6 +788,9 @@ func TestFactoryPromptsCarryNoTicketText(t *testing.T) {
 	}
 	c := h.stageCopy()
 	for _, role := range h.cfg.Factory.Roles {
+		if role.Fix {
+			continue // the fixer: no stage runs it, and its prompt takes the fix job's data, never a task's
+		}
 		for _, st := range []config.FactoryStage{{Name: "investigate", End: config.FactoryEndFindings}, {Name: "judge", End: config.FactoryEndReport}} {
 			text, err := h.e.renderRole(h.ctx, task, st, role, role, c)
 			if err != nil {

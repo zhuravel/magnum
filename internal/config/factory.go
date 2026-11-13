@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"maps"
@@ -85,6 +86,22 @@ type Factory struct {
 	// MaxFixGoOn, 0 turns it off. Without progress the role gets one fresh
 	// session, then the task asks you.
 	FixGoOn int `toml:"fix_go_on"`
+
+	// Fix says whether the factory fixes your own PRs (FactoryFixOn) or
+	// not yet (FactoryFixOff, the default): while it is off, every PR
+	// request of the fix lane (a fix, its switches, a CI fix, a merge of
+	// the parent, a stop, a hand-off) is answered that the factory does not
+	// fix yet, naming this key, and nothing starts. The fixer is the
+	// FactoryFixerRole (DECISIONS "The factory becomes the only fixer").
+	Fix string `toml:"fix"`
+	// FixMaxActive is how many fix loops the factory runs at once across
+	// your PRs, in fix copies and per-PR checkouts alike (at least 1;
+	// DefaultFixMaxActive). Fixes do not count toward MaxActive.
+	FixMaxActive int `toml:"fix_max_active"`
+	// FixLocalReview has a fix cycle run magnum's local review on the
+	// fixer's change before its push (its skip rule aside); false pushes
+	// the change without one.
+	FixLocalReview bool `toml:"fix_local_review"`
 
 	// Sensitive are the path globs (MatchPath's: "**" matches whole
 	// directories) of the files whose change the ready card's FLAGS line
@@ -178,6 +195,11 @@ type FactoryRepo struct {
 	// [daemon] min_free_disk_gb).
 	MaxCopies     int `toml:"max_copies"`
 	MinFreeDiskGB int `toml:"min_free_disk_gb"`
+	// FixCopies is how many copies of the repository are set apart for the
+	// fixes of your PRs (0, the default: none, and a fix works in a per-PR
+	// checkout without databases): apart from MaxCopies and from [factory]
+	// max_active, and never a task's copy.
+	FixCopies int `toml:"fix_copies"`
 	// Setup, Teardown, PostCheckout and ResetDB are the commands of a
 	// copy's life, as a [[pool]] has them.
 	Setup        []string `toml:"setup"`
@@ -586,6 +608,45 @@ const (
 	MaxFixGoOn     = 10
 )
 
+// The values of [factory] fix: the factory fixes your own PRs, or not yet.
+const (
+	FactoryFixOn  = "on"
+	FactoryFixOff = "off"
+)
+
+// DefaultFixMaxActive is [factory] fix_max_active's default: 2 fix loops at
+// once on the first day of the factory's fixes, raised after a clean day.
+const DefaultFixMaxActive = 2
+
+// FactoryFixerRole is the factory's fixer ([[factory.role]] fx-fixer): a
+// fix role (Role.Fix), the only factory role that may carry an identity.
+// It acts as the fix identity of the PR's watch (FactoryFixerFor).
+const FactoryFixerRole = "fx-fixer"
+
+// Fixes reports whether the factory fixes your own PRs ([factory] fix =
+// "on").
+func (f Factory) Fixes() bool { return f.Fix == FactoryFixOn }
+
+// FactoryFixerFor is the factory's fixer (FactoryFixerRole) for the PRs of
+// watch w, as FixRoleFor resolves magnum's fix role: it acts as w's
+// fix_identity when the watch sets one, else as the identity the role
+// names, else as w's poll identity (its identity when it has none); a nil
+// w keeps the role's. ok is false when no fixer role is configured.
+func (c *Config) FactoryFixerFor(w *Watch) (Role, bool) {
+	r, ok := c.FactoryRole(FactoryFixerRole)
+	if !ok || !r.Fix {
+		return Role{}, false
+	}
+	switch {
+	case w == nil:
+	case w.FixIdentity != "":
+		r.Identity = w.FixIdentity
+	case r.Identity == "":
+		r.Identity = cmp.Or(w.PollIdentity, w.Identity)
+	}
+	return r, true
+}
+
 // DefaultFactoryBrowsers are the browsers the factory starts for QA when
 // [factory] browser names none: the first that exists.
 var DefaultFactoryBrowsers = []string{
@@ -619,6 +680,9 @@ func DefaultFactory() Factory {
 		},
 		ProvisionalLoneAnswer: true,
 		FixGoOn:               DefaultFixGoOn,
+		Fix:                   FactoryFixOff,
+		FixMaxActive:          DefaultFixMaxActive,
+		FixLocalReview:        true,
 	}
 }
 
@@ -669,6 +733,11 @@ func DefaultFactoryRoles() []Role {
 		{Name: "fx-liaison", Kind: KindClaude, Effort: "high", Prompt: "factory-liaison.md", Timeout: Duration{24 * time.Hour},
 			OnPermissionPrompt: PermissionWait,
 			Why:                "talk with you about the task: ask its questions, explain, act on your word", Doing: "talking with you"},
+		// The fixer of your own PRs (FactoryFixerRole): magnum's fix role moved into the factory, with its prompt and
+		// skill. No stage names it; the fix lane starts it, as the fix identity of the PR's watch (FactoryFixerFor).
+		{Name: FactoryFixerRole, Kind: KindClaude, Fix: true, Model: "opus", Effort: "high", Skill: DefaultFixSkill, Prompt: DefaultFixPrompt,
+			Timeout: Duration{60 * time.Minute},
+			Why:     "fix what is open on your PR, push it and answer its threads", Doing: "fixing the PR"},
 	}
 }
 
@@ -955,6 +1024,31 @@ func (c *Config) validateFactory() []error {
 	errs = append(errs, c.validateFactoryKinds()...)
 	errs = append(errs, c.validateFactoryPickers()...)
 	errs = append(errs, c.validateFactoryRepos()...)
+	errs = append(errs, c.validateFactoryFix()...)
+	return errs
+}
+
+// MaxFixCopies is the most fix_copies a [[factory.repo]] takes.
+const MaxFixCopies = 10
+
+// validateFactoryFix checks the keys of the factory's fixes: [factory] fix
+// is on or off, fix_max_active at least 1, and each repository's
+// fix_copies 0 to MaxFixCopies.
+func (c *Config) validateFactoryFix() []error {
+	var errs []error
+	f := c.Factory
+	if f.Fix != FactoryFixOn && f.Fix != FactoryFixOff {
+		errs = append(errs, fmt.Errorf("factory.fix must be %q or %q, got %q", FactoryFixOn, FactoryFixOff, f.Fix))
+	}
+	if f.FixMaxActive < 1 {
+		errs = append(errs, fmt.Errorf("factory.fix_max_active must be at least 1, got %d", f.FixMaxActive))
+	}
+	for _, r := range f.Repos {
+		if r.FixCopies < 0 || r.FixCopies > MaxFixCopies {
+			errs = append(errs, fmt.Errorf("factory repo %s: fix_copies must be between 0 (none: a fix works in a per-PR checkout) and %d, got %d",
+				r.Repo, MaxFixCopies, r.FixCopies))
+		}
+	}
 	return errs
 }
 
@@ -988,9 +1082,11 @@ func (l FactoryLocalReview) validate() []error {
 
 // validateFactoryRoles checks each [[factory.role]] with the checks of a
 // [[role]] (validateRole), worded for the section, plus what makes it a
-// factory agent: an agent session that is no judge, fix or whiteboard role,
-// takes no alias and no identity, has a why and a doing of one line each,
-// and a name no other factory role and no review role has.
+// factory agent: an agent session that is no judge or whiteboard role, and
+// no fix role but the fixer (FactoryFixerRole, which must be one), takes no
+// alias and no identity (the fixer alone may name a declared one:
+// validateFactoryIdentity), has a why and a doing of one line each, and a
+// name no other factory role and no review role has.
 func (c *Config) validateFactoryRoles() []error {
 	var errs []error
 	reviewNames := map[string]string{}
@@ -1014,8 +1110,10 @@ func (c *Config) validateFactoryRoles() []error {
 		switch {
 		case r.Judge:
 			bad("a factory role cannot be a judge (judge = true is the review pipeline's)")
-		case r.Fix:
-			bad("a factory role cannot be a fix role")
+		case r.Fix && r.Name != FactoryFixerRole:
+			bad("a factory role cannot be a fix role (the factory's fixer is %s)", FactoryFixerRole)
+		case !r.Fix && r.Name == FactoryFixerRole:
+			bad("the factory's fixer must be a fix role (fix = true)")
 		case r.Whiteboard:
 			bad("a factory role cannot be a whiteboard role")
 		case r.IsShell():
@@ -1029,8 +1127,8 @@ func (c *Config) validateFactoryRoles() []error {
 				bad("%s must be one line of text (the factory's screen names the agent by it), got %q", w.key, w.v)
 			}
 		}
-		if r.Identity != "" {
-			bad("identity is not used by factory roles (agents act as you)")
+		if msg := c.validateFactoryIdentity(r); msg != "" {
+			bad("%s", msg)
 			r.Identity = ""
 		}
 		for _, err := range c.validateRole(r, c.kinds(), nil) {
@@ -1038,6 +1136,23 @@ func (c *Config) validateFactoryRoles() []error {
 		}
 	}
 	return errs
+}
+
+// validateFactoryIdentity is why role r of [[factory.role]] may not carry
+// its identity, "" when it may: no identity at all, or the fixer
+// (FactoryFixerRole) naming a declared [[identity]], which validateFixRole
+// then checks as magnum's fix role's (never the App a watch reviews, polls
+// or approves as). Every other factory role acts as you and takes none.
+func (c *Config) validateFactoryIdentity(r Role) string {
+	switch {
+	case r.Identity == "":
+		return ""
+	case r.Name != FactoryFixerRole:
+		return "identity is not used by factory roles (agents act as you; only the fixer, " + FactoryFixerRole + ", acts as an identity)"
+	case c.IdentityByName(r.Identity) == nil:
+		return fmt.Sprintf("unknown identity %q", r.Identity)
+	}
+	return ""
 }
 
 // validateFactoryKinds checks each kind of task: a name, at least one
@@ -1174,8 +1289,11 @@ func (c *Config) validateStage(where string, st FactoryStage, roles map[string]R
 				len(st.Roles))
 		}
 		for _, r := range st.Roles {
-			if _, ok := roles[r]; !ok {
+			switch role, ok := roles[r]; {
+			case !ok:
 				bad("names unknown role %q (declare it as a [[factory.role]])", r)
+			case role.Fix:
+				bad("names %s, the fixer of your PRs, which no stage runs (the fix lane starts it)", r)
 			}
 		}
 	}

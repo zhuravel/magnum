@@ -902,6 +902,15 @@ fix_go_on = 2                     # how many times one stage gives a role whose 
                                   # progress (the same failure 3 turns in a row) the role gets one fresh session that
                                   # names the failure, its commits and the failing output; then the task asks you
                                   # (accept the failing check as known, give a direction, or drop the task)
+fix = "off"                       # "on": the factory fixes your own PRs (the fix lane, its fixer fx-fixer below), the
+                                  # only fixer once magnum's fix loop moved here; "off": not yet, and every PR request
+                                  # of the fix lane (a fix, its off, on, done and decide, a CI fix, a merge of the
+                                  # parent, a stop, a hand-off) is answered that the factory does not fix yet, naming
+                                  # this key
+fix_max_active = 2                # fix loops at once across your PRs, in fix copies and per-PR checkouts alike (at
+                                  # least 1); fixes do not count toward max_active
+fix_local_review = true           # a fix cycle runs magnum's local review on the fixer's change before its push (a
+                                  # small change aside); false pushes it without one
 sensitive = ["Gemfile.lock", ".github/workflows/**", "config/**"]   # the files whose change the ready card's FLAGS
                                   # line names for a second look: path globs, "**" matches whole directories and
                                   # "*" never crosses "/"; your list replaces this one
@@ -955,7 +964,8 @@ chore = ["upgrade", "bump", "dependency", "gem", "rename", "cleanup", "refactor"
 # The factory's agents: session roles like the review pipeline's, one pane each, in the factory's herdr session. why
 # and doing are the words of the factory's screen ("finding the cause": find the cause on its own, apart from the
 # others); a prompt is a file of prompts/ (prompts_dir). No role is a judge of the review pipeline, and none takes
-# an identity or an alias: the agents act as you, and stages and codex_fallback name a role by its name.
+# an alias: stages and codex_fallback name a role by its name. None but the fixer (fx-fixer, the one fix role) takes
+# an identity: the agents act as you.
 # A role may also set, like a review [[role]]:
 #   on_permission_prompt = "wait"   # deny | wait, over the kind's: an agent that asks you questions itself
 #                                   # (Claude Code's AskUserQuestion shows a Yes/No question as a permission
@@ -1103,6 +1113,20 @@ timeout = "24h"
 on_permission_prompt = "wait"     # it asks you its questions itself (AskUserQuestion): magnum never answers them
 why = "talk with you about the task: ask its questions, explain, act on your word"
 doing = "talking with you"
+
+[[factory.role]]
+name = "fx-fixer"                 # the fixer of your own PRs ([factory] fix): magnum's fix role moved into the
+kind = "claude"                   # factory, with its prompt and skill; no stage names it, the fix lane starts it in a
+fix = true                        # fix copy or a per-PR checkout. The one factory role that may take an identity:
+model = "opus"                    # unset, it acts as the fix_identity of the PR's [[watch]] (else its poll identity),
+effort = "high"                   # and its pane carries that identity's GitHub token alone: a gh identity, or a
+                                  # dedicated fixer App, never the App a watch reviews, polls or approves as
+skill = "{{repo}}/skills/magnum-fix/SKILL.md"   # the fix skill, copied when the factory daemon starts (an edit
+                                  # reaches the fixer at `magnum factory install --drain`)
+prompt = "fix.md"
+timeout = "60m"
+why = "fix what is open on your PR, push it and answer its threads"
+doing = "fixing the PR"
 
 # The kinds of task and their stages, in order. A stage has a name and a type:
 #   agents    launches `roles` in parallel in the task's copy; ends when its `end` fact holds

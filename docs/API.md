@@ -4986,6 +4986,12 @@ const (
     fix_go_on.
 
 const (
+	FactoryFixOn  = "on"
+	FactoryFixOff = "off"
+)
+    The values of [factory] fix: the factory fixes your own PRs, or not yet.
+
+const (
 	ContextUsedGroup = "used" // the percent of the context used
 	ContextLeftGroup = "left" // the percent left
 )
@@ -5256,6 +5262,10 @@ const DefaultFixCycles = 3
     DefaultFixCycles is [pipeline] fix_cycles' default: three fix runs, each
     followed by a re-review, before the PR is left to the operator.
 
+const DefaultFixMaxActive = 2
+    DefaultFixMaxActive is [factory] fix_max_active's default: 2 fix loops at
+    once on the first day of the factory's fixes, raised after a clean day.
+
 const DefaultFullPassAfter = 12 * time.Hour
     DefaultFullPassAfter is [pipeline] full_pass_after's default: a PR's next
     automatic re-review half a day after its baseline is a full pass, so the
@@ -5355,6 +5365,11 @@ const EmbeddedSkill = "builtin:skills/magnum-review/SKILL.md"
     EmbeddedSkill names the binary's own copy of the judge skill (magnum.Skill)
     as a skill source: what a judge gets without a checkout.
 
+const FactoryFixerRole = "fx-fixer"
+    FactoryFixerRole is the factory's fixer ([[factory.role]] fx-fixer):
+    a fix role (Role.Fix), the only factory role that may carry an identity.
+    It acts as the fix identity of the PR's watch (FactoryFixerFor).
+
 const FactorySharedPrompt = prompts.FactoryShared
     FactorySharedPrompt is the factory prompts' partials file
     (prompts.FactoryShared), as SharedPrompt is the judge prompts': the blocks
@@ -5368,6 +5383,9 @@ const LearnRoleName = "retro"
 
 const MaxBudgetFloor = 5000
     MaxBudgetFloor is the highest budget_floor: a user's whole hourly budget.
+
+const MaxFixCopies = 10
+    MaxFixCopies is the most fix_copies a [[factory.repo]] takes.
 
 const MaxSimplificationsMax = 10
     MaxSimplificationsMax bounds max_simplifications ([pipeline] and [[repo]]):
@@ -5895,6 +5913,13 @@ func (c *Config) EditorRole() Role
     [learn] editor_kind in session mode with its editor_model, editor_effort,
     editor_args, editor_prompt, editor_timeout and editor_fallback_models,
     writing changes.json, normalized like a configured role.
+
+func (c *Config) FactoryFixerFor(w *Watch) (Role, bool)
+    FactoryFixerFor is the factory's fixer (FactoryFixerRole) for the PRs
+    of watch w, as FixRoleFor resolves magnum's fix role: it acts as w's
+    fix_identity when the watch sets one, else as the identity the role names,
+    else as w's poll identity (its identity when it has none); a nil w keeps the
+    role's. ok is false when no fixer role is configured.
 
 func (c *Config) FactoryHerdr() herdr.Session
     FactoryHerdr is the herdr session of the factory's panes: [factory]
@@ -6485,6 +6510,22 @@ type Factory struct {
 	// session, then the task asks you.
 	FixGoOn int `toml:"fix_go_on"`
 
+	// Fix says whether the factory fixes your own PRs (FactoryFixOn) or
+	// not yet (FactoryFixOff, the default): while it is off, every PR
+	// request of the fix lane (a fix, its switches, a CI fix, a merge of
+	// the parent, a stop, a hand-off) is answered that the factory does not
+	// fix yet, naming this key, and nothing starts. The fixer is the
+	// FactoryFixerRole (DECISIONS "The factory becomes the only fixer").
+	Fix string `toml:"fix"`
+	// FixMaxActive is how many fix loops the factory runs at once across
+	// your PRs, in fix copies and per-PR checkouts alike (at least 1;
+	// DefaultFixMaxActive). Fixes do not count toward MaxActive.
+	FixMaxActive int `toml:"fix_max_active"`
+	// FixLocalReview has a fix cycle run magnum's local review on the
+	// fixer's change before its push (its skip rule aside); false pushes
+	// the change without one.
+	FixLocalReview bool `toml:"fix_local_review"`
+
 	// Sensitive are the path globs (MatchPath's: "**" matches whole
 	// directories) of the files whose change the ready card's FLAGS line
 	// names for a second look: by default Gemfile.lock, the workflows and
@@ -6541,6 +6582,9 @@ func DefaultFactory() Factory
     DefaultFactory returns the built-in [factory] values, the ones
     config.defaults.toml writes out (TestFactoryGoDefaultsEqualTheEmbeddedFile
     holds the two together). The roles are not normalized: Normalize does.
+
+func (f Factory) Fixes() bool
+    Fixes reports whether the factory fixes your own PRs ([factory] fix = "on").
 
 type FactoryInstall struct {
 	Lock string `toml:"lock"`
@@ -6709,6 +6753,11 @@ type FactoryRepo struct {
 	// [daemon] min_free_disk_gb).
 	MaxCopies     int `toml:"max_copies"`
 	MinFreeDiskGB int `toml:"min_free_disk_gb"`
+	// FixCopies is how many copies of the repository are set apart for the
+	// fixes of your PRs (0, the default: none, and a fix works in a per-PR
+	// checkout without databases): apart from MaxCopies and from [factory]
+	// max_active, and never a task's copy.
+	FixCopies int `toml:"fix_copies"`
 	// Setup, Teardown, PostCheckout and ResetDB are the commands of a
 	// copy's life, as a [[pool]] has them.
 	Setup        []string `toml:"setup"`
@@ -14467,8 +14516,10 @@ func CheckPrompts(cfg *config.Config) error
     fix turns' (ReviewFixPrompt and QAFixPrompt) with data whose every field
     is set, as the factory daemon does once at startup, after it loaded its
     prompts: a prompt (or factory-shared.md) that names a field the data lacks,
-    or a block the partials file does not define, is an error naming the role or
-    the stage and its file.
+    or a block the partials file does not define, is an error naming the role
+    or the stage and its file. The fixer's prompt (a fix role's, fix.md: the
+    fix job's agents.RoleData, never a task's) is rendered as magnum's daemon
+    renders its own fix role's (fixerCheckData).
 
 func ConfirmSentence(t registry.Task, frees string, starts string) string
     ConfirmSentence is the y/N question of the ready card's push: the branch it

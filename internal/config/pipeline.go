@@ -13,6 +13,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/paths"
 )
 
 // The review pipeline is configuration, "a Procfile of agents": [kinds.<name>]
@@ -810,11 +811,19 @@ func cloneOrNil[E any](s []E) []E {
 
 // expandPipeline resolves {{repo}} and ~ in the judges' and fix roles' skills (Load only;
 // Defaults keeps them unexpanded). prompts_dir is expanded earlier, by
-// expand, because Normalize looks prompts up in it.
+// expand, because Normalize looks prompts up in it. A factory role's skill
+// (the fixer's) expands ~ only: it keeps {{repo}}, which RoleSkillPath
+// resolves where the skill is read, so the loaded factory roles stay the
+// Go defaults' (TestFactoryGoDefaultsEqualTheEmbeddedFile).
 func (c *Config) expandPipeline() {
 	for i := range c.Roles {
 		if s := c.Roles[i].Skill; s != "" {
 			c.Roles[i].Skill = c.repoPath(s)
+		}
+	}
+	for i := range c.Factory.Roles {
+		if s := c.Factory.Roles[i].Skill; s != "" && !strings.Contains(s, "{{repo}}") {
+			c.Factory.Roles[i].Skill = paths.Expand(s)
 		}
 	}
 }

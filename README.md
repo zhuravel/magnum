@@ -4369,6 +4369,9 @@ poll = "45s"                         # how often its main tick moves the tasks (
 human_cooldown = "15m"               # it leaves a pane alone this long after you type into it
 provisional_lone_answer = true       # a lone question after a batch you answered: coding starts on its recommendation
 fix_go_on = 2                        # at the cap of fix turns, 2 more fix turns this many times while the writer makes progress
+fix = "off"                          # "on": the factory fixes your own PRs (its fixer fx-fixer); "off": not yet
+fix_max_active = 2                   # fix loops at once across your PRs; fixes do not count toward max_active
+fix_local_review = true              # a fix cycle runs the local review on the fixer's change before its push
 sensitive = ["Gemfile.lock", ".github/workflows/**", "config/**"]   # files the ready card flags for a second look
 
 [factory.local_review]
@@ -4382,6 +4385,7 @@ repo = "talkable/talkable"
 main_clone = "~/Projects/talkable"
 copies = "~/Projects/talkable.factory{n}"   # copy {n}'s checkout: its own block, never a second [[pool]] of the repo
 max_copies = 4
+fix_copies = 2                       # copies set apart for the fixes of your PRs (default 0: a per-PR checkout)
 setup = ["bin/worktree-setup"]
 installs = [{ lock = "Gemfile.lock", run = "bundle install --jobs 4" }]
 reviewer = "rev-ann"                 # requested as the PR's reviewer once CI is green (a later milestone)
@@ -4430,6 +4434,21 @@ stages = [
   `[factory.local_review] left_blocks` is `true` or `false` (default `false`); any other value is refused when the
   config loads, naming the key. So is `provisional_lone_answer` (default `true`; `false` has every question wait
   for your answer).
+- **Fixes.** The factory becomes the only fixer of your own PRs: magnum's fix loop moves into it (see
+  [DECISIONS](docs/DECISIONS.md), "The factory becomes the only fixer"). `fix` is `"off"` (the default) or `"on"`;
+  any other word is refused, naming the key. While it is off, every PR request of the fix lane (a fix, its off, on,
+  done and decide, a CI fix, a merge of the parent, a stop of a fix loop, a hand-off) is answered that the factory
+  does not fix PRs yet, naming `[factory] fix`, and nothing starts. `fix_max_active` (at least 1, default 2) bounds
+  the fix loops that run at once across your PRs, in fix copies and per-PR checkouts alike, apart from
+  `max_active`; `fix_local_review` (default `true`) has a fix cycle run the local review on the fixer's change
+  before its push. A `[[factory.repo]]`'s `fix_copies` (0 to 10, default 0) sets copies of the repository apart for
+  the fixes, apart from `max_copies`; with none, a fix works in a per-PR checkout without databases. The fixer is
+  the factory role `fx-fixer`: magnum's fix role moved here (Claude, `fix = true`, the `fix.md` prompt and the
+  magnum-fix skill, which the factory daemon copies when it starts, so an edit reaches it at `magnum factory
+  install --drain`). No stage names it; the fix lane starts it. It is the one factory role that may take an
+  `identity`: unset, it acts as the `fix_identity` of the PR's `[[watch]]` (else its poll identity), as
+  `claude-fix` does, and its pane carries that identity's GitHub token alone (a dedicated fixer App, or a gh
+  identity; never the App a watch reviews, polls or approves as).
 - **Sensitive files.** `sensitive` lists the path globs (`**` matches whole directories, `*` never crosses
   `/`, as `skip_paths` reads them) of the files whose change the ready card's FLAGS line names for a second
   look; the built-in list is `Gemfile.lock`, the workflows (`.github/workflows/**`) and the config files
@@ -4439,8 +4458,9 @@ stages = [
   the spend level of its kind as a review role does: see [Models and effort](#models-and-effort)) with two more keys the factory's
   screen names its agent by, each one line: `doing` is what the agent does now (`finding the cause`) and
   `why` the reason it exists (`find the cause on its own, apart from the others`). A review `[[role]]` takes
-  neither. A factory role is never a judge, fix or whiteboard role, takes no `identity` (the agents act as
-  you) and no `aliases`, and its `prompt` is a file of [prompts](prompts/README.md) (`factory-*.md`). A role
+  neither. A factory role is never a judge or whiteboard role, nor a fix role but `fx-fixer` (see Fixes above),
+  takes no `identity` (the agents act as you; the fixer alone may) and no `aliases`, and its `prompt` is a file of
+  [prompts](prompts/README.md) (`factory-*.md`; the fixer's is `fix.md`). A role
   on Codex needs an entry in `codex_fallback`, the Claude role that takes its work after a Codex refusal, and
   while Codex is at its soft cap or its usage limit; `magnum config` warns about one without it. A fallback
   that the same stage runs already makes the role a second reader there (the built-in

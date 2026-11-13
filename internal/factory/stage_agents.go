@@ -2473,7 +2473,10 @@ func (e *Engine) endOf(st config.FactoryStage, dir string, since time.Time, role
 // whose every field is set, as the factory daemon does once at startup,
 // after it loaded its prompts: a prompt (or factory-shared.md) that names
 // a field the data lacks, or a block the partials file does not define, is
-// an error naming the role or the stage and its file.
+// an error naming the role or the stage and its file. The fixer's prompt
+// (a fix role's, fix.md: the fix job's agents.RoleData, never a task's) is
+// rendered as magnum's daemon renders its own fix role's
+// (fixerCheckData).
 func CheckPrompts(cfg *config.Config) error {
 	var errs []error
 	seen := map[string]bool{}
@@ -2483,8 +2486,14 @@ func CheckPrompts(cfg *config.Config) error {
 		}
 		seen[name] = true
 		p, err := cfg.ResolvePrompt(name)
-		if err == nil {
-			_, err = agents.RenderPrompt(p, checkData(r))
+		data := []any{checkData(r)}
+		if r.Fix {
+			data = fixerCheckData()
+		}
+		for _, d := range data {
+			if err == nil {
+				_, err = agents.RenderPrompt(p, d)
+			}
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", who, err))
@@ -2550,6 +2559,26 @@ func PromptNames(cfg *config.Config) []string {
 	add(ReviewFixPrompt)
 	add(QAFixPrompt)
 	return names
+}
+
+// fixerCheckData is the fix job's prompt data (agents.RoleData, as
+// agents.Manager.FixPrompt fills it) the fixer's prompt is rendered with
+// (CheckPrompts): once with every field a fix sets, its conflict, its
+// merge, its CI file and its notes included, and once with none, so both
+// sides of each {{if}} run.
+func fixerCheckData() []any {
+	const sha = "0123456789abcdef0123456789abcdef01234567"
+	dir := "/magnum/reports/example-app/1/r1"
+	full := agents.RoleData{URL: "https://github.com/example/app/pull/1", Owner: "example", Repo: "app", Number: 1, HeadSHA: sha,
+		ReportPath: dir + "/fx-fixer.md", RunID: "r1", HeadRef: "feature", ReviewURL: "https://github.com/example/app/pull/1#pullrequestreview-1",
+		ReviewFile: dir + "/review.json", ExternalFile: dir + "/external-threads.json", ReviewerLogin: "magnum-app[bot]",
+		DBLockCommand: agents.DBLockLine("magnum", "/factory/copies/fix1", config.FactoryFixerRole), FixReplyCommand: "magnum fix-reply",
+		SkillPath: "/magnum/factory-skill/abc/SKILL.md", FixSyncCommand: "magnum fix-sync", PushCommand: agents.PushLine("magnum", "", "master"),
+		FixerLogin: "fixer-app[bot]", NoFindings: true, OwnPR: true, MergeOnly: true, CIOnly: true, CIFile: dir + "/ci-failures.json",
+		ConflictBase: "master", ConflictSHA: sha, ConflictPaths: []string{"app/models/credit.rb"}, ConflictFiles: 1,
+		MergedBase: "master", MergedSHA: sha,
+		NotesParts: agents.NotesParts{Path: dir + "/notes.md", Bytes: 10, Lines: 2, Parts: []agents.NotesPart{{From: 1, To: 2, Command: "sed -n '1,2p' notes.md"}}}}
+	return []any{full, agents.RoleData{}}
 }
 
 // checkData is prompt data for role with every field set (CheckPrompts).
