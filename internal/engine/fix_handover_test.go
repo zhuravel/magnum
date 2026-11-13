@@ -663,17 +663,16 @@ func TestFixDoneRefusesAHeldFixWhileWhoFixesThePRCannotBeRead(t *testing.T) {
 // An attention the factory raised on a PR it fixes is the factory's to
 // lift (the engine owner's ruling on R6, after C9): `magnum fix --done`
 // refuses it, even in magnum's calls words, and sends the operator to the
-// factory or the way back, since the factory would never learn of the lift
-// and its loop would wait while magnum shows the PR reviewed. Once the PR
-// is magnum's again, whose factory can lift nothing, --done lifts it.
+// factory, or to fixing by hand where the way back would not take the PR
+// (no lease reader here; TestFixDoneOffersTheWayBackOnlyWhenItWouldTakeThePR
+// has the rest), since the factory would never learn of the lift and its
+// loop would wait while magnum shows the PR reviewed. Once the PR is
+// magnum's again, whose factory can lift nothing, --done lifts it.
 func TestFixDoneRefusesAnAttentionTheFactoryRaised(t *testing.T) {
 	h := newHarness(t)
 	h.reviewedPR(2, "b1")
 	factoryOwns(h)
-	id := h.enqueue(fixwork.ReqFixAttention, fixwork.AttentionPayload{Repo: "talkable/talkable", Number: 2, Raise: true, Cause: "needs_you",
-		Why: "1 finding needs your call: https://github.com/talkable/talkable/pull/2#discussion_r4100"})
-	h.handle()
-	if r := h.request(id); r.State != store.RequestDone {
+	if r := factoryRaise(h); r.State != store.RequestDone {
 		t.Fatalf("the factory's raise: %s %q", r.State, deref(r.Result))
 	}
 	done := func() store.Request {
@@ -683,7 +682,7 @@ func TestFixDoneRefusesAnAttentionTheFactoryRaised(t *testing.T) {
 		return h.request(id)
 	}
 	if r := done(); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "the factory raised it") ||
-		!strings.Contains(deref(r.Result), "`magnum fix --handover back talkable/talkable#2`") {
+		!strings.Contains(deref(r.Result), `fix it by hand under [factory] fix = "off"`) {
 		t.Errorf("magnum fix --done of the factory's attention: %s %q", r.State, deref(r.Result))
 	}
 	h.wantState(2, store.PRNeedsAttention)
@@ -739,6 +738,48 @@ func TestTheFactorysRaiseFailsWhenItsMarkCannotBeWritten(t *testing.T) {
 	h.wantState(2, store.PRReviewed)
 	if kind, ok := kvValue(h, KVPRAttention(pr.ID)); ok {
 		t.Errorf("attention kind = %q with no mark", kind)
+	}
+}
+
+// `magnum fix --done`'s refusal of the factory's attention offers `magnum fix
+// --handover back <pr>` only when the way back would take the PR (C11): the
+// factory has not worked it since it took it, and does not fix it now. A PR
+// the factory worked, the usual case behind its attention, stays the
+// factory's, and the refusal says to fix it by hand under [factory] fix =
+// "off" instead of sending the operator to a refusal.
+func TestFixDoneOffersTheWayBackOnlyWhenItWouldTakeThePR(t *testing.T) {
+	storetest.Parallel(t)
+	for _, tc := range []struct {
+		name  string
+		lease FixLease
+		back  bool
+	}{
+		{"the factory worked it", FixLease{Worked: true}, false},
+		{"the factory fixes it now", FixLease{Fixing: true, Phase: FixPhaseFixing, Head: "b1", Cycle: 1}, false},
+		{"the factory has not worked it", FixLease{}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lease := &fakeLease{}
+			lease.set(tc.lease, nil)
+			h := newHarness(t, func(h *harness) { h.d.FixLeaseOf = lease.reader(h.clock.Now) })
+			h.reviewedPR(2, "b1")
+			factoryOwns(h)
+			if r := factoryRaise(h); r.State != store.RequestDone {
+				t.Fatalf("the factory's raise: %s %q", r.State, deref(r.Result))
+			}
+			id := h.fix(FixPayload{Done: true, Seen: deref(h.pr(2).LastError)})
+			h.handle()
+			r := h.request(id)
+			said := deref(r.Result)
+			if r.State != store.RequestFailed || !strings.Contains(said, "the factory raised it") || !strings.HasSuffix(said, "; nothing changed") {
+				t.Fatalf("magnum fix --done: %s %q", r.State, said)
+			}
+			offers := strings.Contains(said, "`magnum fix --handover back talkable/talkable#2` returns the PR to magnum")
+			byHand := strings.Contains(said, `fix it by hand under [factory] fix = "off"`)
+			if offers != tc.back || byHand == tc.back {
+				t.Errorf("the refusal = %q: offers the way back %v, by hand %v; want the way back %v", said, offers, byHand, tc.back)
+			}
+		})
 	}
 }
 

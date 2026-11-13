@@ -337,8 +337,11 @@ func (e *Engine) markFactoryAttention(ctx context.Context, prID int64, msg, caus
 // lift by magnum, so its loop would wait while magnum shows the PR
 // reviewed. A mark, or a row of who fixes the PR, that cannot be read
 // refuses too. nil for magnum's own attention, and once the PR is magnum's
-// again, whose factory lifts nothing.
-func (e *Engine) factoryAttentionRefusal(ctx context.Context, ref string, pr store.PR, msg string) error {
+// again, whose factory lifts nothing. The refusal offers `magnum fix
+// --handover back` only when the way back would take the PR (staysFactorys,
+// C11); a PR the factory worked, the usual case, is fixed by hand under
+// [factory] fix = "off" instead.
+func (e *Engine) factoryAttentionRefusal(ctx context.Context, repo store.Repo, pr store.PR, msg string) error {
 	switch by, ok, err := e.attentionByOf(ctx, pr.ID); {
 	case err != nil:
 		return fmt.Errorf("PR #%d needs you, and whether the factory raised it cannot be read (%w): ask again shortly: nothing changed", pr.Number, err)
@@ -352,9 +355,12 @@ func (e *Engine) factoryAttentionRefusal(ctx context.Context, ref string, pr sto
 	case !owned || !o.Factory():
 		return nil
 	}
+	other := "the PR stays the factory's (`magnum fix --handover back` would not return it now), so fix it by hand under [factory] fix = \"off\""
+	if e.staysFactorys(ctx, repo, pr) == "" {
+		other = fmt.Sprintf("`magnum fix --handover back %s#%d` returns the PR to magnum", repo.FullName(), pr.Number)
+	}
 	return fmt.Errorf("PR #%d needs you for what the factory's fix left, and the factory raised it: it lifts it once you answer it there "+
-		"(`magnum fix --done` lifts only what magnum's own fix left), or `magnum fix --handover back %s` returns the PR to magnum; nothing changed",
-		pr.Number, ref)
+		"(`magnum fix --done` lifts only what magnum's own fix left), or %s; nothing changed", pr.Number, other)
 }
 
 // attentionCauseRe is the factory's cause of an attention: a short word.

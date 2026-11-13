@@ -49,7 +49,7 @@ func (e *Engine) fixDone(ctx context.Context, repo store.Repo, pr store.PR, seen
 		return "", fmt.Errorf("PR #%d needs attention for %s, not for what the fixer left you: %s",
 			pr.Number, cmp.Or(kind, "a reason magnum did not record"), look)
 	}
-	if err := e.factoryAttentionRefusal(ctx, ref, pr, msg); err != nil { // fix_factory.go: the factory lifts its own
+	if err := e.factoryAttentionRefusal(ctx, repo, pr, msg); err != nil { // fix_factory.go: the factory lifts its own
 		return "", err
 	}
 	_, under, _ := strings.Cut(msg, "\n")
