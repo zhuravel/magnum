@@ -27013,7 +27013,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `TestAReleaseFreesTheCheckoutTheFixerPushedAfterYouTypedOnceThePRMovedPastIt` (C1),
     `TestAReleaseKeepsTheFixersPushAForcePushLeftBehindAndFreesTheCheckout` (C2) and
     `TestAChangeOfFixCopiesKeepsTheFixersCommitAndClaims` (C7), each failing first, and
-    `TestACutSwitchLeavesTheNewerHeadAsTheClaims` (C4, failing first); the third check,
+    `TestACutSwitchLeavesTheNewerHeadAsTheClaims` (C4, failing first; since the third check it cuts inside
+    `slots.Resync` once its git switch ran, through the rig's runner, not through the clock switchFix reads
+    after it, and fails when switchFix records the head last); the third check,
     `TestARebaseLeftInProgressKeepsItsReplayedAndItsOriginalTip` (C1, failing first) with
     `TestInProgressStartIsWhereAnAbortPutsHEAD` in internal/gitx, and
     `TestASwitchCutBeforeTheCheckoutMovedKeepsNothingOfThePRsOldHead` (C2, failing first).

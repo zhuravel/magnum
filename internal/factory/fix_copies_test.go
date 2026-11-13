@@ -1112,7 +1112,9 @@ func TestAChangeOfFixCopiesKeepsTheFixersCommitAndClaims(t *testing.T) {
 // PR then counts that head, the PR's, as pushed and keeps nothing. The
 // switch recorded it last, so the cut left the older head as the claim's,
 // and the release took the PR's own head for commits on no remote (C4 on
-// T3b).
+// T3b). The cut comes inside slots.Resync, once its git switch ran and
+// before it records the checkout, whatever switchFix reads after it (the
+// third check's word on C4's test).
 func TestACutSwitchLeavesTheNewerHeadAsTheClaims(t *testing.T) {
 	r := newFixRig(t, 1, 1)
 	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
@@ -1121,16 +1123,16 @@ func TestACutSwitchLeavesTheNewerHeadAsTheClaims(t *testing.T) {
 	newer := r.pushPR(r.origin, 7, "fix.txt", "v2\n")
 	ctx, cancel := context.WithCancel(r.ctx)
 	defer cancel()
-	r.c.now = func() time.Time {
-		if res, err := r.real.Run(r.ctx, gitCmd(fc.Path, "rev-parse", "HEAD")); err == nil && res.Out() == newer {
-			cancel() // the daemon goes down once the checkout is at the newer head
+	r.onGit(func(c execx.Cmd) {
+		if len(c.Args) > 2 && c.Args[1] == fc.Path && c.Args[2] == "switch" && slices.Contains(c.Args, "--detach") {
+			cancel() // the daemon goes down once Resync's switch moved the checkout, before it records it
 		}
-		return r.clock.Now()
-	}
+	})
 	r.clock.Add(time.Minute)
 	if _, err := r.c.ClaimFix(ctx, w); err == nil {
 		t.Fatal("the claim cut once its checkout moved succeeded")
 	}
+	r.onGit(nil)
 	if got, _ := r.head(fc.Path); got != newer {
 		t.Fatalf("%s is at %s after the cut switch, want the newer head %s", fc.Name, got, newer)
 	}
