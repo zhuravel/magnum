@@ -121,19 +121,55 @@ func (w *WaitError) Error() string { return w.Who + ": " + w.What }
 // outside a launch passes too (mayStart), called on the engine's loop; nil
 // holds nothing. MayPrompt is the engine's hold of new prompts (a drain for
 // a reboot), which Send asks before anything else, called on the engine's
-// loop; nil holds none. Clock nil is time.Now; Log nil discards.
+// loop; nil holds none. IdentityEnv is the GitHub env of a configured
+// identity (identity.Source.Env; false when it is not declared or cannot
+// make its env) and FixerEnv the git env a fix role's pane gets beside it
+// (identity.FixerEnv): the factory's fixer (config.FactoryFixerRole, the
+// only factory role that carries an identity, its watch's fix identity:
+// Config.FactoryFixerFor) acts as that identity, and its pane carries that
+// identity's token and no other (onlyIdentityToken); nil for either gives
+// none, and a fixer's start then fails, as magnum's does when its identity
+// does not resolve. Clock nil is time.Now; Log nil discards.
 type Deps struct {
-	Config    *config.Config
-	Layout    paths.Layout
-	Herdr     agents.Herdr
-	Store     *store.Store
-	Registry  *registry.Registry
-	Runner    execx.Runner
-	Memory    func(ctx context.Context) engine.MemorySample
-	MayStart  func() (who, what string, ok bool)
-	MayPrompt func() (who, what string, ok bool)
-	Clock     func() time.Time
-	Log       *slog.Logger
+	Config      *config.Config
+	Layout      paths.Layout
+	Herdr       agents.Herdr
+	Store       *store.Store
+	Registry    *registry.Registry
+	Runner      execx.Runner
+	Memory      func(ctx context.Context) engine.MemorySample
+	MayStart    func() (who, what string, ok bool)
+	MayPrompt   func() (who, what string, ok bool)
+	IdentityEnv func(name string) (map[string]string, bool)
+	FixerEnv    func(identity string) map[string]string
+	Clock       func() time.Time
+	Log         *slog.Logger
+}
+
+// onlyIdentityToken is f, an identity's env (Deps.IdentityEnv), with every
+// variable that may hold a GitHub token (slots.DefaultStripEnv) blank but
+// the ones the identity's env sets: the env the agents manager lays over a
+// pane with an identity (the fixer's), whose GitHub selection it drops
+// from the pane's env first. So the fixer's pane carries its identity's
+// token alone (an App's, through its gh config dir; a gh identity's, in
+// your gh config), never one the herdr server's environment or the copy's
+// would give it. nil stays nil.
+func onlyIdentityToken(f func(string) (map[string]string, bool)) func(string) (map[string]string, bool) {
+	if f == nil {
+		return nil
+	}
+	return func(name string) (map[string]string, bool) {
+		env, ok := f(name)
+		if !ok {
+			return nil, false
+		}
+		out := make(map[string]string, len(env)+len(slots.DefaultStripEnv))
+		for _, k := range slots.DefaultStripEnv {
+			out[k] = ""
+		}
+		maps.Copy(out, env)
+		return out, true
+	}
 }
 
 // seams are what New takes from the machine and a test replaces: the sleep
@@ -333,7 +369,8 @@ func newWith(d Deps, s seams) (*Runtime, error) {
 		commands: agents.MagnumCommands(&cfg), drained: make(chan struct{}), soon: make(chan struct{}, 1)}
 	r.mgr = agents.New(agents.Deps{Herdr: d.Herdr, Store: d.Store, Runner: d.Runner, Config: &cfg, Layout: d.Layout,
 		Clock: d.Clock, Sleep: s.sleep, ClaudeDir: s.claudeDir, CodexHome: s.codexHome, Log: slogLogger{log},
-		Tag: Tag, OwnerName: r.ownerName, Signal: s.signal, SkipGoneDirs: true, HookFailure: r.hookFailure})
+		Tag: Tag, OwnerName: r.ownerName, Signal: s.signal, SkipGoneDirs: true, HookFailure: r.hookFailure,
+		IdentityEnv: onlyIdentityToken(d.IdentityEnv), FixerEnv: d.FixerEnv})
 	return r, nil
 }
 

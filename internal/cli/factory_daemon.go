@@ -195,8 +195,9 @@ func (d *factoryDaemon) Close() error {
 
 // buildFactoryDaemon builds the factory daemon of c's config and layout: its
 // own log (logs/factory.log, rotated), its prompts loaded once
-// (config.SnapshotPrompts: the factory's prompts, factory.PromptNames, beside
-// the review roles', with factory-shared.md) and rendered once with this build
+// (config.SnapshotFactoryPrompts: the factory's prompts, factory.PromptNames, beside
+// the review roles', with factory-shared.md, and a copy of its fixer's skill in
+// factory.SkillCopyDir) and rendered once with this build
 // (factory.CheckPrompts), its registry (Layout.FactoryDB, migrated by the daemon) and its
 // agents store (Layout.FactoryAgentsDB), and the engine with the
 // collaborators this build has: the memory and disk reads, a MySQL ping when
@@ -247,9 +248,15 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 	}
 	d.Log = app.NewLogger(logf, mirror, level)
 
-	snap, err := cfg.SnapshotPrompts("", time.Now(), factory.PromptNames(cfg)...)
+	// The prompts, and a copy of the fixer's skill (the fix skill), once at
+	// the start: an edit reaches the fixer at the next start, as magnum's
+	// daemon's own fix role's does.
+	snap, err := cfg.SnapshotFactoryPrompts(factory.SkillCopyDir(l), time.Now(), factory.PromptNames(cfg)...)
 	if err != nil {
 		return nil, fmt.Errorf("factory: %w", err)
+	}
+	for _, w := range snap.Warnings {
+		d.Log.Warn("skill not copied; the role reads the file as it is on disk", "warning", w)
 	}
 	if err := factory.CheckPrompts(cfg); err != nil {
 		return nil, fmt.Errorf("factory: the factory roles' prompts do not render with this build (fix the file the error "+
@@ -290,8 +297,12 @@ func buildFactoryDaemon(c *Context, level slog.Level) (*factoryDaemon, error) {
 		}
 		return d.Engine.MayPrompt()
 	}
+	// The fixer (the one factory role with an identity) acts as its watch's
+	// fix identity: its pane gets that identity's env and its git env.
+	ids := newFixerIdentities(cfg, l, run, d.Log)
 	if d.Runtime, err = runtime.New(runtime.Deps{Config: cfg, Layout: l, Herdr: h, Store: d.Agents, Registry: d.Registry,
-		Runner: run, Memory: memory, MayStart: mayStart, MayPrompt: mayPrompt, Log: d.Log}); err != nil {
+		Runner: run, Memory: memory, MayStart: mayStart, MayPrompt: mayPrompt, IdentityEnv: ids.env, FixerEnv: identity.FixerEnv(cfg),
+		Log: d.Log}); err != nil {
 		return nil, fmt.Errorf("factory: runtime: %w", err)
 	}
 	deps := factory.Deps{
@@ -403,8 +414,51 @@ func factoryStaging(cfg *config.Config, l paths.Layout, log *slog.Logger) factor
 }
 
 // stagingIdentityTimeout bounds the minting of an App's token for a
-// staging fetch.
+// staging fetch, and for the env of the fixer's pane.
 const stagingIdentityTimeout = time.Minute
+
+// fixerIdentities is the factory runtime's Deps.IdentityEnv: the GitHub env
+// of a declared identity by its name (its app.NewIdentity source, made at
+// its first use: an App's env mints its token into its gh config dir, as
+// magnum's daemon's does for its fixer), false for an identity not
+// declared or whose env cannot be made, which is logged. The fixer is the
+// one factory role that carries an identity.
+type fixerIdentities struct {
+	cfg *config.Config
+	l   paths.Layout
+	run execx.Runner
+	log *slog.Logger
+
+	mu  sync.Mutex
+	src map[string]identity.Source
+}
+
+func newFixerIdentities(cfg *config.Config, l paths.Layout, run execx.Runner, log *slog.Logger) *fixerIdentities {
+	return &fixerIdentities{cfg: cfg, l: l, run: run, log: log, src: map[string]identity.Source{}}
+}
+
+// env is the GitHub env of the identity called name (Deps.IdentityEnv).
+func (f *fixerIdentities) env(name string) (map[string]string, bool) {
+	id := f.cfg.IdentityByName(name)
+	if id == nil {
+		return nil, false
+	}
+	f.mu.Lock()
+	src, ok := f.src[name]
+	if !ok {
+		src, _ = app.NewIdentity(f.cfg, f.l, f.run, *id)
+		f.src[name] = src
+	}
+	f.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), stagingIdentityTimeout)
+	defer cancel()
+	env, err := src.Env(ctx)
+	if err != nil {
+		f.log.Warn("the env of the fixer's identity", "identity", name, "err", execx.Redact(err.Error()))
+		return nil, false
+	}
+	return env, true
+}
 
 // stagingIdentities are the identities the staging status reads as, one
 // source and GitHub client per identity (app.NewIdentity), made at their

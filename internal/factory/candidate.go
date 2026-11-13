@@ -39,6 +39,14 @@ func ReviewCandidateDir(l paths.Layout) string {
 	return filepath.Join(l.Data(), "factory", "review-candidate")
 }
 
+// SkillCopyDir is where the factory daemon copies its fixer's skill at its
+// start (config.Config.SnapshotFactoryPrompts): <data>/factory/skill/, its
+// own, apart from the review daemon's copies (engine.SkillCopyDir), since
+// each prunes the copies its own roles do not use.
+func SkillCopyDir(l paths.Layout) string {
+	return filepath.Join(l.Data(), "factory", "skill")
+}
+
 // WriteReviewCandidate writes the review candidate the factory's local
 // rounds run with (their config is cfg.WithCandidate(dir)) and returns its
 // directory: prompts/ with every prompt this build embeds, the partials

@@ -160,6 +160,22 @@ func SkillPath(skill string, layout paths.Layout) string {
 // warning (PromptSnapshot.Warnings). Call it once, before the goroutines
 // that resolve prompts start.
 func (c *Config) SnapshotPrompts(skillDir string, now time.Time, extra ...string) (*PromptSnapshot, error) {
+	return c.snapshotPrompts(skillDir, c.Roles, now, extra...)
+}
+
+// SnapshotFactoryPrompts is SnapshotPrompts for the factory daemon: the
+// prompts the roles name and extra (the factory's, factory.PromptNames),
+// and a copy of the skill of each factory fix role (the fixer,
+// FactoryFixerRole: the fix skill, as magnum's daemon copies its fix
+// role's) in skillDir, the factory's own directory, never the review
+// daemon's: each prunes the copies its own roles do not use.
+func (c *Config) SnapshotFactoryPrompts(skillDir string, now time.Time, extra ...string) (*PromptSnapshot, error) {
+	return c.snapshotPrompts(skillDir, c.Factory.Roles, now, extra...)
+}
+
+// snapshotPrompts is SnapshotPrompts with the roles whose judges' and fix
+// roles' skills it copies (skillRoles).
+func (c *Config) snapshotPrompts(skillDir string, skillRoles []Role, now time.Time, extra ...string) (*PromptSnapshot, error) {
 	s := &PromptSnapshot{LoadedAt: now, dir: c.Pipeline.PromptsDir, prompts: map[string]snapPrompt{}, skills: map[string]snapSkill{}}
 	var names []string
 	add := func(n string) {
@@ -203,7 +219,7 @@ func (c *Config) SnapshotPrompts(skillDir string, now time.Time, extra ...string
 	}
 	if skillDir != "" {
 		warned := map[string]bool{} // one warning per skill path, whatever the roles that share it
-		for _, r := range c.Roles {
+		for _, r := range skillRoles {
 			src := RoleSkillPath(r, c.Layout)
 			if _, done := s.skills[src]; !(r.Judge || r.Fix) || done || warned[src] {
 				continue

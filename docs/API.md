@@ -6163,6 +6163,14 @@ func (c *Config) SkillFile(src string) string
     (SkillPath, RoleSkillPath): its startup copy when the daemon's snapshot
     holds one, else src itself.
 
+func (c *Config) SnapshotFactoryPrompts(skillDir string, now time.Time, extra ...string) (*PromptSnapshot, error)
+    SnapshotFactoryPrompts is SnapshotPrompts for the factory daemon: the
+    prompts the roles name and extra (the factory's, factory.PromptNames), and
+    a copy of the skill of each factory fix role (the fixer, FactoryFixerRole:
+    the fix skill, as magnum's daemon copies its fix role's) in skillDir,
+    the factory's own directory, never the review daemon's: each prunes the
+    copies its own roles do not use.
+
 func (c *Config) SnapshotPrompts(skillDir string, now time.Time, extra ...string) (*PromptSnapshot, error)
     SnapshotPrompts loads every prompt file the roles name (each prompt kind),
     the extra names (model-fallback.md) and the partials file of each
@@ -14737,6 +14745,12 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
     factory has no registry yet: no task was ever started): home then has no
     task, news or alert, and lists your PRs alone.
 
+func SkillCopyDir(l paths.Layout) string
+    SkillCopyDir is where the factory daemon copies its fixer's skill at its
+    start (config.Config.SnapshotFactoryPrompts): <data>/factory/skill/,
+    its own, apart from the review daemon's copies (engine.SkillCopyDir),
+    since each prunes the copies its own roles do not use.
+
 func StagingIdentity(cfg *config.Config, repo string) (config.Identity, error)
     StagingIdentity is the identity the staging status of repo reads
     as (internal/staging: its mirror's fetch and its GitHub reads):
@@ -17976,27 +17990,37 @@ func (e *DeniedError) Error() string
     else DeniedLine.
 
 type Deps struct {
-	Config    *config.Config
-	Layout    paths.Layout
-	Herdr     agents.Herdr
-	Store     *store.Store
-	Registry  *registry.Registry
-	Runner    execx.Runner
-	Memory    func(ctx context.Context) engine.MemorySample
-	MayStart  func() (who, what string, ok bool)
-	MayPrompt func() (who, what string, ok bool)
-	Clock     func() time.Time
-	Log       *slog.Logger
+	Config      *config.Config
+	Layout      paths.Layout
+	Herdr       agents.Herdr
+	Store       *store.Store
+	Registry    *registry.Registry
+	Runner      execx.Runner
+	Memory      func(ctx context.Context) engine.MemorySample
+	MayStart    func() (who, what string, ok bool)
+	MayPrompt   func() (who, what string, ok bool)
+	IdentityEnv func(name string) (map[string]string, bool)
+	FixerEnv    func(identity string) map[string]string
+	Clock       func() time.Time
+	Log         *slog.Logger
 }
     Deps are the runtime's collaborators. Config, Herdr, Store,
     Registry and Runner are required. Store is the factory's agents store
     (Layout.FactoryAgentsDB). Memory nil reads no memory (taken as normal);
-    MayStart is the engine's holds of a launch (a disk or memory hold, a drain
-    for an install: who and what, as a task's wait says them), which a start
-    outside a launch passes too (mayStart), called on the engine's loop; nil
-    holds nothing. MayPrompt is the engine's hold of new prompts (a drain for a
-    reboot), which Send asks before anything else, called on the engine's loop;
-    nil holds none. Clock nil is time.Now; Log nil discards.
+    MayStart is the engine's holds of a launch (a disk or memory hold,
+    a drain for an install: who and what, as a task's wait says them),
+    which a start outside a launch passes too (mayStart), called on the
+    engine's loop; nil holds nothing. MayPrompt is the engine's hold of new
+    prompts (a drain for a reboot), which Send asks before anything else,
+    called on the engine's loop; nil holds none. IdentityEnv is the GitHub env
+    of a configured identity (identity.Source.Env; false when it is not declared
+    or cannot make its env) and FixerEnv the git env a fix role's pane gets
+    beside it (identity.FixerEnv): the factory's fixer (config.FactoryFixerRole,
+    the only factory role that carries an identity, its watch's fix identity:
+    Config.FactoryFixerFor) acts as that identity, and its pane carries that
+    identity's token and no other (onlyIdentityToken); nil for either gives
+    none, and a fixer's start then fails, as magnum's does when its identity
+    does not resolve. Clock nil is time.Now; Log nil discards.
 
 type Event struct {
 	TaskID  int64

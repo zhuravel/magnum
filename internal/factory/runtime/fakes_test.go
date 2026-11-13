@@ -569,10 +569,14 @@ type rig struct {
 	usageReads int
 	loginFP    string
 	loggedOut  map[string]bool // kind -> its preflight says logged out
-	slept      []time.Duration
-	signals    []int
-	turnReads  int   // the reads of a transcript's user turns
-	turnErr    error // what the next read of a transcript's user turns fails with (nil: none)
+	// identityEnv and fixerEnv are the runtime's Deps.IdentityEnv and
+	// Deps.FixerEnv (nil: none), which a test sets before restart.
+	identityEnv func(name string) (map[string]string, bool)
+	fixerEnv    func(identity string) map[string]string
+	slept       []time.Duration
+	signals     []int
+	turnReads   int   // the reads of a transcript's user turns
+	turnErr     error // what the next read of a transcript's user turns fails with (nil: none)
 	// unreadable: the daemon cannot read the copies' directories either
 	// (the readable seam). held, when set, is the engine's hold of every
 	// launch (Deps.MayStart): who and what.
@@ -641,7 +645,8 @@ func (g *rig) restart() {
 	t := g.t
 	t.Helper()
 	r, err := newWith(Deps{Config: g.cfg, Layout: g.layout, Herdr: g.h, Store: g.st, Registry: g.reg, Runner: g.run,
-		Memory: g.memory, Clock: g.clock.Now, Log: slog.New(slog.NewTextHandler(&g.logs, nil)), MayStart: g.mayStart}, seams{
+		Memory: g.memory, Clock: g.clock.Now, Log: slog.New(slog.NewTextHandler(&g.logs, nil)), MayStart: g.mayStart,
+		IdentityEnv: g.identityEnv, FixerEnv: g.fixerEnv}, seams{
 		sleep: func(ctx context.Context, d time.Duration) error {
 			g.mu.Lock()
 			g.slept = append(g.slept, d)
