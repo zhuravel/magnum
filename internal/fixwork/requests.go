@@ -11,8 +11,14 @@ package fixwork
 // The factory's requests, by kind: a forced re-review of the head its fixer
 // pushed is magnum's review request (engine.ReqReview) with FixRef, and
 // LocalRound when a local round ran at that head; the abort of that forced
-// round is magnum's abort request (engine.ReqAbort), which stops the round
-// in flight on the PR; the PR's attention is ReqFixAttention.
+// round is magnum's abort request (engine.ReqAbort) with the same FixRef in
+// its payload (engine.TargetPayload.FixRef), which stops only a round of
+// that fix, in flight or paused mid-turn, or takes back its re-review still
+// in line, and refuses any other round (an abort without FixRef is the
+// operator's, which stops any round on the PR); the PR's attention is
+// ReqFixAttention. The end of the round that re-reviewed the fix, or of the
+// stop that ended it, is the fix.factory_round event, which names the
+// FixRef.
 
 import "time"
 

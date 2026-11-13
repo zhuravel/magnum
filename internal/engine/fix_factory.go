@@ -6,8 +6,11 @@ package engine
 // of its fixer's push, a review request with FixRef (and LocalRound when a
 // local round ran at that head), and the PR's attention (fixwork.
 // ReqFixAttention). The abort of its forced round is magnum's abort
-// request, which stops the round in flight. Each is taken only for a PR
-// whose owner row says the factory fixes it.
+// request with that FixRef (TargetPayload.FixRef, requestFactoryAbort),
+// which stops only a round of that fix, or takes back its re-review in
+// line; an abort without it is the operator's. Each is taken only for a PR
+// whose owner row says the factory fixes it, and the end of each round of
+// its fix, or the stop that ends it, is a fix.factory_round event.
 
 import (
 	"context"
