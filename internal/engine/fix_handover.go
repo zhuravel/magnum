@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -114,12 +115,18 @@ func (e *Engine) handoverRefusal(ctx context.Context, pr store.PR, by string, pr
 	return nil
 }
 
-// requestHandover handles `magnum fix --handover` (HandoverPayload).
+// requestHandover handles `magnum fix --handover` (HandoverPayload). A
+// handover, of one PR or of all, its dry run too, is refused while
+// [factory] fix is not "on": nothing on the factory's side would fix the
+// PRs (the engine owner's ruling). The way back goes whatever the key says.
 func (e *Engine) requestHandover(ctx context.Context, p HandoverPayload) (string, error) {
 	named := p.Ref != "" || p.Number > 0
 	switch {
 	case p.All && named:
 		return "", errors.New("magnum fix --handover: all or one PR, not both")
+	case !p.Back && !e.cfg.Factory.Fixes():
+		return "", fmt.Errorf("[factory] fix is %q: the factory fixes no PR, so nothing is handed over (set [factory] fix = %q first)",
+			cmp.Or(e.cfg.Factory.Fix, config.FactoryFixOff), config.FactoryFixOn)
 	case p.All && p.Back:
 		return e.returnAllToMagnum(ctx, p.DryRun)
 	case p.All:

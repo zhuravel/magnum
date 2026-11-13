@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
@@ -40,6 +41,40 @@ func (h *harness) handOver(p HandoverPayload) store.Request {
 // handOverPR2 is HandoverPayload naming PR #2.
 func handOverPR2(back bool) HandoverPayload {
 	return HandoverPayload{PRTarget: PRTarget{Ref: "2"}, Back: back}
+}
+
+// factoryFixOn is the harness's [factory] fix = "on": the factory fixes
+// own PRs, so magnum hands them over.
+func factoryFixOn(h *harness) { h.cfg.Factory.Fix = config.FactoryFixOn }
+
+// While [factory] fix is not "on", nothing on the factory's side fixes a
+// PR: `magnum fix --handover` refuses one PR and every own PR, its dry run
+// too, naming the key, and writes no row; the way back still answers.
+func TestTheHandoverIsRefusedWhileTheFactoryDoesNotFix(t *testing.T) {
+	h, _ := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", nil)
+	for _, p := range []HandoverPayload{handOverPR2(false), {PRTarget: PRTarget{Ref: "2"}, DryRun: true}, {All: true}, {All: true, DryRun: true}} {
+		r := h.handOver(p)
+		if r.State != store.RequestFailed || !strings.Contains(deref(r.Result), `[factory] fix is "off"`) ||
+			!strings.Contains(deref(r.Result), "nothing is handed over") {
+			t.Errorf("%+v: %s %q, want refused naming [factory] fix", p, r.State, deref(r.Result))
+		}
+	}
+	if _, ok := ownerOf(h); ok {
+		t.Error("the PR flipped to a factory that does not fix")
+	}
+	for _, key := range []string{KVPRFixHandover(pr.ID), KVFixHandoverAll} {
+		if v, ok := kvValue(h, key); ok {
+			t.Errorf("%s = %s, want no handover", key, v)
+		}
+	}
+	if r := h.handOver(handOverPR2(true)); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "magnum fixes talkable/talkable#2 already") {
+		t.Errorf("back: %s %q", r.State, deref(r.Result))
+	}
+	factoryFixOn(h)
+	if r := h.handOver(handOverPR2(false)); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "the factory fixes talkable/talkable#2 from now on") {
+		t.Errorf("with [factory] fix on: %s %q", r.State, deref(r.Result))
+	}
 }
 
 // Each record of magnum's fix work in flight on a PR keeps it from handing
@@ -132,7 +167,7 @@ func TestFixQuietIsFalseForEachRecordInFlight(t *testing.T) {
 func TestTheHandoverFlipsOnlyAQuietPRByCAS(t *testing.T) {
 	storetest.Parallel(t)
 	t.Run("quiet", func(t *testing.T) {
-		h, _ := fixHarness(t)
+		h, _ := fixHarness(t, factoryFixOn)
 		fixablePR(h, "zhuravel", nil)
 		r := h.handOver(handOverPR2(false))
 		if r.State != store.RequestDone || !strings.Contains(deref(r.Result), "the factory fixes talkable/talkable#2 from now on") {
@@ -149,7 +184,7 @@ func TestTheHandoverFlipsOnlyAQuietPRByCAS(t *testing.T) {
 		}
 	})
 	t.Run("a loop at work", func(t *testing.T) {
-		h, _ := fixHarness(t, realSleep)
+		h, _ := fixHarness(t, realSleep, factoryFixOn)
 		pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
 		h.fix(FixPayload{})
 		h.e.handleRequests(h.ctx) // the fixer works on
@@ -224,7 +259,7 @@ func TestTheHandoverFlipsOnlyAQuietPRByCAS(t *testing.T) {
 // goes and fix.ended says the factory takes what is left. Once magnum's
 // push left the registry, the tick flips the PR to the factory.
 func TestTheDrainEndsALoopAtItsCycleBoundary(t *testing.T) {
-	h, git := fixHarness(t)
+	h, git := fixHarness(t, factoryFixOn)
 	pr := loopToReReview(t, h, git, findings(map[string]int{"P2": 1}, "COMMENTED"), fixPushed2)
 	r := h.handOver(handOverPR2(false))
 	if r.State != store.RequestDone || !strings.Contains(deref(r.Result), "a fix loop waiting for the re-review of its push (cycle 1 of 3) "+
@@ -300,7 +335,7 @@ func TestOnlyAPRTheFactoryHasNotWorkedReturnsToMagnum(t *testing.T) {
 		}
 	})
 	lease := &fakeLease{}
-	h, _ := fixHarness(t, func(h *harness) { h.d.FixLeaseOf = lease.reader(h.clock.Now) })
+	h, _ := fixHarness(t, func(h *harness) { h.d.FixLeaseOf = lease.reader(h.clock.Now) }, factoryFixOn)
 	fixablePR(h, "zhuravel", nil)
 	if r := h.handOver(handOverPR2(false)); r.State != store.RequestDone {
 		t.Fatalf("handover: %s %q", r.State, deref(r.Result))
@@ -424,7 +459,7 @@ func TestTheMorningListsDropsEndAPushRecordAndAHeldMerge(t *testing.T) {
 // magnum's starts it or drops it: not the restart, a drain's end, a pause's
 // or the budget's, nor `magnum abort`.
 func TestAHeldFixDoesNotBlockTheFlipAndStaysForTheImport(t *testing.T) {
-	h, _ := fixHarness(t)
+	h, _ := fixHarness(t, factoryFixOn)
 	pr := heldFixDuringADrain(t, h)
 	held, _ := kvValue(h, KVPRFixHeld(pr.ID))
 	if q, recs, err := h.e.fixQuiet(h.ctx, h.heldRepo(), pr); err != nil || !q {

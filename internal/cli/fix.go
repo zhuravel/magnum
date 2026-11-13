@@ -133,7 +133,7 @@ func newFixCmd(c *Context) *cobra.Command {
 			"The factory takes the fix loop over (the handover): --handover <pr> hands one own PR's fixes to the factory, at "+
 			"once when none of magnum's fix work is in flight on it, else once that ends (magnum starts no new loop on it "+
 			"meanwhile, and a loop in flight ends at its cycle boundary, with no next cycle); --handover all does so for every "+
-			"own PR, now and later. --handover back <pr> returns a PR only while the factory has not worked it since its "+
+			"own PR, now and later; both are refused while [factory] fix is not \"on\". --handover back <pr> returns a PR only while the factory has not worked it since its "+
 			"import, and calls off a handover that waits; --handover back all lifts --handover all and returns every PR it may. "+
 			"Each asks y/N on a terminal (--yes does not). --drained prints the morning list: every PR whose fix work keeps it "+
 			"from handing over (a loop, a fixer's push record, a held merge, magnum's push waiting for its CI, a "+
