@@ -9,7 +9,10 @@ package cli
 // nothing runs, as daemon-restart and install do for the review daemon
 // (daemon_drain.go). A backoff repair of a broken copy holds neither back:
 // the restart cuts it, the copy stays broken as it was, and the restarted
-// daemon repairs it again after its guard (cutRepairs says so).
+// daemon repairs it again after its guard (cutRepairs says so). A fix loop
+// on one of your PRs (a PR work row of the factory's registry whose phase
+// is not idle, factoryread.FixJobs) is work in flight too: install refuses
+// while one runs and --drain waits for it, as for a local review round.
 
 import (
 	"context"
@@ -23,6 +26,7 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory"
+	"github.com/zhuravel/magnum/internal/factoryread"
 )
 
 // factoryRounds counts the local review rounds in flight (inFlight.count).
@@ -35,6 +39,9 @@ const factoryDrainTimeout = factory.LocalRoundCap + 30*time.Minute
 // errNoFactoryRecord is a factory daemon that keeps no record of its work:
 // a build before the record, or one that could not write it.
 var errNoFactoryRecord = errors.New("no record of the factory daemon's work")
+
+// errFixLoopsUnread is a factory registry whose fix loops cannot be read.
+var errFixLoopsUnread = errors.New("the factory's fix loops cannot be read")
 
 // factoryDaemonPID is the pid of the running factory daemon, 0 for none: a
 // pidfile whose process ps shows as something else is stale (its pid was
@@ -54,9 +61,11 @@ func factoryDaemonPID(ctx context.Context, c *Context, run execx.Runner) (int, e
 // factoryInFlight reads what the factory daemon pid runs that a restart
 // would cut, from its record: the local review rounds and the other work
 // ("precheck of PR-12345 (since 15:04)"), none of it a backoff repair
-// (cutRepairs), and the record itself (its drain). A record that is
-// missing or another daemon's is errNoFactoryRecord: the caller cannot
-// tell, and fails closed.
+// (cutRepairs), and the record itself (its drain); and, from its registry
+// (read only), the fix loops at work ("fix loop of owner/repo#N (fixing,
+// cycle 1, since 15:04)"). A record that is missing or another daemon's is
+// errNoFactoryRecord, a registry whose fix loops cannot be read
+// errFixLoopsUnread: the caller cannot tell, and fails closed.
 func factoryInFlight(c *Context, pid int) (inFlight, factory.WorkRecord, error) {
 	rec, ok, err := factory.ReadWork(c.Layout)
 	switch {
@@ -77,7 +86,24 @@ func factoryInFlight(c *Context, pid int) (inFlight, factory.WorkRecord, error) 
 			out.work = append(out.work, what)
 		}
 	}
+	jobs, err := factoryread.FixJobs(context.Background(), c.Layout.FactoryDB())
+	if err != nil {
+		return inFlight{}, rec, fmt.Errorf("%w: %w", errFixLoopsUnread, err)
+	}
+	for _, j := range jobs {
+		out.work = append(out.work, fixLoopWords(now, j))
+	}
 	return out, rec, nil
+}
+
+// fixLoopWords is fix loop j in words: "fix loop of owner/repo#N (fixing,
+// cycle 1, since 15:04)".
+func fixLoopWords(now time.Time, j factoryread.FixJob) string {
+	what := fmt.Sprintf("fix loop of %s#%d (%s, cycle %d", j.Repo, j.Number, j.Phase, j.Cycle)
+	if !j.Since.IsZero() {
+		what += ", since " + inspClock(now, j.Since)
+	}
+	return what + ")"
 }
 
 // factoryWorkWords is work w in words, with since when it runs.
@@ -138,8 +164,12 @@ func factoryCannotTell(c *Context, pid int, err error) {
 			"then pass --now to restart it anyway\n", pid, inspTilde(c.Layout.FactoryWork()), cut)
 		return
 	}
+	path := c.Layout.FactoryWork()
+	if errors.Is(err, errFixLoopsUnread) {
+		path = c.Layout.FactoryDB()
+	}
 	fmt.Fprintf(c.Stderr, "magnum factory install: cannot tell what the factory daemon (pid %d) runs (reading %s: %v)\n%s\n"+
-		"fix: retry in a moment, or pass --now to restart it anyway\n", pid, inspTilde(c.Layout.FactoryWork()), err, cut)
+		"fix: retry in a moment, or pass --now to restart it anyway\n", pid, inspTilde(path), err, cut)
 }
 
 // guardFactoryRestart is what factory install does about the work in flight
