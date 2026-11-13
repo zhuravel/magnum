@@ -150,6 +150,40 @@ func TestAnUnsafeStopAtMaxRoundsWaitsOnYou(t *testing.T) {
 	}
 }
 
+// A product question still open at max_rounds makes the stop unsafe: only
+// you answer it, so the task waits on you rather than passing the question
+// to the ready card's KNOWN unasked (where the card's w would not send it,
+// as one you decided). Your retry asks it first, as the cap's retry does.
+func TestAnOpenProductQuestionAtMaxRoundsWaitsOnYou(t *testing.T) {
+	q := evalrun.LocalFinding{Severity: "P2", Title: "Should a refund take back the points it gave?", Path: "app/credit.rb", Line: 12, Question: true,
+		Body: "The ticket says nothing of refunds."}
+	r := newReviewRig(t, result(capFinding(1, "P2"), q))
+	r.cfg.Factory.LocalReview.MaxRounds = 1
+	task, _ := r.reviewTask("PR-12518")
+	r.run(8, func() bool { return !isLive(r.reload(task.ID)) || r.reload(task.ID).Stage != "local_review" })
+	got := r.reload(task.ID)
+	if cs := r.cycles(task.ID); got.State != registry.TaskNeedsYou || len(cs) != 1 || cs[0].Exit != registry.ExitCap {
+		t.Fatalf("task %s at %s waits %q; cycles %+v, want it stopped for you at round 1", got.State, got.Stage, got.WaitsWhat, cs)
+	}
+	for _, want := range []string{"at the round limit (1 round)", "not a safe stop: a product question is open"} {
+		if !strings.Contains(got.WaitsWhat, want) {
+			t.Errorf("the wait %q lacks %q", got.WaitsWhat, want)
+		}
+	}
+	if fileIn(r.layout.FactoryTaskDir(task.ID), reviewSummaryFile) {
+		t.Error("a summary was written: the stage passed with the question unasked")
+	}
+	r.letGoOn(task.ID)
+	r.run(4, func() bool { return !isLive(r.reload(task.ID)) })
+	qs, err := r.reg.Questions(r.ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(qs) != 1 || qs[0].Text != q.Title || qs[0].State != registry.QuestionOpen || r.fixPrompts() != 0 {
+		t.Fatalf("questions %+v and %d writer prompts after your retry, want the question asked before any fix", qs, r.fixPrompts())
+	}
+}
+
 // A task that ran more rounds than max_rounds before the limit reached it
 // (task 9 ran 14) stops at the end of its round in flight: a daemon on a
 // build with the limit runs that round again in its cycle, as any restart

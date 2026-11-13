@@ -6,8 +6,9 @@ package factory
 // registry: the task's round n is its cycle n), and `magnum factory
 // finish-review` (review_finish.go) ends a task's loop now. When a round
 // ends at or past the limit, or after your request, no round starts after
-// it (endAtRound): a safe stop (unsafeWhy, as cap_go_on's) passes the stage
-// with the round's open findings left for the ready card's KNOWN row, and
+// it (endAtRound): a safe stop (unsafeWhy, as cap_go_on's, with no product
+// question open) passes the stage with the round's open findings left for
+// the ready card's KNOWN row, and
 // any other stops for you as at the cap, its words naming the limit or you,
 // your retry handing its findings to the writer. review-end.json records
 // the end by its cycle before the cycle ends, so a restart decides alike,
@@ -134,8 +135,10 @@ func limitWords(limit, rounds int) string {
 
 // endAtRound ends the loop at the end of cycle cy's round (the last of
 // loop; res its result, rr its findings, sum the loop's summary as the
-// round left it) by end: a safe stop (unsafeWhy) writes the summary with
-// the round's open findings as its leftovers (exit round_limit, or
+// round left it) by end: a safe stop (unsafeWhy, and no product question
+// open: questionsOpen; your retry after the stop asks them first, capFix)
+// writes the summary with the round's open findings as its leftovers (exit
+// round_limit, or
 // ended_by_you), records the end, ends the cycle (end.exit) and passes the
 // stage; any other records the end and stops for you on the round's
 // findings, as at the cap (stopOnFindings), its words naming the limit or
@@ -144,7 +147,7 @@ func limitWords(limit, rounds int) string {
 func (e *Engine) endAtRound(ctx context.Context, t registry.Task, st config.FactoryStage, cy registry.Cycle, loop []registry.Cycle,
 	res evalrun.LocalResult, rr roundRead, sum ReviewSummary, end loopEnd, recorded bool) (bool, error) {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
-	why := unsafeWhy(dir, loop, res)
+	why := cmp.Or(unsafeWhy(dir, loop, res), questionsOpen(len(rr.questions)))
 	if !recorded {
 		end.Safe = why == ""
 	}
@@ -182,10 +185,23 @@ func (e *Engine) endAtRound(ctx context.Context, t registry.Task, st config.Fact
 		return false, err
 	}
 	e.event(ctx, t.ID, "review", registry.PhaseOK, fmt.Sprintf("the local review ended %s, after round %d (cycle %d), a safe stop (no P0 or P1, "+
-		"a verdict that does not block, no finding declined in its loop): no round starts, and %s go to the ready card under KNOWN; "+
+		"a verdict that does not block, no finding declined in its loop, no product question open): no round starts, and %s go to the ready card under KNOWN; "+
 		"%d declined, %d doubts", strings.TrimPrefix(end.words(), "when "), len(loop), cy.N, plural(len(sum.Leftovers), "open finding"),
 		len(sum.Declined), len(sum.Doubts)))
 	return true, dropFinish(dir, end)
+}
+
+// questionsOpen is why n product questions still open make a stop at the
+// round limit or by you unsafe ("" for none): only you answer them, and
+// under KNOWN they would read as decided by you, never asked.
+func questionsOpen(n int) string {
+	switch n {
+	case 0:
+		return ""
+	case 1:
+		return "a product question is open"
+	}
+	return plural(n, "product question") + " are open"
 }
 
 // endedAt is what a pass of the review stage of task t does after the

@@ -114,8 +114,9 @@ func FinishReviewRefusal(cfg *config.Config, t registry.Task) error {
 
 // finishThen is what follows the round finish-review lets finish, as its
 // plan says it.
-const finishThen = "no round starts after it. A safe stop (no P0 or P1, a verdict that does not block, no finding declined in its loop) " +
-	"goes to the ready card with its open findings under KNOWN, the card saying the review was ended by you; any other waits on you"
+const finishThen = "no round starts after it. A safe stop (no P0 or P1, a verdict that does not block, no finding declined in its loop, " +
+	"no product question open) goes to the ready card with its open findings under KNOWN, the card saying the review was ended by you; " +
+	"any other waits on you"
 
 // FinishReviewPlan is what finish-review does to task t now, read from reg
 // and the task's directory under l, as its y/N, its --dry-run, the
