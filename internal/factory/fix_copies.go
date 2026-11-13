@@ -483,14 +483,16 @@ func (c *copySet) fixGuard(ctx context.Context, w registry.PRWork, owner store.P
 
 // fixOwnHead records a HEAD that moved off checkout sl's recorded checkout
 // as the checkout's own (checked_out_sha), as ownHead does for a task's
-// branch, when nobody typed into the PR's fix panes since the checkout
-// (owner's human_active_at) and the HEAD is the fixer's: at a claim, the
-// PR's remote head the claim fetched (head: the fixer pushed it) or a
-// descendant of the checkout (the fixer's commits on it). Any other HEAD is
-// left to the guard, which holds the checkout over it (head_drift). At a
-// release (release) a HEAD with a commit on no remote or magnum ref holds
-// the checkout (unpushed_commits), wherever it is, so the release loses no
-// commit of the fixer's; any other HEAD that moved is taken as its own.
+// branch. A HEAD at head, the PR's remote head the claim or the release
+// fetched just now, is all on GitHub: it is the checkout's own whatever
+// you typed. Any other is the checkout's own only when nobody typed into
+// the PR's fix panes since the checkout (owner's human_active_at) and it is
+// the fixer's: at a claim a descendant of the checkout (the fixer's commits
+// on it), at a release (release) any HEAD with no commit on no remote or
+// magnum ref. Any other HEAD is left to the guard, which holds the checkout
+// over it (head_drift). At a release a HEAD with a commit on no remote or
+// magnum ref holds the checkout (unpushed_commits), wherever it is, so the
+// release loses no commit of the fixer's.
 func (c *copySet) fixOwnHead(ctx context.Context, owner store.PR, sl store.Slot, head string, release bool) error {
 	cur, err := c.st.SlotByID(ctx, sl.ID)
 	if err != nil || !fsx.Exists(cur.Path) {
@@ -517,10 +519,11 @@ func (c *copySet) fixOwnHead(ctx context.Context, owner store.PR, sl store.Slot,
 	if err != nil {
 		return err
 	}
-	if pr.HumanActiveAt != nil && (cur.LastUsedAt == nil || pr.HumanActiveAt.After(*cur.LastUsedAt)) {
+	pushed := head != "" && got == head
+	if !pushed && pr.HumanActiveAt != nil && (cur.LastUsedAt == nil || pr.HumanActiveAt.After(*cur.LastUsedAt)) {
 		return nil
 	}
-	own := release || got == head
+	own := release || pushed
 	if !own {
 		if own, err = c.git.IsAncestor(ctx, cur.Path, want, got); err != nil {
 			return err
@@ -596,14 +599,17 @@ func (c *copySet) releaseFixSlot(ctx context.Context, w registry.PRWork, owner s
 // releaseHead is a release's look at checkout sl's HEAD (fixOwnHead): it
 // fetches PR work w's head into its fix ref in clone first, so the commits
 // the fixer pushed since the claim count as pushed and only those on no
-// remote hold the release.
+// remote hold the release, and a HEAD at that head is the checkout's own
+// whatever you typed in the fix's panes.
 func (c *copySet) releaseHead(ctx context.Context, w registry.PRWork, owner store.PR, sl store.Slot, clone string) error {
+	head := ""
 	if w.Number > 0 && fsx.Exists(clone) && fsx.Exists(sl.Path) {
-		if _, err := c.git.FetchPRInto(ctx, clone, w.Number, fixRef(w.Number)); err != nil {
+		var err error
+		if head, err = c.git.FetchPRInto(ctx, clone, w.Number, fixRef(w.Number)); err != nil {
 			return err
 		}
 	}
-	return c.fixOwnHead(ctx, owner, sl, "", true)
+	return c.fixOwnHead(ctx, owner, sl, head, true)
 }
 
 // dropFixRef deletes PR work w's fix ref in clone once its checkout is

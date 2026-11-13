@@ -14,6 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/steps"
 	"github.com/zhuravel/magnum/internal/store"
@@ -625,6 +626,59 @@ func TestAFixClaimSurvivesAFactoryRestart(t *testing.T) {
 	h.e.waitBackground()
 	if fc, err := h.e.claimFix(h.ctx, r.work(w.ID)); err != nil || fc.Name != "factory2" || fc.Head != newest {
 		t.Fatalf("claimFix in the next cycle = %+v, %v, want factory2 at %s", fc, err, newest)
+	}
+}
+
+// setTyped records that you typed in PR work w's fix panes at the rig's
+// time: its owner row's human_active_at, as the observe pass sets it.
+func (r *copiesRig) setTyped(w registry.PRWork) {
+	r.t.Helper()
+	owner, err := r.c.fixOwnerOf(r.ctx, w.ID)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	if err := r.st.UpdatePR(r.ctx, owner.ID, func(u *store.PRUpdate) { u.Set("human_active_at", r.clock.Now()) }); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+// The release takes a HEAD equal to the PR's head it fetched as the
+// checkout's own whatever you typed in the fix's panes: all of it is on
+// GitHub. It held it as head_drift for good once you typed (R1 on T3b):
+// the typing kept fixOwnHead from recording it, and the slot guard
+// compared it with the owner row's head, the claim's.
+func TestAReleaseTakesThePushedHeadWhateverYouTyped(t *testing.T) {
+	r := newFixRig(t, 1, 1)
+	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
+	w := r.prWork("talkable/talkable", 7)
+	fc := r.claimFix(w)
+	r.clock.Add(time.Minute)
+	r.setTyped(w) // you answer the fixer in its pane
+	r.write(filepath.Join(fc.Path, "fix.txt"), "v2\n")
+	r.gitIn(fc.Path, "commit", "--quiet", "-am", "the fixer's fix")
+	r.gitIn(fc.Path, "push", "--quiet", "--force", "origin", "HEAD:refs/pull/7/head") // the fixer pushes it
+	r.releaseFix(w)
+	sl := r.slot(fc.Name)
+	if sl.State != store.SlotFree || sl.HoldReason != nil || sl.PRID != nil {
+		t.Fatalf("%s after the release = %s, hold %v, pr %v, want free with no hold", fc.Name, sl.State, store.Deref(sl.HoldReason), sl.PRID)
+	}
+	if got := r.ref(r.main, fixRef(7)); got != "" {
+		t.Fatalf("%s is still %s after the release", fixRef(7), got)
+	}
+
+	// So does a per-PR checkout's removal.
+	shop := r.addShop()
+	r.pushPR(shop, 5, "fix.txt", "v1\n")
+	ws := r.prWork("example/shop", 5)
+	pc := r.claimFix(ws)
+	r.clock.Add(time.Minute)
+	r.setTyped(ws)
+	r.write(filepath.Join(pc.Path, "fix.txt"), "v2\n")
+	r.gitIn(pc.Path, "commit", "--quiet", "-am", "the fixer's fix")
+	r.gitIn(pc.Path, "push", "--quiet", "--force", "origin", "HEAD:refs/pull/5/head")
+	r.releaseFix(ws)
+	if sl := r.slot(pc.Name); sl.State != store.SlotRemoved || sl.HoldReason != nil || fsx.Exists(pc.Path) {
+		t.Fatalf("%s after the release = %s, hold %v, want removed with no hold", pc.Name, sl.State, store.Deref(sl.HoldReason))
 	}
 }
 

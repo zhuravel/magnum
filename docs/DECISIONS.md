@@ -26918,9 +26918,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
     Redis flush, as a task's claim does (`readyData`). Each is a step of `slot:<checkout>:fix:<assignment>:<head>`
     after the checkout's guard: a claim a restart cut runs only the steps it left undone, and a later claim at the
     same head keeps what the fixer did there, while one at a newer head switches to it (the fixer's unpushed
-    commits stay in the copy's reflog, as magnum's resync leaves them). The guard takes a HEAD the fixer moved as
-    the factory's own (the head the claim fetched, or a descendant of the checkout) unless you typed into the
-    PR's fix panes since the checkout, and leaves any other to magnum's slot guard (`head_drift`). The fixer's
+    commits stay in the copy's reflog, as magnum's resync leaves them). The guard takes a HEAD at the PR's head
+    the claim or the release just fetched as the factory's own whatever you typed (all of it is on GitHub: the
+    engine owner's R1 on T3b, since a release held such a HEAD as `head_drift` for good once you typed, the owner
+    row's head being the claim's), a descendant of the checkout only unless you typed into the PR's fix panes
+    since the checkout, and leaves any other to magnum's slot guard (`head_drift`). The fixer's
     own sessions refuse a claim of their checkout as any session does until T4a, which starts them, gives the
     guard their AtWork. In the engine the claim runs off the loop (`claimFix`), apart from the tasks' claims, so
     `max_active` never counts it; its waits (no fix copy free, a guard's hold, a pane in it) cost the fix nothing,
@@ -26955,7 +26957,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `TestATasksCopyIsNeverAFixCopy`, `TestAFixPrefersThePRsLastCopy`, `TestAFixClaimSurvivesAFactoryRestart` and
     `TestAPerPRCheckoutIsRemovedWhenThePRsWorkEnds` in internal/factory, `TestAFixCopysNameAndPortAreCheckedAsACopys`
     in internal/config and `TestFetchPRIntoFetchesOnlyIntoARefOfItsOwn` in internal/gitx; the per-PR checkout's
-    folder, `TestAPerPRCheckoutLivesUnderItsOwnRepositorysFolder` (failing first).
+    folder, `TestAPerPRCheckoutLivesUnderItsOwnRepositorysFolder` (failing first); the engine owner's review of
+    T3b, `TestAReleaseTakesThePushedHeadWhateverYouTyped` (R1, failing first).
   - The Redis databases. Copy n's 16 Redis databases start at n × 16 and the fix copies are numbered past the
     tasks', so a repository whose copies use Redis offsets (its `env` names `REDIS_DB_OFFSET` or renders `{n*16}`:
     `config.FactoryRepo.UsesRedis`) needs `(max_copies + fix_copies + 1) × 16` databases on that Redis, the highest
