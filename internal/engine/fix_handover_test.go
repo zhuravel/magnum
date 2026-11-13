@@ -589,6 +589,23 @@ func TestFixDoneLiftsMagnumsAttentionOnAPRTheFactoryFixes(t *testing.T) {
 	}
 }
 
+// `magnum fix --done` skips its held-fix check only on a PR whose owner row
+// reads and names the factory or returning, whose held fix waits for the
+// factory's import (C10): when the row cannot be read, a held fix of
+// magnum's may start later and rewrite the calls marked done, so --done
+// refuses, as before the interlock.
+func TestFixDoneRefusesAHeldFixWhileWhoFixesThePRCannotBeRead(t *testing.T) {
+	h, pr := fixLeftADescription(t)
+	h.e.setKV(h.ctx, KVPRFixHeld(pr.ID), rowJSON(heldFix{At: h.clock.Now().UTC(), Head: fixHead, By: fixBy, Why: heldBudget}))
+	failKVRead(h, fixwork.KVPRFixOwner(pr.ID))
+	id := h.fix(FixPayload{Done: true, Seen: deref(h.pr(2).LastError)})
+	h.handle()
+	if r := h.request(id); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "who fixes this PR cannot be read") {
+		t.Errorf("magnum fix --done: %s %q", r.State, deref(r.Result))
+	}
+	h.wantState(2, store.PRNeedsAttention)
+}
+
 // An attention the factory raised on a PR it fixes is the factory's to
 // lift (the engine owner's ruling on R6, after C9): `magnum fix --done`
 // refuses it, even in magnum's calls words, and sends the operator to the
