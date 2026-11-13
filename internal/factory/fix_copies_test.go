@@ -914,6 +914,42 @@ func TestAFixCopysReleaseHoldsTheFixersCommitUntilItIsPushed(t *testing.T) {
 	}
 }
 
+// The removal of a per-PR checkout holds changes your typing in the fix's
+// panes since the checkout explains (dirty_worktree, the checkout and the
+// file kept), and removes the fixer's residue otherwise, named in a
+// slot.discarded event. No test left a change in a per-PR checkout (R13 on
+// T3b); the slot guard holds a tracked change you made, so an untracked
+// file is the case the removal itself decides.
+func TestAPerPRCheckoutsRemovalHoldsYourChangesAndDropsTheFixers(t *testing.T) {
+	r := newFixRig(t, 1, 0)
+	shop := r.addShop()
+	r.pushPR(shop, 5, "fix.txt", "v1\n")
+	r.pushPR(shop, 6, "other.txt", "v1\n")
+	yours := r.prWork("example/shop", 5)
+	pc := r.claimFix(yours)
+	r.write(filepath.Join(pc.Path, "notes.txt"), "mine\n")
+	r.clock.Add(time.Minute)
+	r.setTyped(yours)
+	err := r.c.ReleaseFix(r.ctx, yours, "released")
+	if hold, ok := errors.AsType[slots.ErrHold](err); !ok || hold.Reason != slots.HoldDirtyWorktree || !strings.Contains(hold.Detail, "notes.txt") {
+		t.Fatalf("the removal over your file = %v, want held: dirty_worktree naming notes.txt", err)
+	}
+	if !fsx.Exists(filepath.Join(pc.Path, "notes.txt")) {
+		t.Fatal("the removal lost your file")
+	}
+
+	fixers := r.prWork("example/shop", 6)
+	pc6 := r.claimFix(fixers)
+	r.write(filepath.Join(pc6.Path, "residue.txt"), "the fixer's\n")
+	r.releaseFix(fixers)
+	if sl := r.slot(pc6.Name); sl.State != store.SlotRemoved || fsx.Exists(pc6.Path) {
+		t.Fatalf("%s = %s, want removed with the fixer's residue", pc6.Name, sl.State)
+	}
+	if !r.eventsSay(pc6.Name, "slot.discarded", "residue.txt") {
+		t.Fatal("no slot.discarded event names the fixer's residue.txt")
+	}
+}
+
 // A force-push of the PR between the claim and the release holds nothing:
 // the head the claim switched to counts as pushed, though the release's
 // fetch moved the fix ref off it. Its commits counted as unpushed_commits,
