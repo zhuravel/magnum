@@ -31166,11 +31166,15 @@ func (m *Manager) Guard(ctx context.Context, slot store.Slot) error
 func (m *Manager) GuardChanges(ctx context.Context, slot store.Slot) error
     GuardChanges is Guard without its look at HEAD, for a step that moves no
     HEAD (the factory's fix claim readies a fix copy's data after its switch):
-    the slot's pin and holds, a person's agent or process in it, and the tracked
-    changes a person typed since its checkout, held as HoldDirtyWorktree,
-    as guardDiscard refuses them. A HEAD that moved is no reason to refuse,
-    and nothing is saved or recorded for it: the step leaves HEAD where it is,
-    so its commits stay on it.
+    the slot's pin and holds, a person's agent or process in it, whose tracked
+    changes in the tree are saved as HoldDirtyWorktree, so they stay held after
+    the person leaves, as Guard saves them, and the tracked changes a person
+    typed since its checkout, held the same way. A HEAD that moved is no reason
+    to refuse, and nothing is saved or recorded for it: the step leaves HEAD
+    where it is, so its commits stay on it. guardDiscard, which saves nothing
+    under a live hold, was its first body, and a person's changes made in their
+    own session at a claim's retry went at the next release once they left (C1
+    of T3b's third check).
 
 func (m *Manager) GuardLive(ctx context.Context, slot store.Slot) error
     GuardLive is the part of Guard that saves nothing: it refuses a pinned or

@@ -577,7 +577,7 @@ func (m *Manager) removeGuard(ctx context.Context, sl store.Slot, force bool) er
 	if force {
 		return nil
 	}
-	return m.guard(ctx, sl, true)
+	return m.guard(ctx, sl, true, false)
 }
 
 func (m *Manager) removeSteps(ctx context.Context, subject string, sl store.Slot, pool config.Pool, force bool) error {

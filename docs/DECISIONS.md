@@ -27331,6 +27331,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestALaunchOfACodexRoleGoesOnOnAReadingYouOverruled`; `TestLaunchWaitsWhenCodexIsOverItsSoftCap` now expects
   the command in the gate's wait, and `TestTheFactoryReadsYourCodexOverruleInMagnumsRegistry` reads the mark from
   a registry file. No migration: the review daemon's kv row.
+- **A fix checkout's guards after T3b** (2026-11-13, task T3c of the move above, from the engine owner's check of
+  T3b's third round). It must land before T4a starts fixers.
+  - A person's changes under a live hold are saved (C1). `slots.GuardChanges`, the guard of a fix claim's data
+    steps (`reset_db`, the installs, the Redis flush), was `guardDiscard`, which returns a person's agent or
+    process in the checkout as a transient hold and saves nothing. A claim retried after a failed flush runs
+    only those steps, so the changes a person made from their own session there were not held, and once they
+    left, the release discarded them. It is now Guard without its look at HEAD (`guard`'s `skipHead`): under a
+    live hold the tracked changes are saved as the checkout's `dirty_worktree` hold, as Guard saves them, so
+    they stay held after the person leaves; a moved HEAD is still no reason to refuse, and nothing is recorded
+    for it. `guardDiscard` stays Resync's. Test, failing first: `TestGuardChangesSavesDirtyWorktreeUnderALiveHold`.
 
 ## Learned rules
 

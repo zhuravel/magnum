@@ -47,12 +47,14 @@ import (
 // (not a hold): the caller retries later. Git checks are skipped when the
 // slot directory is missing.
 func (m *Manager) Guard(ctx context.Context, slot store.Slot) error {
-	return m.guard(ctx, slot, false)
+	return m.guard(ctx, slot, false, false)
 }
 
 // guard is Guard; with untracked, untracked files count as changes too (a
-// removal deletes the whole directory). Ignored files never count.
-func (m *Manager) guard(ctx context.Context, slot store.Slot, untracked bool) error {
+// removal deletes the whole directory). Ignored files never count. With
+// skipHead it leaves HEAD alone (GuardChanges): no drift, unpushed commits
+// or record of HEAD.
+func (m *Manager) guard(ctx context.Context, slot store.Slot, untracked, skipHead bool) error {
 	sl, pr, err := m.guardStart(ctx, slot)
 	if err != nil {
 		return err
@@ -72,8 +74,10 @@ func (m *Manager) guard(ctx context.Context, slot store.Slot, untracked bool) er
 		}
 		return live
 	}
-	if err := m.guardHead(ctx, sl, pr, untracked); err != nil {
-		return err
+	if !skipHead {
+		if err := m.guardHead(ctx, sl, pr, untracked); err != nil {
+			return err
+		}
 	}
 	if why := humanActivity(sl, pr); why != "" {
 		return m.holdChanges(ctx, sl, untracked, why)
@@ -123,12 +127,16 @@ func (m *Manager) guardDiscard(ctx context.Context, slot store.Slot) error {
 // GuardChanges is Guard without its look at HEAD, for a step that moves no
 // HEAD (the factory's fix claim readies a fix copy's data after its
 // switch): the slot's pin and holds, a person's agent or process in it,
-// and the tracked changes a person typed since its checkout, held as
-// HoldDirtyWorktree, as guardDiscard refuses them. A HEAD that moved is no
-// reason to refuse, and nothing is saved or recorded for it: the step
-// leaves HEAD where it is, so its commits stay on it.
+// whose tracked changes in the tree are saved as HoldDirtyWorktree, so they
+// stay held after the person leaves, as Guard saves them, and the tracked
+// changes a person typed since its checkout, held the same way. A HEAD that
+// moved is no reason to refuse, and nothing is saved or recorded for it:
+// the step leaves HEAD where it is, so its commits stay on it.
+// guardDiscard, which saves nothing under a live hold, was its first body,
+// and a person's changes made in their own session at a claim's retry went
+// at the next release once they left (C1 of T3b's third check).
 func (m *Manager) GuardChanges(ctx context.Context, slot store.Slot) error {
-	return m.guardDiscard(ctx, slot)
+	return m.guard(ctx, slot, false, true)
 }
 
 // guardStart reloads slot (unless it has no row yet), refuses it when it is

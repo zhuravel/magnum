@@ -455,6 +455,58 @@ func TestGuardForeignAgentInThePRWorkspace(t *testing.T) {
 	}
 }
 
+// GuardChanges is Guard without its look at HEAD (C1 of T3b's third check):
+// a person's agent in the slot holds it, and the tracked changes in its tree
+// are theirs too, saved as the slot's dirty_worktree hold, so they stay held
+// once the person leaves and no later step discards them. A clean tree is a
+// transient hold only, and a HEAD that moved is no reason to refuse or save
+// anything.
+func TestGuardChangesSavesDirtyWorktreeUnderALiveHold(t *testing.T) {
+	h := newHarness(t)
+	sl, _ := h.claimedCheckout(8, h.shaPR8)
+	person := herdr.Snapshot{
+		Panes:  []herdr.Pane{{ID: "w1:p1", WorkspaceID: "w1", Cwd: sl.Path, Agent: "claude", AgentStatus: herdr.StatusIdle}},
+		Agents: []herdr.AgentInfo{{PaneID: "w1:p1", Name: "alice", Agent: "claude", AgentStatus: herdr.StatusIdle, Cwd: sl.Path}},
+	}
+
+	// A clean tree: the person holds the slot while they are there, and
+	// nothing is saved.
+	h.snap = person
+	wantHold(t, h.m.GuardChanges(h.ctx, sl), HoldForeignAgent)
+	if got := h.slot(sl.Name); got.HoldReason != nil {
+		t.Fatalf("hold_reason = %q on a clean tree, want none", store.Deref(got.HoldReason))
+	}
+
+	// A HEAD that moved is no reason to refuse once they left.
+	h.snap = herdr.Snapshot{}
+	moved := fixerCommit(t, sl.Path, "one")
+	if err := h.m.GuardChanges(h.ctx, sl); err != nil {
+		t.Fatalf("GuardChanges over a moved HEAD: %v", err)
+	}
+	if got := h.slot(sl.Name); got.HoldReason != nil || store.Deref(got.CheckedOutSHA) != h.shaPR8 {
+		t.Fatalf("hold_reason %q, checked_out_sha %s: want nothing saved or recorded for HEAD %s", store.Deref(got.HoldReason),
+			store.Deref(got.CheckedOutSHA), moved)
+	}
+
+	// Their tracked changes under the live hold are saved as the slot's hold.
+	strayEdit(t, sl.Path)
+	h.snap = person
+	hold := wantHold(t, h.m.GuardChanges(h.ctx, sl), HoldDirtyWorktree)
+	if !strings.Contains(hold.Detail, "1 tracked change") || !strings.Contains(hold.Detail, "alice") {
+		t.Fatalf("detail %q names neither the changes nor the person", hold.Detail)
+	}
+	if got := h.slot(sl.Name); store.Deref(got.HoldReason) != HoldDirtyWorktree {
+		t.Fatalf("hold_reason = %q, want the dirty worktree hold saved", store.Deref(got.HoldReason))
+	}
+
+	// They left: the hold stays, and so do their changes.
+	h.snap = herdr.Snapshot{}
+	wantHold(t, h.m.GuardChanges(h.ctx, sl), HoldDirtyWorktree)
+	if !strings.Contains(readFile(t, filepath.Join(sl.Path, "Gemfile.lock")), "stray") {
+		t.Fatal("the person's change is gone")
+	}
+}
+
 func TestChangesOf(t *testing.T) {
 	entries := []gitx.StatusEntry{
 		{X: ' ', Y: 'M', Path: "db/schema.rb"},
