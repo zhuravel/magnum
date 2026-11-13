@@ -77,8 +77,9 @@ type handover struct {
 }
 
 // errFixHandingOver refuses a fix loop nobody asked for, and a loop's next
-// cycle, on a PR that hands over to the factory (handingOver): the loop
-// that waits for it ends at its cycle boundary instead.
+// cycle, on a PR that hands over to the factory (handingOver, a handover
+// read as there): the loop that waits for it ends at its cycle boundary
+// instead.
 var errFixHandingOver = errors.New("the PR hands over to the factory")
 
 // handoverAllOf reports whether every own PR goes to the factory
@@ -90,7 +91,7 @@ func handoverAllOf(ctx context.Context, st *store.Store) (bool, error) {
 
 // handingOver reports whether pr hands over to the factory: a handover of
 // its own waits (KVPRFixHandover), or every own PR goes and pr is one. A
-// failed read is an error, which the starts take as handing over.
+// failed read is an error, which refuses the starts (handoverRefusal).
 func (e *Engine) handingOver(ctx context.Context, pr store.PR) (bool, error) {
 	if _, ok, err := e.st.GetKV(ctx, KVPRFixHandover(pr.ID)); err != nil || ok {
 		return ok, err
@@ -101,14 +102,17 @@ func (e *Engine) handingOver(ctx context.Context, pr store.PR) (bool, error) {
 
 // handoverRefusal is startFix's refusal, while pr hands over, of a loop
 // nobody asked for (by autofix) and of a loop's next cycle (prev.Cycle >
-// 0): errFixHandingOver; nil otherwise. A read that fails refuses too.
+// 0): errFixHandingOver; nil otherwise. A read that fails refuses too, with
+// a plain error and never errFixHandingOver, which a handover that was read
+// alone gets: a loop's next cycle then ends as one that did not start, with
+// the PR's attention (fix.failed), not as a handover nobody asked for.
 func (e *Engine) handoverRefusal(ctx context.Context, pr store.PR, by string, prev FixState) error {
 	if by != autofixBy && prev.Cycle == 0 {
 		return nil
 	}
 	switch handing, err := e.handingOver(ctx, pr); {
 	case err != nil:
-		return fmt.Errorf("PR #%d: whether it hands over to the factory cannot be read (%w): %w", pr.Number, err, errFixHandingOver)
+		return fmt.Errorf("PR #%d: whether it hands over to the factory cannot be read: %w", pr.Number, err)
 	case handing:
 		return fmt.Errorf("PR #%d hands over to the factory (`magnum fix --handover`): magnum starts no new loop on it: %w", pr.Number, errFixHandingOver)
 	}

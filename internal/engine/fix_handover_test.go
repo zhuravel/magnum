@@ -289,6 +289,57 @@ func TestTheDrainEndsALoopAtItsCycleBoundary(t *testing.T) {
 	}
 }
 
+// failKVRead makes every read of the registry's key-value row key fail, as
+// an I/O error would: the table is rebuilt to take a NULL value, which the
+// row then holds and no read can scan into a string (Store.GetKV errs).
+func failKVRead(h *harness, key string) {
+	h.t.Helper()
+	for _, q := range []string{
+		`CREATE TABLE kv_nullable (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT NOT NULL)`,
+		`INSERT INTO kv_nullable SELECT key, value, updated_at FROM kv`,
+		`DROP TABLE kv`,
+		`ALTER TABLE kv_nullable RENAME TO kv`,
+	} {
+		if _, err := h.st.DB().ExecContext(h.ctx, q); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	if _, err := h.st.DB().ExecContext(h.ctx, `INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, NULL, '')`, key); err != nil {
+		h.t.Fatal(err)
+	}
+	if _, _, err := h.st.GetKV(h.ctx, key); err == nil {
+		h.t.Fatalf("%s still reads", key)
+	}
+}
+
+// A loop's next cycle whose read of the handover rows fails ends as a
+// failed cycle, with the PR's attention, as any next cycle that cannot
+// start: no handover was read, so none is named, and the operator hears
+// that findings are left.
+func TestAFailedReadOfTheHandoverEndsTheLoopWithItsAttention(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := loopToReReview(t, h, git, findings(map[string]int{"P2": 1}, "COMMENTED"), fixPushed2)
+	failKVRead(h, KVFixHandoverAll)
+	reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"}) // the re-review finds a P2: the next cycle would start
+	if st, ok := h.fixStateOf(2); ok {
+		t.Fatalf("the loop goes on: %+v", st)
+	}
+	if ev, ok := h.fixEvent("fix.ended"); ok {
+		t.Errorf("fix.ended = %q: no handover was read", ev.Message)
+	}
+	ev, ok := h.fixEvent("fix.failed")
+	if !ok || ev.Level != "warn" || !strings.Contains(ev.Message, "cycle 2 did not start") ||
+		!strings.Contains(ev.Message, "whether it hands over to the factory cannot be read") {
+		t.Errorf("fix.failed = %+v, %v", ev, ok)
+	}
+	if got := h.wantState(2, store.PRNeedsAttention); !strings.Contains(deref(got.LastError), "cycle 2 did not start") {
+		t.Errorf("attention = %q", deref(got.LastError))
+	}
+	if n := len(h.fixRuns(pr.ID)); n != 1 {
+		t.Errorf("fix runs = %d, want the first cycle's alone", n)
+	}
+}
+
 // fakeLease is the factory's lease of PR #2 as the tests' reader gives it.
 type fakeLease struct {
 	mu    sync.Mutex
