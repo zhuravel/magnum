@@ -26893,6 +26893,62 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `TestTheLeaseAndTheFixJobsCountOnlyAPhaseWithAnAgentOrAPush` and `TestEveryPRWorkPhaseIsTakenAndOnlyThreeAreBusy`.
     `TestTheFactoryStartsNoFixerWithoutAFreshOwnerRow` moved to T4a: T3a
     starts no fixer, and the owner row's type is T2's.
+- **The factory's fix copies and per-PR checkouts** (2026-11-13, task T3b of the move above, on the operator's
+  decision 2 of 2026-11-12: dedicated fix copies, apart from `max_active`). A PR's fix work (its `pr_work` row)
+  claims a checkout at the PR's remote head, apart from the tasks' copies. It starts no fixer: the fix lane (T4a)
+  calls the claim.
+  - The fix copies. A `[[factory.repo]]`'s `fix_copies = N` gives it N copies numbered past `max_copies`
+    (`max_copies+1` to `max_copies+N`), named, placed and given their `env` by the same templates, so they are
+    set up, readied, repaired and released by the same code and guards as a task's copy, and their names,
+    paths and ports are checked with the others' when the config loads. A claim of either kind takes only a
+    copy of its own kind (`ownsCopy`), the one it used last first, and adds one only within its kind's range:
+    a task never takes a fix copy, a fix never a task's, and neither `max_active`, the tasks' `Free`, nor the
+    outage of a repository's task copies counts a fix copy. With `fix_copies = 0`, every copy is a task's, as
+    before. Numbering past `max_copies` rather than a name of their own keeps their Redis offsets and ports
+    apart from the task copies' with no new key; raising `max_copies` later turns the lowest fix copy into a
+    task copy once its fix lets it go, which a copy released clean allows.
+  - The claim. The fix work's owner row in the factory's agents store is a row of a repository of its own,
+    `factory-fix/fix`, numbered by the `pr_work` id (node id `factory:fix:<id>`): the reservation lives in the
+    store, so a restart finds it, and a slot release takes it for another repository's row and leaves the
+    review's `refs/magnum/pr/<N>` alone, as for a task's row. The claim fetches `refs/pull/<N>/head` into
+    `refs/magnum/factory-fix/<N>` of the main clone (`gitx.FetchPRInto`, which refuses `refs/magnum/pr/`): the
+    two daemons share main clones, and a fetch into the review's ref would move it between a review's fetch and
+    its checkout. It then switches the checkout to that head, detached, with `slots.Resync` (an operation left in
+    progress aborted, the checkout recorded), and a fix copy runs `reset_db`, the changed `installs` and the
+    Redis flush, as a task's claim does (`readyData`). Each is a step of `slot:<checkout>:fix:<assignment>:<head>`
+    after the checkout's guard: a claim a restart cut runs only the steps it left undone, and a later claim at the
+    same head keeps what the fixer did there, while one at a newer head switches to it (the fixer's unpushed
+    commits stay in the copy's reflog, as magnum's resync leaves them). The guard takes a HEAD the fixer moved as
+    the factory's own (the head the claim fetched, or a descendant of the checkout) unless you typed into the
+    PR's fix panes since the checkout, and leaves any other to magnum's slot guard (`head_drift`). The fixer's
+    own sessions refuse a claim of their checkout as any session does until T4a, which starts them, gives the
+    guard their AtWork. In the engine the claim runs off the loop (`claimFix`), apart from the tasks' claims, so
+    `max_active` never counts it; its waits (no fix copy free, a guard's hold, a pane in it) cost the fix nothing,
+    leave the PR's phase where it was (queued) and come again after 1, 2, 4, then every 5 minutes; the checkout
+    is the fix's for its cycle, and a new cycle claims it again.
+  - The per-PR checkout. A repository a `[[watch]]` covers with no fix copies (no `[[factory.repo]]`, or one
+    without `fix_copies`) gets a detached worktree of its main clone (the `[[factory.repo]]`'s, else the
+    `[[pool]]`'s, else the clone magnum's review found under the watch's `clone_root`: the factory never clones,
+    and waits until magnum's review has one) named `<owner>-<name>.fix-pr-<N>`, its row `fix-<owner>/<name>#<N>`,
+    in the folder of the first `[[factory.repo]]`'s copies (where the factory keeps its copies: the operator's
+    external volume), else `factory/checkouts` in magnum's data directory. It runs no setup, install, database
+    or service: never magnum's per-PR worktree (`<clone>__worktrees/pr-<N>`, the review's) nor its hooks, whose
+    teardown could drop the review's databases of the same PR. `fix_copies` does not bound these; the fix lane's
+    `fix_max_active` bounds the fix loops.
+  - The end. Each tick lets go the checkouts of fix work that ended (`payFixDebts`): the PR merged or closed, as
+    magnum's registry says, or its work stayed `idle` for 10 minutes, which is how "idle for good" reads (a loop
+    that ended, and no new verdict queued it again meanwhile), or its row is gone. A fix copy goes back to its
+    pool on its placeholder at `origin/<base>`, a per-PR checkout is removed (its worktree, its fix ref, its row
+    let go), each with a `fix.release` event; work that goes on keeps its checkout whatever a restart did. The
+    release fetches the PR's head into the fix ref first, so what the fixer pushed counts as pushed, and a HEAD
+    with commits on no remote or magnum ref still holds it (`unpushed_commits`, never saved as the slot's hold)
+    rather than lose them, as do changes your typing explains; a refused release is tried again after 1, 2, 4,
+    then every 5 minutes, with one alert after 30 minutes, as a task's copy's.
+  - Tests, each checked against a mutation of the code it protects: `TestAFixClaimsAFixCopyAtThePRsRemoteHead`,
+    `TestFixesDoNotCountTowardMaxActive`, `TestARepoWithoutCopiesGetsAPerPRCheckoutWithoutDatabases`,
+    `TestATasksCopyIsNeverAFixCopy`, `TestAFixPrefersThePRsLastCopy`, `TestAFixClaimSurvivesAFactoryRestart` and
+    `TestAPerPRCheckoutIsRemovedWhenThePRsWorkEnds` in internal/factory, `TestAFixCopysNameAndPortAreCheckedAsACopys`
+    in internal/config and `TestFetchPRIntoFetchesOnlyIntoARefOfItsOwn` in internal/gitx.
 
 ## Learned rules
 

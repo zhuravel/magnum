@@ -4672,6 +4672,30 @@ stages = [
   needs. The factory starts a copy's `server` itself, only for the stages that need it, logs it to
   `logs/factory-server-<copy>.log` and records its pid and start time; at its start the daemon stops the
   servers a stopped daemon left, only those whose pid and start time both match the record.
+- **Fix copies and per-PR checkouts.** The fixes of your PRs work in checkouts of their own, apart from the
+  tasks'. A `[[factory.repo]]` with `fix_copies = N` has N fix copies, numbered past `max_copies` (copies
+  `max_copies+1` to `max_copies+N`, named and placed by `copy_name` and `copies` and given their `env` by their
+  number, so their names, paths and ports are checked with the others'). They are set up, readied, repaired and
+  released as a task's copy is, with the same guards, but a task never takes one, a fix never takes a task's
+  copy, and `max_active` and the new-task screen's free copies never count them. Any other repository a
+  `[[watch]]` covers (and a `[[factory.repo]]` without `fix_copies`) gets a per-PR checkout: a detached worktree
+  of its main clone (the `[[factory.repo]]`'s, else the `[[pool]]`'s, else the clone magnum's review uses under
+  the watch's `clone_root`; the factory never clones one, and waits until it exists), `<owner>-<name>.fix-pr-<N>`
+  in the folder of the first `[[factory.repo]]`'s copies (else `factory/checkouts` in magnum's data directory),
+  with no setup, no installs, no database and no Redis. `fix_copies` does not bound these. A claim fetches the
+  PR's head into `refs/magnum/factory-fix/<N>` of the main clone (never the review's `refs/magnum/pr/<N>`), takes
+  the fix copy the PR used last when it is free, else another free one, else adds one up to `fix_copies` (none
+  left: `copy: all 2 busy`, a wait that leaves the PR's fix queued), and switches the checkout to that head,
+  detached; a fix copy then runs `reset_db`, the changed `installs` and the Redis flush as a task's claim does.
+  Each is a step of `slot:<checkout>:fix:<n>:<head>` with begin and ok or fail events, after the checkout's
+  guard, which takes the fixer's own commits and pushes there as the factory's unless you typed in its panes
+  since: a claim a restart cut runs only the steps it left undone, and a restart keeps the checkout the PR's.
+  The checkout goes once the PR's fix work ends: the PR merged or closed (magnum's registry says so), or its
+  work stayed idle for 10 minutes. A fix copy goes back to its pool on its placeholder, a per-PR checkout is
+  removed with its fix ref, each with a `fix.release` event. The release fetches the PR's head first, so what the
+  fixer pushed counts as pushed; commits on no remote, or changes your typing explains, hold it
+  (`unpushed_commits`, `dirty_worktree`), and a refused release is tried again after 1, 2, 4 and then every 5
+  minutes, with one alert after 30 minutes.
 - **Precheck.** `lint` and `migrations` are lists of commands, `specs` and `jest` one command each; a command
   takes `{files}` (the changed files, shell-quoted) and `{base}`, and a `migrations` command also `{version}`
   (the digits a migration's file name starts with) and `{file}`: each runs once per migration the branch
