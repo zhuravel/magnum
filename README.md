@@ -4154,8 +4154,10 @@ fixes, and Magnum is the arbiter: a PR the factory fixes has a row of its own in
 nor on one whose row it cannot read: `magnum fix`, `f`, `c`, `P`, autofix, the look of autofix = "open", a
 held fix and the late settle of a push all refuse it ("the factory fixes this PR since 09:30"). `d` (`magnum
 fix --done`) starts no fixer, so it still lifts what Magnum's own fix left you before the PR handed over. An
-attention the factory raised is the factory's to lift, once you answer it there: `d` refuses it and says so,
-or `magnum fix --handover back <pr>` returns the PR to Magnum.
+attention the factory raised is the factory's to lift, once you answer it there: `d` refuses it and says so.
+The refusal offers `magnum fix --handover back <pr>` when the way back would take the PR; for a PR the factory
+worked, the usual case, it says to fix it by hand while `[factory] fix = "off"`. When Magnum cannot read whether
+the factory raised it, `d` asks you to try again shortly.
 
 - `magnum fix --handover <pr>` hands one own PR to the factory. When none of Magnum's fix work is in flight
   on it, the factory takes it at once. Otherwise the PR hands over once that work ends: Magnum starts no new
@@ -4171,7 +4173,9 @@ or `magnum fix --handover back <pr>` returns the PR to Magnum.
   it took it (no start, push, reply or change of its records), and calls off a handover that waits. There is
   no way back for a PR the factory worked: fix it by hand while `[factory] fix = "off"`. The PR first
   becomes "returning", when neither daemon starts a fixer, and the next tick that finds the factory still
-  idle on it gives it back. `--handover back all` lifts `--handover all` and returns every PR it may.
+  idle on it gives it back. `--handover back all` lifts `--handover all` and returns every PR it may. While
+  `[factory] fix` is not `"on"`, nothing fixes a PR the factory owns or that is returning: `magnum doctor`
+  warns for each, and its line no longer says that every PR can hand over.
 - `magnum fix --drained` is the morning list: every PR whose fix work keeps it from handing over, with your
   action for each. It reads the registry alone: the daemon's own reservations of PRs (a fix job winding down)
   are not in it, as its last line says; `magnum fix --handover <pr> --dry-run` asks the daemon, which counts
@@ -4189,7 +4193,11 @@ or `magnum fix --handover back <pr>` returns the PR to Magnum.
   Your `magnum abort` stops any round, as before. Every end of the factory's re-review is one
   `fix.factory_round` event naming its fix, which the factory reads: the round's own end, a stop, your
   forced review in its place, or the PR's close (a re-review that waits in line or paused ends with it). A
-  round paused by a usage limit or a lost login has not ended, and its continue names the fix when it does.
+  round names its end while it still holds the PR, so no review or stop of yours comes in between. A clean
+  re-review that holds its approval (`approve_after_full_pass`) names its posted end, and the full pass it
+  forces carries no fix. A round paused by a usage limit or a lost login has not ended, and its continue
+  names the fix when it does; on a PR that closed or merged meanwhile no continue comes, so that pause ends
+  it, closed.
 - While the factory's fixer works on a PR it fixes, the PR's next round waits for it, as for Magnum's own
   fixer ("re-review waits for the factory's fixer (fix cycle 1 of 3)"), `magnum review` is refused, and the
   status comment says the fixes are being applied. The factory's own re-review of its push goes on, and
@@ -4199,11 +4207,12 @@ or `magnum fix --handover back <pr>` returns the PR to Magnum.
   registry cannot read or this build cannot parse the PR's owner row, the round waits 10 minutes from the
   first failed read (anew after a gap with no failed read of 5 minutes or three poll intervals, whichever is
   longer, when the daemon stopped or the Mac slept), then Magnum reviews the PR anyway, with a warning
-  (`fix.lease_open`). `magnum doctor` names such PRs until a read works, the PR leaves the factory or closes:
-  a "factory lease" line for the factory's records, and a "fix owner row" line for Magnum's own rows, which
-  never names the factory. It names the PRs that wait to hand over too. Magnum reads the factory's records
-  read only, from the factory's registry; with no factory registry on the Mac, the factory fixes nothing and
-  rounds go on as before.
+  (`fix.lease_open`). A closed or merged PR's failed read is read again at each tick too, so `magnum review`
+  of a merged PR waits for the same grace once, not anew at each ask. `magnum doctor` names such PRs until a
+  read works or the PR leaves the factory: a "factory lease" line for the factory's records, and a "fix owner
+  row" line for Magnum's own rows, which never names the factory. It names the PRs that wait to hand over
+  too. Magnum reads the factory's records read only, from the factory's registry; with no factory registry on
+  the Mac, the factory fixes nothing and rounds go on as before.
 
 ### Whiteboards of reviewed PRs
 

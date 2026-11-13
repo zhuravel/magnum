@@ -19432,6 +19432,35 @@ skill versions); people add theirs to the sections before it, at the end of the 
     a factory that stopped there held off every review of the PR for good.
   - `magnum abort` of a PR whose review waits in line also ends a fixer's run no loop backs, and the
     morning list's action says that it takes the review back (C12).
+- **The interlock after the engine owner's check of the second fix round** (2026-11-13, his findings C1, C3
+  to C5, C8 to C11 on 8015e4aa, and his earlier ruling on C6's window). What changed from the three entries
+  above:
+  - A fix is never ended from inside the round that holds it (C4). A clean re-review of the factory's push
+    that holds its approval (approve_after_full_pass) forces the full pass from its own round; that forced
+    round carries no fix, and keepFixRef ended the fix as "stopped" by it, so the factory never got the
+    posted end. keepFixRef now leaves the row while a round of the fix holds the PR (its handle's fixRef):
+    that round names its end, posted with its review, before the full pass can start.
+  - The round of the factory's fix names its end before it lets go of the PR (his ruling): fixRefAfterRound
+    runs in reservedRound after afterRound and before the unreserve, so no `magnum review` or stop the tick
+    serves comes between the round's end and its report.
+  - A round of the fix whose judge pauses on a PR that closed or merged meanwhile ends, closed by the close
+    (C5): the close let the asked round run on and left the fix to it, and a closed PR is never continued.
+  - A closed or merged PR's failed read of the lease or the owner row stays while the read fails, read again
+    at each tick as an open PR's (C1): `magnum review` of a merged PR, which noteLease holds for the grace,
+    then fails open once, where the sweep's drop at every tick made each ask a first failure that never failed
+    open. His words were to drop the row after a read works or after its grace ends; a drop at the grace's
+    end would leave the next ask, the one the refusal asks for, a first failure again, so the row goes only
+    once a read works, the factory no longer fixes the PR, or the PR is gone, and the doctor names a closed
+    PR's row while it cannot be read.
+  - The factory's attention mark fails closed (C3, C10, C9). --done reads `pr.<id>.attention_by` with
+    st.GetKV and refuses on a read error ("ask again shortly: nothing changed"); the raise writes the mark
+    with st.SetKV before the transition and fails when it cannot, and marks an attention already up in the
+    same words too, so no attention the factory raised stands without its mark.
+  - --done's refusal of the factory's attention offers `--handover back <pr>` only when staysFactorys would
+    let the PR go back; otherwise it says to fix the PR by hand under `[factory] fix = "off"` (C11).
+  - While `[factory] fix` is not "on", the doctor WARNs for every PR whose owner row names the factory or
+    "returning", which nothing fixes then, and its PASS line drops "every PR can hand over" (C8, for
+    visibility; the no-fixer outcome is the rollback's, by design).
 
 ## The factory (2026-11-03)
 
