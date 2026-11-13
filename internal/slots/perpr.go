@@ -297,11 +297,9 @@ func (m *Manager) perPRSteps(ctx context.Context, subject string, sl store.Slot,
 		if planErr != nil {
 			return planErr
 		}
-		if err := m.runHooks(ctx, sl, plan, plan.Setup, SetupTimeout, false); err != nil {
-			return err
-		}
-		m.recordSetupFiles(ctx, sl, copiedFiles(sl.MainClone, plan.Copy)) // a removal saves none of them
-		return nil
+		return m.recordingSetup(ctx, sl, copiedFiles(sl.MainClone, plan.Copy), func() error { // a removal saves none of them
+			return m.runHooks(ctx, sl, plan, plan.Setup, SetupTimeout, false)
+		})
 	}); err != nil {
 		if ctx.Err() != nil {
 			return err

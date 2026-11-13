@@ -20,9 +20,9 @@ import (
 // clone's own files (secrets among them), and whatever the setup wrote. A
 // removal saves none of them (saveChanges); the worktree keeps a record of
 // them in the kv store (ownFilesKey): the copy_files each render_mise
-// copies, and the untracked files the setup step leaves in the new
-// worktree, where nothing else wrote yet. A worktree made before the
-// record existed has the copy_files of its next checkout alone.
+// copies, and the untracked files the setup step wrote (there after it,
+// not before it: recordingSetup). A worktree made before the record
+// existed has the copy_files of its next checkout alone.
 
 // ownFilesKey is the kv key of the record of the files magnum wrote into
 // slot id: a JSON list of paths relative to the worktree, a folder's with
@@ -95,22 +95,53 @@ func copiedFiles(mainClone string, files []string) []string {
 	return out
 }
 
-// recordSetupFiles makes the untracked files of per-PR worktree sl, right
-// after its setup step, with copied (copiedFiles of its plan), its record
-// of the files magnum wrote into it: the worktree is new, so they are the
-// rendered files, the copy_files and what the setup wrote; a record a
-// removed row of the same name left goes. Best effort, as recordOwnFiles:
-// a listing that fails records copied alone and is logged.
-func (m *Manager) recordSetupFiles(ctx context.Context, sl store.Slot, copied []string) {
+// recordingSetup runs setup, the setup step of slot sl, then makes what it
+// wrote, with copied (copiedFiles of the copy_files the step's render
+// copied), the slot's record of the files magnum wrote into it: the
+// untracked files there after it that were not before it. Setup also runs
+// over a worktree kept from an earlier attempt (a per-PR row whose setup
+// failed, revived; a pool slot provisioned again over its listed
+// worktree), whose untracked files may be a person's by then: they stay
+// theirs, and so does a file the setup rewrote over one that was there. A
+// record a removed row of the same name left goes. Best effort, as
+// recordOwnFiles: a listing that fails records copied alone and is
+// logged, and a removal then saves what the setup wrote as a person's.
+func (m *Manager) recordingSetup(ctx context.Context, sl store.Slot, copied []string, setup func() error) error {
+	if sl.ID == 0 || m.d.DryRun {
+		return setup()
+	}
+	before, listed := m.untrackedForRecord(ctx, sl, "before")
+	if err := setup(); err != nil {
+		return err
+	}
+	var wrote []string
+	if listed {
+		if after, ok := m.untrackedForRecord(ctx, sl, "after"); ok {
+			had := map[string]bool{}
+			for _, p := range before {
+				had[p] = true
+			}
+			wrote = slices.DeleteFunc(after, func(p string) bool { return had[p] })
+		}
+	}
+	m.recordOwnFiles(ctx, sl, append(wrote, copied...), true)
+	return nil
+}
+
+// untrackedForRecord lists the untracked files of slot sl, when (before or
+// after) its setup runs, for recordingSetup; false for a listing that
+// fails, which is logged.
+func (m *Manager) untrackedForRecord(ctx context.Context, sl store.Slot, when string) ([]string, bool) {
 	files, err := m.git.UntrackedFiles(ctx, sl.Path)
 	if errors.Is(err, gitx.ErrTreeTooLarge) {
 		err = fmt.Errorf("more than the runner's output of names: %w", err)
 	}
 	if err != nil {
-		m.logErr(ctx, err, "slots: list what the setup of %s wrote (a removal saves it as a person's): %v", sl.Name, err)
-		files = nil
+		m.logErr(ctx, err, "slots: list the untracked files of %s %s its setup (a removal saves what the setup wrote as a person's): %v",
+			sl.Name, when, err)
+		return nil, false
 	}
-	m.recordOwnFiles(ctx, sl, append(files, copied...), true)
+	return files, true
 }
 
 // withoutOwn is untracked less the files of own (ownFiles): a path own
