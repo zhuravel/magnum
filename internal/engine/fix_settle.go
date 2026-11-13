@@ -103,7 +103,7 @@ func (e *Engine) settleFix(ctx, stop context.Context, job *fixJob) {
 		e.awaitPush(ctx, job, unanswered)
 		return
 	case errors.As(headErr, &unconfirmed): // fix_confirm.go: the typed kind, which the poll may settle late
-		e.failUnconfirmed(ctx, job, unconfirmed.head, "fix settle failed: "+headErr.Error(), typed)
+		e.failUnconfirmed(ctx, job, unconfirmed.Head, "fix settle failed: "+headErr.Error(), typed)
 		return
 	case errors.As(headErr, &held): // fix_held_merge.go: the fixer's merge magnum holds for your y
 		e.finishFixRun(ctx, job.run, store.RunVerified, "needs_you", "")
@@ -158,7 +158,7 @@ func (e *Engine) settleSlot(ctx, stop context.Context, job *fixJob, rep FixRepor
 			case headErr != nil && stop.Err() != nil && errors.Is(headErr, stop.Err()):
 				return headErr
 			case errors.As(headErr, &unanswered):
-				target = unanswered.head
+				target = unanswered.Head
 			case headErr != nil:
 				target = job.head
 			}
@@ -575,11 +575,6 @@ func (e *Engine) pushedHead(ctx, stop context.Context, job *fixJob, rep FixRepor
 }
 
 const (
-	// fixPushLooks bounds how often confirmPush looks at a PR's head that
-	// GitHub shows otherwise, fixPushWait apart: GitHub moves a PR's head a
-	// moment after the push to its branch.
-	fixPushLooks = 3
-	fixPushWait  = 5 * time.Second
 	// fixLsRemoteTimeout bounds the `git ls-remote` confirmPush falls back on.
 	fixLsRemoteTimeout = 30 * time.Second
 )

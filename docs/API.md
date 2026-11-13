@@ -18917,6 +18917,10 @@ const CIPlace = "ci"
     CIPlace is the place of a "## Needs you" entry for a CI fix's job
     (needsYouEntryRe).
 
+const ConfirmWindow = 3 * time.Minute
+    ConfirmWindow bounds the settle's own retries of a transient read
+    (confirmBackoff bounds their number too): past it, the ticks try again.
+
 const ConflictPlace = "conflict"
     ConflictPlace is the place of a "## Needs you" entry for a conflict of the
     base merge (needsYouEntryRe), which has no comment id.
@@ -19004,6 +19008,18 @@ func CIRunNow(runs []github.WorkflowRun, c CIFailedCheck) (github.WorkflowRun, b
     moved reports that it no longer says that c.Run failed: it is a later run,
     or c.Run's newest attempt has not ended or ended without failing. No rollup
     shows a dispatched run, so only the head's runs tell.
+
+func ConfirmPush(ctx context.Context, c PushConfirm, head string) error
+    ConfirmPush checks that GitHub has head, the commit the fixer says it
+    pushed, as the head of the PR's branch (c.Read). A head GitHub shows
+    otherwise is looked at again pushWait later, up to pushLooks times;
+    a read that fails with a transient error (transientRead) is tried again
+    after each wait of confirmBackoff, within ConfirmWindow, and the loop's
+    row says meanwhile that it confirms the push (c.Mark); any other failed
+    read ends it at once. It returns nil once GitHub shows head, PushUnanswered
+    when GitHub did not answer within the window, PushNotConfirmed otherwise,
+    or ctx's error the moment ctx ends: the retry holds no shutdown or drain.
+    The errors name the shas, never the fixer's words.
 
 func CopyCIFiles(from, dir string) string
     CopyCIFiles copies the CI reader's files from the folder of from (its
@@ -20215,6 +20231,19 @@ func (rec Push) EarlierPush(head string) bool
     commits rec's fixer pushed before its last (Push.Commits): GitHub has not
     got to the last yet.
 
+type PushConfirm struct {
+	Read   func(ctx context.Context) (string, error)
+	Now    func() time.Time
+	Sleep  func(ctx context.Context, d time.Duration) error
+	Mark   func()
+	Unmark func()
+}
+    PushConfirm is what ConfirmPush confirms a push through: the read of the
+    PR's head on GitHub (Read; the engine's remoteHead), the clock and its wait
+    (Now, Sleep, which ends with ctx), and the marks on the loop's row while
+    GitHub does not answer: Mark at the first transient failure, Unmark once
+    GitHub answers after one.
+
 type PushJob struct {
 	State       FixState   `json:"state"`
 	Role        string     `json:"role"`
@@ -20240,6 +20269,21 @@ type PushMerge struct {
     PushMerge is a conflict of the head with its base (the engine's Conflict) as
     a record keeps it.
 
+type PushNotConfirmed struct {
+	Head string
+	Err  error
+}
+    PushNotConfirmed is the settle's failure for want of the push on GitHub:
+    GitHub answered with another head, its read failed for good, or GitHub did
+    not answer within fixConfirmCap. Its words are as before; the record carries
+    its kind (PushUnconfirmed), never the words.
+
+func (p PushNotConfirmed) Error() string
+    Error says the push was not confirmed, and why.
+
+func (p PushNotConfirmed) Unwrap() error
+    Unwrap is why.
+
 type PushRefusal struct {
 	Why   string
 	Own   []string
@@ -20261,6 +20305,19 @@ func OwnWorkflowsRefusal(at string, b Conflict, tip, login string, own, workflow
     is that it keeps the PR's own workflow changes names them and its workflow
     files, so the settle may hold it for your y. Zero when own is empty: nothing
     to refuse.
+
+type PushUnanswered struct {
+	Head string
+	Err  error
+}
+    PushUnanswered is ConfirmPush's end when GitHub did not answer within
+    ConfirmWindow, only transient failures: the ticks try again.
+
+func (p PushUnanswered) Error() string
+    Error says GitHub did not answer, and how it failed last.
+
+func (p PushUnanswered) Unwrap() error
+    Unwrap is the last failure.
 
 type Settle struct {
 	Quiet, Max, Late, HandsOff time.Duration

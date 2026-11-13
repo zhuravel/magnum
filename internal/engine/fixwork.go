@@ -273,3 +273,11 @@ var (
 	writeHeldDiff  = fixwork.WriteHeldDiff
 	escapeControls = fixwork.EscapeControls
 )
+
+// The settle's confirmation of the fixer's push, under the engine's names.
+const fixConfirmWindow = fixwork.ConfirmWindow
+
+type (
+	pushNotConfirmed = fixwork.PushNotConfirmed
+	pushUnanswered   = fixwork.PushUnanswered
+)

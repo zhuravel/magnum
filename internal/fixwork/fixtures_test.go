@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -73,3 +74,17 @@ func itemKeys(items []Item) []string {
 }
 
 func itoa(n int64) string { return fmt.Sprint(n) }
+
+// gitDown is `git ls-remote`'s error while github.com cannot be reached.
+func gitDown() error {
+	return fmt.Errorf("git ls-remote: %w", &execx.ExitError{Cmd: execx.Cmd{Name: "git", Args: []string{"ls-remote", "origin"}}, Code: 128,
+		Stderr: "fatal: unable to access 'https://github.com/talkable/talkable/': Could not resolve host: github.com\n"})
+}
+
+// ghDown is what the GitHub client returned while gh could not connect, on
+// talkable/talkable#12226 on 2026-11-12: gh's exit, which names no status.
+func ghDown() error {
+	return fmt.Errorf("github details talkable/talkable (1): %w", &execx.ExitError{
+		Cmd:  execx.Cmd{Name: "gh", Args: []string{"api", "graphql", "--hostname", "github.com", "--input", "-"}},
+		Code: 1, Stderr: "error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com\n"})
+}

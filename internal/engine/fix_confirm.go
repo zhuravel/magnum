@@ -23,15 +23,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/attention"
-	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/steps"
 	"github.com/zhuravel/magnum/internal/store"
@@ -39,10 +36,6 @@ import (
 )
 
 const (
-	// fixConfirmWindow bounds the settle's own retries of a transient read
-	// (fixConfirmBackoff bounds their number too): past it, the ticks try
-	// again.
-	fixConfirmWindow = 3 * time.Minute
 	// fixConfirmCap bounds the confirmation in all, from its start
 	// (fixPush.Since): past it, the fix fails as unconfirmed.
 	fixConfirmCap = 30 * time.Minute
@@ -50,10 +43,6 @@ const (
 	// find its push as the PR's head.
 	fixPushKeep = 24 * time.Hour
 )
-
-// fixConfirmBackoff are the waits before each new read of the PR's head
-// after a transient failure: 3 minutes in all (fixConfirmWindow).
-var fixConfirmBackoff = []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second, 40 * time.Second, time.Minute, 45 * time.Second}
 
 // kvPRFixPush holds the record of the push the PR's fix settles (fixPush as
 // JSON): written before the settle confirms it, gone once it is confirmed,
@@ -83,136 +72,24 @@ func (j *fixJob) pushRecord(kind, head string, since time.Time, typed bool) fixP
 		Described: j.described, BaseChecked: j.baseChecked}}
 }
 
-// pushNotConfirmed is the settle's failure for want of the push on GitHub:
-// GitHub answered with another head, its read failed for good, or GitHub
-// did not answer within fixConfirmCap. Its words are as before; the record
-// carries its kind (fixPushUnconfirmed), never the words.
-type pushNotConfirmed struct {
-	head string
-	err  error
-}
-
-func (p pushNotConfirmed) Error() string { return "push not confirmed on GitHub: " + p.err.Error() }
-func (p pushNotConfirmed) Unwrap() error { return p.err }
-
-// pushUnanswered is confirmPush's end when GitHub did not answer within
-// fixConfirmWindow, only transient failures: the ticks try again.
-type pushUnanswered struct {
-	head string
-	err  error
-}
-
-func (p pushUnanswered) Error() string {
-	return "push not confirmed on GitHub yet: GitHub does not answer: " + p.err.Error()
-}
-func (p pushUnanswered) Unwrap() error { return p.err }
-
-// transientRead reports whether err, a failed read of the PR's head
-// (remoteHead), is GitHub or the network failing to answer, which a retry
-// may get past: a connection error (no connection, a reset, a DNS
-// failure), a timeout, or an HTTP 5xx from GitHub. It reads what the GitHub
-// client returns: a typed error (*github.APIError, net.Error), or gh's or
-// git's exit and its output (github.ConnectionCause, its rate limits left
-// out, then transientExitRe: what git, curl, ssh and Go's HTTP/2 print when
-// GitHub fails to answer, which the shared classifier does not name). A 499
-// is GitHub's own timeout. An answer cut short is a timeout too: the empty body GraphQL
-// answers a query past its time limit with, which the client cannot decode
-// ("unexpected end of JSON input"), and a cut one (io.ErrUnexpectedEOF).
-// GitHub's own answer (401, 403, 404, a GraphQL error, a rate limit) and
-// every other error are not, nor is a stop. remoteHead's joined error (the
-// client's read, then `git ls-remote`) is transient only when each part
-// is.
-func transientRead(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) {
-		return false
-	}
-	if j, ok := err.(interface{ Unwrap() []error }); ok {
-		errs := j.Unwrap()
-		for _, e := range errs {
-			if !transientRead(e) {
-				return false
-			}
-		}
-		return len(errs) > 0
-	}
-	if api, ok := errors.AsType[*github.APIError](err); ok {
-		return len(api.Errors) == 0 && (api.Status == 499 || api.Status >= 500 && api.Status <= 599)
-	}
-	if _, ok := errors.AsType[net.Error](err); ok { // a dial, a DNS lookup, a reset, a timeout (context.DeadlineExceeded is one)
-		return true
-	}
-	if se, ok := errors.AsType[*json.SyntaxError](err); ok && se.Offset == 0 && se.Error() == "unexpected end of JSON input" {
-		return true // an empty answer: GraphQL's time limit (github's overloaded reads it so too)
-	}
-	if errors.Is(err, io.ErrUnexpectedEOF) {
-		return true
-	}
-	if exit, ok := errors.AsType[*execx.ExitError](err); ok {
-		if cause := github.ConnectionCause(exit.Stderr); cause != "" {
-			return cause != github.RateLimited
-		}
-		return transientExitRe.MatchString(strings.ToLower(exit.Stderr))
-	}
-	return false
-}
-
-// transientExitRe is what an exit prints, lower case, when GitHub fails to
-// answer and github.ConnectionCause names nothing: git's (curl's) HTTP 5xx
-// ("The requested URL returned error: 503"), an empty or cut answer, an
-// HTTP/2 stream git or gh lost (curl's "HTTP/2 stream 1 was not closed
-// cleanly", Go's REFUSED_STREAM, CANCEL, GOAWAY and lost connection, which
-// the client's overloaded reads so too), and ssh's connection GitHub
-// closed. A 4xx, a missing repository or a refused key match nothing.
-var transientExitRe = regexp.MustCompile(`requested url returned error: 5\d\d\b|empty reply from server|failure when receiving data from the peer|` +
-	`http/2 stream \d+ was not closed cleanly|refused_stream|cancel; received from peer|server sent goaway|http2: client connection lost|` +
-	`connection closed by \S+ port \d+|kex_exchange_identification`)
-
 // confirmPush checks that GitHub has head, the commit the fixer says it
-// pushed, as the head of the PR's branch (remoteHead). A head GitHub shows
-// otherwise is looked at again fixPushWait later, up to fixPushLooks times;
-// a read that fails with a transient error (transientRead) is tried again
-// after each wait of fixConfirmBackoff, within fixConfirmWindow, and the
-// loop's row says meanwhile that it confirms the push (markConfirming); any
-// other failed read ends it at once. It returns nil once GitHub shows head,
-// pushUnanswered when GitHub did not answer within the window,
+// pushed, as the head of the PR's branch (remoteHead), as
+// fixwork.ConfirmPush does it: a head GitHub shows otherwise is looked at
+// again a few seconds later, a read that fails with a transient error is
+// tried again with a backoff for about 3 minutes, and meanwhile the loop's
+// row says that it confirms the push (markConfirming, and unmarkConfirming
+// once GitHub answers after a blip). It returns nil once GitHub shows
+// head, pushUnanswered when GitHub did not answer within the window,
 // pushNotConfirmed otherwise, or ctx's error the moment ctx ends: the
-// retry holds no shutdown or drain. The errors name the shas, never the
-// fixer's words.
+// retry holds no shutdown or drain.
 func (e *Engine) confirmPush(ctx context.Context, job *fixJob, head string) error {
-	start := e.now()
-	looks, tries := 0, 0
-	for {
-		got, err := e.remoteHead(ctx, job)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		var wait time.Duration
-		switch {
-		case err == nil && got == head:
-			if tries > 0 { // GitHub answered after a blip: the loop is at work again, its settle no longer confirming
-				e.unmarkConfirming(ctx, job)
-			}
-			return nil
-		case err == nil:
-			if looks++; looks >= fixPushLooks {
-				return pushNotConfirmed{head: head, err: fmt.Errorf("the PR's head is %s, not the pushed %s", textx.ShortSHA(got), textx.ShortSHA(head))}
-			}
-			wait = fixPushWait
-		case !transientRead(err):
-			return pushNotConfirmed{head: head, err: err}
-		case tries >= len(fixConfirmBackoff) || e.now().Sub(start) >= fixConfirmWindow:
-			return pushUnanswered{head: head, err: err}
-		default:
-			if tries == 0 {
-				e.markConfirming(ctx, job, head)
-			}
-			wait = fixConfirmBackoff[tries]
-			tries++
-		}
-		if err := e.d.Sleep(ctx, wait); err != nil {
-			return err
-		}
-	}
+	return fixwork.ConfirmPush(ctx, fixwork.PushConfirm{
+		Read:   func(ctx context.Context) (string, error) { return e.remoteHead(ctx, job) },
+		Now:    e.now,
+		Sleep:  e.d.Sleep,
+		Mark:   func() { e.markConfirming(ctx, job, head) },
+		Unmark: func() { e.unmarkConfirming(ctx, job) },
+	}, head)
 }
 
 // markConfirming puts on the job's loop row that its settle confirms head
@@ -367,12 +244,12 @@ func (e *Engine) runAtReport(ctx context.Context, prID int64, report string) (st
 // fixConfirmCap (capPushes). A fix.push_confirming event says so.
 func (e *Engine) awaitPush(ctx context.Context, job *fixJob, u pushUnanswered) {
 	if job.state.Confirm == nil { // a window with no transient failure cannot end so; the mark failed
-		e.markConfirming(ctx, job, u.head)
+		e.markConfirming(ctx, job, u.Head)
 	}
 	data := job.eventData()
-	data["head"] = u.head
+	data["head"] = u.Head
 	e.event(ctx, "info", job.subject(), "fix.push_confirming", fmt.Sprintf("GitHub did not answer for %s while the settle confirmed the push of %s (%s): "+
-		"the next ticks try again, for at most %s in all", humanDuration(fixConfirmWindow), textx.ShortSHA(u.head), oneLine(u.err.Error(), 200),
+		"the next ticks try again, for at most %s in all", humanDuration(fixConfirmWindow), textx.ShortSHA(u.Head), oneLine(u.Err.Error(), 200),
 		humanDuration(fixConfirmCap)), data)
 }
 
@@ -710,7 +587,7 @@ func (e *Engine) endConfirming(ctx context.Context, repo store.Repo, pr store.PR
 	if run, ok := e.runAtReport(ctx, pr.ID, st.Report); ok {
 		job.run = run
 	}
-	msg := "fix settle failed: " + pushNotConfirmed{head: st.Confirm.Head, err: errors.New(why)}.Error()
+	msg := "fix settle failed: " + pushNotConfirmed{Head: st.Confirm.Head, Err: errors.New(why)}.Error()
 	if head := cmp.Or(st.Head, deref(pr.ReviewedSHA)); job.slot.ID != 0 && head != "" { // loopJob names no head: the loop's row does
 		if err := e.resyncFixSlot(ctx, job, head); err != nil {
 			msg += fmt.Sprintf("; slot %s not put back: %v", job.slot.Name, err)
@@ -759,7 +636,7 @@ func (e *Engine) failPush(ctx context.Context, repo store.Repo, pr store.PR, row
 		e.dropPushRow(ctx, pr.ID, row)
 		return
 	}
-	msg := "fix settle failed: " + pushNotConfirmed{head: row.rec.Pushed, err: why}.Error()
+	msg := "fix settle failed: " + pushNotConfirmed{Head: row.rec.Pushed, Err: why}.Error()
 	if job.slot.ID != 0 {
 		if err := e.resyncFixSlot(ctx, job, job.head); err != nil {
 			msg += fmt.Sprintf("; slot %s not put back: %v", job.slot.Name, err)
@@ -952,7 +829,7 @@ func (e *Engine) recoverConfirming(ctx context.Context, repo store.Repo, pr stor
 		return false
 	}
 	job.ciOutcome = ciOutcomeLost // ci_fix.go: a CI fix the restart ended
-	why := pushNotConfirmed{head: rec.Pushed, err: errors.New("a daemon restart cut the settle while it confirmed the push of " + textx.ShortSHA(rec.Pushed))}
+	why := pushNotConfirmed{Head: rec.Pushed, Err: errors.New("a daemon restart cut the settle while it confirmed the push of " + textx.ShortSHA(rec.Pushed))}
 	e.failUnconfirmed(ctx, job, rec.Pushed, "fix settle failed: "+why.Error()+e.stopFixerAt(ctx, job, job.head), rec.Typed)
 	return true
 }
