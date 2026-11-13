@@ -26948,17 +26948,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
     that ended, and no new verdict queued it again meanwhile), or its row is gone. A fix copy goes back to its
     pool on its placeholder at `origin/<base>`, a per-PR checkout is removed (its worktree, its fix ref, its row
     let go), each with a `fix.release` event; work that goes on keeps its checkout whatever a restart did. The
-    release fetches the PR's head into the fix ref first, so what the fixer pushed counts as pushed, and a HEAD
-    with commits on no remote or magnum ref still holds it (`unpushed_commits`, never saved as the slot's hold)
-    rather than lose them, as do changes your typing explains; a refused release is tried again after 1, 2, 4,
-    then every 5 minutes, with one alert after 30 minutes, as a task's copy's.
+    release fetches the PR's head into the fix ref first, so what the fixer pushed counts as pushed, as does the
+    head the claim switched to (its open assignment's, `gitx.UnpushedPast`: a force-push of the PR moves the fix ref
+    off it, and its commits held the checkout as `unpushed_commits` for good, the engine owner's R5 on T3b), and a
+    HEAD with commits on no remote or magnum ref past it still holds it (`unpushed_commits`, never saved as the
+    slot's hold) rather than lose them, as do changes your typing explains; a refused release is tried again after
+    1, 2, 4, then every 5 minutes, with one alert after 30 minutes, as a task's copy's.
   - Tests, each checked against a mutation of the code it protects: `TestAFixClaimsAFixCopyAtThePRsRemoteHead`,
     `TestFixesDoNotCountTowardMaxActive`, `TestARepoWithoutCopiesGetsAPerPRCheckoutWithoutDatabases`,
     `TestATasksCopyIsNeverAFixCopy`, `TestAFixPrefersThePRsLastCopy`, `TestAFixClaimSurvivesAFactoryRestart` and
     `TestAPerPRCheckoutIsRemovedWhenThePRsWorkEnds` in internal/factory, `TestAFixCopysNameAndPortAreCheckedAsACopys`
     in internal/config and `TestFetchPRIntoFetchesOnlyIntoARefOfItsOwn` in internal/gitx; the per-PR checkout's
     folder, `TestAPerPRCheckoutLivesUnderItsOwnRepositorysFolder` (failing first); the engine owner's review of
-    T3b, `TestAReleaseTakesThePushedHeadWhateverYouTyped` (R1, failing first).
+    T3b, `TestAReleaseTakesThePushedHeadWhateverYouTyped` (R1, failing first),
+    `TestAForcePushOfThePRDoesNotHoldItsFixCheckout` (R5, failing first).
   - The Redis databases. Copy n's 16 Redis databases start at n × 16 and the fix copies are numbered past the
     tasks', so a repository whose copies use Redis offsets (its `env` names `REDIS_DB_OFFSET` or renders `{n*16}`:
     `config.FactoryRepo.UsesRedis`) needs `(max_copies + fix_copies + 1) × 16` databases on that Redis, the highest

@@ -16,6 +16,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/steps"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -679,6 +680,40 @@ func TestAReleaseTakesThePushedHeadWhateverYouTyped(t *testing.T) {
 	r.releaseFix(ws)
 	if sl := r.slot(pc.Name); sl.State != store.SlotRemoved || sl.HoldReason != nil || fsx.Exists(pc.Path) {
 		t.Fatalf("%s after the release = %s, hold %v, want removed with no hold", pc.Name, sl.State, store.Deref(sl.HoldReason))
+	}
+}
+
+// A force-push of the PR between the claim and the release holds nothing:
+// the head the claim switched to counts as pushed, though the release's
+// fetch moved the fix ref off it. Its commits counted as unpushed_commits,
+// and every later try fetched and held again (R5 on T3b). A commit of the
+// fixer's on it still holds the release.
+func TestAForcePushOfThePRDoesNotHoldItsFixCheckout(t *testing.T) {
+	r := newFixRig(t, 1, 1)
+	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
+	w := r.prWork("talkable/talkable", 7)
+	fc := r.claimFix(w)
+	forcePush := func(content string) {
+		author := filepath.Join(r.root, "author-"+filepath.Base(r.origin))
+		r.gitIn(author, "reset", "--quiet", "--hard", "origin/master")
+		r.pushPR(r.origin, 7, "rebased.txt", content) // the author rebases and force-pushes
+	}
+	forcePush("v1\n")
+	r.releaseFix(w)
+	if sl := r.slot(fc.Name); sl.State != store.SlotFree || sl.HoldReason != nil {
+		t.Fatalf("%s after a force-push and the release = %s, hold %v, want free", fc.Name, sl.State, store.Deref(sl.HoldReason))
+	}
+
+	// The fixer's own commit on the claimed head still holds it.
+	fc = r.claimFix(w)
+	r.write(filepath.Join(fc.Path, "fix.txt"), "v2\n")
+	r.gitIn(fc.Path, "add", "-A")
+	r.gitIn(fc.Path, "commit", "--quiet", "-m", "the fixer's fix")
+	forcePush("v2\n")
+	r.clock.Add(time.Minute)
+	err := r.c.ReleaseFix(r.ctx, w, "released")
+	if hold, ok := errors.AsType[slots.ErrHold](err); !ok || hold.Reason != slots.HoldUnpushed || !strings.Contains(hold.Detail, "1 commit(s)") {
+		t.Fatalf("the release over the fixer's commit = %v, want unpushed_commits for its 1 commit", err)
 	}
 }
 

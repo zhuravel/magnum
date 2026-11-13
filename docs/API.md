@@ -23140,6 +23140,11 @@ func (c *Client) Unpushed(ctx context.Context, dir string) (int, error)
     ref and no refs/magnum/* ref, i.e. work a human committed in a slot that a
     reset would orphan. A HEAD sitting on a fetched PR ref counts as zero.
 
+func (c *Client) UnpushedPast(ctx context.Context, dir string, known ...string) (int, error)
+    UnpushedPast is Unpushed with the commits reachable from each of known
+    (commit SHAs) counted as pushed too: a head a checkout was switched to that
+    a force-push of its PR moved off every ref. Read-only.
+
 func (c *Client) UnpushedRef(ctx context.Context, dir, ref string) (int, error)
     UnpushedRef is Unpushed for an arbitrary ref (a placeholder branch,
     a detached sha): the commits reachable from ref that exist on no

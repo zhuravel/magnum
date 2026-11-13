@@ -499,7 +499,7 @@ func (c *copySet) fixOwnHead(ctx context.Context, owner store.PR, sl store.Slot,
 		return err
 	}
 	if release {
-		n, err := c.git.Unpushed(ctx, cur.Path)
+		n, err := c.unpushedPastClaim(ctx, cur)
 		if err != nil {
 			return err
 		}
@@ -538,6 +538,22 @@ func (c *copySet) fixOwnHead(ctx context.Context, owner store.PR, sl store.Slot,
 	c.event(ctx, cur.Name, "info", "factory.fix_head", fmt.Sprintf("HEAD %s, past the checkout %s, is the fixer's own: recorded as %s's checkout",
 		textx.ShortSHA(got), textx.ShortSHA(want), cur.Name))
 	return nil
+}
+
+// unpushedPastClaim counts the commits of checkout sl's HEAD on no remote
+// or magnum ref and past the head its claim switched to (its open
+// assignment's): that head was the PR's remote head, so a force-push of the
+// PR, which moves the fix ref off it at the release's fetch, leaves it
+// pushed.
+func (c *copySet) unpushedPastClaim(ctx context.Context, sl store.Slot) (int, error) {
+	var claimed []string
+	switch a, err := c.st.OpenAssignmentBySlot(ctx, sl.ID); {
+	case err == nil && store.Deref(a.HeadSHA) != "":
+		claimed = append(claimed, *a.HeadSHA)
+	case err != nil && !errors.Is(err, store.ErrNotFound):
+		return 0, err
+	}
+	return c.git.UnpushedPast(ctx, sl.Path, claimed...)
 }
 
 // ReleaseFix hands PR work w's checkout back: a fix copy goes back to its

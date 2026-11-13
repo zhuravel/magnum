@@ -1111,10 +1111,29 @@ func (c *Client) Unpushed(ctx context.Context, dir string) (int, error) {
 // detached sha): the commits reachable from ref that exist on no
 // remote-tracking ref and no refs/magnum/* ref. Read-only.
 func (c *Client) UnpushedRef(ctx context.Context, dir, ref string) (int, error) {
+	return c.unpushed(ctx, dir, ref)
+}
+
+// UnpushedPast is Unpushed with the commits reachable from each of known
+// (commit SHAs) counted as pushed too: a head a checkout was switched to
+// that a force-push of its PR moved off every ref. Read-only.
+func (c *Client) UnpushedPast(ctx context.Context, dir string, known ...string) (int, error) {
+	return c.unpushed(ctx, dir, "HEAD", known...)
+}
+
+// unpushed counts the commits reachable from ref on no remote-tracking ref,
+// no refs/magnum/* ref and none of known.
+func (c *Client) unpushed(ctx context.Context, dir, ref string, known ...string) (int, error) {
 	if err := checkRev("ref", ref); err != nil {
 		return 0, err
 	}
-	res, err := c.git(ctx, dir, call{label: "rev-list unpushed " + ref}, "rev-list", "--count", ref, "--not", "--remotes", "--glob=refs/magnum/*")
+	for _, k := range known {
+		if err := checkRev("known commit", k); err != nil {
+			return 0, err
+		}
+	}
+	args := append([]string{"rev-list", "--count", ref, "--not", "--remotes", "--glob=refs/magnum/*"}, known...)
+	res, err := c.git(ctx, dir, call{label: "rev-list unpushed " + ref}, args...)
 	if err != nil {
 		return 0, err
 	}

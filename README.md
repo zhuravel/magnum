@@ -4699,7 +4699,8 @@ stages = [
   The checkout goes once the PR's fix work ends: the PR merged or closed (magnum's registry says so), or its
   work stayed idle for 10 minutes. A fix copy goes back to its pool on its placeholder, a per-PR checkout is
   removed with its fix ref, each with a `fix.release` event. The release fetches the PR's head first, so what the
-  fixer pushed counts as pushed; commits on no remote, or changes your typing explains, hold it
+  fixer pushed counts as pushed, as does the head the claim switched to (a force-push of the PR holds nothing);
+  commits on no remote past it, or changes your typing explains, hold it
   (`unpushed_commits`, `dirty_worktree`), and a refused release is tried again after 1, 2, 4 and then every 5
   minutes, with one alert after 30 minutes.
 - **Precheck.** `lint` and `migrations` are lists of commands, `specs` and `jest` one command each; a command
