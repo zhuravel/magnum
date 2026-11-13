@@ -27064,7 +27064,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
     line says its number is the configuration's (`by the configuration (max_copies + fix_copies)`) and that
     doctor also counts the copies made past it: it read as the copies' whole need, the sentence doctor uses with
     the copies made counted (the engine owner's word on C5 of T3b's third check). Its test,
-    `TestConfigCheckNamesTheRedisDatabasesTheCopiesNeed`, pins the line, failing first.
+    `TestConfigCheckNamesTheRedisDatabasesTheCopiesNeed`, pins the line, failing first. A `redis-cli` missing
+    from doctor's own PATH is weighed against the PATH the factory daemon runs with (`doctorDaemonLookPath`:
+    launchd's, the LaunchAgent's, and, with `[daemon] shell_path` on, the login shell's directories it lacks,
+    which doctor asks `$SHELL -ilc` for as the daemon's start does): where that PATH finds it, the claims flush,
+    so the check is a WARN that names doctor's PATH and where the daemon finds it; where the shell does not
+    answer, a WARN, since the daemon's PATH is unknown; only where that PATH lacks it too is it C9's FAIL. A
+    doctor run from a shell without `/opt/homebrew/bin` (an ssh, the herdr popup) failed a check whose claims
+    flushed (the engine owner's C4 of T3b's third check). A probe that works on doctor's PATH while the daemon's
+    lacks `redis-cli` still passes, as before C9. Test, failing first:
+    `TestDoctorFailsAMissingRedisCLIOnlyWhenTheDaemonsPATHLacksItToo`.
 
 ## Learned rules
 

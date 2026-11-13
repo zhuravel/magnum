@@ -252,7 +252,9 @@ func TestDoctorNamesAMissingRedisCLIThatTheClaimsFlushNeedsToo(t *testing.T) {
 	cfg.Factory.Repos = redisRepos()[:2]
 	d.Config = &cfg
 	missing := &execx.RunError{Cmd: execx.Cmd{Name: "redis-cli"}, Err: &exec.Error{Name: "redis-cli", Err: exec.ErrNotFound}}
-	fake.Rules = append([]execx.Rule{{Prefix: []string{"redis-cli"}, Err: missing}}, fake.Rules...)
+	fake.Rules = append([]execx.Rule{{Prefix: []string{"redis-cli"}, Err: missing},
+		{Prefix: []string{"zsh", "-ilc"}, Result: execx.Result{Stdout: []byte("/usr/bin:/bin\n")}}}, fake.Rules...)
+	d.Executable = func(string) bool { return false } // nor on the factory daemon's PATH
 	m := map[string]doctorCheck{}
 	for _, c := range doctorRun(context.Background(), d) {
 		m[c.Name] = c
@@ -266,6 +268,65 @@ func TestDoctorNamesAMissingRedisCLIThatTheClaimsFlushNeedsToo(t *testing.T) {
 	if c.Status != doctorWarn || !strings.Contains(c.Detail, "redis-cli is not on PATH") || strings.Contains(c.Detail, "flush") ||
 		!strings.Contains(c.Fix, "install redis-cli") || strings.Contains(c.Fix, "start the Redis") {
 		t.Fatalf("example/cache, whose claims flush nothing, without redis-cli = %+v, want a WARN naming redis-cli, with its install as the fix", c)
+	}
+}
+
+// A redis-cli missing from doctor's own PATH fails the check only when the
+// factory daemon's PATH lacks it too: launchd's PATH of the LaunchAgent,
+// with the login shell's directories when [daemon] shell_path is on, as the
+// daemon's start adds them. Where the daemon finds it, its claims flush,
+// so it is a WARN that names doctor's PATH; where doctor cannot tell (the
+// login shell did not answer), a WARN. Doctor decided on its own PATH, so a
+// doctor run from a shell without /opt/homebrew/bin failed a check whose
+// claims flushed (C4 of T3b's third check).
+func TestDoctorFailsAMissingRedisCLIOnlyWhenTheDaemonsPATHLacksItToo(t *testing.T) {
+	_, d, _, _ := doctorFixture(t)
+	fake := d.Run.(*execx.Fake)
+	base := fake.Rules
+	cfg := *d.Config
+	cfg.Factory.Repos = redisRepos()[:1] // its env names REDIS_DB_OFFSET: its claims flush with redis-cli
+	d.Config = &cfg
+	missing := &execx.RunError{Cmd: execx.Cmd{Name: "redis-cli"}, Err: &exec.Error{Name: "redis-cli", Err: exec.ErrNotFound}}
+	var on map[string]bool
+	d.Executable = func(p string) bool { return on[p] }
+	check := func(shell execx.Rule) doctorCheck {
+		t.Helper()
+		fake.Rules = append([]execx.Rule{{Prefix: []string{"redis-cli"}, Err: missing}, shell}, base...)
+		for _, c := range doctorRun(context.Background(), d) {
+			if c.Name == "redis talkable/talkable" {
+				return c
+			}
+		}
+		t.Fatal("no redis check of talkable/talkable")
+		return doctorCheck{}
+	}
+	answers := execx.Rule{Prefix: []string{"zsh", "-ilc"}, Result: execx.Result{Stdout: []byte("/usr/bin:/opt/redis/bin\n")}}
+	local := filepath.Join(d.UserHome, ".local", "bin", "redis-cli")
+
+	cfg.Daemon.ShellPath = false
+	on = map[string]bool{local: true}
+	if c := check(answers); c.Status != doctorWarn || !strings.Contains(c.Detail, "redis-cli is not on doctor's PATH") ||
+		!strings.Contains(c.Detail, "the factory daemon's PATH finds it at "+inspTilde(local)) || strings.Contains(c.Fix, "install") {
+		t.Fatalf("redis-cli on launchd's PATH alone = %+v, want a WARN naming doctor's PATH and where the daemon finds it", c)
+	}
+	cfg.Daemon.ShellPath = true
+	on = map[string]bool{"/opt/redis/bin/redis-cli": true}
+	if c := check(answers); c.Status != doctorWarn || !strings.Contains(c.Detail, "finds it at /opt/redis/bin/redis-cli") {
+		t.Fatalf("redis-cli on the login shell's PATH with shell_path on = %+v, want a WARN naming where the daemon finds it", c)
+	}
+	cfg.Daemon.ShellPath = false
+	if c := check(answers); c.Status != doctorFail || !strings.Contains(c.Detail, "neither doctor's nor the factory daemon's") {
+		t.Fatalf("redis-cli on the login shell's PATH with shell_path off = %+v, want a FAIL: the daemon does not add it", c)
+	}
+	cfg.Daemon.ShellPath = true
+	on = nil
+	if c := check(answers); c.Status != doctorFail || !strings.Contains(c.Detail, "redis-cli is not on PATH") ||
+		!strings.Contains(c.Detail, "neither doctor's nor the factory daemon's") || !strings.Contains(c.Fix, "install redis-cli") {
+		t.Fatalf("redis-cli on no PATH = %+v, want a FAIL with its install as the fix", c)
+	}
+	silent := execx.Rule{Prefix: []string{"zsh", "-ilc"}, Err: context.DeadlineExceeded}
+	if c := check(silent); c.Status != doctorWarn || !strings.Contains(c.Detail, "is unknown: the login shell") {
+		t.Fatalf("redis-cli on no PATH doctor can read, the login shell silent = %+v, want a WARN: the daemon's PATH is unknown", c)
 	}
 }
 

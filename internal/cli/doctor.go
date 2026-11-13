@@ -113,6 +113,9 @@ type doctorDeps struct {
 	DiskFree    func(path string) (uint64, error)
 	Getenv      func(string) string
 	UserHome    string
+	// Executable reports whether path is an executable file, as a lookup
+	// on the daemons' PATH reads it (doctorDaemonLookPath); nil: os.Stat.
+	Executable func(path string) bool
 	// DaemonPID and FactoryPID read the review and the factory daemon's
 	// pidfiles (engine.DaemonPID, factory.DaemonPID); nil: not running.
 	DaemonPID  func() (int, error)

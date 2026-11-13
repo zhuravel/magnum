@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -8,11 +9,13 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/factory"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -31,9 +34,9 @@ var doctorRedisTimeout = 5 * time.Second
 // no copy. Fewer fail: the claims of the copies past them cannot flush
 // theirs. A Redis that does not answer, or whose answer has no number, is
 // unknown, a warning; so is an env that names no Redis, and a PASS while
-// the agents store cannot be read. A redis-cli that is not on PATH is named
-// as such (redisCLIMissing). No repository on Redis is a skip that runs
-// nothing.
+// the agents store cannot be read. A redis-cli that is not on doctor's PATH
+// is named as such, against the factory daemon's PATH (redisCLIMissing). No
+// repository on Redis is a skip that runs nothing.
 func doctorRedis(ctx context.Context, d doctorDeps) []doctorCheck {
 	made, unread := factoryCopiesMade(ctx, d.Layout.FactoryAgentsDB())
 	var out []doctorCheck
@@ -74,7 +77,7 @@ func doctorRedisRepo(ctx context.Context, d doctorDeps, r config.FactoryRepo, co
 	}
 	out, err := doctorCmd(ctx, d, cmd)
 	if errors.Is(err, exec.ErrNotFound) {
-		return redisCLIMissing(name, needs, addr, r)
+		return redisCLIMissing(ctx, d, name, needs, addr, r)
 	}
 	if err != nil {
 		return doctorWarned(name, fmt.Sprintf("%s; how many the Redis at %s has is unknown, since it does not answer: %s", needs, addr, err.Error()),
@@ -94,18 +97,75 @@ func doctorRedisRepo(ctx context.Context, d doctorDeps, r config.FactoryRepo, co
 	return doctorOK(name, fmt.Sprintf("%s, and the Redis at %s has %d", needs, addr, have))
 }
 
-// redisCLIMissing is repository r's check when redis-cli is not on PATH,
-// which is no Redis that does not answer: how many databases the Redis at
-// addr has is unknown, a WARN, and a FAIL where the copies' env names
+// redisCLIMissing is repository r's check when redis-cli is not on
+// doctor's own PATH, which is no Redis that does not answer: how many
+// databases the Redis at addr has is unknown. Where the factory daemon's
+// PATH finds it (doctorDaemonLookPath), its claims flush: a WARN that names
+// doctor's PATH. Where doctor cannot tell (the login shell did not answer),
+// a WARN. Where it does not, a WARN, and a FAIL where the copies' env names
 // REDIS_DB_OFFSET, since each claim of a copy flushes its Redis databases
 // with redis-cli too, and those claims fail.
-func redisCLIMissing(name, needs, addr string, r config.FactoryRepo) doctorCheck {
-	detail := fmt.Sprintf("%s; redis-cli is not on PATH, so how many the Redis at %s has is unknown", needs, addr)
+func redisCLIMissing(ctx context.Context, d doctorDeps, name, needs, addr string, r config.FactoryRepo) doctorCheck {
 	fix := "install redis-cli (it comes with Redis) where the factory daemon's PATH finds it, then run `magnum doctor` again"
+	switch at, known := doctorDaemonLookPath(ctx, d, "redis-cli"); {
+	case at != "":
+		return doctorWarned(name, fmt.Sprintf("%s; redis-cli is not on doctor's PATH, so how many the Redis at %s has is unknown, "+
+			"while the factory daemon's PATH finds it at %s, so its claims flush", needs, addr, inspTilde(at)),
+			"run `magnum doctor` from a shell whose PATH finds redis-cli, as the factory daemon's does")
+	case !known:
+		return doctorWarned(name, fmt.Sprintf("%s; redis-cli is not on doctor's PATH, so how many the Redis at %s has is unknown, "+
+			"and whether the factory daemon's PATH finds it is unknown: the login shell, whose PATH [daemon] shell_path adds to it, "+
+			"did not answer", needs, addr), fix)
+	}
+	detail := fmt.Sprintf("%s; redis-cli is not on PATH, neither doctor's nor the factory daemon's, so how many the Redis at %s has is unknown",
+		needs, addr)
 	if _, flushes := r.Env[config.RedisOffsetEnv]; flushes {
 		return doctorFailed(name, detail+fmt.Sprintf(", and each claim of %s's copies flushes their Redis databases with it: those claims fail", r.Repo), fix)
 	}
 	return doctorWarned(name, detail, fix)
+}
+
+// doctorDaemonLookPath is where the PATH the daemons run with finds
+// executable file ("" for nowhere): launchd's, the LaunchAgent's
+// (launchdPATH), then, with [daemon] shell_path on, the directories of the
+// login shell's PATH it lacks, which the daemon's start appends
+// (daemonShellPATH); doctor asks the shell as the daemon does. known is
+// false when the shell did not answer and launchd's PATH lacks file.
+func doctorDaemonLookPath(ctx context.Context, d doctorDeps, file string) (at string, known bool) {
+	isExec := d.Executable
+	if isExec == nil {
+		isExec = isExecutableFile
+	}
+	lookIn := func(path string) string {
+		for dir := range strings.SplitSeq(path, ":") {
+			if p := filepath.Join(dir, file); filepath.IsAbs(dir) && isExec(p) {
+				return p
+			}
+		}
+		return ""
+	}
+	own := launchdPATH(d.UserHome)
+	if at := lookIn(own); at != "" || d.Config == nil || !d.Config.Daemon.ShellPath {
+		return at, true
+	}
+	shell := "zsh"
+	if d.Getenv != nil {
+		shell = cmp.Or(d.Getenv("SHELL"), shell)
+	}
+	out, err := doctorCmd(ctx, d, execx.Cmd{Name: shell, Args: []string{"-ilc", shellPATHScript}, Timeout: shellPATHTimeout, NoTTY: true,
+		Label: "doctor"})
+	line, ok := lastPATHLine(out)
+	if err != nil || !ok {
+		return "", false
+	}
+	_, added := mergePATH(own, line)
+	return lookIn(strings.Join(added, ":")), true
+}
+
+// isExecutableFile reports whether p is a regular file someone may run.
+func isExecutableFile(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0
 }
 
 // redisTooFew is the FAIL of repository r's Redis at addr, which has have
