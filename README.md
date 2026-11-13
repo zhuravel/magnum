@@ -5512,8 +5512,9 @@ the limit gets no second opinion, and one waiting to begin when the limit comes 
 you or after the writer's fix at the cap as passed at that head, so its fresh run follows. `magnum factory
 finish-review <task>` (the task card's `S`) ends a task's loop the same way now: the round in
 flight finishes and none starts after it, or, between rounds, the review ends at once on the writer's fix of the last
-round's findings (FIXED AFTER on the card), or, before a second opinion that has not begun, clean on the round it
-follows; the card says `the local review was ended by you`. `review-end.json`
+round's findings (FIXED AFTER on the card); the card says `the local review was ended by you`. Before a second opinion
+that has not begun, the opinion does not run and the review ends clean on the round it follows, so the card says `the
+local review ended clean`. `review-end.json`
 records each such end before its cycle ends, so a restart decides alike. Any other
 stop needs you: `you: <n> blocking
 findings after 3 review rounds (blocking 11 → 8 → 5, P1 5 → 3 → 0; verdict non_blocking): P2 <title> (<path>); …`,

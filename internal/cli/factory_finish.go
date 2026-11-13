@@ -25,7 +25,8 @@ func newFactoryFinishCmd(c *Context) *cobra.Command {
 			"round reviewed yet gets its one round first. Then the stage ends as at [factory.local_review] max_rounds: a safe stop "+
 			"(no P0 or P1, a verdict that does not block, no finding the writer declined in its loop, no product question open) goes to the ready card with its "+
 			"open findings under KNOWN, the card saying the review was ended by you; any other waits on you, and your retry lets the "+
-			"loop go on. The command says what happens to the task now and asks y/N on a terminal (only y sends the request, and "+
+			"loop go on. A second opinion that has not begun after a clean round does not run: the review ends clean on that round, "+
+			"and the card says it ended clean. The command says what happens to the task now and asks y/N on a terminal (only y sends the request, and "+
 			"it waits for the daemon's answer as `retry` does; off a terminal it asks nothing and sends nothing); --dry-run says it "+
 			"and sends nothing. A task that is not in its local review at work is refused with the reason: one at another stage, "+
 			"one that waits on you (its retry or your answers come first), one done or stopped.",
