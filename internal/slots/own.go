@@ -79,7 +79,8 @@ func (m *Manager) recordOwnFiles(ctx context.Context, sl store.Slot, paths []str
 
 // copiedFiles are the copy_files entries of files that the main clone
 // holds, as recordOwnFiles names them: a file by its path, a folder with a
-// trailing "/" (every file below it), never the local mise file.
+// trailing "/" (the files below it that the main clone holds: withoutOwn),
+// never the local mise file.
 func copiedFiles(mainClone string, files []string) []string {
 	var out []string
 	for _, f := range files {
@@ -185,18 +186,51 @@ func (m *Manager) untrackedForRecord(ctx context.Context, sl store.Slot, when st
 	return files, true
 }
 
-// withoutOwn is untracked less the files of own (ownFiles): a path own
-// names, or one below a folder it names.
-func withoutOwn(untracked, own []string) []string {
+// withoutOwn is untracked, the untracked paths of a tree, less the files
+// of own (ownFiles): a path own names, or one below a folder it names (a
+// copy_files folder) that the main clone at mainClone holds as a regular
+// file, as the copy of such a folder writes those alone
+// (copyTreeIntoCheckout). A file added below that folder in the tree is a
+// person's, and so is one whose main clone cannot be read.
+func withoutOwn(mainClone string, untracked, own []string) []string {
 	if len(own) == 0 {
 		return untracked
 	}
+	main := mainFiles{dir: mainClone}
+	defer main.close()
 	return slices.DeleteFunc(untracked, func(p string) bool {
 		for _, o := range own {
-			if p == o || strings.HasSuffix(o, "/") && strings.HasPrefix(p, o) {
+			if p == o || strings.HasSuffix(o, "/") && strings.HasPrefix(p, o) && main.holds(p) {
 				return true
 			}
 		}
 		return false
 	})
+}
+
+// mainFiles reads the main clone at dir, through an os.Root opened at the
+// first read.
+type mainFiles struct {
+	dir  string
+	root *os.Root
+	err  error
+}
+
+// holds reports whether the main clone holds p, a slash-separated path
+// relative to it, as a regular file; false when it cannot be read.
+func (f *mainFiles) holds(p string) bool {
+	if f.root == nil && f.err == nil {
+		f.root, f.err = os.OpenRoot(f.dir)
+	}
+	if f.err != nil {
+		return false
+	}
+	fi, err := f.root.Lstat(filepath.FromSlash(p))
+	return err == nil && fi.Mode().IsRegular()
+}
+
+func (f *mainFiles) close() {
+	if f.root != nil {
+		_ = f.root.Close()
+	}
 }

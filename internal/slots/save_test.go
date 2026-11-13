@@ -705,6 +705,33 @@ func TestAPoolSlotsRemovalSavesNothingMagnumWrote(t *testing.T) {
 	}
 }
 
+// A copy_files folder is magnum's for the files the copy wrote alone,
+// those the main clone's folder holds: a person's file added under it in
+// the slot is theirs, and a removal saves it. The folder was recorded as a
+// prefix, so every file under it was dropped, neither saved nor named, and
+// `worktree remove --force` deleted it.
+func TestAPersonsFileInACopiedFolderIsSaved(t *testing.T) {
+	h := newHarness(t)
+	writeFile(t, filepath.Join(h.main, "mocks", "generated.js"), "generated\n")
+	h.pool.CopyFiles = append(h.pool.CopyFiles, "mocks")
+	sl := h.provisioned(1)
+	if !fsx.Exists(filepath.Join(sl.Path, "mocks", "generated.js")) {
+		t.Fatal("the provisioning did not copy mocks/generated.js")
+	}
+	writeFile(t, filepath.Join(sl.Path, "mocks", "userApi.js"), "written by hand\n")
+
+	if err := h.m.Remove(h.ctx, sl, h.pool, false); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	save := h.onlySave(t, h.layout.SlotSaves(sl.Name), sl.Name)
+	if got := readFile(t, filepath.Join(save, "untracked", "mocks", "userApi.js")); got != "written by hand\n" {
+		t.Fatalf("mocks/userApi.js saved = %q", got)
+	}
+	if _, err := os.Lstat(filepath.Join(save, "untracked", "mocks", "generated.js")); !os.IsNotExist(err) {
+		t.Fatalf("the copied mocks/generated.js saved: %v", err)
+	}
+}
+
 // A removal whose untracked files are all left out keeps no untracked/
 // folder in its save, as a save with no path's patch keeps no changes.diff.
 func TestASaveThatCopiesNoUntrackedFileHasNoUntrackedFolder(t *testing.T) {

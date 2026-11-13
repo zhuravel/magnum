@@ -183,7 +183,7 @@ func (m *Manager) saveChanges(ctx context.Context, sl store.Slot, ch changes, un
 	}
 	own := m.ownFiles(ctx, sl)
 	if !untracked {
-		s.kept = withoutOwn(withoutRenderedMiseLocal(sl.Path, slices.Clone(ch.untracked)), own)
+		s.kept = withoutOwn(sl.MainClone, withoutRenderedMiseLocal(sl.Path, slices.Clone(ch.untracked)), own)
 	} else if err := m.saveRemoved(ctx, sl, own, budget, &s); err != nil {
 		return s, err
 	}
@@ -226,7 +226,7 @@ func (m *Manager) saveRemoved(ctx context.Context, sl store.Slot, own []string, 
 	if err != nil {
 		return err
 	}
-	return saveUntracked(sl.Path, s.dir, withoutOwn(withoutRenderedMiseLocal(sl.Path, files), own), budget, s)
+	return saveUntracked(sl.Path, s.dir, withoutOwn(sl.MainClone, withoutRenderedMiseLocal(sl.Path, files), own), budget, s)
 }
 
 // empty reports whether the save holds nothing and names nothing.
