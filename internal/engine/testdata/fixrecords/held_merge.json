@@ -1,0 +1,20 @@
+{
+  "repo": "talkable/talkable",
+  "number": 2,
+  "merge": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
+  "head": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "base": "master",
+  "tip": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+  "workflows": [
+    ".github/workflows/ci.yml"
+  ],
+  "conflicts": 1,
+  "role": "claude-fix",
+  "identity": "zhuravel-factory",
+  "login": "zhuravel-factory[bot]",
+  "clone": "/pool/talkable-1",
+  "diff": "/reviews/talkable/2/held-merge.diff",
+  "findings": true,
+  "attention": "the merge of master waits for your y",
+  "at": "2026-11-12T14:20:53Z"
+}

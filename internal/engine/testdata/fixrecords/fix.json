@@ -1,0 +1,45 @@
+{
+  "cycle": 2,
+  "cap": 5,
+  "phase": "fixing",
+  "since": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "head": "e6c1f37000000000000000000000000000000000",
+  "by": "autofix",
+  "report": "/reviews/talkable/2/fix-1.md",
+  "started_at": "2026-11-12T14:20:53Z",
+  "needs_you": [
+    "- 4100: a call (needs: decision)"
+  ],
+  "answered": [
+    "4100"
+  ],
+  "role": "claude-fix",
+  "forced_at": "2026-11-12T14:21:53Z",
+  "held": true,
+  "context": "compacted 82% → 31%",
+  "others_unread": "not read (HTTP 502)",
+  "carried": [
+    {
+      "report": "/reviews/talkable/2/fix-0.md",
+      "needs_you": [
+        "- 4000: a call"
+      ],
+      "answered": [
+        "4000"
+      ]
+    }
+  ],
+  "waits": [
+    "thread:4200@4201"
+  ],
+  "mode": "ci",
+  "ci_checks": [
+    "rspec"
+  ],
+  "parent_refused": "needs Workflows on the App",
+  "confirm": {
+    "head": "e6c1f37000000000000000000000000000000000",
+    "since": "2026-11-12T14:20:53Z"
+  },
+  "late": true
+}

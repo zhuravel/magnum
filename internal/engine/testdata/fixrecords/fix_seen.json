@@ -1,0 +1,83 @@
+{
+  "handed": {
+    "thread:4100@4101": "2026-11-12T14:20:53Z"
+  },
+  "reviews": [
+    "review:r1"
+  ],
+  "fixer_heads": [
+    "e6c1f37000000000000000000000000000000000"
+  ],
+  "cursor": 42,
+  "since": "2026-11-12T14:20:53Z",
+  "raised_msg": "2 items need you",
+  "raised": [
+    "thread:4100@4101"
+  ],
+  "starts": [
+    "2026-11-12T14:20:53Z"
+  ],
+  "read": {
+    "print": "p1",
+    "at": "2026-11-12T14:20:53Z",
+    "head": "a1a1a1a1",
+    "cut": [
+      "threads"
+    ],
+    "others": [
+      {
+        "key": "thread:4100@4101",
+        "class": "person",
+        "kind": "thread",
+        "url": "https://github.com/talkable/talkable/pull/2#discussion_r4100",
+        "fixer_replies": 1,
+        "resolved": true,
+        "decision": true,
+        "by": "rev-ann",
+        "changes_at": "2026-11-12T14:20:53Z",
+        "accepted": true
+      }
+    ],
+    "mine": [
+      {
+        "root_id": 5100,
+        "url": "https://github.com/talkable/talkable/pull/2#discussion_r5100",
+        "review_id": 101,
+        "latest_id": 5101,
+        "latest_at": "2026-11-12T14:20:53Z",
+        "rebuttal": true,
+        "answered": true,
+        "answered_at": "2026-11-12T14:20:53Z"
+      }
+    ],
+    "failed_at": "2026-11-12T14:20:53Z"
+  },
+  "conflict": {
+    "head": "a1a1a1a1",
+    "base": "master",
+    "tip": "b2b2b2b2",
+    "at": "2026-11-12T14:20:53Z",
+    "paths": [
+      "app.go"
+    ],
+    "unchecked": true
+  },
+  "read_fails": 1,
+  "late_toasted": "a1a1a1a1",
+  "approval": {
+    "sha": "a0a0a0a0",
+    "head": "a1a1a1a1",
+    "after": 2
+  },
+  "refused": "fp1",
+  "refused_why": "nothing to fix",
+  "wait_at": "2026-11-12T14:20:53Z",
+  "wait_why": "the slot is busy",
+  "spell": {
+    "start": "2026-11-12T14:20:53Z",
+    "seen": "2026-11-12T14:21:53Z"
+  },
+  "waited": {
+    "rev-ann": "2026-11-12T14:20:53Z"
+  }
+}

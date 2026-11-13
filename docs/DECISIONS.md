@@ -19267,6 +19267,31 @@ skill versions); people add theirs to the sections before it, at the end of the 
     and the dashboard's title (`DaemonFacts.Controls`, first) and the factory screen's blocker line say
     "draining since <time>: magnum resume ends it". Phase 2 (`restart`, `stop`, `start`, `install`, `uninstall`,
     `kick` for both daemons, the old names as hidden aliases) is in the design, not built.
+- **The fix loop moves into the factory: magnum's fix code freezes, is shared through internal/fixwork, then goes**
+  (2026-11-12, the operator's decision 12, approach B; the engine owner's rules of the same day). There will be one
+  fixer engine, in the factory daemon (see "The factory becomes the only fixer" under the factory). internal/factory
+  imports internal/engine, so the engine can never import the factory: the code both daemons need moves first into a
+  leaf package, internal/fixwork, which imports neither. Its first task (T1) moves, with no change of behavior and in
+  small commits each green alone, the JSON types of every fix record (the loop's row, `fix_off`, the push record,
+  the held merge, `pushed`, `fix_held`, the open ledger `fix_seen`, `ci_fix`, `ci_dispatch`, `ci_rerun`, `fix_calls`,
+  `optional_calls` and the verdict `open`), the report and calls parsers, decideOpen and the open items, the CI
+  reader, pushMerge's checks and pushRefusal, the held-merge diff writer, confirmPush with transientRead, and the
+  settle's needs-you filters. The engine calls the same code through fixwork, and the rows keep their format:
+  TestFixRecordsWrittenBeforeTheMoveStillDecode decodes each record as the build before the move wrote it
+  (testdata, never written again), so a changed JSON name, omitempty or omitzero fails at once. Magnum's fix code
+  is deleted in this same effort, in revertible commits, once the factory's fixer passed a sandbox matrix and a
+  same-day live trial; until then magnum fixes every PR the factory does not own.
+  - The freeze covers new fix-loop features only: none lands in the engine during the move. Bug fixes and
+    self-healing fixes still land: before T1 in the engine, after it in internal/fixwork where the code lives,
+    else in the engine and onto the port-debt list below, with the name of the test that protects it. The factory's
+    port of the loop carries every test on that list. Port debt (engine-only fixes after T1, each with its test):
+    none yet.
+  - The engine owner's rules. The review side fails open and the fixer side fails closed: the arbiter is
+    `pr.<id>.fix_owner` in magnum.db, which magnum reads locally and the factory across processes, and a failed or
+    stale read refuses a fixer start in either daemon (no fix without a fresh owner = factory). The round hold and
+    the review refusal fail open after a grace, with a warn event and a doctor line while they do. The move starts
+    only after the held merge, confirm-push and the first phase of pause and drain landed; the readers of the fix
+    data move in the same commits as the data; only the fixer role may carry an identity.
 
 ## The factory (2026-11-03)
 
@@ -26482,7 +26507,6 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheFactorysRestartDrainAndRebootDrainDoNotLiftEachOther, TestAQuietFactoryDrainForARebootSaysOnceAfterAnHour,
   and TestTurnsInFlightNameTheTasksRolesAndItsLiaison and TestADrainForARebootHoldsANewPrompt in
   internal/factory/runtime.
-
 - **The factory heals its mechanical stops by itself, and what still stops asks a question, never "retry"**
   (2026-11-12). The factory's registry held 12 retries by the operator. Not one needed a decision. Task 1's lint
   exited 2 and named no offense, three times. Task 9's writer reached its fix-turn limit while it made
@@ -26790,6 +26814,29 @@ skill versions); people add theirs to the sections before it, at the end of the 
   failing first: `TestARowGitCannotPlaceMakesTheReportUnreadable`,
   `TestAStylelintSyntaxRowOfATouchedFileIsTheWriters` and `TestEveryLineOfAnUnnamedFailureIsItsKey` in
   internal/factory.
+- **The factory becomes the only fixer** (2026-11-12, the operator's decisions 1, 2 and 12, the nine defaults, and
+  the engine owner's rules and risk fixes of the same day). The fix loop that magnum's engine runs on own PRs moves
+  into the factory daemon (approach B), and magnum's fix code is deleted in the same effort (see "The fix loop
+  moves into the factory" under Operations, which also holds the freeze and the port-debt list). The factory fixes
+  every own PR, as autofix = "open" does today, through PR records with no task: in the two weeks before, 12 of the
+  17 PRs that magnum fixed were not the factory's. It fixes in dedicated fix copies (2 for talkable and 1 for one
+  other repository, apart from max_active), and in a per-PR checkout without databases where a repository has no
+  copies. Both daemons share internal/fixwork, so the factory decides on the imported ledgers with the same
+  decideOpen code.
+  - All at once: no shadow, no measuring period, no soak and no rollout per watch. The drain proof, the one import
+    of each PR's records (intent and caps) and a same-day live trial on one factory PR come before the deletion.
+    `/factory` self-review, the reviewer request on green and the hand-off land after the fixer works, each its own
+    revertible commit.
+  - The same-day fixes. The rollback is one way: the import only reads magnum's rows, and only a PR the factory has
+    not worked since its import goes back to magnum, with its rows intact; there is no export back, and a worked PR
+    is fixed by hand under `[factory] fix = "off"`. A trial matrix runs one PR per rare path on a sandbox repository
+    of the operator's, with a checklist. At most 2 factory fix loops run at once on the first day
+    (`fix_max_active`), raised after a clean day. A morning list names each PR that will not drain by itself, with
+    the operator's action. `magnum factory fix --fault confirm` refuses every PR outside a watch marked as a
+    sandbox, and writes an event each time it fires, so that a fault never passes for a GitHub blip in stats or in
+    the retro.
+  - The interlock, from the factory's side: the factory reads magnum's `pr.<id>.fix_owner` across processes, and a
+    failed or stale read starts no fixer.
 
 ## Learned rules
 

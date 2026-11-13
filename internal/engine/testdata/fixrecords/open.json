@@ -1,0 +1,22 @@
+{
+  "verdict": "needs_you",
+  "why": "1 thread of a person needs you",
+  "head": "a1a1a1a1",
+  "at": "2026-11-12T14:20:53Z",
+  "since": "2026-11-12T14:20:53Z",
+  "read_at": "2026-11-12T14:20:53Z",
+  "until": "2026-11-12T15:20:53Z",
+  "open": 1,
+  "needs": [
+    {
+      "kind": "thread",
+      "url": "https://github.com/talkable/talkable/pull/2#discussion_r4100"
+    }
+  ],
+  "approved": "a0a0a0a",
+  "after_approval": 2,
+  "off": "draft",
+  "optional": [
+    "https://github.com/talkable/talkable/pull/2#discussion_r5200"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "head": "a1a1a1a1",
+  "read_at": "2026-11-12T14:20:53Z",
+  "queued": 42673098083,
+  "queued_status": "queued",
+  "unread": true,
+  "unread_why": "needs Actions on the App",
+  "run": {
+    "id": 42673098082,
+    "workflow": "ci.yml",
+    "attempt": 1,
+    "conclusion": "failure"
+  },
+  "at": "2026-11-12T14:20:53Z",
+  "failed": "GitHub answered HTTP 403",
+  "refused": "a pause",
+  "seen": {
+    "attempt": 2,
+    "status": "completed",
+    "conclusion": "failure",
+    "no_job": true
+  },
+  "moved": "2026-11-12T14:20:53Z"
+}

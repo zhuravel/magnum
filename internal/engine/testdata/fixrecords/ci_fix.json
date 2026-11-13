@@ -1,0 +1,61 @@
+{
+  "starts": [
+    {
+      "head": "a1a1a1a1",
+      "entries": [
+        "rspec"
+      ],
+      "at": "2026-11-12T14:20:53Z",
+      "by": "autofix",
+      "outcome": "cannot",
+      "why": "flaky",
+      "pushed": "e6c1f37"
+    }
+  ],
+  "read": {
+    "head": "a1a1a1a1",
+    "key": "rspec@1",
+    "at": "2026-11-12T14:20:53Z",
+    "file": "/reviews/talkable/2/ci-failures.json",
+    "digest": "sha256:00",
+    "jobs": 2,
+    "steps": 3,
+    "lines": 120,
+    "bytes": 4096,
+    "unread": true,
+    "unread_why": "needs Actions on the App",
+    "running": true,
+    "runs": [
+      {
+        "id": 42673098082,
+        "attempt": 2
+      }
+    ],
+    "checked": "2026-11-12T14:20:53Z"
+  },
+  "base": {
+    "head": "a1a1a1a1",
+    "key": "rspec@1",
+    "tip": "b2b2b2b2",
+    "checks": [
+      {
+        "name": "Completion",
+        "sha": "c3c3c3c3",
+        "state": "failed",
+        "each": [
+          {
+            "name": "rspec",
+            "sha": "c3c3c3c3",
+            "state": "passed"
+          },
+          {
+            "name": "jest",
+            "state": "never"
+          }
+        ]
+      }
+    ],
+    "at": "2026-11-12T14:20:53Z",
+    "failed": true
+  }
+}

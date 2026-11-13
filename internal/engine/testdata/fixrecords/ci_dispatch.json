@@ -1,0 +1,13 @@
+{
+  "head": "a1a1a1a1",
+  "workflow": "ci.yml",
+  "at": "2026-11-12T14:20:53Z",
+  "failed": "GitHub answered HTTP 422",
+  "refused": "a pause",
+  "run": {
+    "id": 42673098082,
+    "status": "completed",
+    "conclusion": "failure"
+  },
+  "moved": "2026-11-12T14:20:53Z"
+}
