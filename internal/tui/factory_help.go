@@ -130,6 +130,8 @@ var factoryKeyHelp = []struct {
 		{"r", "retry: it goes on at its stage (y/N, when it can); on a card that offers no retry, the review of its PR, as on home"},
 		{"R z M U", "on a card with a PR: a fresh review, snooze, mute, unmute, as on home (y/N)"},
 		{acceptQAKey, "accept what QA left you at the task's head: the writer's declines, fixes QA did not walk again, states it could not reach (y/N)"},
+		{finishKey, "end its local review now, as magnum factory finish-review: the round in flight finishes, none starts after it (y/N); " +
+			"a safe stop goes to the ready card with its open findings under KNOWN, any other waits on you (a task in its local review at work)"},
 		{"d", "the diff"},
 		{"+ −", "on a published or a done task's card: rate the task, then a digit says why (1 the cause and the fix, 2 how much it changed, " +
 			"3 how it followed my words, 4 the tests, 5 the time it took me) and esc skips the reason; asks nothing: rating again stores a new rating"},

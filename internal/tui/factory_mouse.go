@@ -203,6 +203,7 @@ func (m factoryModel) menuItems() []menuItem {
 		}
 		return slices.Concat([]menuItem{
 			{"retry", "r", "r", acts && c.Retry}, {"accept for QA", acceptQAKey, acceptQAKey, acts && c.AcceptQA != ""},
+			{"end the local review", finishKey, finishKey, acts && c.FinishReview != ""},
 			{"diff", "d", "d", acts}, {"rate +", "+", "+", acts && c.Rate}, {"rate −", "−", "-", acts && c.Rate}, {"drop", "x", "x", acts},
 			{"step into its pane", "o", "o", acts}, {"open its PR", "b", "b", acts && c.PRURL != ""},
 			{"open its Jira issue", "t", "t", acts && c.IssueURL != ""}, m.reportItem(m.task)}, fixKeys,

@@ -197,6 +197,12 @@ func (a *factoryActions) AcceptQA(ctx context.Context, taskID int64) (tui.Action
 	return a.send(ctx, factory.ReqRetry, factory.RetryPayload{TaskID: taskID, Surface: screenSurface, AcceptQA: true})
 }
 
+// FinishReview ends a task's local review now, as `magnum factory
+// finish-review`: the screen asked its y/N first.
+func (a *factoryActions) FinishReview(ctx context.Context, taskID int64) (tui.ActionResult, error) {
+	return a.send(ctx, factory.ReqFinishReview, factory.FinishReviewPayload{TaskID: taskID, Surface: screenSurface})
+}
+
 // Rate rates a published or a done task + (value 1) or − (-1) with the key of
 // a reason ("" for none), as the task card's + and − do; diffOpened is that
 // the screen showed you the task's diff first (RatePayload). The screen asks

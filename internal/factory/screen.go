@@ -101,7 +101,7 @@ var holdWords = map[string]string{
 
 // flashKinds are the requests whose answer is news for the status rule:
 // yours, not the screen's own focus reports and previews.
-var flashKinds = []string{ReqStart, ReqAnswer, ReqDecide, ReqStop, ReqRetry, ReqLetGo, ReqRate}
+var flashKinds = []string{ReqStart, ReqAnswer, ReqDecide, ReqStop, ReqRetry, ReqLetGo, ReqRate, ReqFinishReview}
 
 // ScreenData is the factory screen's data at now for an operator last seen
 // on home at lastSeen (zero: never): see the file's comment. agents may be
@@ -895,6 +895,7 @@ func (s *screen) taskCard(v *taskView, row tui.FactoryRow) tui.TaskCard {
 			}
 		}
 	}
+	c.FinishReview = s.finishAsk(t)
 	c.Stages = s.stages(v, row)
 	for _, x := range v.agents {
 		c.Agents = append(c.Agents, s.cardAgent(x))
@@ -922,6 +923,21 @@ func (s *screen) capStop(t registry.Task) (head string, items []string, ok bool)
 		items = append(items, capItem(i))
 	}
 	return st.Head, items, true
+}
+
+// finishAsk is the y/N of the task card's S for task t, which ends its
+// local review now (FinishReviewQuestion, naming FinishReviewPlan): "" when
+// finish-review refuses the task (FinishReviewRefusal) or its plan cannot
+// be read, and no S then.
+func (s *screen) finishAsk(t registry.Task) string {
+	if FinishReviewRefusal(s.cfg, t) != nil {
+		return ""
+	}
+	plan, err := FinishReviewPlan(s.ctx, s.reg, s.l, t)
+	if err != nil {
+		return ""
+	}
+	return FinishReviewQuestion(TaskKey(t), plan)
 }
 
 // prURL is the GitHub page of task t's PR, which the screen's b opens: its

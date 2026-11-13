@@ -1629,6 +1629,8 @@ func (m *factoryModel) taskCardKey(k string) (tea.Cmd, bool) {
 			func(ctx context.Context) (ActionResult, error) { return act.Stop(ctx, task) }), true
 	case acceptQAKey:
 		return m.askAcceptQA(c), true
+	case finishKey:
+		return m.askFinish(c), true
 	case "+", "-", "−":
 		switch {
 		case !c.Rate: // a task at work is not rated: nothing happens

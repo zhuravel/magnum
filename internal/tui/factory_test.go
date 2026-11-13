@@ -115,6 +115,7 @@ type fakeFactoryActions struct {
 	aborts    []string          // the PRs Abort was asked for
 	openPRs   []string          // the PRs OpenPR stepped into magnum's pane of
 	acceptsQA []int64           // the tasks AcceptQA was asked for
+	finishes  []int64           // the tasks FinishReview was asked for
 	rates     []factoryRateCall // Rate's calls
 	plans     []string          // the PRs MergeParentPlan was asked for
 	merges    []string          // the merges MergeParent sent (mergeCall: the PR and its binding)
@@ -313,14 +314,22 @@ func (a *fakeFactoryActions) AcceptQA(_ context.Context, task int64) (ActionResu
 	return ActionResult{Text: "it goes on; QA lets 1 defect the writer declined pass"}, nil
 }
 
+func (a *fakeFactoryActions) FinishReview(_ context.Context, task int64) (ActionResult, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.finishes = append(a.finishes, task)
+	return ActionResult{Text: "round 4 of its local review runs: it finishes, then no round starts after it"}, nil
+}
+
 // calls counts the requests that change something (starts, answers,
-// decisions, stops, retries, ratings, QA's accepts, magnum's fix, fix off and abort,
-// and the board's row actions on PRs).
+// decisions, stops, retries, ratings, QA's accepts, the ends of local
+// reviews, magnum's fix, fix off and abort, and the board's row actions on
+// PRs).
 func (a *fakeFactoryActions) calls() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return len(a.starts) + len(a.answers) + len(a.decides) + len(a.stops) + len(a.retries) + len(a.acceptsQA) + len(a.fixes) +
-		len(a.fixOffs) + len(a.aborts) + len(a.prActs) + len(a.rates) + len(a.ciFixes)
+	return len(a.starts) + len(a.answers) + len(a.decides) + len(a.stops) + len(a.retries) + len(a.acceptsQA) + len(a.finishes) +
+		len(a.fixes) + len(a.fixOffs) + len(a.aborts) + len(a.prActs) + len(a.rates) + len(a.ciFixes)
 }
 
 // testClock is the screen's clock in tests: fixed until a test moves it.

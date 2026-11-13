@@ -911,6 +911,29 @@ func TestTheTaskCardOffersRetryExactlyWhenARetryWouldGoOn(t *testing.T) {
 	}
 }
 
+// The task card offers S, the end of the local review, exactly when
+// finish-review goes on (its own guard: a task in its local review at
+// work), with the y/N the command asks, naming what happens now.
+func TestTheTaskCardOffersFinishReviewOnALocalReviewAtWork(t *testing.T) {
+	r := newScreenRig(t)
+	at := r.task("PR-12394", "bug", "In its review", registry.TaskActive, "local_review", "", "")
+	if _, err := r.reg.BeginCycle(r.ctx, at.ID, "abc1234", "skill"); err != nil {
+		t.Fatal(err)
+	}
+	stopped := r.task("PR-12395", "bug", "Stopped at the cap", registry.TaskNeedsYou, "local_review", waitsYou, "review unavailable (timeout)")
+	coding := r.task("PR-12396", "bug", "Coding", registry.TaskActive, "coding", "", "")
+	d := r.data(screenNow)
+	want := "End PR-12394's local review: round 1 of its local review runs: it finishes, then no round starts after it"
+	if got := d.Cards[at.ID].Task.FinishReview; !strings.HasPrefix(got, want) || !strings.HasSuffix(got, "any other waits on you?") {
+		t.Errorf("PR-12394's S asks %q, want %q…", got, want)
+	}
+	for _, task := range []registry.Task{stopped, coding} {
+		if got := d.Cards[task.ID].Task.FinishReview; got != "" || FinishReviewRefusal(r.cfg, task) == nil {
+			t.Errorf("%s: S asks %q, want none (the guard refuses it)", TaskKey(task), got)
+		}
+	}
+}
+
 // The question card is the newest revision's questions with their options,
 // the factory's recommendation and why, your own words as the last option,
 // the answers the factory has (the screen sends none of them again), and a

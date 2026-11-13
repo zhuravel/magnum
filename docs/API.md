@@ -36465,6 +36465,10 @@ type FactoryActions interface {
 	// did not walk again, and the states a walk that reached its pages could
 	// not reach (the task card's A, as `magnum factory retry --accept-qa`).
 	AcceptQA(ctx context.Context, taskID int64) (ActionResult, error)
+	// FinishReview ends a task's local review now: the round in flight
+	// finishes, none starts after it, and the stage ends as at the round
+	// limit (the task card's S, as `magnum factory finish-review`).
+	FinishReview(ctx context.Context, taskID int64) (ActionResult, error)
 }
     FactoryActions are the screen's requests to the factory. Each runs from a
     command on the screen's context; the ones that change something return what
@@ -38306,6 +38310,12 @@ type TaskCard struct {
 	// there could not reach ("1 state QA could not reach at abc1234 (...)");
 	// "" for none, and no A then.
 	AcceptQA string
+	// FinishReview is the y/N of S, which ends the task's local review now
+	// (`magnum factory finish-review`), naming what happens: the round in
+	// flight finishes, none starts after it, a safe stop goes to the ready
+	// card; "" when the task is not in its local review at work, and no S
+	// then.
+	FinishReview string
 	// QAReport is the report of the QA run whose stop AcceptQA names
 	// (summary.md, absolute), which e opens in the pager there; "" for none.
 	QAReport string

@@ -70,8 +70,9 @@ func (p *cardPainter) task(c TaskCard, height, scroll int) (string, int) {
 }
 
 // taskHints are the task card's own key hints. A task a retry can go on
-// for offers r: retry, which goes on at its stage (spec 9.D); your PR's
-// card (no stages, its PR's lines) offers its PR's keys.
+// for offers r: retry, which goes on at its stage (spec 9.D), and one in
+// its local review at work S, which ends it; your PR's card (no stages, its
+// PR's lines) offers its PR's keys.
 func (p *cardPainter) taskHints(c TaskCard) []hint {
 	if len(c.Stages) == 0 && c.PRInfo != nil { // your PR's card: its PR's keys
 		return []hint{{"f", "fix"}, {"F", "fix off"}, {"o", "magnum's pane"}, {"b", "PR"}, {"esc", "back"}, {"?", "more"}}
@@ -82,6 +83,9 @@ func (p *cardPainter) taskHints(c TaskCard) []hint {
 	}
 	if c.AcceptQA != "" {
 		hs = append(hs, hint{acceptQAKey, "accept QA"})
+	}
+	if c.FinishReview != "" {
+		hs = append(hs, hint{finishKey, "end review"})
 	}
 	return append(hs, hint{"d", "diff"}, hint{"l", "log"}, hint{"+ " + p.minus(), "rate"}, hint{"esc", "back"}, hint{"?", "more"})
 }

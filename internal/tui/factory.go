@@ -255,6 +255,10 @@ type FactoryActions interface {
 	// did not walk again, and the states a walk that reached its pages could
 	// not reach (the task card's A, as `magnum factory retry --accept-qa`).
 	AcceptQA(ctx context.Context, taskID int64) (ActionResult, error)
+	// FinishReview ends a task's local review now: the round in flight
+	// finishes, none starts after it, and the stage ends as at the round
+	// limit (the task card's S, as `magnum factory finish-review`).
+	FinishReview(ctx context.Context, taskID int64) (ActionResult, error)
 }
 
 // FactoryOptions tune the factory screen.
