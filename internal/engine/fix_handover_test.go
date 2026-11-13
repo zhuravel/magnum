@@ -512,6 +512,28 @@ func TestAbortEndsAFixRunNoLoopBacks(t *testing.T) {
 	}
 }
 
+// What magnum's fix left you stays yours after the PR hands over to the
+// factory: `magnum fix --done` (d) still lifts that attention, which
+// starts no fixer, also while a held fix waits for the factory's import;
+// every other fix request is still refused on the PR.
+func TestFixDoneLiftsMagnumsAttentionOnAPRTheFactoryFixes(t *testing.T) {
+	h, pr := fixLeftADescription(t)
+	factoryOwns(h)
+	h.e.setKV(h.ctx, KVPRFixHeld(pr.ID), rowJSON(heldFix{At: h.clock.Now().UTC(), Head: fixHead, By: fixBy, Why: heldBudget}))
+	if said := h.refusedFix(FixPayload{}); !strings.Contains(said, "the factory fixes this PR") {
+		t.Errorf("magnum fix = %q", said)
+	}
+	id := h.fix(FixPayload{Done: true, Seen: deref(h.pr(2).LastError)})
+	h.handle()
+	if res := h.wantDone(id); !strings.HasPrefix(res, "PR #2 is back to reviewed at a1a1a1a") {
+		t.Errorf("magnum fix --done = %q", res)
+	}
+	h.wantState(2, store.PRReviewed)
+	if _, ok := kvValue(h, KVPRFixHeld(pr.ID)); !ok {
+		t.Error("the held fix went: it stays for the factory's import")
+	}
+}
+
 // The morning list's drops end the records that keep a PR from handing
 // over and do not end by themselves: `magnum fix --drop-push` drops the
 // record of a fixer's push kept for its late settle, and `magnum

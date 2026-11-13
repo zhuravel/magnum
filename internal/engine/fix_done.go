@@ -73,7 +73,9 @@ func (e *Engine) fixDone(ctx context.Context, repo store.Repo, pr store.PR, seen
 	case running:
 		return "", errors.New(fixRunningSentence(st))
 	}
-	if _, held := e.getKV(ctx, KVPRFixHeld(pr.ID)); held {
+	// A held fix would start and rewrite the calls; one of a PR magnum does
+	// not fix waits for the factory's import, and magnum never starts it.
+	if _, held := e.getKV(ctx, KVPRFixHeld(pr.ID)); held && e.ownerRefusal(ctx, ref, pr.ID) == nil {
 		return "", fmt.Errorf("a fix of PR #%d is held to start later: `magnum abort %s` takes it back first", pr.Number, ref)
 	}
 	head := textx.ShortSHA(pr.HeadSHA)

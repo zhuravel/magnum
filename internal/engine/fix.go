@@ -370,7 +370,9 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 		return e.requestDrop(ctx, repo, pr, p)
 	}
 	// fix_owner.go: a PR magnum does not fix gets none of its fix requests
-	if err := e.ownerRefusal(ctx, fmt.Sprintf("%s#%d", repo.FullName(), pr.Number), pr.ID); err != nil {
+	// but --done, which starts no fixer: what magnum's fix left you before
+	// the PR handed over stays yours to mark done.
+	if err := e.ownerRefusal(ctx, fmt.Sprintf("%s#%d", repo.FullName(), pr.Number), pr.ID); err != nil && !p.Done {
 		return "", err
 	}
 	switch {
