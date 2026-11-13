@@ -1,21 +1,22 @@
 package slots
 
 // A save before a discard that fails (its folder, the patch, the listing
-// of the untracked files, a write into it, saved.txt), or a listing of the
-// tree's changes that fails, fails the step, which discards nothing and
-// retries at its next attempt (a round's checkout, a release resumed): a
-// slot whose save keeps failing never switches, resets or goes. That is
-// raised once per slot, not at every retry: the first failure of its kind
-// is recorded in the kv store (saveFailedKey), with a slot.save_failed
-// event at level error and the alert of SetSaveAlert (the review daemon's
-// toast); the retries that fail the same way add nothing, and `magnum
-// doctor` names the slot while the record stands (SaveFailures). The
-// step's next save that works, or nothing left to save, clears it with a
-// slot.save_ok event; the slot's removal deletes it with none
-// (markRemoved). A forced removal goes on over a failure, which it does
-// not raise: its slot.discarded warning, written before the removal, says
-// what it deletes unsaved and names the part of the save kept
-// (noteRemoval, keepPartial).
+// of the untracked files, a read of the tree or a comparison with the main
+// clone's copy that fails for the whole process, a write into it,
+// saved.txt), or a listing of the tree's changes that fails, fails the
+// step, which discards nothing and retries at its next attempt (a round's
+// checkout, a release resumed): a slot whose save keeps failing never
+// switches, resets or goes. That is raised once per slot, not at every
+// retry: the first failure of its kind is recorded in the kv store
+// (saveFailedKey), with a slot.save_failed event at level error and the
+// alert of SetSaveAlert (the review daemon's toast); the retries that fail
+// the same way add nothing, and `magnum doctor` names the slot while the
+// record stands (SaveFailures). The step's next save that works, or
+// nothing left to save, clears it with a slot.save_ok event; the slot's
+// removal deletes it with none (markRemoved). A forced removal goes on
+// over a failure, which it does not raise: its slot.discarded warning,
+// written before the removal, says what it deletes unsaved and names the
+// part of the save kept (noteRemoval, keepPartial).
 
 import (
 	"context"

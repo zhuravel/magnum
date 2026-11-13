@@ -734,6 +734,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     something is then kept with no `saved.txt`, which the warning says ("with no saved.txt"), and one that copied
     nothing goes. The third entry's C3 bullet names only a save that cannot make its folder; in all three the
     warning's first 20 paths are the only record of what the removal deleted, as the README now says.
+  - saveChanges' doc no longer says a file that cannot be read is never a failure (C7, words only): since rule (a)
+    a read or a comparison that fails with EMFILE, ENFILE or ENOMEM fails the save, and the save_fail.go header's
+    list of what fails a save names it too.
 
 ## Scheduling
 

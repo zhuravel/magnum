@@ -157,19 +157,22 @@ func clipNames(names []string) string {
 // and with untracked (a removal, which deletes them) the untracked files
 // git does not ignore, within the cap (saveCap); without it saved.txt only
 // names those files, which the step keeps. A file that cannot be read is
-// left out and named, never a failure; a write into the save that fails
-// is one. The files magnum wrote into the tree (the mise file it
-// rendered, the copy_files and what setup wrote: ownFiles) are neither
-// saved nor named, but a copy a person edited, which a removal names
-// (editedOwn), and a save that would hold nothing else is not kept
-// (s.dir is ""); nor is one that copied no file and repeats the slot's
-// last save (repeatedSave: s.same, s.dir that save). Saves past SaveKeep
-// in the folder go first (pruneSaveFolder). A save
-// that fails (its folder, the patch, the listing of the untracked files,
-// saved.txt) leaves nothing behind, and the step that called it discards
-// nothing; but with force, a forced removal's, which goes on over it, the
-// save keeps what it copied, with a saved.txt that names all it does not
-// hold (keepPartial), and s is that save.
+// left out and named, but for a read or a comparison with the main
+// clone's copy that fails for the whole process (processWide), which
+// fails the save, as a write into the save that fails does. The files
+// magnum wrote into the tree (the mise file it rendered, the copy_files
+// and what setup wrote: ownFiles) are neither saved nor named, but a copy
+// a person edited, which a removal names (editedOwn) or, below a copied
+// folder, saves (sortOwn), and a save that would hold nothing else is not
+// kept (s.dir is ""); nor is one that copied no file and repeats the
+// slot's last save (repeatedSave: s.same, s.dir that save). Saves past
+// SaveKeep in the folder go first (pruneSaveFolder). A save that fails
+// (its folder, the patch, the listing of the untracked files, such a read,
+// a write into it, saved.txt) leaves nothing behind, and the step that
+// called it discards nothing; but with force, a forced removal's, which
+// goes on over it, the save keeps what it copied, with a saved.txt that
+// names all it does not hold (keepPartial, untrackedListed), and s is that
+// save.
 func (m *Manager) saveChanges(ctx context.Context, sl store.Slot, ch changes, untracked, force bool, what string) (s saved, err error) {
 	folder, err := m.savesFolder(ctx, sl)
 	if err != nil {
