@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/fixwork"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
@@ -388,6 +390,44 @@ func TestTheFactoryRaisesAndLiftsAPRsAttentionSilently(t *testing.T) {
 		t.Errorf("raise on a PR magnum fixes: %s %q", r.State, deref(r.Result))
 	}
 	h.wantState(2, store.PRReviewed)
+}
+
+// The factory alerts the operator itself, so its raise and lift of a PR's
+// attention say nothing on magnum's side: no toast of any title, urgent or
+// batched, and no reveal of a pane, even with reveal_on_attention on.
+func TestTheFactorysAttentionNeverToastsNorReveals(t *testing.T) {
+	var focused, revealed atomic.Int32
+	h := newHarness(t, func(h *harness) {
+		h.cfg.Terminal.RevealOnAttention = true
+		h.d.Focus = func(context.Context, string) error { focused.Add(1); return nil }
+		h.d.Reveal = func(context.Context) error { revealed.Add(1); return nil }
+	})
+	pr := h.reviewedPR(2, "b1")
+	factoryOwns(h)
+	role, ok := h.cfg.FixRoleFor(h.cfg.WatchFor("talkable/talkable"))
+	if !ok {
+		t.Fatal("no fix role")
+	}
+	h.liveSession(pr.ID, role.Name, "claude", h.clock.Now(), herdr.StatusIdle) // a pane a reveal would focus
+	toasts, batched := len(h.nh.titles("")), h.e.batch.Pending()
+	for _, raise := range []bool{true, false, true} {
+		id := h.enqueue(fixwork.ReqFixAttention, fixwork.AttentionPayload{Repo: "talkable/talkable", Number: 2, Raise: raise, Cause: "needs_you",
+			Why: "1 call the fixer left needs you: https://github.com/talkable/talkable/pull/2#discussion_r4100"})
+		h.handle()
+		if r := h.request(id); r.State != store.RequestDone {
+			t.Fatalf("raise %v: %s %q", raise, r.State, deref(r.Result))
+		}
+	}
+	h.wantState(2, store.PRNeedsAttention)
+	if got := h.nh.titles(""); len(got) != toasts {
+		t.Errorf("toasts = %v, want none new", got[toasts:])
+	}
+	if n := h.e.batch.Pending(); n != batched {
+		t.Errorf("batched toasts = %d, want %d", n, batched)
+	}
+	if f, r := focused.Load(), revealed.Load(); f != 0 || r != 0 {
+		t.Errorf("focused %d and revealed %d times, want neither", f, r)
+	}
 }
 
 // gatedTick runs a tick whose round, once dispatched, stays in the pipeline
