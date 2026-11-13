@@ -755,6 +755,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (the kv table renamed for one provisioning) and
   `TestASetupThatCannotDeleteTheRecordOfItsNewWorktreeDoesNotRun` (a trigger fails that one delete).
 
+- **A per-PR worktree whose setup cannot take the record of its new worktree goes on as over a kept one**
+  (2026-11-13, the engine owner's check C2 of the entry above). Failing the setup step there was a new way
+  for a review's checkout to fail: `SQLITE_BUSY` past the busy timeout at that read or delete (a `magnum` CLI
+  write holding the lock) broke a new per-PR row, charged the round's attempt, could dismiss a kept approval
+  ("their check failed") and toasted "setup failed" on a requested round. The retry gained nothing: the
+  row's revival finds the worktree listed, worktree_add drops the record, and its setup runs as over a kept
+  worktree, recording the copy_files alone, which the old fall-through did in one pass. So for a per-PR row
+  `takeTreeAdded` logs the error and reports a kept worktree, and the setup runs and records the copy_files
+  alone. A pool slot's setup (the review pools and the factory's copies) still fails, since its resume takes
+  the record with no setup run between. The one case left open on a per-PR row needs two faults: the take
+  fails, then the daemon stops during that same setup, whose resumed run takes the standing record as the
+  first. Test, failing first:
+  `TestAPerPRSetupThatCannotTakeTheRecordOfItsNewWorktreeRunsAsOverAKeptOne` (the read, with the kv table
+  renamed from the render's `mise trust` to the setup's command; the delete, with a trigger): the row is
+  claimed, the log names the failure, and a removal saves the setup's file and the person's file written
+  while it ran, never the copied key.
+
 ## Scheduling
 
 - **No backfill.** PRs open before the first sync are `baseline` until their next push or a manual

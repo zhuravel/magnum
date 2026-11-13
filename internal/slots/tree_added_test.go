@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -120,4 +121,78 @@ func TestASetupThatCannotDeleteTheRecordOfItsNewWorktreeDoesNotRun(t *testing.T)
 	err := h.m.ProvisionPool(h.ctx, h.pool, 1)
 	h.sql(t, "DROP TRIGGER keep_tree_added")
 	h.heldBackSetup(t, sl, err, logs, "take the record")
+}
+
+// perPRTakeFails creates f's per-PR worktree, whose [[repo]] copies the
+// main clone's master.key and whose setup writes .env.setup, with fail run
+// as its render trusts the local mise file (after the worktree_add step
+// recorded that it made the worktree, before the setup step) and mend as
+// the setup's command runs, which also writes notes/repro.rb there first:
+// a person at work in the worktree meanwhile.
+func perPRTakeFails(t *testing.T, f *perPRFixture, logs *levelLog, fail, mend string) (store.Slot, error) {
+	t.Helper()
+	h := f.h
+	writeFile(t, filepath.Join(f.main, "master.key"), "main clone secret\n")
+	writeFile(t, filepath.Join(f.main, MiseLocal), "[env]\nKEEP = \"k\"\n")
+	h.m = h.newManager(Deps{Log: logs, Repos: []config.Repo{{Repo: f.repoName(),
+		CopyFiles: []string{"master.key"}, Setup: []string{"touch .env.setup"}}}})
+	h.fake.Rules = append([]execx.Rule{{Prefix: []string{"mise", "-C", PRWorktreePath(f.main, f.pr.Number), "trust"},
+		Fn: func(execx.Cmd) (execx.Result, error) {
+			h.sql(t, fail)
+			return execx.Result{}, nil
+		}}}, h.fake.Rules...)
+	h.onScript = func(script, dir string) {
+		if script == "touch .env.setup" {
+			h.sql(t, mend)
+			writeFile(t, filepath.Join(dir, "notes", "repro.rb"), "written while the setup ran\n")
+		}
+	}
+	return h.m.CreatePRWorktree(h.ctx, f.watch, f.repoName(), f.pr, f.sha7)
+}
+
+// A per-PR worktree whose setup cannot read or delete the record that its
+// provisioning made the worktree (SQLITE_BUSY past the busy timeout, an
+// I/O error) logs that and goes on as over a kept worktree: the setup
+// runs, records the copy_files alone, and the row is claimed, so a removal
+// saves what the setup wrote and the person's file written while it ran,
+// never the copied key. The setup step failed instead, which broke the
+// row, charged the round and could dismiss a kept approval, though the
+// row's revival found the worktree listed, dropped the record and ran the
+// same setup as over a kept worktree. A pool slot's setup still fails:
+// TestASetupThatCannotReadTheRecordOfItsNewWorktreeDoesNotRun.
+func TestAPerPRSetupThatCannotTakeTheRecordOfItsNewWorktreeRunsAsOverAKeptOne(t *testing.T) {
+	for _, c := range []struct{ name, what, fail, mend string }{
+		{"the read", "read the record",
+			"ALTER TABLE kv RENAME TO kv_away", "ALTER TABLE kv_away RENAME TO kv"},
+		{"the delete", "take the record",
+			`CREATE TRIGGER keep_tree_added BEFORE DELETE ON kv WHEN OLD.key LIKE 'slot.%.tree_added'
+  BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`, "DROP TRIGGER keep_tree_added"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newPerPR(t, true)
+			h := f.h
+			logs := &levelLog{}
+			sl, err := perPRTakeFails(t, f, logs, c.fail, c.mend)
+			if err != nil {
+				t.Fatalf("CreatePRWorktree = %v, want the setup run as over a kept worktree", err)
+			}
+			if sl.State != store.SlotClaimed {
+				t.Fatalf("state = %s, want claimed", sl.State)
+			}
+			if n := len(h.scriptCalls("touch .env.setup")); n != 1 {
+				t.Fatalf("the setup ran %d times, want once", n)
+			}
+			if !slices.ContainsFunc(logs.lines(), func(l string) bool { return strings.Contains(l, c.what) && strings.Contains(l, sl.Name) }) {
+				t.Errorf("log %q, want a line on %q of %s", logs.lines(), c.what, sl.Name)
+			}
+			if err := h.m.RemovePRWorktree(h.ctx, sl, false); err != nil {
+				t.Fatalf("RemovePRWorktree: %v", err)
+			}
+			save := h.onlySave(t, h.layout.PRSaves("zhuravel", "widget", f.pr.Number), sl.Name)
+			want := map[string]string{"notes/repro.rb": "written while the setup ran\n", ".env.setup": "written by setup\n"}
+			if got := savedUntracked(t, save); !maps.Equal(got, want) {
+				t.Fatalf("the save's untracked files = %q; want %q, the copied key alone recorded as magnum's", got, want)
+			}
+		})
+	}
 }

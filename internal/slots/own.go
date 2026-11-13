@@ -134,23 +134,39 @@ func (m *Manager) noteTreeAdded(ctx context.Context, sl store.Slot, added bool) 
 // so only the first setup over the worktree finds it: a setup run again
 // (a failed one resumed or retried) runs over a worktree a person may be
 // at work in. No record is a worktree kept. A record that cannot be read
-// or deleted is an error, logged, which fails the setup step before its
-// setup runs: run, the setup would leave the record standing, and a later
-// run of it would take the record as the first; the step's retry takes it
-// with no setup run between.
+// or deleted is logged. A pool slot's is an error, which fails the setup
+// step before its setup runs: run, the setup would leave the record
+// standing, and a later run of it would take the record as the first; the
+// step's retry takes it with no setup run between. A per-PR row's is a
+// worktree kept, and its setup goes on: failed, the row would go broken,
+// and its revival finds the worktree listed, drops the record and runs the
+// setup as over a kept worktree, which this one does now. A record left
+// standing goes at the next worktree_add, and is taken as the first only
+// by this setup resumed after the daemon stopped during it.
 func (m *Manager) takeTreeAdded(ctx context.Context, sl store.Slot) (bool, error) {
+	added, err := m.takeTreeRecord(ctx, sl)
+	switch {
+	case err == nil:
+		return added, nil
+	case sl.Kind == store.SlotKindPerPR:
+		m.logErr(ctx, err, "%v (its setup runs as over a kept worktree: only the copy_files are recorded as magnum's)", err)
+		return false, nil
+	}
+	m.logErr(ctx, err, "%v (its setup runs once it takes it)", err)
+	return false, err
+}
+
+// takeTreeRecord reads and deletes slot sl's record that its provisioning
+// made its worktree, for takeTreeAdded: true when there was one.
+func (m *Manager) takeTreeRecord(ctx context.Context, sl store.Slot) (bool, error) {
 	_, ok, err := m.d.Store.GetKV(ctx, treeAddedKey(sl.ID))
 	if err != nil {
-		m.logErr(ctx, err, "slots: read the record that the provisioning of %s made its worktree (its setup runs once it reads): %v",
-			sl.Name, err)
 		return false, fmt.Errorf("slots: read the record that the provisioning of %s made its worktree: %w", sl.Name, err)
 	}
 	if !ok {
 		return false, nil
 	}
 	if err := m.d.Store.DeleteKV(ctx, treeAddedKey(sl.ID)); err != nil {
-		m.logErr(ctx, err, "slots: take the record that the provisioning of %s made its worktree (its setup runs once it takes it): %v",
-			sl.Name, err)
 		return false, fmt.Errorf("slots: take the record that the provisioning of %s made its worktree: %w", sl.Name, err)
 	}
 	return true, nil
@@ -172,8 +188,8 @@ func (m *Manager) takeTreeAdded(ctx context.Context, sl store.Slot) (bool, error
 // removed row of the same name left goes. Best effort, as recordOwnFiles:
 // a listing that fails records copied alone and is logged, and a removal
 // then saves what the setup wrote as a person's. A record of the
-// worktree_add step that cannot be taken fails the step before setup
-// runs (takeTreeAdded).
+// worktree_add step that cannot be taken fails a pool slot's step before
+// setup runs, and is a worktree kept for a per-PR row (takeTreeAdded).
 func (m *Manager) recordingSetup(ctx context.Context, sl store.Slot, copied []string, setup func() error) error {
 	if sl.ID == 0 || m.d.DryRun {
 		return setup()
