@@ -344,9 +344,9 @@ func TestFixesDoNotCountTowardMaxActive(t *testing.T) {
 
 // A repository with a [[watch]] and no [[factory.repo]] gets a per-PR
 // checkout: a detached worktree of the clone magnum's review uses, at the
-// PR's remote head, beside the factory's copies, named for the repository
-// and the PR, with no setup, no install, no database and no Redis flush.
-// So does a [[factory.repo]] without fix copies.
+// PR's remote head, in the factory's checkouts folder, named for the
+// repository and the PR, with no setup, no install, no database and no
+// Redis flush. So does a [[factory.repo]] without fix copies.
 func TestARepoWithoutCopiesGetsAPerPRCheckoutWithoutDatabases(t *testing.T) {
 	r := newFixRig(t, 2, 0)
 	shop := r.addShop()
@@ -354,7 +354,7 @@ func TestARepoWithoutCopiesGetsAPerPRCheckoutWithoutDatabases(t *testing.T) {
 	w := r.prWork("example/shop", 5)
 
 	fc := r.claimFix(w)
-	want := filepath.Join(r.root, "example-shop.fix-pr-5")
+	want := r.cfg.Layout.FactoryCheckout("example/shop", 5)
 	if !fc.PerPR() || fc.Name != "fix-example/shop#5" || fc.Path != want || fc.Head != head || fc.Env != nil || fc.Port != 0 {
 		t.Fatalf("ClaimFix = %+v, want the per-PR checkout fix-example/shop#5 at %s, no env", fc, want)
 	}
@@ -390,11 +390,55 @@ func TestARepoWithoutCopiesGetsAPerPRCheckoutWithoutDatabases(t *testing.T) {
 
 	own := r.pushPR(r.origin, 9, "fix.txt", "v1\n")
 	if fc := r.claimFix(r.prWork("talkable/talkable", 9)); !fc.PerPR() || fc.Head != own ||
-		fc.Path != filepath.Join(r.root, "talkable-talkable.fix-pr-9") {
+		fc.Path != r.cfg.Layout.FactoryCheckout("talkable/talkable", 9) {
 		t.Fatalf("a fix in a [[factory.repo]] without fix copies = %+v, want its per-PR checkout", fc)
 	}
 	if n := len(r.calls("bin/worktree-setup", "")); n != 0 {
 		t.Fatalf("the setup ran %d times, want none", n)
+	}
+}
+
+// A per-PR checkout lives in the factory's own folder of magnum's data
+// directory, factory/checkouts/<owner>-<name>/pr-<N>: one folder per
+// repository, one per PR in it. It went in the folder of the first
+// [[factory.repo]]'s copies, which belongs to another repository (the
+// operator's external volume), whatever repository the PR was of.
+func TestAPerPRCheckoutLivesUnderItsOwnRepositorysFolder(t *testing.T) {
+	r := newFixRig(t, 2, 0)
+	shop := r.addShop()
+	r.pushPR(shop, 5, "fix.txt", "v1\n")
+	r.pushPR(shop, 6, "other.txt", "v1\n")
+	r.pushPR(r.origin, 9, "fix.txt", "v1\n")
+	checkouts := filepath.Join(r.cfg.Layout.Data(), "factory", "checkouts")
+	copies := filepath.Dir(r.cfg.Factory.Repos[0].Pool().Path(1))
+	for _, c := range []struct {
+		repo   string
+		number int
+		want   string
+	}{
+		{"example/shop", 5, filepath.Join(checkouts, "example-shop", "pr-5")},
+		{"example/shop", 6, filepath.Join(checkouts, "example-shop", "pr-6")},
+		{"talkable/talkable", 9, filepath.Join(checkouts, "talkable-talkable", "pr-9")},
+	} {
+		fc := r.claimFix(r.prWork(c.repo, c.number))
+		if !fc.PerPR() || fc.Path != c.want {
+			t.Fatalf("the per-PR checkout of %s#%d is at %s, want %s", c.repo, c.number, fc.Path, c.want)
+		}
+		if _, err := os.Stat(filepath.Join(c.want, "README")); err != nil {
+			t.Fatalf("the checkout of %s#%d at %s has no work tree: %v", c.repo, c.number, c.want, err)
+		}
+		if sl := r.slot(fc.Name); sl.Path != c.want {
+			t.Fatalf("the row of %s is at %s, want %s", fc.Name, sl.Path, c.want)
+		}
+	}
+	entries, err := os.ReadDir(copies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), "fix-pr") || strings.HasPrefix(e.Name(), "pr-") {
+			t.Fatalf("the copies' folder %s holds %s, a per-PR checkout", copies, e.Name())
+		}
 	}
 }
 

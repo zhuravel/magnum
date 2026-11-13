@@ -8,9 +8,10 @@ package factory
 // repaired and released as the tasks' copies are, with the same guards: a
 // task never takes one, a fix never takes a task's, and max_active never
 // counts them. Any other watched repository gets a per-PR checkout: a
-// detached worktree of its main clone at the PR's head, where the factory
-// keeps its copies, with no setup, no databases and no services, removed
-// once the PR's fix work ends. The checkout's reservation is the fix work's
+// detached worktree of its main clone at the PR's head, in the factory's
+// checkouts folder of magnum's data directory (fixCheckoutPath), with no
+// setup, no databases and no services, removed once the PR's fix work
+// ends. The checkout's reservation is the fix work's
 // owner row in the agents store (fixOwner), so a restart finds the claim
 // and its checkout; every step that changes a checkout is a step of the
 // agents store (begin, ok or fail rows), which a cut claim resumes.
@@ -275,22 +276,12 @@ func (c *copySet) claimPerPR(ctx context.Context, w registry.PRWork, owner store
 // fix-<owner>/<name>#<N>.
 func fixCheckoutName(w registry.PRWork) string { return "fix-" + workKey(w) }
 
-// fixCheckoutPath is where PR work w's per-PR checkout goes:
-// <owner>-<name>.fix-pr-<N> in fixCheckoutDir.
+// fixCheckoutPath is where PR work w's per-PR checkout goes: the factory's
+// own folder of magnum's data directory, factory/checkouts/<owner>-<name>/
+// pr-<N> (paths.Layout.FactoryCheckout), never the copies' folder of
+// another repository. It holds no database, so the internal disk does.
 func (c *copySet) fixCheckoutPath(w registry.PRWork) string {
-	return filepath.Join(c.fixCheckoutDir(), strings.ReplaceAll(w.Repo, "/", "-")+".fix-pr-"+strconv.Itoa(w.Number))
-}
-
-// fixCheckoutDir is where the factory keeps its copies, which the per-PR
-// checkouts go beside: the folder of the first [[factory.repo]]'s copies,
-// else checkouts in the factory's own folder.
-func (c *copySet) fixCheckoutDir() string {
-	for _, r := range c.cfg.Factory.Repos {
-		if r.Copies != "" {
-			return filepath.Dir(r.Pool().Path(1))
-		}
-	}
-	return filepath.Join(filepath.Dir(c.cfg.Layout.FactoryDB()), "checkouts")
+	return c.cfg.Layout.FactoryCheckout(w.Repo, w.Number)
 }
 
 // perPRCheckout is PR work w's per-PR checkout of clone, reserved for owner

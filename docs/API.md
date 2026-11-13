@@ -27211,6 +27211,16 @@ func (l Layout) FactoryBaseline() string
     per ticket before the factory, frozen once before its first task (`magnum
     factory baseline`), beside FactoryDB.
 
+func (l Layout) FactoryCheckout(repo string, number int) string
+    FactoryCheckout is the per-PR checkout of PR number of repo (owner/name) in
+    FactoryCheckouts: <owner>-<name>/pr-<number>.
+
+func (l Layout) FactoryCheckouts() string
+    FactoryCheckouts is the root of the per-PR checkouts the fixes of your PRs
+    work in when their repository has no fix copies, one folder per repository
+    (FactoryCheckout), beside FactoryDB. They hold no database, so the internal
+    disk does, and no copy of any repository is there.
+
 func (l Layout) FactoryDB() string
     FactoryDB is the factory's own registry (factory.db in the factory directory
     of the data directory), separate from the review registry.

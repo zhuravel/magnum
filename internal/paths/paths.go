@@ -323,6 +323,18 @@ func (l Layout) FactoryTaskDir(id int64) string {
 	return filepath.Join(l.FactoryTasks(), strconv.FormatInt(id, 10))
 }
 
+// FactoryCheckouts is the root of the per-PR checkouts the fixes of your
+// PRs work in when their repository has no fix copies, one folder per
+// repository (FactoryCheckout), beside FactoryDB. They hold no database,
+// so the internal disk does, and no copy of any repository is there.
+func (l Layout) FactoryCheckouts() string { return filepath.Join(l.factoryDir(), "checkouts") }
+
+// FactoryCheckout is the per-PR checkout of PR number of repo (owner/name)
+// in FactoryCheckouts: <owner>-<name>/pr-<number>.
+func (l Layout) FactoryCheckout(repo string, number int) string {
+	return filepath.Join(l.FactoryCheckouts(), strings.ReplaceAll(repo, "/", "-"), "pr-"+strconv.Itoa(number))
+}
+
 // FactoryPRStatus is the root of the status files the factory daemon writes
 // for the PRs its tasks published, pr-status/<owner>/<repo>/<number>.json
 // (internal/prstatus names one and holds its contract), beside FactoryDB.

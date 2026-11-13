@@ -26929,12 +26929,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - The per-PR checkout. A repository a `[[watch]]` covers with no fix copies (no `[[factory.repo]]`, or one
     without `fix_copies`) gets a detached worktree of its main clone (the `[[factory.repo]]`'s, else the
     `[[pool]]`'s, else the clone magnum's review found under the watch's `clone_root`: the factory never clones,
-    and waits until magnum's review has one) named `<owner>-<name>.fix-pr-<N>`, its row `fix-<owner>/<name>#<N>`,
-    in the folder of the first `[[factory.repo]]`'s copies (where the factory keeps its copies: the operator's
-    external volume), else `factory/checkouts` in magnum's data directory. It runs no setup, install, database
-    or service: never magnum's per-PR worktree (`<clone>__worktrees/pr-<N>`, the review's) nor its hooks, whose
-    teardown could drop the review's databases of the same PR. `fix_copies` does not bound these; the fix lane's
-    `fix_max_active` bounds the fix loops.
+    and waits until magnum's review has one), its row `fix-<owner>/<name>#<N>`, at
+    `factory/checkouts/<owner>-<name>/pr-<N>` in magnum's data directory (`paths.Layout.FactoryCheckout`): a
+    folder per repository, one per PR in it. It runs no setup, install, database or service: never magnum's
+    per-PR worktree (`<clone>__worktrees/pr-<N>`, the review's) nor its hooks, whose teardown could drop the
+    review's databases of the same PR. `fix_copies` does not bound these; the fix lane's `fix_max_active` bounds
+    the fix loops. The first build put them, named `<owner>-<name>.fix-pr-<N>`, in the folder of the first
+    `[[factory.repo]]`'s copies (the operator's external volume), which belongs to another repository whatever the
+    PR's was; a per-PR checkout holds no database, so the internal disk does, and the factory's own folder holds
+    no copy of any repository, so no path of one collides with a copy's. A checkout made before keeps its path
+    (its row's) until its release; its next claim makes it at the new one.
   - The end. Each tick lets go the checkouts of fix work that ended (`payFixDebts`): the PR merged or closed, as
     magnum's registry says, or its work stayed `idle` for 10 minutes, which is how "idle for good" reads (a loop
     that ended, and no new verdict queued it again meanwhile), or its row is gone. A fix copy goes back to its
@@ -26948,7 +26952,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `TestFixesDoNotCountTowardMaxActive`, `TestARepoWithoutCopiesGetsAPerPRCheckoutWithoutDatabases`,
     `TestATasksCopyIsNeverAFixCopy`, `TestAFixPrefersThePRsLastCopy`, `TestAFixClaimSurvivesAFactoryRestart` and
     `TestAPerPRCheckoutIsRemovedWhenThePRsWorkEnds` in internal/factory, `TestAFixCopysNameAndPortAreCheckedAsACopys`
-    in internal/config and `TestFetchPRIntoFetchesOnlyIntoARefOfItsOwn` in internal/gitx.
+    in internal/config and `TestFetchPRIntoFetchesOnlyIntoARefOfItsOwn` in internal/gitx; the per-PR checkout's
+    folder, `TestAPerPRCheckoutLivesUnderItsOwnRepositorysFolder` (failing first).
 
 ## Learned rules
 

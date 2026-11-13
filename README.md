@@ -4680,9 +4680,9 @@ stages = [
   copy, and `max_active` and the new-task screen's free copies never count them. Any other repository a
   `[[watch]]` covers (and a `[[factory.repo]]` without `fix_copies`) gets a per-PR checkout: a detached worktree
   of its main clone (the `[[factory.repo]]`'s, else the `[[pool]]`'s, else the clone magnum's review uses under
-  the watch's `clone_root`; the factory never clones one, and waits until it exists), `<owner>-<name>.fix-pr-<N>`
-  in the folder of the first `[[factory.repo]]`'s copies (else `factory/checkouts` in magnum's data directory),
-  with no setup, no installs, no database and no Redis. `fix_copies` does not bound these. A claim fetches the
+  the watch's `clone_root`; the factory never clones one, and waits until it exists), at
+  `factory/checkouts/<owner>-<name>/pr-<N>` in magnum's data directory (`~/.local/share/magnum`, never a copies'
+  folder), with no setup, no installs, no database and no Redis. `fix_copies` does not bound these. A claim fetches the
   PR's head into `refs/magnum/factory-fix/<N>` of the main clone (never the review's `refs/magnum/pr/<N>`), takes
   the fix copy the PR used last when it is free, else another free one, else adds one up to `fix_copies` (none
   left: `copy: all 2 busy`, a wait that leaves the PR's fix queued), and switches the checkout to that head,

@@ -380,6 +380,11 @@ func TestFactoryPathsLiveUnderTheDataAndStateDirs(t *testing.T) {
 					t.Errorf("got %q, want %q", got, want)
 				}
 			}
+			// A per-PR checkout of the fixes: a folder per repository, one
+			// per PR in it.
+			if got, want := l.FactoryCheckout("example/shop", 7), filepath.Join(tc.data, "factory", "checkouts", "example-shop", "pr-7"); got != want {
+				t.Errorf("FactoryCheckout = %q, want %q", got, want)
+			}
 			// The review daemon's files stay where they were, and the
 			// factory's never collide with them.
 			if l.FactoryDB() == l.DB() || l.FactoryPid() == l.Pid() || l.FactoryLock() == l.Lock() || l.FactoryLog() == l.DaemonLog() ||
