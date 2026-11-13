@@ -63,7 +63,7 @@ func doctorFixHandover(ctx context.Context, d doctorDeps) []doctorCheck {
 	}
 	// While the factory fixes none, the PRs it owns have no fixer (C8): no
 	// line says that every PR can hand over.
-	factorys, fixesNone := doctorFactorysPRs(ctx, d)
+	ownedLine, fixesNone := doctorFactorysPRs(ctx, d)
 	canHand := ": every PR can hand over to the factory"
 	if fixesNone {
 		canHand = ""
@@ -78,7 +78,7 @@ func doctorFixHandover(ctx context.Context, d doctorDeps) []doctorCheck {
 		out = append(out, doctorOK(name, "none of magnum's fix work is in flight"+canHand+held+refused))
 	}
 	if fixesNone {
-		out = append(out, factorys)
+		out = append(out, ownedLine)
 	}
 	if c, ok := doctorHandoverKey(ctx, d); ok {
 		out = append(out, c)
