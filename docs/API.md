@@ -12428,6 +12428,16 @@ type ReviewPayload struct {
 	// It takes a head magnum reviewed and replies it has not re-decided;
 	// otherwise the round is an ordinary forced one.
 	Replies bool `json:"replies,omitempty"`
+	// FixRef is the factory's fix whose push this forced round re-reviews
+	// (fixwork.FixRef; nil: no fix's), on a PR the factory fixes: the
+	// factory's own request passes the refusal its lease makes, the PR keeps
+	// it until the round that takes it ends, and that round's end names it
+	// (fix.factory_round, fix_factory.go), as ForcedAt names magnum's own
+	// loop's re-review. LocalRound is the factory's local round at that
+	// head (fixwork.LocalRound), kept and passed on with it; magnum does
+	// nothing with it yet.
+	FixRef     *fixwork.FixRef     `json:"fix_ref,omitempty"`
+	LocalRound *fixwork.LocalRound `json:"local_round,omitempty"`
 }
     ReviewPayload is a `magnum review` request: a forced round that bypasses
     eligibility, the throttle and quiet hours. On a PR GitHub merged it is a

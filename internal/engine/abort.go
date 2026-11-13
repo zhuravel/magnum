@@ -291,7 +291,7 @@ func (e *Engine) dropQueued(ctx context.Context, repo store.Repo, pr store.PR) (
 	if to == "" {
 		return "", fmt.Errorf("%s moved on meanwhile; `magnum status %s` says where it is", label, label)
 	}
-	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRFreshParkBusy(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID), KVPRWait(pr.ID))
+	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRFreshParkBusy(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID), KVPRWait(pr.ID), kvPRFixRef(pr.ID))
 	e.clearRequested(ctx, pr.ID)
 	what := "queued review"
 	if pr.Forced {
@@ -435,7 +435,7 @@ func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool, 
 		done = append(done, stoppedCompletion)
 	}
 	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRFreshParkBusy(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID),
-		kvPRGateReason(pr.ID), KVPRWait(pr.ID))
+		kvPRGateReason(pr.ID), KVPRWait(pr.ID), kvPRFixRef(pr.ID))
 	e.clearRequested(ctx, pr.ID)
 	if note := e.endFixLoop(ctx, repo, pr, by); note != "" {
 		done = append(done, note) // the loop whose re-review this was

@@ -57,6 +57,7 @@ func (e *Engine) launch(ctx, rctx context.Context, job *roundJob) {
 			return
 		}
 		e.safely(ctx, "fix", subject, func() { e.fixAfterRound(ctx, job, res) }, nil)
+		e.safely(ctx, "fix", subject, func() { e.fixRefAfterRound(ctx, job, res) }, nil) // fix_factory.go: the factory's re-review
 		e.safely(ctx, "whiteboard", subject, func() { e.whiteboardAfterRound(ctx, job.pr, res) }, nil)
 	})
 }

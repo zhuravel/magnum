@@ -14,6 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/cleanup"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/usage"
 )
@@ -119,6 +120,16 @@ type ReviewPayload struct {
 	// It takes a head magnum reviewed and replies it has not re-decided;
 	// otherwise the round is an ordinary forced one.
 	Replies bool `json:"replies,omitempty"`
+	// FixRef is the factory's fix whose push this forced round re-reviews
+	// (fixwork.FixRef; nil: no fix's), on a PR the factory fixes: the
+	// factory's own request passes the refusal its lease makes, the PR keeps
+	// it until the round that takes it ends, and that round's end names it
+	// (fix.factory_round, fix_factory.go), as ForcedAt names magnum's own
+	// loop's re-review. LocalRound is the factory's local round at that
+	// head (fixwork.LocalRound), kept and passed on with it; magnum does
+	// nothing with it yet.
+	FixRef     *fixwork.FixRef     `json:"fix_ref,omitempty"`
+	LocalRound *fixwork.LocalRound `json:"local_round,omitempty"`
 }
 
 // OpenPayload is a `magnum open` request for a PR without a live session:
@@ -256,6 +267,8 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 		})
 	case ReqFixHandover: // fix_handover.go
 		answer(e, ctx, req, e.requestHandover)
+	case fixwork.ReqFixAttention: // fix_factory.go
+		answer(e, ctx, req, e.requestFixAttention)
 	case ReqWhiteboard: // whiteboard.go
 		if p, ok := payload[WhiteboardPayload](e, ctx, req); ok {
 			e.requestWhiteboardAsync(ctx, req.ID, p)
@@ -444,7 +457,11 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 	case fixing:
 		return "", fmt.Errorf("%s: %s", label, fixRunningSentence(st))
 	}
-	if why := e.factoryReviewRefusal(ctx, pr, label); why != "" { // fix_lease.go: the factory's push asks for its own re-review
+	if p.FixRef != nil { // fix_factory.go: the factory's re-review of its fixer's push
+		if why := e.fixRefRefusal(ctx, pr, label, p); why != "" {
+			return "", errors.New(why)
+		}
+	} else if why := e.factoryReviewRefusal(ctx, pr, label); why != "" { // fix_lease.go: the factory's push asks for its own re-review
 		return "", errors.New(why)
 	}
 	w := e.cfg.WatchFor(repo.FullName())
@@ -581,7 +598,12 @@ func (e *Engine) forceReview(ctx context.Context, repo store.Repo, pr store.PR, 
 	} else {
 		e.delKV(ctx, kvPRRedecide(pr.ID)) // this request is a review, whatever an earlier one asked
 	}
-	if by != fixBy && by != approvalBy { // the fix loop's re-review and a held review's full pass are magnum's own
+	e.keepFixRef(ctx, pr.ID, p) // fix_factory.go: the factory's fix this round re-reviews, or none
+	if p.FixRef != nil {
+		by = factoryFixBy
+	}
+	// the fix loop's re-review, the factory's and a held review's full pass are no act of the operator's
+	if by != fixBy && by != approvalBy && by != factoryFixBy {
 		e.seeStalemates(ctx, pr.ID) // the operator acts on the PR: the threads magnum stopped arguing in are seen
 	}
 	forced := "forced"

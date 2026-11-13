@@ -1,0 +1,184 @@
+package engine
+
+// What the factory asks of magnum for a PR it fixes (DECISIONS "The fix
+// loop moves into the factory"), through magnum's requests table and the
+// payloads both share (internal/fixwork/requests.go): the forced re-review
+// of its fixer's push, a review request with FixRef (and LocalRound when a
+// local round ran at that head), and the PR's attention (fixwork.
+// ReqFixAttention). The abort of its forced round is magnum's abort
+// request, which stops the round in flight. Each is taken only for a PR
+// whose owner row says the factory fixes it.
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/attention"
+	"github.com/zhuravel/magnum/internal/fixwork"
+	"github.com/zhuravel/magnum/internal/pipeline"
+	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
+)
+
+// factoryFixBy is who forces the factory's re-review (the pr.forced
+// event): no act of the operator's.
+const factoryFixBy = "the factory's fix"
+
+// kvPRFixRef holds the factory's fix a forced round of PR prID re-reviews
+// (fixRefRow as JSON), from the request to the end of the round that takes
+// it.
+func kvPRFixRef(prID int64) string { return fmt.Sprintf("pr.%d.fix_ref", prID) }
+
+// fixRefRow is a kvPRFixRef row: the factory's fix, its local round (nil:
+// none) and when the request came.
+type fixRefRow struct {
+	FixRef     fixwork.FixRef      `json:"fix_ref"`
+	LocalRound *fixwork.LocalRound `json:"local_round,omitempty"`
+	At         time.Time           `json:"at"`
+}
+
+// fixRefRefusal is the refusal of the factory's re-review request p of pr
+// (label), "" when it may go: only a PR the factory fixes, and a fix that
+// names its head.
+func (e *Engine) fixRefRefusal(ctx context.Context, pr store.PR, label string, p ReviewPayload) string {
+	o, _, ok, err := e.fixOwner(ctx, pr.ID)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("%s: who fixes this PR cannot be read (%v)", label, err)
+	case !ok || !o.Factory():
+		return fmt.Sprintf("%s: the factory does not fix this PR; a fix's re-review comes from the fixer that fixes it", label)
+	case strings.TrimSpace(p.FixRef.Head) == "":
+		return fmt.Sprintf("%s: the factory's fix names no head", label)
+	}
+	return ""
+}
+
+// keepFixRef keeps with PR prID the factory's fix that the forced round p
+// asks for re-reviews (kvPRFixRef), or, for any other forced round, drops
+// one an earlier request left.
+func (e *Engine) keepFixRef(ctx context.Context, prID int64, p ReviewPayload) {
+	if p.FixRef == nil {
+		e.delKV(ctx, kvPRFixRef(prID))
+		return
+	}
+	e.setKV(ctx, kvPRFixRef(prID), rowJSON(fixRefRow{FixRef: *p.FixRef, LocalRound: p.LocalRound, At: e.now().UTC()}))
+}
+
+// fixRefOf is the factory's fix PR prID's forced round re-reviews (nil:
+// none), and its row as stored.
+func (e *Engine) fixRefOf(ctx context.Context, prID int64) (*fixRefRow, string) {
+	raw, ok := e.getKV(ctx, kvPRFixRef(prID))
+	if !ok {
+		return nil, ""
+	}
+	var r fixRefRow
+	if json.Unmarshal([]byte(raw), &r) != nil {
+		return nil, raw
+	}
+	return &r, raw
+}
+
+// fixRefAfterRound passes on the factory's fix the round of job
+// re-reviewed (roundJob.fixRef, taken at its dispatch): the round's end,
+// its outcome, head and review, with the fix and its local round, in a
+// fix.factory_round event, which the factory reads; the PR's row of it goes
+// while it is the one the round took.
+func (e *Engine) fixRefAfterRound(ctx context.Context, job *roundJob, res pipeline.RoundResult) {
+	if job.fixRef == nil {
+		return
+	}
+	r := job.fixRef
+	data := map[string]any{"fix_ref": r.FixRef, "round": res.Round, "outcome": res.Outcome, "target_sha": res.TargetSHA}
+	if r.LocalRound != nil {
+		data["local_round"] = r.LocalRound
+	}
+	if res.ReviewURL != "" {
+		data["review_url"] = res.ReviewURL
+	}
+	e.event(ctx, "info", prSubject(job.repo, job.pr.Number), "fix.factory_round", fmt.Sprintf("%s ended %s: the re-review of the factory's push of %s (cycle %d)",
+		roundName(res), cmpOrOutcome(res.Outcome), textx.ShortSHA(r.FixRef.Head), r.FixRef.Cycle), data)
+	if _, err := e.st.DeleteKVIf(ctx, kvPRFixRef(job.pr.ID), job.fixRefRaw); err != nil {
+		e.warnUnlessStopped(ctx, err, "drop the factory's fix of a round", "pr", job.pr.ID)
+	}
+}
+
+// cmpOrOutcome is a round's outcome, error when it names none.
+func cmpOrOutcome(o string) string {
+	if o == "" {
+		return pipeline.OutcomeError
+	}
+	return o
+}
+
+// attentionCauseRe is the factory's cause of an attention: a short word.
+var attentionCauseRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+
+// requestFixAttention raises or lifts the attention of a PR the factory
+// fixes (fixwork.AttentionPayload), silently: no toast and no reveal, since
+// the factory alerts the operator itself. A raise moves a reviewed PR to
+// needs attention, kind fix, with the factory's why as its message; a lift
+// puts it back while its attention is still that one. Both say so in an
+// event (fix.factory_attention), with the cause.
+func (e *Engine) requestFixAttention(ctx context.Context, p fixwork.AttentionPayload) (string, error) {
+	repo, pr, err := e.resolve(ctx, PRTarget{Repo: p.Repo, Number: p.Number})
+	if err != nil {
+		return "", err
+	}
+	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
+	why := oneLine(strings.TrimSpace(p.Why), 500)
+	switch o, _, ok, err := e.fixOwner(ctx, pr.ID); {
+	case err != nil:
+		return "", fmt.Errorf("%s: who fixes this PR cannot be read (%v)", label, err)
+	case !ok || !o.Factory():
+		return "", fmt.Errorf("%s: the factory does not fix this PR: its attention is magnum's", label)
+	case !attentionCauseRe.MatchString(p.Cause):
+		return "", fmt.Errorf("%s: the attention's cause %q is no short word", label, p.Cause)
+	case why == "":
+		return "", fmt.Errorf("%s: the attention names no why", label)
+	}
+	msg := why
+	if !strings.HasPrefix(msg, attention.KindFix+": ") {
+		msg = attention.KindFix + ": " + msg
+	}
+	subject := prSubject(repo, pr.Number)
+	data := map[string]any{"cause": p.Cause, "raise": p.Raise}
+	if !p.Raise {
+		if pr.State != store.PRNeedsAttention || deref(pr.LastError) != msg {
+			return fmt.Sprintf("%s: nothing to lift: its attention is not that one", label), nil
+		}
+		to := store.PRReviewed
+		if deref(pr.ReviewedSHA) != pr.HeadSHA {
+			to = claimableState(pr)
+		}
+		err := e.st.TransitionPR(ctx, pr.ID, []string{store.PRNeedsAttention}, to, func(u *store.PRUpdate) {
+			u.Set("last_error", nil)
+			u.Where("last_error", msg)
+		})
+		if err != nil {
+			return "", fmt.Errorf("%s moved on meanwhile: %w", label, err)
+		}
+		e.delKV(ctx, KVPRAttention(pr.ID), kvPRAttentionRun(pr.ID))
+		e.event(ctx, "info", subject, "fix.factory_attention", "the factory lifted the PR's attention ("+p.Cause+")", data)
+		return fmt.Sprintf("%s: the attention is lifted: PR %s", label, to), nil
+	}
+	switch {
+	case pr.State == store.PRNeedsAttention && deref(pr.LastError) == msg:
+		return fmt.Sprintf("%s needs you for that already", label), nil
+	case pr.State != store.PRReviewed:
+		return "", fmt.Errorf("%s is %s: the factory raises the attention of a reviewed PR alone", label, pr.State)
+	}
+	err = e.st.TransitionPR(ctx, pr.ID, []string{store.PRReviewed}, store.PRNeedsAttention, func(u *store.PRUpdate) {
+		u.Set("last_error", msg)
+		u.Set("next_attempt_at", nil)
+	})
+	if err != nil {
+		return "", fmt.Errorf("%s moved on meanwhile: %w", label, err)
+	}
+	e.setKV(ctx, KVPRAttention(pr.ID), attention.KindFix)
+	e.event(ctx, "warn", subject, "fix.factory_attention", "the factory raised the PR's attention ("+p.Cause+"): "+msg, data)
+	return fmt.Sprintf("%s needs you: %s", label, msg), nil
+}

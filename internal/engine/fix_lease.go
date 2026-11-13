@@ -153,6 +153,9 @@ func leaseErrWords(err error) string { return oneLine(err.Error(), 200) }
 // round goes on without the lease. A read that works again clears it, with
 // fix.lease_read. With no reader it holds nothing.
 func (e *Engine) factoryHolds(ctx context.Context, pr store.PR) bool {
+	if e.factorysOwnRound(ctx, pr) {
+		return false
+	}
 	v, ok := e.leaseOf(ctx, pr)
 	if !ok {
 		return false
@@ -193,9 +196,23 @@ func (e *Engine) noteLease(ctx context.Context, pr store.PR, v leaseView) bool {
 	return held
 }
 
+// factorysOwnRound reports whether pr's next round is the factory's own
+// re-review of its fixer's push (forced, with a kvPRFixRef row,
+// fix_factory.go), which no lease of the factory's holds.
+func (e *Engine) factorysOwnRound(ctx context.Context, pr store.PR) bool {
+	if !pr.Forced || e.d.FixLeaseOf == nil {
+		return false
+	}
+	r, _ := e.fixRefOf(ctx, pr.ID)
+	return r != nil
+}
+
 // factoryWaitOf is the wait of pr while the factory holds its round
 // (waitFor; ok false: it does not), read without recording anything.
 func (e *Engine) factoryWaitOf(ctx context.Context, pr store.PR) (Wait, bool) {
+	if e.factorysOwnRound(ctx, pr) {
+		return Wait{}, false
+	}
 	v, ok := e.leaseOf(ctx, pr)
 	if !ok {
 		return Wait{}, false

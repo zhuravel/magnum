@@ -110,6 +110,12 @@ type roundJob struct {
 	// re-review (FixState.ForcedAt, fixAfterRound).
 	dispatchedAt time.Time
 
+	// fixRef is the factory's fix a forced round re-reviews, as its request
+	// asked (kvPRFixRef, fix_factory.go; nil: none), and fixRefRaw its row:
+	// the round's end passes it on (fixRefAfterRound).
+	fixRef    *fixRefRow
+	fixRefRaw string
+
 	// The round's start (enterReviewing, refund.go): whether it recorded
 	// last_round_started_at (started) and counted against the daily cap
 	// (counted), on which day, the start time it recorded and the one before.
@@ -529,6 +535,8 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 	job := &roundJob{pr: pr, repo: repo, watch: *w, pool: e.cfg.PoolFor(full), kind: kindFor(pr), postMerge: postMerge(pr), dispatchedAt: e.now()}
 	if !pr.Forced {
 		_, job.requested = e.pendingRequest(ctx, pr)
+	} else {
+		job.fixRef, job.fixRefRaw = e.fixRefOf(ctx, pr.ID) // fix_factory.go
 	}
 	if job.kind == pipeline.KindRereview {
 		f := e.factsFor(ctx, pr, *w, e.now())
