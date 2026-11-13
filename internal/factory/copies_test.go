@@ -110,6 +110,26 @@ type copiesRig struct {
 	// origins are the GitHub URLs `git remote get-url origin` answers for
 	// the clones it names (routeRunner): a test sets them before any claim.
 	origins map[string]string
+	// gitRan, when set, sees each git command once it ran (onGit).
+	gitRan func(c execx.Cmd)
+}
+
+// onGit makes fn see each git command the rig's runner runs once it ran
+// (nil: none), so a test can cut a claim at a given command.
+func (r *copiesRig) onGit(fn func(c execx.Cmd)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.gitRan = fn
+}
+
+// ranGit hands git command c, which ran, to the test's onGit.
+func (r *copiesRig) ranGit(c execx.Cmd) {
+	r.mu.Lock()
+	fn := r.gitRan
+	r.mu.Unlock()
+	if fn != nil {
+		fn(c)
+	}
 }
 
 // fakeHerdrView is one herdr session as the copies' guard reads it.
@@ -229,7 +249,7 @@ func newCopiesRig(t *testing.T, maxCopies int) *copiesRig {
 		{Prefix: []string{"redis-cli"}, Fn: r.redis},
 	}}
 	r.origins = map[string]string{}
-	run := routeRunner{real: r.real, fake: fake, origins: r.origins}
+	run := routeRunner{real: r.real, fake: fake, origins: r.origins, ran: r.ranGit}
 	r.git = gitx.New(run)
 	view := herdr.GuardView{Own: r.factoryHerdr, Yours: r.yourHerdr}
 	r.sm = slots.New(slots.Deps{Store: r.st, Run: run, Git: r.git, MySQL: r.dbs, Layout: r.cfg.Layout,
@@ -261,7 +281,7 @@ func (r *copiesRig) newCopies() *copySet {
 	c, ok := NewCopies(r.cfg, r.sm, r.st, r.git, routeRunner{real: r.real, fake: &execx.Fake{Rules: []execx.Rule{
 		{Prefix: []string{"mise"}, Fn: r.mise},
 		{Prefix: []string{"redis-cli"}, Fn: r.redis},
-	}}}, r.dbs, r.factoryHerdr.Snapshot, r.owner, r.atWork).(*copySet)
+	}}, ran: r.ranGit}, r.dbs, r.factoryHerdr.Snapshot, r.owner, r.atWork).(*copySet)
 	if !ok {
 		r.t.Fatal("NewCopies is not the copies' set")
 	}
@@ -282,10 +302,11 @@ func (r *copiesRig) newCopies() *copySet {
 // and every other command to the fakes. origins, when set, answers `git
 // remote get-url origin` of a clone it names with its URL (a GitHub one,
 // which clone discovery asks for, while fetches still go to the rig's
-// local origin).
+// local origin). ran, when set, sees each git command once it ran.
 type routeRunner struct {
 	real, fake execx.Runner
 	origins    map[string]string
+	ran        func(c execx.Cmd)
 }
 
 func (r routeRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) {
@@ -295,7 +316,11 @@ func (r routeRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, error)
 				return execx.Result{Stdout: []byte(url + "\n")}, nil
 			}
 		}
-		return r.real.Run(ctx, c)
+		res, err := r.real.Run(ctx, c)
+		if r.ran != nil {
+			r.ran(c)
+		}
+		return res, err
 	}
 	// A fake command ends with its context, as a real one does: one asked
 	// for after the context ended never starts, and one the context ends

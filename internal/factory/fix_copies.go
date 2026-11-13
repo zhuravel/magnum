@@ -23,6 +23,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -478,11 +479,11 @@ func (c *copySet) prepareFix(ctx context.Context, w registry.PRWork, owner store
 // switchFix records head as the head of the claim's assignment a, then
 // switches checkout sl to it (slots.Resync) and records the time, which a
 // person's typing in the PR's fix panes is read against (the guard). The
-// assignment's head comes first: the release counts it as pushed
-// (unpushedPastClaim), so a switch cut once the checkout moved must not
-// leave the older head there, or the PR's own head would count as commits
-// on no remote. The commits on no remote that HEAD carries were kept by the
-// step's guard (fixOwnHead).
+// release counts the assignment's head and the checkout's recorded one as
+// pushed (unpushedPastClaim), so a switch cut before the checkout moved
+// (HEAD at the recorded head) or after it (HEAD at the assignment's) leaves
+// no head of the PR's own to count as commits on no remote. The commits on
+// no remote that HEAD carries were kept by the step's guard (fixOwnHead).
 func (c *copySet) switchFix(ctx context.Context, sl store.Slot, a store.Assignment, head string) error {
 	if store.Deref(a.HeadSHA) != head {
 		if err := c.st.UpdateAssignmentHead(ctx, a.ID, head); err != nil {
@@ -601,10 +602,15 @@ func (c *copySet) fixOwnHead(ctx context.Context, w registry.PRWork, sl store.Sl
 }
 
 // unpushedPastClaim counts the commits of commit sha of checkout sl on no
-// remote or magnum ref and past the head its claim switched to (its open
-// assignment's): that head was the PR's remote head, so a force-push of the
-// PR, which moves the fix ref off it at the release's fetch, leaves it
-// pushed.
+// remote or magnum ref and past the heads its claim switched to: its open
+// assignment's, the PR's remote head the claim fetched, so a force-push of
+// the PR, which moves the fix ref off it at the release's fetch, leaves it
+// pushed, and the checkout's recorded one (sl's checked_out_sha), which
+// every writer records pushed or kept (the claim at the fix ref, the
+// switch at a fetched head, the slot guard at the PR's pushed head,
+// fixOwnHead after its keep). Either may be the other's older head: a
+// switch cut between the assignment's head and the checkout's move leaves
+// HEAD at the recorded head, which the PR's force-push takes off every ref.
 func (c *copySet) unpushedPastClaim(ctx context.Context, sl store.Slot, sha string) (int, error) {
 	var claimed []string
 	switch a, err := c.st.OpenAssignmentBySlot(ctx, sl.ID); {
@@ -612,6 +618,9 @@ func (c *copySet) unpushedPastClaim(ctx context.Context, sl store.Slot, sha stri
 		claimed = append(claimed, *a.HeadSHA)
 	case err != nil && !errors.Is(err, store.ErrNotFound):
 		return 0, err
+	}
+	if out := store.Deref(sl.CheckedOutSHA); out != "" && !slices.Contains(claimed, out) {
+		claimed = append(claimed, out)
 	}
 	return c.git.UnpushedPast(ctx, sl.Path, sha, claimed...)
 }

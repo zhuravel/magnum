@@ -1152,6 +1152,54 @@ func TestACutSwitchLeavesTheNewerHeadAsTheClaims(t *testing.T) {
 	}
 }
 
+// A claim's switch cut after it recorded the newer head as its
+// assignment's and before it moved the checkout there leaves HEAD at the
+// older head, the checkout's recorded one: once a force-push of the PR took
+// that head off every ref, the release counts it as pushed, as every head
+// the checkout records was pushed or kept, and keeps nothing. Only the
+// assignment's head counted, so the release kept the PR's own old head as
+// the fixer's commits (C2 of T3b's third check).
+func TestASwitchCutBeforeTheCheckoutMovedKeepsNothingOfThePRsOldHead(t *testing.T) {
+	r := newFixRig(t, 1, 1)
+	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
+	w := r.prWork("talkable/talkable", 7)
+	fc := r.claimFix(w)
+	forcePush := func(content string) string {
+		author := filepath.Join(r.root, "author-"+filepath.Base(r.origin))
+		r.gitIn(author, "reset", "--quiet", "--hard", "origin/master")
+		return r.pushPR(r.origin, 7, "rebased.txt", content) // the author rebases and force-pushes
+	}
+	newer := forcePush("v1\n")
+	ctx, cancel := context.WithCancel(r.ctx)
+	defer cancel()
+	r.onGit(func(c execx.Cmd) {
+		if len(c.Args) > 2 && c.Args[1] == fc.Path && slices.Contains(c.Args, newer+"^{commit}") {
+			cancel() // the daemon goes down once Resync looked the newer head up, before it moves the checkout
+		}
+	})
+	r.clock.Add(time.Minute)
+	if _, err := r.c.ClaimFix(ctx, w); err == nil {
+		t.Fatal("the claim cut before its checkout moved succeeded")
+	}
+	r.onGit(nil)
+	if got, _ := r.head(fc.Path); got != fc.Head {
+		t.Fatalf("%s is at %s after the cut switch, want the older head %s", fc.Name, got, fc.Head)
+	}
+	if a, err := r.st.OpenAssignmentBySlot(r.ctx, r.slot(fc.Name).ID); err != nil || store.Deref(a.HeadSHA) != newer {
+		t.Fatalf("the claim's head after the cut switch = %q, %v, want the newer head %s", store.Deref(a.HeadSHA), err, newer)
+	}
+
+	r.c = r.newCopies() // the restart
+	forcePush("v2\n")
+	r.releaseFix(w)
+	if sl := r.slot(fc.Name); sl.State != store.SlotFree || sl.HoldReason != nil {
+		t.Fatalf("%s after the release = %s, hold %q, want free", fc.Name, sl.State, store.Deref(sl.HoldReason))
+	}
+	if got := r.keptRefs(r.main); got != "" {
+		t.Fatalf("the release kept %q, want nothing: the head the checkout stayed at is the PR's", got)
+	}
+}
+
 // stopRebase leaves a replay of the fixer's commits in progress in checkout
 // dir, claimed at PR number's head claimed, as `magnum fix-sync` killed
 // mid-replay does: the fixer commits p1 and p2, the PR's author pushes a

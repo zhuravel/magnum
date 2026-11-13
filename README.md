@@ -4709,7 +4709,8 @@ stages = [
   The checkout goes once the PR's fix work ends: the PR merged or closed (magnum's registry says so), or its
   work stayed idle for 10 minutes. A fix copy goes back to its pool on its placeholder, a per-PR checkout is
   removed with its fix ref, each with a `fix.release` event. The release fetches the PR's head first, so what
-  was pushed counts as pushed, as does the head the claim switched to (a force-push of the PR keeps nothing),
+  was pushed counts as pushed, as do the head the claim switched to and the one the checkout records, even of
+  a switch cut short (a force-push of the PR keeps nothing),
   and keeps any other commit on no remote as the claim does. Beyond a session or a process at work in the
   checkout, it holds only on `dirty_worktree`, never on a commit or on a HEAD because you typed, and a refused
   release is tried again after 1, 2, 4 and then every 5 minutes, with one alert after 30 minutes.
