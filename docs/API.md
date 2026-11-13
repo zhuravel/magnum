@@ -9626,6 +9626,10 @@ const KVStagingResolves = "staging.resolve.*"
     (kvStagingResolve) in one KVValues read: StagingResolverSays reads them for
     the card and `magnum staging`.
 
+const LeaseFromOwner = "owner"
+    LeaseFromOwner is LeaseUnread.Source of a PR whose owner row in magnum's
+    registry does not parse (a newer build wrote it, or it is damaged).
+
 const QueuedRebootDrain = "reboot_drain"
     QueuedRebootDrain is why a curation waits (CurateQueued.Why) while the
     daemon drains for a reboot alone.
@@ -11894,13 +11898,18 @@ type LearnRevertPayload struct {
     (the design log's entry says it).
 
 type LeaseUnread struct {
-	Since time.Time `json:"since"`
-	Err   string    `json:"err"`
-	Open  bool      `json:"open,omitempty"`
+	Since  time.Time `json:"since"`
+	Last   time.Time `json:"last,omitzero"`
+	Err    string    `json:"err"`
+	Open   bool      `json:"open,omitempty"`
+	Source string    `json:"source,omitempty"`
 }
-    LeaseUnread is a KVPRFixLeaseUnread row: the first failed read (Since),
-    the last one's error in a line (Err, a registry's words, never PR text) and
-    Open, the grace ended and magnum reviews the PR without the lease.
+    LeaseUnread is a KVPRFixLeaseUnread row: the first failed read (Since) and
+    the last one (Last: a row written before it was kept counts from Since), the
+    last one's error in a line (Err, a registry's words, never PR text), Open,
+    the grace ended and magnum reviews the PR without the lease, and Source,
+    what failed: the factory's lease ("") or the PR's owner row in magnum's own
+    registry, which this build cannot parse (LeaseFromOwner).
 
 type LocalRound struct {
 	EvalCase
