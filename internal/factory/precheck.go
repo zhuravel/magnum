@@ -1047,8 +1047,8 @@ func (p *precheckRun) copyFile(file string) (rel string, in bool) {
 			return rel, true
 		}
 	}
-	if real, err := filepath.EvalSymlinks(file); err == nil && p.realCopy != "" {
-		if rel, ok := strings.CutPrefix(real, p.realCopy+"/"); ok {
+	if phys, err := filepath.EvalSymlinks(file); err == nil && p.realCopy != "" {
+		if rel, ok := strings.CutPrefix(phys, p.realCopy+"/"); ok {
 			return rel, true
 		}
 	}

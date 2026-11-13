@@ -88,12 +88,12 @@ func TestAnOffenseUnderTheCopysPhysicalPathCounts(t *testing.T) {
 	if err := os.Symlink(r.copyDir, link); err != nil {
 		t.Fatal(err)
 	}
-	real, err := filepath.EvalSymlinks(link)
+	phys, err := filepath.EvalSymlinks(link)
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.lint = func([]string) string {
-		return real + "/spec/models/credit_points_spec.rb:1:1: C: Style: the writer's\n"
+		return phys + "/spec/models/credit_points_spec.rb:1:1: C: Style: the writer's\n"
 	}
 	cp := r.cp
 	cp.Path = link
