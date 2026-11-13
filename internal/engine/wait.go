@@ -286,6 +286,7 @@ func (w Wait) Sentence(ref string, now time.Time) string {
 		s += "; `magnum resume` lifts the pause"
 	case w.Reason == WaitKind:
 		s += "; `magnum resume --tool " + cmp.Or(w.Subject, "all") + "` lifts the pause"
+	case w.Reason == WaitFixing && w.Subject == waitFactory: // fix_lease.go: magnum stops no fixer of the factory's
 	case w.Reason == WaitFixing && ref != "":
 		s += "; `magnum abort " + ref + "` stops the fixer"
 	case w.Reason == WaitWhiteboard && ref != "":
@@ -375,6 +376,9 @@ func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now tim
 	}
 	if fw, ok := e.fixWaitOf(ctx, pr.ID); ok {
 		return with(fw) // nothing starts while the fixer works (fixHolds)
+	}
+	if fw, ok := e.factoryWaitOf(ctx, pr); ok {
+		return with(fw) // nor while the factory's does, or its lease cannot be read within the grace (fix_lease.go)
 	}
 	if ww, ok := e.whiteboardWaitOf(pr.ID, w); ok {
 		return with(ww) // nor while the whiteboard is being written (its reservation)

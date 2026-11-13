@@ -1736,7 +1736,9 @@ func (e *Engine) abandonFixRun(ctx context.Context, run store.Run, why string) b
 // fixHolds reports whether the PR's fix loop holds its next round: the
 // fixer works on it (phase fixing), or its row cannot be read (no round
 // starts over a loop that may run). The loop's own re-review (phase
-// reviewing) passes.
+// reviewing) passes. A PR the factory fixes is held while the factory's
+// fixer works on it, or its lease cannot be read within a grace
+// (factoryHolds, fix_lease.go).
 func (e *Engine) fixHolds(ctx context.Context, pr store.PR) bool {
 	st, ok, err := e.fixState(ctx, pr.ID)
 	if err != nil {
@@ -1745,7 +1747,10 @@ func (e *Engine) fixHolds(ctx context.Context, pr store.PR) bool {
 		}
 		return true
 	}
-	return ok && st.Phase == FixPhaseFixing
+	if ok && st.Phase == FixPhaseFixing {
+		return true
+	}
+	return e.factoryHolds(ctx, pr)
 }
 
 // fixWaitOf is the wait of a PR whose fix loop holds it (fixHolds; ok

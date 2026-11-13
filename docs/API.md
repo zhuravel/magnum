@@ -9906,6 +9906,10 @@ func FixCalls(st FixState, prURL, ref string) []attention.FixCall
     as the settle's toast said: no thread is read again here. None for entries
     magnum cannot read so.
 
+func FixLeaseUnreads(ctx context.Context, st *store.Store) (map[int64]LeaseUnread, error)
+    FixLeaseUnreads are the PRs whose factory lease magnum could not read
+    (KVPRFixLeaseUnread rows that read), by PR id: the doctor's line.
+
 func FixNeedsAsked(msg string, entries []string) []string
     FixNeedsAsked keeps of entries those that msg still asks the author for
     (fixwork.FixNeedsAsked).
@@ -10025,6 +10029,10 @@ func KVPRFixHeld(prID int64) string
     end without one, starts it; a `magnum fix` or an autofix the GitHub budget
     held until it recovers; one the fixer's paused kind held until the pause
     ends.
+
+func KVPRFixLeaseUnread(prID int64) string
+    KVPRFixLeaseUnread holds, while it lasts, the failed read of the factory's
+    lease of PR prID (LeaseUnread as JSON): the doctor names it.
 
 func KVPRFixOff(prID int64) string
     KVPRFixOff holds a PR's opt-out of the fix job (FixOff as JSON).
@@ -11876,6 +11884,15 @@ type LearnRevertPayload struct {
     LearnRevertPayload is a `magnum learn --revert <version>` request:
     a proposal that restores the files of the version before Version, for Reason
     (the design log's entry says it).
+
+type LeaseUnread struct {
+	Since time.Time `json:"since"`
+	Err   string    `json:"err"`
+	Open  bool      `json:"open,omitempty"`
+}
+    LeaseUnread is a KVPRFixLeaseUnread row: the first failed read (Since),
+    the last one's error in a line (Err, a registry's words, never PR text) and
+    Open, the grace ended and magnum reviews the PR without the lease.
 
 type LocalRound struct {
 	EvalCase

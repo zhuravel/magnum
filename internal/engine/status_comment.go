@@ -288,7 +288,11 @@ func (v statusView) body(note string, now time.Time) string {
 			lines = append(lines, v.approval)
 		}
 	case statusFixing:
-		lines = []string{"- [x] " + v.postedLine(now), fmt.Sprintf("- [ ] Applying automatic fixes, cycle %d of %d", v.cycle, v.cycles)}
+		cycle := fmt.Sprintf("cycle %d of %d", v.cycle, v.cycles)
+		if v.cycles == 0 { // the factory's lease may not know its cap (fix_lease.go)
+			cycle = fmt.Sprintf("cycle %d", v.cycle)
+		}
+		lines = []string{"- [x] " + v.postedLine(now), "- [ ] Applying automatic fixes, " + cycle}
 		tail = []string{statusUpdates, note}
 	default:
 		first, progress := "- [x] "+v.label()+" "+sha, "- [ ] In progress"
@@ -1093,14 +1097,22 @@ func (e *Engine) statusEarlier(ctx context.Context, pr store.PR, v *statusView, 
 }
 
 // statusFix is the PR's fix loop (FixState), when one can be read (dispatch
-// warns of one that cannot, fixHolds).
+// warns of one that cannot, fixHolds); without one, the factory's fix work
+// on it, as its lease says (factoryFix, fix_lease.go).
 func (e *Engine) statusFix(ctx context.Context, prID int64) (FixState, bool) {
 	st, ok, err := e.fixState(ctx, prID)
 	if err != nil {
 		e.log.Debug("status comment: the fix loop cannot be read", "pr", prID, "err", err)
 		return FixState{}, false
 	}
-	return st, ok
+	if ok || e.d.FixLeaseOf == nil {
+		return st, ok
+	}
+	pr, err := e.st.PRByID(ctx, prID)
+	if err != nil {
+		return FixState{}, false
+	}
+	return e.factoryFix(ctx, pr)
 }
 
 // statusEnding is the last edit of the comment of pr, which GitHub closed

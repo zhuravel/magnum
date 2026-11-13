@@ -444,6 +444,9 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 	case fixing:
 		return "", fmt.Errorf("%s: %s", label, fixRunningSentence(st))
 	}
+	if why := e.factoryReviewRefusal(ctx, pr, label); why != "" { // fix_lease.go: the factory's push asks for its own re-review
+		return "", errors.New(why)
+	}
 	w := e.cfg.WatchFor(repo.FullName())
 	merged := postMerge(pr)
 	switch {
