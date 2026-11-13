@@ -18,7 +18,7 @@ import (
 // A repository of another watch still counts it.
 func TestTheBoardsCIIsNotRedWhenOnlyAnIgnoredCheckFailed(t *testing.T) {
 	h := newActHarness(t)
-	h.c.Config.Watches[0].IgnoreChecks = []string{"Vendor Gates"}
+	h.c.preset.Watches[0].IgnoreChecks = []string{"Vendor Gates"}
 	at := h.now.Add(-time.Hour)
 	checks := []store.CheckResult{
 		{Name: "Vendor Gates", State: store.CheckFailed, At: at},

@@ -6053,6 +6053,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
   TestTheCursorStaysWhereTheCaretIsDrawn checked the old keys, so it is gone.
   TestCleanupTypedConfirmMismatchThenMatch now expects no blink command.
 
+- **The cli tests run each command with no config loaded, as `Main` does** (2026-11-13, after the finish-review
+  bug that 82a04f3f fixed). From a terminal, `magnum factory finish-review` read every task as outside its local
+  review: it read `c.Config` before it loaded the config. Its tests passed, because the shared test setups built
+  their `Context` with the config loaded already. Now four setups leave `Config` nil: the daemon group's
+  (`newDaemonGroupTest`), the act one (`newActHarness`), the comment one and the inspect fixture. Each run sets
+  it nil again, as each process starts. A test's own config goes in `Context.preset`, which `LoadConfig` loads
+  in place of the files. So a command that reads `c.Config` without `LoadConfig` fails its tests, also in a
+  test with a custom config. And no test reads the operator's files or herdr socket. Some tests drive the parts
+  of a screen without its command: a frame, the actions, `buildFactoryDaemon`. Such a test loads the config
+  first with `loaded(t, c)`, as the command does. The change showed no other command with the bug. The cli
+  package passes under it, and a read of every `c.Config` in the commands found a load before each. Proven by
+  mutation: without the `LoadConfig` of finish-review, three of its tests fail (before, one failed). Without
+  the load of `factory start`, its test panics, and the old setup passed it. If a run keeps a loaded config,
+  `TestTheHarnessesLeaveTheConfigToTheCommand` fails. AGENTS.md says it.
+
 ## Operations
 
 - **The daemon exits when the schema was migrated under it** (another binary ran a newer migration);

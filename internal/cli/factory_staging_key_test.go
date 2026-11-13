@@ -29,8 +29,8 @@ func TestTheFactoryScreensStagingDeployIsTheBoards(t *testing.T) {
 	h.stagingDaemon(prs[5].HeadSHA)
 	board := newScreenActions(h.c)
 	defer board.Close()
-	src := &factoryScreenSource{c: h.c, now: inspNow}
-	act := newFactoryActions(h.c, src, board)
+	src := &factoryScreenSource{c: loaded(t, h.c), now: inspNow}
+	act := newFactoryActions(loaded(t, h.c), src, board)
 	ctx := context.Background()
 	const ref = "talkable/talkable#5"
 
@@ -56,7 +56,7 @@ func TestTheFactoryScreensStagingDeployIsTheBoards(t *testing.T) {
 		t.Error("E made the factory's registry")
 	}
 
-	bare := newFactoryActions(h.c, src, nil)
+	bare := newFactoryActions(loaded(t, h.c), src, nil)
 	if _, err := bare.StagingPlan(ctx, ref, []string{"void"}); !errors.Is(err, errNoBoard) {
 		t.Errorf("the plan without the board's actions: %v, want %v", err, errNoBoard)
 	}
@@ -76,10 +76,10 @@ func TestTheFactoryScreensStagingDeployIsTheBoards(t *testing.T) {
 func TestTheFactoryScreenReadsItsPRsStagingDeploys(t *testing.T) {
 	storetest.Serial(t)
 	dt := newDaemonGroupTest(t)
-	cfg := *dt.ctx.Config
+	cfg := *dt.ctx.preset
 	stagingConfig(&cfg)
 	cfg.Watches = []config.Watch{{Owner: "talkable", Include: []string{"talkable"}, Identity: "zhuravel"}} // a staging repo is a watched one
-	dt.ctx.Config = &cfg
+	dt.ctx.preset = &cfg
 	ctx := context.Background()
 	st := storetest.OpenFile(t, dt.ctx.Layout.DB())
 	at := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
@@ -104,7 +104,7 @@ func TestTheFactoryScreenReadsItsPRsStagingDeploys(t *testing.T) {
 		return factory.PRState{Ref: factory.PRRef{Repo: "talkable/talkable", Number: n}, ID: id, Title: "a PR", Found: true, DaemonUp: true,
 			Watched: true, GHState: store.GHOpen, State: store.PRReviewed, AuthorLogin: "zhuravel"}
 	}
-	src := &factoryScreenSource{c: dt.ctx, now: time.Now, magnum: ownOnlyMagnum{own: []factory.PRState{own(5, 15), own(6, 16)}}}
+	src := &factoryScreenSource{c: loaded(t, dt.ctx), now: time.Now, magnum: ownOnlyMagnum{own: []factory.PRState{own(5, 15), own(6, 16)}}}
 	defer src.close()
 	d, err := src.Frame(ctx)
 	if err != nil {
@@ -138,14 +138,14 @@ func TestTheFactoryScreenReadsItsPRsStagingDeploys(t *testing.T) {
 func TestTheFactoryScreenGivesItsPRsTheConfigsStagingEnvs(t *testing.T) {
 	storetest.Serial(t)
 	dt := newDaemonGroupTest(t)
-	cfg := *dt.ctx.Config
+	cfg := *dt.ctx.preset
 	stagingConfig(&cfg)
-	dt.ctx.Config = &cfg
+	dt.ctx.preset = &cfg
 	own := func(repo string, n int, id int64) factory.PRState {
 		return factory.PRState{Ref: factory.PRRef{Repo: repo, Number: n}, ID: id, Title: "a PR", Found: true, DaemonUp: true,
 			Watched: true, GHState: store.GHOpen, State: store.PRReviewed, AuthorLogin: "zhuravel"}
 	}
-	src := &factoryScreenSource{c: dt.ctx, now: time.Now, magnum: ownOnlyMagnum{own: []factory.PRState{own("talkable/talkable", 5, 15),
+	src := &factoryScreenSource{c: loaded(t, dt.ctx), now: time.Now, magnum: ownOnlyMagnum{own: []factory.PRState{own("talkable/talkable", 5, 15),
 		own("example/shop", 6, 16)}}}
 	defer src.close()
 	d, err := src.Frame(context.Background())

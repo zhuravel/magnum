@@ -49,6 +49,9 @@ func newScreenActionsTest(t *testing.T, pid int, answer func(registry.Request) (
 		at.kicks++
 		return kick(l)
 	}
+	if err := at.ctx.LoadConfig(); err != nil { // as the screen does before it builds its actions (runFactoryScreen)
+		t.Fatal(err)
+	}
 	at.src = &factoryScreenSource{c: at.ctx, now: func() time.Time { return screenActionsNow }}
 	t.Cleanup(at.src.close)
 	at.act = newFactoryActions(at.ctx, at.src, nil)
@@ -270,9 +273,9 @@ func TestTheScreensFocusIsARequestWithItsPid(t *testing.T) {
 	}
 
 	bare := newDaemonGroupTest(t)
-	src := &factoryScreenSource{c: bare.ctx, now: func() time.Time { return screenActionsNow }}
+	src := &factoryScreenSource{c: loaded(t, bare.ctx), now: func() time.Time { return screenActionsNow }}
 	defer src.close()
-	if err := newFactoryActions(bare.ctx, src, nil).Focus(ctx, true, screenActionsNow); err != nil {
+	if err := newFactoryActions(loaded(t, bare.ctx), src, nil).Focus(ctx, true, screenActionsNow); err != nil {
 		t.Fatal(err)
 	}
 	if fileExists(bare.ctx.Layout.FactoryDB()) {
@@ -309,9 +312,9 @@ func TestTheDigestCountsOnlyTheTimeYouWereAway(t *testing.T) {
 	daemonSys.FactoryKick = func(paths.Layout) (int, error) { return 0, nil } // no factory daemon: the reports wait queued
 	night := screenActionsNow.Add(-14 * time.Hour)
 	now := night
-	src := &factoryScreenSource{c: dt.ctx, now: func() time.Time { return now }}
+	src := &factoryScreenSource{c: loaded(t, dt.ctx), now: func() time.Time { return now }}
 	defer src.close()
-	act := newFactoryActions(dt.ctx, src, nil)
+	act := newFactoryActions(loaded(t, dt.ctx), src, nil)
 	ctx := t.Context()
 	if err := act.Focus(ctx, true, night); err != nil { // at the screen, focused
 		t.Fatal(err)

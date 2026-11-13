@@ -106,7 +106,7 @@ func newCommentHarness(t *testing.T, edit func(*config.Config)) *commentHarness 
 	h := &commentHarness{t: t, layout: layout, title: "Fix the total", slug: "fixer-app", poster: [2]string{"fixer-app", "Bot"},
 		out: &bytes.Buffer{}, errb: &bytes.Buffer{}}
 	h.st = storetest.OpenFile(t, layout.DB())
-	h.c = &Context{Version: "test", Layout: layout, Config: cfg, Stdout: h.out, Stderr: h.errb}
+	h.c = &Context{Version: "test", Layout: layout, preset: cfg, Stdout: h.out, Stderr: h.errb}
 	h.run = &execx.Fake{Rules: []execx.Rule{
 		{Prefix: commentMint, Fn: h.mint},
 		{Prefix: commentApp, Fn: h.app},
@@ -226,6 +226,7 @@ func (h *commentHarness) exec(text string, args ...string) (int, map[string]any)
 	h.out.Reset()
 	h.errb.Reset()
 	commentStdin = func() io.Reader { return strings.NewReader(text) }
+	h.c.Config = nil // each command starts as Main leaves it, and loads its config itself
 	code := execute(h.c, append([]string{"comment"}, args...))
 	var got map[string]any
 	if err := json.Unmarshal(h.out.Bytes(), &got); err != nil {

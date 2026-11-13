@@ -214,7 +214,7 @@ func listHarness(t *testing.T) *notesHarness {
 	prev := inspNow
 	inspNow = func() time.Time { return h.now }
 	t.Cleanup(func() { inspNow = prev })
-	h.c.Config.Notes.MaxBytes, h.c.Config.Notes.MaxHarnessFiles = 100, 2
+	h.c.preset.Notes.MaxBytes, h.c.preset.Notes.MaxHarnessFiles = 100, 2
 	p := h.proposal()
 	h.write(oldNotes+"- a judge's new lesson\n", map[string]string{"run_spec.sh": "bin/rspec \"$@\"\n", "campaign_snapshot_probes_spec.rb": "probe\n"})
 	judge := h.seedPR("talkable/talkable", 11940, store.PRReviewed)

@@ -21,18 +21,26 @@ import (
 
 // Context carries what every command needs.
 type Context struct {
-	Version   string
-	Layout    paths.Layout
-	Config    *config.Config // nil until LoadConfig
-	Stdout    io.Writer
-	Stderr    io.Writer
-	cfgPath   string
+	Version string
+	Layout  paths.Layout
+	Config  *config.Config // nil until LoadConfig
+	Stdout  io.Writer
+	Stderr  io.Writer
+	cfgPath string
+	// preset is the config LoadConfig loads in place of the files: a test's
+	// own, which stays out of Config until the command loads it, as Main
+	// leaves Config, so a command that forgets LoadConfig fails its tests.
+	preset    *config.Config
 	layoutErr error // paths.Resolve failed; commands refuse to run
 }
 
 // LoadConfig loads config.toml once.
 func (c *Context) LoadConfig() error {
 	if c.Config != nil {
+		return nil
+	}
+	if c.preset != nil {
+		c.Config = c.preset
 		return nil
 	}
 	cfg, err := config.Load(c.Layout, c.cfgPath)

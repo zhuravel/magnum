@@ -131,7 +131,6 @@ func TestFactoryFinishReviewLoadsTheConfigBeforeItJudgesTheStage(t *testing.T) {
 	storetest.Serial(t)
 	dt := newFactoryStartTest(t, 250, func(registry.Request) (string, string) { return registry.RequestDone, "" })
 	finishTask(t, dt, "PR-12536", registry.TaskActive, "local_review", true)
-	dt.ctx.Config = nil // as Main leaves it before a command loads it
 	finishTerminal(t, true, "")
 	if code := dt.run("factory", "finish-review", "PR-12536", "--dry-run"); code != 0 || strings.Contains(dt.stderr.String(), "not in its local review") {
 		t.Errorf("exit %d, stderr %q; want the plan of a task at its local review", code, dt.stderr)

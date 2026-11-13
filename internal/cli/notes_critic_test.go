@@ -181,7 +181,7 @@ func TestTheListShowsTheCriticRunningAndWhatItLeftToYou(t *testing.T) {
 	prev := inspNow
 	inspNow = func() time.Time { return h.now }
 	t.Cleanup(func() { inspNow = prev })
-	h.c.Config.Notes.Critic = true
+	h.c.preset.Notes.Critic = true
 	p := h.proposal()
 	h.criticMark(p, "fable", h.now.Add(-2*time.Minute))
 	row := func() notesRow {
@@ -236,7 +236,7 @@ func TestTheListShowsTheCriticRunningAndWhatItLeftToYou(t *testing.T) {
 	actContains(t, h.out.String(), "proposal "+itoa(p3.ID)+" to review (over_limit, 0s; the critic stepped back)")
 
 	// With the critic off the list says nothing of it.
-	h.c.Config.Notes.Critic = false
+	h.c.preset.Notes.Critic = false
 	if r := row(); r.Proposal.CriticSteppedBack || r.Proposal.CriticLeft || strings.Contains(h.out.String(), "critic") {
 		t.Errorf("critic off: %+v\n%s", r.Proposal, h.out.String())
 	}

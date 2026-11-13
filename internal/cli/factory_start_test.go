@@ -24,9 +24,9 @@ import (
 func newFactoryStartTest(t *testing.T, pid int, answer func(registry.Request) (state, result string)) *daemonGroupTest {
 	t.Helper()
 	dt := newDaemonGroupTest(t)
-	cfg := *dt.ctx.Config
+	cfg := *dt.ctx.preset
 	cfg.Factory.Repos = []config.FactoryRepo{{Repo: "talkable/talkable", Base: "master", MainClone: t.TempDir(), Copies: t.TempDir() + "/talkable.factory{n}"}}
-	dt.ctx.Config = &cfg
+	dt.ctx.preset = &cfg
 	registrytest.Seed(t, dt.ctx.Layout.FactoryDB())
 	daemonSys.FactoryKick = func(paths.Layout) (int, error) { return pid, nil }
 	daemonSys.Sleep = func(ctx context.Context, _ time.Duration) error {

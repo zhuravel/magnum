@@ -18,7 +18,7 @@ import (
 // boardRowsOf reads the board's rows from h's registry, by PR number.
 func boardRowsOf(t *testing.T, h *actHarness) map[int]tui.PRBoardRow {
 	t.Helper()
-	rows, err := prsSource(h.st, h.c.Config, store.BoardFilter{}, prsSelfLogins(h.c.Config), h.c.Layout)(h.ctx)
+	rows, err := prsSource(h.st, loaded(t, h.c).Config, store.BoardFilter{}, prsSelfLogins(h.c.Config), h.c.Layout)(h.ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

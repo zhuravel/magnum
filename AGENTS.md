@@ -126,7 +126,10 @@ it), not `hang()`, whose waits can run out its timeout first on a busy machine. 
 hooks run on the engine's goroutines: they report with `t.Errorf` and return `failRound`'s error result,
 never `t.Fatal`; `newHarness` runs on `t.Context()` and its cleanup fails a test whose rounds, retro,
 curation, Run loop (`h.goRun`) or toasts outlive it. The tui tests build screens with `testDashboard`,
-`testPRBoard` and `testWatch`, whose timers answer at once.
+`testPRBoard` and `testWatch`, whose timers answer at once. The cli harnesses leave `Context.Config` nil, as
+`Main` does, before every command they run: a test's own config goes in `Context.preset`, which `LoadConfig`
+loads, so a command that forgets `LoadConfig` fails its tests; a test that drives a screen's parts without its
+command loads it first (`loaded(t, c)`).
 
 ## Layout
 

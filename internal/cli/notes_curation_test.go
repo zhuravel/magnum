@@ -371,7 +371,7 @@ func TestNotesCurateQueuesTheRequest(t *testing.T) {
 // a waiting proposal; --json carries the same.
 func TestNotesShowsTriggersUnusedFilesAndAProposal(t *testing.T) {
 	h := newNotesHarness(t)
-	h.c.Config.Notes.MaxBytes = 100
+	h.c.preset.Notes.MaxBytes = 100
 	p := h.proposal()
 	for range store.NotesUnusedRounds {
 		if err := h.st.RecordNotesRound(h.ctx, h.repo.ID, []string{"campaign_snapshot_probes_spec.rb", "run_spec.sh"}, h.now); err != nil {

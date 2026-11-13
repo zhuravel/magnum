@@ -26,7 +26,7 @@ func TestFOnAnOwnPRRowAsksAndQueuesMagnumsFix(t *testing.T) {
 	h.onSleep = func(h *actHarness) { h.completePending(store.RequestDone, fixAnswer) }
 	board := newScreenActions(h.c)
 	defer board.Close()
-	act := newFactoryActions(h.c, &factoryScreenSource{c: h.c, now: inspNow}, board)
+	act := newFactoryActions(loaded(t, h.c), &factoryScreenSource{c: loaded(t, h.c), now: inspNow}, board)
 	ctx := context.Background()
 	const ref = "talkable/talkable#5"
 
@@ -80,8 +80,8 @@ func TestCOnAPRRowOfTheFactoryScreenIsTheBoardsCIFix(t *testing.T) {
 	h.ciFixDaemon()
 	board := newScreenActions(h.c)
 	defer board.Close()
-	src := &factoryScreenSource{c: h.c, now: inspNow}
-	act := newFactoryActions(h.c, src, board)
+	src := &factoryScreenSource{c: loaded(t, h.c), now: inspNow}
+	act := newFactoryActions(loaded(t, h.c), src, board)
 	ctx := context.Background()
 	const ref = "talkable/talkable#5"
 
@@ -114,7 +114,7 @@ func TestCOnAPRRowOfTheFactoryScreenIsTheBoardsCIFix(t *testing.T) {
 		t.Error("c on a PR's row made the factory's registry")
 	}
 
-	bare := newFactoryActions(h.c, src, nil)
+	bare := newFactoryActions(loaded(t, h.c), src, nil)
 	if _, err := bare.FixCIPlan(ctx, ref); !errors.Is(err, errNoBoard) {
 		t.Errorf("the plan without the board's actions: %v, want %v", err, errNoBoard)
 	}
@@ -136,7 +136,7 @@ func TestOOnAPRRowOpensMagnumsPane(t *testing.T) {
 	h.session(pr.ID, store.RoleJudge, store.SessionLive, "mg-talkable-5-judge", "p_1", "w_1")
 	board := newScreenActions(h.c)
 	defer board.Close()
-	act := newFactoryActions(h.c, &factoryScreenSource{c: h.c, now: inspNow}, board)
+	act := newFactoryActions(loaded(t, h.c), &factoryScreenSource{c: loaded(t, h.c), now: inspNow}, board)
 	if _, err := act.OpenPR(h.ctx, "talkable/talkable#5"); err != nil {
 		t.Fatalf("open: %v (%s)", err, h.errb.String())
 	}
@@ -161,8 +161,8 @@ func TestThePRKeysOfTheFactoryScreenAreTheBoardsRequests(t *testing.T) {
 	h.onSleep = func(h *actHarness) { h.completePending(store.RequestDone, "ok") }
 	board := newScreenActions(h.c)
 	defer board.Close()
-	src := &factoryScreenSource{c: h.c, now: inspNow}
-	act := newFactoryActions(h.c, src, board)
+	src := &factoryScreenSource{c: loaded(t, h.c), now: inspNow}
+	act := newFactoryActions(loaded(t, h.c), src, board)
 	ctx := context.Background()
 	const ref = "talkable/talkable#5"
 	start := h.now // the review's waits move the clock
@@ -206,7 +206,7 @@ func TestThePRKeysOfTheFactoryScreenAreTheBoardsRequests(t *testing.T) {
 		t.Error("the screen's PR keys made the factory's registry")
 	}
 
-	bare := newFactoryActions(h.c, src, nil)
+	bare := newFactoryActions(loaded(t, h.c), src, nil)
 	for i, call := range calls {
 		if _, err := call(bare); !errors.Is(err, errNoBoard) {
 			t.Errorf("call %d without the board's actions: %v, want %v", i, err, errNoBoard)

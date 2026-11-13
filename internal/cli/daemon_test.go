@@ -118,7 +118,7 @@ func TestDaemonUsageErrors(t *testing.T) {
 
 func TestDaemonConfigErrorNamesTheFix(t *testing.T) {
 	dt := newDaemonGroupTest(t)
-	dt.ctx.Config = nil
+	dt.ctx.preset = nil // the command reads the file the test names
 	dt.ctx.cfgPath = dt.ctx.Layout.Home + "/missing.toml"
 	if code := dt.run("daemon"); code != 1 {
 		t.Fatalf("exit %d, want 1", code)

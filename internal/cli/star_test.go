@@ -108,7 +108,7 @@ func TestStarIsKeptAcrossReloads(t *testing.T) {
 		t.Fatalf("the board's star: %+v, %v", res, err)
 	}
 	at := h.now
-	src := prsSource(h.st, h.c.Config, store.BoardFilter{IncludeClosed: true}, nil, h.c.Layout)
+	src := prsSource(h.st, loaded(t, h.c).Config, store.BoardFilter{IncludeClosed: true}, nil, h.c.Layout)
 	starredOf := func() map[int]time.Time {
 		t.Helper()
 		rows, err := src(ctx)

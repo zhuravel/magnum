@@ -33,10 +33,10 @@ type talkTest struct {
 func newFactoryTalkTest(t *testing.T, answer func(registry.Request) (string, string)) *talkTest {
 	t.Helper()
 	tt := &talkTest{daemonGroupTest: newFactoryStartTest(t, 250, answer)}
-	cfg := *tt.ctx.Config
+	cfg := *tt.ctx.preset
 	cfg.Terminal.App, cfg.Terminal.Launcher, cfg.Terminal.Session = "custom", "myterm -e {herdr} {args}", "default"
 	cfg.Factory.HerdrSession = "factory"
-	tt.ctx.Config = &cfg
+	tt.ctx.preset = &cfg
 	tt.fake.Rules = append([]execx.Rule{{Prefix: []string{"/bin/sh"}}}, tt.fake.Rules...)
 	daemonSys.FocusAgent = func(_ context.Context, socket, target string) error {
 		tt.sockets = append(tt.sockets, socket)
@@ -254,7 +254,7 @@ func TestTheLiaisonsCommandsLoadNoConfig(t *testing.T) {
 	if err := os.WriteFile(answers, []byte(`{"revision": 1, "answers": {"1": "Seven days before it expires"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	tt.ctx.Config, tt.ctx.cfgPath = nil, broken
+	tt.ctx.preset, tt.ctx.cfgPath = nil, broken
 	shown := "2026-11-04T09:00:00Z"
 
 	for _, args := range [][]string{

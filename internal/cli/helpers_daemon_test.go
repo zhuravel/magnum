@@ -49,7 +49,7 @@ func newDaemonGroupTest(t *testing.T, rules ...execx.Rule) *daemonGroupTest {
 		// rule (matched first) says otherwise.
 		fake: &execx.Fake{Rules: append(rules, daemonRuleOK([]string{paths.Layout{Home: repo}.Binary(), "config"}, ""))},
 	}
-	dt.ctx = &Context{Version: "test", Layout: paths.Layout{Home: repo}, Config: cfg, Stdout: dt.stdout, Stderr: dt.stderr}
+	dt.ctx = &Context{Version: "test", Layout: paths.Layout{Home: repo}, preset: cfg, Stdout: dt.stdout, Stderr: dt.stderr}
 	old := daemonSys
 	t.Cleanup(func() { daemonSys = old })
 	daemonSys = daemonGroupSys{
@@ -79,13 +79,26 @@ func (dt *daemonGroupTest) useMiseKey(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dt.ctx.Layout.Home, "mise.toml"), []byte("[env]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg := *dt.ctx.Config
+	cfg := *dt.ctx.preset
 	cfg.Identities = append(slices.Clone(cfg.Identities), config.Identity{Name: "app", Kind: "app", Login: "example[bot]",
 		AppID: 1, ClientID: "c", InstallationID: 2, PrivateKeyEnv: "MAGNUM_TEST_APP_KEY"})
-	dt.ctx.Config = &cfg
+	dt.ctx.preset = &cfg
+}
+
+// loaded is c with its config loaded, as a screen's command loads it before
+// it reads a frame or builds its actions: for a test that drives those parts
+// without the command. The harnesses leave Config nil (preset holds the
+// test's config) so that a command run whole must load it itself.
+func loaded(t testing.TB, c *Context) *Context {
+	t.Helper()
+	if err := c.LoadConfig(); err != nil {
+		t.Fatal(err)
+	}
+	return c
 }
 
 func (dt *daemonGroupTest) run(name string, args ...string) int {
+	dt.ctx.Config = nil // each command starts as Main leaves it, and loads its config itself
 	return execute(dt.ctx, append([]string{name}, args...))
 }
 

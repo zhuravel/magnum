@@ -183,7 +183,7 @@ func TestDaemonRefusesToStartOnAPromptThisBuildCannotRender(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "judge-initial.md"), []byte("{{.FieldOfANewerBuild}}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	dt.ctx.Config.Pipeline.PromptsDir = dir
+	dt.ctx.preset.Pipeline.PromptsDir = dir
 	if code := dt.run("daemon"); code != 1 {
 		t.Fatalf("exit %d, want 1", code)
 	}
@@ -215,7 +215,7 @@ func TestConfigCommandRendersEveryPrompt(t *testing.T) {
 	cfg.Pipeline.PromptsDir = dir
 	f.Out.Reset()
 	f.Err.Reset()
-	c = &Context{Version: "test", Layout: f.Ctx.Layout, Config: cfg, Stdout: f.Out, Stderr: f.Err}
+	c = &Context{Version: "test", Layout: f.Ctx.Layout, preset: cfg, Stdout: f.Out, Stderr: f.Err}
 	if code := execute(c, []string{"config"}); code != 1 {
 		t.Fatalf("exit %d, want 1", code)
 	}

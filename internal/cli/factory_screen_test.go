@@ -32,9 +32,9 @@ import (
 func TestFactoryWithoutASubcommandOpensTheScreen(t *testing.T) {
 	storetest.Serial(t)
 	dt := newDaemonGroupTest(t)
-	cfg := *dt.ctx.Config
+	cfg := *dt.ctx.preset
 	cfg.Terminal.Mouse, cfg.Terminal.Icons = false, "ascii"
-	dt.ctx.Config = &cfg
+	dt.ctx.preset = &cfg
 	l := dt.ctx.Layout
 	registrytest.Seed(t, l.FactoryDB())
 	reg, err := registry.Open(l.FactoryDB(), registry.Options{})
@@ -118,7 +118,7 @@ func TestTheFactoryScreenSaysWhenTheDaemonIsDown(t *testing.T) {
 		}
 		return nil
 	}
-	src := &factoryScreenSource{c: dt.ctx, now: time.Now}
+	src := &factoryScreenSource{c: loaded(t, dt.ctx), now: time.Now}
 	frame := func() tui.FactoryData {
 		t.Helper()
 		d, err := src.Frame(context.Background())
@@ -173,9 +173,9 @@ func TestTheFactoryScreenWithoutARegistryShowsNoTask(t *testing.T) {
 func TestTheFactoryScreenTakesTheBoardsRepoFlag(t *testing.T) {
 	storetest.Serial(t)
 	dt := newDaemonGroupTest(t)
-	cfg := *dt.ctx.Config
+	cfg := *dt.ctx.preset
 	cfg.Daemon.DefaultRepo = "example/shop"
-	dt.ctx.Config = &cfg
+	dt.ctx.preset = &cfg
 	onScreen(t)
 	var opened []tui.FactoryOptions
 	old := tuiFactory
@@ -254,13 +254,13 @@ func (m ownOnlyMagnum) CodexOverrule(context.Context) (time.Time, error) { retur
 func TestTheFactoryScreenWithoutARegistryListsYourPRs(t *testing.T) {
 	storetest.Serial(t)
 	dt := newDaemonGroupTest(t)
-	cfg := *dt.ctx.Config
+	cfg := *dt.ctx.preset
 	cfg.Board.OwnPRs = config.OwnPRsFactory
-	dt.ctx.Config = &cfg
+	dt.ctx.preset = &cfg
 	own := factory.PRState{Ref: factory.PRRef{Repo: "example/shop", Number: 12}, ID: 5, Title: "Coupon rounding",
 		URL: "https://github.com/example/shop/pull/12", Found: true, DaemonUp: true, Watched: true, GHState: store.GHOpen,
 		State: store.PRReviewed, AuthorLogin: "zhuravel"}
-	src := &factoryScreenSource{c: dt.ctx, now: time.Now, magnum: ownOnlyMagnum{own: []factory.PRState{own}}}
+	src := &factoryScreenSource{c: loaded(t, dt.ctx), now: time.Now, magnum: ownOnlyMagnum{own: []factory.PRState{own}}}
 	defer src.close()
 	d, err := src.Frame(context.Background())
 	if err != nil {
@@ -290,9 +290,9 @@ func (ownUnreadMagnum) OwnPRs(context.Context) ([]factory.PRState, error) {
 func TestAFrameThatCouldNotReadYourPRsSaysSo(t *testing.T) {
 	storetest.Serial(t)
 	dt := newDaemonGroupTest(t)
-	cfg := *dt.ctx.Config
+	cfg := *dt.ctx.preset
 	cfg.Board.OwnPRs = config.OwnPRsFactory
-	dt.ctx.Config = &cfg
+	dt.ctx.preset = &cfg
 	own := factory.PRState{Ref: factory.PRRef{Repo: "example/shop", Number: 12}, ID: 5, Title: "Coupon rounding",
 		URL: "https://github.com/example/shop/pull/12", Found: true, DaemonUp: true, Watched: true, GHState: store.GHOpen,
 		State: store.PRReviewed, AuthorLogin: "zhuravel"}
@@ -300,7 +300,7 @@ func TestAFrameThatCouldNotReadYourPRsSaysSo(t *testing.T) {
 		magnum factory.Magnum
 		unread bool
 	}{{ownUnreadMagnum{}, true}, {ownOnlyMagnum{own: []factory.PRState{own}}, false}} {
-		src := &factoryScreenSource{c: dt.ctx, now: time.Now, magnum: tc.magnum}
+		src := &factoryScreenSource{c: loaded(t, dt.ctx), now: time.Now, magnum: tc.magnum}
 		d, err := src.Frame(context.Background())
 		src.close()
 		if err != nil {
@@ -319,9 +319,9 @@ func TestAFrameThatCouldNotReadYourPRsSaysSo(t *testing.T) {
 func TestTheFactoryScreenShowsAPublishedTasksPRVerdict(t *testing.T) {
 	storetest.Serial(t)
 	dt := newDaemonGroupTest(t)
-	cfg := *dt.ctx.Config
+	cfg := *dt.ctx.preset
 	cfg.Watches = []config.Watch{{Owner: "example", Include: []string{"*"}, Identity: "zhuravel", Autofix: config.AutofixOpen}}
-	dt.ctx.Config = &cfg
+	dt.ctx.preset = &cfg
 	l := dt.ctx.Layout
 	ctx := context.Background()
 	registrytest.Seed(t, l.FactoryDB())
@@ -419,10 +419,10 @@ func (m statesMagnum) PRStates(context.Context, []factory.PRRef) (map[factory.PR
 func TestTheFactoryScreenReadsWhatThePRKeysGoBy(t *testing.T) {
 	storetest.Serial(t)
 	dt := newDaemonGroupTest(t)
-	cfg := *dt.ctx.Config
+	cfg := *dt.ctx.preset
 	cfg.Watches = []config.Watch{{Owner: "example", Include: []string{"shop"}, Identity: "zhuravel", Autofix: config.AutofixOpen},
 		{Owner: "example", Include: []string{"widget"}, Identity: "zhuravel"}}
-	dt.ctx.Config = &cfg
+	dt.ctx.preset = &cfg
 	l := dt.ctx.Layout
 	ctx := context.Background()
 	registrytest.Seed(t, l.FactoryDB())
@@ -479,7 +479,7 @@ func TestTheFactoryScreenReadsWhatThePRKeysGoBy(t *testing.T) {
 		return factory.PRState{Ref: factory.PRRef{Repo: repo, Number: n}, ID: id, Title: "a PR", Found: true, DaemonUp: true, Watched: true,
 			GHState: store.GHOpen, State: store.PRReviewed, AuthorLogin: "zhuravel"}
 	}
-	src := &factoryScreenSource{c: dt.ctx, now: time.Now, magnum: statesMagnum{
+	src := &factoryScreenSource{c: loaded(t, dt.ctx), now: time.Now, magnum: statesMagnum{
 		ownOnlyMagnum: ownOnlyMagnum{own: []factory.PRState{state("example/widget", 12, own.ID), state("example/widget", 13, gone.ID),
 			state("example/widget", 14, own.ID+99)}},
 		states: map[factory.PRRef]factory.PRState{{Repo: "example/shop", Number: 4530}: state("example/shop", 4530, taskPR.ID)}}}

@@ -263,10 +263,10 @@ func TestFactoryStatsRefusesABaselineItCannotRead(t *testing.T) {
 // your GitHub login.
 func baselineFixture(t *testing.T, dt *daemonGroupTest) (transcripts, labelled string) {
 	t.Helper()
-	cfg := *dt.ctx.Config
+	cfg := *dt.ctx.preset
 	cfg.Board.Trackers = []string{"https://example.atlassian.net/browse/PR-{num}"}
 	cfg.Identities = append(slices.Clone(cfg.Identities), config.Identity{Name: "me", Kind: "gh", Login: "zhuravel"})
-	dt.ctx.Config = &cfg
+	dt.ctx.preset = &cfg
 
 	transcripts = filepath.Join(t.TempDir(), "transcripts")
 	at := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
@@ -393,10 +393,10 @@ func TestFactoryBaselineNamesWhyItSkippedEachTranscript(t *testing.T) {
 	storetest.Serial(t)
 	dt := newDaemonGroupTest(t)
 	transcripts, labelled := baselineFixture(t, dt)
-	cfg := *dt.ctx.Config
+	cfg := *dt.ctx.preset
 	slots := t.TempDir()
 	cfg.Pools = []config.Pool{{Repo: "example/shop", SlotName: "review{n}", SlotPath: filepath.Join(slots, "shop.review{n}"), Max: 2}}
-	dt.ctx.Config = &cfg
+	dt.ctx.preset = &cfg
 	at := time.Date(2026, 10, 2, 10, 0, 0, 0, time.UTC)
 	write := func(name string, lines ...string) {
 		t.Helper()
@@ -515,9 +515,9 @@ func TestFactoryBaselineNeedsYourBranchPrefix(t *testing.T) {
 	storetest.Serial(t)
 	dt := newDaemonGroupTest(t)
 	transcripts, labelled := baselineFixture(t, dt)
-	cfg := *dt.ctx.Config
+	cfg := *dt.ctx.preset
 	cfg.Identities = nil
-	dt.ctx.Config = &cfg
+	dt.ctx.preset = &cfg
 	if code := dt.run("factory", "baseline", "--transcripts", transcripts, "--labelled", labelled); code != 1 ||
 		!strings.Contains(dt.stderr.String(), "--branch-prefix") {
 		t.Errorf("exit %d, stderr %q; want a refusal that names --branch-prefix", code, dt.stderr)
@@ -563,9 +563,9 @@ func TestFactoryBaselineWritesNothingWhenItCannotMeasure(t *testing.T) {
 		}
 	}
 	// No tracker, no way to tell a ticket from a word.
-	cfg := *dt.ctx.Config
+	cfg := *dt.ctx.preset
 	cfg.Board.Trackers = nil
-	dt.ctx.Config = &cfg
+	dt.ctx.preset = &cfg
 	fine := filepath.Join(t.TempDir(), "fine.jsonl")
 	if err := os.WriteFile(fine, []byte(`{"text": "open PR", "class": "step_start"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -620,7 +620,7 @@ func TestFactoryBaselineLoadsTheConfiguration(t *testing.T) {
 	if err := os.WriteFile(user, []byte("[board]\ntrackers = [\"https://example.atlassian.net/browse/PR-{num}\"]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	dt.ctx.Config = nil // as Main leaves it: no command has loaded it yet
+	dt.ctx.preset = nil // as Main leaves it: the command reads the files, the user layer below
 	dt.ctx.Layout.UserConfig = user
 
 	code := dt.run("factory", "baseline", "--transcripts", transcripts, "--labelled", labelled, "--branch-prefix", "zhuravel-")

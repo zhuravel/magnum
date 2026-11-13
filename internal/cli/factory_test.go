@@ -265,7 +265,7 @@ func TestTheFactoryDaemonBuilderRefusesToMigrateUnderAnotherDaemon(t *testing.T)
 	writeFactoryRegistryAt(t, l.FactoryDB(), 1)
 	storetest.Seed(t, l.FactoryAgentsDB())
 
-	d, err := buildFactoryDaemon(dt.ctx, slog.LevelInfo)
+	d, err := buildFactoryDaemon(loaded(t, dt.ctx), slog.LevelInfo)
 	if err == nil {
 		d.Close()
 		t.Fatal("the daemon built and migrated under another factory daemon")

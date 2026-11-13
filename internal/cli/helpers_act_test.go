@@ -171,7 +171,7 @@ func newActHarnessOn(t *testing.T, open func(testing.TB, string) *store.Store) *
 		cleaner: &actFakeCleaner{}, env: map[string]string{},
 		now: time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)}
 	st.Clock = func() time.Time { return h.now }
-	h.c = &Context{Version: "test", Layout: layout, Config: cfg, Stdout: &h.out, Stderr: &h.errb}
+	h.c = &Context{Version: "test", Layout: layout, preset: cfg, Stdout: &h.out, Stderr: &h.errb}
 	h.d = &actDeps{
 		Cfg: cfg, Layout: layout, Store: st, Herdr: h.hd,
 		GitHub: func(id string) actGitHub {
@@ -239,6 +239,7 @@ func newActHarnessOn(t *testing.T, open func(testing.TB, string) *store.Store) *
 // cmd runs a command through the cobra tree and returns its exit code.
 func (h *actHarness) cmd(name string, args ...string) int {
 	h.t.Helper()
+	h.c.Config = nil // each command starts as Main leaves it, and loads its config itself
 	return execute(h.c, append([]string{name}, args...))
 }
 

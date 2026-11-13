@@ -147,6 +147,7 @@ func (f *inspFixture) run(name string, args ...string) int {
 	f.t.Helper()
 	f.Out.Reset()
 	f.Err.Reset()
+	f.Ctx.Config = nil // each command starts as Main leaves it, and loads its config itself
 	return execute(f.Ctx, append([]string{name}, args...))
 }
 
