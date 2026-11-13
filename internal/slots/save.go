@@ -17,8 +17,8 @@ package slots
 //   - saved.txt: what was saved, from where and before what, how to put it
 //     back, the untracked files a switch keeps in the tree, and what the
 //     save left out: past its cap (SaveCap, over the patch and the files
-//     together), no regular file or symlink, or a file it could not read
-//     or write.
+//     together), no regular file or symlink, or a file it could not read.
+//     A write into the save that fails fails the save.
 //
 // Ignored files are never saved: a work tree's caches, logs and builds,
 // which a discard keeps anyway, but for a removal's.
@@ -141,8 +141,9 @@ func clipNames(names []string) string {
 // own under savesFolder: the patch of the tracked changes and saved.txt,
 // and with untracked (a removal, which deletes them) the untracked files
 // git does not ignore, within the cap (saveCap); without it saved.txt only
-// names those files, which the step keeps. A file that cannot be copied is
-// left out and named, never a failure. The files magnum wrote into the
+// names those files, which the step keeps. A file that cannot be read is
+// left out and named, never a failure; a write into the save that fails
+// is one. The files magnum wrote into the
 // tree (the mise file it rendered, the copy_files and what setup wrote:
 // ownFiles) are neither saved nor named, and a save that would hold
 // nothing else is not kept (s.dir is ""); nor is one whose patch is the
@@ -414,9 +415,11 @@ func appendFile(out *os.File, name string) error {
 // or a symlink saved as the link, at most budget bytes together; the
 // others are named in s: a file past what is left, a repository inside the
 // tree, any other file that is no regular file, and a file it could not
-// read or write (unreadable, gone, a name the save's folder refuses), with
-// the error. untracked/ is made at the first file saved, so a save that copies
-// none has no such folder. Only that folder failing is an error.
+// read (unreadable, gone), with the error. untracked/ is made at the first
+// file saved, so a save that copies none has no such folder. A write into
+// the save that fails (a full disk, a quota, a name its folder refuses) is
+// an error, the save's as a whole: it is no reason about the file, and the
+// removal must not delete what the save does not hold.
 func saveUntracked(tree, dir string, files []string, budget int64, s *saved) error {
 	if len(files) == 0 {
 		return nil
@@ -474,9 +477,9 @@ func (u *untrackedSave) close() {
 }
 
 // save copies untracked file f and takes its size from the budget, or
-// says why it does not ("" when it did): a file it cannot read or write is
-// left out with the error, as a file past the cap is. The error is the
-// save's folder's alone.
+// says why it does not ("" when it did): a file it cannot read is left out
+// with the error, as a file past the cap is. The error is the save's own
+// (place, the write).
 func (u *untrackedSave) save(f string) (string, error) {
 	if strings.HasSuffix(f, "/") {
 		return "a repository inside the work tree", nil
@@ -505,22 +508,33 @@ func (u *untrackedSave) save(f string) (string, error) {
 	case err != nil:
 		return "cannot be read: " + errText(err), nil
 	}
-	dst, err := u.folder()
+	dst, err := u.place(f)
 	if err != nil {
 		return "", err
-	}
-	if d := path.Dir(f); d != "." {
-		if err := dst.MkdirAll(d, 0o700); err != nil {
-			return "cannot be written: " + errText(err), nil
-		}
 	}
 	// The owner's bits (an executable script stays one when `cp -R` puts
 	// it back), never the group's or others'.
 	if err := writeSaved(dst, f, b, fi.Mode().Perm()&0o700|0o600); err != nil {
-		return "cannot be written: " + errText(err), nil
+		return "", fmt.Errorf("copy into the save: %w", err)
 	}
 	u.budget -= int64(len(b))
 	return "", nil
+}
+
+// place makes the save's untracked/ and the folder of f in it, and returns
+// untracked/: an error there is the save's own (its disk full, a folder it
+// cannot write), never a reason about f.
+func (u *untrackedSave) place(f string) (*os.Root, error) {
+	dst, err := u.folder()
+	if err != nil {
+		return nil, err
+	}
+	if d := path.Dir(f); d != "." {
+		if err := dst.MkdirAll(d, 0o700); err != nil {
+			return nil, fmt.Errorf("copy into the save: %w", err)
+		}
+	}
+	return dst, nil
 }
 
 // link saves symlink f as a symlink to the same target, never what it
@@ -536,17 +550,12 @@ func (u *untrackedSave) link(f string) (string, error) {
 	case int64(len(target)) > u.budget:
 		return "a symlink to " + target + ", past the cap", nil
 	}
-	dst, err := u.folder()
+	dst, err := u.place(f)
 	if err != nil {
 		return "", err
 	}
-	if d := path.Dir(f); d != "." {
-		if err := dst.MkdirAll(d, 0o700); err != nil {
-			return "cannot be written: " + errText(err), nil
-		}
-	}
 	if err := dst.Symlink(target, f); err != nil {
-		return "cannot be written: " + errText(err), nil
+		return "", fmt.Errorf("copy into the save: %w", err)
 	}
 	u.budget -= int64(len(target))
 	return "", nil
@@ -582,9 +591,6 @@ func writeSaved(dst *os.Root, name string, b []byte, perm fs.FileMode) (err erro
 func errText(err error) string {
 	if pe, ok := errors.AsType[*fs.PathError](err); ok {
 		return pe.Err.Error()
-	}
-	if le, ok := errors.AsType[*os.LinkError](err); ok {
-		return le.Err.Error()
 	}
 	return err.Error()
 }

@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
@@ -130,6 +131,48 @@ func TestAPatchCutShortFailsTheSave(t *testing.T) {
 	}
 	if got, err := os.ReadFile(filepath.Join(sl.Path, "README")); err != nil || string(got) != string(want) {
 		t.Fatalf("README after the failed save: %d bytes, %v; want the change kept", len(got), err)
+	}
+	if evs := h.discarded(t, sl.Name); len(evs) != 0 {
+		t.Fatalf("slot.discarded events = %+v, want none", evs)
+	}
+}
+
+// A write into the save that fails (a full disk, a quota; a file size
+// limit here) fails the save as a whole, and the removal deletes nothing:
+// a file the save cannot write is not a file of the tree that cannot be
+// read. The write error was a per-file reason, so saved.txt, a few KB,
+// still went through, and `worktree remove --force` deleted the file the
+// save never held.
+func TestAWriteIntoTheSaveThatFailsRefusesTheRemoval(t *testing.T) {
+	storetest.Serial(t)
+	f := newPerPR(t, true)
+	h := f.h
+	limit := fileLimit()
+	h.m.saveCap = 2*limit + 1<<20 // the file fits the cap: only its write fails
+	sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, f.repoName(), f.pr, f.sha7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dump := make([]byte, limit+200<<10)
+	_, _ = rand.NewChaCha8([32]byte{9}).Read(dump)
+	if err := os.WriteFile(filepath.Join(sl.Path, "dump.sql"), dump, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	undo := limitFileSize(t, limit, true)
+	err = h.m.RemovePRWorktree(h.ctx, sl, false)
+	undo()
+	if err == nil {
+		t.Fatal("RemovePRWorktree over a save that could not write dump.sql: no error")
+	}
+	if got, err := os.ReadFile(filepath.Join(sl.Path, "dump.sql")); err != nil || string(got) != string(dump) {
+		t.Fatalf("dump.sql after the failed save: %d bytes, %v; want it kept", len(got), err)
+	}
+	if got := h.slot(sl.Name); got.State == store.SlotRemoved {
+		t.Fatalf("state = %s, want the removal refused", got.State)
+	}
+	if got := saves(t, h.layout.PRSaves("zhuravel", "widget", f.pr.Number)); len(got) != 0 {
+		t.Fatalf("saves = %q, want none left by the failed save", got)
 	}
 	if evs := h.discarded(t, sl.Name); len(evs) != 0 {
 		t.Fatalf("slot.discarded events = %+v, want none", evs)
