@@ -257,6 +257,19 @@ func (s *Store) SetKVIf(ctx context.Context, key, old, value string) (bool, erro
 	return n == 1, err
 }
 
+// AddKV stores value under key only while the key is absent, and reports
+// whether it did: SetKVIf's compare for a writer that read no row (the
+// handover of a PR's fixes writes its owner row so).
+func (s *Store) AddKV(ctx context.Context, key, value string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, "INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING",
+		key, value, FormatTime(s.now()))
+	if err != nil {
+		return false, fmt.Errorf("add kv %s: %w", key, err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 // DeleteKVIf removes key only while it still holds value, and reports
 // whether it did (SetKVIf's counterpart).
 func (s *Store) DeleteKVIf(ctx context.Context, key, value string) (bool, error) {

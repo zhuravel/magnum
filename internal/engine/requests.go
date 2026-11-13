@@ -254,6 +254,8 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 			read, _ := carry.(*externalRead) // the other reviewers' items it read before the yield
 			return e.requestFix(ctx, p, read)
 		})
+	case ReqFixHandover: // fix_handover.go
+		answer(e, ctx, req, e.requestHandover)
 	case ReqWhiteboard: // whiteboard.go
 		if p, ok := payload[WhiteboardPayload](e, ctx, req); ok {
 			e.requestWhiteboardAsync(ctx, req.ID, p)

@@ -9098,6 +9098,18 @@ const (
 	MachineToastRounds = 3
 )
 const (
+	FixRecLoop        = "loop"        // a fix loop's row
+	FixRecPush        = "push"        // a fixer's push record, to confirm or to settle late
+	FixRecHeldMerge   = "held_merge"  // a merge of the parent held for your y
+	FixRecHeldFix     = "held_fix"    // a fix held for a restart, a pause or the GitHub budget
+	FixRecPushed      = "pushed"      // magnum's push, waiting for its CI start
+	FixRecRequest     = "request"     // a pending `magnum fix` or `magnum abort` request
+	FixRecRun         = "run"         // a fix run whose verdict is not written
+	FixRecReservation = "reservation" // a fix job holds the PR now (the daemon's alone)
+)
+    Kinds of fix work in flight (FixRecord.Kind).
+
+const (
 	// FixPhaseFixing: the fixer works on the head the cycle fixes.
 	FixPhaseFixing = fixwork.FixPhaseFixing
 	// FixPhaseReviewing: the fixer pushed, and a review round runs on the new head.
@@ -9577,6 +9589,10 @@ const KVDaemonWork = "daemon.work"
     changes, deleted when nothing is in flight, at the shutdown and at every
     start of the daemon.
 
+const KVFixHandoverAll = "fix.handover_all"
+    KVFixHandoverAll says that every own PR goes to the factory (a handover as
+    JSON), `magnum fix --handover all`.
+
 const KVLearnEditing = "learn.editing"
     KVLearnEditing holds the skill edit running now (EditMark as JSON), which
     the CLI reads before it stops the daemon: set when it starts, deleted when
@@ -9621,6 +9637,10 @@ const ReqCodexFlag = "codex-flag"
 const ReqFix = "fix"
     ReqFix starts a fix loop on a PR, or switches the fix job off or on for it
     (FixPayload).
+
+const ReqFixHandover = "fix_handover"
+    ReqFixHandover hands a PR's fixes, or every own PR's, to the factory,
+    or one back (HandoverPayload).
 
 const ReqSnooze = "snooze"
     ReqSnooze snoozes a PR or lifts its snooze (SnoozePayload).
@@ -9994,6 +10014,10 @@ func KVPRDeltaCheck(prID int64) string
 
 func KVPRFix(prID int64) string
     KVPRFix holds a PR's fix loop (FixState as JSON).
+
+func KVPRFixHandover(prID int64) string
+    KVPRFixHandover holds the handover of PR prID that waits for its fix work to
+    end (a handover as JSON).
 
 func KVPRFixHeld(prID int64) string
     KVPRFixHeld holds a fix that could not start yet (heldFix as JSON):
@@ -11076,6 +11100,14 @@ type Deps struct {
 	// listens (onHookFailure); nil = none.
 	HookFailures <-chan app.HookFailure
 
+	// FixLeaseOf reads the factory's lease of a PR's fixes, the PR Number
+	// of repo ("owner/name"), from the factory's registry, read only
+	// (factoryread's, through the daemon's wiring; fix_lease.go). nil = no
+	// reader: the review side reads no lease and holds nothing, as before
+	// the factory fixed PRs, and `magnum fix --handover back` refuses,
+	// since magnum cannot tell whether the factory worked the PR.
+	FixLeaseOf func(ctx context.Context, repo string, number int) (FixLease, error)
+
 	// Staging reads where each open PR of a repository with staging envs
 	// stands on them (internal/staging's read side, staging_status.go);
 	// FromApp makes one when a watched repository has [[factory.repo.staging]]
@@ -11395,6 +11427,24 @@ type FixDecision struct {
     its first comment (attention.FixCall's Thread), and your words, which magnum
     posts there as you; no event or log carries them.
 
+type FixLease struct {
+	Fixing bool
+	Phase  string
+	Head   string
+	Cycle  int
+	Cap    int
+	Worked bool
+	ReadAt time.Time
+}
+    FixLease is what the factory's registry says of its fix work on a PR:
+    Fixing, the factory holds the PR's lease and works on it now, in Phase
+    (FixPhaseFixing while its fixer works, FixPhaseReviewing while it waits
+    for magnum's re-review of its push), on Head, in cycle Cycle of Cap (0:
+    not known); Worked, the factory worked the PR since its import (a start,
+    a push, a reply or a change of its ledger), which keeps it the factory's
+    (`magnum fix --handover back` refuses it); ReadAt, when the reader read it.
+    The zero lease is a PR the factory has no record of.
+
 type FixOff = fixwork.FixOff
     FixOff is a PR's opt-out of the fix job (KVPRFixOff): fixwork.FixOff.
 
@@ -11430,6 +11480,15 @@ type FixPayload struct {
     Mode FixModeCI fixes the PR's failed required CI (fix_ci.go, `magnum fix
     --ci`), with DryRun and nothing else; CIAsked is what the y/N of its plan
     asked about (nil: nothing was asked).
+
+type FixRecord struct {
+	Kind   string `json:"kind"`
+	What   string `json:"what"`
+	Action string `json:"action"`
+}
+    FixRecord is one record of magnum's fix work in flight on a PR, which keeps
+    it from handing over to the factory: its Kind, What it is and the operator's
+    Action about it, in words.
 
 type FixReport = fixwork.FixReport
     FixReport is what the fixer reports: fixwork.FixReport.
@@ -11664,6 +11723,17 @@ func (w GitHubWindow) Outside() int
     Outside is what the window's readings say was spent outside the daemon's
     calls: Used − Points, never below 0. It counts what others spent before the
     daemon's first call of the window too.
+
+type HandoverPayload struct {
+	PRTarget
+	All    bool `json:"all,omitempty"`
+	Back   bool `json:"back,omitempty"`
+	DryRun bool `json:"dry_run,omitempty"`
+}
+    HandoverPayload is a `magnum fix --handover` request: All (every own PR) or
+    the PR the target names, to the factory; Back returns that PR to magnum,
+    or with All every PR it may and lifts All. DryRun answers what would happen
+    and changes nothing.
 
 type HeldMerge = fixwork.HeldMerge
     HeldMerge is a merge of a PR's parent held for your y (KVPRHeldMerge):
@@ -12675,6 +12745,28 @@ type UnapprovePayload struct {
 }
     UnapprovePayload withdraws the PR's automatic approval and stops
     auto-approval of the PR; Resume lets magnum approve it again instead.
+
+type UndrainedPR struct {
+	ID      int64       `json:"id"`
+	Repo    string      `json:"repo"`
+	Number  int         `json:"number"`
+	URL     string      `json:"url"`
+	Handing bool        `json:"handing,omitempty"`
+	Records []FixRecord `json:"records"`
+}
+    UndrainedPR is a PR with fix work in flight (FixInFlight): its row's id,
+    repository, number and link, whether a handover waits for it (Handing),
+    and its records.
+
+func FixInFlight(ctx context.Context, st *store.Store, cfg *config.Config, now time.Time) ([]UndrainedPR, error)
+    FixInFlight is the morning list (`magnum fix --drained`, the doctor): every
+    PR the registry st holds fix work in flight for, by repository and number,
+    with each record's action, and whether a handover waits for it (cfg names
+    the operator's own PRs and resolves the requests' refs). The daemon's own
+    reservations are not in the registry: fixQuiet adds them.
+
+func (u UndrainedPR) Label() string
+    Label is the PR as owner/name#N.
 
 type VerdictPayload struct {
 	PRTarget
@@ -20296,14 +20388,18 @@ func ParseFixOff(s string) (FixOff, bool)
     opt-out.
 
 type FixOwner struct {
-	Owner string    `json:"owner"`
-	At    time.Time `json:"at"`
-	By    string    `json:"by,omitempty"`
+	Owner   string    `json:"owner"`
+	At      time.Time `json:"at"`
+	By      string    `json:"by,omitempty"`
+	Flipped time.Time `json:"flipped,omitzero"`
 }
     FixOwner is a PR's KVPRFixOwner row: Owner, since At (when magnum flipped
     the row to Owner: the factory keys its one import of the PR's records by
     the At of the flip to OwnerFactory), and By, what flipped it ("magnum fix
-    --handover", "magnum fix --handover all").
+    --handover", "magnum fix --handover all"). Flipped is, for OwnerReturning,
+    the At of the flip to the factory it returns from: a PR the factory worked
+    before it saw the return stays the factory's under that flip again, so the
+    factory imports it no second time.
 
 func ParseFixOwner(raw string) (FixOwner, error)
     ParseFixOwner reads a KVPRFixOwner row. A row that is no JSON, names an
@@ -34273,6 +34369,11 @@ func OpenWith(path string, opts Options) (*Store, error)
 func (s *Store) ActiveRuns(ctx context.Context) ([]Run, error)
     ActiveRuns returns runs still in flight (pending, submitted, working,
     ended-but-unverified), oldest first.
+
+func (s *Store) AddKV(ctx context.Context, key, value string) (bool, error)
+    AddKV stores value under key only while the key is absent, and reports
+    whether it did: SetKVIf's compare for a writer that read no row (the
+    handover of a PR's fixes writes its owner row so).
 
 func (s *Store) AgentTimeSince(ctx context.Context, since, now time.Time, prIDs ...int64) ([]PRAgentTime, error)
     AgentTimeSince sums, per PR, the durations of the runs created at or after

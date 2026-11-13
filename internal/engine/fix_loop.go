@@ -250,6 +250,8 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 		case err == nil:
 		case errors.Is(err, errFixLoopGone):
 			e.log.Info("fix: the loop ended before its next cycle started", "subject", job.subject(), "why", err.Error())
+		case errors.Is(err, errFixHandingOver): // fix_handover.go: the loop ends at its cycle boundary
+			e.endLoopForHandover(ctx, job, raw, calls, callsText, left)
 		case errors.Is(err, errFixDraining):
 			e.log.Info("fix: the daemon is draining; the next cycle waits for the restart", "subject", job.subject(), "cycle", st.Cycle+1)
 			e.holdNextCycle(ctx, job, raw, false)
@@ -406,6 +408,24 @@ func (e *Engine) endLoopForAttention(ctx context.Context, job *fixJob, raw, kind
 		return
 	}
 	e.fixAttention(ctx, job, withParentRefused(withUnread(msg, job.othersUnread()), job)) // fix_settle.go, fix_parent.go
+}
+
+// endLoopForHandover ends, at its cycle boundary, a loop whose PR hands
+// over to the factory (errFixHandingOver, fix_handover.go), where its next
+// cycle would start: its row goes (while it is still raw, endFixRowIf) and
+// fix.ended says that the factory takes what is left (left: the
+// re-review's words). Calls the loop carried, which its next cycle would
+// have carried on (calls, callsText), are the author's now, as at an end
+// with no next cycle (fix.needs_you).
+func (e *Engine) endLoopForHandover(ctx context.Context, job *fixJob, raw string, calls bool, callsText func() string, left string) {
+	if calls {
+		e.endLoopForAttention(ctx, job, raw, "fix.needs_you", "fix: "+callsText())
+		return
+	}
+	if e.endFixRowIf(ctx, job, raw) {
+		e.event(ctx, "info", job.subject(), "fix.ended", fmt.Sprintf("the fix loop ends at its cycle boundary: the PR hands over to the factory, "+
+			"which takes what is left (%s)", left), job.loopData())
+	}
 }
 
 // endFixRowIf ends the job's loop by removing its row while the row is still
@@ -620,6 +640,12 @@ func (e *Engine) autofixGone(ctx context.Context, repo store.Repo, pr store.PR) 
 		return "autofix is no longer on for its watch"
 	case !e.ownPR(pr):
 		return "the PR is not yours"
+	}
+	switch handing, err := e.handingOver(ctx, pr); { // fix_handover.go
+	case err != nil:
+		return "whether it hands over to the factory cannot be read: " + err.Error()
+	case handing:
+		return "the PR hands over to the factory"
 	}
 	switch _, off, err := e.fixOff(ctx, pr.ID); {
 	case err != nil:

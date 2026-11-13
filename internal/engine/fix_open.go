@@ -923,6 +923,8 @@ func (e *Engine) openStart(ctx context.Context, repo store.Repo, pr store.PR, l 
 		l.WaitAt, l.WaitWhy = e.now(), v.Why
 	case errors.As(err, &noSlot): // prepareFix asked the pool for one (needSlot); the next look asks again, a registry read
 		return slotWait(v, work, noSlot.repo)
+	case errors.Is(err, errFixHandingOver): // fix_handover.go: the factory takes the work once the PR flips
+		v.Verdict, v.Why = OpenWaits, oneLine(err.Error(), 300)
 	case errors.As(err, &unchecked): // the conflict is unknown, not gone: asked again, as a failed read is
 		v.Verdict, v.Why = OpenWaits, oneLine(unchecked.cause.Error(), 300)
 		l.WaitAt, l.WaitWhy = e.now(), v.Why

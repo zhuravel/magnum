@@ -20,7 +20,7 @@ func TestOwnerRowsWrittenByThisBuildDecodeInFixwork(t *testing.T) {
 	rows := map[string]FixOwner{
 		"factory.json":       {Owner: OwnerFactory, At: flip, By: "magnum fix --handover"},
 		"factory-no-by.json": {Owner: OwnerFactory, At: flip},
-		"returning.json":     {Owner: OwnerReturning, At: flip.Add(75 * time.Minute), By: "magnum fix --handover back"},
+		"returning.json":     {Owner: OwnerReturning, At: flip.Add(75 * time.Minute), By: "magnum fix --handover back", Flipped: flip},
 	}
 	files, err := filepath.Glob(filepath.Join("testdata", "owner", "*.json"))
 	if err != nil || len(files) != len(rows) {

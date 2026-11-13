@@ -89,6 +89,22 @@ func TestSetKVIfAndDeleteKVIfCompareTheValue(t *testing.T) {
 	}
 }
 
+// AddKV writes only a key that is absent: a writer that read no row and
+// lost the race to another (a value written since) changes nothing.
+func TestAddKVWritesOnlyAnAbsentKey(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	if ok, err := st.AddKV(ctx, "pr.7.fix_owner", "a"); !ok || err != nil {
+		t.Fatalf("AddKV of an absent key = %v, %v", ok, err)
+	}
+	if ok, err := st.AddKV(ctx, "pr.7.fix_owner", "b"); ok || err != nil {
+		t.Fatalf("AddKV of a key that holds a value = %v, %v", ok, err)
+	}
+	if v, _, _ := st.GetKV(ctx, "pr.7.fix_owner"); v != "a" {
+		t.Fatalf("value = %q, want the first writer's a", v)
+	}
+}
+
 // KVValues reads the keys a glob matches with their values in one query
 // (the board's pr.*.star): a key the glob does not match, a near miss
 // included, stays out, and a glob that matches nothing reads an empty map.

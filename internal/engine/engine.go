@@ -460,6 +460,14 @@ type Deps struct {
 	// listens (onHookFailure); nil = none.
 	HookFailures <-chan app.HookFailure
 
+	// FixLeaseOf reads the factory's lease of a PR's fixes, the PR Number
+	// of repo ("owner/name"), from the factory's registry, read only
+	// (factoryread's, through the daemon's wiring; fix_lease.go). nil = no
+	// reader: the review side reads no lease and holds nothing, as before
+	// the factory fixed PRs, and `magnum fix --handover back` refuses,
+	// since magnum cannot tell whether the factory worked the PR.
+	FixLeaseOf func(ctx context.Context, repo string, number int) (FixLease, error)
+
 	// Staging reads where each open PR of a repository with staging envs
 	// stands on them (internal/staging's read side, staging_status.go);
 	// FromApp makes one when a watched repository has [[factory.repo.staging]]
@@ -1340,6 +1348,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.continuePauseHeld(ctx)   // fix_held.go: the held fixes the fixer's pause held, once it ended
 	e.endOpenHolds(ctx)        // open_hold.go: a PR whose hold ended goes on in this dispatch
 	e.ciAfterPushes(ctx)       // ci_dispatch.go: the CI of magnum's own pushes, before the look reads their starts
+	e.handOvers(ctx)           // fix_handover.go: a PR whose fix work ended flips to the factory before the look could start a loop
 	_ = e.autofixOpen(ctx)     // fix_open.go: a loop it starts reserves its PR before dispatch can claim it
 	e.restartSessions(ctx, ts) // session_restart.go: a PR whose marked sessions park now waits in dispatch
 	e.dispatch(ctx, ts)

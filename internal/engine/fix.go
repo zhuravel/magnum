@@ -499,6 +499,9 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 	if off {
 		notes = append(notes, "fix is off for this PR: this requested loop runs anyway")
 	}
+	if handing, _ := e.handingOver(ctx, pr); handing { // fix_handover.go
+		notes = append(notes, "the PR hands over to the factory: this loop ends at its cycle boundary, with no next cycle")
+	}
 	for _, n := range notes {
 		res += "; " + n
 	}
@@ -842,6 +845,9 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 	}
 	if e.draining(ctx) {
 		return nil, errFixDraining
+	}
+	if err := e.handoverRefusal(ctx, pr, by, prev); err != nil { // fix_handover.go: no loop nobody asked for, no next cycle
+		return nil, err
 	}
 	overAttention := false
 	if by == autofixBy && prev.Cycle == 0 {

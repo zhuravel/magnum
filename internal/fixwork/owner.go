@@ -35,11 +35,15 @@ const (
 // FixOwner is a PR's KVPRFixOwner row: Owner, since At (when magnum
 // flipped the row to Owner: the factory keys its one import of the PR's
 // records by the At of the flip to OwnerFactory), and By, what flipped it
-// ("magnum fix --handover", "magnum fix --handover all").
+// ("magnum fix --handover", "magnum fix --handover all"). Flipped is, for
+// OwnerReturning, the At of the flip to the factory it returns from: a PR
+// the factory worked before it saw the return stays the factory's under
+// that flip again, so the factory imports it no second time.
 type FixOwner struct {
-	Owner string    `json:"owner"`
-	At    time.Time `json:"at"`
-	By    string    `json:"by,omitempty"`
+	Owner   string    `json:"owner"`
+	At      time.Time `json:"at"`
+	By      string    `json:"by,omitempty"`
+	Flipped time.Time `json:"flipped,omitzero"`
 }
 
 // Factory reports whether the factory fixes the PR (OwnerFactory): the only
