@@ -34,23 +34,6 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 )
 
-// FixCarry is the calls one earlier cycle of a fix loop left the author
-// (FixState.Carried): the cycle's report, beside which its files place the
-// threads, the entries of its "## Needs you" still asked (in the fixer's
-// own words, so never put in an event or a log), and the comment ids among
-// them whose threads showed their answer and ask only for the resolution
-// (as FixState.Answered).
-type FixCarry struct {
-	Report   string   `json:"report"`
-	NeedsYou []string `json:"needs_you"`
-	Answered []string `json:"answered,omitempty"`
-}
-
-// answered is Answered as a set (nil for none).
-func (c FixCarry) answered() map[string]bool {
-	return FixState{Answered: c.Answered}.answered()
-}
-
 // carryOn is carried with the calls of the cycle at report (needs, and the
 // threads among them answered asks only to resolve) after it, as the next
 // cycle takes them on; carried itself when that cycle left none.
@@ -128,7 +111,7 @@ func carriedLeft(carried []FixCarry, report string, entries []string, took later
 		if len(kept) == 0 {
 			continue
 		}
-		out = append(out, FixCarry{Report: c.Report, NeedsYou: kept, Answered: answeredOf(kept, c.answered())})
+		out = append(out, FixCarry{Report: c.Report, NeedsYou: kept, Answered: answeredOf(kept, c.AnsweredSet())})
 	}
 	return out
 }
@@ -161,7 +144,7 @@ func (e *Engine) freshCarried(ctx context.Context, job *fixJob, carried []FixCar
 	for _, c := range carried {
 		at := *job
 		at.state.Report = c.Report
-		needs, answered := e.freshNeedsYou(ctx, &at, c.NeedsYou, c.answered(), dir, read)
+		needs, answered := e.freshNeedsYou(ctx, &at, c.NeedsYou, c.AnsweredSet(), dir, read)
 		if len(needs) == 0 {
 			continue
 		}
@@ -219,7 +202,7 @@ func loopCalls(carried []FixCarry, entries []string, answered map[string]bool, r
 	parts := make([]part, len(groups))
 	for i := len(groups) - 1; i >= 0; i-- { // the newest first, so that its entry of a call wins
 		g := groups[i]
-		ans := g.answered()
+		ans := g.AnsweredSet()
 		if i == len(groups)-1 {
 			ans = answered
 		}

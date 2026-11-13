@@ -42,12 +42,6 @@ const ciPushGrace = 2 * time.Minute
 // until ciAfterPushes decided on its CI.
 func kvPRPushed(prID int64) string { return fmt.Sprintf("pr.%d.pushed", prID) }
 
-// ciPush is a head magnum pushed to a PR, and when.
-type ciPush struct {
-	Head string    `json:"head"`
-	At   time.Time `json:"at"`
-}
-
 // recentRunLister is the engine's GitHub client's list of a workflow's
 // newest runs of every branch (*github.Client's RecentRuns).
 type recentRunLister interface {

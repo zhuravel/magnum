@@ -64,22 +64,6 @@ const (
 	classCI = "ci"
 )
 
-// The outcomes of a CI fix (ciFixStart.Outcome): it never ran a fixer (the
-// fix job refused it at once: it does not count), it pushed, the daemon
-// merged the parent and the fixer pushed nothing (CI runs on the merge;
-// Why: the class word of a fixer that said it cannot there), the fixer
-// said it cannot (Why: its class word), the run failed, was stopped or
-// lost in a restart.
-const (
-	ciOutcomeUnstarted = "unstarted"
-	ciOutcomePushed    = "pushed"
-	ciOutcomeMerged    = "merged"
-	ciOutcomeCannot    = "cannot"
-	ciOutcomeFailed    = "failed"
-	ciOutcomeStopped   = "stopped"
-	ciOutcomeLost      = "lost"
-)
-
 // ciCannotClasses are the class words a fixer's ci entry under Needs you
 // gives (skills/magnum-fix/SKILL.md, section 8), with the verdict's words.
 var ciCannotClasses = map[string]string{
@@ -97,99 +81,6 @@ const ciBaseDepth = github.FirstParentDepth
 
 // kvPRCIFix holds the PR's CI fixes (ciFixRecord as JSON).
 func kvPRCIFix(prID int64) string { return fmt.Sprintf("pr.%d.ci_fix", prID) }
-
-// ciFixRecord is a PR's CI fixes: each start (written before startFix),
-// the CI reader's last read (ci_failures.go) and the base's last read.
-type ciFixRecord struct {
-	Starts []ciFixStart `json:"starts,omitempty"`
-	Read   ciFailRead   `json:"read,omitzero"`
-	Base   ciBaseRead   `json:"base,omitzero"`
-}
-
-// ciFixStart is one CI fix: the head it started at, the failed required
-// entries it fixed, when and by whom (autofix, magnum fix), and what it
-// ended with (Outcome, "" while it runs or when its end was lost), the
-// class word of a cannot (Why) and the head it pushed (Pushed).
-type ciFixStart struct {
-	Head    string    `json:"head"`
-	Entries []string  `json:"entries,omitempty"`
-	At      time.Time `json:"at"`
-	By      string    `json:"by,omitempty"`
-	Outcome string    `json:"outcome,omitempty"`
-	Why     string    `json:"why,omitempty"`
-	Pushed  string    `json:"pushed,omitempty"`
-}
-
-// count is the CI fixes that count against ciFixMax: every start but an
-// unstarted one (a start whose end was lost counts).
-func (r ciFixRecord) count() int {
-	n := 0
-	for _, s := range r.Starts {
-		if s.Outcome != ciOutcomeUnstarted {
-			n++
-		}
-	}
-	return n
-}
-
-// atHead is the newest CI fix at head that counts (zero: none), or the one
-// whose fixer said it cannot on the daemon's merge of the parent that head
-// is (merged with a class word): the merge is no new chance for the same
-// cause.
-func (r ciFixRecord) atHead(head string) ciFixStart {
-	for _, s := range slices.Backward(r.Starts) {
-		switch {
-		case s.Outcome == ciOutcomeUnstarted:
-		case s.Head == head, s.Outcome == ciOutcomeMerged && s.Why != "" && s.Pushed == head:
-			return s
-		}
-	}
-	return ciFixStart{}
-}
-
-// lastPushed is the newest CI fix that pushed or whose parent merge moved
-// the head, and its number among the ones that count (zero: none).
-func (r ciFixRecord) lastPushed() (ciFixStart, int) {
-	n, last, at := 0, ciFixStart{}, 0
-	for _, s := range r.Starts {
-		if s.Outcome == ciOutcomeUnstarted {
-			continue
-		}
-		n++
-		if s.Pushed != "" && (s.Outcome == ciOutcomePushed || s.Outcome == ciOutcomeMerged) {
-			last, at = s, n
-		}
-	}
-	return last, at
-}
-
-// ciBaseRead is the base's read for the failed set Key at Head: the base
-// tip it read from (Tip), each failed check's word (Checks, in the failed
-// set's order), when, and whether the read failed (tried again settle_max
-// later).
-type ciBaseRead struct {
-	Head   string        `json:"head"`
-	Key    string        `json:"key"`
-	Tip    string        `json:"tip"`
-	Checks []ciBaseCheck `json:"checks,omitempty"`
-	At     time.Time     `json:"at"`
-	Failed bool          `json:"failed,omitempty"`
-}
-
-// word is the base's word on the whole failed set and the commit that
-// decided: failed where one failed, running where one still runs, never
-// where one never ran, passed where every one passed.
-func (b ciBaseRead) word() (string, string) {
-	for _, w := range []string{ciBaseFailed, ciBaseRunning, ciBaseNever} {
-		if i := slices.IndexFunc(b.Checks, func(c ciBaseCheck) bool { return c.State == w }); i >= 0 {
-			return w, b.Checks[i].SHA
-		}
-	}
-	if len(b.Checks) == 0 {
-		return "", ""
-	}
-	return ciBasePassed, b.Checks[0].SHA
-}
 
 // ciFixFacts are what the look knows of a CI fix of f.ci's failed checks
 // at the head (ciFixFactsOf): on, the look gathered them; why the failure
@@ -420,17 +311,17 @@ func ciShape3(ci openCI, s ciStart, r ciRerun) openCI {
 	var workflow, how string
 	dispatched := false
 	switch {
-	case !s.At.IsZero() && s.Failed == "" && s.Run.ended() && runFailed(s.Run.Conclusion) && s.Run.ID != 0:
+	case !s.At.IsZero() && s.Failed == "" && s.Run.Ended() && runFailed(s.Run.Conclusion) && s.Run.ID != 0:
 		run, workflow, dispatched = s.Run.ID, s.Workflow, true
 		how = "magnum's run of " + workflow + " ended " + strings.ReplaceAll(s.Run.Conclusion, "_", " ")
 		if !s.Moved.IsZero() {
 			how = "the newest run of " + workflow + " ended " + strings.ReplaceAll(s.Run.Conclusion, "_", " ")
 		}
-	case r.asked() && r.Seen.ended() && !r.Seen.NoJob && runFailed(r.Seen.Conclusion):
+	case r.Asked() && r.Seen.Ended() && !r.Seen.NoJob && runFailed(r.Seen.Conclusion):
 		run, workflow = r.Run.ID, r.Run.Workflow
-		how = "magnum's re-run of " + r.Run.named() + " ended " + strings.ReplaceAll(r.Seen.Conclusion, "_", " ")
+		how = "magnum's re-run of " + r.Run.Named() + " ended " + strings.ReplaceAll(r.Seen.Conclusion, "_", " ")
 		if !r.Moved.IsZero() {
-			how = "the newest attempt of " + r.Run.named() + " ended " + strings.ReplaceAll(r.Seen.Conclusion, "_", " ")
+			how = "the newest attempt of " + r.Run.Named() + " ended " + strings.ReplaceAll(r.Seen.Conclusion, "_", " ")
 		}
 	default:
 		return ci
@@ -525,8 +416,8 @@ func (e *Engine) ciFixFactsOf(ctx context.Context, repo store.Repo, pr store.PR,
 		c.on, c.refused = failed, "the record of its CI fixes cannot be read"
 		return c
 	}
-	c.starts = rec.count()
-	c.last, c.lastN = rec.lastPushed()
+	c.starts = rec.Count()
+	c.last, c.lastN = rec.LastPushed()
 	if !failed {
 		return c
 	}
@@ -537,7 +428,7 @@ func (e *Engine) ciFixFactsOf(ctx context.Context, repo store.Repo, pr store.PR,
 	} else {
 		c.refused, c.filesWait = ciFixRefusal(files, listed, pr.HeadSHA, f.ci.failedRuns)
 	}
-	c.atHead = rec.atHead(pr.HeadSHA)
+	c.atHead = rec.AtHead(pr.HeadSHA)
 	base := cmp.Or(deref(pr.BaseRef), repo.DefaultBranch)
 	c.baseName = "the base"
 	if base != "" && gitx.ShellSafeRef(base) {
@@ -546,7 +437,7 @@ func (e *Engine) ciFixFactsOf(ctx context.Context, repo store.Repo, pr store.PR,
 	key, tip := ciKeyAt(f.ci.failedRuns), ciBaseTip(pr, l, base)
 	b := rec.Base
 	if b.Head == pr.HeadSHA && b.Key == key && b.Tip == tip {
-		c.base, c.baseSHA = b.word()
+		c.base, c.baseSHA = b.Word()
 		c.baseFailed, c.baseRetry = b.Failed, b.At.Add(f.settle.max)
 		c.baseDue = (b.Failed || c.base == ciBaseRunning) && !f.now.Before(c.baseRetry)
 		if b.Failed {
@@ -602,7 +493,7 @@ func (e *Engine) readCIBase(ctx context.Context, repo store.Repo, w config.Watch
 		for _, c := range f.ci.failedRuns {
 			read.Checks = append(read.Checks, ciBaseOf(commits, c))
 		}
-		word, sha := read.word()
+		word, sha := read.Word()
 		e.log.Info("autofix open: the base's CI of a failed required check", "subject", prSubject(repo, pr.Number),
 			"head", textx.ShortSHA(pr.HeadSHA), "tip", textx.ShortSHA(tip), "word", word, "at", textx.ShortSHA(sha), "commits", len(commits))
 	}

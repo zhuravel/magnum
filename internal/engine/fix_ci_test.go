@@ -116,8 +116,8 @@ func TestMagnumFixCIDryRunAnswersThePlan(t *testing.T) {
 	again := h.fix(FixPayload{Mode: FixModeCI})
 	h.handle()
 	h.wantDone(again)
-	if rec := h.ciRecordOf(); rec.count() != 2 || len(h.fixRuns(h.pr(2).ID)) != 2 {
-		t.Errorf("a try by hand after a cannot: %d CI fixes counted, %d fix runs; want 2 of each", rec.count(), len(h.fixRuns(h.pr(2).ID)))
+	if rec := h.ciRecordOf(); rec.Count() != 2 || len(h.fixRuns(h.pr(2).ID)) != 2 {
+		t.Errorf("a try by hand after a cannot: %d CI fixes counted, %d fix runs; want 2 of each", rec.Count(), len(h.fixRuns(h.pr(2).ID)))
 	}
 	stale := plan.Asked
 	stale.Count, stale.At = 2, stale.At.Add(-time.Hour)
@@ -197,7 +197,7 @@ func TestACIFixThatCannotOnTheParentsMergeKeepsItsClass(t *testing.T) {
 		if ev, ok := h.fixEvent("fix.ended"); !ok || !strings.Contains(ev.Message, "a missing secret") || !strings.Contains(ev.Message, fixParentMerge[:7]) {
 			t.Errorf("fix.ended = %q, %v; want the class and the merge", ev.Message, ok)
 		}
-		if at := rec.atHead(fixParentMerge); at.Why != "secret" {
+		if at := rec.AtHead(fixParentMerge); at.Why != "secret" {
 			t.Errorf("the merge's head reads %+v, want the CI fix that said cannot", at)
 		}
 		f := ciFailedFacts()

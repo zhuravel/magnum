@@ -45,40 +45,6 @@ import (
 // JSON), the last head's.
 func kvPRCIStart(prID int64) string { return fmt.Sprintf("pr.%d.ci_dispatch", prID) }
 
-// ciStart is the look's start of a PR's CI workflow at Head: the workflow
-// file, when it was asked (At: written before the call, so a start whose
-// end was lost still counts), why it failed (Failed: GitHub's answer as a
-// status, "GitHub answered HTTP 422", never its message; a 403 adds
-// cannotStartWorkflows' words) or why magnum did not start it (Refused, At
-// zero), and its run as the poll last read it (Run: nil, none seen). Moved
-// is when the look found that a run that failed was run again (a re-run by
-// hand, someone's later start at the head: noteRunMoved), which Run is
-// since; the poll waits for it as for the start's (awaitCIRuns).
-type ciStart struct {
-	Head     string    `json:"head"`
-	Workflow string    `json:"workflow"`
-	At       time.Time `json:"at,omitzero"`
-	Failed   string    `json:"failed,omitempty"`
-	Refused  string    `json:"refused,omitempty"`
-	Run      *ciRun    `json:"run,omitempty"`
-	Moved    time.Time `json:"moved,omitzero"`
-}
-
-// ciRun is the newest run of a start's workflow that a dispatch started at
-// the head since the start (dispatchedRun): its id (0 in a record of an
-// earlier build), GitHub's status of it (queued, in_progress, completed,
-// ...) and, once it ended, its conclusion.
-type ciRun struct {
-	ID         int64  `json:"id,omitempty"`
-	Status     string `json:"status"`
-	Conclusion string `json:"conclusion,omitempty"`
-}
-
-// running reports whether r is a run that has not ended (queued, waiting
-// or in progress); ended whether it ended. Both are false for nil, no run.
-func (r *ciRun) running() bool { return r != nil && r.Status != "completed" }
-func (r *ciRun) ended() bool   { return r != nil && r.Status == "completed" }
-
 // ciRunSkew is how long before the look's start GitHub may have created
 // its run, GitHub's clock against the daemon's: a run created earlier is
 // an older one of the head (someone's start by hand), not the look's.
@@ -169,12 +135,12 @@ func (e *Engine) awaitCIRuns(ctx context.Context, w config.Watch, full string, p
 			continue
 		}
 		r := e.ciRerunAt(ctx, pr) // ci_rerun.go: the look's re-run waits as a start does
-		rerun := r.rerunWaits(now, settleMax)
+		rerun := r.RerunWaits(now, settleMax)
 		var s ciStart
 		if dispatch {
 			s = e.ciStartAt(ctx, pr)
 		}
-		start := !s.At.IsZero() && s.Failed == "" && (now.Before(later(s.At, s.Moved).Add(settleMax)) || s.Run.running())
+		start := !s.At.IsZero() && s.Failed == "" && (now.Before(later(s.At, s.Moved).Add(settleMax)) || s.Run.Running())
 		if !rerun && !start || len(e.openCI(ctx, full, pr).missing) == 0 {
 			continue
 		}
@@ -281,9 +247,9 @@ func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
 	startWait := later(s.At, s.Moved).Add(f.settle.max)
 	due := f.pr.HeadChangedAt.Add(f.settle.max)
 	switch {
-	case (f.ci.running || s.Run.running()) && started:
+	case (f.ci.running || s.Run.Running()) && started:
 		return waits(startedWhy(), startWait)
-	case (f.ci.running || f.ciRerun.Seen.running()) && f.ciRerun.asked(): // ci_rerun.go
+	case (f.ci.running || f.ciRerun.Seen.Running()) && f.ciRerun.Asked(): // ci_rerun.go
 		return waits(rerunWhy(f, what), later(f.ciRerun.At, f.ciRerun.Moved).Add(f.settle.max))
 	case f.ci.running || f.now.Before(due):
 		return waits(what+" has not started", due)
@@ -303,9 +269,9 @@ func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
 		return needsYou(fmt.Sprintf("magnum's start of %s failed (%s)%s", wf, s.Failed, byHand))
 	case started && f.now.Before(startWait):
 		return waits(startedWhy(), startWait)
-	case started && s.Run.ended() && !s.Moved.IsZero():
+	case started && s.Run.Ended() && !s.Moved.IsZero():
 		return needsYou(fmt.Sprintf("%s; that run ended%s without it%s", again, runEnd(s.Run.Conclusion), byHand))
-	case started && s.Run.ended():
+	case started && s.Run.Ended():
 		return needsYou(fmt.Sprintf("magnum started %s at %s and its run ended%s without it%s", wf, waitClock(s.At, f.now), runEnd(s.Run.Conclusion), byHand))
 	case started:
 		return needsYou(fmt.Sprintf("magnum started %s at %s and no run came%s", wf, waitClock(s.At, f.now), byHand))
@@ -314,7 +280,7 @@ func openMissingCI(f openFacts, v OpenVerdict) OpenVerdict {
 	case f.low || f.ciLow:
 		return waits(fmt.Sprintf("%s did not run; magnum starts %s once the GitHub budget allows", what, wf), time.Time{})
 	}
-	v.dispatch = true
+	v.Dispatch = true
 	return needsYou("magnum starts " + wf)
 }
 

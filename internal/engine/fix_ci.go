@@ -192,7 +192,7 @@ func (e *Engine) requestCIFix(ctx context.Context, pr store.PR, dry bool, asked 
 		if f.ci.failed == "" { // noteRunMoved: the run the look named ran again since it failed
 			again := f.ciStart.Workflow + " was run again at " + short + " after magnum's run of it failed"
 			if f.ciStart.Moved.IsZero() && f.ciRerun.Run != nil {
-				again = f.ciRerun.Run.named() + " was run again at " + short + " after magnum's re-run of it failed"
+				again = f.ciRerun.Run.Named() + " was run again at " + short + " after magnum's re-run of it failed"
 			}
 			return "", errors.New(again + ": nothing failed to fix")
 		}
@@ -202,7 +202,7 @@ func (e *Engine) requestCIFix(ctx context.Context, pr store.PR, dry bool, asked 
 	}
 	entries, count := ciEntries(f.ci.failedRuns), f.ciFix.starts
 	// fix_open_needs.go: its next cycles, on findings, leave alone what waits for you, as the look's CI fix does
-	prev := FixState{Mode: FixModeCI, CIChecks: entries, Waits: l.lastReadWaits()}
+	prev := FixState{Mode: FixModeCI, CIChecks: entries, Waits: l.LastReadWaits()}
 	if dry {
 		job, err := e.prepareFix(ctx, pr, prev, fixPinWouldUnpin, nil, false)
 		switch {

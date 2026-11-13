@@ -66,8 +66,6 @@ package engine
 // Unknown is never idle.
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -84,247 +82,6 @@ func KVPROpen(prID int64) string { return fmt.Sprintf("pr.%d.open", prID) }
 
 // kvPRFixSeen holds the look's ledger of the PR (openLedger as JSON).
 func kvPRFixSeen(prID int64) string { return fmt.Sprintf("pr.%d.fix_seen", prID) }
-
-// Verdicts of autofix = "open" (OpenVerdict.Verdict).
-const (
-	OpenFixing   = "fixing"    // a fix loop runs, or the look starts one
-	OpenWaits    = "waits"     // something will move on its own: magnum's review, the settle, CI, the budget
-	OpenNeedsYou = "needs_you" // only the operator can move it
-	OpenIdle     = "idle"      // nothing open at the head
-	OpenUnknown  = "unknown"   // the look has not read GitHub since the PR changed: never idle
-	OpenOff      = "off"       // the look does not cover the PR (OpenVerdict.Off says why)
-)
-
-// Why an off verdict is off (OpenVerdict.Off).
-const (
-	OpenOffFixOff     = "fix_off"     // `magnum fix --off`
-	OpenOffDraft      = "draft"       // a draft PR
-	OpenOffFork       = "fork"        // its head lives in a fork
-	OpenOffIncludeOwn = "include_own" // its watch reviews no own PRs
-	OpenOffMuted      = "muted"       // `magnum mute`: a mute stops every automatic round
-	OpenOffBaseline   = "baseline"    // open before magnum first synced the repository
-	OpenOffIneligible = "ineligible"  // magnum does not review it
-)
-
-// OpenVerdict is autofix = "open"'s verdict on a PR at Head (KVPROpen):
-// fixing, waits, needs_you, idle, unknown or off, why in plain words
-// (counts, kinds, short SHAs and clock times, never PR text), when the
-// look decided it (At), since when it has said the same without a break
-// (Since: the same verdict, approval and reason to be off, whatever the
-// words and however often the PR changed; Since and At are equal when it
-// began, and zero in a row of a build before it), when it last read GitHub
-// whole (ReadAt), when a wait ends where that is known (Until), the open
-// items (work and what needs the
-// operator) and what needs the operator (kind and link only), the short SHA
-// a person approved ("" = none) and the commits on Head after it (-1 = not
-// counted), and why an off verdict is off.
-type OpenVerdict struct {
-	Verdict       string     `json:"verdict"`
-	Why           string     `json:"why"`
-	Head          string     `json:"head"`
-	At            time.Time  `json:"at"`
-	Since         time.Time  `json:"since,omitzero"`
-	ReadAt        time.Time  `json:"read_at,omitzero"`
-	Until         time.Time  `json:"until,omitzero"`
-	Open          int        `json:"open"`
-	Needs         []OpenNeed `json:"needs,omitempty"`
-	Approved      string     `json:"approved,omitempty"`
-	AfterApproval int        `json:"after_approval,omitempty"`
-	Off           string     `json:"off,omitempty"`
-	// Optional are the links of the operator's optional calls an idle
-	// verdict names (fix_optional.go): P3s whose Fix leaves the choice to
-	// the operator, which hold nothing and wait for them at the merge.
-	Optional []string `json:"optional,omitempty"`
-	// leftovers: the verdict needs you for what loops left (rule 8), which
-	// the look raises to needs_attention; late: for magnum's late review
-	// (rule 5), which it toasts once per head; dispatch: for a required
-	// check that did not run, whose workflow the look starts (rule 11,
-	// openStartCI). None is stored.
-	leftovers, late, dispatch bool
-	// readRuns: rule 11 reads the runs at the head (openReadRuns,
-	// ci_rerun.go); rerun: it re-runs the head's run that started no job
-	// (openRerunCI); readCIBase: it reads the base's CI of a failed
-	// required check (readCIBase, ci_fix.go); recheckCIRead: it checks a
-	// read that listed no failed job of a run it named against the head's
-	// runs (ensureCIRead, ci_fix.go). None is stored.
-	readRuns, rerun, readCIBase, recheckCIRead bool
-}
-
-// OpenNeed is one thing that needs the operator: its kind (thread, review,
-// comment, magnum, finding, conflict, ci for a required check that ran and
-// failed, ci_missing for one that did not run at the head, loop or
-// magnum_late) and link.
-type OpenNeed struct {
-	Kind string `json:"kind"`
-	URL  string `json:"url,omitempty"`
-}
-
-// ParseOpenVerdict reads a KVPROpen value; ok is false for one that is not a
-// verdict.
-func ParseOpenVerdict(s string) (OpenVerdict, bool) {
-	var v OpenVerdict
-	if s == "" || json.Unmarshal([]byte(s), &v) != nil || v.Verdict == "" || v.Head == "" {
-		return OpenVerdict{}, false
-	}
-	return v, true
-}
-
-// Stale reports whether v no longer tells the PR's state, for a reader
-// (the factory's screen) that then shows the PR as looked at: the start of
-// the daemon's last tick (lastTick, zero for none) is older than four poll
-// intervals (ticks start an interval plus a tick's length apart, so two
-// would call a long tick a stop), the PR's head moved past v's, or the
-// PR's row changed after v was decided (prUpdated).
-func (v OpenVerdict) Stale(prHead string, prUpdated, lastTick, now time.Time, poll time.Duration) bool {
-	return lastTick.IsZero() || now.Sub(lastTick) > openStalePolls*poll || v.Head != prHead || v.At.Before(prUpdated)
-}
-
-// goesOn reports whether v goes on saying what prev said, so it keeps
-// prev's Since: the same verdict, the same approval (a person's or none)
-// and the same reason to be off; the words, the counts and the head may
-// change.
-func (v OpenVerdict) goesOn(prev OpenVerdict) bool {
-	return v.Verdict == prev.Verdict && (v.Approved == "") == (prev.Approved == "") && v.Off == prev.Off
-}
-
-// sameAs reports whether v and w say the same, whenever each was decided.
-func (v OpenVerdict) sameAs(w OpenVerdict) bool {
-	v.At, w.At = time.Time{}, time.Time{}
-	a, _ := json.Marshal(v)
-	b, _ := json.Marshal(w)
-	return bytes.Equal(a, b)
-}
-
-// openLedger is what the look remembers of a PR (kvPRFixSeen): the keys
-// the fixers of finished loops had (Handed, with when the look saw that
-// loop end), magnum's reviews a loop worked on (Reviews), the heads the
-// fixer pushed (FixerHeads, the last openFixerHeadsMax), the PR's last
-// event the look read for the loops that ended (Cursor), when the look
-// began to track its loops (Since: its first look at the PR, or the start
-// of the loop that ran then; a loop that started before hands nothing), the last_error
-// its own raise wrote (RaisedMsg) and the keys it raised (Raised), the
-// autofix starts of the last 24 hours (Starts), its last read of GitHub
-// (Read) and of the base (Conflict), the failed reads in a row
-// (ReadFails), the head whose late review it toasted, the commits after a
-// person's approval (Approval), and the fingerprint at which prepareFix
-// refused the look's start as nothing to fix, with its sentence (Refused,
-// RefusedWhy: not tried again until the PR changes), and when the fix job
-// last refused it otherwise, with its sentence (WaitAt, WaitWhy: tried
-// again openReadRetry later), and the PR's current spell of activity
-// (Spell, the settle's).
-type openLedger struct {
-	Handed      map[string]time.Time `json:"handed,omitempty"`
-	Reviews     []string             `json:"reviews,omitempty"`
-	FixerHeads  []string             `json:"fixer_heads,omitempty"`
-	Cursor      int64                `json:"cursor,omitempty"`
-	Since       time.Time            `json:"since,omitzero"`
-	RaisedMsg   string               `json:"raised_msg,omitempty"`
-	Raised      []string             `json:"raised,omitempty"`
-	Starts      []time.Time          `json:"starts,omitempty"`
-	Read        openRead             `json:"read"`
-	Conflict    openConflict         `json:"conflict"`
-	ReadFails   int                  `json:"read_fails,omitempty"`
-	LateToasted string               `json:"late_toasted,omitempty"`
-	Approval    openApprovalCount    `json:"approval,omitzero"`
-	Refused     string               `json:"refused,omitempty"`
-	RefusedWhy  string               `json:"refused_why,omitempty"`
-	WaitAt      time.Time            `json:"wait_at,omitzero"`
-	WaitWhy     string               `json:"wait_why,omitempty"`
-	Spell       openSpell            `json:"spell,omitzero"`
-	// Waited are the reviewers (Account form, lower case) one of whose
-	// items waited for the author, with when the first began to: a loop's
-	// hand-off of it (seedWaited), else the look that first saw it wait
-	// (noteWaited). A change request of theirs since waits for the author
-	// too (pushback).
-	Waited map[string]time.Time `json:"waited,omitempty"`
-}
-
-// openSpell is the PR's current spell of activity as the look saw it:
-// when it began (Start: the activity the look first saw within
-// settle_quiet) and when the look last saw it go on (Seen); zero while the
-// PR is quiet. The settle's cap counts from its start on a head older than
-// it (settleDone), so quiet still holds on an old head.
-type openSpell struct {
-	Start time.Time `json:"start,omitzero"`
-	Seen  time.Time `json:"seen,omitzero"`
-}
-
-// next is s at the look at now on pr: none once the PR is quiet (no
-// activity, its head's move included, for quiet) or while a loop runs or
-// is held on it (its fixer's activity is the loop's; the spell after it
-// begins when the look first sees it again without one); a new one at the
-// PR's last activity when none was going on, or when the look did not see
-// it go on for gap (the daemon slept, and the PR may have been quiet in
-// between: the caller's gap is at least quiet, and longer than looks a few
-// poll intervals apart); else s, seen now.
-func (s openSpell) next(pr store.PR, quiet, gap time.Duration, now time.Time, looping bool) openSpell {
-	activity := lastActivity(pr)
-	if looping || !now.Before(activity.Add(quiet)) {
-		return openSpell{}
-	}
-	if s.Start.IsZero() || now.Sub(s.Seen) >= gap {
-		s.Start = activity
-	}
-	s.Seen = now
-	return s
-}
-
-// lastActivity is pr's last activity: its head's move, or a later one.
-func lastActivity(pr store.PR) time.Time {
-	if pr.ActivityAt != nil && pr.ActivityAt.After(pr.HeadChangedAt) {
-		return *pr.ActivityAt
-	}
-	return pr.HeadChangedAt
-}
-
-// openApprovalCount is the count of the commits on Head after the approved
-// commit SHA (-1: not counted).
-type openApprovalCount struct {
-	SHA   string `json:"sha,omitempty"`
-	Head  string `json:"head,omitempty"`
-	After int    `json:"after,omitempty"`
-}
-
-// openRead is the look's last read of GitHub: the PR's read fingerprint
-// then (openPrint), when it read, at which head, what GitHub cut short, the
-// other reviewers' items and magnum's threads it found, and when a read
-// failed last (zero: the last read did not fail).
-type openRead struct {
-	Print    string         `json:"print,omitempty"`
-	At       time.Time      `json:"at,omitzero"`
-	Head     string         `json:"head,omitempty"`
-	Cut      []string       `json:"cut,omitempty"`
-	Others   []openItem     `json:"others,omitempty"`
-	Mine     []magnumThread `json:"mine,omitempty"`
-	FailedAt time.Time      `json:"failed_at,omitzero"`
-}
-
-// openConflict is the look's last check of the head against its base: the
-// head and the base, the base's tip it fetched (also of a clean merge: the
-// base's CI is read there, ci_fix.go), when, and the conflict (no paths: a
-// clean merge; Unchecked: the check failed).
-type openConflict struct {
-	Head      string    `json:"head,omitempty"`
-	Base      string    `json:"base,omitempty"`
-	Tip       string    `json:"tip,omitempty"`
-	At        time.Time `json:"at,omitzero"`
-	Paths     []string  `json:"paths,omitempty"`
-	Unchecked bool      `json:"unchecked,omitempty"`
-}
-
-// handedReview reports whether a loop worked on magnum's review of run.
-func (l openLedger) handedReview(run string) bool { return slices.Contains(l.Reviews, reviewKey(run)) }
-
-// startsSince are the autofix starts at or after since.
-func (l openLedger) startsSince(since time.Time) int {
-	n := 0
-	for _, at := range l.Starts {
-		if !at.Before(since) {
-			n++
-		}
-	}
-	return n
-}
 
 // openSettle are the [pipeline] keys of autofix = "open".
 type openSettle struct {
@@ -467,37 +224,6 @@ type openFacts struct {
 	ciFix ciFixFacts
 }
 
-// sortOpen splits items by the ledger: work, never handed (and magnum's
-// review no loop worked on), and needs, handed and still open (a person's,
-// magnum's, a conflict, a bot's thread), every finding a fixer skipped
-// without a word, every thread a fixer resolved with no answer (no loop
-// can be handed it: the fixer's file leaves resolved threads out) and every
-// thread a fixer answered twice whose reviewer answered again (never work
-// again). A handed bot's review body or comment is seen: a receipt, a
-// summary or a note, it drops out.
-func sortOpen(items []openItem, l openLedger) (work, needs []openItem) {
-	for _, it := range items {
-		handed := l.leftToAuthor(it) // fix_open_needs.go: handed to a loop, or a reviewer's pushback
-		switch {
-		case it.Kind == itemFindings:
-			if !l.handedReview(strings.TrimPrefix(it.Key, "review:")) {
-				work = append(work, it)
-			}
-		case l.acceptedLeftover(it): // fix_open_needs.go: its reviewer approved since, so it waits for no one
-		case it.Kind == itemFinding, it.Resolved:
-			needs = append(needs, it)
-		case it.Kind == itemThread && it.FixerReplies >= 2:
-			needs = append(needs, it)
-		case handed && it.Class == classBot && it.Kind != itemThread:
-		case handed:
-			needs = append(needs, it)
-		default:
-			work = append(work, it)
-		}
-	}
-	return work, needs
-}
-
 // decideOpen decides the verdict of f's PR by the rules of this file's
 // comment, and returns it with the work a loop would start on (only for
 // the fixing verdict of rule 9, a start) and what needs the operator.
@@ -548,7 +274,7 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 	if why, late, until := magnumDue(f); why != "" {
 		if late {
 			v.Needs = append(v.Needs, OpenNeed{Kind: "magnum_late", URL: f.pr.URL})
-			v.late = true
+			v.Late = true
 			return say(OpenNeedsYou, why), nil, needs
 		}
 		v.Until = until
@@ -576,7 +302,7 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 	onlyRebuttals := len(work) > 0 && !slices.ContainsFunc(work, func(it openItem) bool { return it.Kind != itemMagnum }) &&
 		!reviewWork(*f.sum, f.optionalP3, f.described)
 	if len(needs) > 0 && (len(work) == 0 || onlyRebuttals || !personsAlone(needs)) { // rule 8; a person's items alone wait beside work (rule 9)
-		v.leftovers = true
+		v.Leftovers = true
 		return say(OpenNeedsYou, needsWords(needs)), nil, needs
 	}
 	settled, until := settleDone(f)
@@ -593,7 +319,7 @@ func decideOpen(f openFacts) (OpenVerdict, []openItem, []openItem) {
 		if verdict == OpenNeedsYou {
 			v.Needs = append(v.Needs, OpenNeed{Kind: "ci", URL: f.pr.URL})
 		}
-		v.Until, v.readCIBase, v.recheckCIRead = until, readBase, recheck
+		v.Until, v.ReadCIBase, v.RecheckCIRead = until, readBase, recheck
 		return say(verdict, why), nil, needs
 	case len(f.ci.missing) > 0:
 		return openMissingCI(f, v), nil, needs
@@ -655,9 +381,9 @@ func decideWork(f openFacts, v OpenVerdict, work, needs []openItem, onlyRebuttal
 	case onlyRebuttals:
 		v.Needs = append(v.Needs, openNeeds(work)...)
 		return say(OpenNeedsYou, "magnum's reply waits for your answer: "+work[0].URL), nil, work
-	case f.ledger.startsSince(f.now.Add(-24*time.Hour)) >= f.settle.maxLoops:
+	case f.ledger.StartsSince(f.now.Add(-24*time.Hour)) >= f.settle.maxLoops:
 		if len(needs) > 0 { // no loop starts today: rule 8, as with no work beside them
-			v.leftovers = true
+			v.Leftovers = true
 			return say(OpenNeedsYou, needsWords(needs)), nil, needs
 		}
 		v.Needs = append(v.Needs, OpenNeed{Kind: "loop", URL: f.pr.URL})
@@ -909,21 +635,6 @@ func checksPending(pr store.PR, names []string) bool {
 // reviewer who is not a bot): rule 8 lets rule 9 start beside them.
 func personsAlone(needs []openItem) bool {
 	return !slices.ContainsFunc(needs, func(it openItem) bool { return it.Class != classPerson })
-}
-
-// waitsOf are the keys of the items of needs that a fixer's external file
-// lists (another reviewer's open thread, review body or comment: not one a
-// fixer resolved, which the file leaves out), sorted: the loop the look
-// starts beside them marks them waiting (FixState.Waits).
-func waitsOf(needs []openItem) []string {
-	var keys []string
-	for _, it := range needs {
-		if it.Class == classPerson && !it.Resolved && (it.Kind == itemThread || it.Kind == itemReview || it.Kind == itemComment) {
-			keys = append(keys, it.Key)
-		}
-	}
-	slices.Sort(keys)
-	return slices.Compact(keys)
 }
 
 // openNeeds are items as needs: kind and link only.

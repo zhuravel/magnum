@@ -436,33 +436,33 @@ func TestTheReRunWaitsForThePauseAndTheBudget(t *testing.T) {
 	f := idleFacts()
 	f.ci = openCI{missing: []string{"build"}}
 	v, _, _ := decideOpen(f)
-	if !v.readRuns || v.rerun {
+	if !v.ReadRuns || v.Rerun {
 		t.Fatalf("verdict = %+v, want the read of the head's runs asked for", v)
 	}
 	f.low = true
 	v, _, _ = decideOpen(f)
 	wantVerdict(t, v, OpenWaits, "CI at a1a1a1a: required check build did not run; magnum reads the head's runs once the GitHub budget allows")
-	if v.readRuns {
+	if v.ReadRuns {
 		t.Errorf("read asked for below the floor")
 	}
 	f.low = false
 	f.ciRerun = ciRerun{Head: fixHead, ReadAt: openNow.Add(-time.Minute),
 		Run: &ciNoJob{ID: liveRunID, Workflow: "ci.yml", Attempt: 1, Conclusion: "failure"}}
 	v, _, _ = decideOpen(f)
-	if !v.rerun || v.readRuns || v.Verdict != OpenNeedsYou {
+	if !v.Rerun || v.ReadRuns || v.Verdict != OpenNeedsYou {
 		t.Fatalf("verdict = %+v, want the re-run asked for", v)
 	}
 	wantVerdict(t, v, OpenNeedsYou, "required check build did not run at a1a1a1a: magnum re-runs run 42673098082 of ci.yml")
 	f.pause, f.pauseUntil = "daemon paused", openNow.Add(time.Hour)
 	v, _, _ = decideOpen(f)
 	wantVerdict(t, v, OpenWaits, "CI at a1a1a1a: required check build did not run; magnum re-runs run 42673098082 of ci.yml once the pause ends")
-	if v.rerun || !v.Until.Equal(f.pauseUntil) {
-		t.Errorf("rerun %v, until %s under the pause", v.rerun, v.Until)
+	if v.Rerun || !v.Until.Equal(f.pauseUntil) {
+		t.Errorf("rerun %v, until %s under the pause", v.Rerun, v.Until)
 	}
 	f.pause, f.pauseUntil, f.ciLow = "", time.Time{}, true
 	v, _, _ = decideOpen(f)
 	wantVerdict(t, v, OpenWaits, "CI at a1a1a1a: required check build did not run; magnum re-runs run 42673098082 of ci.yml once the GitHub budget allows")
-	if v.rerun {
+	if v.Rerun {
 		t.Errorf("re-run asked for below the floor")
 	}
 }
@@ -606,7 +606,7 @@ func TestTheReRunIsRecordedBeforeItsCall(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if len(atCall) != 1 || atCall[0].At.IsZero() || atCall[0].Run == nil || atCall[0].Run.ID != liveRunID || atCall[0].Failed != "" ||
-		!atCall[0].decided() {
+		!atCall[0].Decided() {
 		t.Fatalf("the record at the re-run's call = %+v, want one that says magnum re-ran run %d", atCall, liveRunID)
 	}
 }
@@ -630,15 +630,15 @@ func TestARecordedReRunIsNotRedoneByALookThatCouldNotReadTheRecord(t *testing.T)
 			h.tick()
 			pr, acts := h.pr(2), h.e.ciActions("zhuravel")
 			stored := h.e.ciRerunAt(h.ctx, pr)
-			if !stored.decided() {
+			if !stored.Decided() {
 				t.Fatalf("record = %+v, want the head decided", stored)
 			}
 			reads, reruns := len(h.ghCalls("head_runs:")), len(h.ghCalls("rerun:"))
-			if r, ok := h.e.openReadRuns(h.ctx, acts, h.repo(), pr); !ok || !r.decided() || !r.At.Equal(stored.At) || r.Refused != stored.Refused {
+			if r, ok := h.e.openReadRuns(h.ctx, acts, h.repo(), pr); !ok || !r.Decided() || !r.At.Equal(stored.At) || r.Refused != stored.Refused {
 				t.Errorf("read = %+v, %v; want the stored record %+v", r, ok, stored)
 			}
 			unread := ciRerun{Head: fixHead, ReadAt: h.clock.Now(), Run: &ciNoJob{ID: liveRunID, Workflow: "ci.yml", Attempt: 1, Conclusion: "failure"}}
-			if r, ok := h.e.openRerunCI(h.ctx, acts, h.repo(), pr, unread, "required check build"); !ok || !r.decided() || !r.At.Equal(stored.At) ||
+			if r, ok := h.e.openRerunCI(h.ctx, acts, h.repo(), pr, unread, "required check build"); !ok || !r.Decided() || !r.At.Equal(stored.At) ||
 				r.Refused != stored.Refused {
 				t.Errorf("re-run = %+v, %v; want the stored record %+v", r, ok, stored)
 			}
@@ -651,7 +651,7 @@ func TestARecordedReRunIsNotRedoneByALookThatCouldNotReadTheRecord(t *testing.T)
 			if n := len(h.fixEvents(c.event)); n != 1 {
 				t.Errorf("%s said %d times, want once", c.event, n)
 			}
-			if r := h.e.ciRerunAt(h.ctx, pr); !r.decided() || !r.At.Equal(stored.At) || r.Refused != stored.Refused || r.Run == nil {
+			if r := h.e.ciRerunAt(h.ctx, pr); !r.Decided() || !r.At.Equal(stored.At) || r.Refused != stored.Refused || r.Run == nil {
 				t.Errorf("record = %+v after, want %+v", r, stored)
 			}
 		})

@@ -27,11 +27,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"maps"
 	"slices"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/store"
@@ -89,164 +86,6 @@ func (e *Engine) openRaise(ctx context.Context, repo store.Repo, pr store.PR, l 
 	return true
 }
 
-// raisedHere reports whether pr needs attention of kind for what the look
-// raised itself: kind fix, last_error the look's message, keys it raised.
-// A loop's or a round's Needs you is not.
-func (l openLedger) raisedHere(pr store.PR, kind string) bool {
-	return pr.State == store.PRNeedsAttention && kind == attention.KindFix && l.RaisedMsg != "" && deref(pr.LastError) == l.RaisedMsg &&
-		len(l.Raised) > 0
-}
-
-// leftToAuthor reports whether it, once still open, waits for the author
-// rather than a fixer where sortOpen sorts it: a loop was handed it
-// (Handed), or it is a reviewer's pushback.
-func (l openLedger) leftToAuthor(it openItem) bool {
-	_, handed := l.Handed[it.Key]
-	return handed || l.pushback(it)
-}
-
-// pushback reports whether it is a person's review body that requests
-// changes made after one of that reviewer's items began to wait for the
-// author (pushedBack): they push back on the author's answer, or ask
-// again, which only the author can settle. Their plain comment is no
-// pushback: it is an item of its own, never handed, so work.
-func (l openLedger) pushback(it openItem) bool {
-	return it.Class == classPerson && pushedBack(l.Waited, it.By, it.ChangesAt)
-}
-
-// pushedBack reports whether a change request by by whose latest word
-// came at at (zero: no change request) is their pushback: made after
-// waited's time for them (openLedger.Waited), when one of their items
-// began to wait for the author (a loop's hand-off of it, seedWaited). One
-// made before is a request of its own, which a fixer works on, though the
-// look reads their item only later: it came while the loop that left the
-// item ran, or before.
-func pushedBack(waited map[string]time.Time, by string, at time.Time) bool {
-	since, ok := waited[strings.ToLower(by)]
-	return ok && !at.IsZero() && at.After(since)
-}
-
-// pushbackPrefix starts a pushbackKey.
-const pushbackPrefix = "changes:"
-
-// pushbackKey is the key, among a loop's FixState.Waits, of by's pushback
-// since since (Waited): "changes:rev-ann@<unix nanoseconds>". It names no
-// item: every cycle's external file marks each change request of theirs
-// made after since waiting (externalItems.waiting), so one that comes
-// while the loop runs reaches no fixer either.
-func pushbackKey(by string, since time.Time) string {
-	return pushbackPrefix + strings.ToLower(by) + "@" + strconv.FormatInt(since.UnixNano(), 10)
-}
-
-// pushbacksOf are the reviewers and times of the pushback keys among keys
-// (pushbackKey), as Waited holds them; nil for none.
-func pushbacksOf(keys []string) map[string]time.Time {
-	var out map[string]time.Time
-	for _, k := range keys {
-		rest, ok := strings.CutPrefix(k, pushbackPrefix)
-		i := strings.LastIndexByte(rest, '@')
-		if !ok || i <= 0 {
-			continue
-		}
-		ns, err := strconv.ParseInt(rest[i+1:], 10, 64)
-		if err != nil {
-			continue
-		}
-		if out == nil {
-			out = map[string]time.Time{}
-		}
-		out[rest[:i]] = time.Unix(0, ns)
-	}
-	return out
-}
-
-// loopWaits are the FixState.Waits of a loop the look starts beside needs:
-// the keys of needs and of the items it would wait for you on that their
-// reviewer accepted (acceptedWaits), then a pushback key for each reviewer
-// of Waited (pushbackKey), sorted.
-func (l openLedger) loopWaits(items, needs []openItem) []string {
-	keys := waitsOf(append(slices.Clone(needs), acceptedWaits(items, l)...))
-	var pushbacks []string
-	for by, since := range l.Waited {
-		pushbacks = append(pushbacks, pushbackKey(by, since))
-	}
-	slices.Sort(pushbacks)
-	return append(keys, pushbacks...)
-}
-
-// lastReadWaits are the FixState.Waits of a loop that starts outside the
-// look (a CI fix by hand, fix_ci.go): loopWaits over the other reviewers'
-// items of the look's last read (Read.Others), seeded and sorted as the
-// look seeds and sorts them (seedWaited, sortOpen) on a copy of l's
-// reviewers, so its next cycles leave alone what a loop the look starts
-// would. The key of an item that moved since that read marks nothing.
-func (l openLedger) lastReadWaits() []string {
-	l.Waited = maps.Clone(l.Waited)
-	l.seedWaited(l.Read.Others)
-	_, needs := sortOpen(l.Read.Others, l)
-	return l.loopWaits(l.Read.Others, needs)
-}
-
-// seedWaited records in l.Waited, before the look sorts items, the
-// reviewer of each person's item of items that a loop was handed, from the
-// earliest time a loop handed one of theirs (Handed: when openLoopsEnded
-// saw that loop end). Their change requests since are pushback from the
-// first look whose read shows the item, though a reply magnum had not
-// re-decided, a low budget or failed reads kept the look from seeing it
-// wait before; one made while that loop ran stays work.
-func (l *openLedger) seedWaited(items []openItem) {
-	for _, it := range items {
-		if at, ok := l.Handed[it.Key]; ok {
-			l.waitedFrom(it, at)
-		}
-	}
-}
-
-// noteWaited records in l.Waited, at now the first time, the reviewers
-// of the person's items of needs, which wait for the author (a thread a
-// fixer resolved, never handed, too). A reviewer stays there for the PR's
-// life: an approval of theirs and a new change request can come in one
-// read.
-func (l *openLedger) noteWaited(needs []openItem, now time.Time) {
-	for _, it := range needs {
-		l.waitedFrom(it, now)
-	}
-}
-
-// waitedFrom records in l.Waited that the reviewer of it, a person's item,
-// waited for the author from at on, unless an earlier time stands.
-func (l *openLedger) waitedFrom(it openItem, at time.Time) {
-	by := strings.ToLower(it.By)
-	if it.Class != classPerson || by == "" || by == "ghost" {
-		return
-	}
-	if since, ok := l.Waited[by]; ok && !at.Before(since) {
-		return
-	}
-	if l.Waited == nil {
-		l.Waited = map[string]time.Time{}
-	}
-	l.Waited[by] = at
-}
-
-// acceptedLeftover reports whether it would wait for you (left to you,
-// a thread a fixer resolved, one the fixer answered twice) but its
-// reviewer approved the PR since (openItem.Accepted): it waits for no one
-// (sortOpen). An item never handed is work, accepted or not.
-func (l openLedger) acceptedLeftover(it openItem) bool {
-	return it.Accepted && (l.leftToAuthor(it) || it.Resolved || it.Kind == itemThread && it.FixerReplies >= 2)
-}
-
-// acceptedWaits are the items of items that would wait for you and whose
-// reviewer approved the PR since (acceptedLeftover): no longer work or
-// needs, they are still left alone by a loop's fixer, as the ones that wait
-// are (waitsOf), since an earlier fixer left them to you. Its file lists
-// them unanswered, and a fixer that answered one would answer for you, or
-// name it under Needs you, a loop's own attention the look never lifts.
-func acceptedWaits(items []openItem, l openLedger) []openItem {
-	return slices.DeleteFunc(slices.Clone(items), func(it openItem) bool { return !l.acceptedLeftover(it) })
-}
-
 // openLift puts pr back to reviewed when it needs attention for what the
 // look raised (raisedHere), no loop runs, and the look's whole, fresh read
 // shows none of the raised items open any more: you answered them, or
@@ -256,7 +95,7 @@ func acceptedWaits(items []openItem, l openLedger) []openItem {
 // here. It reports whether it lifted.
 func (e *Engine) openLift(ctx context.Context, repo store.Repo, pr store.PR, l *openLedger, f openFacts) bool {
 	switch {
-	case !l.raisedHere(pr, f.attention), f.fix != nil || f.fixBad, !f.whole || f.failed || len(f.cut) > 0, deref(pr.ReviewedSHA) != pr.HeadSHA:
+	case !l.RaisedHere(pr, f.attention), f.fix != nil || f.fixBad, !f.whole || f.failed || len(f.cut) > 0, deref(pr.ReviewedSHA) != pr.HeadSHA:
 		return false
 	}
 	open, accepted := map[string]bool{}, map[string]string{}

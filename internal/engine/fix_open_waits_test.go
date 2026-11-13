@@ -27,7 +27,7 @@ func TestTheLookStartsOnNeverHandedWorkWhileAPersonsItemsWait(t *testing.T) {
 	if len(work) != 1 || work[0].Key != lint.Key || len(needs) != 1 || needs[0].Key != person.Key || len(v.Needs) != 1 || v.Needs[0].URL != person.URL {
 		t.Errorf("work %v, needs %v, verdict needs %+v; want the bot's thread as work and the person's listed", work, needs, v.Needs)
 	}
-	if v.leftovers {
+	if v.Leftovers {
 		t.Error("the person's item is raised while the loop starts")
 	}
 	skipped := openItem{Key: "rthread:5000", Class: classMagnum, Kind: itemFinding, URL: prPage + "#discussion_r5000"}
@@ -61,8 +61,8 @@ func TestAPersonsWaitingItemsStayNamedWhileTheWorkCannotStart(t *testing.T) {
 	f.pause = "fixes paused"
 	v, _, needs := decideOpen(f)
 	wantVerdict(t, v, OpenWaits, "fixes paused: 1 thread of a bot waits for `magnum resume`; 1 item waits for you: 1 thread of a person")
-	if v.leftovers || len(needs) != 1 || len(v.Needs) != 1 {
-		t.Errorf("paused: leftovers %v, needs %v, verdict needs %+v; want the person's item listed, not raised", v.leftovers, needs, v.Needs)
+	if v.Leftovers || len(needs) != 1 || len(v.Needs) != 1 {
+		t.Errorf("paused: leftovers %v, needs %v, verdict needs %+v; want the person's item listed, not raised", v.Leftovers, needs, v.Needs)
 	}
 	f = facts()
 	act := openNow.Add(-time.Minute)
@@ -70,15 +70,15 @@ func TestAPersonsWaitingItemsStayNamedWhileTheWorkCannotStart(t *testing.T) {
 	v, _, _ = decideOpen(f)
 	wantVerdict(t, v, OpenWaits, "settling: 1 thread of a bot waits until "+waitClock(act.Add(3*time.Minute), openNow)+
 		"; 1 item waits for you: 1 thread of a person")
-	if v.leftovers {
+	if v.Leftovers {
 		t.Error("settling: the person's item is raised")
 	}
 	f = facts()
 	f.ledger.Starts = []time.Time{openNow.Add(-5 * time.Hour), openNow.Add(-3 * time.Hour), openNow.Add(-time.Hour)}
 	v, work, _ := decideOpen(f)
 	wantVerdict(t, v, OpenNeedsYou, "1 item needs you: 1 thread of a person")
-	if !v.leftovers || len(work) != 0 {
-		t.Errorf("at the cap: leftovers %v, work %v; want the person's item raised as rule 8 does", v.leftovers, work)
+	if !v.Leftovers || len(work) != 0 {
+		t.Errorf("at the cap: leftovers %v, work %v; want the person's item raised as rule 8 does", v.Leftovers, work)
 	}
 }
 

@@ -26,23 +26,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
-
-// optionalCall is a P3 of magnum's that a fixer left the author as an
-// optional call: the id of its thread's first comment, the thread's link
-// on the PR's page, and when the settle took the call (At): the author's
-// own word in the thread after it is a decision on it, as on any call the
-// fixer left (fixerCalls), which `magnum fix --decide` posts.
-type optionalCall struct {
-	Thread int64     `json:"thread"`
-	URL    string    `json:"url"`
-	At     time.Time `json:"at,omitzero"`
-}
 
 // kvPROptionalCalls holds the PR's optional calls (JSON: []optionalCall,
 // by thread, oldest first), which the settle adds to and the look prunes.
@@ -220,7 +208,7 @@ func (e *Engine) openOptional(ctx context.Context, prID int64, mine []magnumThre
 // thread: nobody answered it since the call (magnumThread.answeredSince),
 // the rule decisionIn reads a decision by. A question of the author's that
 // magnum answered before the call takes nothing.
-func optionalWaits(c optionalCall, mt magnumThread) bool { return !mt.answeredSince(c.At) }
+func optionalWaits(c optionalCall, mt magnumThread) bool { return !mt.AnsweredSince(c.At) }
 
 // openOptionalIn is how many of calls mine shows open and waiting
 // (optionalWaits), as the look counts them (openOptional).

@@ -52,13 +52,6 @@ const (
 	// openEventsRead is how many of a PR's newest events the look reads for
 	// the loops that ended since its last look.
 	openEventsRead = 200
-	// openStalePolls is how many poll intervals since the daemon's last
-	// sign of polling (a watch's last good poll for the look, the last
-	// tick's start for a verdict's reader) make it behind: the run loop
-	// waits a whole interval after each tick ends, so ticks start an
-	// interval plus a tick's length apart, and one failed poll puts the
-	// last good one two such spans back.
-	openStalePolls = 4
 )
 
 // openCand is an own PR the look covers this tick: its row, repository,
@@ -211,7 +204,7 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 		}
 	}
 	f.pending = len(pr.PendingReplies())
-	f.raised = l.raisedHere(pr, f.attention) // fix_open_needs.go
+	f.raised = l.RaisedHere(pr, f.attention) // fix_open_needs.go
 	f.sum = c.sum
 	if f.pause = e.userPause(ctx); f.pause != "" { // it holds the look's starts, as it held "own"'s rounds
 		f.pauseUntil, _ = e.kvTime(ctx, store.KVDaemonPausedUntil)
@@ -246,36 +239,36 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 		openPrune(&l, f.items)
 	}
 	// fix_open_needs.go: pushback counts from the loop's hand-off, however late the look reads it
-	l.seedWaited(f.items)
+	l.SeedWaited(f.items)
 	gap := max(f.settle.quiet, openStalePolls*e.cfg.Daemon.PollInterval.Duration) // longer than the looks' own spacing
-	l.Spell = l.Spell.next(pr, f.settle.quiet, gap, now, f.fix != nil || f.fixBad || f.held != "")
+	l.Spell = l.Spell.Next(pr, f.settle.quiet, gap, now, f.fix != nil || f.fixBad || f.held != "")
 	f.ledger = l
 	f.ciFix = e.ciFixFactsOf(ctx, repo, pr, f, l) // ci_fix.go
 	v, work, needs := decideOpen(f)
-	if !e.d.DryRun && v.readCIBase { // ci_fix.go: rule 11 reads the base's CI of the failed required check, once per head, failed set and tip
+	if !e.d.DryRun && v.ReadCIBase { // ci_fix.go: rule 11 reads the base's CI of the failed required check, once per head, failed set and tip
 		f.ciFix = e.readCIBase(ctx, repo, *c.w, pr, f, l)
 		v, work, needs = decideOpen(f)
 	}
 	acts := e.ciActions(e.ciDispatchIdentity(repo.FullName(), *c.w)) // ci_actions.go: one token for the look's Actions calls
 	defer acts.end()
-	if !e.d.DryRun && (v.readRuns || v.rerun) { // ci_rerun.go: rule 11 reads the head's runs, re-runs the one that started no job
+	if !e.d.DryRun && (v.ReadRuns || v.Rerun) { // ci_rerun.go: rule 11 reads the head's runs, re-runs the one that started no job
 		v, work = e.openCIRerun(ctx, acts, repo, pr, &f, v, work)
 	}
 	ci := v.Verdict == OpenFixing && len(work) == 1 && work[0].Kind == itemCI
 	// ci_failures.go: why it failed, once, before the start, or again where a read of a run it named listed no failed job
-	if !e.d.DryRun && (ci || v.recheckCIRead) && e.ensureCIRead(ctx, acts, repo, pr, &f) {
+	if !e.d.DryRun && (ci || v.RecheckCIRead) && e.ensureCIRead(ctx, acts, repo, pr, &f) {
 		v, work, needs = decideOpen(f)
 		ci = v.Verdict == OpenFixing && len(work) == 1 && work[0].Kind == itemCI
 	}
 	switch {
 	case e.d.DryRun:
-	case v.leftovers && e.openRaise(ctx, repo, pr, &l, needs): // fix_open_needs.go
+	case v.Leftovers && e.openRaise(ctx, repo, pr, &l, needs): // fix_open_needs.go
 		pr.State = store.PRNeedsAttention
 		f.pr, f.attention, f.ledger = pr, attention.KindFix, l
 		v, work, _ = decideOpen(f)
-	case v.late:
+	case v.Late:
 		e.openLate(ctx, repo, pr, &l, v.Why)
-	case v.dispatch: // fix_open_ci.go: a required check did not run at the head
+	case v.Dispatch: // fix_open_ci.go: a required check did not run at the head
 		if s, ok := e.openStartCI(ctx, acts, repo, pr, f.ciWorkflow, missingWhat(f.ci.missing)); ok {
 			f.ciStart = s
 			v, work, _ = decideOpen(f)
@@ -283,9 +276,9 @@ func (e *Engine) lookOpen(ctx context.Context, c *openCand, pauses []openHold, r
 	}
 	acts.end() // before the fixer starts: the deferred end does nothing more
 	// fix_open_needs.go: a change request their reviewers make from now on waits for you, in the loop below too
-	l.noteWaited(needs, now)
+	l.NoteWaited(needs, now)
 	// a person's handed items wait, those their reviewer accepted, and their reviewers' pushback: a loop's fixer leaves them alone
-	waits := l.loopWaits(f.items, needs)
+	waits := l.LoopWaits(f.items, needs)
 	switch {
 	case ci: // ci_fix.go: the record first, so a restart never starts a fourth; its next cycles, on findings, read the other reviewers too
 		v = e.openStart(ctx, repo, pr, &l, v, work, FixState{Mode: FixModeCI, CIChecks: ciEntries(f.ci.failedRuns), Waits: waits}, fp)
@@ -346,14 +339,14 @@ func (e *Engine) openLookRead(ctx context.Context, c *openCand, l *openLedger, f
 	f.whole, f.failed = openWhole(l.Read, fp, pr.HeadSHA)
 	if f.whole {
 		f.cut = l.Read.Cut
-		handed := !hasRow && f.sum != nil && l.handedReview(f.sum.RunID)
+		handed := !hasRow && f.sum != nil && l.HandedReview(f.sum.RunID)
 		var optional map[int64]bool
 		if !f.failed && len(f.cut) == 0 { // fix_optional.go: the operator's optional calls, as the read shows them
 			f.optional, optional = e.openOptional(ctx, pr.ID, l.Read.Mine, f.sum)
 			f.optionalP3 = optionalSplit(l.Read.Mine, f.sum, optional)
 		}
 		f.described = f.sum != nil && e.reviewDescribed(repo, pr.Number, f.sum.SHA) // fix.go: the review's Description line is work
-		f.items = append(slices.Clone(l.Read.Others), magnumItemsOf(l.Read.Mine, f.sum, handed, l.Conflict.fixConflict(pr.HeadSHA), pr.HeadSHA, optional,
+		f.items = append(slices.Clone(l.Read.Others), magnumItemsOf(l.Read.Mine, f.sum, handed, openFixConflict(l.Conflict, pr.HeadSHA), pr.HeadSHA, optional,
 			f.described)...)
 		if f.attention == attention.KindFix && !f.failed && len(f.cut) == 0 { // fix_decide.go: your decisions answer the fixer's calls
 			f.decided = callsDecided(deref(pr.LastError), func(root int64) bool { return decisionOf(f.items, root) })
@@ -604,9 +597,9 @@ func (e *Engine) openConflictCheck(ctx context.Context, repo store.Repo, pr stor
 	l.Conflict = next
 }
 
-// fixConflict is the conflict as the fix job reads it (zero: none, or one
+// openFixConflict is the conflict c as the fix job reads it (zero: none, or one
 // checked at another head).
-func (c openConflict) fixConflict(head string) fixConflict {
+func openFixConflict(c openConflict, head string) fixConflict {
 	if c.Head != head || len(c.Paths) == 0 {
 		return fixConflict{}
 	}
@@ -776,7 +769,7 @@ func (e *Engine) openLoopsEnded(ctx context.Context, repo store.Repo, pr store.P
 		}
 	}
 	if loops > 0 {
-		for _, it := range magnumItemsOf(l.Read.Mine, nil, false, l.Conflict.fixConflict(l.Conflict.Head), l.Conflict.Head, nil, false) {
+		for _, it := range magnumItemsOf(l.Read.Mine, nil, false, openFixConflict(l.Conflict, l.Conflict.Head), l.Conflict.Head, nil, false) {
 			if it.Kind == itemMagnum || it.Kind == itemConflict {
 				hand(it.Key)
 			}
@@ -976,10 +969,10 @@ func (e *Engine) openWrite(ctx context.Context, pr store.PR, raw string, l openL
 	v.Since = v.At
 	if cur, ok := e.getKV(ctx, KVPROpen(pr.ID)); ok {
 		if prev, ok := ParseOpenVerdict(cur); ok {
-			if v.goesOn(prev) {
+			if v.GoesOn(prev) {
 				v.Since = cmp.Or(prev.Since, prev.At)
 			}
-			if prev.sameAs(v) && !pr.UpdatedAt.After(prev.At) {
+			if prev.SameAs(v) && !pr.UpdatedAt.After(prev.At) {
 				return
 			}
 		}

@@ -243,7 +243,7 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 		left = "earlier findings still open"
 	}
 	paused := e.pauseContinues(ctx, job.pr, res.Outcome)
-	needs, answered, carried := st.NeedsYou, st.answered(), st.Carried
+	needs, answered, carried := st.NeedsYou, st.AnsweredSet(), st.Carried
 	if !paused && (len(needs) > 0 || len(carried) > 0) { // what magnum's threads show now, the re-review's read of them first
 		if len(needs) > 0 {
 			needs, answered = e.freshNeedsYou(fctx, job, needs, answered, res.ReportDir, read)

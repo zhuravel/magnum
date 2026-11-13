@@ -52,6 +52,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [runtime](#runtime) | Package runtime is the factory's agent runtime: the owner rows of its tasks in the factory's own agents store, the launches it records before any workspace exists, the prompt ledger that never sends a prompt of unknown delivery twice, the pauses that are not failures, and a watchdog with its recovery steps (docs/superpowers/specs/2026-11-03-factory-design.md, sections 4.3, 10 and 10.1). |
 | [stats](#stats) | Package stats measures how much the factory still asks of the operator: per task, the messages typed, the messages that only start a step, the answer batches, the card decisions, the operator's time on cards and the time a task waited on them, computed from the factory registry's evidence records alone (spans, inputs, questions, decisions and review rounds) and set against the baseline frozen before the first task (milestone 1's exit test); and, for a task with a published PR, the PR's quality: what the local review missed at magnum's first posted round (the escape checks) and the PR's CI failures after the publish (its CI checks). |
 | [factoryread](#factoryread) | Package factoryread is the review side's read of what the factory keeps: the local review round of a pull request the factory published, from its registry (factory.db), and the task's plan, ticket and answers, from the task's directory, for the review retro (DECISIONS "The review retro tags factory-origin misses and their stage"); and a task's local review rounds, their heads and roles and its answered questions with every answer they had, for the replay of a round as an eval case (LocalReview, `magnum eval add --local-task`), and a task's Codex mark and published PR before its replay (TaskCodex). |
+| [fixwork](#fixwork) | Package fixwork is the fix loop's code that both daemons need: magnum's engine, which runs the loop today, and the factory, which takes it over (DECISIONS "The fix loop moves into the factory"). |
 | [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a replacement without disk syncs, a size-limited read of a regular file, plain or inside an os.Root, the check of a file holding a secret, an existence check and a canonical path. |
 | [github](#github) | Package github is magnum's GitHub access layer. |
 | [gitx](#gitx) | Package gitx holds every git operation magnum needs: fetching PR heads into refs/magnum/pr/N, detached switches and placeholder resets in review slots, worktree management, dirty/unpushed guards and the diff queries behind "did this PR touch db/". |
@@ -9011,33 +9012,33 @@ const (
 	MachineToastRounds = 3
 )
 const (
-	OpenFixing   = "fixing"    // a fix loop runs, or the look starts one
-	OpenWaits    = "waits"     // something will move on its own: magnum's review, the settle, CI, the budget
-	OpenNeedsYou = "needs_you" // only the operator can move it
-	OpenIdle     = "idle"      // nothing open at the head
-	OpenUnknown  = "unknown"   // the look has not read GitHub since the PR changed: never idle
-	OpenOff      = "off"       // the look does not cover the PR (OpenVerdict.Off says why)
+	// FixPhaseFixing: the fixer works on the head the cycle fixes.
+	FixPhaseFixing = fixwork.FixPhaseFixing
+	// FixPhaseReviewing: the fixer pushed, and a review round runs on the new head.
+	FixPhaseReviewing = fixwork.FixPhaseReviewing
+)
+    Phases of a fix loop (FixState.Phase).
+
+const (
+	OpenFixing   = fixwork.OpenFixing
+	OpenWaits    = fixwork.OpenWaits
+	OpenNeedsYou = fixwork.OpenNeedsYou
+	OpenIdle     = fixwork.OpenIdle
+	OpenUnknown  = fixwork.OpenUnknown
+	OpenOff      = fixwork.OpenOff
 )
     Verdicts of autofix = "open" (OpenVerdict.Verdict).
 
 const (
-	OpenOffFixOff     = "fix_off"     // `magnum fix --off`
-	OpenOffDraft      = "draft"       // a draft PR
-	OpenOffFork       = "fork"        // its head lives in a fork
-	OpenOffIncludeOwn = "include_own" // its watch reviews no own PRs
-	OpenOffMuted      = "muted"       // `magnum mute`: a mute stops every automatic round
-	OpenOffBaseline   = "baseline"    // open before magnum first synced the repository
-	OpenOffIneligible = "ineligible"  // magnum does not review it
+	OpenOffFixOff     = fixwork.OpenOffFixOff
+	OpenOffDraft      = fixwork.OpenOffDraft
+	OpenOffFork       = fixwork.OpenOffFork
+	OpenOffIncludeOwn = fixwork.OpenOffIncludeOwn
+	OpenOffMuted      = fixwork.OpenOffMuted
+	OpenOffBaseline   = fixwork.OpenOffBaseline
+	OpenOffIneligible = fixwork.OpenOffIneligible
 )
     Why an off verdict is off (OpenVerdict.Off).
-
-const (
-	// FixPhaseFixing: the fixer works on the head the cycle fixes.
-	FixPhaseFixing = "fixing"
-	// FixPhaseReviewing: the fixer pushed, and a review round runs on the new head.
-	FixPhaseReviewing = "reviewing"
-)
-    Phases of a fix loop (FixState.Phase).
 
 const (
 	EventKindHeld        = "kind.held"
@@ -11306,17 +11307,8 @@ type EvidenceMapEntry struct {
     the round that wrote it. A stale entry (pipeline.EvidenceStale) keeps the
     state it was written with in Was.
 
-type FixCarry struct {
-	Report   string   `json:"report"`
-	NeedsYou []string `json:"needs_you"`
-	Answered []string `json:"answered,omitempty"`
-}
-    FixCarry is the calls one earlier cycle of a fix loop left the author
-    (FixState.Carried): the cycle's report, beside which its files place the
-    threads, the entries of its "## Needs you" still asked (in the fixer's
-    own words, so never put in an event or a log), and the comment ids among
-    them whose threads showed their answer and ask only for the resolution (as
-    FixState.Answered).
+type FixCarry = fixwork.FixCarry
+    FixCarry is the calls an earlier cycle left the author: fixwork.FixCarry.
 
 type FixCommit struct {
 	SHA     string // 7 to 40 hex digits, as the fixer wrote it
@@ -11324,13 +11316,8 @@ type FixCommit struct {
 }
     FixCommit is a commit the fixer says it pushed.
 
-type FixConfirm struct {
-	Head  string    `json:"head"`
-	Since time.Time `json:"since"`
-}
-    FixConfirm is the fixer's push a fix loop's settle confirms on GitHub
-    while GitHub does not answer: the pushed head and when GitHub first did not
-    answer.
+type FixConfirm = fixwork.FixConfirm
+    FixConfirm is the push a loop's settle confirms: fixwork.FixConfirm.
 
 type FixDecision struct {
 	Thread int64  `json:"thread"`
@@ -11340,12 +11327,8 @@ type FixDecision struct {
     its first comment (attention.FixCall's Thread), and your words, which magnum
     posts there as you; no event or log carries them.
 
-type FixOff struct {
-	Since time.Time `json:"since"`
-	By    string    `json:"by"`
-}
-    FixOff is a PR's opt-out of the fix job: when it was set and by whom
-    ("magnum fix --off").
+type FixOff = fixwork.FixOff
+    FixOff is a PR's opt-out of the fix job (KVPRFixOff): fixwork.FixOff.
 
 func ParseFixOff(s string) (FixOff, bool)
     ParseFixOff reads a KVPRFixOff value; ok is false for one that is not an
@@ -11417,100 +11400,12 @@ func ParseFixReport(text string, runID string) (FixReport, error)
     a closing remark after the sections is ignored. Any other line that does not
     fit its section is an error that quotes the line (not a sentinel).
 
-type FixState struct {
-	Cycle         int         `json:"cycle"`
-	Cap           int         `json:"cap"`
-	Phase         string      `json:"phase"`
-	Since         string      `json:"since"`
-	Head          string      `json:"head"`
-	By            string      `json:"by"`
-	Report        string      `json:"report"`
-	StartedAt     time.Time   `json:"started_at"`
-	NeedsYou      []string    `json:"needs_you,omitempty"`
-	Answered      []string    `json:"answered,omitempty"`
-	Role          string      `json:"role,omitempty"`
-	ForcedAt      time.Time   `json:"forced_at,omitzero"`
-	Held          bool        `json:"held,omitempty"`
-	Context       string      `json:"context,omitempty"`
-	OthersUnread  string      `json:"others_unread,omitempty"`
-	Carried       []FixCarry  `json:"carried,omitempty"`
-	Waits         []string    `json:"waits,omitempty"`
-	Mode          string      `json:"mode,omitempty"`
-	CIChecks      []string    `json:"ci_checks,omitempty"`
-	ParentRefused string      `json:"parent_refused,omitempty"`
-	Confirm       *FixConfirm `json:"confirm,omitempty"`
-	Late          bool        `json:"late,omitempty"`
-}
-    FixState is where a PR's fix loop is: cycle Cycle of at most Cap, in Phase.
-    Since is the head the loop started from and Head the head the current
-    cycle fixes (in phase reviewing, the head the fixer pushed). By says who
-    started it ("magnum fix", "autofix"), Role is the fix role whose fixer
-    runs the current cycle, Report is the path of the report the fixer writes,
-    and StartedAt is when the loop started. NeedsYou are the findings a fixer
-    that pushed left to the author (its report's "## Needs you" entries,
-    in its own words, so never put in an event or a log; FixCalls reads what
-    each asks): the push is re-reviewed first, and the loop ends after that
-    round as needs attention, unless magnum's threads show every call settled
-    by then (freshNeedsYou), when the round decides the loop as for a push that
-    left nothing to the author. Answered are the comment ids of the threads
-    of magnum's among them that showed their answer at the settle, whose
-    calls ask only for the resolution; fixReReview writes it with NeedsYou,
-    and an id whose entry is gone asks nothing. ForcedAt is when the loop forced
-    the re-review of its push (phase reviewing): its re-review is the forced
-    round dispatched at or after it, and every other round that ends while the
-    loop waits is ignored (fixAfterRound; zero in a row written before it was
-    recorded, where any forced round is). Held says that re-review ended and
-    called for a next cycle a drain for a restart refused: no round that ends
-    afterwards is the loop's re-review, and the restart's recovery, or the
-    drain's end without one, starts that cycle (recoverReviewingLoop). Context
-    is what the current cycle did to the fixer's conversation it resumed before
-    its prompt, in a few words (fixCompact: "compacted 82% → 31%", "compacted
-    from 82%" when the pane shows no figure after it, "fresh session (82% after
-    /compact)", "fresh session (/compact failed)"); "" when it resumed it as
-    it was or started a fresh fixer anyway. OthersUnread says that the current
-    cycle's fixer did not get all the other reviewers' items (writeExternal):
-    "not read (HTTP 502)", "not all read (over 1000 review threads)", a short
-    cause and never PR text; the loop's end says so (othersUnread). "" when it
-    got them. Carried are the calls the loop's earlier cycles left the author,
-    which it carries to its end, each cycle's under its own report (FixCarry,
-    fix_carry.go): a re-review that posts new findings runs the next cycle over
-    them while cycles are left. Waits are the keys of other reviewers' items
-    (fix_open_items.go) that an earlier loop was handed and that wait for the
-    author, a person's, beside which autofix = "open" started this loop on work
-    never handed (rule 9), or a CI fix, the look's or by hand, whose next cycles
-    read the other reviewers: every cycle's external file marks them waiting,
-    and the fixer leaves them alone (writeExternal); a pushback key among them
-    (pushbackKey) names a reviewer one of whose items waited, and marks their
-    change requests made since. Mode is what the loop does: "" fixes findings,
-    FixModeMerge merges the PR's parent alone (fix_parent.go), FixModeCI fixes
-    its failed required CI on the loop's first cycle (ci_fix.go; the next
-    cycles fix the re-review's findings, with Mode ""), the required entries
-    that failed in CIChecks (the [[repo]] list's or GitHub's rulesets', never
-    a job's name; the registry's alone). ParentRefused is why the daemon did
-    not push its merge of the parent on the loop's first cycle (mergeParent's
-    refusal: "needs Workflows on the App", a branch it never pushes to),
-    which the cycle's fixer goes on without and the loop's end puts under
-    Needs you (parentRefusedNote); "" when it merged or had nothing to merge.
-    Confirm is the push the cycle's settle confirms on GitHub while GitHub does
-    not answer (fix_confirm.go): the loop is still at work, in phase fixing,
-    and the screens say so (Confirming); nil otherwise. Late says the cycle's
-    push was settled late, after its fix failed for want of it: the toasts
-    of that settle and of the loop's end after it have keys of their own,
-    apart from the failure's (fixAttentionKey).
+type FixState = fixwork.FixState
+    FixState is where a PR's fix loop is (KVPRFix): fixwork.FixState.
 
 func ParseFixState(s string) (FixState, bool)
     ParseFixState reads a KVPRFix value; ok is false for one that is not a fix
     loop.
-
-func (s FixState) Confirming() string
-    Confirming says that the loop's settle confirms its fixer's push while
-    GitHub does not answer: "confirming the push of e6c1f37 (GitHub does not
-    answer)"; "" when it does not.
-
-func (s FixState) Short() string
-    Short is the loop while its fixer works, as the board's state cell shows it:
-    "fixing 1/3 · claude-fix" ("fixing 1/3" when the role is not known), "fixing
-    1/3 · confirming e6c1f37" while its settle confirms the push (Confirm).
 
 type GateCase struct {
 	learn.GateRow
@@ -11732,36 +11627,9 @@ func (w GitHubWindow) Outside() int
     calls: Used − Points, never below 0. It counts what others spent before the
     daemon's first call of the window too.
 
-type HeldMerge struct {
-	Repo      string    `json:"repo"`
-	Number    int       `json:"number"`
-	Merge     string    `json:"merge"`
-	Head      string    `json:"head"`
-	Base      string    `json:"base"`
-	Tip       string    `json:"tip"`
-	Workflows []string  `json:"workflows"`
-	Conflicts int       `json:"conflicts,omitempty"`
-	Role      string    `json:"role"`
-	Identity  string    `json:"identity"`
-	Login     string    `json:"login"`
-	Clone     string    `json:"clone"`
-	Diff      string    `json:"diff"`
-	Findings  bool      `json:"findings,omitempty"`
-	Attention string    `json:"attention"`
-	At        time.Time `json:"at"`
-}
-    HeldMerge is a merge of a PR's parent that magnum holds for your y:
-    the PR it was held for (Repo, owner/name, and Number: checked against
-    the registry's rows, never a path's source), the merge commit (Merge),
-    the PR's head on GitHub it merges into (Head, its first parent), the base
-    branch and the commit of it it merges (Base, Tip: its second parent, the
-    base's tip on GitHub when it was held), the workflow files its push changes
-    against the head, how many files the fixer resolved conflicts in (Conflicts;
-    0 when not known), the fix role whose fixer resolved it, the identity that
-    pushes it and its login, the clone that holds its ref, its held-merge.diff
-    (absolute), whether a fix run's findings wait for the next fix after the
-    push (Findings), the words the PR's attention starts with while it is held
-    (Attention) and when it was held.
+type HeldMerge = fixwork.HeldMerge
+    HeldMerge is a merge of a PR's parent held for your y (KVPRHeldMerge):
+    fixwork.HeldMerge.
 
 func ParseHeldMerge(raw string) (HeldMerge, bool)
     ParseHeldMerge reads a KVPRHeldMerge row; false for one that names no merge,
@@ -12142,14 +12010,8 @@ func (h OpenHold) End(d config.Daemon, humanAt *time.Time) time.Time
     End is when the hold ends: Until, or human_cooldown after humanAt (the PR's
     human_active_at, the last input in its panes) when that is later.
 
-type OpenNeed struct {
-	Kind string `json:"kind"`
-	URL  string `json:"url,omitempty"`
-}
-    OpenNeed is one thing that needs the operator: its kind (thread, review,
-    comment, magnum, finding, conflict, ci for a required check that ran
-    and failed, ci_missing for one that did not run at the head, loop or
-    magnum_late) and link.
+type OpenNeed = fixwork.OpenNeed
+    OpenNeed is one thing that needs the operator: fixwork.OpenNeed.
 
 type OpenPayload struct {
 	PRTarget
@@ -12162,49 +12024,13 @@ type OpenPayload struct {
     pane), pins the PR and its slot, and completes with the pane id of Role.
     A PR whose session is live, or whose round is running, completes at once.
 
-type OpenVerdict struct {
-	Verdict       string     `json:"verdict"`
-	Why           string     `json:"why"`
-	Head          string     `json:"head"`
-	At            time.Time  `json:"at"`
-	Since         time.Time  `json:"since,omitzero"`
-	ReadAt        time.Time  `json:"read_at,omitzero"`
-	Until         time.Time  `json:"until,omitzero"`
-	Open          int        `json:"open"`
-	Needs         []OpenNeed `json:"needs,omitempty"`
-	Approved      string     `json:"approved,omitempty"`
-	AfterApproval int        `json:"after_approval,omitempty"`
-	Off           string     `json:"off,omitempty"`
-	// Optional are the links of the operator's optional calls an idle
-	// verdict names (fix_optional.go): P3s whose Fix leaves the choice to
-	// the operator, which hold nothing and wait for them at the merge.
-	Optional []string `json:"optional,omitempty"`
-
-	// Has unexported fields.
-}
-    OpenVerdict is autofix = "open"'s verdict on a PR at Head (KVPROpen):
-    fixing, waits, needs_you, idle, unknown or off, why in plain words (counts,
-    kinds, short SHAs and clock times, never PR text), when the look decided
-    it (At), since when it has said the same without a break (Since: the same
-    verdict, approval and reason to be off, whatever the words and however
-    often the PR changed; Since and At are equal when it began, and zero in
-    a row of a build before it), when it last read GitHub whole (ReadAt),
-    when a wait ends where that is known (Until), the open items (work and
-    what needs the operator) and what needs the operator (kind and link only),
-    the short SHA a person approved ("" = none) and the commits on Head after it
-    (-1 = not counted), and why an off verdict is off.
+type OpenVerdict = fixwork.OpenVerdict
+    OpenVerdict is autofix = "open"'s verdict on a PR (KVPROpen):
+    fixwork.OpenVerdict.
 
 func ParseOpenVerdict(s string) (OpenVerdict, bool)
     ParseOpenVerdict reads a KVPROpen value; ok is false for one that is not a
     verdict.
-
-func (v OpenVerdict) Stale(prHead string, prUpdated, lastTick, now time.Time, poll time.Duration) bool
-    Stale reports whether v no longer tells the PR's state, for a reader
-    (the factory's screen) that then shows the PR as looked at: the start of
-    the daemon's last tick (lastTick, zero for none) is older than four poll
-    intervals (ticks start an interval plus a tick's length apart, so two would
-    call a long tick a stop), the PR's head moved past v's, or the PR's row
-    changed after v was decided (prUpdated).
 
 type Options struct {
 	// Once runs startup and a single tick, then keeps observing herdr only
@@ -19010,6 +18836,915 @@ func TaskFiles(dir string) []TaskFile
     dir, in that order, read only and inside dir: a kind none of whose names
     exists is left out, and one larger than TaskFileMax or that cannot be read
     says why (Skipped). A directory that does not exist has no files.
+
+```
+
+## fixwork
+
+```text
+package fixwork // import "github.com/zhuravel/magnum/internal/fixwork"
+
+Package fixwork is the fix loop's code that both daemons need: magnum's engine,
+which runs the loop today, and the factory, which takes it over (DECISIONS "The
+fix loop moves into the factory"). It holds the JSON types of the fix records in
+magnum's registry, so both decode the same rows, and the pure parts of the loop.
+It imports neither internal/engine nor internal/factory: the factory imports
+the engine, so a type both need lives here. A name in its docs that it does not
+define (KVPRFix, fixJob, settlePushes) is the engine's.
+
+CONSTANTS
+
+const (
+	CIOutcomeUnstarted = "unstarted"
+	CIOutcomePushed    = "pushed"
+	CIOutcomeMerged    = "merged"
+	CIOutcomeCannot    = "cannot"
+	CIOutcomeFailed    = "failed"
+	CIOutcomeStopped   = "stopped"
+	CIOutcomeLost      = "lost"
+)
+    The outcomes of a CI fix (CIFixStart.Outcome): it never ran a fixer (the fix
+    job refused it at once: it does not count), it pushed, the daemon merged the
+    parent and the fixer pushed nothing (CI runs on the merge; Why: the class
+    word of a fixer that said it cannot there), the fixer said it cannot (Why:
+    its class word), the run failed, was stopped or lost in a restart.
+
+const (
+	CIBasePassed  = "passed"
+	CIBaseFailed  = "failed"
+	CIBaseRunning = "running"
+	CIBaseNever   = "never"
+)
+    The base's word on a failed check (CIBaseCheck.State): it passed on the
+    newest first-parent commit of the base that finished it, failed there,
+    runs on a commit while no commit read finished it, or no commit of the ones
+    read ran it.
+
+const (
+	OpenFixing   = "fixing"    // a fix loop runs, or the look starts one
+	OpenWaits    = "waits"     // something will move on its own: magnum's review, the settle, CI, the budget
+	OpenNeedsYou = "needs_you" // only the operator can move it
+	OpenIdle     = "idle"      // nothing open at the head
+	OpenUnknown  = "unknown"   // the look has not read GitHub since the PR changed: never idle
+	OpenOff      = "off"       // the look does not cover the PR (OpenVerdict.Off says why)
+)
+    Verdicts of autofix = "open" (OpenVerdict.Verdict).
+
+const (
+	OpenOffFixOff     = "fix_off"     // `magnum fix --off`
+	OpenOffDraft      = "draft"       // a draft PR
+	OpenOffFork       = "fork"        // its head lives in a fork
+	OpenOffIncludeOwn = "include_own" // its watch reviews no own PRs
+	OpenOffMuted      = "muted"       // `magnum mute`: a mute stops every automatic round
+	OpenOffBaseline   = "baseline"    // open before magnum first synced the repository
+	OpenOffIneligible = "ineligible"  // magnum does not review it
+)
+    Why an off verdict is off (OpenVerdict.Off).
+
+const (
+	ClassMagnum   = "magnum"   // magnum's review, thread or finding
+	ClassPerson   = "person"   // another reviewer who is not a bot
+	ClassBot      = "bot"      // another reviewer that is a bot (github.IsBot)
+	ClassConflict = "conflict" // a conflict of the head with its base
+)
+    Classes of an open item (Item.Class): whose word it is.
+
+const (
+	ItemThread   = "thread"   // another reviewer's review thread
+	ItemReview   = "review"   // another reviewer's review body
+	ItemComment  = "comment"  // another reviewer's conversation comment
+	ItemMagnum   = "magnum"   // magnum's thread whose rebuttal waits for an answer
+	ItemFinding  = "finding"  // a finding of a handed review the fixer skipped without a word
+	ItemFindings = "findings" // magnum's review with work for the fixer
+	ItemConflict = "conflict"
+)
+    Kinds of an open item (Item.Kind).
+
+const (
+	// FixPhaseFixing: the fixer works on the head the cycle fixes.
+	FixPhaseFixing = "fixing"
+	// FixPhaseReviewing: the fixer pushed, and a review round runs on the new head.
+	FixPhaseReviewing = "reviewing"
+)
+    Phases of a fix loop (FixState.Phase).
+
+const (
+	// PushConfirming: the settle confirms the push (its own retries,
+	// then the ticks', up to fixConfirmCap).
+	PushConfirming = "confirming"
+	// PushUnconfirmed: the fix failed only because its push was not
+	// confirmed on GitHub; the poll settles it late when GitHub shows the
+	// pushed head (settlePushes).
+	PushUnconfirmed = "push_unconfirmed"
+)
+    Kinds of a fix's push record (Push.Kind).
+
+const (
+	// HeldBudget is the HeldFix.Why of a fix the GitHub budget held.
+	HeldBudget = "github_budget"
+	// HeldPause is the HeldFix.Why of a fix the pause of its fixer's agent
+	// kind (HeldFix.Kind) held.
+	HeldPause = "kind_pause"
+)
+const OpenStalePolls = 4
+    OpenStalePolls is how many poll intervals since the daemon's last sign of
+    polling (a watch's last good poll for the look, the last tick's start for
+    a verdict's reader) make it behind: the run loop waits a whole interval
+    after each tick ends, so ticks start an interval plus a tick's length apart,
+    and one failed poll puts the last good one two such spans back.
+
+
+FUNCTIONS
+
+func LastActivity(pr store.PR) time.Time
+    LastActivity is pr's last activity: its head's move, or a later one.
+
+func PushbacksOf(keys []string) map[string]time.Time
+    PushbacksOf are the reviewers and times of the pushback keys among keys
+    (pushbackKey), as Waited holds them; nil for none.
+
+func PushedBack(waited map[string]time.Time, by string, at time.Time) bool
+    PushedBack reports whether a change request by by whose latest word came at
+    at (zero: no change request) is their pushback: made after waited's time for
+    them (Ledger.Waited), when one of their items began to wait for the author
+    (a loop's hand-off of it, seedWaited). One made before is a request of its
+    own, which a fixer works on, though the look reads their item only later:
+    it came while the loop that left the item ran, or before.
+
+func ReviewKey(run string) string
+    ReviewKey is the key of magnum's review of run.
+
+func ThreadKey(root, latest int64) string
+    ThreadKey is the key of another reviewer's thread: its first comment and its
+    latest.
+
+func WaitsOf(needs []Item) []string
+    WaitsOf are the keys of the items of needs that a fixer's external file
+    lists (another reviewer's open thread, review body or comment: not one a
+    fixer resolved, which the file leaves out), sorted: the loop the look starts
+    beside them marks them waiting (FixState.Waits).
+
+
+TYPES
+
+type ApprovalCount struct {
+	SHA   string `json:"sha,omitempty"`
+	Head  string `json:"head,omitempty"`
+	After int    `json:"after,omitempty"`
+}
+    ApprovalCount is the count of the commits on Head after the approved commit
+    SHA (-1: not counted).
+
+type CIAttempt struct {
+	Attempt    int    `json:"attempt"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion,omitempty"`
+	NoJob      bool   `json:"no_job,omitempty"`
+}
+    CIAttempt is a newer attempt of a re-run run: its number, GitHub's status
+    and, once it ended, its conclusion, and NoJob: it ended with no job started.
+
+func (a *CIAttempt) Ended() bool
+    Ended reports whether a is an attempt that ended; false for nil, none seen.
+
+func (a *CIAttempt) Running() bool
+    Running reports whether a is an attempt that has not ended; false for nil,
+    none seen.
+
+type CIBaseCheck struct {
+	Name  string        `json:"name"`
+	SHA   string        `json:"sha,omitempty"`
+	State string        `json:"state"`
+	Each  []CIBaseCheck `json:"each,omitempty"`
+}
+    CIBaseCheck is what the base said of a failed check: its name, the commit
+    that decided (SHA; "" for never) and the word (State), the worst of the
+    names it compared, whose own words are in Each when it compared more than
+    one (talkable's Completion skipped beside two failed jobs).
+
+func (b CIBaseCheck) Checks() []CIBaseCheck
+    Checks is the base's word on each name b compared: Each, or b itself.
+
+func (b CIBaseCheck) PassedOnBase(name string) bool
+    PassedOnBase reports whether the check of name, one b compared, passed on
+    the base.
+
+type CIBaseRead struct {
+	Head   string        `json:"head"`
+	Key    string        `json:"key"`
+	Tip    string        `json:"tip"`
+	Checks []CIBaseCheck `json:"checks,omitempty"`
+	At     time.Time     `json:"at"`
+	Failed bool          `json:"failed,omitempty"`
+}
+    CIBaseRead is the base's read for the failed set Key at Head: the base tip
+    it read from (Tip), each failed check's word (Checks, in the failed set's
+    order), when, and whether the read failed (tried again settle_max later).
+
+func (b CIBaseRead) Word() (string, string)
+    Word is the base's word on the whole failed set and the commit that decided:
+    failed where one failed, running where one still runs, never where one never
+    ran, passed where every one passed.
+
+type CIFailRead struct {
+	Head      string    `json:"head"`
+	Key       string    `json:"key"`
+	At        time.Time `json:"at"`
+	File      string    `json:"file,omitempty"`
+	Digest    string    `json:"digest,omitempty"`
+	Jobs      int       `json:"jobs,omitempty"`
+	Steps     int       `json:"steps,omitempty"`
+	Lines     int       `json:"lines,omitempty"`
+	Bytes     int       `json:"bytes,omitempty"`
+	Unread    bool      `json:"unread,omitempty"`
+	UnreadWhy string    `json:"unread_why,omitempty"`
+	// Running: the newest attempt of a failed check's run has not ended (a
+	// re-run someone started by hand of a run the rollup shows; one of a
+	// run the look named is Moved): nothing was read, and the look reads
+	// again settle_max after At.
+	Running bool `json:"running,omitempty"`
+	// Runs are the runs the read read, at their attempts; Checked is when
+	// the look last found the runs it named (magnum's own, ciShape3) still
+	// at those attempts before a start (ciRunMoved).
+	Runs    []CIReadRun `json:"runs,omitempty"`
+	Checked time.Time   `json:"checked,omitzero"`
+	// Moved, never recorded: the run that now speaks for a run the look
+	// named (magnum's start or re-run) moved past its failure (ciRunNow):
+	// nothing was read, and the look records the run in the start or the
+	// re-run instead (noteRunMoved).
+	Moved *github.WorkflowRun `json:"-"`
+}
+    CIFailRead is the reader's record of a read at Head (kvPRCIFix's Read):
+    the failed set it read for (Key, ciReadKey), when, the files (File,
+    the JSON's path), the JSON's digest and its counts (jobs listed,
+    failed steps, log lines and bytes kept), and a read that failed (Unread,
+    with actionsNotGranted's words in UnreadWhy when GitHub would not mint the
+    batch's token) or a run still running (Running), which the look tries again
+    settle_max after At.
+
+type CIFixRecord struct {
+	Starts []CIFixStart `json:"starts,omitempty"`
+	Read   CIFailRead   `json:"read,omitzero"`
+	Base   CIBaseRead   `json:"base,omitzero"`
+}
+    CIFixRecord is a PR's CI fixes: each start (written before startFix),
+    the CI reader's last read (ci_failures.go) and the base's last read.
+
+func (r CIFixRecord) AtHead(head string) CIFixStart
+    AtHead is the newest CI fix at head that counts (zero: none), or the one
+    whose fixer said it cannot on the daemon's merge of the parent that head is
+    (merged with a class word): the merge is no new chance for the same cause.
+
+func (r CIFixRecord) Count() int
+    Count is the CI fixes that count against ciFixMax: every start but an
+    unstarted one (a start whose end was lost counts).
+
+func (r CIFixRecord) LastPushed() (CIFixStart, int)
+    LastPushed is the newest CI fix that pushed or whose parent merge moved the
+    head, and its number among the ones that count (zero: none).
+
+type CIFixStart struct {
+	Head    string    `json:"head"`
+	Entries []string  `json:"entries,omitempty"`
+	At      time.Time `json:"at"`
+	By      string    `json:"by,omitempty"`
+	Outcome string    `json:"outcome,omitempty"`
+	Why     string    `json:"why,omitempty"`
+	Pushed  string    `json:"pushed,omitempty"`
+}
+    CIFixStart is one CI fix: the head it started at, the failed required
+    entries it fixed, when and by whom (autofix, magnum fix), and what it ended
+    with (Outcome, "" while it runs or when its end was lost), the class word of
+    a cannot (Why) and the head it pushed (Pushed).
+
+type CINoJob struct {
+	ID         int64  `json:"id"`
+	Workflow   string `json:"workflow"`
+	Attempt    int    `json:"attempt"`
+	Conclusion string `json:"conclusion"`
+}
+    CINoJob is a run that started no job: its id, its workflow file, the attempt
+    that started none, and that attempt's conclusion.
+
+func (r *CINoJob) Named() string
+    Named is the run in the verdict's words: "run 42673098082 of ci.yml".
+
+type CIPush struct {
+	Head string    `json:"head"`
+	At   time.Time `json:"at"`
+}
+    CIPush is a head magnum pushed to a PR, and when.
+
+type CIReadRun struct {
+	ID      int64 `json:"id"`
+	Attempt int   `json:"attempt"`
+}
+    CIReadRun is a run the CI reader read, and the attempt it read.
+
+type CIRerun struct {
+	Head         string     `json:"head"`
+	ReadAt       time.Time  `json:"read_at"`
+	Queued       int64      `json:"queued,omitempty"`
+	QueuedStatus string     `json:"queued_status,omitempty"`
+	Unread       bool       `json:"unread,omitempty"`
+	UnreadWhy    string     `json:"unread_why,omitempty"`
+	Run          *CINoJob   `json:"run,omitempty"`
+	At           time.Time  `json:"at,omitzero"`
+	Failed       string     `json:"failed,omitempty"`
+	Refused      string     `json:"refused,omitempty"`
+	Seen         *CIAttempt `json:"seen,omitempty"`
+	Moved        time.Time  `json:"moved,omitzero"`
+}
+    CIRerun is what the look read of the runs at Head (at ReadAt) and did about
+    them: Run is the run that started no job (nil: none); Queued a run of the
+    head that had not ended at the read (its id, QueuedStatus its status then),
+    and Unread a read that failed (UnreadWhy: GitHub would not mint the token
+    of the read, actionsNotGranted's words), either of which the look reads
+    again settle_max after ReadAt; At when the look asked GitHub to re-run Run
+    (written before the call, so a re-run whose answer was lost still counts),
+    Failed why GitHub refused (its status, never its message; a 403 adds
+    cannotStartWorkflows' words) and Refused why magnum did not (At zero);
+    Seen is the re-run's new attempt as the poll last read it (nil: none seen),
+    and Moved when the look found that attempt, after it failed, run again by
+    hand (noteRunMoved: Seen is that attempt since), which the poll waits for as
+    for the re-run's (rerunWaits).
+
+func (r CIRerun) Asked() bool
+    Asked reports whether the look asked GitHub to re-run the head's run and
+    GitHub took it.
+
+func (r CIRerun) Decided() bool
+    Decided reports whether the look re-ran the head's run or refused to:
+    the record that a look and a restart never redo.
+
+func (r CIRerun) ReadDue(head string, now time.Time, settleMax time.Duration) bool
+    ReadDue reports whether the look reads the runs of head (again) at now:
+    none read at the head, or settleMax passed since a read that found a run
+    that had not ended or that failed.
+
+func (r CIRerun) RerunWaits(now time.Time, settleMax time.Duration) bool
+    RerunWaits reports whether the poll reads the head's runs for r, the look's
+    re-run (awaitCIRuns) at now: GitHub took it, and it is less than settleMax
+    old (or its attempt by hand that the look found, Moved) or its new attempt
+    had not ended at the last read.
+
+type CIRun struct {
+	ID         int64  `json:"id,omitempty"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion,omitempty"`
+}
+    CIRun is the newest run of a start's workflow that a dispatch started at the
+    head since the start (dispatchedRun): its id (0 in a record of an earlier
+    build), GitHub's status of it (queued, in_progress, completed, ...) and,
+    once it ended, its conclusion.
+
+func (r *CIRun) Ended() bool
+    Ended reports whether r is a run that ended; false for nil, no run.
+
+func (r *CIRun) Running() bool
+    Running reports whether r is a run that has not ended (queued, waiting or in
+    progress); false for nil, no run.
+
+type CIStart struct {
+	Head     string    `json:"head"`
+	Workflow string    `json:"workflow"`
+	At       time.Time `json:"at,omitzero"`
+	Failed   string    `json:"failed,omitempty"`
+	Refused  string    `json:"refused,omitempty"`
+	Run      *CIRun    `json:"run,omitempty"`
+	Moved    time.Time `json:"moved,omitzero"`
+}
+    CIStart is the look's start of a PR's CI workflow at Head: the workflow
+    file, when it was asked (At: written before the call, so a start whose
+    end was lost still counts), why it failed (Failed: GitHub's answer as
+    a status, "GitHub answered HTTP 422", never its message; a 403 adds
+    cannotStartWorkflows' words) or why magnum did not start it (Refused, At
+    zero), and its run as the poll last read it (Run: nil, none seen). Moved is
+    when the look found that a run that failed was run again (a re-run by hand,
+    someone's later start at the head: noteRunMoved), which Run is since;
+    the poll waits for it as for the start's (awaitCIRuns).
+
+type FixCarry struct {
+	Report   string   `json:"report"`
+	NeedsYou []string `json:"needs_you"`
+	Answered []string `json:"answered,omitempty"`
+}
+    FixCarry is the calls one earlier cycle of a fix loop left the author
+    (FixState.Carried): the cycle's report, beside which its files place the
+    threads, the entries of its "## Needs you" still asked (in the fixer's
+    own words, so never put in an event or a log), and the comment ids among
+    them whose threads showed their answer and ask only for the resolution (as
+    FixState.Answered).
+
+func (c FixCarry) AnsweredSet() map[string]bool
+    AnsweredSet is Answered as a set (nil for none).
+
+type FixConfirm struct {
+	Head  string    `json:"head"`
+	Since time.Time `json:"since"`
+}
+    FixConfirm is the fixer's push a fix loop's settle confirms on GitHub
+    while GitHub does not answer: the pushed head and when GitHub first did not
+    answer.
+
+type FixOff struct {
+	Since time.Time `json:"since"`
+	By    string    `json:"by"`
+}
+    FixOff is a PR's opt-out of the fix job: when it was set and by whom
+    ("magnum fix --off").
+
+func ParseFixOff(s string) (FixOff, bool)
+    ParseFixOff reads a KVPRFixOff value; ok is false for one that is not an
+    opt-out.
+
+type FixState struct {
+	Cycle         int         `json:"cycle"`
+	Cap           int         `json:"cap"`
+	Phase         string      `json:"phase"`
+	Since         string      `json:"since"`
+	Head          string      `json:"head"`
+	By            string      `json:"by"`
+	Report        string      `json:"report"`
+	StartedAt     time.Time   `json:"started_at"`
+	NeedsYou      []string    `json:"needs_you,omitempty"`
+	Answered      []string    `json:"answered,omitempty"`
+	Role          string      `json:"role,omitempty"`
+	ForcedAt      time.Time   `json:"forced_at,omitzero"`
+	Held          bool        `json:"held,omitempty"`
+	Context       string      `json:"context,omitempty"`
+	OthersUnread  string      `json:"others_unread,omitempty"`
+	Carried       []FixCarry  `json:"carried,omitempty"`
+	Waits         []string    `json:"waits,omitempty"`
+	Mode          string      `json:"mode,omitempty"`
+	CIChecks      []string    `json:"ci_checks,omitempty"`
+	ParentRefused string      `json:"parent_refused,omitempty"`
+	Confirm       *FixConfirm `json:"confirm,omitempty"`
+	Late          bool        `json:"late,omitempty"`
+}
+    FixState is where a PR's fix loop is: cycle Cycle of at most Cap, in Phase.
+    Since is the head the loop started from and Head the head the current
+    cycle fixes (in phase reviewing, the head the fixer pushed). By says who
+    started it ("magnum fix", "autofix"), Role is the fix role whose fixer
+    runs the current cycle, Report is the path of the report the fixer writes,
+    and StartedAt is when the loop started. NeedsYou are the findings a fixer
+    that pushed left to the author (its report's "## Needs you" entries,
+    in its own words, so never put in an event or a log; FixCalls reads what
+    each asks): the push is re-reviewed first, and the loop ends after that
+    round as needs attention, unless magnum's threads show every call settled
+    by then (freshNeedsYou), when the round decides the loop as for a push that
+    left nothing to the author. Answered are the comment ids of the threads
+    of magnum's among them that showed their answer at the settle, whose
+    calls ask only for the resolution; fixReReview writes it with NeedsYou,
+    and an id whose entry is gone asks nothing. ForcedAt is when the loop forced
+    the re-review of its push (phase reviewing): its re-review is the forced
+    round dispatched at or after it, and every other round that ends while the
+    loop waits is ignored (fixAfterRound; zero in a row written before it was
+    recorded, where any forced round is). Held says that re-review ended and
+    called for a next cycle a drain for a restart refused: no round that ends
+    afterwards is the loop's re-review, and the restart's recovery, or the
+    drain's end without one, starts that cycle (recoverReviewingLoop). Context
+    is what the current cycle did to the fixer's conversation it resumed before
+    its prompt, in a few words (fixCompact: "compacted 82% → 31%", "compacted
+    from 82%" when the pane shows no figure after it, "fresh session (82% after
+    /compact)", "fresh session (/compact failed)"); "" when it resumed it as
+    it was or started a fresh fixer anyway. OthersUnread says that the current
+    cycle's fixer did not get all the other reviewers' items (writeExternal):
+    "not read (HTTP 502)", "not all read (over 1000 review threads)", a short
+    cause and never PR text; the loop's end says so (othersUnread). "" when it
+    got them. Carried are the calls the loop's earlier cycles left the author,
+    which it carries to its end, each cycle's under its own report (FixCarry,
+    fix_carry.go): a re-review that posts new findings runs the next cycle over
+    them while cycles are left. Waits are the keys of other reviewers' items
+    (fix_open_items.go) that an earlier loop was handed and that wait for the
+    author, a person's, beside which autofix = "open" started this loop on work
+    never handed (rule 9), or a CI fix, the look's or by hand, whose next cycles
+    read the other reviewers: every cycle's external file marks them waiting,
+    and the fixer leaves them alone (writeExternal); a pushback key among them
+    (pushbackKey) names a reviewer one of whose items waited, and marks their
+    change requests made since. Mode is what the loop does: "" fixes findings,
+    FixModeMerge merges the PR's parent alone (fix_parent.go), FixModeCI fixes
+    its failed required CI on the loop's first cycle (ci_fix.go; the next
+    cycles fix the re-review's findings, with Mode ""), the required entries
+    that failed in CIChecks (the [[repo]] list's or GitHub's rulesets', never
+    a job's name; the registry's alone). ParentRefused is why the daemon did
+    not push its merge of the parent on the loop's first cycle (mergeParent's
+    refusal: "needs Workflows on the App", a branch it never pushes to),
+    which the cycle's fixer goes on without and the loop's end puts under
+    Needs you (parentRefusedNote); "" when it merged or had nothing to merge.
+    Confirm is the push the cycle's settle confirms on GitHub while GitHub does
+    not answer (fix_confirm.go): the loop is still at work, in phase fixing,
+    and the screens say so (Confirming); nil otherwise. Late says the cycle's
+    push was settled late, after its fix failed for want of it: the toasts
+    of that settle and of the loop's end after it have keys of their own,
+    apart from the failure's (fixAttentionKey).
+
+func ParseFixState(s string) (FixState, bool)
+    ParseFixState reads a KVPRFix value; ok is false for one that is not a fix
+    loop.
+
+func (s FixState) AnsweredSet() map[string]bool
+    AnsweredSet is Answered as a set (nil for none), as needsYouCalls reads it.
+
+func (s FixState) Confirming() string
+    Confirming says that the loop's settle confirms its fixer's push while
+    GitHub does not answer: "confirming the push of e6c1f37 (GitHub does not
+    answer)"; "" when it does not.
+
+func (s FixState) Short() string
+    Short is the loop while its fixer works, as the board's state cell shows it:
+    "fixing 1/3 · claude-fix" ("fixing 1/3" when the role is not known), "fixing
+    1/3 · confirming e6c1f37" while its settle confirms the push (Confirm).
+
+type HeldFix struct {
+	At   time.Time `json:"at"`
+	Head string    `json:"head"`
+	By   string    `json:"by"`
+	Why  string    `json:"why,omitempty"`
+	Kind string    `json:"kind,omitempty"`
+}
+    HeldFix is a held fix: when it was asked, the PR's head then (the head the
+    review it would fix stood at), who asked (fixBy, whose loop unpins a pinned
+    PR as the request would have; autofixBy for an autofix the GitHub floor
+    held) and why it is held ("" for a drain, HeldBudget for the GitHub budget,
+    HeldPause for the fixer's paused agent kind, Kind).
+
+type HeldMerge struct {
+	Repo      string    `json:"repo"`
+	Number    int       `json:"number"`
+	Merge     string    `json:"merge"`
+	Head      string    `json:"head"`
+	Base      string    `json:"base"`
+	Tip       string    `json:"tip"`
+	Workflows []string  `json:"workflows"`
+	Conflicts int       `json:"conflicts,omitempty"`
+	Role      string    `json:"role"`
+	Identity  string    `json:"identity"`
+	Login     string    `json:"login"`
+	Clone     string    `json:"clone"`
+	Diff      string    `json:"diff"`
+	Findings  bool      `json:"findings,omitempty"`
+	Attention string    `json:"attention"`
+	At        time.Time `json:"at"`
+}
+    HeldMerge is a merge of a PR's parent that magnum holds for your y:
+    the PR it was held for (Repo, owner/name, and Number: checked against
+    the registry's rows, never a path's source), the merge commit (Merge),
+    the PR's head on GitHub it merges into (Head, its first parent), the base
+    branch and the commit of it it merges (Base, Tip: its second parent, the
+    base's tip on GitHub when it was held), the workflow files its push changes
+    against the head, how many files the fixer resolved conflicts in (Conflicts;
+    0 when not known), the fix role whose fixer resolved it, the identity that
+    pushes it and its login, the clone that holds its ref, its held-merge.diff
+    (absolute), whether a fix run's findings wait for the next fix after the
+    push (Findings), the words the PR's attention starts with while it is held
+    (Attention) and when it was held.
+
+func ParseHeldMerge(raw string) (HeldMerge, bool)
+    ParseHeldMerge reads a KVPRHeldMerge row; false for one that names no merge,
+    head, base or tip.
+
+type Item struct {
+	Key          string `json:"key"`
+	Class        string `json:"class"`
+	Kind         string `json:"kind"`
+	URL          string `json:"url,omitempty"`
+	FixerReplies int    `json:"fixer_replies,omitempty"`
+	Resolved     bool   `json:"resolved,omitempty"`
+	Decision     bool   `json:"decision,omitempty"`
+	// By is another reviewer's item's reviewer (Account form, "ghost" for
+	// none; a thread's first comment's author), and ChangesAt, for a review
+	// body that requests changes, when it got its latest word (its last
+	// edit): their pushback when one of their items waited for you before
+	// it (Ledger.pushback). Zero for every other item.
+	By        string    `json:"by,omitempty"`
+	ChangesAt time.Time `json:"changes_at,omitzero"`
+	// Accepted says that the reviewer of another reviewer's item approved
+	// the PR after its latest word (acceptedBy): one that would wait for
+	// you waits for no one (SortOpen).
+	Accepted bool `json:"accepted,omitempty"`
+}
+    Item is one thing open on a PR: its ledger key, whose word it is,
+    its kind and link, and, for another reviewer's thread, how many fix-marked
+    replies the fixer gave in it (the thread's first and newest comments only:
+    a long thread can undercount, which errs toward work), whether a fixer
+    login resolved it (Resolved: the fixer's file leaves resolved threads out,
+    so it is never work), and whether its last comment is your decision on the
+    fixer's call there (Decision, fix_decide.go: its key takes your reply,
+    so it is new work).
+
+func AcceptedWaits(items []Item, l Ledger) []Item
+    AcceptedWaits are the items of items that would wait for you and whose
+    reviewer approved the PR since (acceptedLeftover): no longer work or needs,
+    they are still left alone by a loop's fixer, as the ones that wait are
+    (WaitsOf), since an earlier fixer left them to you. Its file lists them
+    unanswered, and a fixer that answered one would answer for you, or name it
+    under Needs you, a loop's own attention the look never lifts.
+
+func SortOpen(items []Item, l Ledger) (work, needs []Item)
+    SortOpen splits items by the ledger: work, never handed (and magnum's review
+    no loop worked on), and needs, handed and still open (a person's, magnum's,
+    a conflict, a bot's thread), every finding a fixer skipped without a word,
+    every thread a fixer resolved with no answer (no loop can be handed it:
+    the fixer's file leaves resolved threads out) and every thread a fixer
+    answered twice whose reviewer answered again (never work again). A handed
+    bot's review body or comment is seen: a receipt, a summary or a note,
+    it drops out.
+
+type Ledger struct {
+	Handed      map[string]time.Time `json:"handed,omitempty"`
+	Reviews     []string             `json:"reviews,omitempty"`
+	FixerHeads  []string             `json:"fixer_heads,omitempty"`
+	Cursor      int64                `json:"cursor,omitempty"`
+	Since       time.Time            `json:"since,omitzero"`
+	RaisedMsg   string               `json:"raised_msg,omitempty"`
+	Raised      []string             `json:"raised,omitempty"`
+	Starts      []time.Time          `json:"starts,omitempty"`
+	Read        LedgerRead           `json:"read"`
+	Conflict    LedgerConflict       `json:"conflict"`
+	ReadFails   int                  `json:"read_fails,omitempty"`
+	LateToasted string               `json:"late_toasted,omitempty"`
+	Approval    ApprovalCount        `json:"approval,omitzero"`
+	Refused     string               `json:"refused,omitempty"`
+	RefusedWhy  string               `json:"refused_why,omitempty"`
+	WaitAt      time.Time            `json:"wait_at,omitzero"`
+	WaitWhy     string               `json:"wait_why,omitempty"`
+	Spell       Spell                `json:"spell,omitzero"`
+	// Waited are the reviewers (Account form, lower case) one of whose
+	// items waited for the author, with when the first began to: a loop's
+	// hand-off of it (seedWaited), else the look that first saw it wait
+	// (noteWaited). A change request of theirs since waits for the author
+	// too (pushback).
+	Waited map[string]time.Time `json:"waited,omitempty"`
+}
+    Ledger is what the look remembers of a PR (kvPRFixSeen): the keys the
+    fixers of finished loops had (Handed, with when the look saw that loop end),
+    magnum's reviews a loop worked on (Reviews), the heads the fixer pushed
+    (FixerHeads, the last openFixerHeadsMax), the PR's last event the look read
+    for the loops that ended (Cursor), when the look began to track its loops
+    (Since: its first look at the PR, or the start of the loop that ran then;
+    a loop that started before hands nothing), the last_error its own raise
+    wrote (RaisedMsg) and the keys it raised (Raised), the autofix starts of
+    the last 24 hours (Starts), its last read of GitHub (Read) and of the
+    base (Conflict), the failed reads in a row (ReadFails), the head whose
+    late review it toasted, the commits after a person's approval (Approval),
+    and the fingerprint at which prepareFix refused the look's start as nothing
+    to fix, with its sentence (Refused, RefusedWhy: not tried again until the PR
+    changes), and when the fix job last refused it otherwise, with its sentence
+    (WaitAt, WaitWhy: tried again openReadRetry later), and the PR's current
+    spell of activity (Spell, the settle's).
+
+func (l Ledger) HandedReview(run string) bool
+    HandedReview reports whether a loop worked on magnum's review of run.
+
+func (l Ledger) LastReadWaits() []string
+    LastReadWaits are the FixState.Waits of a loop that starts outside the
+    look (a CI fix by hand, fix_ci.go): loopWaits over the other reviewers'
+    items of the look's last read (Read.Others), seeded and sorted as the look
+    seeds and sorts them (seedWaited, SortOpen) on a copy of l's reviewers,
+    so its next cycles leave alone what a loop the look starts would. The key of
+    an item that moved since that read marks nothing.
+
+func (l Ledger) LoopWaits(items, needs []Item) []string
+    LoopWaits are the FixState.Waits of a loop the look starts beside needs:
+    the keys of needs and of the items it would wait for you on that their
+    reviewer accepted (AcceptedWaits), then a pushback key for each reviewer of
+    Waited (pushbackKey), sorted.
+
+func (l *Ledger) NoteWaited(needs []Item, now time.Time)
+    NoteWaited records in l.Waited, at now the first time, the reviewers of
+    the person's items of needs, which wait for the author (a thread a fixer
+    resolved, never handed, too). A reviewer stays there for the PR's life:
+    an approval of theirs and a new change request can come in one read.
+
+func (l Ledger) RaisedHere(pr store.PR, kind string) bool
+    RaisedHere reports whether pr needs attention of kind for what the look
+    raised itself: kind fix, last_error the look's message, keys it raised.
+    A loop's or a round's Needs you is not.
+
+func (l *Ledger) SeedWaited(items []Item)
+    SeedWaited records in l.Waited, before the look sorts items, the reviewer of
+    each person's item of items that a loop was handed, from the earliest time a
+    loop handed one of theirs (Handed: when openLoopsEnded saw that loop end).
+    Their change requests since are pushback from the first look whose read
+    shows the item, though a reply magnum had not re-decided, a low budget or
+    failed reads kept the look from seeing it wait before; one made while that
+    loop ran stays work.
+
+func (l Ledger) StartsSince(since time.Time) int
+    StartsSince are the autofix starts at or after since.
+
+type LedgerConflict struct {
+	Head      string    `json:"head,omitempty"`
+	Base      string    `json:"base,omitempty"`
+	Tip       string    `json:"tip,omitempty"`
+	At        time.Time `json:"at,omitzero"`
+	Paths     []string  `json:"paths,omitempty"`
+	Unchecked bool      `json:"unchecked,omitempty"`
+}
+    LedgerConflict is the look's last check of the head against its base:
+    the head and the base, the base's tip it fetched (also of a clean merge:
+    the base's CI is read there, ci_fix.go), when, and the conflict (no paths:
+    a clean merge; Unchecked: the check failed).
+
+type LedgerRead struct {
+	Print    string         `json:"print,omitempty"`
+	At       time.Time      `json:"at,omitzero"`
+	Head     string         `json:"head,omitempty"`
+	Cut      []string       `json:"cut,omitempty"`
+	Others   []Item         `json:"others,omitempty"`
+	Mine     []MagnumThread `json:"mine,omitempty"`
+	FailedAt time.Time      `json:"failed_at,omitzero"`
+}
+    LedgerRead is the look's last read of GitHub: the PR's read fingerprint then
+    (openPrint), when it read, at which head, what GitHub cut short, the other
+    reviewers' items and magnum's threads it found, and when a read failed last
+    (zero: the last read did not fail).
+
+type MagnumThread struct {
+	RootID     int64     `json:"root_id"`
+	URL        string    `json:"url,omitempty"`
+	ReviewID   int64     `json:"review_id,omitempty"`
+	LatestID   int64     `json:"latest_id"`
+	LatestAt   time.Time `json:"latest_at"`
+	Rebuttal   bool      `json:"rebuttal,omitempty"`
+	Answered   bool      `json:"answered,omitempty"`
+	AnsweredAt time.Time `json:"answered_at,omitzero"`
+}
+    MagnumThread is an unresolved review thread one of magnum's logins started:
+    its first comment's id and link, the review it belongs to, its latest
+    comment's id and time, whether that latest comment is magnum's rebuttal (a
+    reply of magnum's whose marker says rebuttal or that has none; a fixer's
+    reply or a chat session's magnum comment is none), and whether it was
+    answered: a reply by the PR author, or a fix-marked reply by one of magnum's
+    logins, the latest of them made at AnsweredAt (a magnum comment answers none
+    of magnum's own findings).
+
+func (mt MagnumThread) AnsweredSince(at time.Time) bool
+    AnsweredSince reports whether mt was answered after at (a read recorded
+    before AnsweredAt was kept says answered, whenever it was).
+
+type OpenNeed struct {
+	Kind string `json:"kind"`
+	URL  string `json:"url,omitempty"`
+}
+    OpenNeed is one thing that needs the operator: its kind (thread, review,
+    comment, magnum, finding, conflict, ci for a required check that ran
+    and failed, ci_missing for one that did not run at the head, loop or
+    magnum_late) and link.
+
+type OpenVerdict struct {
+	Verdict       string     `json:"verdict"`
+	Why           string     `json:"why"`
+	Head          string     `json:"head"`
+	At            time.Time  `json:"at"`
+	Since         time.Time  `json:"since,omitzero"`
+	ReadAt        time.Time  `json:"read_at,omitzero"`
+	Until         time.Time  `json:"until,omitzero"`
+	Open          int        `json:"open"`
+	Needs         []OpenNeed `json:"needs,omitempty"`
+	Approved      string     `json:"approved,omitempty"`
+	AfterApproval int        `json:"after_approval,omitempty"`
+	Off           string     `json:"off,omitempty"`
+	// Optional are the links of the operator's optional calls an idle
+	// verdict names (fix_optional.go): P3s whose Fix leaves the choice to
+	// the operator, which hold nothing and wait for them at the merge.
+	Optional []string `json:"optional,omitempty"`
+	// Leftovers: the verdict needs you for what loops left (rule 8), which
+	// the look raises to needs_attention; Late: for magnum's late review
+	// (rule 5), which it toasts once per head; Dispatch: for a required
+	// check that did not run, whose workflow the look starts (rule 11,
+	// openStartCI). None is stored.
+	Leftovers bool `json:"-"`
+	Late      bool `json:"-"`
+	Dispatch  bool `json:"-"`
+	// ReadRuns: rule 11 reads the runs at the head (openReadRuns,
+	// ci_rerun.go); Rerun: it re-runs the head's run that started no job
+	// (openRerunCI); ReadCIBase: it reads the base's CI of a failed
+	// required check (readCIBase, ci_fix.go); RecheckCIRead: it checks a
+	// read that listed no failed job of a run it named against the head's
+	// runs (ensureCIRead, ci_fix.go). None is stored.
+	ReadRuns      bool `json:"-"`
+	Rerun         bool `json:"-"`
+	ReadCIBase    bool `json:"-"`
+	RecheckCIRead bool `json:"-"`
+}
+    OpenVerdict is autofix = "open"'s verdict on a PR at Head (KVPROpen):
+    fixing, waits, needs_you, idle, unknown or off, why in plain words (counts,
+    kinds, short SHAs and clock times, never PR text), when the look decided
+    it (At), since when it has said the same without a break (Since: the same
+    verdict, approval and reason to be off, whatever the words and however
+    often the PR changed; Since and At are equal when it began, and zero in
+    a row of a build before it), when it last read GitHub whole (ReadAt),
+    when a wait ends where that is known (Until), the open items (work and
+    what needs the operator) and what needs the operator (kind and link only),
+    the short SHA a person approved ("" = none) and the commits on Head after it
+    (-1 = not counted), and why an off verdict is off.
+
+func ParseOpenVerdict(s string) (OpenVerdict, bool)
+    ParseOpenVerdict reads a KVPROpen value; ok is false for one that is not a
+    verdict.
+
+func (v OpenVerdict) GoesOn(prev OpenVerdict) bool
+    GoesOn reports whether v goes on saying what prev said, so it keeps prev's
+    Since: the same verdict, the same approval (a person's or none) and the same
+    reason to be off; the words, the counts and the head may change.
+
+func (v OpenVerdict) SameAs(w OpenVerdict) bool
+    SameAs reports whether v and w say the same, whenever each was decided.
+
+func (v OpenVerdict) Stale(prHead string, prUpdated, lastTick, now time.Time, poll time.Duration) bool
+    Stale reports whether v no longer tells the PR's state, for a reader
+    (the factory's screen) that then shows the PR as looked at: the start of
+    the daemon's last tick (lastTick, zero for none) is older than four poll
+    intervals (ticks start an interval plus a tick's length apart, so two would
+    call a long tick a stop), the PR's head moved past v's, or the PR's row
+    changed after v was decided (prUpdated).
+
+type OptionalCall struct {
+	Thread int64     `json:"thread"`
+	URL    string    `json:"url"`
+	At     time.Time `json:"at,omitzero"`
+}
+    OptionalCall is a P3 of magnum's that a fixer left the author as an optional
+    call: the id of its thread's first comment, the thread's link on the PR's
+    page, and when the settle took the call (At): the author's own word in
+    the thread after it is a decision on it, as on any call the fixer left
+    (fixerCalls), which `magnum fix --decide` posts.
+
+type Push struct {
+	Kind              string    `json:"kind"`
+	Run               string    `json:"run"`
+	Pushed            string    `json:"pushed"`
+	Commits           []string  `json:"commits,omitempty"`
+	Since             time.Time `json:"since"`
+	Failed            time.Time `json:"failed,omitzero"`
+	Typed             bool      `json:"typed,omitempty"`
+	RepliesNamed      bool      `json:"replies_named,omitempty"`
+	ConversationNamed bool      `json:"conversation_named,omitempty"`
+	Job               PushJob   `json:"job"`
+}
+    Push is a fixer's push the settle confirms (Kind PushConfirming) or could
+    not confirm (PushUnconfirmed): the run, the pushed head (the whole SHA),
+    the short SHAs of the commits the fixer's report lists as pushed (Commits:
+    an earlier one GitHub shows is no other head, only one not there yet),
+    when the settle began to confirm it (Since, which fixConfirmCap counts
+    from), when the fix failed (Failed), whether the operator typed into the
+    fixer's pane during the run, whether the settle looked for the author's
+    replies without the fix marker in the threads (RepliesNamed) and on the
+    conversation (ConversationNamed): a later settle looks where it could not,
+    and only there, and the job as the settle had it, which a later settle
+    rebuilds (pushJob).
+
+func (rec Push) EarlierPush(head string) bool
+    EarlierPush reports whether head, the PR's head GitHub shows, is one of the
+    commits rec's fixer pushed before its last (Push.Commits): GitHub has not
+    got to the last yet.
+
+type PushJob struct {
+	State       FixState   `json:"state"`
+	Role        string     `json:"role"`
+	Head        string     `json:"head"`
+	Started     time.Time  `json:"started"`
+	Login       string     `json:"login,omitempty"`
+	Mode        string     `json:"mode,omitempty"`
+	Conflict    *PushMerge `json:"conflict,omitempty"`
+	Merged      *PushMerge `json:"merged,omitempty"`
+	ForMerge    bool       `json:"for_merge,omitempty"`
+	Alone       bool       `json:"alone,omitempty"`
+	Described   bool       `json:"described,omitempty"`
+	BaseChecked bool       `json:"base_checked,omitempty"`
+}
+    PushJob is what a settle reads of its fix job beyond the registry's rows
+    (fixJob's fields of the same names).
+
+type PushMerge struct {
+	Base  string   `json:"base"`
+	SHA   string   `json:"sha"`
+	Paths []string `json:"paths,omitempty"`
+}
+    PushMerge is a conflict of the head with its base (the engine's fixConflict)
+    as a record keeps it.
+
+type Spell struct {
+	Start time.Time `json:"start,omitzero"`
+	Seen  time.Time `json:"seen,omitzero"`
+}
+    Spell is the PR's current spell of activity as the look saw it:
+    when it began (Start: the activity the look first saw within settle_quiet)
+    and when the look last saw it go on (Seen); zero while the PR is quiet.
+    The settle's cap counts from its start on a head older than it (settleDone),
+    so quiet still holds on an old head.
+
+func (s Spell) Next(pr store.PR, quiet, gap time.Duration, now time.Time, looping bool) Spell
+    Next is s at the look at now on pr: none once the PR is quiet (no activity,
+    its head's move included, for quiet) or while a loop runs or is held on it
+    (its fixer's activity is the loop's; the spell after it begins when the
+    look first sees it again without one); a new one at the PR's last activity
+    when none was going on, or when the look did not see it go on for gap (the
+    daemon slept, and the PR may have been quiet in between: the caller's gap is
+    at least quiet, and longer than looks a few poll intervals apart); else s,
+    seen now.
 
 ```
 

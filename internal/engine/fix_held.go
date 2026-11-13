@@ -39,7 +39,6 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/notify"
@@ -54,27 +53,6 @@ import (
 // pause ends.
 func KVPRFixHeld(prID int64) string { return fmt.Sprintf("pr.%d.fix_held", prID) }
 
-// heldFix is a held fix: when it was asked, the PR's head then (the head
-// the review it would fix stood at), who asked (fixBy, whose loop unpins a
-// pinned PR as the request would have; autofixBy for an autofix the GitHub
-// floor held) and why it is held ("" for a drain, heldBudget for the GitHub
-// budget, heldPause for the fixer's paused agent kind, Kind).
-type heldFix struct {
-	At   time.Time `json:"at"`
-	Head string    `json:"head"`
-	By   string    `json:"by"`
-	Why  string    `json:"why,omitempty"`
-	Kind string    `json:"kind,omitempty"`
-}
-
-const (
-	// heldBudget is the heldFix.Why of a fix the GitHub budget held.
-	heldBudget = "github_budget"
-	// heldPause is the heldFix.Why of a fix the pause of its fixer's agent
-	// kind (heldFix.Kind) held.
-	heldPause = "kind_pause"
-)
-
 // HeldFixStarts is when the held fix raw (a KVPRFixHeld value) starts, for
 // `magnum fix --wait`: "after the restart" for a drain's, "when the GitHub
 // budget recovers" for the GitHub budget's, "when claude's pause ends" for
@@ -88,13 +66,13 @@ func HeldFixStarts(raw string) string {
 	case heldBudget:
 		return "when the GitHub budget recovers"
 	case heldPause:
-		return "when " + h.kind() + "'s pause ends"
+		return "when " + heldKind(h) + "'s pause ends"
 	}
 	return "after the restart"
 }
 
-// kind is the paused agent kind a pause hold waits for, in words.
-func (h heldFix) kind() string { return cmp.Or(h.Kind, "the fixer") }
+// heldKind is the paused agent kind a pause hold waits for, in words.
+func heldKind(h heldFix) string { return cmp.Or(h.Kind, "the fixer") }
 
 // fixHold is why holdFix holds a fix: a drain for a restart (the zero
 // value) or a GitHub budget below the floor (low), with the job startFix
@@ -104,13 +82,13 @@ type fixHold struct {
 	job *fixJob
 }
 
-// during is what a held fix was held during, for its drop.
-func (h heldFix) during() string {
+// heldDuring is what a held fix was held during, for its drop.
+func heldDuring(h heldFix) string {
 	switch h.Why {
 	case heldBudget:
 		return "while the GitHub budget was low"
 	case heldPause:
-		return "while " + h.kind() + " was paused"
+		return "while " + heldKind(h) + " was paused"
 	}
 	return "during a drain"
 }
@@ -289,14 +267,14 @@ func (e *Engine) startHeldFix(ctx context.Context, prID int64, after string) boo
 	if h.By == autofixBy {
 		asked = "the autofix held"
 	}
-	e.event(ctx, "warn", subject, "fix.dropped", fmt.Sprintf("%s at %s %s is dropped %s: %s", asked, h.At.Local().Format("15:04"), h.during(), after, why),
+	e.event(ctx, "warn", subject, "fix.dropped", fmt.Sprintf("%s at %s %s is dropped %s: %s", asked, h.At.Local().Format("15:04"), heldDuring(h), after, why),
 		map[string]any{"asked_at": h.At, "head": h.Head, "why": why, "by": h.By})
 	if h.By == autofixBy {
 		return true
 	}
 	title := fmt.Sprintf("magnum: fix dropped: %s#%d", repo.Name, pr.Number)
 	e.info(notify.Item{Key: fmt.Sprintf("fix-dropped:%d:%s", pr.ID, store.FormatTime(h.At)), Title: title,
-		Body: pr.URL + "\nthe fix asked " + strings.Replace(h.during(), "during a drain", "during the drain", 1) + ": " + why, Line: strings.TrimPrefix(title, "magnum: ") + " " + pr.URL, Kind: kindFixDropped})
+		Body: pr.URL + "\nthe fix asked " + strings.Replace(heldDuring(h), "during a drain", "during the drain", 1) + ": " + why, Line: strings.TrimPrefix(title, "magnum: ") + " " + pr.URL, Kind: kindFixDropped})
 	return true
 }
 
@@ -316,7 +294,7 @@ func (e *Engine) dropHeldFix(ctx context.Context, repo store.Repo, pr store.PR, 
 	}
 	var h heldFix
 	_ = json.Unmarshal([]byte(raw), &h) // a record that does not read says "during a drain", the hold it had before Why
-	note := "the fix held " + h.during() + " is dropped"
+	note := "the fix held " + heldDuring(h) + " is dropped"
 	e.event(ctx, "info", prSubject(repo, pr.Number), "fix.dropped", note+" by "+by, map[string]any{"by": by, "why": h.Why})
 	return note
 }

@@ -334,7 +334,7 @@ func TestMagnumFixCIRefusesARunOfMagnumsThatRanAgain(t *testing.T) {
 	h.setHeadRuns(fixHead, attempt)
 	h.setRuns(fixHead, attempt)
 	h.wantCIFixRefused("ci.yml was run again at a1a1a1a after magnum's run of it failed: nothing failed to fix")
-	if s := h.e.ciStartAt(h.ctx, h.pr(2)); s.Moved.IsZero() || !s.Run.running() {
+	if s := h.e.ciStartAt(h.ctx, h.pr(2)); s.Moved.IsZero() || !s.Run.Running() {
 		t.Errorf("start = %+v, want the re-run as its run", s)
 	}
 	if n := len(h.ghCalls("run_jobs:")); n != 0 {
@@ -564,7 +564,7 @@ func TestTheCIFixRecordIsWrittenBeforeTheStart(t *testing.T) {
 	}
 	h.tick()
 	rec := h.ciRecordOf()
-	if len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeUnstarted || rec.count() != 0 {
+	if len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeUnstarted || rec.Count() != 0 {
 		t.Fatalf("record = %+v, want one unstarted start", rec.Starts)
 	}
 	h.wantOpen(OpenWaits, "someone typed into its panes")
@@ -645,7 +645,7 @@ func TestACIFixPushGoesToItsForcedReReviewAndTheNextCycleFixesFindings(t *testin
 	if ev, ok := h.fixEventOf(2, "fix.start"); !ok || strings.Contains(string(ev.Data), `"mode"`) {
 		t.Errorf("the second cycle's fix.start = %s, want no mode", ev.Data)
 	}
-	if rec := h.ciRecordOf(); rec.count() != 1 || rec.Starts[0].Outcome != ciOutcomePushed {
+	if rec := h.ciRecordOf(); rec.Count() != 1 || rec.Starts[0].Outcome != ciOutcomePushed {
 		t.Errorf("record = %+v: the loop's end keeps the CI fix's push", rec.Starts)
 	}
 }
@@ -705,12 +705,12 @@ func TestACIFixWhoseClaimLostItsSlotDoesNotCount(t *testing.T) {
 	job := &fixJob{repo: repo, watch: h.cfg.Watches[0], pr: pr, mode: FixModeCI,
 		state: FixState{Cycle: 1, Cap: 3, By: autofixBy, Since: fixHead, Mode: FixModeCI, CIChecks: []string{"Completion"}, StartedAt: h.clock.Now()}}
 	h.e.endFixUnclaimed(h.ctx, job, noFreeFixSlot{repo: "talkable/talkable", label: "talkable/talkable#2"}.Error(), true)
-	if rec := h.ciRecordOf(); len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeUnstarted || rec.count() != 0 {
+	if rec := h.ciRecordOf(); len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeUnstarted || rec.Count() != 0 {
 		t.Fatalf("record = %+v, want the start unstarted", rec.Starts)
 	}
 	h.pastSettle()
 	h.tick()
-	if rec := h.ciRecordOf(); len(h.fixRuns(pr.ID)) != 1 || len(rec.Starts) != 1 || rec.count() != 1 {
+	if rec := h.ciRecordOf(); len(h.fixRuns(pr.ID)) != 1 || len(rec.Starts) != 1 || rec.Count() != 1 {
 		t.Errorf("record = %+v, %d fix runs; want the CI fix started in the unstarted one's place", rec.Starts, len(h.fixRuns(pr.ID)))
 	}
 }
@@ -727,7 +727,7 @@ func TestAnAbortedCIFixIsStopped(t *testing.T) {
 	h.e.handleRequests(h.ctx)
 	h.settle()
 	h.wantDone(id)
-	if rec := h.ciRecordOf(); len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeStopped || rec.count() != 1 {
+	if rec := h.ciRecordOf(); len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeStopped || rec.Count() != 1 {
 		t.Fatalf("record = %+v, want the CI fix stopped", rec.Starts)
 	}
 	h.pastSettle()
@@ -747,7 +747,7 @@ func TestACIFixWhoseRunFailedIsFailed(t *testing.T) {
 	id := h.fix(FixPayload{Mode: FixModeCI})
 	h.handle()
 	h.wantDone(id)
-	if rec := h.ciRecordOf(); len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeFailed || rec.count() != 1 {
+	if rec := h.ciRecordOf(); len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeFailed || rec.Count() != 1 {
 		t.Fatalf("record = %+v, want the CI fix failed", rec.Starts)
 	}
 	h.wantState(2, store.PRNeedsAttention)
@@ -766,7 +766,7 @@ func TestACIFixLostInARestartIsLost(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.startup()
-	if rec := h.ciRecordOf(); len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeLost || rec.count() != 1 {
+	if rec := h.ciRecordOf(); len(rec.Starts) != 1 || rec.Starts[0].Outcome != ciOutcomeLost || rec.Count() != 1 {
 		t.Fatalf("record = %+v, want the CI fix lost", rec.Starts)
 	}
 	if _, ok := h.fixStateOf(2); ok {

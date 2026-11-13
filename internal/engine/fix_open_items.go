@@ -53,54 +53,6 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-// Classes of an open item (openItem.Class): whose word it is.
-const (
-	classMagnum   = "magnum"   // magnum's review, thread or finding
-	classPerson   = "person"   // another reviewer who is not a bot
-	classBot      = "bot"      // another reviewer that is a bot (github.IsBot)
-	classConflict = "conflict" // a conflict of the head with its base
-)
-
-// Kinds of an open item (openItem.Kind).
-const (
-	itemThread   = "thread" // another reviewer's review thread
-	itemReview   = remarkReview
-	itemComment  = remarkComment
-	itemMagnum   = "magnum"   // magnum's thread whose rebuttal waits for an answer
-	itemFinding  = "finding"  // a finding of a handed review the fixer skipped without a word
-	itemFindings = "findings" // magnum's review with work for the fixer
-	itemConflict = "conflict"
-)
-
-// openItem is one thing open on a PR: its ledger key, whose word it is, its
-// kind and link, and, for another reviewer's thread, how many fix-marked
-// replies the fixer gave in it (the thread's first and newest comments
-// only: a long thread can undercount, which errs toward work), whether
-// a fixer login resolved it (Resolved: the fixer's file leaves resolved
-// threads out, so it is never work), and whether its last comment is your
-// decision on the fixer's call there (Decision, fix_decide.go: its key
-// takes your reply, so it is new work).
-type openItem struct {
-	Key          string `json:"key"`
-	Class        string `json:"class"`
-	Kind         string `json:"kind"`
-	URL          string `json:"url,omitempty"`
-	FixerReplies int    `json:"fixer_replies,omitempty"`
-	Resolved     bool   `json:"resolved,omitempty"`
-	Decision     bool   `json:"decision,omitempty"`
-	// By is another reviewer's item's reviewer (Account form, "ghost" for
-	// none; a thread's first comment's author), and ChangesAt, for a review
-	// body that requests changes, when it got its latest word (its last
-	// edit): their pushback when one of their items waited for you before
-	// it (openLedger.pushback). Zero for every other item.
-	By        string    `json:"by,omitempty"`
-	ChangesAt time.Time `json:"changes_at,omitzero"`
-	// Accepted says that the reviewer of another reviewer's item approved
-	// the PR after its latest word (acceptedBy): one that would wait for
-	// you waits for no one (sortOpen).
-	Accepted bool `json:"accepted,omitempty"`
-}
-
 // quietRules are [pipeline] quiet_logins and quiet_markers: a review body
 // or conversation comment by one of the logins, or whose whole body holds
 // one of the markers, asks nothing. Threads never go quiet.
@@ -116,31 +68,6 @@ func (q quietRules) login(author string) bool {
 // marked reports whether body holds a quiet marker.
 func quietMarked(markers []string, body string) bool {
 	return slices.ContainsFunc(markers, func(m string) bool { return m != "" && strings.Contains(body, m) })
-}
-
-// magnumThread is an unresolved review thread one of magnum's logins
-// started: its first comment's id and link, the review it belongs to, its
-// latest comment's id and time, whether that latest comment is magnum's
-// rebuttal (a reply of magnum's whose marker says rebuttal or that has
-// none; a fixer's reply or a chat session's magnum comment is none), and
-// whether it was answered: a reply by the PR author, or a fix-marked reply
-// by one of magnum's logins, the latest of them made at AnsweredAt (a
-// magnum comment answers none of magnum's own findings).
-type magnumThread struct {
-	RootID     int64     `json:"root_id"`
-	URL        string    `json:"url,omitempty"`
-	ReviewID   int64     `json:"review_id,omitempty"`
-	LatestID   int64     `json:"latest_id"`
-	LatestAt   time.Time `json:"latest_at"`
-	Rebuttal   bool      `json:"rebuttal,omitempty"`
-	Answered   bool      `json:"answered,omitempty"`
-	AnsweredAt time.Time `json:"answered_at,omitzero"`
-}
-
-// answeredSince reports whether mt was answered after at (a read recorded
-// before AnsweredAt was kept says answered, whenever it was).
-func (mt magnumThread) answeredSince(at time.Time) bool {
-	return mt.Answered && (mt.AnsweredAt.IsZero() || mt.AnsweredAt.After(at))
 }
 
 // resolvedThread is another reviewer's thread that a fixer login resolved:
@@ -368,19 +295,12 @@ func magnumItemsOf(mine []magnumThread, sum *store.ReviewSummary, handed bool, c
 	return out
 }
 
-// threadKey is the key of another reviewer's thread: its first comment and
-// its latest.
-func threadKey(root, latest int64) string { return fmt.Sprintf("thread:%d@%d", root, latest) }
-
 // decisionOf reports whether items hold your decision in the thread whose
 // first comment is root (openItem.Decision).
 func decisionOf(items []openItem, root int64) bool {
 	prefix := fmt.Sprintf("thread:%d@", root)
 	return slices.ContainsFunc(items, func(it openItem) bool { return it.Decision && strings.HasPrefix(it.Key, prefix) })
 }
-
-// reviewKey is the key of magnum's review of run.
-func reviewKey(run string) string { return "review:" + run }
 
 // conflictKey is the key of a conflict of head with its base.
 func conflictKey(head string) string { return "conflict:" + head[:min(12, len(head))] }

@@ -62,42 +62,6 @@ const (
 	ciLineBytes = 2 << 10
 )
 
-// The base's word on a failed check (ciBaseCheck.State): it passed on the
-// newest first-parent commit of the base that finished it, failed there,
-// runs on a commit while no commit read finished it, or no commit of the
-// ones read ran it.
-const (
-	ciBasePassed  = "passed"
-	ciBaseFailed  = "failed"
-	ciBaseRunning = "running"
-	ciBaseNever   = "never"
-)
-
-// ciBaseCheck is what the base said of a failed check: its name, the
-// commit that decided (SHA; "" for never) and the word (State), the worst
-// of the names it compared, whose own words are in Each when it compared
-// more than one (talkable's Completion skipped beside two failed jobs).
-type ciBaseCheck struct {
-	Name  string        `json:"name"`
-	SHA   string        `json:"sha,omitempty"`
-	State string        `json:"state"`
-	Each  []ciBaseCheck `json:"each,omitempty"`
-}
-
-// each is the base's word on each name b compared: Each, or b itself.
-func (b ciBaseCheck) each() []ciBaseCheck {
-	if len(b.Each) > 0 {
-		return b.Each
-	}
-	return []ciBaseCheck{{Name: b.Name, SHA: b.SHA, State: b.State}}
-}
-
-// passedOnBase reports whether the check of name, one b compared, passed
-// on the base.
-func (b ciBaseCheck) passedOnBase(name string) bool {
-	return slices.ContainsFunc(b.each(), func(e ciBaseCheck) bool { return e.Name == name && e.State == ciBasePassed })
-}
-
 // ciFailedCheck is one failed required check at a head (openCIOf,
 // ciShape3) that the reader reads: the required entry ("Completion",
 // "workflow:CI"), the check run's name ("" for a workflow entry's missing
@@ -119,48 +83,6 @@ type ciFailedCheck struct {
 	At           time.Time
 	Compare      []string
 	Base         ciBaseCheck
-}
-
-// ciFailRead is the reader's record of a read at Head (kvPRCIFix's Read):
-// the failed set it read for (Key, ciReadKey), when, the files (File, the
-// JSON's path), the JSON's digest and its counts (jobs listed, failed
-// steps, log lines and bytes kept), and a read that failed (Unread, with
-// actionsNotGranted's words in UnreadWhy when GitHub would not mint the
-// batch's token) or a run still running (Running), which the look tries
-// again settle_max after At.
-type ciFailRead struct {
-	Head      string    `json:"head"`
-	Key       string    `json:"key"`
-	At        time.Time `json:"at"`
-	File      string    `json:"file,omitempty"`
-	Digest    string    `json:"digest,omitempty"`
-	Jobs      int       `json:"jobs,omitempty"`
-	Steps     int       `json:"steps,omitempty"`
-	Lines     int       `json:"lines,omitempty"`
-	Bytes     int       `json:"bytes,omitempty"`
-	Unread    bool      `json:"unread,omitempty"`
-	UnreadWhy string    `json:"unread_why,omitempty"`
-	// Running: the newest attempt of a failed check's run has not ended (a
-	// re-run someone started by hand of a run the rollup shows; one of a
-	// run the look named is Moved): nothing was read, and the look reads
-	// again settle_max after At.
-	Running bool `json:"running,omitempty"`
-	// Runs are the runs the read read, at their attempts; Checked is when
-	// the look last found the runs it named (magnum's own, ciShape3) still
-	// at those attempts before a start (ciRunMoved).
-	Runs    []ciReadRun `json:"runs,omitempty"`
-	Checked time.Time   `json:"checked,omitzero"`
-	// Moved, never recorded: the run that now speaks for a run the look
-	// named (magnum's start or re-run) moved past its failure (ciRunNow):
-	// nothing was read, and the look records the run in the start or the
-	// re-run instead (noteRunMoved).
-	Moved *github.WorkflowRun `json:"-"`
-}
-
-// ciReadRun is a run the CI reader read, and the attempt it read.
-type ciReadRun struct {
-	ID      int64 `json:"id"`
-	Attempt int   `json:"attempt"`
 }
 
 // ciFailuresJSON is ci-failures.json.
@@ -321,7 +243,7 @@ func (e *Engine) readCIFailures(ctx context.Context, acts *ciActions, repo store
 			if owner[j.ID] != i { // another check of the run lists it
 				continue
 			}
-			job := ciJobJSON{ID: j.ID, Name: j.Name, Conclusion: j.Conclusion, URL: j.URL, PassedOnBase: c.Base.passedOnBase(j.Name)}
+			job := ciJobJSON{ID: j.ID, Name: j.Name, Conclusion: j.Conclusion, URL: j.URL, PassedOnBase: c.Base.PassedOnBase(j.Name)}
 			for _, s := range j.Steps {
 				job.Steps = append(job.Steps, ciStepJSON{N: s.Number, Name: s.Name, Conclusion: s.Conclusion})
 				if stepFailed(s.Conclusion) {
@@ -600,7 +522,7 @@ func ciFailuresText(repo store.Repo, pr store.PR, f ciFailuresJSON) string {
 		}
 		switch c.Base.State {
 		case ciBasePassed:
-			for _, p := range c.Base.each() {
+			for _, p := range c.Base.Checks() {
 				fmt.Fprintf(&b, "%s passed on the base at %s.\n", p.Name, textx.ShortSHA(p.SHA))
 			}
 			b.WriteString("\n")

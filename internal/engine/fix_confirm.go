@@ -38,17 +38,6 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-// Kinds of a fix's push record (fixPush.Kind).
-const (
-	// fixPushConfirming: the settle confirms the push (its own retries,
-	// then the ticks', up to fixConfirmCap).
-	fixPushConfirming = "confirming"
-	// fixPushUnconfirmed: the fix failed only because its push was not
-	// confirmed on GitHub; the poll settles it late when GitHub shows the
-	// pushed head (settlePushes).
-	fixPushUnconfirmed = "push_unconfirmed"
-)
-
 const (
 	// fixConfirmWindow bounds the settle's own retries of a transient read
 	// (fixConfirmBackoff bounds their number too): past it, the ticks try
@@ -71,54 +60,6 @@ var fixConfirmBackoff = []time.Duration{5 * time.Second, 10 * time.Second, 20 * 
 // kept as fixPushUnconfirmed when the fix failed for want of it.
 func kvPRFixPush(prID int64) string { return fmt.Sprintf("pr.%d.fix_push", prID) }
 
-// fixPush is a fixer's push the settle confirms (Kind fixPushConfirming)
-// or could not confirm (fixPushUnconfirmed): the run, the pushed head (the
-// whole SHA), the short SHAs of the commits the fixer's report lists as
-// pushed (Commits: an earlier one GitHub shows is no other head, only one
-// not there yet), when the settle began to confirm it (Since, which
-// fixConfirmCap counts from), when the fix failed (Failed), whether the
-// operator typed into the fixer's pane during the run, whether the settle
-// looked for the author's replies without the fix marker in the threads
-// (RepliesNamed) and on the conversation (ConversationNamed): a later
-// settle looks where it could not, and only there, and the job as the
-// settle had it, which a later settle rebuilds (pushJob).
-type fixPush struct {
-	Kind              string     `json:"kind"`
-	Run               string     `json:"run"`
-	Pushed            string     `json:"pushed"`
-	Commits           []string   `json:"commits,omitempty"`
-	Since             time.Time  `json:"since"`
-	Failed            time.Time  `json:"failed,omitzero"`
-	Typed             bool       `json:"typed,omitempty"`
-	RepliesNamed      bool       `json:"replies_named,omitempty"`
-	ConversationNamed bool       `json:"conversation_named,omitempty"`
-	Job               fixPushJob `json:"job"`
-}
-
-// fixPushJob is what a settle reads of its fix job beyond the registry's
-// rows (fixJob's fields of the same names).
-type fixPushJob struct {
-	State       FixState      `json:"state"`
-	Role        string        `json:"role"`
-	Head        string        `json:"head"`
-	Started     time.Time     `json:"started"`
-	Login       string        `json:"login,omitempty"`
-	Mode        string        `json:"mode,omitempty"`
-	Conflict    *fixPushMerge `json:"conflict,omitempty"`
-	Merged      *fixPushMerge `json:"merged,omitempty"`
-	ForMerge    bool          `json:"for_merge,omitempty"`
-	Alone       bool          `json:"alone,omitempty"`
-	Described   bool          `json:"described,omitempty"`
-	BaseChecked bool          `json:"base_checked,omitempty"`
-}
-
-// fixPushMerge is a fixConflict as a record keeps it.
-type fixPushMerge struct {
-	Base  string   `json:"base"`
-	SHA   string   `json:"sha"`
-	Paths []string `json:"paths,omitempty"`
-}
-
 func mergeRecord(c fixConflict) *fixPushMerge {
 	if c.sha == "" {
 		return nil
@@ -126,7 +67,8 @@ func mergeRecord(c fixConflict) *fixPushMerge {
 	return &fixPushMerge{Base: c.base, SHA: c.sha, Paths: c.paths}
 }
 
-func (m *fixPushMerge) conflict() fixConflict {
+// conflictOf is the fixConflict that m keeps (zero for none).
+func conflictOf(m *fixPushMerge) fixConflict {
 	if m == nil {
 		return fixConflict{}
 	}
@@ -139,13 +81,6 @@ func (j *fixJob) pushRecord(kind, head string, since time.Time, typed bool) fixP
 		State: j.state, Role: j.role.Name, Head: j.head, Started: j.started, Login: j.login, Mode: j.mode,
 		Conflict: mergeRecord(j.conflict), Merged: mergeRecord(j.merged), ForMerge: j.forMerge, Alone: j.alone,
 		Described: j.described, BaseChecked: j.baseChecked}}
-}
-
-// earlierPush reports whether head, the PR's head GitHub shows, is one of
-// the commits rec's fixer pushed before its last (fixPush.Commits): GitHub
-// has not got to the last yet.
-func (rec fixPush) earlierPush(head string) bool {
-	return head != rec.Pushed && slices.ContainsFunc(rec.Commits, func(c string) bool { return len(c) >= 7 && strings.HasPrefix(head, c) })
 }
 
 // pushNotConfirmed is the settle's failure for want of the push on GitHub:
@@ -580,7 +515,7 @@ func (e *Engine) decidePush(ctx context.Context, repo store.Repo, pr store.PR, r
 		switch {
 		case !e.confirmingLoop(ctx, pr, rec):
 			e.dropConfirming(ctx, pr, row)
-		case !seen, rec.earlierPush(head):
+		case !seen, rec.EarlierPush(head):
 		case head == rec.Pushed:
 			e.settleConfirmedPush(ctx, repo, pr, row)
 		default:
@@ -593,7 +528,7 @@ func (e *Engine) decidePush(ctx context.Context, repo store.Repo, pr store.PR, r
 			return
 		}
 		switch {
-		case !seen, head == rec.Job.Head, rec.earlierPush(head), !lateMayRun(pr):
+		case !seen, head == rec.Job.Head, rec.EarlierPush(head), !lateMayRun(pr):
 		case head == rec.Pushed:
 			e.settleConfirmedPush(ctx, repo, pr, row)
 		default:
@@ -799,7 +734,7 @@ func (e *Engine) pushJob(ctx context.Context, repo store.Repo, pr store.PR, rec 
 		job.role.Name = j.Role
 	}
 	job.run, job.head, job.started, job.login, job.mode, job.touched = run, j.Head, j.Started, j.Login, j.Mode, true
-	job.conflict, job.merged = j.Conflict.conflict(), j.Merged.conflict()
+	job.conflict, job.merged = conflictOf(j.Conflict), conflictOf(j.Merged)
 	job.forMerge, job.alone, job.described, job.baseChecked = j.ForMerge, j.Alone, j.Described, j.BaseChecked
 	job.state.Late = rec.Kind == fixPushUnconfirmed // fixAttentionKey: its toasts are not its failure's
 	return job, nil

@@ -173,10 +173,11 @@ func (r externalRemark) changesAt() time.Time {
 }
 
 // Remark kinds (externalRemark.Kind), also the place a "## Needs you" entry
-// names for one (needsYouEntryRe).
+// names for one (needsYouEntryRe), and the kinds of the open items they
+// are (fixwork.ItemReview, ItemComment).
 const (
-	remarkReview  = "review"
-	remarkComment = "comment"
+	remarkReview  = itemReview
+	remarkComment = itemComment
 )
 
 // externalReader is what writeExternal reads beyond the engine's GitHub

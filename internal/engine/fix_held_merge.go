@@ -39,7 +39,6 @@ package engine
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -78,47 +77,6 @@ func HeldMergeRef(prID int64) string { return fmt.Sprintf("refs/magnum/held/%d",
 // workflow files: the merge, how the fixer resolved their conflicts, then
 // what its push changes in them. The screens' e opens it in the pager.
 const HeldMergeFile = "held-merge.diff"
-
-// HeldMerge is a merge of a PR's parent that magnum holds for your y: the
-// PR it was held for (Repo, owner/name, and Number: checked against the
-// registry's rows, never a path's source), the merge commit (Merge), the
-// PR's head on GitHub it merges into (Head, its first parent), the base
-// branch and the commit of it it merges (Base, Tip: its second parent, the
-// base's tip on GitHub when it was held), the workflow files its push
-// changes against the head, how many files the fixer resolved conflicts in
-// (Conflicts; 0 when not known), the fix role whose fixer resolved it, the
-// identity that pushes it and its login, the clone that holds its ref, its
-// held-merge.diff (absolute), whether a fix run's findings wait for the
-// next fix after the push (Findings), the words the PR's attention starts
-// with while it is held (Attention) and when it was held.
-type HeldMerge struct {
-	Repo      string    `json:"repo"`
-	Number    int       `json:"number"`
-	Merge     string    `json:"merge"`
-	Head      string    `json:"head"`
-	Base      string    `json:"base"`
-	Tip       string    `json:"tip"`
-	Workflows []string  `json:"workflows"`
-	Conflicts int       `json:"conflicts,omitempty"`
-	Role      string    `json:"role"`
-	Identity  string    `json:"identity"`
-	Login     string    `json:"login"`
-	Clone     string    `json:"clone"`
-	Diff      string    `json:"diff"`
-	Findings  bool      `json:"findings,omitempty"`
-	Attention string    `json:"attention"`
-	At        time.Time `json:"at"`
-}
-
-// ParseHeldMerge reads a KVPRHeldMerge row; false for one that names no
-// merge, head, base or tip.
-func ParseHeldMerge(raw string) (HeldMerge, bool) {
-	var h HeldMerge
-	if json.Unmarshal([]byte(raw), &h) != nil || h.Merge == "" || h.Head == "" || h.Tip == "" || h.Base == "" {
-		return HeldMerge{}, false
-	}
-	return h, true
-}
 
 // heldRow is a held merge as its row was read: the merge, the row as
 // stored (raw: a drop deletes only that row) and its PR's number.
@@ -206,7 +164,7 @@ func (e *Engine) holdMerge(ctx context.Context, job *fixJob, id *config.Identity
 	h := HeldMerge{Repo: job.repo.FullName(), Number: job.pr.Number, Merge: merge, Head: head, Base: b.base, Tip: b.sha,
 		Workflows: slices.Clone(r.files), Conflicts: conflicts, Role: job.role.Name, Identity: id.Name, Login: id.Login, Clone: clone,
 		Diff: filepath.Join(dir, HeldMergeFile), Findings: heldFindings(job), At: e.now().UTC()}
-	h.Attention = h.attention()
+	h.Attention = heldMergeAttention(h)
 	failed := func(what string, err error) (HeldMerge, string) {
 		e.log.Warn("fix: hold the merge of the parent: "+what, "subject", job.subject(), "err", err)
 		return HeldMerge{}, r.why
@@ -259,7 +217,7 @@ func (e *Engine) settleHeld(ctx context.Context, job *fixJob, held fixMergeHeld)
 		msg = strings.TrimSuffix(msg, ".") + "; " + carried
 	}
 	e.event(ctx, "warn", job.subject(), "fix.needs_you", msg, job.eventData())
-	e.heldAttention(ctx, job, msg)
+	e.heldMergeAttention(ctx, job, msg)
 	if err := writeKVJSON(ctx, e, KVPRHeldMerge(job.pr.ID), "the held merge", held.h); err != nil {
 		e.log.Warn("fix: record the held merge", "subject", job.subject(), "err", err)
 		e.unholdFiles(ctx, job.repo, job.pr, held.h)
@@ -271,7 +229,7 @@ func (e *Engine) settleHeld(ctx context.Context, job *fixJob, held fixMergeHeld)
 // an urgent toast of it on a PR whose state takes no attention, which
 // fixAttention leaves with the events alone: a PR magnum never reviewed,
 // whose needs attention would queue its review at its next push.
-func (e *Engine) heldAttention(ctx context.Context, job *fixJob, msg string) {
+func (e *Engine) heldMergeAttention(ctx context.Context, job *fixJob, msg string) {
 	e.fixAttention(ctx, job, msg)
 	if pr, err := e.st.PRByID(ctx, job.pr.ID); err == nil && pr.State != store.PRReviewed && pr.State != store.PRNeedsAttention &&
 		!slices.Contains(waitingStates, pr.State) {
@@ -360,12 +318,12 @@ func hiddenFormat(r rune) bool {
 	return unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
 }
 
-// attention is the PR's attention while h is held: "fix: merge ready:
+// heldMergeAttention is the PR's attention while h is held: "fix: merge ready:
 // claude-fix merged master at c0c0c0c and resolved 5 conflicts. It changes
 // .github/workflows/ci.yml and pronto.yml. fixer-app[bot] pushes it only
 // after your y: P asks (e shows held-merge.diff).", and for a fix run's
 // merge " The findings wait for the next fix after the push."
-func (h HeldMerge) attention() string {
+func heldMergeAttention(h HeldMerge) string {
 	merged := fmt.Sprintf("%s merged %s at %s", h.Role, h.Base, textx.ShortSHA(h.Tip))
 	if h.Conflicts > 0 {
 		merged += " and resolved " + textx.Count(h.Conflicts, "conflict", "conflicts")
@@ -397,25 +355,25 @@ func workflowWords(files []string) string {
 	return andList(words)
 }
 
-// asked is what the y/N of h's push asks about at at: the PR's head, the
+// heldAsked is what the y/N of h's push asks about at at: the PR's head, the
 // base and its tip, the conflicts and the merge (MergeAsked.Merge).
-func (h HeldMerge) asked(at time.Time) MergeAsked {
+func heldAsked(h HeldMerge, at time.Time) MergeAsked {
 	return MergeAsked{Head: h.Head, Base: h.Base, Tip: h.Tip, Conflicts: h.Conflicts, Merge: h.Merge, At: at.UTC()}
 }
 
-// words name h: "claude-fix's merge d3d3d3d of master at c0c0c0c".
-func (h HeldMerge) words() string {
+// heldMergeWords name h: "claude-fix's merge d3d3d3d of master at c0c0c0c".
+func heldMergeWords(h HeldMerge) string {
 	return fmt.Sprintf("%s's merge %s of %s at %s", h.Role, textx.ShortSHA(h.Merge), h.Base, textx.ShortSHA(h.Tip))
 }
 
-// pushWords say what h's push does, into branch: "magnum pushes
+// heldPushWords say what h's push does, into branch: "magnum pushes
 // claude-fix's merge d3d3d3d of master at c0c0c0c into feature as
 // fixer-app[bot] with the Workflows token; it changes
 // .github/workflows/ci.yml and pronto.yml (held-merge.diff)". They name
 // the merge, so a merge held again of the same tip asks another question.
-func (h HeldMerge) pushWords(branch string) string {
+func heldPushWords(h HeldMerge, branch string) string {
 	return fmt.Sprintf("magnum pushes %s into %s as %s with the Workflows token; it changes %s (%s)",
-		h.words(), branch, h.Login, workflowWords(h.Workflows), HeldMergeFile)
+		heldMergeWords(h), branch, h.Login, workflowWords(h.Workflows), HeldMergeFile)
 }
 
 // heldMergeOf is PR prID's held merge as its row reads now; false for
@@ -675,7 +633,7 @@ func (e *Engine) heldOnGitHub(ctx context.Context, repo store.Repo, pr store.PR,
 	}
 	e.heldLanded(ctx, repo, pr, row, found)
 	return fmt.Sprintf("nothing to merge: %s is on GitHub already (the head of %s#%d is %s): magnum settled it as pushed",
-		row.h.words(), repo.FullName(), pr.Number, textx.ShortSHA(row.h.Merge)), true
+		heldMergeWords(row.h), repo.FullName(), pr.Number, textx.ShortSHA(row.h.Merge)), true
 }
 
 // requestHeld answers a merge of pr's parent while magnum holds row's
@@ -723,24 +681,24 @@ func (e *Engine) requestHeld(ctx context.Context, pr store.PR, row heldRow, dry 
 				return "", false, nil
 			}
 		}
-		res, err := MergePlan{Ref: label, Asked: h.asked(e.now()), Text: fmt.Sprintf("%s%s: %s", mergeDryWords, label, h.pushWords(deref(pr.HeadRef)))}.result()
+		res, err := MergePlan{Ref: label, Asked: heldAsked(h, e.now()), Text: fmt.Sprintf("%s%s: %s", mergeDryWords, label, heldPushWords(h, deref(pr.HeadRef)))}.result()
 		return res, true, err
 	}
 	switch {
 	case asked == nil:
 		return "", true, fmt.Errorf("%s: magnum holds %s for your y on a terminal: `magnum merge-parent %s` asks it (P on the screens); "+
-			"--yes binds nothing and never pushes a held merge: nothing was pushed", label, h.words(), label)
+			"--yes binds nothing and never pushes a held merge: nothing was pushed", label, heldMergeWords(h), label)
 	case asked.Merge == "":
 		return "", true, fmt.Errorf("%s: the question named no held merge, and magnum holds %s for your y: nothing was pushed; ask again (`magnum merge-parent %s`)",
-			label, h.words(), label)
+			label, heldMergeWords(h), label)
 	}
-	if why := askedRefusalOf(label, *asked, h.asked(e.now()), e.now()); why != "" {
+	if why := askedRefusalOf(label, *asked, heldAsked(h, e.now()), e.now()); why != "" {
 		return "", true, errors.New(why)
 	}
 	if err := e.startHeldPush(ctx, job, row); err != nil {
 		return "", true, err
 	}
-	return fmt.Sprintf("pushing %s into %s as %s with the Workflows token; `magnum abort %s` stops it", h.words(), deref(pr.HeadRef), h.Login, label), true, nil
+	return fmt.Sprintf("pushing %s into %s as %s with the Workflows token; `magnum abort %s` stops it", heldMergeWords(h), deref(pr.HeadRef), h.Login, label), true, nil
 }
 
 // mergeDryWords start the words of a dry run's plan of a merge of the
@@ -1038,7 +996,7 @@ func (e *Engine) heldPushed(ctx context.Context, job *fixJob, row heldRow, found
 		e.log.Warn("fix: the held merge's push on the PR row", "subject", job.subject(), "err", err)
 	}
 	data := map[string]any{"base": h.Base, "tip": h.Tip, "head": h.Head, "merge": h.Merge, "identity": h.Identity, "workflows": true, "held": true}
-	why := fmt.Sprintf("magnum pushed %s into %s as %s %s %s: the head is %s", h.words(), job.label(), h.Login, workflowsWord, after,
+	why := fmt.Sprintf("magnum pushed %s into %s as %s %s %s: the head is %s", heldMergeWords(h), job.label(), h.Login, workflowsWord, after,
 		textx.ShortSHA(h.Merge))
 	e.event(ctx, "info", job.subject(), "fix.parent_pushed", why, data)
 	pushed := fmt.Sprintf("fix: magnum pushed %s's held merge %s after your y", h.Role, textx.ShortSHA(h.Merge))
@@ -1053,7 +1011,7 @@ func (e *Engine) heldPushed(ctx context.Context, job *fixJob, row heldRow, found
 		}
 		msg += rest
 		e.event(ctx, "warn", job.subject(), "fix.needs_you", msg, data)
-		e.heldAttention(ctx, job, msg)
+		e.heldMergeAttention(ctx, job, msg)
 		return
 	}
 	e.replaceHeldWords(ctx, job.subject(), job.pr.ID, h, pushed) // words a PR the push left in needs attention would still show
@@ -1196,5 +1154,5 @@ func (e *Engine) heldBlocksFix(ctx context.Context, repo store.Repo, pr store.PR
 		return nil
 	}
 	return fmt.Errorf("%s: magnum holds %s for your y: `magnum merge-parent %s` (P on the screens) pushes it first, and a push of "+
-		"yours to the branch drops it; a fix now would merge the base again over it", label, row.h.words(), label)
+		"yours to the branch drops it; a fix now would merge the base again over it", label, heldMergeWords(row.h), label)
 }

@@ -364,7 +364,7 @@ func namesNeedsYouID(line, id string) bool {
 // resolution, as the settle's toast said: no thread is read again here.
 // None for entries magnum cannot read so.
 func FixCalls(st FixState, prURL, ref string) []attention.FixCall {
-	calls, _ := loopCalls(st.Carried, st.NeedsYou, st.answered(), st.Report, prURL, ref)
+	calls, _ := loopCalls(st.Carried, st.NeedsYou, st.AnsweredSet(), st.Report, prURL, ref)
 	return calls
 }
 

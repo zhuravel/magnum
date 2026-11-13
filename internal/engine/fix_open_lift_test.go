@@ -166,7 +166,7 @@ func TestOnlyTheLooksOwnRaiseIsReadDespiteAReply(t *testing.T) {
 	const raisedMsg = "fix: 1 item the fixer left needs you: " + prPage + "#pullrequestreview-9001"
 	l := openLedger{Raised: []string{"remark:9001"}, RaisedMsg: raisedMsg}
 	pr := store.PR{State: store.PRNeedsAttention, LastError: new(raisedMsg)}
-	if !l.raisedHere(pr, attention.KindFix) {
+	if !l.RaisedHere(pr, attention.KindFix) {
 		t.Error("the look's own raise is not its own")
 	}
 	for name, c := range map[string]struct {
@@ -180,7 +180,7 @@ func TestOnlyTheLooksOwnRaiseIsReadDespiteAReply(t *testing.T) {
 		"nothing raised":    {pr, attention.KindFix, openLedger{RaisedMsg: raisedMsg}},
 		"no message of its": {pr, attention.KindFix, openLedger{Raised: l.Raised}},
 	} {
-		if c.l.raisedHere(c.pr, c.kind) {
+		if c.l.RaisedHere(c.pr, c.kind) {
 			t.Errorf("%s: the look takes the attention for its own", name)
 		}
 	}
@@ -496,12 +496,12 @@ func TestAChangeRequestWaitsForYouOnceTheReviewersItemWaited(t *testing.T) {
 	alices := openItem{Key: "remark:9003", Class: classPerson, Kind: itemReview, URL: prPage + "#pullrequestreview-9003", By: "alice", ChangesAt: openNow.Add(-time.Minute)}
 	f := idleFacts()
 	f.items = []openItem{pushback, earlier, comment, alices}
-	f.ledger.noteWaited([]openItem{
+	f.ledger.NoteWaited([]openItem{
 		{Key: "thread:100@100", Class: classPerson, Kind: itemThread, By: "rev-ann"},
 		{Key: "thread:200@200", Class: classBot, Kind: itemThread, By: "lint-bot[bot]"},
 		{Key: "rthread:300", Class: classMagnum, Kind: itemFinding},
 	}, openNow.Add(-time.Hour))
-	f.ledger.noteWaited([]openItem{{Key: "thread:100@101", Class: classPerson, Kind: itemThread, By: "rev-ann"}}, openNow)
+	f.ledger.NoteWaited([]openItem{{Key: "thread:100@101", Class: classPerson, Kind: itemThread, By: "rev-ann"}}, openNow)
 	if want := map[string]time.Time{"rev-ann": openNow.Add(-time.Hour)}; !maps.Equal(f.ledger.Waited, want) {
 		t.Errorf("waited = %v, want %v", f.ledger.Waited, want)
 	}
@@ -520,7 +520,7 @@ func TestAPushbackKeyMarksTheReviewersLaterChangeRequestsWaiting(t *testing.T) {
 	since := time.Date(2026, 11, 10, 9, 0, 0, 123, time.UTC)
 	l := openLedger{Waited: map[string]time.Time{"rev-ann": since}}
 	handed := personThread(4100)
-	keys := l.loopWaits(nil, []openItem{handed})
+	keys := l.LoopWaits(nil, []openItem{handed})
 	if want := []string{handed.Key, "changes:rev-ann@" + strconv.FormatInt(since.UnixNano(), 10)}; !slices.Equal(keys, want) {
 		t.Errorf("loop waits = %v, want %v", keys, want)
 	}
@@ -661,14 +661,14 @@ func TestPushbackCountsFromTheLoopsHandOff(t *testing.T) {
 	items := []openItem{ann1, ann2, fresh, alices, bot}
 	l.Read.Others = items
 	waited := maps.Clone(l.Waited)
-	keys := l.lastReadWaits()
+	keys := l.LastReadWaits()
 	if want := "changes:rev-ann@" + strconv.FormatInt(openNow.Add(-2*time.Hour).UnixNano(), 10); !slices.Contains(keys, want) {
 		t.Errorf("a CI fix by hand's waits = %v, want %s", keys, want)
 	}
 	if !maps.Equal(l.Waited, waited) {
 		t.Errorf("lastReadWaits wrote the ledger it read: waited %v", l.Waited)
 	}
-	l.seedWaited(items)
+	l.SeedWaited(items)
 	if want := map[string]time.Time{"rev-ann": openNow.Add(-2 * time.Hour), "alice": openNow.Add(-5 * time.Hour)}; !maps.Equal(l.Waited, want) {
 		t.Errorf("waited = %v, want %v", l.Waited, want)
 	}

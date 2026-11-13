@@ -435,8 +435,8 @@ func TestAMissingRequiredCheckWaitsWhileTheHeadsChecksRun(t *testing.T) {
 	}
 	v, _, _ := decideOpen(f)
 	wantVerdict(t, v, OpenWaits, "CI at a1a1a1a: required check Completion has not started")
-	if v.dispatch || !v.Until.IsZero() {
-		t.Errorf("dispatch %v, until %s while the head's checks run", v.dispatch, v.Until)
+	if v.Dispatch || !v.Until.IsZero() {
+		t.Errorf("dispatch %v, until %s while the head's checks run", v.Dispatch, v.Until)
 	}
 	f.ciStart = ciStart{Head: fixHead, Workflow: "ci.yml", At: openNow.Add(-time.Hour)} // older than settle_max
 	v, _, _ = decideOpen(f)
@@ -592,7 +592,7 @@ func TestOpenVerdictStaleness(t *testing.T) {
 		}
 	}
 	raw, _ := json.Marshal(v)
-	if got, ok := ParseOpenVerdict(string(raw)); !ok || !got.sameAs(v) {
+	if got, ok := ParseOpenVerdict(string(raw)); !ok || !got.SameAs(v) {
 		t.Errorf("ParseOpenVerdict = %+v, %v", got, ok)
 	}
 	if _, ok := ParseOpenVerdict("not json"); ok {
@@ -627,8 +627,8 @@ func TestAThreadTheFixerResolvedUnansweredNeedsYouNotALoop(t *testing.T) {
 	f.items = []openItem{it}
 	v, work, needs := decideOpen(f)
 	wantVerdict(t, v, OpenNeedsYou, "1 item needs you")
-	if len(work) != 0 || len(needs) != 1 || !v.leftovers {
-		t.Errorf("work %+v, needs %+v, leftovers %v: want the thread among the leftovers", work, needs, v.leftovers)
+	if len(work) != 0 || len(needs) != 1 || !v.Leftovers {
+		t.Errorf("work %+v, needs %+v, leftovers %v: want the thread among the leftovers", work, needs, v.Leftovers)
 	}
 }
 
@@ -670,27 +670,27 @@ func TestTheSpellOfActivityBeginsGoesOnAndEnds(t *testing.T) {
 	pr := store.PR{HeadChangedAt: openNow.Add(-48 * time.Hour)}
 	at := func(d time.Duration) *time.Time { t := openNow.Add(d); return &t }
 	pr.ActivityAt = at(-30 * time.Second)
-	s := openSpell{}.next(pr, quiet, gap, openNow, false)
+	s := openSpell{}.Next(pr, quiet, gap, openNow, false)
 	if !s.Start.Equal(*pr.ActivityAt) || !s.Seen.Equal(openNow) {
 		t.Errorf("a new spell = %+v, want it to begin at the activity, seen now", s)
 	}
 	pr.ActivityAt = at(time.Minute)
-	if next := s.next(pr, quiet, gap, openNow.Add(90*time.Second), false); !next.Start.Equal(s.Start) {
+	if next := s.Next(pr, quiet, gap, openNow.Add(90*time.Second), false); !next.Start.Equal(s.Start) {
 		t.Errorf("a spell that goes on = %+v, want its start kept", next)
 	}
 	pr.ActivityAt = at(4 * time.Minute)
-	if next := s.next(pr, quiet, 20*time.Minute, openNow.Add(5*time.Minute), false); !next.Start.Equal(s.Start) {
+	if next := s.Next(pr, quiet, 20*time.Minute, openNow.Add(5*time.Minute), false); !next.Start.Equal(s.Start) {
 		t.Errorf("a spell that goes on across looks 5 minutes apart = %+v, want its start kept", next)
 	}
 	pr.ActivityAt = at(time.Minute)
-	if next := s.next(pr, quiet, gap, openNow.Add(5*time.Minute), false); !next.Start.IsZero() {
+	if next := s.Next(pr, quiet, gap, openNow.Add(5*time.Minute), false); !next.Start.IsZero() {
 		t.Errorf("a quiet PR's spell = %+v, want none", next)
 	}
-	if next := s.next(pr, quiet, gap, openNow.Add(90*time.Second), true); !next.Start.IsZero() {
+	if next := s.Next(pr, quiet, gap, openNow.Add(90*time.Second), true); !next.Start.IsZero() {
 		t.Errorf("a spell under a loop = %+v, want none", next)
 	}
 	pr.ActivityAt = at(10 * time.Hour)
-	if next := s.next(pr, quiet, gap, openNow.Add(10*time.Hour+30*time.Second), false); !next.Start.Equal(*pr.ActivityAt) {
+	if next := s.Next(pr, quiet, gap, openNow.Add(10*time.Hour+30*time.Second), false); !next.Start.Equal(*pr.ActivityAt) {
 		t.Errorf("a spell after a night the look did not see = %+v, want a new one at %s", next, *pr.ActivityAt)
 	}
 }
@@ -800,13 +800,13 @@ func TestMagnumIsNeverLateInsideQuietHours(t *testing.T) {
 	f.now = at(4, 0)
 	v, _, _ := decideOpen(f)
 	wantVerdict(t, v, OpenWaits, "magnum reviews a1a1a1a")
-	if v.late || !v.Until.Equal(at(10, 0)) {
-		t.Errorf("late %v, until %s; want no late review inside quiet hours, a wait until their end", v.late, v.Until)
+	if v.Late || !v.Until.Equal(at(10, 0)) {
+		t.Errorf("late %v, until %s; want no late review inside quiet hours, a wait until their end", v.Late, v.Until)
 	}
 	f.now = at(10, 0)
 	v, _, _ = decideOpen(f)
 	wantVerdict(t, v, OpenNeedsYou, "magnum has not reviewed a1a1a1a since 00:30")
-	if !v.late {
+	if !v.Late {
 		t.Error("not late at the end of quiet hours")
 	}
 }
@@ -835,14 +835,14 @@ func TestMagnumLateCountsFromTheEndOfQuietHoursThatBeganBeforeItWasLate(t *testi
 		f.pr.HeadChangedAt, f.pr.NextEligibleAt = tc.head, tc.due
 		for _, now := range []time.Time{at(4, 30), at(10, 0), at(11, 59)} {
 			f.now = now
-			if v, _, _ := decideOpen(f); v.Verdict != OpenWaits || v.late {
-				t.Errorf("%s, at %s: verdict %s %q (late %v), want a wait for magnum's review", tc.name, now.Format("15:04"), v.Verdict, v.Why, v.late)
+			if v, _, _ := decideOpen(f); v.Verdict != OpenWaits || v.Late {
+				t.Errorf("%s, at %s: verdict %s %q (late %v), want a wait for magnum's review", tc.name, now.Format("15:04"), v.Verdict, v.Why, v.Late)
 			}
 		}
 		f.now = at(12, 0)
 		v, _, _ := decideOpen(f)
-		if v.Verdict != OpenNeedsYou || !v.late || !strings.Contains(v.Why, "magnum has not reviewed a1a1a1a since 10:00") {
-			t.Errorf("%s, at 12:00: verdict %s %q (late %v), want late since the window's end", tc.name, v.Verdict, v.Why, v.late)
+		if v.Verdict != OpenNeedsYou || !v.Late || !strings.Contains(v.Why, "magnum has not reviewed a1a1a1a since 10:00") {
+			t.Errorf("%s, at 12:00: verdict %s %q (late %v), want late since the window's end", tc.name, v.Verdict, v.Why, v.Late)
 		}
 	}
 }
@@ -863,8 +863,8 @@ func TestMagnumIsNeverLateUnderThePauseAndCountsFromItsEnd(t *testing.T) {
 	f.now = at(16, 15)
 	v, _, _ := decideOpen(f)
 	wantVerdict(t, v, OpenWaits, "daemon paused: magnum's review of a1a1a1a waits until 18:00")
-	if v.late || len(v.Needs) != 0 || !v.Until.Equal(at(18, 0)) {
-		t.Errorf("late %v, needs %+v, until %s; want a wait until the pause's end", v.late, v.Needs, v.Until)
+	if v.Late || len(v.Needs) != 0 || !v.Until.Equal(at(18, 0)) {
+		t.Errorf("late %v, needs %+v, until %s; want a wait until the pause's end", v.Late, v.Needs, v.Until)
 	}
 	f.pauseUntil = time.Time{}
 	v, _, _ = decideOpen(f)

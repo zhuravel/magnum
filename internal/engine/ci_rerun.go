@@ -43,76 +43,6 @@ import (
 // re-run of the one that started no job (ciRerun as JSON), the last head's.
 func kvPRCIRerun(prID int64) string { return fmt.Sprintf("pr.%d.ci_rerun", prID) }
 
-// ciRerun is what the look read of the runs at Head (at ReadAt) and did
-// about them: Run is the run that started no job (nil: none); Queued a run
-// of the head that had not ended at the read (its id, QueuedStatus its
-// status then), and Unread a read that failed (UnreadWhy: GitHub would not
-// mint the token of the read, actionsNotGranted's words), either of which
-// the look reads again settle_max after ReadAt; At when the look asked GitHub to
-// re-run Run (written before the call, so a re-run whose answer was lost
-// still counts), Failed why GitHub refused (its status, never its message;
-// a 403 adds cannotStartWorkflows' words) and Refused why magnum did not
-// (At zero); Seen is the re-run's new attempt as the poll last read it
-// (nil: none seen), and Moved when the look found that attempt, after it
-// failed, run again by hand (noteRunMoved: Seen is that attempt since),
-// which the poll waits for as for the re-run's (rerunWaits).
-type ciRerun struct {
-	Head         string     `json:"head"`
-	ReadAt       time.Time  `json:"read_at"`
-	Queued       int64      `json:"queued,omitempty"`
-	QueuedStatus string     `json:"queued_status,omitempty"`
-	Unread       bool       `json:"unread,omitempty"`
-	UnreadWhy    string     `json:"unread_why,omitempty"`
-	Run          *ciNoJob   `json:"run,omitempty"`
-	At           time.Time  `json:"at,omitzero"`
-	Failed       string     `json:"failed,omitempty"`
-	Refused      string     `json:"refused,omitempty"`
-	Seen         *ciAttempt `json:"seen,omitempty"`
-	Moved        time.Time  `json:"moved,omitzero"`
-}
-
-// ciNoJob is a run that started no job: its id, its workflow file, the
-// attempt that started none, and that attempt's conclusion.
-type ciNoJob struct {
-	ID         int64  `json:"id"`
-	Workflow   string `json:"workflow"`
-	Attempt    int    `json:"attempt"`
-	Conclusion string `json:"conclusion"`
-}
-
-// ciAttempt is a newer attempt of a re-run run: its number, GitHub's status
-// and, once it ended, its conclusion, and NoJob: it ended with no job
-// started.
-type ciAttempt struct {
-	Attempt    int    `json:"attempt"`
-	Status     string `json:"status"`
-	Conclusion string `json:"conclusion,omitempty"`
-	NoJob      bool   `json:"no_job,omitempty"`
-}
-
-// running reports whether a is an attempt that has not ended, ended
-// whether it ended. Both are false for nil, none seen.
-func (a *ciAttempt) running() bool { return a != nil && a.Status != "completed" }
-func (a *ciAttempt) ended() bool   { return a != nil && a.Status == "completed" }
-
-// asked reports whether the look asked GitHub to re-run the head's run and
-// GitHub took it.
-func (r ciRerun) asked() bool { return !r.At.IsZero() && r.Failed == "" && r.Run != nil }
-
-// decided reports whether the look re-ran the head's run or refused to:
-// the record that a look and a restart never redo.
-func (r ciRerun) decided() bool { return !r.At.IsZero() || r.Refused != "" }
-
-// readDue reports whether the look reads the runs of head (again) at now:
-// none read at the head, or settleMax passed since a read that found a run
-// that had not ended or that failed.
-func (r ciRerun) readDue(head string, now time.Time, settleMax time.Duration) bool {
-	return r.Head != head || (r.Queued != 0 || r.Unread) && !now.Before(r.ReadAt.Add(settleMax))
-}
-
-// named is the run in the verdict's words: "run 42673098082 of ci.yml".
-func (r *ciNoJob) named() string { return fmt.Sprintf("run %d of %s", r.ID, r.Workflow) }
-
 // headRunLister is the engine's GitHub client's list of every workflow's
 // runs at a commit (*github.Client's HeadRuns), runJobLister its list of a
 // run's jobs (RunJobs) and runRerunner its re-run of a run (RerunRun).
@@ -236,8 +166,8 @@ func noJobRunAt(ctx context.Context, gh GitHub, owner, name, sha string) (found 
 // refused already is not read again. ok is false when it did nothing (the record could not
 // be read or written).
 func (e *Engine) openReadRuns(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR) (ciRerun, bool) {
-	if stored, ok := e.storedRerun(ctx, pr); !ok || stored.decided() {
-		return stored, ok && stored.decided()
+	if stored, ok := e.storedRerun(ctx, pr); !ok || stored.Decided() {
+		return stored, ok && stored.Decided()
 	}
 	full, who := repo.FullName(), acts.identity
 	r := ciRerun{Head: pr.HeadSHA, ReadAt: e.now()}
@@ -296,8 +226,8 @@ func CIConfigPath(p string) bool {
 // data names the head, the run, its workflow, attempt and conclusion, and
 // the identity.
 func (e *Engine) openRerunCI(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR, r ciRerun, what string) (ciRerun, bool) {
-	if stored, ok := e.storedRerun(ctx, pr); !ok || stored.decided() {
-		return stored, ok && stored.decided()
+	if stored, ok := e.storedRerun(ctx, pr); !ok || stored.Decided() {
+		return stored, ok && stored.Decided()
 	}
 	files, listed, err := e.st.PRFilesOf(ctx, pr.ID)
 	switch {
@@ -311,7 +241,7 @@ func (e *Engine) openRerunCI(ctx context.Context, acts *ciActions, repo store.Re
 	case files.Truncated:
 		r.Refused = "GitHub did not list every file of the PR"
 	}
-	subject, run := prSubject(repo, pr.Number), r.Run.named()
+	subject, run := prSubject(repo, pr.Number), r.Run.Named()
 	identity := acts.identity
 	lead := fmt.Sprintf("%s did not run at %s, as %s started no job%s", what, textx.ShortSHA(pr.HeadSHA), run, runEnd(r.Run.Conclusion))
 	data := map[string]any{"head": pr.HeadSHA, "run": r.Run.ID, "workflow": r.Run.Workflow, "attempt": r.Run.Attempt,
@@ -360,27 +290,19 @@ func (e *Engine) openRerunCI(ctx context.Context, acts *ciActions, repo store.Re
 // re-run (v.rerun, openRerunCI), each followed by the verdict decided again
 // on what it did, which it returns with its work.
 func (e *Engine) openCIRerun(ctx context.Context, acts *ciActions, repo store.Repo, pr store.PR, f *openFacts, v OpenVerdict, work []openItem) (OpenVerdict, []openItem) {
-	if v.readRuns {
+	if v.ReadRuns {
 		if r, ok := e.openReadRuns(ctx, acts, repo, pr); ok {
 			f.ciRerun = r
 			v, work, _ = decideOpen(*f)
 		}
 	}
-	if v.rerun {
+	if v.Rerun {
 		if r, ok := e.openRerunCI(ctx, acts, repo, pr, f.ciRerun, missingWhat(f.ci.missing)); ok {
 			f.ciRerun = r
 			v, work, _ = decideOpen(*f)
 		}
 	}
 	return v, work
-}
-
-// rerunWaits reports whether the poll reads the head's runs for r, the
-// look's re-run (awaitCIRuns) at now: GitHub took it, and it is less than
-// settleMax old (or its attempt by hand that the look found, Moved) or its
-// new attempt had not ended at the last read.
-func (r ciRerun) rerunWaits(now time.Time, settleMax time.Duration) bool {
-	return r.asked() && (now.Before(later(r.At, r.Moved).Add(settleMax)) || r.Seen.running())
 }
 
 // seeRerun is the poll's read of the new attempt of r's run (awaitCIRuns):
@@ -393,13 +315,13 @@ func (r ciRerun) rerunWaits(now time.Time, settleMax time.Duration) bool {
 // read standing.
 func (e *Engine) seeRerun(ctx context.Context, acts *ciActions, owner, name string, pr store.PR, r ciRerun) {
 	identity := acts.identity
-	if _, low := e.githubLow(identity); low || r.Seen.ended() {
+	if _, low := e.githubLow(identity); low || r.Seen.Ended() {
 		return
 	}
 	full, short := owner+"/"+name, textx.ShortSHA(r.Head)
 	fail := func(err error) {
 		if e.changed("ci_head_runs:"+full, err.Error()) {
-			e.event(ctx, "warn", "repo:"+full, "poll.ci_runs_error", fmt.Sprintf("the runs at %s, after magnum re-ran %s: %v", short, r.Run.named(), err), nil)
+			e.event(ctx, "warn", "repo:"+full, "poll.ci_runs_error", fmt.Sprintf("the runs at %s, after magnum re-ran %s: %v", short, r.Run.Named(), err), nil)
 		}
 	}
 	gh, err := acts.client(ctx)
@@ -443,7 +365,7 @@ func (e *Engine) seeRerun(ctx context.Context, acts *ciActions, owner, name stri
 	}
 	if seen.NoJob {
 		e.event(ctx, "warn", prSubject(store.Repo{Owner: owner, Name: name}, pr.Number), "fix.open_ci_rerun_twice",
-			fmt.Sprintf("%s failed to start twice at %s%s: the PR needs you", r.Run.named(), short, runEnd(seen.Conclusion)),
+			fmt.Sprintf("%s failed to start twice at %s%s: the PR needs you", r.Run.Named(), short, runEnd(seen.Conclusion)),
 			map[string]any{"head": r.Head, "run": r.Run.ID, "workflow": r.Run.Workflow, "attempt": seen.Attempt, "conclusion": seen.Conclusion,
 				"identity": identity})
 	}
@@ -465,9 +387,9 @@ func (e *Engine) seeRerun(ctx context.Context, acts *ciActions, owner, name stri
 // started no job either, ended without the check, or never came.
 func openRerunVerdict(f openFacts, v *OpenVerdict, waits func(string, time.Time) OpenVerdict, needsYou func(string) OpenVerdict, what string) (OpenVerdict, bool) {
 	r, low := f.ciRerun, f.low || f.ciLow
-	due := r.readDue(f.pr.HeadSHA, f.now, f.settle.max)
+	due := r.ReadDue(f.pr.HeadSHA, f.now, f.settle.max)
 	if due {
-		v.readRuns = !low
+		v.ReadRuns = !low
 	}
 	if r.Head == f.pr.HeadSHA && r.Unread && r.UnreadWhy != "" { // ci_actions.go: GitHub will not mint the token that reads them
 		return needsYou(fmt.Sprintf("magnum cannot read the head's runs (%s); run its workflow on the PR's branch, or push", r.UnreadWhy)), true
@@ -487,28 +409,28 @@ func openRerunVerdict(f openFacts, v *OpenVerdict, waits func(string, time.Time)
 		return OpenVerdict{}, false
 	}
 	const onGitHub = "; re-run it on GitHub"
-	run := r.Run.named()
+	run := r.Run.Named()
 	switch {
 	case r.Refused != "":
 		return needsYou(fmt.Sprintf("magnum does not re-run %s (%s)%s", run, r.Refused, onGitHub)), true
 	case r.Failed != "":
 		return needsYou(fmt.Sprintf("magnum's re-run of %s failed (%s)%s", run, r.Failed, onGitHub)), true
-	case r.asked() && r.Seen.ended() && r.Seen.NoJob:
+	case r.Asked() && r.Seen.Ended() && r.Seen.NoJob:
 		return needsYou(fmt.Sprintf("%s failed to start twice%s%s, or push", run, runEnd(r.Seen.Conclusion), onGitHub)), true
-	case r.asked() && f.now.Before(later(r.At, r.Moved).Add(f.settle.max)):
+	case r.Asked() && f.now.Before(later(r.At, r.Moved).Add(f.settle.max)):
 		return waits(rerunWhy(f, what), later(r.At, r.Moved).Add(f.settle.max)), true
-	case r.asked() && r.Seen.ended() && !r.Moved.IsZero():
+	case r.Asked() && r.Seen.Ended() && !r.Moved.IsZero():
 		return needsYou(fmt.Sprintf("%s; that attempt ended%s without it%s", rerunWhy(f, what), runEnd(r.Seen.Conclusion), onGitHub)), true
-	case r.asked() && r.Seen.ended():
+	case r.Asked() && r.Seen.Ended():
 		return needsYou(fmt.Sprintf("magnum re-ran %s at %s and it ended%s without it%s", run, waitClock(r.At, f.now), runEnd(r.Seen.Conclusion), onGitHub)), true
-	case r.asked():
+	case r.Asked():
 		return needsYou(fmt.Sprintf("magnum re-ran %s at %s and no new attempt came%s", run, waitClock(r.At, f.now), onGitHub)), true
 	case f.pause != "":
 		return waits(fmt.Sprintf("%s did not run; magnum re-runs %s once the pause ends", what, run), f.pauseUntil), true
 	case low:
 		return waits(fmt.Sprintf("%s did not run; magnum re-runs %s once the GitHub budget allows", what, run), time.Time{}), true
 	}
-	v.rerun = true
+	v.Rerun = true
 	return needsYou("magnum re-runs " + run), true
 }
 
@@ -531,7 +453,7 @@ func queuedWhy(id int64, status string) string {
 // 42673098082 of ci.yml was run again after magnum's re-run of it failed".
 func rerunWhy(f openFacts, what string) string {
 	if !f.ciRerun.Moved.IsZero() {
-		return f.ciRerun.Run.named() + " was run again after magnum's re-run of it failed"
+		return f.ciRerun.Run.Named() + " was run again after magnum's re-run of it failed"
 	}
-	return fmt.Sprintf("magnum re-ran %s at %s, as %s did not run", f.ciRerun.Run.named(), waitClock(f.ciRerun.At, f.now), what)
+	return fmt.Sprintf("magnum re-ran %s at %s, as %s did not run", f.ciRerun.Run.Named(), waitClock(f.ciRerun.At, f.now), what)
 }

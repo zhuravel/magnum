@@ -94,13 +94,13 @@ func TestARequiredCheckTheBaseNeverRanNeedsYou(t *testing.T) {
 	f.ciFix.base, f.ciFix.baseDue = "", true
 	v, work, _ = decideOpen(f)
 	wantVerdict(t, v, OpenWaits, "required check Completion failed at a1a1a1a; reading main's CI")
-	if !v.readCIBase || len(work) != 0 {
-		t.Fatalf("readCIBase %v, work %v", v.readCIBase, work)
+	if !v.ReadCIBase || len(work) != 0 {
+		t.Fatalf("readCIBase %v, work %v", v.ReadCIBase, work)
 	}
 	f.low = true
 	v, _, _ = decideOpen(f)
 	wantVerdict(t, v, OpenWaits, "reading main's CI waits for the GitHub budget")
-	if v.readCIBase {
+	if v.ReadCIBase {
 		t.Error("the base is read below the GitHub floor")
 	}
 }
