@@ -5,8 +5,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/fixwork"
+	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
 )
@@ -130,6 +132,58 @@ func TestTheFactorysReReviewKeepsItsFixRefToTheRoundsEnd(t *testing.T) {
 	h.handle()
 	if r := h.request(id); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "the factory does not fix this PR") {
 		t.Errorf("a fix's re-review of a PR magnum fixes: %s %q", r.State, deref(r.Result))
+	}
+}
+
+// A re-review of the factory's push whose judge turn pauses on a usage
+// limit or a lost login is not over: the turn continues once the pause
+// lifts, as the same round. The PR keeps the factory's fix meanwhile, no
+// fix.factory_round says the round ended, and the continued round, which
+// posts the review, takes the fix and names it in the one fix.factory_round.
+func TestAPausedReReviewKeepsTheFactorysFixForItsContinue(t *testing.T) {
+	storetest.Parallel(t)
+	for _, outcome := range []string{pipeline.OutcomeUsageLimit, pipeline.OutcomeLoginRequired} {
+		t.Run(outcome, func(t *testing.T) {
+			h := leaseHarness(t, &fakeLease{})
+			pr := h.pr(2)
+			h.rd.mu.Lock()
+			h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) { return h.rd.posted(h.ctx, in, 0) }
+			h.rd.mu.Unlock()
+			pausedReReview(h, outcome, true)
+			ref := fixwork.FixRef{Work: 7, Cycle: 1, Head: "b2"}
+			if r := h.reReviewOf(ref); r.State != store.RequestDone {
+				t.Fatalf("the factory's re-review: %s %q", r.State, deref(r.Result))
+			}
+			h.tick()
+			h.wantState(2, store.PRPaused)
+			if ev, ok := h.fixEvent("fix.factory_round"); ok {
+				t.Errorf("fix.factory_round for a turn that continues: %q", ev.Message)
+			}
+			if kept, raw := h.e.fixRefOf(h.ctx, pr.ID); kept == nil || kept.FixRef != ref {
+				t.Fatalf("the factory's fix = %q, want %+v kept for the continue", raw, ref)
+			}
+
+			h.advance(2 * time.Hour) // the pause lifts: the turn continues and posts
+			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2"})
+			h.tick()
+			if ins := h.rd.all(); ins[len(ins)-1].Kind != pipeline.KindContinue {
+				t.Fatalf("the round after the pause is a %s round, want the continue", ins[len(ins)-1].Kind)
+			}
+			evs := h.fixEvents("fix.factory_round")
+			if len(evs) != 1 {
+				t.Fatalf("fix.factory_round events = %d, want the continue's alone", len(evs))
+			}
+			var data struct {
+				FixRef  fixwork.FixRef `json:"fix_ref"`
+				Outcome string         `json:"outcome"`
+			}
+			if err := json.Unmarshal(evs[0].Data, &data); err != nil || data.FixRef != ref || data.Outcome != pipeline.OutcomePosted {
+				t.Errorf("fix.factory_round data = %s (%v), want the fix, posted", evs[0].Data, err)
+			}
+			if r, raw := h.e.fixRefOf(h.ctx, pr.ID); r != nil {
+				t.Errorf("the PR keeps the fix after the continue: %s", raw)
+			}
+		})
 	}
 }
 

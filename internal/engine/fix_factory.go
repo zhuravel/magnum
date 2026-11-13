@@ -86,9 +86,13 @@ func (e *Engine) fixRefOf(ctx context.Context, prID int64) (*fixRefRow, string) 
 // re-reviewed (roundJob.fixRef, taken at its dispatch): the round's end,
 // its outcome, head and review, with the fix and its local round, in a
 // fix.factory_round event, which the factory reads; the PR's row of it goes
-// while it is the one the round took.
+// while it is the one the round took. A round whose judge turn paused on a
+// usage limit or a lost login (pauseContinues) has not ended: the turn
+// continues as the same round once the pause lifts, so the row stays for
+// the continue to take at its dispatch, and no event says it ended (as
+// magnum's own loop waits for it, continueFixLoop).
 func (e *Engine) fixRefAfterRound(ctx context.Context, job *roundJob, res pipeline.RoundResult) {
-	if job.fixRef == nil {
+	if job.fixRef == nil || e.pauseContinues(ctx, job.pr, res.Outcome) {
 		return
 	}
 	r := job.fixRef
