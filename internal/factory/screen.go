@@ -783,7 +783,11 @@ func (s *screen) holdBlocker(t registry.Task) (tui.WaitsOn, bool) {
 // line; "" when it opens something: a live agent's pane, or the output the
 // factory runs for it (v.follow). The factory's hold that stops the task is
 // named first, then its wait (row's first blocker, in the words of its row),
-// which is its stage's own step when it names none.
+// which is its stage's own step when it names none. It says "nothing runs"
+// only where that is so: a hold stops the task, it waits on its stage's own
+// step (stageBlocker), or it ended. Any other wait may run where o cannot
+// step in (a local review round in magnum's review session, a copy's claim
+// before its log exists), so o says only that there is no pane to open.
 func (s *screen) opensNothing(v *taskView, row tui.FactoryRow) string {
 	if v.pane || v.follow != "" {
 		return ""
@@ -792,16 +796,18 @@ func (s *screen) opensNothing(v *taskView, row tui.FactoryRow) string {
 		return fmt.Sprintf("nothing runs: the factory holds every stage (%s since %s)", h.Reason, holdClock(s.now, h.Since))
 	}
 	if len(row.WaitsOn) == 0 {
-		return "nothing runs: it waits on nothing"
+		return "no pane to open: it waits on nothing"
 	}
 	w := row.WaitsOn[0]
-	switch w.Who {
-	case waitNothing: // a task that ended
+	switch step := s.stageBlocker(v.t); {
+	case w.Who == waitNothing: // a task that ended
 		return "nothing runs: " + w.What
-	case "":
-		return "nothing runs: it waits on " + w.What
+	case w.Who == step.Who && w.What == step.What: // its stage's own step: the task names no wait, so none of its work runs
+		return "nothing runs: it waits on " + w.Who + ": " + w.What
+	case w.Who == "":
+		return "no pane to open: it waits on " + w.What
 	}
-	return "nothing runs: it waits on " + w.Who + ": " + w.What
+	return "no pane to open: it waits on " + w.Who + ": " + w.What
 }
 
 // stageBlocker is what an active task without a wait of its own waits on:

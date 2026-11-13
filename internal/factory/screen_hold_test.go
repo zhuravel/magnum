@@ -160,7 +160,7 @@ func TestTheTaskCardSaysWhyOOpensNothing(t *testing.T) {
 	if got, want := opens(d, stage.ID), "nothing runs: it waits on magnum: local review"; got != want {
 		t.Errorf("a task at its local review: %q, want %q", got, want)
 	}
-	if got, want := opens(d, ask.ID), "nothing runs: it waits on you: 1 question before coding"; got != want {
+	if got, want := opens(d, ask.ID), "no pane to open: it waits on you: 1 question before coding"; got != want {
 		t.Errorf("a task that waits on you: %q, want %q", got, want)
 	}
 	for name, id := range map[string]int64{"agent at work": working.ID, "idle live agent": idle.ID, "check whose log follows": check.ID} {
@@ -174,10 +174,59 @@ func TestTheTaskCardSaysWhyOOpensNothing(t *testing.T) {
 	if got, want := opens(d, stage.ID), "nothing runs: the factory holds every stage (MySQL does not answer since 09:00)"; got != want {
 		t.Errorf("under the hold: %q, want %q", got, want)
 	}
-	if got, want := opens(d, ask.ID), "nothing runs: it waits on you: 1 question before coding"; got != want {
+	if got, want := opens(d, ask.ID), "no pane to open: it waits on you: 1 question before coding"; got != want {
 		t.Errorf("a task that waits on you, under the hold: %q, want its own wait", got)
 	}
 	if got := opens(d, working.ID); got != "" {
 		t.Errorf("a task with an agent at work, under the hold: %q, want none", got)
+	}
+}
+
+// o said "nothing runs" on every task it opened nothing on, though a round
+// of the local review runs in magnum's review session (no factory pane, no
+// follow file), a copy's claim runs before its log exists, and magnum's
+// review of a published task's PR runs in magnum's daemon; before, it said
+// the task had no pane open, which was true. "nothing runs" is said only
+// where it is so: a hold of the daemon's stops the task, the task waits on
+// its stage's own step (magnum's, which names no wait of the task's), or the
+// task ended. Otherwise o says there is no pane to open and what the task
+// waits on.
+func TestOSaysNothingRunsOnlyWhereNothingDoes(t *testing.T) {
+	r := newScreenRig(t)
+	round := r.task("PR-12380", "bug", "Its round runs", registry.TaskActive, "local_review", waitReview, "round 2 of the local review runs")
+	claim := r.task("PR-12381", "bug", "Its copy is claimed", registry.TaskActive, "coding", waitCopy, "preparing factory3")
+	ask := r.task("PR-12382", "bug", "Questions", registry.TaskActive, "questions", "", "")
+	ask = r.questions(ask, question("When?", "Seven days"))
+	r.move(ask, registry.TaskNeedsYou, waitsYou, "1 question before coding")
+	pub := r.task("PR-12383", "bug", "Published", registry.TaskActive, "publish", "", "")
+	r.published(pub, 4519)
+	stage := r.task("PR-12384", "bug", "At its local review", registry.TaskActive, "local_review", "", "")
+	merged := r.task("PR-12385", "chore", "Merged", registry.TaskActive, "publish", "", "")
+	r.move(merged, registry.TaskDone, "", "")
+
+	d := r.data(screenNow)
+	opens := func(id int64) string { return d.Cards[id].Task.OpensNothing }
+	for id, want := range map[int64]string{
+		round.ID: "no pane to open: it waits on review: round 2 of the local review runs",
+		claim.ID: "no pane to open: it waits on copy: preparing factory3",
+		ask.ID:   "no pane to open: it waits on you: 1 question before coding",
+		pub.ID:   "no pane to open: it waits on magnum: review of #4519",
+		stage.ID: "nothing runs: it waits on magnum: local review",
+	} {
+		if got := opens(id); got != want {
+			t.Errorf("task %d: o says %q, want %q", id, got, want)
+		}
+	}
+	if got := opens(merged.ID); !strings.HasPrefix(got, "nothing runs: merged ") {
+		t.Errorf("a task that ended: o says %q, want nothing runs", got)
+	}
+
+	r.holds(mysqlHold())
+	d = r.data(screenNow)
+	if got, want := opens(stage.ID), "nothing runs: the factory holds every stage (MySQL does not answer since 09:00)"; got != want {
+		t.Errorf("under the hold: %q, want %q", got, want)
+	}
+	if got, want := opens(round.ID), "no pane to open: it waits on review: round 2 of the local review runs"; got != want {
+		t.Errorf("a round that runs, under the hold: %q, want its own wait %q", got, want)
 	}
 }

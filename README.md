@@ -5176,8 +5176,10 @@ is a row that says why, and the rest is drawn. Each action is a request to the f
 commands send them (the daemon records your input once); `o` focuses the task's pane in the factory's herdr
 session (`[factory] herdr_session`) and brings that terminal to the front, and on a task with no agent's pane
 open and no output to follow it says why on the message line, asking nothing (`nothing runs: the factory holds
-every stage (MySQL does not answer since 17:03)` under a hold of the daemon's, else the task's wait: `nothing
-runs: it waits on magnum: local review`); `d` pages the ready card's diff
+every stage (MySQL does not answer since 17:03)` under a hold of the daemon's, `nothing runs: it waits on magnum:
+local review` when the task waits on its stage's own step, `nothing runs: merged 14:02` when it ended, else no
+pane to open and the task's wait, which may run where `o` cannot step in: `no pane to open: it waits on review:
+round 2 of the local review runs`); `d` pages the ready card's diff
 in the task's copy (no external diff, no textconv), the flagged files first, and the pager never quits at once on
 a short diff (`-+F` after your `LESS`); the diff counts as read when the pager exits, so a `core.pager` that exits at once (not less) counts it as read at once. `[factory] diff_pager` sets the pager (`GIT_PAGER`) for it alone: `diff_pager = "hunk pager"` opens [hunk](https://hunk.dev/) on the same diff, in the card's file order. Without a factory daemon a request waits queued, and the footer says so.
 Each frame reads the factory daemon's pidfile and probes its process (`kill -0`, no ps): while no daemon runs,

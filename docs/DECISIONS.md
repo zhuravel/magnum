@@ -27738,9 +27738,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
   setup log, a QA server's log), and with neither says why on the message line, asking nothing
   (`TaskCard.OpensNothing`, which the data fills from the task's sessions and its follow file, so the screen
   never guesses a pane): `nothing runs: the factory holds every stage (MySQL does not answer since 17:03)` when
-  the hold stops the task, else its wait (`nothing runs: it waits on you: 2 questions before coding`) or, when it
-  names none, its stage's own step (`nothing runs: it waits on magnum: local review`). A task whose agent is
-  idle in a live pane is still stepped into, as before. The pause, the reboot drain and the restart's drain
+  the hold stops the task, `nothing runs: it waits on magnum: local review` when it names no wait and waits on
+  its stage's own step (`stageBlocker`), `nothing runs: merged 14:02` when it ended, and else `no pane to open:`
+  with its wait (`no pane to open: it waits on you: 2 questions before coding`). Only those three are sure that
+  nothing runs: a local review round runs in magnum's review session (`no pane to open: it waits on review:
+  round 2 of the local review runs`), a copy's claim runs before its log exists, and magnum reviews a published
+  task's PR in its own daemon, none of them in a pane of the factory's (`TestOSaysNothingRunsOnlyWhereNothingDoes`).
+  A task whose agent is idle in a live pane is still stepped into, as before. The pause, the reboot drain and the restart's drain
   stay out of this on purpose: a stage meets each where it launches and says it in its own wait, as it did.
   Tests, failing first: `TestAnActiveTaskWithNoWaitShowsTheDaemonsHold` (status text and JSON),
   `TestATasksOwnWaitWinsOverTheDaemonsHold`, `TestTheScreensOpenKeySaysWhyNothingOpens`, with
