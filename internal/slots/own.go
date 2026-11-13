@@ -1,10 +1,14 @@
 package slots
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -186,26 +190,124 @@ func (m *Manager) untrackedForRecord(ctx context.Context, sl store.Slot, when st
 	return files, true
 }
 
-// withoutOwn is untracked, the untracked paths of a tree, less the files
-// of own (ownFiles): a path own names, or one below a folder it names (a
-// copy_files folder) that the main clone at mainClone holds as a regular
-// file, as the copy of such a folder writes those alone
-// (copyTreeIntoCheckout). A file added below that folder in the tree is a
-// person's, and so is one whose main clone cannot be read.
-func withoutOwn(mainClone string, untracked, own []string) []string {
+// sortOwn splits untracked, the untracked paths of a tree, into a person's
+// (theirs) and the files of own (ownFiles, mine): a path own names, or one
+// below a folder it names (a copy_files folder) that the main clone at
+// mainClone holds as a regular file, as the copy of such a folder writes
+// those alone (copyTreeIntoCheckout). A file added below that folder in
+// the tree is a person's, and so is one whose main clone cannot be read.
+func sortOwn(mainClone string, untracked, own []string) (theirs, mine []string) {
 	if len(own) == 0 {
-		return untracked
+		return untracked, nil
 	}
 	main := mainFiles{dir: mainClone}
 	defer main.close()
-	return slices.DeleteFunc(untracked, func(p string) bool {
-		for _, o := range own {
-			if p == o || strings.HasSuffix(o, "/") && strings.HasPrefix(p, o) && main.holds(p) {
-				return true
-			}
+	for _, p := range untracked {
+		if slices.ContainsFunc(own, func(o string) bool {
+			return p == o || strings.HasSuffix(o, "/") && strings.HasPrefix(p, o) && main.holds(p)
+		}) {
+			mine = append(mine, p)
+		} else {
+			theirs = append(theirs, p)
 		}
-		return false
-	})
+	}
+	return theirs, mine
+}
+
+// withoutOwn is untracked less the files of own: sortOwn's theirs.
+func withoutOwn(mainClone string, untracked, own []string) []string {
+	theirs, _ := sortOwn(mainClone, untracked, own)
+	return theirs
+}
+
+// editedOwn names the files of mine (sortOwn's, in the tree at tree) that
+// differ from the main clone's copy at mainClone, which a person edited
+// since magnum copied it, each "<path> (<why>)": a removal saves none of
+// magnum's files, which hold the main clone's secrets, but names those.
+// A file the main clone holds none of, what the setup wrote, is not
+// compared; nor is one gone from the tree.
+func editedOwn(tree, mainClone string, mine []string) ([]string, error) {
+	if len(mine) == 0 {
+		return nil, nil
+	}
+	src, err := os.OpenRoot(tree)
+	if err != nil {
+		return nil, err
+	}
+	defer src.Close()
+	var out []string
+	for _, p := range mine {
+		same, err := sameAsMain(src, mainClone, p)
+		switch {
+		case err != nil:
+			out = append(out, p+" (magnum's own, not saved, cannot be compared with the main clone's: "+errText(err)+")")
+		case !same:
+			out = append(out, p+" (magnum's own, edited, not saved)")
+		}
+	}
+	return out, nil
+}
+
+// sameAsMain reports whether file p of the tree at src is the same as the
+// main clone's at mainClone, which the copy read through its links
+// (CopyIntoCheckout): true when the main clone holds no regular file of
+// that path or the tree holds no file there; false for a tree's file that
+// is no regular file (magnum wrote one).
+func sameAsMain(src *os.Root, mainClone, p string) (bool, error) {
+	name := filepath.FromSlash(p)
+	mainPath := filepath.Join(mainClone, name)
+	mfi, err := os.Stat(mainPath)
+	if err != nil || !mfi.Mode().IsRegular() {
+		return true, nil
+	}
+	fi, err := src.Lstat(name)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return true, nil
+	case err != nil:
+		return false, err
+	case !fi.Mode().IsRegular():
+		return false, nil
+	case fi.Size() != mfi.Size():
+		return false, nil
+	}
+	a, err := src.Open(name)
+	if err != nil {
+		return false, err
+	}
+	defer a.Close()
+	b, err := os.Open(mainPath)
+	if err != nil {
+		return false, err
+	}
+	defer b.Close()
+	return sameContent(a, b)
+}
+
+// sameContent reports whether a and b read the same bytes to their ends.
+func sameContent(a, b io.Reader) (bool, error) {
+	ba, bb := make([]byte, 32<<10), make([]byte, 32<<10)
+	for {
+		na, ea := io.ReadFull(a, ba)
+		nb, eb := io.ReadFull(b, bb)
+		if err := cmp.Or(readErr(ea), readErr(eb)); err != nil {
+			return false, err
+		}
+		if na != nb || !bytes.Equal(ba[:na], bb[:nb]) {
+			return false, nil
+		}
+		if ea != nil || eb != nil {
+			return ea != nil && eb != nil, nil
+		}
+	}
+}
+
+// readErr is err of a read to the end, nil at the end.
+func readErr(err error) error {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return nil
+	}
+	return err
 }
 
 // mainFiles reads the main clone at dir, through an os.Root opened at the

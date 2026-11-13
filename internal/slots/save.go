@@ -17,8 +17,9 @@ package slots
 //   - saved.txt: what was saved, from where and before what, how to put it
 //     back, the untracked files a switch keeps in the tree, and what the
 //     save left out: past its cap (SaveCap, over the patch and the files
-//     together), no regular file or symlink, or a file it could not read.
-//     A write into the save that fails fails the save.
+//     together), no regular file or symlink, a file it could not read, or
+//     a file of magnum's a person edited (editedOwn). A write into the save
+//     that fails fails the save.
 //
 // Ignored files are never saved: a work tree's caches, logs and builds,
 // which a discard keeps anyway, but for a removal's.
@@ -145,7 +146,8 @@ func clipNames(names []string) string {
 // left out and named, never a failure; a write into the save that fails
 // is one. The files magnum wrote into the tree (the mise file it
 // rendered, the copy_files and what setup wrote: ownFiles) are neither
-// saved nor named, and a save that would hold nothing else is not kept
+// saved nor named, but a copy a person edited, which a removal names
+// (editedOwn), and a save that would hold nothing else is not kept
 // (s.dir is ""); nor is one that copied no file and repeats the slot's
 // last save (repeatedSave: s.same, s.dir that save). Saves past SaveKeep
 // in the folder go first (pruneSaveFolder). A save
@@ -214,8 +216,9 @@ func (m *Manager) settleSave(folder string, sl store.Slot, s saved, head, what s
 
 // saveRemoved saves the untracked files of slot sl that a removal deletes
 // (UntrackedFiles, one by one), but the files magnum wrote (the rendered
-// mise file, own), within budget, into s. A listing past the runner's
-// output saves none and says so; any other failure to list is an error.
+// mise file, own), within budget, into s, and names those of own a person
+// edited (editedOwn). A listing past the runner's output saves none and
+// says so; any other failure to list is an error.
 func (m *Manager) saveRemoved(ctx context.Context, sl store.Slot, own []string, budget int64, s *saved) error {
 	files, err := m.git.UntrackedFiles(ctx, sl.Path)
 	if errors.Is(err, gitx.ErrTreeTooLarge) {
@@ -226,7 +229,16 @@ func (m *Manager) saveRemoved(ctx context.Context, sl store.Slot, own []string, 
 	if err != nil {
 		return err
 	}
-	return saveUntracked(sl.Path, s.dir, withoutOwn(sl.MainClone, withoutRenderedMiseLocal(sl.Path, files), own), budget, s)
+	theirs, mine := sortOwn(sl.MainClone, withoutRenderedMiseLocal(sl.Path, files), own)
+	edited, err := editedOwn(sl.Path, sl.MainClone, mine)
+	if err != nil {
+		return err
+	}
+	if err := saveUntracked(sl.Path, s.dir, theirs, budget, s); err != nil {
+		return err
+	}
+	s.skipped = append(s.skipped, edited...)
+	return nil
 }
 
 // empty reports whether the save holds nothing and names nothing.

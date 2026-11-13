@@ -534,25 +534,7 @@ func TestASaveLeavesOutOnlyTheMiseFileMagnumRendered(t *testing.T) {
 // save. A symlink is saved as the link, never what it points to, so a link
 // to a folder of keys copies no key into the saves.
 func TestARemovalSavesNothingMagnumWroteAndASymlinkAsTheLink(t *testing.T) {
-	setup := func(t *testing.T) (*perPRFixture, store.Slot) {
-		t.Helper()
-		f := newPerPR(t, true)
-		h := f.h
-		writeFile(t, filepath.Join(f.main, "master.key"), "main clone secret\n")
-		writeFile(t, filepath.Join(f.main, "fixtures", "a.json"), "{}\n")
-		h.m = h.newManager(Deps{Repos: []config.Repo{{Repo: f.repoName(),
-			CopyFiles: []string{"master.key", "fixtures"}, Setup: []string{"touch .env.setup"}}}})
-		sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, f.repoName(), f.pr, f.sha7)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, p := range []string{"master.key", filepath.Join("fixtures", "a.json"), ".env.setup"} {
-			if !fsx.Exists(filepath.Join(sl.Path, p)) {
-				t.Fatalf("the worktree's setup did not write %s", p)
-			}
-		}
-		return f, sl
-	}
+	setup := ownFilesWorktree
 	folder := func(f *perPRFixture) string { return f.h.layout.PRSaves("zhuravel", "widget", f.pr.Number) }
 
 	t.Run("a removal saves a person's files alone", func(t *testing.T) {
@@ -604,6 +586,72 @@ func TestARemovalSavesNothingMagnumWroteAndASymlinkAsTheLink(t *testing.T) {
 			t.Fatalf("state %s, directory left %v; want removed", got.State, fsx.Exists(sl.Path))
 		}
 	})
+}
+
+// ownFilesWorktree is a per-PR worktree whose [[repo]] copies the main
+// clone's master.key and fixtures/a.json and whose setup writes .env.setup.
+func ownFilesWorktree(t *testing.T) (*perPRFixture, store.Slot) {
+	t.Helper()
+	f := newPerPR(t, true)
+	h := f.h
+	writeFile(t, filepath.Join(f.main, "master.key"), "main clone secret\n")
+	writeFile(t, filepath.Join(f.main, "fixtures", "a.json"), "{}\n")
+	h.m = h.newManager(Deps{Repos: []config.Repo{{Repo: f.repoName(),
+		CopyFiles: []string{"master.key", "fixtures"}, Setup: []string{"touch .env.setup"}}}})
+	sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, f.repoName(), f.pr, f.sha7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"master.key", filepath.Join("fixtures", "a.json"), ".env.setup"} {
+		if !fsx.Exists(filepath.Join(sl.Path, p)) {
+			t.Fatalf("the worktree's setup did not write %s", p)
+		}
+	}
+	return f, sl
+}
+
+// A removal names a file magnum copied that a person edited since, one
+// that differs from the main clone's copy, as "magnum's own, edited, not
+// saved": it saves none of magnum's files, which hold the main clone's
+// secrets, but the edit goes with a trace. A copy as the main clone holds
+// it, and what the setup wrote (no copy of the main clone's), go unnamed.
+// An edited copy was dropped as magnum's, and nothing named it.
+func TestARemovalNamesMagnumsOwnFilesAPersonEdited(t *testing.T) {
+	f, sl := ownFilesWorktree(t)
+	h := f.h
+	writeFile(t, filepath.Join(sl.Path, "master.key"), "a key I tried\n")
+	writeFile(t, filepath.Join(sl.Path, "fixtures", "a.json"), "{\"id\": 1}\n")
+	writeFile(t, filepath.Join(sl.Path, "notes.txt"), "mine\n")
+
+	if err := h.m.RemovePRWorktree(h.ctx, sl, false); err != nil {
+		t.Fatalf("RemovePRWorktree: %v", err)
+	}
+	save := h.onlySave(t, h.layout.PRSaves("zhuravel", "widget", f.pr.Number), sl.Name)
+	note := readFile(t, filepath.Join(save, "saved.txt"))
+	for _, p := range []string{"master.key", "fixtures/a.json"} {
+		if !strings.Contains(note, "- "+p+" (magnum's own, edited, not saved)\n") {
+			t.Fatalf("saved.txt does not name the edited %s:\n%s", p, note)
+		}
+		if _, err := os.Lstat(filepath.Join(save, "untracked", p)); !os.IsNotExist(err) {
+			t.Fatalf("%s saved: %v", p, err)
+		}
+	}
+	if strings.Contains(note, ".env.setup") {
+		t.Fatalf("saved.txt names the setup's file:\n%s", note)
+	}
+	if evs := h.discarded(t, sl.Name); !strings.Contains(evs[0].Message, "master.key (magnum's own, edited, not saved)") {
+		t.Fatalf("slot.discarded = %q, want it to name the edited master.key", evs[0].Message)
+	}
+
+	f, sl = ownFilesWorktree(t)
+	writeFile(t, filepath.Join(sl.Path, "notes.txt"), "mine\n")
+	if err := f.h.m.RemovePRWorktree(f.h.ctx, sl, false); err != nil {
+		t.Fatalf("RemovePRWorktree: %v", err)
+	}
+	save = f.h.onlySave(t, f.h.layout.PRSaves("zhuravel", "widget", f.pr.Number), sl.Name)
+	if note := readFile(t, filepath.Join(save, "saved.txt")); strings.Contains(note, "magnum's own") {
+		t.Fatalf("saved.txt names magnum's own files no one edited:\n%s", note)
+	}
 }
 
 // The setup that runs again over a worktree kept from an earlier attempt
