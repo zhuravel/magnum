@@ -11,6 +11,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/eligibility"
+	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
@@ -156,6 +157,10 @@ type roundHandle struct {
 	// board's r, or started by a review request) or a post-merge review,
 	// which a close on GitHub never stops (stopClosedRound).
 	asked bool
+	// fixRef is the factory's fix the round re-reviews (its request's
+	// FixRef, fix_factory.go; nil: none): the factory's abort stops only
+	// the round of its own fix.
+	fixRef *fixwork.FixRef
 }
 
 // activeRounds counts the round and open goroutines.
@@ -572,7 +577,11 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 	}
 
 	rctx, cancel := context.WithCancel(ctx)
-	if !e.reserve(pr.ID, &roundHandle{cancel: cancel, asked: pr.Forced || job.requested || job.postMerge}) {
+	var fixRef *fixwork.FixRef
+	if job.fixRef != nil {
+		fixRef = &job.fixRef.FixRef
+	}
+	if !e.reserve(pr.ID, &roundHandle{cancel: cancel, asked: pr.Forced || job.requested || job.postMerge, fixRef: fixRef}) {
 		cancel()
 		return false, 0, otherGate(e.heldReason(pr.ID))
 	}

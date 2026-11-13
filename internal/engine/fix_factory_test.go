@@ -8,6 +8,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // kindsBeforeT2 are the request kinds the daemon handled before the
@@ -67,6 +68,20 @@ func TestAnOlderBuildAnswersTheNewKindsAsUnknown(t *testing.T) {
 	var old reviewPayloadBeforeT2
 	if err := decode(store.Request{ID: 9, Kind: ReqReview, Payload: payload}, &old); err == nil || !strings.Contains(err.Error(), "this daemon predates") {
 		t.Errorf("the build before decodes a fix's re-review: %v", err)
+	}
+	// The factory's abort names its fix: a build before it would stop any round.
+	payload, err = json.Marshal(TargetPayload{PRTarget: PRTarget{Repo: "talkable/talkable", Number: 2}, FixRef: &fixwork.FixRef{Work: 7, Cycle: 1, Head: "c3c3c3c"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var oldTarget struct {
+		PRTarget
+		Slot   string `json:"slot,omitempty"`
+		Force  bool   `json:"force,omitempty"`
+		Reason string `json:"reason,omitempty"`
+	}
+	if err := decode(store.Request{ID: 10, Kind: ReqAbort, Payload: payload}, &oldTarget); err == nil || !strings.Contains(err.Error(), "this daemon predates") {
+		t.Errorf("the build before decodes the factory's abort: %v", err)
 	}
 }
 
@@ -157,4 +172,108 @@ func TestTheFactoryRaisesAndLiftsAPRsAttentionSilently(t *testing.T) {
 		t.Errorf("raise on a PR magnum fixes: %s %q", r.State, deref(r.Result))
 	}
 	h.wantState(2, store.PRReviewed)
+}
+
+// gatedTick runs a tick whose round, once dispatched, stays in the pipeline
+// until its context ends, and waits for it to get there.
+func (h *harness) gatedTick() {
+	h.t.Helper()
+	before := len(h.rd.all())
+	h.rd.mu.Lock()
+	h.rd.gate = make(chan struct{})
+	h.rd.mu.Unlock()
+	if err := h.e.Tick(h.ctx); err != nil {
+		h.t.Fatalf("tick: %v", err)
+	}
+	h.awaitRound(before)
+}
+
+// reReviewOf asks for the factory's re-review of PR #2's push for fix and
+// returns the request.
+func (h *harness) reReviewOf(fix fixwork.FixRef) store.Request {
+	h.t.Helper()
+	id := h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}, FixRef: &fix})
+	h.handle()
+	return h.request(id)
+}
+
+// The factory's abort names its fix (TargetPayload.FixRef) and stops only
+// the round that re-reviews it: a round in flight for another fix, or for
+// no fix at all, runs on, and the request says why; a forced re-review of
+// its fix still in line is taken back. The operator's abort, naming no fix,
+// stops any round as before.
+func TestTheFactorysAbortStopsOnlyItsOwnRound(t *testing.T) {
+	storetest.Parallel(t)
+	ref := fixwork.FixRef{Work: 7, Cycle: 1, Head: "b2"}
+	other := fixwork.FixRef{Work: 7, Cycle: 2, Head: "b3"}
+	abort := func(h *harness, fix *fixwork.FixRef) store.Request {
+		h.t.Helper()
+		id := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}, FixRef: fix})
+		h.tick()
+		return h.request(id)
+	}
+	t.Run("its own round", func(t *testing.T) {
+		h := leaseHarness(t, &fakeLease{})
+		if r := h.reReviewOf(ref); r.State != store.RequestDone {
+			t.Fatalf("the factory's re-review: %s %q", r.State, deref(r.Result))
+		}
+		h.gatedTick()
+		pr := h.pr(2)
+		id := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}, FixRef: &other})
+		h.e.handleRequests(h.ctx)
+		if r := h.request(id); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "is not the factory's re-review of b3 (cycle 2): it runs on") {
+			t.Errorf("an abort of another fix: %s %q", r.State, deref(r.Result))
+		}
+		if !h.e.roundActive(pr.ID) {
+			t.Fatal("the round stopped for another fix's abort")
+		}
+		if r := abort(h, &ref); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "aborted talkable/talkable#2") {
+			t.Errorf("the factory's abort of its round: %s %q", r.State, deref(r.Result))
+		}
+		if h.e.roundActive(pr.ID) || !h.hasEvent("pr:talkable/talkable#2", "pr.aborted") {
+			t.Error("the factory's round was not aborted")
+		}
+	})
+	t.Run("another round", func(t *testing.T) {
+		h := leaseHarness(t, &fakeLease{})
+		h.gatedTick() // the automatic re-review of b2
+		pr := h.pr(2)
+		id := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}, FixRef: &ref})
+		h.e.handleRequests(h.ctx)
+		if r := h.request(id); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "is not the factory's re-review of b2 (cycle 1): it runs on") {
+			t.Errorf("the factory's abort of a round not its own: %s %q", r.State, deref(r.Result))
+		}
+		if !h.e.roundActive(pr.ID) {
+			t.Fatal("the round stopped for the factory's abort")
+		}
+		if r := abort(h, nil); r.State != store.RequestDone { // the operator's abort
+			t.Errorf("magnum abort: %s %q", r.State, deref(r.Result))
+		}
+		if h.e.roundActive(pr.ID) {
+			t.Error("magnum abort did not stop the round")
+		}
+	})
+	t.Run("in line", func(t *testing.T) {
+		h := leaseHarness(t, &fakeLease{})
+		h.reReviewOf(ref)
+		id := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}, FixRef: &other})
+		h.handle()
+		if r := h.request(id); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "nothing to abort") {
+			t.Errorf("an abort of another fix in line: %s %q", r.State, deref(r.Result))
+		}
+		if !h.pr(2).Forced {
+			t.Fatal("the factory's re-review was taken back for another fix's abort")
+		}
+		id = h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}, FixRef: &ref})
+		h.handle()
+		if r := h.request(id); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "took back the forced review") {
+			t.Errorf("the factory's abort of its re-review in line: %s %q", r.State, deref(r.Result))
+		}
+		if pr := h.pr(2); pr.Forced {
+			t.Error("the factory's re-review stays forced")
+		}
+		if r, raw := h.e.fixRefOf(h.ctx, h.pr(2).ID); r != nil {
+			t.Errorf("the PR keeps the fix: %s", raw)
+		}
+	})
 }

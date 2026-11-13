@@ -158,6 +158,10 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 	}
 	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
 	verb := map[bool]string{false: "abort", true: "ignore"}[ignore]
+	if p.FixRef != nil { // fix_factory.go: the factory's abort stops only the round of its own fix
+		e.requestFactoryAbort(ctx, id, repo, pr, *p.FixRef, ignore)
+		return
+	}
 
 	if e.stopHeld(ctx, id, repo, pr, ignore) {
 		return

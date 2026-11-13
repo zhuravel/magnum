@@ -173,6 +173,11 @@ type TargetPayload struct {
 	// Reason is why the operator mutes the PR (`magnum mute <ref> [reason…]`),
 	// kept in the request, its answer and the pr.muted event.
 	Reason string `json:"reason,omitempty"`
+	// FixRef is, on the factory's abort, the fix whose forced re-review it
+	// stops (fixwork.FixRef; nil: the operator's abort, which stops any
+	// round): only a round whose request carries that same fix is stopped,
+	// or taken back while it waits in line (fix_factory.go).
+	FixRef *fixwork.FixRef `json:"fix_ref,omitempty"`
 }
 
 // CleanupPayload is a cleanup request: Plan (re-checked by Apply) or

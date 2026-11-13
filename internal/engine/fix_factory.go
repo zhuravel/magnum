@@ -114,6 +114,60 @@ func cmpOrOutcome(o string) string {
 	return o
 }
 
+// requestFactoryAbort serves the factory's abort (request id, TargetPayload
+// with FixRef ref) of pr, of repo: only the round of its own fix stops. A
+// round in flight whose request carried that same fix is stopped as `magnum
+// abort` stops a round (stopHeld; the round's end answers the request), and
+// a forced re-review of it still in line is taken back (dropQueued). Any
+// other round runs on, and the request is refused, saying why; so is an
+// ignore, and a PR the factory does not fix. The operator's abort, which
+// names no fix, is requestAbort's own.
+func (e *Engine) requestFactoryAbort(ctx context.Context, id int64, repo store.Repo, pr store.PR, ref fixwork.FixRef, ignore bool) {
+	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
+	fix := fmt.Sprintf("the factory's re-review of %s (cycle %d)", textx.ShortSHA(ref.Head), ref.Cycle)
+	refuse := func(why string) { e.complete(ctx, id, fmt.Errorf("%s: %s", label, why), "") }
+	switch o, _, ok, err := e.fixOwner(ctx, pr.ID); {
+	case ignore:
+		refuse("the factory's stop of its round is an abort, never an ignore")
+		return
+	case err != nil:
+		refuse(fmt.Sprintf("who fixes this PR cannot be read (%v)", err))
+		return
+	case !ok || !o.Factory():
+		refuse("the factory does not fix this PR: its rounds are magnum's to stop")
+		return
+	}
+	e.mu.Lock()
+	h, held := e.rounds[pr.ID]
+	ours := held && h.fixRef != nil && *h.fixRef == ref
+	e.mu.Unlock()
+	switch {
+	case held && !ours:
+		refuse("the round in flight is not " + fix + ": it runs on")
+		return
+	case held:
+		e.stopHeld(ctx, id, repo, pr, false)
+		return
+	}
+	kept, _ := e.fixRefOf(ctx, pr.ID)
+	queued := pr.State == store.PRQueued || pr.State == store.PRRereviewPending
+	if !queued || !pr.Forced || kept == nil || kept.FixRef != ref {
+		refuse("no round of " + fix + " runs or waits: nothing to abort")
+		return
+	}
+	if e.d.DryRun {
+		e.complete(ctx, id, nil, "dry run: would take back "+fix+" of "+label)
+		return
+	}
+	if !e.reserve(pr.ID, &roundHandle{cancel: func() {}, stop: roundStop{stopping: true}}) {
+		refuse(e.heldReason(pr.ID) + "; ask again shortly")
+		return
+	}
+	res, err := e.dropQueued(ctx, repo, pr)
+	e.unreserve(pr.ID)
+	e.complete(ctx, id, err, res)
+}
+
 // attentionCauseRe is the factory's cause of an attention: a short word.
 var attentionCauseRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 
