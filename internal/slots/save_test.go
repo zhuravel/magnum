@@ -379,3 +379,33 @@ func TestARemovalSavesAFileWhoseNameLeavesNoRoomForATemporaryOne(t *testing.T) {
 		t.Fatalf("untracked/ holds %v, %v; want the one file and no temporary one", ents, err)
 	}
 }
+
+// A saved file keeps its owner's bits, so the `cp -R` saved.txt gives puts
+// an executable script back executable; group and others get nothing. Every
+// file was saved 0600.
+func TestARemovalKeepsTheOwnersBitsOfASavedFile(t *testing.T) {
+	f := newPerPR(t, true)
+	h := f.h
+	sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, f.repoName(), f.pr, f.sha7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sl.Path, "bin", "dev-check"), "#!/bin/sh\n")
+	if err := os.Chmod(filepath.Join(sl.Path, "bin", "dev-check"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sl.Path, "notes.txt"), "notes\n")
+	if err := os.Chmod(filepath.Join(sl.Path, "notes.txt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.m.RemovePRWorktree(h.ctx, sl, false); err != nil {
+		t.Fatalf("RemovePRWorktree: %v", err)
+	}
+	save := h.onlySave(t, h.layout.PRSaves("zhuravel", "widget", f.pr.Number), sl.Name)
+	for p, want := range map[string]os.FileMode{filepath.Join("bin", "dev-check"): 0o700, "notes.txt": 0o600} {
+		if fi, err := os.Stat(filepath.Join(save, "untracked", p)); err != nil || fi.Mode().Perm() != want {
+			t.Fatalf("%s saved: %v, %v; want mode %04o", p, fi, err, want)
+		}
+	}
+}

@@ -380,7 +380,9 @@ func saveFile(src, dst *os.Root, f string, budget *int64) string {
 			return "cannot be written: " + errText(err)
 		}
 	}
-	if err := writeSaved(dst, f, b, 0o600); err != nil {
+	// The owner's bits (an executable script stays one when `cp -R` puts
+	// it back), never the group's or others'.
+	if err := writeSaved(dst, f, b, fi.Mode().Perm()&0o700|0o600); err != nil {
 		return "cannot be written: " + errText(err)
 	}
 	*budget -= int64(len(b))
@@ -388,12 +390,13 @@ func saveFile(src, dst *os.Root, f string, budget *int64) string {
 }
 
 // writeSaved writes b to name in dst, the save's own folder, which nothing
-// else writes: created there, with no temporary file (whose longer name a
-// file name near 255 bytes leaves no room for) and no disk flush, which an
-// atomic write pays twice per file. saved.txt, written last and durably,
-// marks the save whole; a file cut short is removed.
+// else writes, mode perm whatever the umask: created there, with no
+// temporary file (whose longer name a file name near 255 bytes leaves no
+// room for) and no disk flush, which an atomic write pays twice per file.
+// saved.txt, written last and durably, marks the save whole; a file cut
+// short is removed.
 func writeSaved(dst *os.Root, name string, b []byte, perm fs.FileMode) (err error) {
-	f, err := dst.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	f, err := dst.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
@@ -402,7 +405,9 @@ func writeSaved(dst *os.Root, name string, b []byte, perm fs.FileMode) (err erro
 			_ = dst.Remove(name)
 		}
 	}()
-	_, err = f.Write(b)
+	if err = f.Chmod(perm); err == nil {
+		_, err = f.Write(b)
+	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -448,8 +453,9 @@ func (s saved) writeNote(sl store.Slot, head, what string, limit int64, now time
 			s.tracked, saveDiff, textx.ShortSHA(head), quoted, execx.ShellQuote(filepath.Join(s.dir, saveDiff)))
 	}
 	if s.untracked > 0 {
-		fmt.Fprintf(&b, "- %d untracked file(s) under %s/: `cp -Rp %s %s` puts them back\n", s.untracked, saveFiles,
-			execx.ShellQuote(filepath.Join(s.dir, saveFiles)+"/."), quoted)
+		// Not -p: it would also set the tree's own folders to the save's 0700.
+		fmt.Fprintf(&b, "- %d untracked file(s) under %s/, each with its owner's bits: `cp -R %s %s` puts them back\n",
+			s.untracked, saveFiles, execx.ShellQuote(filepath.Join(s.dir, saveFiles)+"/."), quoted)
 	}
 	if len(s.kept) > 0 {
 		fmt.Fprintf(&b, "\nUntracked, kept in the tree by %s and not saved (%d):\n", what, len(s.kept))
