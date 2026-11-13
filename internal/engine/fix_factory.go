@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -121,8 +122,10 @@ func cmpOrOutcome(o string) string {
 // requestFactoryAbort serves the factory's abort (request id, TargetPayload
 // with FixRef ref) of pr, of repo: only the round of its own fix stops. A
 // round in flight whose request carried that same fix is stopped as `magnum
-// abort` stops a round (stopHeld; the round's end answers the request), and
-// a forced re-review of it still in line is taken back (dropQueued). Any
+// abort` stops a round (stopHeld; the round's end answers the request), a
+// forced re-review of it still in line is taken back (dropQueued), and one
+// whose turn paused mid-way, or whose state stays without its round after a
+// restart, is stopped as `magnum abort` stops it (stopReserved). Any
 // other round runs on, and the request is refused, saying why; so is an
 // ignore, and a PR the factory does not fix. The operator's abort, which
 // names no fix, is requestAbort's own.
@@ -153,22 +156,35 @@ func (e *Engine) requestFactoryAbort(ctx context.Context, id int64, repo store.R
 		e.stopHeld(ctx, id, repo, pr, false)
 		return
 	}
+	// No round holds the PR: its re-review of the fix waits in line, or its
+	// state stays without its round, or its turn paused mid-way (a usage
+	// limit, or a restart during the judge's turn), whose continue would
+	// run past the hold of the factory's next fixer: stopped as `magnum
+	// abort` stops one (requestAbort).
 	kept, _ := e.fixRefOf(ctx, pr.ID)
 	queued := pr.State == store.PRQueued || pr.State == store.PRRereviewPending
-	if !queued || !pr.Forced || kept == nil || kept.FixRef != ref {
+	stale := slices.Contains(store.InFlightStates, pr.State) || pr.State == store.PRPaused
+	if (!queued && !stale) || !pr.Forced || kept == nil || kept.FixRef != ref {
 		refuse("no round of " + fix + " runs or waits: nothing to abort")
 		return
 	}
 	if e.d.DryRun {
-		e.complete(ctx, id, nil, "dry run: would take back "+fix+" of "+label)
+		e.complete(ctx, id, nil, "dry run: would stop "+fix+" of "+label)
 		return
 	}
-	if !e.reserve(pr.ID, &roundHandle{cancel: func() {}, stop: roundStop{stopping: true}}) {
+	rctx, cancel := context.WithCancel(ctx)
+	if !e.reserve(pr.ID, &roundHandle{cancel: cancel, stop: roundStop{stopping: true}}) {
+		cancel()
 		refuse(e.heldReason(pr.ID) + "; ask again shortly")
+		return
+	}
+	if stale {
+		e.stopReserved(rctx, id, repo, pr, false)
 		return
 	}
 	res, err := e.dropQueued(ctx, repo, pr)
 	e.unreserve(pr.ID)
+	cancel()
 	e.complete(ctx, id, err, res)
 }
 

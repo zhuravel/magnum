@@ -200,6 +200,16 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 		e.complete(ctx, id, err, res)
 		return
 	}
+	e.stopReserved(rctx, id, repo, pr, ignore)
+}
+
+// stopReserved stops pr, whose round's state stays without its round or
+// whose round paused mid-way, under the reservation the caller took for
+// the stop (rctx, its context): on a goroutine of its own, which drops the
+// reservation, stopPR stops it as a running round is, and the stop
+// request id (an ignore with ignore) hears the outcome (serveStop).
+func (e *Engine) stopReserved(rctx context.Context, id int64, repo store.Repo, pr store.PR, ignore bool) {
+	verb := map[bool]string{false: "abort", true: "ignore"}[ignore]
 	e.mu.Lock()
 	e.inflight[id] = true
 	e.mu.Unlock()

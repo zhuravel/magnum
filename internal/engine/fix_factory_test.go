@@ -187,6 +187,55 @@ func TestAPausedReReviewKeepsTheFactorysFixForItsContinue(t *testing.T) {
 	}
 }
 
+// pausedFactoryRound leaves PR #2's re-review of the factory's fix ref
+// paused mid-turn, as a usage limit or a restart during the judge's turn
+// leaves it: paused, forced, the fix kept and no round holding the PR.
+func pausedFactoryRound(t *testing.T, ref fixwork.FixRef) *harness {
+	t.Helper()
+	h := leaseHarness(t, &fakeLease{})
+	h.rd.mu.Lock()
+	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) { return h.rd.posted(h.ctx, in, 0) }
+	h.rd.mu.Unlock()
+	pausedReReview(h, pipeline.OutcomeUsageLimit, true)
+	if r := h.reReviewOf(ref); r.State != store.RequestDone {
+		t.Fatalf("the factory's re-review: %s %q", r.State, deref(r.Result))
+	}
+	h.tick()
+	if pr := h.wantState(2, store.PRPaused); !pr.Forced || h.e.roundActive(pr.ID) {
+		t.Fatalf("the paused round: forced %v, held %v", pr.Forced, h.e.roundActive(pr.ID))
+	}
+	return h
+}
+
+// The factory's abort of its own round paused mid-turn stops it, as `magnum
+// abort` stops a paused round: its turn would otherwise continue later,
+// past the hold of the factory's next fixer, and post on an old head. An
+// abort naming another fix leaves it paused.
+func TestTheFactorysAbortStopsItsOwnRoundPausedMidTurn(t *testing.T) {
+	ref := fixwork.FixRef{Work: 7, Cycle: 1, Head: "b2"}
+	h := pausedFactoryRound(t, ref)
+	pr := h.pr(2)
+	abort := func(fix fixwork.FixRef) store.Request {
+		t.Helper()
+		id := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}, FixRef: &fix})
+		h.handle()
+		return h.request(id)
+	}
+	if r := abort(fixwork.FixRef{Work: 7, Cycle: 2, Head: "b3"}); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "nothing to abort") {
+		t.Errorf("an abort of another fix: %s %q", r.State, deref(r.Result))
+	}
+	h.wantState(2, store.PRPaused)
+	if r := abort(ref); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "aborted talkable/talkable#2") {
+		t.Fatalf("the factory's abort of its paused round: %s %q", r.State, deref(r.Result))
+	}
+	if cur := h.pr(2); cur.State == store.PRPaused || cur.Forced {
+		t.Errorf("PR #2 = %s, forced %v; want the paused round stopped", cur.State, cur.Forced)
+	}
+	if r, raw := h.e.fixRefOf(h.ctx, pr.ID); r != nil {
+		t.Errorf("the PR keeps the fix: %s", raw)
+	}
+}
+
 // The factory raises the attention of a reviewed PR it fixes, silently (no
 // toast), with its why as the PR's message and kind fix, and lifts it while
 // it is still that one; it touches no PR magnum fixes.
