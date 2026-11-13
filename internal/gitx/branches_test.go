@@ -529,6 +529,37 @@ func TestBisectHeadsNamesItsBadCommitAndItsStart(t *testing.T) {
 	}
 }
 
+// BisectReset ends a bisect in progress at the commit it is given, and
+// says so; with none it runs nothing and says none; a commit that is no
+// full id is refused before git runs.
+func TestBisectResetEndsABisectAtTheCommitGiven(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	wt := filepath.Join(filepath.Dir(fx.clone), "wt")
+	fx.git(fx.clone, "worktree", "add", "--quiet", "--detach", wt, "main")
+	good := fx.git(wt, "rev-parse", "HEAD")
+	var f []string
+	for i := range 4 {
+		f = append(f, fx.commit(wt, "a.txt", fmt.Sprintf("f%d\n", i), fmt.Sprintf("f%d", i)))
+	}
+	if ended, err := fx.c.BisectReset(ctx, wt, f[3]); err != nil || ended {
+		t.Fatalf("BisectReset with no bisect = %v, %v; want false", ended, err)
+	}
+	fx.git(wt, "bisect", "start", f[3], good)
+	if _, err := fx.c.BisectReset(ctx, wt, "HEAD"); err == nil {
+		t.Fatal("BisectReset at HEAD, no commit id: no error")
+	}
+	if ended, err := fx.c.BisectReset(ctx, wt, f[1]); err != nil || !ended {
+		t.Fatalf("BisectReset = %v, %v; want true", ended, err)
+	}
+	if head := fx.git(wt, "rev-parse", "HEAD"); head != f[1] {
+		t.Fatalf("HEAD = %s, want %s", head, f[1])
+	}
+	if bad, start, err := fx.c.BisectHeads(ctx, wt); err != nil || bad != "" || start != "" {
+		t.Fatalf("BisectHeads after the reset = %q %q, %v; want no bisect", bad, start, err)
+	}
+}
+
 // AbortOperation ends what InProgress names, a rebase as a merge (the
 // slot's abort step before a switch), and refuses anything else before git
 // runs: the op becomes git's subcommand.

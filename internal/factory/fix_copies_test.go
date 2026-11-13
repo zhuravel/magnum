@@ -1511,6 +1511,52 @@ func TestABisectLeftInProgressKeepsItsBadCommitAndItsStart(t *testing.T) {
 	}
 }
 
+// A fix copy's release ends a bisect left in progress once it kept its
+// commits (`git bisect reset` to its start), so the next claim of the copy
+// does not inherit it: the copy goes back free, on its placeholder, with
+// no bisect state. The bisect stayed until a person ended it, and the next
+// claim's fixer found HEAD in a bisect it never started.
+func TestAFixCopysReleaseEndsTheBisectItKept(t *testing.T) {
+	r := newFixRig(t, 1, 1)
+	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
+	w := r.prWork("talkable/talkable", 7)
+	fc := r.claimFix(w)
+	head, bad, start := r.leaveBisect(fc.Path, fc.Head)
+	r.releaseFix(w)
+	if sl := r.slot(fc.Name); sl.State != store.SlotFree || sl.HoldReason != nil {
+		t.Fatalf("%s after the release = %s, hold %q, want free", fc.Name, sl.State, store.Deref(sl.HoldReason))
+	}
+	for _, sha := range []string{head, bad, start} {
+		if !r.kept(r.main, 7, sha) {
+			t.Fatalf("the release kept %q, want HEAD %s, the bad commit %s and the start %s", r.keptRefs(r.main), head, bad, start)
+		}
+	}
+	if _, err := os.Stat(r.gitIn(fc.Path, "rev-parse", "--path-format=absolute", "--git-path", "BISECT_START")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("BISECT_START after the release: %v, want the bisect ended", err)
+	}
+	if refs := r.gitIn(fc.Path, "for-each-ref", "refs/bisect/"); refs != "" {
+		t.Fatalf("refs/bisect after the release: %q, want none", refs)
+	}
+	if _, branch := r.head(fc.Path); branch == "" {
+		t.Fatalf("%s after the release is detached, want it on its placeholder", fc.Name)
+	}
+
+	// A change in the tree that the checkout of the start would overwrite:
+	// the bisect ends where HEAD is, and the release saves the change and
+	// goes on.
+	w = r.prWork("talkable/talkable", 7)
+	fc = r.claimFix(w)
+	r.leaveBisect(fc.Path, fc.Head)
+	r.write(filepath.Join(fc.Path, "fixer.txt"), "mine\n")
+	r.releaseFix(w)
+	if sl := r.slot(fc.Name); sl.State != store.SlotFree || sl.HoldReason != nil {
+		t.Fatalf("%s after the release over a change = %s, hold %q, want free", fc.Name, sl.State, store.Deref(sl.HoldReason))
+	}
+	if _, err := os.Stat(r.gitIn(fc.Path, "rev-parse", "--path-format=absolute", "--git-path", "BISECT_START")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("BISECT_START after the release over a change: %v, want the bisect ended", err)
+	}
+}
+
 // A per-PR checkout goes once the PR's fix work ends: at once when the PR
 // merges or closes, once its work stayed idle for fixIdleEnd, never while
 // the work goes on. Its worktree, its fix ref and its row's hold on it go,

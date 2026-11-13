@@ -831,6 +831,31 @@ func (c *Client) BisectHeads(ctx context.Context, repo string) (bad, start strin
 	return bad, start, err
 }
 
+// BisectReset ends a `git bisect` in progress in repo at commit, a full
+// commit id (`git bisect reset <commit>`: HEAD checked out there,
+// detached, then the bisect's state deleted: refs/bisect/, BISECT_START
+// and its other files), and reports whether one was in progress
+// (BISECT_START). With none it runs nothing. A checkout the work tree's
+// changes refuse is an error, and the bisect stays.
+func (c *Client) BisectReset(ctx context.Context, repo, commit string) (bool, error) {
+	if !isOID(commit) {
+		return false, fmt.Errorf("gitx: bisect reset: %q is not a commit id", commit)
+	}
+	res, err := c.git(ctx, repo, call{label: "rev-parse --git-path"}, "rev-parse", "--path-format=absolute", "--git-path", "BISECT_START")
+	if err != nil {
+		return false, err
+	}
+	if _, err := os.Stat(filepath.Clean(res.Out())); errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("gitx: the bisect in progress: %w", err)
+	}
+	if _, err := c.git(ctx, repo, call{label: "bisect reset", mutates: true}, "bisect", "reset", commit); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
 // WorktreeDiscard removes the worktree at dir of repo, modified and
 // untracked files included, then forgets the stale registrations below
 // root, the directory of worktrees dir is in (the worktree list's prunable

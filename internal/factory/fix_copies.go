@@ -17,6 +17,7 @@ package factory
 // agents store (begin, ok or fail rows), which a cut claim resumes.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -776,6 +777,9 @@ func (c *copySet) releaseFixKind(ctx context.Context, w registry.PRWork, sl stor
 	if err := c.releaseHead(ctx, w, sl, repo.MainClone); err != nil {
 		return fmt.Errorf("release %s of %s: %w", cp.Name, workKey(w), err)
 	}
+	if err := c.endBisect(ctx, w, sl); err != nil {
+		return fmt.Errorf("release %s of %s: %w", cp.Name, workKey(w), err)
+	}
 	if err := c.slots.Release(ctx, sl, c.pool(repo, n), reason); err != nil {
 		return fmt.Errorf("release %s of %s: %w", cp.Name, workKey(w), err)
 	}
@@ -796,6 +800,45 @@ func (c *copySet) releaseHead(ctx context.Context, w registry.PRWork, sl store.S
 		}
 	}
 	return c.fixOwnHead(ctx, w, sl, head, "its release")
+}
+
+// endBisect ends a bisect left in progress in fix copy sl once its release
+// kept the bisect's commits (releaseHead: keepInProgress), so the copy's
+// next claim does not inherit it: `git bisect reset` to the bisect's start
+// (gitx.BisectHeads), kept or pushed now, else where HEAD is (no start
+// known, or the tree's changes refuse that checkout; the release's save
+// and reset come next). A HEAD that moved to the start is then the
+// checkout's own (fixOwnHead), so the release's guard finds it recorded;
+// the release's reset moves it to origin/<base>. A per-PR checkout's
+// removal deletes the bisect with the worktree.
+func (c *copySet) endBisect(ctx context.Context, w registry.PRWork, sl store.Slot) error {
+	cur, err := c.st.SlotByID(ctx, sl.ID)
+	if err != nil || !fsx.Exists(cur.Path) {
+		return err
+	}
+	head, err := c.git.RevParse(ctx, cur.Path, "HEAD")
+	if err != nil {
+		return err
+	}
+	_, start, err := c.git.BisectHeads(ctx, cur.Path)
+	if err != nil {
+		return err
+	}
+	at := cmp.Or(start, head)
+	ended, err := c.git.BisectReset(ctx, cur.Path, at)
+	if err != nil && at != head {
+		at = head
+		ended, err = c.git.BisectReset(ctx, cur.Path, head)
+	}
+	if err != nil || !ended {
+		return err
+	}
+	c.event(ctx, cur.Name, "info", "factory.fix_bisect_ended", fmt.Sprintf("%s: the bisect left in progress, its commits kept, ended at %s before its release",
+		cur.Name, textx.ShortSHA(at)))
+	if at == head {
+		return nil
+	}
+	return c.fixOwnHead(ctx, w, cur, "", "its release")
 }
 
 // dropFixRef deletes PR work w's fix ref in clone once its checkout is
