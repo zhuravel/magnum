@@ -303,10 +303,11 @@ var holdsOrder = []string{HoldHerdr, HoldInfra, HoldDrain, HoldReboot, HoldPause
 
 // saveHolds writes the holds in force to holds.json (Layout.FactoryHolds),
 // in holdsOrder, the repositories' infrastructure holds after the
-// machine's, when they changed since the last write of this daemon (and on
-// its first tick, so a restart clears what the last run left): the screen,
-// another process, draws them. A failed write is logged and tried again on
-// the next tick.
+// machine's, when they changed since the last write of this daemon (and at
+// its start, before its pidfile, so a restart clears what the last run left
+// before any reader pairs this daemon's pid with them: RunLocked): the
+// screen, another process, draws them. A failed write is logged and tried
+// again on the next tick.
 func (e *Engine) saveHolds() {
 	var hs []Hold
 	for _, kind := range holdsOrder {
@@ -336,7 +337,9 @@ func (e *Engine) saveHolds() {
 }
 
 // ReadHolds are the holds of the machine in force as the factory daemon
-// last saved them (holds.json in layout l); none before its first tick.
+// last saved them (holds.json in layout l): the running daemon's, which
+// saves them before it writes its pidfile (a write that fails leaves the
+// last run's until a tick saves them).
 func ReadHolds(l paths.Layout) ([]Hold, error) {
 	b, err := os.ReadFile(l.FactoryHolds())
 	if errors.Is(err, fs.ErrNotExist) {

@@ -27823,6 +27823,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   findings still makes the stop unsafe, as before. Test, failing first:
   `TestAChangeYouAskedForThatTheRoundAtTheLimitFindsAgainStaysAKnownDefect`.
 
+- **A daemon that starts writes its holds before its pidfile** (2026-11-13, the engine owner's follow-up HV-C1 to
+  the holds as a task's wait). Only the deferred `saveHolds` of `Tick` wrote holds.json. So after every
+  `magnum factory install --drain` and every reboot, the readers paired the new daemon's pid with the old
+  daemon's file. Its `HoldDrain` or `HoldReboot` was then the wait of each active task with no wait of its own.
+  `magnum factory status` and the screen showed it until the new daemon's first tick ended. A long startup or a
+  long first stage held that up. `RunLocked` now saves the holds before it writes the pidfile: none yet, so no
+  reader sees the old file under the new pid. Then `takeControls` takes the controls that stay (a pause, a
+  drain for a reboot on the same boot), and `RunLocked` saves the holds again, so they show from the start. The
+  other way was to write the writer's pid into holds.json and ignore another pid's file, as work.json does.
+  That changes the file's format and the screen's options (it knows only that the daemon runs, not its pid), so
+  it is larger. A write that fails still leaves the last run's file until a tick saves the holds, as before.
+  Test, failing first: `TestADaemonThatStartsShowsNoneOfTheOldDaemonsHolds` (its pause case fails without the
+  second save).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

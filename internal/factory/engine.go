@@ -813,6 +813,10 @@ func (e *Engine) RunLocked(ctx context.Context) error {
 	// install reads it for the daemon the pidfile names.
 	e.saveWork()
 	defer e.closeWork()
+	// So do the holds: none yet, so the daemon before this one's (its
+	// drain, a reboot's) never reads as this pid's until its first tick
+	// ends; the controls that stay are saved once taken, below.
+	e.saveHolds()
 	pidFile := e.d.Layout.FactoryPid()
 	if err := fsx.WriteFileAtomic(pidFile, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
 		return fmt.Errorf("factory: pidfile: %w", err)
@@ -829,6 +833,7 @@ func (e *Engine) RunLocked(ctx context.Context) error {
 	e.endDrainAtStart(ctx)
 	e.endRebootDrainAtStart(ctx) // control.go: a drain for a reboot ends at the first start on another boot
 	e.takeControls(ctx)          // control.go: one that stays holds from the start, before the startup's recovery
+	e.saveHolds()                // and shows from it, not from the first tick's end
 
 	stop := make(chan struct{})
 	sigs := make(chan os.Signal, 4)
