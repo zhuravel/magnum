@@ -302,10 +302,20 @@ func TestAnOwnerRowThatCannotBeReadIsNoFailedLeaseRead(t *testing.T) {
 
 // An owner row this build cannot parse (a newer build's, or a damaged one)
 // is a failed read within the grace, as the factory's lease is, but it is
-// named as magnum's own row, never as the factory's registry: in the wait,
-// in `magnum review`'s refusal and in the row the doctor reads.
+// named as magnum's own row, never as the factory's lease: in the wait, in
+// `magnum review`'s refusal, in the row the doctor reads, in the warn the
+// daemon logs, in fix.lease_open after the grace and in fix.lease_read once
+// the row reads (C3).
 func TestAnOwnerRowThatDoesNotParseIsNamedAsMagnumsOwn(t *testing.T) {
-	h := leaseHarness(t, &fakeLease{})
+	logs := &syncBuffer{}
+	h := newHarness(t, func(h *harness) {
+		h.d.FixLeaseOf = (&fakeLease{}).reader(h.clock.Now)
+		h.d.Logger = newTeeLogger(t, logs)
+	})
+	h.reviewedPR(2, "b1")
+	factoryOwns(h)
+	pollPR(h, time.Hour, 2, "b2")
+	h.advance(6 * time.Minute) // past the push quiet period
 	pr := h.pr(2)
 	if err := h.st.SetKV(h.ctx, fixwork.KVPRFixOwner(pr.ID), `{"owner":"someone newer"}`); err != nil {
 		t.Fatal(err)
@@ -325,6 +335,24 @@ func TestAnOwnerRowThatDoesNotParseIsNamedAsMagnumsOwn(t *testing.T) {
 	h.handle()
 	if r := h.request(review); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "its owner row cannot be read by this build") {
 		t.Errorf("magnum review: %s %q", r.State, deref(r.Result))
+	}
+	if l := logs.String(); strings.Contains(l, "the factory's lease") || !strings.Contains(l, "owner row of a PR cannot be parsed by this build; its round waits") {
+		t.Errorf("the warn names the factory's lease, or not the owner row:\n%s", l)
+	}
+	for range fixLeaseGrace / time.Minute { // the daemon's ticks, each of which fails to parse the row
+		h.advance(time.Minute)
+		h.tick()
+	}
+	if got := len(h.rd.all()); got != rounds+1 {
+		t.Fatalf("rounds = %d, want %d: magnum reviews after the grace", got, rounds+1)
+	}
+	if ev, ok := h.fixEvent("fix.lease_open"); !ok || strings.Contains(ev.Message, "lease") || !strings.Contains(ev.Message, "owner row") {
+		t.Errorf("fix.lease_open = %q, %v; want the owner row named, not the lease", ev.Message, ok)
+	}
+	h.e.delKV(h.ctx, fixwork.KVPRFixOwner(pr.ID)) // the row goes: magnum fixes the PR, and the read works
+	h.tick()
+	if ev, ok := h.fixEvent("fix.lease_read"); !ok || strings.Contains(ev.Message, "lease") || !strings.Contains(ev.Message, "owner row") {
+		t.Errorf("fix.lease_read = %q, %v; want the owner row named, not the lease", ev.Message, ok)
 	}
 }
 

@@ -159,13 +159,45 @@ func (v leaseView) source() string {
 	return ""
 }
 
-// unreadWords names what v could not read, as a wait says it.
-func (v leaseView) unreadWords() string {
-	if v.fromOwner {
-		return "its owner row, which this build cannot read"
-	}
-	return "the factory's lease, which cannot be read"
+// unreadWords are the words of a failed read from its source
+// (LeaseUnread.Source), so that each place names what failed: the
+// factory's lease, or magnum's own owner row, never the one for the other.
+type unreadWords struct {
+	wait    string // a wait's detail
+	warn    string // the daemon's warn at a first failure
+	open    string // fix.lease_open's subject
+	without string // what magnum reviews the PR without, after the grace
+	refusal string // `magnum review`'s refusal, of the PR as "it"
+	read    string // fix.lease_read, once it reads again
+	gone    string // fix.lease_read, once it reads again and magnum fixes the PR
 }
+
+// wordsOf are the words of a failed read whose source is source.
+func wordsOf(source string) unreadWords {
+	if source == LeaseFromOwner {
+		return unreadWords{
+			wait:    "its owner row, which this build cannot read",
+			warn:    "the owner row of a PR cannot be parsed by this build; its round waits",
+			open:    "the PR's owner row cannot be read by this build",
+			without: "without knowing who fixes it",
+			refusal: "its owner row cannot be read by this build",
+			read:    "the PR's owner row reads again",
+			gone:    "the PR's owner row reads again: magnum fixes the PR, and its failed read is dropped",
+		}
+	}
+	return unreadWords{
+		wait:    "the factory's lease, which cannot be read",
+		warn:    "the factory's lease of a PR cannot be read; its round waits",
+		open:    "the factory's lease of the PR cannot be read",
+		without: "without the lease",
+		refusal: "the factory's lease of it cannot be read",
+		read:    "the factory's lease of the PR reads again",
+		gone:    "the factory no longer fixes the PR: its failed lease read is dropped",
+	}
+}
+
+// unreadWords names what v could not read, as a wait says it.
+func (v leaseView) unreadWords() string { return wordsOf(v.source()).wait }
 
 // fixing reports whether the factory works on the PR now (its lease held,
 // in any phase).
@@ -293,9 +325,10 @@ func (e *Engine) noteLease(ctx context.Context, pr store.PR, v leaseView) bool {
 	if v.err == nil {
 		if recorded {
 			e.delKV(ctx, KVPRFixLeaseUnread(pr.ID))
-			msg := "the factory's lease of the PR reads again"
+			words := wordsOf(u.Source) // what failed, as recorded
+			msg := words.read
 			if !v.owned {
-				msg = "the factory no longer fixes the PR: its failed lease read is dropped"
+				msg = words.gone
 			}
 			e.event(ctx, "info", subject, "fix.lease_read", msg, nil)
 		}
@@ -308,18 +341,15 @@ func (e *Engine) noteLease(ctx context.Context, pr store.PR, v leaseView) bool {
 	}
 	if !recorded {
 		u = LeaseUnread{Since: now.UTC()}
-		e.log.Warn("the factory's lease of a PR cannot be read; its round waits", "subject", subject, "grace", fixLeaseGrace, "err", v.err)
+		e.log.Warn(wordsOf(v.source()).warn, "subject", subject, "grace", fixLeaseGrace, "err", v.err)
 	}
 	u.Last, u.Err, u.Source = now.UTC(), leaseErrWords(v.err), v.source()
 	_, held := e.leaseWait(v, u, true)
 	if !held && !u.Open {
 		u.Open = true
-		what := "the factory's lease of the PR cannot be read"
-		if v.fromOwner {
-			what = "the PR's owner row cannot be read by this build"
-		}
-		e.event(ctx, "warn", subject, "fix.lease_open", fmt.Sprintf("%s since %s (%s): magnum reviews it "+
-			"without the lease after the %s grace", what, waitClock(u.Since, e.now()), u.Err, humanDuration(fixLeaseGrace)),
+		words := wordsOf(u.Source)
+		e.event(ctx, "warn", subject, "fix.lease_open", fmt.Sprintf("%s since %s (%s): magnum reviews it %s after the %s grace",
+			words.open, waitClock(u.Since, e.now()), u.Err, words.without, humanDuration(fixLeaseGrace)),
 			map[string]any{"since": u.Since, "source": cmp.Or(u.Source, "lease")})
 	}
 	e.setKV(ctx, KVPRFixLeaseUnread(pr.ID), rowJSON(u)) // each failed read: its time is the gap's start
@@ -430,12 +460,8 @@ func (e *Engine) factoryReviewRefusal(ctx context.Context, pr store.PR, label st
 		if u, ok := e.leaseUnreadOf(ctx, pr.ID); ok {
 			since = u.Since
 		}
-		what := "the factory's lease of it cannot be read"
-		if v.fromOwner {
-			what = "its owner row cannot be read by this build"
-		}
 		return fmt.Sprintf("%s: %s (%s); ask again after %s, when magnum reviews it anyway",
-			label, what, leaseErrWords(v.err), waitClock(since.Add(fixLeaseGrace), e.now()))
+			label, wordsOf(v.source()).refusal, leaseErrWords(v.err), waitClock(since.Add(fixLeaseGrace), e.now()))
 	case v.fixing() || v.reviewing():
 		cycle := fmt.Sprintf("cycle %d", v.lease.Cycle)
 		if v.lease.Cap > 0 {

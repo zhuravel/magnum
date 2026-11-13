@@ -273,6 +273,11 @@ func TestTheDoctorNamesAnOwnerRowThatDoesNotParseAsMagnumsOwn(t *testing.T) {
 		fmt.Sprintf(`{"since":%q,"err":"fix owner: unknown owner \"someone newer\"","source":"owner"}`, h.now.UTC().Format(time.RFC3339))); err != nil {
 		t.Fatal(err)
 	}
+	pr7 := h.seedPR("talkable/talkable", 7, store.PRReviewed)
+	if err := h.st.SetKV(h.ctx, engine.KVPRFixLeaseUnread(pr7.ID),
+		fmt.Sprintf(`{"since":%q,"err":"fix owner: unknown owner \"someone newer\"","open":true,"source":"owner"}`, h.now.UTC().Format(time.RFC3339))); err != nil {
+		t.Fatal(err)
+	}
 	cs := doctorFixHandover(h.ctx, d)
 	if len(cs) != 2 {
 		t.Fatalf("checks = %+v", cs)
@@ -281,5 +286,10 @@ func TestTheDoctorNamesAnOwnerRowThatDoesNotParseAsMagnumsOwn(t *testing.T) {
 	if c.Status != doctorWarn || !strings.Contains(c.Detail, "talkable#6") || !strings.Contains(c.Detail, "its owner row in magnum's registry") ||
 		!strings.Contains(c.Fix, "pr.*.fix_owner") || strings.Contains(c.Fix, "the factory's registry cannot be read") {
 		t.Errorf("owner row = %+v", c)
+	}
+	// The headlines name the owner row too, never the factory's lease (C3).
+	if strings.Contains(c.Detail, "lease") || !strings.Contains(c.Detail, "magnum reviews 1 PRs without their owner row, which it cannot read (failed open): talkable#7") ||
+		!strings.Contains(c.Detail, "1 PRs' rounds wait for their owner row, which cannot be read: talkable#6") || strings.Contains(c.Name, "lease") {
+		t.Errorf("owner row headlines = %+v", c)
 	}
 }

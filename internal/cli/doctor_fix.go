@@ -3,8 +3,9 @@ package cli
 // The doctor's line of the fix loop's move into the factory (DECISIONS "The
 // fix loop moves into the factory"): the PRs whose fix work of magnum's
 // keeps them from handing over (the drain proof's morning list,
-// engine.FixInFlight), and the PRs whose factory lease magnum could not
-// read and reviewed without it (failed open, engine.FixLeaseUnreads).
+// engine.FixInFlight), and the PRs whose factory lease, or whose owner row
+// in magnum's registry, could not be read, which wait for the grace or
+// were reviewed without it (failed open, engine.FixLeaseUnreads).
 
 import (
 	"cmp"
@@ -21,7 +22,7 @@ import (
 
 // doctorFixHandover is the fix handover's lines: a WARN while a PR that
 // hands over to the factory waits for its fix work to end, or while a read
-// of the factory's lease failed (open: magnum reviews the PR without it),
+// of the factory's lease or of an owner row failed (doctorLeaseUnreads),
 // and a PASS that counts magnum's fix work in flight otherwise.
 func doctorFixHandover(ctx context.Context, d doctorDeps) []doctorCheck {
 	if d.Store == nil || d.Config == nil {
@@ -59,21 +60,16 @@ func doctorFixHandover(ctx context.Context, d doctorDeps) []doctorCheck {
 	default:
 		out = append(out, doctorOK(name, "none of magnum's fix work is in flight: every PR can hand over to the factory"+held))
 	}
-	if line, ok := doctorLeaseUnreads(ctx, d, unread); ok {
-		out = append(out, line)
-	}
-	return out
+	return append(out, doctorLeaseUnreads(ctx, d, unread)...)
 }
 
-// doctorLeaseUnreads is the line of the PRs whose factory lease magnum
-// could not read: a WARN naming those it reviews without the lease (failed
-// open) and those whose round waits for the grace; ok false for none.
-func doctorLeaseUnreads(ctx context.Context, d doctorDeps, unread map[int64]engine.LeaseUnread) (doctorCheck, bool) {
-	if len(unread) == 0 {
-		return doctorCheck{}, false
-	}
-	var open, waits []string
-	owners, leases := false, false
+// doctorLeaseUnreads are the lines of the PRs whose failed reads hold or
+// held their rounds (engine.LeaseUnread), one per source: a WARN named for
+// the factory's lease, and one named for magnum's own owner rows, each
+// naming the PRs magnum reviews without the read (failed open) and those
+// whose round waits for the grace; none for no such PR.
+func doctorLeaseUnreads(ctx context.Context, d doctorDeps, unread map[int64]engine.LeaseUnread) []doctorCheck {
+	var leases, owners leaseGroup
 	for _, id := range slices.Sorted(maps.Keys(unread)) {
 		u := unread[id]
 		label := fmt.Sprintf("PR %d", id)
@@ -82,36 +78,52 @@ func doctorLeaseUnreads(ctx context.Context, d doctorDeps, unread map[int64]engi
 				label = actRefLabel(d.Config.Daemon.DefaultRepo, repo.FullName(), pr.Number)
 			}
 		}
-		why := cmp.Or(actClean(u.Err), "no error")
+		why, g := cmp.Or(actClean(u.Err), "no error"), &leases
 		if u.Source == engine.LeaseFromOwner { // magnum's own row, not the factory's registry
-			why, owners = "its owner row in magnum's registry: "+why, true
-		} else {
-			leases = true
+			why, g = "its owner row in magnum's registry: "+why, &owners
 		}
-		what := fmt.Sprintf("%s since %s (%s)", label, u.Since.Local().Format("Jan 2 15:04"), why)
-		if u.Open {
-			open = append(open, what)
-		} else {
-			waits = append(waits, what)
-		}
+		g.add(fmt.Sprintf("%s since %s (%s)", label, u.Since.Local().Format("Jan 2 15:04"), why), u.Open)
 	}
+	var out []doctorCheck
+	if c, ok := leases.check("factory lease", "the factory fixes without its lease, which it cannot read", "the factory's lease, which cannot be read",
+		"the factory's registry cannot be read; `magnum factory status` says whether its daemon runs"); ok {
+		out = append(out, c)
+	}
+	if c, ok := owners.check("fix owner row", "without their owner row, which it cannot read", "their owner row, which cannot be read",
+		"magnum's registry holds an owner row (pr.*.fix_owner) this build cannot parse: a newer build wrote it, "+
+			"or it is damaged; run the build that wrote it"); ok {
+		out = append(out, c)
+	}
+	return out
+}
+
+// leaseGroup is the PRs of one source of failed reads: those magnum reviews
+// without the read (open) and those whose round waits for the grace.
+type leaseGroup struct{ open, waits []string }
+
+func (g *leaseGroup) add(what string, open bool) {
+	if open {
+		g.open = append(g.open, what)
+	} else {
+		g.waits = append(g.waits, what)
+	}
+}
+
+// check is g's WARN, name, its headlines naming what magnum reviews the PRs
+// without (reviews) and what their rounds wait for (waits), and fix; ok
+// false for no PR.
+func (g leaseGroup) check(name, reviews, waits, fix string) (doctorCheck, bool) {
 	var parts []string
-	if len(open) > 0 {
-		parts = append(parts, fmt.Sprintf("magnum reviews %d PRs the factory fixes without its lease, which it cannot read (failed open): %s",
-			len(open), strings.Join(open, ", ")))
+	if len(g.open) > 0 {
+		parts = append(parts, fmt.Sprintf("magnum reviews %d PRs %s (failed open): %s", len(g.open), reviews, strings.Join(g.open, ", ")))
 	}
-	if len(waits) > 0 {
-		parts = append(parts, fmt.Sprintf("%d PRs' rounds wait for the factory's lease, which cannot be read: %s", len(waits), strings.Join(waits, ", ")))
+	if len(g.waits) > 0 {
+		parts = append(parts, fmt.Sprintf("%d PRs' rounds wait for %s: %s", len(g.waits), waits, strings.Join(g.waits, ", ")))
 	}
-	var fixes []string
-	if leases {
-		fixes = append(fixes, "the factory's registry cannot be read; `magnum factory status` says whether its daemon runs")
+	if len(parts) == 0 {
+		return doctorCheck{}, false
 	}
-	if owners {
-		fixes = append(fixes, "magnum's registry holds an owner row (pr.*.fix_owner) this build cannot parse: a newer build wrote it, "+
-			"or it is damaged; run the build that wrote it")
-	}
-	return doctorWarned("factory lease", strings.Join(parts, "; "), strings.Join(fixes, "; ")), true
+	return doctorWarned(name, strings.Join(parts, "; "), fix), true
 }
 
 // recordKinds are recs' kinds, in a few words.
