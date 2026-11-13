@@ -90,7 +90,7 @@ const (
 )
 
 // CIFailRead is the reader's record of a read at Head (kvPRCIFix's Read):
-// the failed set it read for (Key, ciReadKey), when, the files (File, the
+// the failed set it read for (Key, CIReadKey), when, the files (File, the
 // JSON's path), the JSON's digest and its counts (jobs listed, failed
 // steps, log lines and bytes kept), and a read that failed (Unread, with
 // actionsNotGranted's words in UnreadWhy when GitHub would not mint the
@@ -119,7 +119,7 @@ type CIFailRead struct {
 	Runs    []CIReadRun `json:"runs,omitempty"`
 	Checked time.Time   `json:"checked,omitzero"`
 	// Moved, never recorded: the run that now speaks for a run the look
-	// named (magnum's start or re-run) moved past its failure (ciRunNow):
+	// named (magnum's start or re-run) moved past its failure (CIRunNow):
 	// nothing was read, and the look records the run in the start or the
 	// re-run instead (noteRunMoved).
 	Moved *github.WorkflowRun `json:"-"`

@@ -222,3 +222,20 @@ var (
 	quietHoursHold    = fixwork.QuietHoursHold
 	quietHoursEnd     = fixwork.QuietHoursEnd
 )
+
+// The CI reader's files and steps, under the engine's names.
+const (
+	ciFailuresFile = fixwork.CIFailuresFile
+	ciFailuresMD   = fixwork.CIFailuresMD
+)
+
+type ciFailuresJSON = fixwork.CIFailures
+
+var (
+	ciReadKey      = fixwork.CIReadKey
+	ciRunNow       = fixwork.CIRunNow
+	runFailed      = fixwork.RunFailed
+	writeCIFiles   = fixwork.WriteCIFiles
+	copyCIFiles    = fixwork.CopyCIFiles
+	ciFailuresText = fixwork.CIFailuresText
+)

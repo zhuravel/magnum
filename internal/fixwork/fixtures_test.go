@@ -23,6 +23,9 @@ const (
 	// liveRunID is the run of the live case of 2026-11-09 that started no
 	// job.
 	liveRunID = 42673098082
+	// ciRunID is the failed run of ci.yml at fixHead the CI reader's tests
+	// read.
+	ciRunID = 500
 )
 
 // openNow is the look's time in the verdict tests.

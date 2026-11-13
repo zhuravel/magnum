@@ -18809,6 +18809,12 @@ define (KVPRFix, fixJob, settlePushes) is the engine's.
 CONSTANTS
 
 const (
+	// CIFailuresFile is the CI reader's file in the head's report folder.
+	CIFailuresFile = "ci-failures.json"
+	// CIFailuresMD is its summary beside it.
+	CIFailuresMD = "ci-failures.md"
+)
+const (
 	CIOutcomeUnstarted = "unstarted"
 	CIOutcomePushed    = "pushed"
 	CIOutcomeMerged    = "merged"
@@ -18960,6 +18966,11 @@ func CICannotWords(class string) string
     CICannotWords are the verdict's words of class, a class word of a fixer's ci
     entry under Needs you (ciCannotClasses); "" for another word.
 
+func CIFailuresText(repo store.Repo, pr store.PR, f CIFailures) string
+    CIFailuresText is ci-failures.md: the failed checks of f's head of pr,
+    their runs, jobs, failed steps and line counts, and the base commit each
+    passed on, on one screen.
+
 func CIFixWords(f Facts, short string) (verdict, why string, until time.Time, readBase, recheck bool)
     CIFixWords is rule 11's verdict on a failed required check that is no work
     (no CI fix starts now): needs you with why, or waits; readBase asks the
@@ -18968,6 +18979,29 @@ func CIFixWords(f Facts, short string) (verdict, why string, until time.Time, re
     ciRunMoved: at most once a settle_quiet), so a re-run of it by hand is read
     again. A check the look gathered nothing for (a rollup's failure, no facts)
     needs you as before CI fix mode.
+
+func CIReadKey(checks []CIFailedCheck, at func(CIFailedCheck) string) string
+    CIReadKey is the failed set a read is of: the entries and, for each, its run
+    or the time the rollup says it finished, so a re-run that failed again is a
+    new read and an unchanged head is none.
+
+func CIRunNow(runs []github.WorkflowRun, c CIFailedCheck) (github.WorkflowRun, bool)
+    CIRunNow is the run that speaks for c, a failed check of a run the look
+    named (ciShape3: c.Run, magnum's start of ci_dispatch's workflow or
+    its re-run of a run that started no job), among runs, the head's runs:
+    c.Run at its newest attempt (a re-run by hand keeps the run's id), or,
+    for magnum's start (c.Dispatched), the newest run a dispatch started of
+    c's workflow file at the head after c.Run (someone's start by hand).
+    Zero where c names no run, or GitHub no longer lists it at the head.
+    moved reports that it no longer says that c.Run failed: it is a later run,
+    or c.Run's newest attempt has not ended or ended without failing. No rollup
+    shows a dispatched run, so only the head's runs tell.
+
+func CopyCIFiles(from, dir string) string
+    CopyCIFiles copies the CI reader's files from the folder of from (its
+    ci-failures.json) into dir, the report folder of a job whose head moved (the
+    daemon's merge of the parent), and returns the copy's path; from when dir is
+    its folder already, "" when it cannot.
 
 func DecideOpen(f Facts) (OpenVerdict, []Item, []Item)
     DecideOpen decides the verdict of f's PR by the rules of this file's
@@ -19052,6 +19086,20 @@ func QuietHoursHold(spec string, now time.Time, judgeAlone bool) bool
     a round nobody forced; judgeAlone: it is a re-review of the judge alone,
     which they let start (eligibility.QuietHoursHold).
 
+func ReadCIFailures(ctx context.Context, gh CIReadClient, owner, name string, pr store.PR, checks []CIFailedCheck,
+	now time.Time) (CIFailRead, CIFailures, error)
+    ReadCIFailures reads why checks, the failed required checks of pr's head
+    in the repository owner/name, failed, through gh at now: the head's runs,
+    the newest run of each check's workflow file, that run's jobs and the end
+    of each failed job's log (at most ciLogReads). It returns the read as far
+    as it went (the head, the time and the runs read) and the file to write
+    (ci-failures.json, CIFailuresText), or the error of a read of the runs or
+    of a run's jobs, with the read as it stood then. A run whose newest attempt
+    has not ended makes the read Running, and a check of a run the look named
+    (magnum's start or re-run) that ran again since it failed (CIRunNow) makes
+    it Moved; either returns at once, with no file. A log alone that could not
+    be read is that job's Unread in the file.
+
 func ReviewKey(run string) string
     ReviewKey is the key of magnum's review of run.
 
@@ -19077,6 +19125,9 @@ func RunEnd(conclusion string) string
     verdict's words (" (timed out)"); "" for none, or one that is not GitHub's
     plain word.
 
+func RunFailed(conclusion string) bool
+    RunFailed reports whether a run's conclusion is a failure of its jobs.
+
 func ShownCheckName(name string) bool
     ShownCheckName reports whether name, a check's workflow and name, is plain
     text an event or the log may carry: ASCII letters, digits, spaces and
@@ -19096,6 +19147,9 @@ func WaitClock(t, now time.Time) string
 func WorkWords(items []Item) string
     WorkWords counts items by kind and class: "1 review of magnum's and 1 thread
     of a person".
+
+func WriteCIFiles(dir string, b []byte, md string) error
+    WriteCIFiles writes ci-failures.json (b) and ci-failures.md (md) into dir.
 
 
 TYPES
@@ -19182,13 +19236,13 @@ type CIFailRead struct {
 	Runs    []CIReadRun `json:"runs,omitempty"`
 	Checked time.Time   `json:"checked,omitzero"`
 	// Moved, never recorded: the run that now speaks for a run the look
-	// named (magnum's start or re-run) moved past its failure (ciRunNow):
+	// named (magnum's start or re-run) moved past its failure (CIRunNow):
 	// nothing was read, and the look records the run in the start or the
 	// re-run instead (noteRunMoved).
 	Moved *github.WorkflowRun `json:"-"`
 }
     CIFailRead is the reader's record of a read at Head (kvPRCIFix's Read):
-    the failed set it read for (Key, ciReadKey), when, the files (File,
+    the failed set it read for (Key, CIReadKey), when, the files (File,
     the JSON's path), the JSON's digest and its counts (jobs listed,
     failed steps, log lines and bytes kept), and a read that failed (Unread,
     with actionsNotGranted's words in UnreadWhy when GitHub would not mint the
@@ -19215,7 +19269,21 @@ type CIFailedCheck struct {
     its own, or the failed jobs beside a skipped one; none: the entry's runs),
     and the base's word on it (zero: not read). Dispatched: Run is magnum's
     start of ci_dispatch's workflow, which no rollup shows, nor a re-run of it
-    or a later start of the workflow at the head (ciRunNow).
+    or a later start of the workflow at the head (CIRunNow).
+
+type CIFailures struct {
+	PR     string          `json:"pr"`
+	Head   string          `json:"head"`
+	ReadAt time.Time       `json:"read_at"`
+	Note   string          `json:"note"`
+	Checks []ciFailureJSON `json:"checks"`
+}
+    CIFailures is ci-failures.json.
+
+func (f CIFailures) Counts() (jobs, steps, lines, bytes int)
+    Counts are what the record of a read keeps of its file: the jobs it lists
+    that were not cancelled, their failed steps, and the log lines kept with
+    their bytes (each line and its newline).
 
 type CIFixFacts struct {
 	On         bool
@@ -19295,6 +19363,15 @@ type CIPush struct {
 	At   time.Time `json:"at"`
 }
     CIPush is a head magnum pushed to a PR, and when.
+
+type CIReadClient interface {
+	HeadRuns(ctx context.Context, owner, repo, sha string) ([]github.WorkflowRun, error)
+	RunJobs(ctx context.Context, owner, repo string, runID int64) ([]github.WorkflowJob, error)
+	JobLogTail(ctx context.Context, owner, repo string, jobID int64, keep int) (string, bool, error)
+}
+    CIReadClient is what the CI reader reads GitHub through (*github.Client has
+    it): every workflow's runs at a commit (HeadRuns), a run's jobs (RunJobs)
+    and the end of a job's log (JobLogTail).
 
 type CIReadRun struct {
 	ID      int64 `json:"id"`

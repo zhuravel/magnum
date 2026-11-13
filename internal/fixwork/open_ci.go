@@ -56,7 +56,7 @@ const ciBaseDepth = github.FirstParentDepth
 // none: the entry's runs), and the base's word on it (zero: not read).
 // Dispatched: Run is magnum's start of ci_dispatch's workflow, which no
 // rollup shows, nor a re-run of it or a later start of the workflow at the
-// head (ciRunNow).
+// head (CIRunNow).
 type CIFailedCheck struct {
 	Entry        string
 	Name         string

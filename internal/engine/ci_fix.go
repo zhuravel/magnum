@@ -176,33 +176,6 @@ func ciShape3(ci openCI, s ciStart, r ciRerun) openCI {
 	return openCI{Failed: missingWhat(ci.Missing), FailedRuns: failed, How: how}
 }
 
-// runFailed reports whether a run's conclusion is a failure of its jobs.
-func runFailed(conclusion string) bool { return conclusion == "failure" || conclusion == "timed_out" }
-
-// ciRunNow is the run that speaks for c, a failed check of a run the look
-// named (ciShape3: c.Run, magnum's start of ci_dispatch's workflow or its
-// re-run of a run that started no job), among runs, the head's runs: c.Run
-// at its newest attempt (a re-run by hand keeps the run's id), or, for
-// magnum's start (c.Dispatched), the newest run a dispatch started of c's
-// workflow file at the head after c.Run (someone's start by hand). Zero
-// where c names no run, or GitHub no longer lists it at the head. moved
-// reports that it no longer says that c.Run failed: it is a later run, or
-// c.Run's newest attempt has not ended or ended without failing. No rollup
-// shows a dispatched run, so only the head's runs tell.
-func ciRunNow(runs []github.WorkflowRun, c ciFailedCheck) (github.WorkflowRun, bool) {
-	i := slices.IndexFunc(runs, func(r github.WorkflowRun) bool { return r.ID == c.Run })
-	if c.Run == 0 || i < 0 {
-		return github.WorkflowRun{}, false
-	}
-	now := runs[i]
-	for _, r := range runs {
-		if c.Dispatched && r.Event == "workflow_dispatch" && r.Workflow == c.WorkflowFile && r.CreatedAt.After(now.CreatedAt) {
-			now = r
-		}
-	}
-	return now, now.ID != c.Run || !now.Done() || !runFailed(now.Conclusion)
-}
-
 // ciFixRecordOf reads the PR's CI fixes (none: zero).
 func (e *Engine) ciFixRecordOf(ctx context.Context, prID int64) (ciFixRecord, error) {
 	r, _, err := readKVJSON[ciFixRecord](ctx, e, kvPRCIFix(prID), "the PR's CI fixes")
