@@ -549,6 +549,24 @@ func (c *Client) BranchDelete(ctx context.Context, mainClone, branch string, for
 // magnumRefs is the only namespace UpdateRefDelete may touch.
 const magnumRefs = "refs/magnum/"
 
+// KeepCommit points ref, under refs/magnum/ but never the review's
+// refs/magnum/pr/, at commit sha in the repository of dir (a worktree's
+// refs are its main clone's), so git keeps the commit and Unpushed counts
+// it as kept. Pointing it at the same sha again changes nothing.
+func (c *Client) KeepCommit(ctx context.Context, dir, ref, sha string) error {
+	if err := checkBranch("ref", ref); err != nil {
+		return err
+	}
+	if err := checkRev("commit", sha); err != nil {
+		return err
+	}
+	if !strings.HasPrefix(ref, magnumRefs) || strings.HasPrefix(strings.ToLower(ref), prRefs) || strings.HasSuffix(ref, "/") {
+		return fmt.Errorf("gitx: keep %s as %q: only a ref under %s outside %s", sha, ref, magnumRefs, prRefs)
+	}
+	_, err := c.git(ctx, dir, call{label: "update-ref " + ref, mutates: true}, "update-ref", ref, sha)
+	return err
+}
+
 // UpdateRefDelete deletes a ref under refs/magnum/ (for example PRRef(n)). It
 // is idempotent: a missing ref is not an error. Other namespaces are refused so
 // a bug can never delete a real branch or tag. A symbolic ref is never

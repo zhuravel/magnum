@@ -102,6 +102,25 @@ func TestFetchPRIntoFetchesOnlyIntoARefOfItsOwn(t *testing.T) {
 	}
 }
 
+// KeepCommit points a ref under refs/magnum/ at a commit, never the
+// review's refs/magnum/pr/ (in any case) nor a ref outside refs/magnum/.
+func TestKeepCommitKeepsOnlyUnderARefOfItsOwn(t *testing.T) {
+	c, f := newFake(okRule("git", "-C", clone, "update-ref"))
+	if err := c.KeepCommit(context.Background(), clone, "refs/magnum/factory-kept/42/"+sha1, sha1); err != nil {
+		t.Fatalf("KeepCommit = %v", err)
+	}
+	wantCall(t, f, 0, true, "git", "-C", clone, "update-ref", "refs/magnum/factory-kept/42/"+sha1, sha1)
+	for _, bad := range []struct{ ref, sha string }{
+		{"refs/magnum/pr/42", sha1}, {"refs/magnum/PR/42", sha1}, {"refs/heads/main", sha1}, {"refs/magnum/", sha1},
+		{"refs/magnum/x y", sha1}, {"", sha1}, {"refs/magnum/k", "-x"}, {"refs/magnum/k", ""},
+	} {
+		c, f := newFake(okRule("git"))
+		if err := c.KeepCommit(context.Background(), clone, bad.ref, bad.sha); err == nil || len(f.Calls) != 0 {
+			t.Errorf("KeepCommit(%q, %q) = %v with %d git calls, want a refusal before git", bad.ref, bad.sha, err, len(f.Calls))
+		}
+	}
+}
+
 func TestFetchPRErrors(t *testing.T) {
 	c, _ := newFake()
 	if _, err := c.FetchPR(context.Background(), clone, 0); err == nil {

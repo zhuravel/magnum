@@ -745,6 +745,57 @@ func TestAClaimTakesTheFixersMovedHeadUnlessYouTyped(t *testing.T) {
 	}
 }
 
+// A claim at a newer head of the PR keeps the fixer's commits on no remote
+// before it switches away from them: under refs/magnum/factory-kept/<N>/
+// <sha> of the main clone, with a factory.fix_kept event that names the
+// ref, so the removal of a per-PR checkout, which deletes its reflog, loses
+// none. They were left on no ref, and the removal lost them (R2 and R18 on
+// T3b). A head a force-push of the PR left behind is the PR's, not the
+// fixer's: nothing keeps it.
+func TestAClaimKeepsTheFixersUnpushedCommitsBeforeItSwitches(t *testing.T) {
+	r := newFixRig(t, 1, 0)
+	shop := r.addShop()
+	clone := filepath.Join(r.root, "shop")
+	kept := func() string {
+		return r.gitIn(clone, "for-each-ref", "--format=%(refname) %(objectname)", "refs/magnum/factory-kept/")
+	}
+	r.pushPR(shop, 5, "fix.txt", "v1\n")
+	w := r.prWork("example/shop", 5)
+	pc := r.claimFix(w)
+	mine := r.commit(pc.Path, "fix.txt", "v2\n")
+	newer := r.pushPR(shop, 5, "fix.txt", "v3\n")
+	if got := r.claimFix(w); got.Head != newer {
+		t.Fatalf("the claim at the PR's newer head = %+v, want %s", got, newer)
+	}
+	ref := "refs/magnum/factory-kept/5/" + mine
+	if got := kept(); got != ref+" "+mine {
+		t.Fatalf("the kept refs = %q, want %s at the fixer's commit", got, ref)
+	}
+	if !r.eventsSay(pc.Name, "factory.fix_kept", ref) {
+		t.Fatalf("no factory.fix_kept event names %s", ref)
+	}
+	r.releaseFix(w)
+	if fsx.Exists(pc.Path) {
+		t.Fatalf("%s is still there after its release", pc.Path)
+	}
+	if got := r.gitIn(clone, "rev-parse", "--verify", ref+"^{commit}"); got != mine {
+		t.Fatalf("%s = %q after the removal, want the fixer's commit %s", ref, got, mine)
+	}
+
+	r.pushPR(shop, 6, "other.txt", "v1\n")
+	w6 := r.prWork("example/shop", 6)
+	r.claimFix(w6)
+	author := filepath.Join(r.root, "author-"+filepath.Base(shop))
+	r.gitIn(author, "reset", "--quiet", "--hard", "origin/master")
+	rebased := r.pushPR(shop, 6, "rebased.txt", "v1\n")
+	if got := r.claimFix(w6); got.Head != rebased {
+		t.Fatalf("the claim after a force-push = %+v, want %s", got, rebased)
+	}
+	if got := kept(); got != ref+" "+mine {
+		t.Fatalf("the kept refs = %q after a force-push of PR 6, want only PR 5's", got)
+	}
+}
+
 // A force-push of the PR between the claim and the release holds nothing:
 // the head the claim switched to counts as pushed, though the release's
 // fetch moved the fix ref off it. Its commits counted as unpushed_commits,

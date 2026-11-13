@@ -22791,6 +22791,12 @@ func (c *Client) Isolated(ctx context.Context, dir string, fn func(iso string) e
     only staging's mirrors use --filter. If a slot ever becomes a partial clone,
     Isolated's reads fail.
 
+func (c *Client) KeepCommit(ctx context.Context, dir, ref, sha string) error
+    KeepCommit points ref, under refs/magnum/ but never the review's
+    refs/magnum/pr/, at commit sha in the repository of dir (a worktree's refs
+    are its main clone's), so git keeps the commit and Unpushed counts it as
+    kept. Pointing it at the same sha again changes nothing.
+
 func (c *Client) LogAfter(ctx context.Context, dir, from, to string, n int) ([]Commit, error)
     LogAfter returns the last n commits of to that from lacks, newest first (git
     log -n <n> ^from to), as FileLog does for a path: the commits a branch made

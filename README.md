@@ -4692,7 +4692,10 @@ stages = [
   PR's head into `refs/magnum/factory-fix/<N>` of the main clone (never the review's `refs/magnum/pr/<N>`), takes
   the fix copy the PR used last when it is free, else another free one, else adds one up to `fix_copies` (none
   left: `copy: all 2 busy`, a wait that leaves the PR's fix queued), and switches the checkout to that head,
-  detached; a fix copy then runs `reset_db`, the changed `installs` and the Redis flush as a task's claim does.
+  detached, after it keeps the fixer's commits on no remote that the checkout carries under
+  `refs/magnum/factory-kept/<N>/<sha>` of the main clone (a `factory.fix_kept` event names the ref; nothing
+  deletes it, so `git update-ref -d` it once you looked); a fix copy then runs `reset_db`, the changed `installs`
+  and the Redis flush as a task's claim does.
   Each is a step of `slot:<checkout>:fix:<n>:<head>` with begin and ok or fail events, after the checkout's
   guard, which takes the fixer's own commits and pushes there as the factory's unless you typed in its panes
   since: a claim a restart cut runs only the steps it left undone, and a restart keeps the checkout the PR's.

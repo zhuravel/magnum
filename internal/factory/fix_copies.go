@@ -440,7 +440,7 @@ func (c *copySet) prepareFix(ctx context.Context, w registry.PRWork, owner store
 			return fn(ctx)
 		})
 	}
-	if err := step("switch", func(ctx context.Context) error { return c.switchFix(ctx, sl, a, head) }); err != nil {
+	if err := step("switch", func(ctx context.Context) error { return c.switchFix(ctx, w, sl, a, head) }); err != nil {
 		return err
 	}
 	if data == nil {
@@ -451,8 +451,12 @@ func (c *copySet) prepareFix(ctx context.Context, w registry.PRWork, owner store
 
 // switchFix switches checkout sl to head (slots.Resync) and records it as
 // the checkout of the claim's assignment a, with the time, which a person's
-// typing in the PR's fix panes is read against (the guard).
-func (c *copySet) switchFix(ctx context.Context, sl store.Slot, a store.Assignment, head string) error {
+// typing in the PR's fix panes is read against (the guard). The fixer's
+// commits on no remote that HEAD carries are kept first (keepUnpushed).
+func (c *copySet) switchFix(ctx context.Context, w registry.PRWork, sl store.Slot, a store.Assignment, head string) error {
+	if err := c.keepUnpushed(ctx, w, sl, head); err != nil {
+		return err
+	}
 	if err := c.slots.Resync(ctx, sl, head); err != nil {
 		return err
 	}
@@ -463,6 +467,47 @@ func (c *copySet) switchFix(ctx context.Context, sl store.Slot, a store.Assignme
 		return nil
 	}
 	return c.st.UpdateAssignmentHead(ctx, a.ID, head)
+}
+
+// fixKeptPrefix holds the fixer's commits a claim's switch would leave on
+// no ref (keepUnpushed): fixKeptRef, apart from the fix refs
+// (refs/magnum/factory-fix/<N>, which a release deletes) and the review's
+// refs/magnum/pr/<N>. Nothing deletes them: they are yours to look at.
+const fixKeptPrefix = "refs/magnum/factory-kept/"
+
+// fixKeptRef is where a claim keeps commit sha of PR number's fixer.
+func fixKeptRef(number int, sha string) string {
+	return fixKeptPrefix + strconv.Itoa(number) + "/" + sha
+}
+
+// keepUnpushed keeps checkout sl's HEAD under fixKeptRef in its main clone,
+// with a factory.fix_kept event that names the ref, when the claim of PR
+// work w is about to switch it to head and it carries commits on no remote
+// or magnum ref past the head the PR's last claim switched to
+// (unpushedPastClaim): the switch leaves them on no ref, and the removal of
+// a per-PR checkout deletes the reflog that still names them. A HEAD at
+// head, or with no such commit (the PR's own old head after a force-push
+// among them), keeps nothing. Once kept, the commits count as pushed, so a
+// switch run again keeps nothing twice.
+func (c *copySet) keepUnpushed(ctx context.Context, w registry.PRWork, sl store.Slot, head string) error {
+	if !fsx.Exists(sl.Path) {
+		return nil
+	}
+	got, err := c.git.RevParse(ctx, sl.Path, "HEAD")
+	if err != nil || got == head {
+		return err
+	}
+	n, err := c.unpushedPastClaim(ctx, sl)
+	if err != nil || n == 0 {
+		return err
+	}
+	ref := fixKeptRef(w.Number, got)
+	if err := c.git.KeepCommit(ctx, sl.Path, ref, got); err != nil {
+		return err
+	}
+	c.event(ctx, sl.Name, "info", "factory.fix_kept", fmt.Sprintf("HEAD %s of %s carries %d commit(s) of the fixer's on no remote: kept as %s before the switch to the PR's head %s",
+		textx.ShortSHA(got), sl.Name, n, ref, textx.ShortSHA(head)))
+	return nil
 }
 
 // fixGuard is what each step of PR work w's claim runs before it changes

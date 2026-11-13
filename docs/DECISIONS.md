@@ -26917,8 +26917,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
     progress aborted, the checkout recorded), and a fix copy runs `reset_db`, the changed `installs` and the
     Redis flush, as a task's claim does (`readyData`). Each is a step of `slot:<checkout>:fix:<assignment>:<head>`
     after the checkout's guard: a claim a restart cut runs only the steps it left undone, and a later claim at the
-    same head keeps what the fixer did there, while one at a newer head switches to it (the fixer's unpushed
-    commits stay in the copy's reflog, as magnum's resync leaves them). The guard takes a HEAD at the PR's head
+    same head keeps what the fixer did there, while one at a newer head switches to it. Before the switch, a HEAD
+    with commits on no remote past the PR's last claimed head is kept under `refs/magnum/factory-kept/<N>/<sha>`
+    of the main clone (`keepUnpushed`, `gitx.KeepCommit`), with a `factory.fix_kept` event that names it, and
+    nothing deletes that ref. The first build left them in the checkout's reflog, as magnum's resync does, but the
+    removal of a per-PR checkout deletes that reflog, so they were lost (the engine owner's R2 and R18 on T3b); a
+    hold until they are pushed would never clear for a commit the PR moved past. A force-push's old PR head is the
+    PR's, not the fixer's: it is not kept. The guard takes a HEAD at the PR's head
     the claim or the release just fetched as the factory's own whatever you typed (all of it is on GitHub: the
     engine owner's R1 on T3b, since a release held such a HEAD as `head_drift` for good once you typed, the owner
     row's head being the claim's), a descendant of the checkout only unless you typed into the PR's fix panes
@@ -26961,7 +26966,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     in internal/config and `TestFetchPRIntoFetchesOnlyIntoARefOfItsOwn` in internal/gitx; the per-PR checkout's
     folder, `TestAPerPRCheckoutLivesUnderItsOwnRepositorysFolder` (failing first); the engine owner's review of
     T3b, `TestAReleaseTakesThePushedHeadWhateverYouTyped` (R1, failing first),
-    `TestAForcePushOfThePRDoesNotHoldItsFixCheckout` (R5, failing first) and, for code that had no test,
+    `TestAForcePushOfThePRDoesNotHoldItsFixCheckout` (R5, failing first),
+    `TestAClaimKeepsTheFixersUnpushedCommitsBeforeItSwitches` (R2 and R18, failing first) with
+    `TestKeepCommitKeepsOnlyUnderARefOfItsOwn` in internal/gitx and, for code that had no test,
     `TestAClaimTakesTheFixersMovedHeadUnlessYouTyped` (R10).
   - The Redis databases. Copy n's 16 Redis databases start at n × 16 and the fix copies are numbered past the
     tasks', so a repository whose copies use Redis offsets (its `env` names `REDIS_DB_OFFSET` or renders `{n*16}`:
