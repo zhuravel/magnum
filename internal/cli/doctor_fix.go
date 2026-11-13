@@ -126,8 +126,14 @@ func doctorFactorysPRs(ctx context.Context, d doctorDeps) (doctorCheck, bool) {
 		return doctorCheck{}, false
 	}
 	slices.Sort(prs)
+	// While --handover all stands, the daemon refuses every `back <pr>`
+	// (returnToMagnum): `back all` lifts it first (C4).
+	back := "`magnum fix --handover back <pr>` returns one"
+	if _, all, err := d.Store.GetKV(ctx, engine.KVFixHandoverAll); all && err == nil {
+		back = "`magnum fix --handover back all` lifts `magnum fix --handover all` and returns each"
+	}
 	return doctorWarned("fix handover", fmt.Sprintf("%d PRs are the factory's, which fixes none while %s: %s", len(prs), key, strings.Join(prs, ", ")),
-		"`magnum fix --handover back <pr>` returns one the factory has not worked since it took it (a returning PR goes back by itself at a tick "+
+		back+" the factory has not worked since it took it (a returning PR goes back by itself at a tick "+
 			"that finds the factory still idle on it); fix the rest by hand, or set [factory] fix = \"on\" and restart both daemons"), true
 }
 

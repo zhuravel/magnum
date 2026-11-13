@@ -4162,9 +4162,10 @@ nor on one whose row it cannot read: `magnum fix`, `f`, `c`, `P`, autofix, the l
 held fix and the late settle of a push all refuse it ("the factory fixes this PR since 09:30"). `d` (`magnum
 fix --done`) starts no fixer, so it still lifts what Magnum's own fix left you before the PR handed over. An
 attention the factory raised is the factory's to lift, once you answer it there: `d` refuses it and says so.
-The refusal offers `magnum fix --handover back <pr>` when the way back would take the PR; for a PR the factory
-worked, the usual case, it says to fix it by hand while `[factory] fix = "off"`. When Magnum cannot read whether
-the factory raised it, `d` asks you to try again shortly.
+The refusal offers `magnum fix --handover back <pr>` when the way back would take the PR, or `--handover back all`
+while `--handover all` stands, since that refuses every `back <pr>`; for a PR the factory worked, the usual case,
+it says to fix it by hand while `[factory] fix = "off"`. When Magnum cannot read whether the factory raised it,
+or whether `--handover all` stands, `d` asks you to try again shortly.
 
 - `magnum fix --handover <pr>` hands one own PR to the factory. When none of Magnum's fix work is in flight
   on it, the factory takes it at once. Otherwise the PR hands over once that work ends: Magnum starts no new

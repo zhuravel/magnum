@@ -746,17 +746,24 @@ func TestTheFactorysRaiseFailsWhenItsMarkCannotBeWritten(t *testing.T) {
 // factory has not worked it since it took it, and does not fix it now. A PR
 // the factory worked, the usual case behind its attention, stays the
 // factory's, and the refusal says to fix it by hand under [factory] fix =
-// "off" instead of sending the operator to a refusal.
+// "off" instead of sending the operator to a refusal. While `--handover all`
+// stands, which refuses every `back <pr>`, it offers `back all`, which
+// lifts it (C3, C4), and when whether it stands cannot be read, no way back
+// at all. The way offered takes the PR.
 func TestFixDoneOffersTheWayBackOnlyWhenItWouldTakeThePR(t *testing.T) {
 	storetest.Parallel(t)
 	for _, tc := range []struct {
 		name  string
 		lease FixLease
-		back  bool
+		all   string // the row of --handover all: "" none, "set", "unread"
+		back  string // the way back offered: "" none
 	}{
-		{"the factory worked it", FixLease{Worked: true}, false},
-		{"the factory fixes it now", FixLease{Fixing: true, Phase: FixPhaseFixing, Head: "b1", Cycle: 1}, false},
-		{"the factory has not worked it", FixLease{}, true},
+		{"the factory worked it", FixLease{Worked: true}, "", ""},
+		{"the factory fixes it now", FixLease{Fixing: true, Phase: FixPhaseFixing, Head: "b1", Cycle: 1}, "", ""},
+		{"the factory has not worked it", FixLease{}, "", "talkable/talkable#2"},
+		{"--handover all stands", FixLease{}, "set", "all"},
+		{"--handover all stands, and the factory worked it", FixLease{Worked: true}, "set", ""},
+		{"whether --handover all stands cannot be read", FixLease{}, "unread", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			lease := &fakeLease{}
@@ -767,6 +774,12 @@ func TestFixDoneOffersTheWayBackOnlyWhenItWouldTakeThePR(t *testing.T) {
 			if r := factoryRaise(h); r.State != store.RequestDone {
 				t.Fatalf("the factory's raise: %s %q", r.State, deref(r.Result))
 			}
+			switch tc.all {
+			case "set":
+				h.e.setKV(h.ctx, KVFixHandoverAll, rowJSON(handover{At: h.clock.Now().UTC(), By: handoverAllBy}))
+			case "unread":
+				failKVRead(h, KVFixHandoverAll)
+			}
 			id := h.fix(FixPayload{Done: true, Seen: deref(h.pr(2).LastError)})
 			h.handle()
 			r := h.request(id)
@@ -774,10 +787,29 @@ func TestFixDoneOffersTheWayBackOnlyWhenItWouldTakeThePR(t *testing.T) {
 			if r.State != store.RequestFailed || !strings.Contains(said, "the factory raised it") || !strings.HasSuffix(said, "; nothing changed") {
 				t.Fatalf("magnum fix --done: %s %q", r.State, said)
 			}
-			offers := strings.Contains(said, "`magnum fix --handover back talkable/talkable#2` returns the PR to magnum")
+			offers := strings.Count(said, "`magnum fix --handover back ")
 			byHand := strings.Contains(said, `fix it by hand under [factory] fix = "off"`)
-			if offers != tc.back || byHand == tc.back {
-				t.Errorf("the refusal = %q: offers the way back %v, by hand %v; want the way back %v", said, offers, byHand, tc.back)
+			switch {
+			case tc.back == "" && (offers > 0 || byHand == (tc.all == "unread")):
+				t.Errorf("the refusal = %q: offers %d ways back, by hand %v; want no way back", said, offers, byHand)
+			case tc.back != "" && (offers != 1 || byHand || !strings.Contains(said, "`magnum fix --handover back "+tc.back+"`")):
+				t.Errorf("the refusal = %q: offers %d ways back, by hand %v; want `back %s` alone", said, offers, byHand, tc.back)
+			}
+			if tc.all == "unread" && !strings.Contains(said, "ask again shortly") {
+				t.Errorf("the refusal = %q, want ask again shortly", said)
+			}
+			if tc.back == "" {
+				return
+			}
+			p := HandoverPayload{PRTarget: PRTarget{Ref: "2"}, Back: true}
+			if tc.back == "all" {
+				p = HandoverPayload{All: true, Back: true}
+			}
+			if r := h.handOver(p); r.State != store.RequestDone {
+				t.Errorf("the way back offered: %s %q", r.State, deref(r.Result))
+			}
+			if o, _ := ownerOf(h); o.Owner != fixwork.OwnerReturning {
+				t.Errorf("owner = %+v after the way back offered, want returning", o)
 			}
 		})
 	}

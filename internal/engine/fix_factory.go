@@ -366,9 +366,9 @@ func (e *Engine) markFactoryAttention(ctx context.Context, prID int64, msg, caus
 // reviewed. A mark, or a row of who fixes the PR, that cannot be read
 // refuses too. nil for magnum's own attention, and once the PR is magnum's
 // again, whose factory lifts nothing. The refusal offers `magnum fix
-// --handover back` only when the way back would take the PR (staysFactorys,
-// C11); a PR the factory worked, the usual case, is fixed by hand under
-// [factory] fix = "off" instead.
+// --handover back` only when the way back would take the PR (wayBackWords,
+// C11, C3, C4); a PR the factory worked, the usual case, is fixed by hand
+// under [factory] fix = "off" instead.
 func (e *Engine) factoryAttentionRefusal(ctx context.Context, repo store.Repo, pr store.PR, msg string) error {
 	switch by, ok, err := e.attentionByOf(ctx, pr.ID); {
 	case err != nil:
@@ -383,12 +383,27 @@ func (e *Engine) factoryAttentionRefusal(ctx context.Context, repo store.Repo, p
 	case !owned || !o.Factory():
 		return nil
 	}
-	other := "the PR stays the factory's (`magnum fix --handover back` would not return it now), so fix it by hand under [factory] fix = \"off\""
-	if e.staysFactorys(ctx, repo, pr) == "" {
-		other = fmt.Sprintf("`magnum fix --handover back %s#%d` returns the PR to magnum", repo.FullName(), pr.Number)
-	}
 	return fmt.Errorf("PR #%d needs you for what the factory's fix left, and the factory raised it: it lifts it once you answer it there "+
-		"(`magnum fix --done` lifts only what magnum's own fix left), or %s; nothing changed", pr.Number, other)
+		"(`magnum fix --done` lifts only what magnum's own fix left), or %s; nothing changed", pr.Number, e.wayBackWords(ctx, repo, pr))
+}
+
+// wayBackWords is factoryAttentionRefusal's other way for pr, which the
+// factory fixes: the way back only when it would take the PR, judged as
+// returnToMagnum judges it. A PR that stays the factory's (staysFactorys) is
+// fixed by hand; while `--handover all` stands, which refuses every `back
+// <pr>`, `back all` lifts it and returns the PR (C3, C4); when whether it
+// stands cannot be read, no way back is offered.
+func (e *Engine) wayBackWords(ctx context.Context, repo store.Repo, pr store.PR) string {
+	if e.staysFactorys(ctx, repo, pr) != "" {
+		return "the PR stays the factory's (`magnum fix --handover back` would not return it now), so fix it by hand under [factory] fix = \"off\""
+	}
+	switch all, err := handoverAllOf(ctx, e.st); {
+	case err != nil:
+		return fmt.Sprintf("whether the way back would take the PR cannot be read (%v): ask again shortly", err)
+	case all:
+		return "`magnum fix --handover back all` lifts `magnum fix --handover all` and returns the PR to magnum, with every other PR the factory has not worked"
+	}
+	return fmt.Sprintf("`magnum fix --handover back %s#%d` returns the PR to magnum", repo.FullName(), pr.Number)
 }
 
 // attentionCauseRe is the factory's cause of an attention: a short word.

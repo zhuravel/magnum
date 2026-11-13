@@ -343,8 +343,24 @@ func TestTheDoctorNamesTheFactorysPRsWhileItFixesNone(t *testing.T) {
 	}
 	if warn.Status != doctorWarn ||
 		!strings.Contains(warn.Detail, `2 PRs are the factory's, which fixes none while [factory] fix is "off": talkable#3, talkable#4 (returning)`) ||
-		!strings.Contains(warn.Fix, "magnum fix --handover back") || !strings.Contains(warn.Fix, "by hand") {
+		!strings.Contains(warn.Fix, "magnum fix --handover back <pr>") || !strings.Contains(warn.Fix, "by hand") {
 		t.Errorf("the factory's PRs = %+v", warn)
+	}
+	// While `--handover all` stands, which refuses every `back <pr>`, the
+	// way back is `back all`, which lifts it (C4).
+	h.setKVJSON(engine.KVFixHandoverAll, map[string]any{"at": h.now, "by": "magnum fix --handover all"})
+	warned := false
+	for _, c := range doctorFixHandover(h.ctx, d) {
+		if !strings.Contains(c.Detail, "which fixes none") {
+			continue
+		}
+		warned = true
+		if strings.Contains(c.Fix, "back <pr>") || !strings.Contains(c.Fix, "`magnum fix --handover back all` lifts `magnum fix --handover all`") {
+			t.Errorf("the factory's PRs under --handover all = %+v", c)
+		}
+	}
+	if !warned {
+		t.Error("no WARN of the factory's PRs under --handover all")
 	}
 	h.d.Cfg.Factory.Fix = config.FactoryFixOn
 	for _, c := range doctorFixHandover(h.ctx, d) {

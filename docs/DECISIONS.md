@@ -19479,6 +19479,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
     the fix while the PR is paused, the one state continueCandidates continues; a PR the tick moved on
     meanwhile is never continued, and the pause ends the round, closed by the close for a closing state and
     with its own outcome otherwise (a Codex flag's hold).
+  - --done's refusal of the factory's attention judges the way back as returnToMagnum does (C3, C4): while
+    `fix.handover_all` stands, which refuses every `--handover back <pr>`, it offers `--handover back all`,
+    which lifts it and returns the PR with every other the factory has not worked; a PR that stays the
+    factory's is still fixed by hand. When the row of `--handover all` cannot be read the refusal offers no
+    way back and asks again shortly, since `back all` on a misread would return every such PR. The doctor's
+    WARN of the factory's PRs names `back all` the same way while that row stands.
 
 ## The factory (2026-11-03)
 
