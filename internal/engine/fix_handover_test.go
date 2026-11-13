@@ -567,6 +567,42 @@ func TestAbortEndsAFixRunNoLoopBacks(t *testing.T) {
 	}
 }
 
+// On a PR whose review waits in line, `magnum abort`, the morning list's
+// action for a fixer's run no loop backs, ends that run too, and not only
+// the review it takes back; the action says that it takes the review back,
+// which `magnum review` asks for again (C12).
+func TestAbortOfAQueuedPREndsAFixRunNoLoopBacks(t *testing.T) {
+	h, _ := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", nil)
+	review := h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.handle()
+	if r := h.request(review); r.State != store.RequestDone {
+		t.Fatalf("magnum review: %s %q", r.State, deref(r.Result))
+	}
+	pr = h.wantState(2, store.PRRereviewPending)
+	run, err := h.st.CreateRun(h.ctx, store.Run{ID: "fix-run-1", PRID: pr.ID, Round: 1, Role: "claude-fix", Kind: store.RunFix,
+		TargetSHA: fixHead, Identity: "zhuravel", State: store.RunEnded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, recs, err := h.e.fixQuiet(h.ctx, h.heldRepo(), pr)
+	if err != nil || len(recs) != 1 || !strings.Contains(recs[0].Action, "`magnum abort talkable/talkable#2` ends it, and takes back the PR's review that waits in line") {
+		t.Fatalf("records = %+v (%v), want the run with magnum abort as its action, which names the take-back", recs, err)
+	}
+	id := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.handle()
+	if r := h.request(id); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "took back the forced review") ||
+		!strings.Contains(deref(r.Result), "ended the fixer's run fix-run-1") {
+		t.Errorf("magnum abort: %s %q", r.State, deref(r.Result))
+	}
+	if cur, err := h.st.RunByID(h.ctx, run.ID); err != nil || cur.State != store.RunAbandoned {
+		t.Errorf("the run = %s (%v), want abandoned", cur.State, err)
+	}
+	if q, recs, err := h.e.fixQuiet(h.ctx, h.heldRepo(), h.pr(2)); err != nil || !q {
+		t.Errorf("quiet = %v, %+v, %v; want quiet once the run ended", q, recs, err)
+	}
+}
+
 // What magnum's fix left you stays yours after the PR hands over to the
 // factory: `magnum fix --done` (d) still lifts that attention, which
 // starts no fixer, also while a held fix waits for the factory's import;

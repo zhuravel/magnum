@@ -207,6 +207,9 @@ func (f fixFlight) records(pr store.PR, label string, handing bool, now time.Tim
 		action := "nothing: it ends with its loop"
 		if _, ok := rows[FixRecLoop]; !ok {
 			action = fmt.Sprintf("`magnum abort %s` ends it", label)
+			if pr.State == store.PRQueued || pr.State == store.PRRereviewPending { // requestAbort's queued branch
+				action += ", and takes back the PR's review that waits in line (`magnum review` asks for it again)"
+			}
 		}
 		out = append(out, FixRecord{Kind: FixRecRun, What: fmt.Sprintf("the fixer's run %s (%s)", r.ID, r.State), Action: action})
 	}
@@ -222,14 +225,7 @@ func (f fixFlight) records(pr store.PR, label string, handing bool, now time.Tim
 // what it ended ("": none, or a loop backs them now); a PR something holds
 // is an error, to ask again.
 func (e *Engine) endOrphanFixRuns(ctx context.Context, repo store.Repo, pr store.PR) (string, error) {
-	orphans := func() ([]store.Run, error) {
-		runs, err := e.st.ActiveRuns(ctx)
-		if err != nil {
-			return nil, err
-		}
-		return slices.DeleteFunc(runs, func(r store.Run) bool { return r.Kind != store.RunFix || r.PRID != pr.ID }), nil
-	}
-	if runs, err := orphans(); err != nil || len(runs) == 0 {
+	if runs, err := e.activeFixRuns(ctx, pr.ID); err != nil || len(runs) == 0 {
 		return "", err
 	}
 	if e.d.DryRun {
@@ -239,10 +235,27 @@ func (e *Engine) endOrphanFixRuns(ctx context.Context, repo store.Repo, pr store
 		return "", fmt.Errorf("%s; run `magnum abort %s#%d` again shortly", e.heldReason(pr.ID), repo.FullName(), pr.Number)
 	}
 	defer e.unreserve(pr.ID)
+	return e.endOrphanFixRunsHeld(ctx, repo, pr)
+}
+
+// activeFixRuns are the fixer's runs of PR prID still active.
+func (e *Engine) activeFixRuns(ctx context.Context, prID int64) ([]store.Run, error) {
+	runs, err := e.st.ActiveRuns(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(runs, func(r store.Run) bool { return r.Kind != store.RunFix || r.PRID != prID }), nil
+}
+
+// endOrphanFixRunsHeld is endOrphanFixRuns under the PR's reservation,
+// which the caller holds (endOrphanFixRuns, or requestAbort's take-back of
+// a review in line, C12): with no loop's row, each active fix run of pr
+// ends, and the answer says which ("" for none).
+func (e *Engine) endOrphanFixRunsHeld(ctx context.Context, repo store.Repo, pr store.PR) (string, error) {
 	if _, raw, _, err := e.fixRow(ctx, pr.ID); raw != "" || err != nil {
 		return "", err // a loop backs them now: the abort is the loop's
 	}
-	runs, err := orphans()
+	runs, err := e.activeFixRuns(ctx, pr.ID)
 	if err != nil {
 		return "", err
 	}

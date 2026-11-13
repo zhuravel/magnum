@@ -197,6 +197,14 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 			if note := e.endFixLoop(ctx, repo, pr, "magnum abort"); note != "" { // the loop's re-review taken back
 				res += "; " + note
 			}
+			// A fixer's run no loop backs ends too: the morning list's
+			// action for it is this abort (fix_drained.go, C12).
+			switch note, oerr := e.endOrphanFixRunsHeld(ctx, repo, pr); {
+			case oerr != nil:
+				res += "; the fixer's runs no loop backs did not end: " + oerr.Error()
+			case note != "":
+				res += "; " + note
+			}
 		}
 		e.unreserve(pr.ID)
 		cancel()
