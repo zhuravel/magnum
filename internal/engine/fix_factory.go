@@ -112,14 +112,25 @@ func (e *Engine) fixRefOf(ctx context.Context, prID int64) (*fixRefRow, string) 
 // serves comes between the round's end and this. The event is written
 // once: only when the round's own delete takes the PR's row of the fix, the
 // one the round took, so another end that took the row first (endFixRef)
-// leaves it unsaid here. A round
-// whose judge turn paused on a usage limit or a lost login (pauseContinues)
-// has not ended: the turn continues as the same round once the pause
-// lifts, so the row stays for the continue to take at its dispatch, and no
-// event says it ended (as magnum's own loop waits for it, continueFixLoop).
+// leaves it unsaid here. A round whose judge turn paused on a usage limit
+// or a lost login (pauseContinues) has not ended: the turn continues as the
+// same round once the pause lifts, so the row stays for the continue to
+// take at its dispatch, and no event says it ended (as magnum's own loop
+// waits for it, continueFixLoop). On a PR closed or merged meanwhile
+// (closedOnGitHub, read again: the close lets an asked round run on and
+// leaves its fix to it, endFixRefAtClose) no continue comes, so that pause
+// is the round's end, with the outcome closed and the close as its by (C5).
 func (e *Engine) fixRefAfterRound(ctx context.Context, job *roundJob, res pipeline.RoundResult) {
-	if job.fixRef == nil || e.pauseContinues(ctx, job.pr, res.Outcome) {
+	if job.fixRef == nil {
 		return
+	}
+	outcome, by := res.Outcome, ""
+	if e.pauseContinues(ctx, job.pr, res.Outcome) {
+		c, closed := e.closedOnGitHub(ctx, job.pr.ID)
+		if !closed {
+			return
+		}
+		outcome, by = pipeline.OutcomeClosed, c.by()
 	}
 	switch gone, err := e.st.DeleteKVIf(ctx, kvPRFixRef(job.pr.ID), job.fixRefRaw); {
 	case err != nil:
@@ -129,15 +140,35 @@ func (e *Engine) fixRefAfterRound(ctx context.Context, job *roundJob, res pipeli
 		return
 	}
 	r := job.fixRef
-	data := map[string]any{"fix_ref": r.FixRef, "round": res.Round, "outcome": res.Outcome, "target_sha": res.TargetSHA}
+	data := map[string]any{"fix_ref": r.FixRef, "round": res.Round, "outcome": outcome, "target_sha": res.TargetSHA}
 	if r.LocalRound != nil {
 		data["local_round"] = r.LocalRound
 	}
 	if res.ReviewURL != "" {
 		data["review_url"] = res.ReviewURL
 	}
+	ended := cmpOrOutcome(outcome)
+	if by != "" {
+		data["by"] = by
+		ended += " (" + by + ")"
+	}
 	e.event(ctx, "info", prSubject(job.repo, job.pr.Number), "fix.factory_round", fmt.Sprintf("%s ended %s: the re-review of the factory's push of %s (cycle %d)",
-		roundName(res), cmpOrOutcome(res.Outcome), textx.ShortSHA(r.FixRef.Head), r.FixRef.Cycle), data)
+		roundName(res), ended, textx.ShortSHA(r.FixRef.Head), r.FixRef.Cycle), data)
+}
+
+// closedOnGitHub reads PR prID again and reports whether it is closed or
+// merged (GitHub's state, or a closing state), and how (c.by); a failed
+// read reports it open, so a pause keeps its fix for the continue.
+func (e *Engine) closedOnGitHub(ctx context.Context, prID int64) (c closeStop, closed bool) {
+	cur, err := e.st.PRByID(ctx, prID)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "the factory's fix: the PR after its round paused", "pr", prID)
+		return closeStop{}, false
+	}
+	if cur.GHState == store.GHOpen && !slices.Contains(closingStates, cur.State) {
+		return closeStop{}, false
+	}
+	return closeStop{state: cur.GHState}, true
 }
 
 // factoryAbortBy is who stops the factory's re-review when the factory
@@ -181,7 +212,8 @@ func (e *Engine) endFixRef(ctx context.Context, repo store.Repo, pr store.PR, ou
 // c): a re-review of it that waits in line or paused mid-turn never runs on
 // a closed PR, so fix.factory_round names it, closed by the close, and the
 // row goes. A round of the fix in flight, which a close lets run on as one
-// asked for (stopClosedRound), names its own end (fixRefAfterRound).
+// asked for (stopClosedRound), names its own end (fixRefAfterRound), closed
+// when its judge then pauses, since no continue comes.
 func (e *Engine) endFixRefAtClose(ctx context.Context, repo store.Repo, pr store.PR, c closeStop) {
 	if !e.roundOfFix(pr.ID) {
 		e.endFixRef(ctx, repo, pr, pipeline.OutcomeClosed, c.by())

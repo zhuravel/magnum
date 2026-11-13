@@ -458,6 +458,54 @@ func TestAClosedPRsFactoryReReviewEndsWithTheClose(t *testing.T) {
 	}
 }
 
+// A PR that merges while a round of the factory's fix runs lets that round
+// run on (it was asked for), and the close leaves the fix to it. When that
+// round's judge then pauses on a usage limit or a lost login, its turn would
+// continue as the same round, but a closed PR is never continued: the pause
+// is the round's end, closed by the merge (C5). The factory hears it once,
+// and the row goes.
+func TestAFactoryRoundThatPausesOnAClosedPREndsClosed(t *testing.T) {
+	storetest.Parallel(t)
+	for _, outcome := range []string{pipeline.OutcomeUsageLimit, pipeline.OutcomeLoginRequired} {
+		t.Run(outcome, func(t *testing.T) {
+			h := leaseHarness(t, &fakeLease{})
+			pausedReReview(h, outcome, true)
+			ref := fixwork.FixRef{Work: 7, Cycle: 1, Head: "b2"}
+			if r := h.reReviewOf(ref); r.State != store.RequestDone {
+				t.Fatalf("the factory's re-review: %s %q", r.State, deref(r.Result))
+			}
+			h.gatedTick()
+			pr := h.pr(2)
+			h.open(prSpec{n: 1, head: "base1"}) // #2 merged: it left the OPEN list
+			h.gh.mu.Lock()
+			h.gh.closed[2] = "MERGED"
+			h.gh.mu.Unlock()
+			for range 2 { // the poll confirms the merge while the round runs on
+				if err := h.e.Tick(h.ctx); err != nil {
+					t.Fatalf("tick: %v", err)
+				}
+				h.advance(confirmGap)
+			}
+			if cur := h.pr(2); cur.State != store.PRClosed || !h.e.roundActive(pr.ID) {
+				t.Fatalf("PR #2 = %s, round held %v: want closed with its asked round running on", cur.State, h.e.roundActive(pr.ID))
+			}
+			if evs := h.fixEvents("fix.factory_round"); len(evs) != 0 {
+				t.Fatalf("fix.factory_round while its round runs on: %+v", evs)
+			}
+			h.rd.mu.Lock()
+			close(h.rd.gate) // the judge's turn pauses
+			h.rd.mu.Unlock()
+			h.settle()
+			if outcome, by := factoryRoundOf(t, h, ref); outcome != pipeline.OutcomeClosed || by != "the PR's merge on GitHub" {
+				t.Errorf("fix.factory_round = %s by %q, want closed by the merge", outcome, by)
+			}
+			if r, raw := h.e.fixRefOf(h.ctx, pr.ID); r != nil {
+				t.Errorf("the closed PR keeps the fix: %s", raw)
+			}
+		})
+	}
+}
+
 // The factory's abort of its own round paused mid-turn stops it, as `magnum
 // abort` stops a paused round: its turn would otherwise continue later,
 // past the hold of the factory's next fixer, and post on an old head. An
