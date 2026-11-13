@@ -729,6 +729,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
     which a save that works lists again; a removal that is not forced and a switch list as before.
     `TestAForcedRemovalsFailedSaveNamesEachFileOfAnUntrackedFolder` failed first (its patch fails); its case of a
     folder that cannot be listed fails when that folder goes through the sort.
+  - The README no longer says a save kept in part always has its full list (C6, words only). keepPartial writes
+    `saved.txt` into the same folder, and on the full disk that failed the save it can fail too: a save that copied
+    something is then kept with no `saved.txt`, which the warning says ("with no saved.txt"), and one that copied
+    nothing goes. The third entry's C3 bullet names only a save that cannot make its folder; in all three the
+    warning's first 20 paths are the only record of what the removal deleted, as the README now says.
 
 ## Scheduling
 

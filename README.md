@@ -968,7 +968,9 @@ then discards nothing and retries at its next attempt; the first failure of a sl
 removed. A forced removal goes on over a save that fails: its `slot.discarded` event, a warning written before
 git deletes anything, names what it deletes and says "forced, not saved"; a save that failed part way keeps what
 it copied, and its `saved.txt`, which the warning names, lists every file it does not hold, a wholly untracked
-folder's one by one (a folder git cannot list is named whole).
+folder's one by one (a folder git cannot list is named whole). When that `saved.txt` cannot be written either (a
+full disk fails it too), or the save cannot make its folder, the warning says so, and the first 20 paths it names
+are all that names what the removal deleted.
 
 A round that fails three times on one head (a timeout, an error, a setup failure charged to the PR) parks
 its PR in needs attention. When the cause was Magnum's own (an unknown role, a launch line that broke), the
