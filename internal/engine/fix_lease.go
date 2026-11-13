@@ -13,7 +13,8 @@ package engine
 // round for fixLeaseGrace from the first failure, then fails open: magnum
 // reviews, a warn event says so once, and the PR's row (KVPRFixLeaseUnread,
 // a key-value row: no migration) shows on the doctor's line until a read
-// works again. A read of magnum's own registry that fails says nothing of
+// works again, which each tick tries (sweepLeaseUnreads), or the PR leaves
+// the factory or closes. A read of magnum's own registry that fails says nothing of
 // the factory: the round waits, as for a fix loop's row that cannot be read,
 // and nothing is recorded. A nil reader is inert: no lease is read, nothing
 // is held or refused, no event or doctor line, as before the factory fixed
@@ -23,7 +24,9 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -261,7 +264,11 @@ func (e *Engine) noteLease(ctx context.Context, pr store.PR, v leaseView) bool {
 	if v.err == nil {
 		if recorded && !e.d.DryRun {
 			e.delKV(ctx, KVPRFixLeaseUnread(pr.ID))
-			e.event(ctx, "info", subject, "fix.lease_read", "the factory's lease of the PR reads again", nil)
+			msg := "the factory's lease of the PR reads again"
+			if !v.owned {
+				msg = "the factory no longer fixes the PR: its failed lease read is dropped"
+			}
+			e.event(ctx, "info", subject, "fix.lease_read", msg, nil)
 		}
 		_, held := e.leaseWait(v, u, recorded)
 		return held
@@ -286,6 +293,47 @@ func (e *Engine) noteLease(ctx context.Context, pr store.PR, v leaseView) bool {
 			map[string]any{"since": u.Since, "source": cmp.Or(u.Source, "lease")})
 	}
 	return held
+}
+
+// sweepLeaseUnreads is the tick's look at every failed lease read recorded
+// (KVPRFixLeaseUnread), dispatch candidate or not: a PR reviewed after it
+// failed open is none, and only the reads of dispatch and `magnum review`
+// cleared a row, so the doctor's WARN outlived the failure for good on a
+// reviewed or closed PR. It reads the PR's owner row and lease again, as
+// dispatch does (noteLease): the row goes once the lease reads or the
+// factory no longer fixes the PR, a read that still fails keeps it (and a
+// grace that ends meanwhile fails open), and magnum's own failed read of
+// the owner row leaves it as it is. A PR gone or closed (merged too) drops
+// its row at once, and so does a daemon that reads no lease.
+func (e *Engine) sweepLeaseUnreads(ctx context.Context) {
+	keys, err := e.st.KVKeys(ctx, "pr.*.fix_lease_unread")
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "fix lease: the failed reads")
+		return
+	}
+	for _, key := range keys {
+		var id int64
+		if _, err := fmt.Sscanf(key, "pr.%d.", &id); err != nil || KVPRFixLeaseUnread(id) != key {
+			continue
+		}
+		pr, err := e.st.PRByID(ctx, id)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			e.delKV(ctx, key)
+			continue
+		case err != nil:
+			continue
+		case pr.GHState != store.GHOpen || slices.Contains(closingStates, pr.State):
+			e.delKV(ctx, key)
+			continue
+		}
+		switch v, ok := e.leaseOf(ctx, pr); {
+		case !ok:
+			e.delKV(ctx, key)
+		case v.unknown == nil:
+			e.noteLease(ctx, pr, v)
+		}
+	}
 }
 
 // factorysOwnRound reports whether pr's next round is the factory's own

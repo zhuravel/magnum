@@ -11,6 +11,7 @@ import (
 	"github.com/zhuravel/magnum/internal/factoryread"
 	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // leaseHarness is a harness whose factory lease reader is lease's, with
@@ -86,7 +87,7 @@ func TestMagnumReviewsAfterTheGraceWithAWarnAndADoctorLine(t *testing.T) {
 	}
 
 	lease.set(FixLease{}, nil)
-	h.e.factoryHolds(h.ctx, h.pr(2))
+	h.tick() // the PR was reviewed: no dispatch candidate, the tick's own look reads it
 	if u, ok := h.leaseUnread(pr.ID); ok {
 		t.Errorf("a read that works left the failed one: %+v", u)
 	}
@@ -270,6 +271,45 @@ func TestAnOwnerRowThatDoesNotParseIsNamedAsMagnumsOwn(t *testing.T) {
 	h.handle()
 	if r := h.request(review); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "its owner row cannot be read by this build") {
 		t.Errorf("magnum review: %s %q", r.State, deref(r.Result))
+	}
+}
+
+// A failed lease read the doctor names lasts only while it does: each tick
+// reads again the lease of every PR it is recorded for, round or none (a
+// PR reviewed after it failed open is no dispatch candidate any more), and
+// drops it once the lease reads, the factory no longer fixes the PR, or the
+// PR closed.
+func TestAFailedLeaseReadGoesOnceItReadsOrThePRLeaves(t *testing.T) {
+	storetest.Parallel(t)
+	for _, tc := range []struct {
+		name string
+		act  func(h *harness, lease *fakeLease)
+		gone bool
+	}{
+		{"the lease still fails", func(*harness, *fakeLease) {}, false},
+		{"the lease reads again", func(_ *harness, lease *fakeLease) { lease.set(FixLease{}, nil) }, true},
+		{"the factory no longer fixes the PR", func(h *harness, _ *fakeLease) { h.e.delKV(h.ctx, fixwork.KVPRFixOwner(h.pr(2).ID)) }, true},
+		{"the PR closed", func(h *harness, _ *fakeLease) {
+			h.open(prSpec{n: 1, head: "base1"}) // #2 left the OPEN list: closed, which the next tick confirms
+			h.gh.closed[2] = "CLOSED"
+			h.tick()
+			h.advance(confirmGap)
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lease := &fakeLease{}
+			lease.set(FixLease{}, errors.New("database is locked"))
+			h := newHarness(t, func(h *harness) { h.d.FixLeaseOf = lease.reader(h.clock.Now) })
+			pr := h.reviewedPR(2, "b1")
+			factoryOwns(h)
+			// It failed open, and the round it let through left the PR reviewed.
+			h.e.setKV(h.ctx, KVPRFixLeaseUnread(pr.ID), rowJSON(LeaseUnread{Since: h.clock.Now().Add(-time.Hour).UTC(), Err: "database is locked", Open: true}))
+			tc.act(h, lease)
+			h.tick()
+			if _, ok := h.leaseUnread(pr.ID); ok == tc.gone {
+				t.Errorf("the failed read recorded: %v, want %v", ok, !tc.gone)
+			}
+		})
 	}
 }
 

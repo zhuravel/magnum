@@ -1356,6 +1356,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.endOpenHolds(ctx)        // open_hold.go: a PR whose hold ended goes on in this dispatch
 	e.ciAfterPushes(ctx)       // ci_dispatch.go: the CI of magnum's own pushes, before the look reads their starts
 	e.handOvers(ctx)           // fix_handover.go: a PR whose fix work ended flips to the factory before the look could start a loop
+	e.sweepLeaseUnreads(ctx)   // fix_lease.go: a failed read of the factory's lease lasts only while it does
 	_ = e.autofixOpen(ctx)     // fix_open.go: a loop it starts reserves its PR before dispatch can claim it
 	e.restartSessions(ctx, ts) // session_restart.go: a PR whose marked sessions park now waits in dispatch
 	e.dispatch(ctx, ts)
