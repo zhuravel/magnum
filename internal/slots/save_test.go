@@ -380,6 +380,29 @@ func TestARemovalSavesAFileWhoseNameLeavesNoRoomForATemporaryOne(t *testing.T) {
 	}
 }
 
+// A tracked change whose patch is empty (a submodule with untracked
+// content: git status says " M sub", git diff writes nothing) writes no
+// changes.diff, and saved.txt does not say `git apply` puts anything back:
+// it would fail with "No valid patches in input".
+func TestAWholePatchOfNoBytesWritesNoChangesDiff(t *testing.T) {
+	h := newHarness(t)
+	sl, pr := h.claimedCheckout(8, h.shaPR8)
+	strayEdit(t, sl.Path)
+	h.fake.Rules = append(h.fake.Rules, execx.Rule{Prefix: []string{"git"}})
+	h.run.fakeGit = func(c execx.Cmd) bool { return slices.Contains(c.Args, "--binary") }
+
+	if err := h.m.Resync(h.ctx, sl, h.shaPR7); err != nil {
+		t.Fatalf("Resync: %v", err)
+	}
+	save := h.onlySave(t, h.layout.PRSaves("talkable", "talkable", pr.Number), sl.Name)
+	if _, err := os.Lstat(filepath.Join(save, "changes.diff")); !os.IsNotExist(err) {
+		t.Fatalf("an empty patch was kept as changes.diff: %v", err)
+	}
+	if note := readFile(t, filepath.Join(save, "saved.txt")); strings.Contains(note, "apply") || strings.Contains(note, "tracked path(s)") {
+		t.Fatalf("saved.txt says an empty patch puts something back:\n%s", note)
+	}
+}
+
 // A removal whose untracked files are all left out keeps no untracked/
 // folder in its save, as a save with no path's patch keeps no changes.diff.
 func TestASaveThatCopiesNoUntrackedFileHasNoUntrackedFolder(t *testing.T) {

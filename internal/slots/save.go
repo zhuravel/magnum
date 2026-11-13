@@ -234,7 +234,10 @@ func (m *Manager) savePatch(ctx context.Context, tree, dir string, paths []strin
 	if err != nil {
 		return 0, err
 	}
-	if size <= budget {
+	switch {
+	case size == 0: // a submodule's untracked content: a change git diff writes nothing for
+		return 0, os.Remove(part)
+	case size <= budget:
 		s.tracked = len(paths)
 		return size, os.Rename(part, final)
 	}
