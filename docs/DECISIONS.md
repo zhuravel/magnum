@@ -26859,9 +26859,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - The factory's one write into magnum.db is a request plus a wake of magnum's daemon (`MagnumWriter`), opened with
     every migration refused: a magnum.db of another schema, or none, is refused and left as it was.
   - The PR request kinds (`fix`, `fix_off`, `fix_on`, `fix_done`, `fix_decide`, `fix_ci`, `merge_parent`,
-    `fix_stop`, `handoff`) each have a payload and checks, and the ones with a plan answer a dry run with it and
-    take a y bound to it (head, base, tip, conflicts, held merge, failed checks, assignee; 10 minutes), as the
-    engine's merge of the parent does. Their work is one interface, `PRWorker`, which T4a fills.
+    `fix_stop`, `handoff`) each have a payload and checks (the PR's repository spelled as GitHub spells one: owner
+    and name of `[A-Za-z0-9._-]` alone, neither `.` nor `..`, so no path part or escape reaches the worker), and
+    the ones with a plan answer a dry run with it and take a y bound to it (head, base, tip, conflicts, held
+    merge, failed checks, assignee; 10 minutes), as the engine's merge of the parent does. Their work is one
+    interface, `PRWorker`, which T4a fills.
   - Configuration: `[factory] fix` (on or off), `fix_max_active` (2: at most 2 fix loops on the first day),
     `fix_local_review` and a `[[factory.repo]]`'s `fix_copies` (0). The fixer is the built-in role `fx-fixer`
     (claude-fix moved here: the fix prompt and the magnum-fix skill), the only factory role that may be a fix role

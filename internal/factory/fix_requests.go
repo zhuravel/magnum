@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -312,15 +313,25 @@ func (e *Engine) boundRequest(ctx context.Context, kind string, pr PRRef, dry bo
 // prLabel is pr as the answers name it: owner/name#N.
 func prLabel(pr PRRef) string { return fmt.Sprintf("%s#%d", pr.Repo, pr.Number) }
 
+// repoPartRe is one part of a repository's owner/name as GitHub spells it
+// (github's checkRepo), "." and ".." aside.
+var repoPartRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
 // prCheck refuses a request that names no pull request: its repository
-// is owner/name and its number positive.
+// is owner/name, each part of [A-Za-z0-9._-] alone and neither "." nor
+// ".." (no path part, control character or escape reaches the fix lane,
+// which may join the name into a path or echo it), and its number
+// positive.
 func prCheck(pr PRRef) error {
 	owner, name, ok := strings.Cut(pr.Repo, "/")
-	if !ok || owner == "" || name == "" || strings.ContainsAny(pr.Repo, " \t\r\n") || strings.Contains(name, "/") || pr.Number <= 0 {
+	if !ok || !repoPart(owner) || !repoPart(name) || pr.Number <= 0 {
 		return fmt.Errorf("the request names no pull request (%q#%d): it needs the repository's owner/name and the PR's number", pr.Repo, pr.Number)
 	}
 	return nil
 }
+
+// repoPart says whether s is an owner or a name GitHub could give.
+func repoPart(s string) bool { return repoPartRe.MatchString(s) && s != "." && s != ".." }
 
 // seenCheck refuses a ReqFixDone that names no attention you saw.
 func seenCheck(seen string) error {

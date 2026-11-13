@@ -324,3 +324,36 @@ func TestThePRRequestsCheckTheirPayloads(t *testing.T) {
 		t.Fatalf("the lane was asked %v about requests it never takes", got)
 	}
 }
+
+// A PR request names its repository as GitHub spells one (github's
+// checkRepo): an owner and a name of [A-Za-z0-9._-] alone, neither "." nor
+// "..". A path part, a control character (an escape the screen would
+// print), DEL, a colon or a letter outside ASCII is refused before the fix
+// lane sees the request, since the lane may join the name into a path or
+// echo it; a name with a dot, an underscore or a dash passes.
+func TestAPRRequestNamesItsRepositoryAsGitHubSpellsIt(t *testing.T) {
+	work := &fakePRWork{}
+	h := newHarness(t, func(d *Deps) { d.PRWork = work })
+	h.cfg.Factory.Fix = config.FactoryFixOn
+	for _, repo := range []string{
+		"../shop", "./shop", "example/..", "example/.", "../..",
+		"exa\x1b]0;t\x07mple/shop", "example/sh\x1bop", "example/shop\x7f", "example/sh\x00op",
+		"exa:mple/shop", "example/sh%op", "example/shöp", "example/sh\\op", "example/sh op",
+	} {
+		q := h.ask(ReqFixStop, FixStopPayload{PRRef: PRRef{Repo: repo, Number: 7}})
+		if q.State != registry.RequestFailed || !strings.Contains(q.Result, "names no pull request") {
+			t.Errorf("repository %q: %s %q, want a refusal that it names no pull request", repo, q.State, q.Result)
+		}
+	}
+	if got := work.kinds(); len(got) != 0 {
+		t.Fatalf("the lane was asked %v about repositories GitHub never names", got)
+	}
+	for _, repo := range []string{"example/shop.js", "Example-Org/my_shop", "example/.github", "a1/b"} {
+		if q := h.ask(ReqFixStop, FixStopPayload{PRRef: PRRef{Repo: repo, Number: 7}}); q.State == registry.RequestFailed {
+			t.Errorf("repository %q refused: %q", repo, q.Result)
+		}
+	}
+	if got := work.kinds(); len(got) != 4 {
+		t.Errorf("the lane was asked %v, want the 4 stops", got)
+	}
+}
