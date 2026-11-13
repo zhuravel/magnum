@@ -312,14 +312,22 @@ type attentionBy struct {
 const attentionByFactory = "factory"
 
 // attentionByOf is PR prID's kvPRAttentionBy row (ok false: none, or one
-// that does not parse, which marks nothing).
-func (e *Engine) attentionByOf(ctx context.Context, prID int64) (attentionBy, bool) {
-	raw, ok := e.getKV(ctx, kvPRAttentionBy(prID))
+// that does not parse, which marks nothing). A read that fails is an error,
+// never no mark (C3): a lift on it could take the factory's attention.
+func (e *Engine) attentionByOf(ctx context.Context, prID int64) (attentionBy, bool, error) {
+	raw, ok, err := e.st.GetKV(ctx, kvPRAttentionBy(prID))
 	var by attentionBy
-	if !ok || json.Unmarshal([]byte(raw), &by) != nil {
-		return attentionBy{}, false
+	if err != nil || !ok || json.Unmarshal([]byte(raw), &by) != nil {
+		return attentionBy{}, false, err
 	}
-	return by, true
+	return by, true, nil
+}
+
+// markFactoryAttention writes the factory's mark of PR prID's attention msg
+// (kvPRAttentionBy), failing loudly, so that no raise of the factory's
+// stands without it (C10).
+func (e *Engine) markFactoryAttention(ctx context.Context, prID int64, msg, cause string) error {
+	return e.st.SetKV(ctx, kvPRAttentionBy(prID), rowJSON(attentionBy{By: attentionByFactory, Message: msg, Cause: cause, At: e.now().UTC()}))
 }
 
 // factoryAttentionRefusal is `magnum fix --done`'s refusal of pr's
@@ -327,11 +335,14 @@ func (e *Engine) attentionByOf(ctx context.Context, prID int64) (attentionBy, bo
 // fixes the PR (the engine owner's ruling on R6): the factory lifts it
 // itself once the operator answers it there, and would never learn of a
 // lift by magnum, so its loop would wait while magnum shows the PR
-// reviewed. A row of who fixes the PR that cannot be read refuses too. nil
-// for magnum's own attention, and once the PR is magnum's again, whose
-// factory lifts nothing.
+// reviewed. A mark, or a row of who fixes the PR, that cannot be read
+// refuses too. nil for magnum's own attention, and once the PR is magnum's
+// again, whose factory lifts nothing.
 func (e *Engine) factoryAttentionRefusal(ctx context.Context, ref string, pr store.PR, msg string) error {
-	if by, ok := e.attentionByOf(ctx, pr.ID); !ok || by.By != attentionByFactory || by.Message != msg {
+	switch by, ok, err := e.attentionByOf(ctx, pr.ID); {
+	case err != nil:
+		return fmt.Errorf("PR #%d needs you, and whether the factory raised it cannot be read (%w): ask again shortly: nothing changed", pr.Number, err)
+	case !ok || by.By != attentionByFactory || by.Message != msg:
 		return nil
 	}
 	switch o, _, owned, err := e.fixOwner(ctx, pr.ID); {
@@ -378,42 +389,63 @@ func (e *Engine) requestFixAttention(ctx context.Context, p fixwork.AttentionPay
 	if !strings.HasPrefix(msg, attention.KindFix+": ") {
 		msg = attention.KindFix + ": " + msg
 	}
-	subject := prSubject(repo, pr.Number)
-	data := map[string]any{"cause": p.Cause, "raise": p.Raise}
 	if !p.Raise {
-		if pr.State != store.PRNeedsAttention || deref(pr.LastError) != msg {
-			return fmt.Sprintf("%s: nothing to lift: its attention is not that one", label), nil
-		}
-		to := store.PRReviewed
-		if deref(pr.ReviewedSHA) != pr.HeadSHA {
-			to = claimableState(pr)
-		}
-		err := e.st.TransitionPR(ctx, pr.ID, []string{store.PRNeedsAttention}, to, func(u *store.PRUpdate) {
-			u.Set("last_error", nil)
-			u.Where("last_error", msg)
-		})
-		if err != nil {
-			return "", fmt.Errorf("%s moved on meanwhile: %w", label, err)
-		}
-		e.delKV(ctx, KVPRAttention(pr.ID), kvPRAttentionRun(pr.ID), kvPRAttentionBy(pr.ID))
-		e.event(ctx, "info", subject, "fix.factory_attention", "the factory lifted the PR's attention ("+p.Cause+")", data)
-		return fmt.Sprintf("%s: the attention is lifted: PR %s", label, to), nil
+		return e.liftFactoryAttention(ctx, repo, pr, msg, p)
 	}
+	return e.raiseFactoryAttention(ctx, repo, pr, msg, p)
+}
+
+// liftFactoryAttention is requestFixAttention's lift of pr's attention msg
+// (p, the factory's request): only while the attention is still that one.
+func (e *Engine) liftFactoryAttention(ctx context.Context, repo store.Repo, pr store.PR, msg string, p fixwork.AttentionPayload) (string, error) {
+	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
+	if pr.State != store.PRNeedsAttention || deref(pr.LastError) != msg {
+		return fmt.Sprintf("%s: nothing to lift: its attention is not that one", label), nil
+	}
+	to := store.PRReviewed
+	if deref(pr.ReviewedSHA) != pr.HeadSHA {
+		to = claimableState(pr)
+	}
+	err := e.st.TransitionPR(ctx, pr.ID, []string{store.PRNeedsAttention}, to, func(u *store.PRUpdate) {
+		u.Set("last_error", nil)
+		u.Where("last_error", msg)
+	})
+	if err != nil {
+		return "", fmt.Errorf("%s moved on meanwhile: %w", label, err)
+	}
+	e.delKV(ctx, KVPRAttention(pr.ID), kvPRAttentionRun(pr.ID), kvPRAttentionBy(pr.ID))
+	e.event(ctx, "info", prSubject(repo, pr.Number), "fix.factory_attention", "the factory lifted the PR's attention ("+p.Cause+")",
+		map[string]any{"cause": p.Cause, "raise": false})
+	return fmt.Sprintf("%s: the attention is lifted: PR %s", label, to), nil
+}
+
+// raiseFactoryAttention is requestFixAttention's raise of pr's attention
+// msg (p, the factory's request). The factory's mark (kvPRAttentionBy) is
+// written before the PR's attention goes up, and a mark that cannot be
+// written fails the raise with nothing changed (C10): only the factory
+// lifts its attention, and `magnum fix --done` would lift one up without
+// its mark.
+func (e *Engine) raiseFactoryAttention(ctx context.Context, repo store.Repo, pr store.PR, msg string, p fixwork.AttentionPayload) (string, error) {
+	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
 	switch {
 	case pr.State == store.PRNeedsAttention && deref(pr.LastError) == msg:
 		return fmt.Sprintf("%s needs you for that already", label), nil
 	case pr.State != store.PRReviewed:
 		return "", fmt.Errorf("%s is %s: the factory raises the attention of a reviewed PR alone", label, pr.State)
 	}
-	err = e.st.TransitionPR(ctx, pr.ID, []string{store.PRReviewed}, store.PRNeedsAttention, func(u *store.PRUpdate) {
+	if err := e.markFactoryAttention(ctx, pr.ID, msg, p.Cause); err != nil {
+		return "", fmt.Errorf("%s: the factory's mark of its attention cannot be written (%w): nothing changed", label, err)
+	}
+	err := e.st.TransitionPR(ctx, pr.ID, []string{store.PRReviewed}, store.PRNeedsAttention, func(u *store.PRUpdate) {
 		u.Set("last_error", msg)
 		u.Set("next_attempt_at", nil)
 	})
 	if err != nil {
+		e.delKV(ctx, kvPRAttentionBy(pr.ID)) // no attention of the factory's went up
 		return "", fmt.Errorf("%s moved on meanwhile: %w", label, err)
 	}
 	e.setKV(ctx, KVPRAttention(pr.ID), attention.KindFix)
-	e.setKV(ctx, kvPRAttentionBy(pr.ID), rowJSON(attentionBy{By: attentionByFactory, Message: msg, Cause: p.Cause, At: e.now().UTC()})) // only the factory lifts it
-	e.event(ctx, "warn", subject, "fix.factory_attention", "the factory raised the PR's attention ("+p.Cause+"): "+msg, data)
+	e.event(ctx, "warn", prSubject(repo, pr.Number), "fix.factory_attention", "the factory raised the PR's attention ("+p.Cause+"): "+msg,
+		map[string]any{"cause": p.Cause, "raise": true})
 	return fmt.Sprintf("%s needs you: %s", label, msg), nil
 }

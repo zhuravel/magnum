@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -367,6 +368,23 @@ func failKVRead(h *harness, key string) {
 	}
 }
 
+// failKVWrite makes every write of the registry's key-value row key fail,
+// as an I/O error or a lock held past the busy timeout would: a trigger
+// aborts its insert and its update.
+func failKVWrite(h *harness, key string) {
+	h.t.Helper()
+	for _, when := range []string{"INSERT", "UPDATE"} {
+		q := fmt.Sprintf(`CREATE TRIGGER fail_kv_%s BEFORE %s ON kv WHEN NEW.key = '%s' BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`,
+			strings.ToLower(when), when, key)
+		if _, err := h.st.DB().ExecContext(h.ctx, q); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	if err := h.st.SetKV(h.ctx, key, "x"); err == nil {
+		h.t.Fatalf("%s still writes", key)
+	}
+}
+
 // A loop's next cycle whose read of the handover rows fails ends as a
 // failed cycle, with the PR's attention, as any next cycle that cannot
 // start: no handover was read, so none is named, and the operator hears
@@ -674,6 +692,54 @@ func TestFixDoneRefusesAnAttentionTheFactoryRaised(t *testing.T) {
 		t.Errorf("magnum fix --done once magnum fixes the PR: %s %q", r.State, deref(r.Result))
 	}
 	h.wantState(2, store.PRReviewed)
+}
+
+// factoryRaise has the factory raise PR #2's attention, its why the call a
+// finding needs; it returns the request.
+func factoryRaise(h *harness) store.Request {
+	h.t.Helper()
+	id := h.enqueue(fixwork.ReqFixAttention, fixwork.AttentionPayload{Repo: "talkable/talkable", Number: 2, Raise: true, Cause: "needs_you",
+		Why: "1 finding needs your call: https://github.com/talkable/talkable/pull/2#discussion_r4100"})
+	h.handle()
+	return h.request(id)
+}
+
+// Whether the factory raised the attention is read before `magnum fix
+// --done` lifts it, and a read that fails refuses, saying that nothing
+// changed (C3): the lift would otherwise take the factory's attention
+// behind its back, which only the factory lifts.
+func TestFixDoneRefusesWhileWhoRaisedTheAttentionCannotBeRead(t *testing.T) {
+	h := newHarness(t)
+	h.reviewedPR(2, "b1")
+	factoryOwns(h)
+	if r := factoryRaise(h); r.State != store.RequestDone {
+		t.Fatalf("the factory's raise: %s %q", r.State, deref(r.Result))
+	}
+	failKVRead(h, kvPRAttentionBy(h.pr(2).ID))
+	id := h.fix(FixPayload{Done: true, Seen: deref(h.pr(2).LastError)})
+	h.handle()
+	if r := h.request(id); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "ask again shortly: nothing changed") {
+		t.Errorf("magnum fix --done: %s %q", r.State, deref(r.Result))
+	}
+	h.wantState(2, store.PRNeedsAttention)
+}
+
+// The factory's raise writes its mark before the PR's attention goes up, and
+// a mark that cannot be written fails the raise with nothing changed (C10):
+// an attention up without its mark is one `magnum fix --done` would lift
+// behind the factory's back.
+func TestTheFactorysRaiseFailsWhenItsMarkCannotBeWritten(t *testing.T) {
+	h := newHarness(t)
+	pr := h.reviewedPR(2, "b1")
+	factoryOwns(h)
+	failKVWrite(h, kvPRAttentionBy(pr.ID))
+	if r := factoryRaise(h); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "nothing changed") {
+		t.Errorf("the factory's raise: %s %q", r.State, deref(r.Result))
+	}
+	h.wantState(2, store.PRReviewed)
+	if kind, ok := kvValue(h, KVPRAttention(pr.ID)); ok {
+		t.Errorf("attention kind = %q with no mark", kind)
+	}
 }
 
 // The morning list's drops end the records that keep a PR from handing
