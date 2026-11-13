@@ -8,10 +8,16 @@ package cli
 // only credential helper (the pane's GH_CONFIG_DIR makes gh answer with the
 // App's token). It needs nothing but the pane's env, git and the lock of
 // the branch, a file in magnum's state directory: no config, no registry,
-// no daemon. One agent pushes a branch at a time: the push holds the lock
-// of its repository and branch (paths.Layout.PushLock, dblock's flock) for
-// its run, and refuses while another agent's push holds it, so the fixers
-// of both daemons never push one PR's branch at once.
+// no daemon. One agent pushes a branch at a time through it: the push
+// holds the lock of its repository and branch (paths.Layout.PushLock,
+// dblock's flock) for its run, and refuses while another agent's push
+// holds it, so two fixer Apps' pushes through `magnum push`, of either
+// daemon's fixer, never push one PR's branch at once. Only this command
+// takes the lock: a gh fixer pushes with a plain `git push` (the fix
+// prompt's line when the fixer acts as no fixer App), and the engine's own
+// merge pushes (the merge of the parent, a held merge: PushLeaseGitHubAs)
+// skip it. pr.<id>.fix_owner, which gives a PR's fixes to one daemon, and
+// the leases (a plain push never forces) guard those.
 
 import (
 	"cmp"

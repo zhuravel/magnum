@@ -26868,15 +26868,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `fix_local_review` and a `[[factory.repo]]`'s `fix_copies` (0). The fixer is the built-in role `fx-fixer`
     (claude-fix moved here: the fix prompt and the magnum-fix skill), the only factory role that may be a fix role
     and the only one that may carry an identity, its watch's fix identity resolved as `FixRoleFor` does; no stage
-    and no `codex_fallback` names it. Its pane carries that identity's token alone: every other GitHub token variable is blank, and a
-    fixer whose identity does not resolve does not start. The factory daemon copies the fix skill when it starts,
-    into a directory of its own.
+    and no `codex_fallback` names it. Its pane carries that identity's token alone: every other GitHub token
+    variable is blank, and a fixer whose identity does not resolve does not start. The factory daemon copies the
+    fix skill when it starts, into a directory of its own.
   - `magnum push` holds the lock of its repository and branch for its run and refuses (exit 2) while another
-    agent's push holds it, so magnum's fixer and the factory's never push one branch at once; it now needs magnum's
-    state directory for the lock, and still no config or registry. `magnum factory install` counts a PR work row
-    in `fixing`, `local_review` or `pushing` as work in flight (`factoryread.FixJobs`): plain install refuses,
-    `--drain` waits for it. A queued, reviewing or held loop holds no agent and no push, and the drain does not
-    wait for it.
+    agent's push holds it, so two fixer Apps' pushes through `magnum push`, magnum's fixer's or the factory's, never
+    push one branch at once. Only `magnum push` takes the lock: a gh fixer pushes with a plain `git push` (the fix
+    prompt's line when the fixer acts as no fixer App), and the daemon's own merge pushes (the merge of the parent,
+    a held merge: `PushLeaseGitHubAs`) skip it; `pr.<id>.fix_owner`, which gives a PR's fixes to one daemon, and
+    the leases (a plain push never forces) guard those. It now needs magnum's state directory for the lock, and
+    still no config or registry. `magnum factory install` counts a PR work row in `fixing`, `local_review` or
+    `pushing` as work in flight (`factoryread.FixJobs`): plain install refuses, `--drain` waits for it. A queued,
+    reviewing or held loop holds no agent and no push, and the drain does not wait for it.
   - Tests: `TestOnlyTheFixerRoleMayCarryAnIdentity`, `TestTheMagnumWriterRefusesToMigrate`,
     `TestAFixerPaneCarriesTheAppTokenAlone`, `TestPushRefusesABranchAnotherAgentHolds`,
     `TestTheFactoryDaemonSnapshotsTheFixSkill`, `TestInstallDrainWaitsForAFixJob`,

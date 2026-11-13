@@ -27327,7 +27327,9 @@ func (l Layout) PushLock(repo, branch string) string
     PushLock is the lock file `magnum push` takes for a push to branch of repo
     (owner/name): push-locks/<owner>-<name>-<hash>.lock under State, the hash
     of the repository (case aside) and the branch, so one repository and branch
-    share the file whichever daemon's fixer pushes, and no two do.
+    share the file whichever daemon's fixer App pushes through `magnum push`,
+    and no two do. `magnum push` alone takes it: a gh fixer's plain `git push`
+    and the engine's own merge pushes do not.
 
 func (l Layout) ReviewDir(owner, repo string, number int, sha string) string
     ReviewDir is where one review round's reports live: a directory per head in
