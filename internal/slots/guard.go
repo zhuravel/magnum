@@ -120,6 +120,17 @@ func (m *Manager) guardDiscard(ctx context.Context, slot store.Slot) error {
 	return nil
 }
 
+// GuardChanges is Guard without its look at HEAD, for a step that moves no
+// HEAD (the factory's fix claim readies a fix copy's data after its
+// switch): the slot's pin and holds, a person's agent or process in it,
+// and the tracked changes a person typed since its checkout, held as
+// HoldDirtyWorktree, as guardDiscard refuses them. A HEAD that moved is no
+// reason to refuse, and nothing is saved or recorded for it: the step
+// leaves HEAD where it is, so its commits stay on it.
+func (m *Manager) GuardChanges(ctx context.Context, slot store.Slot) error {
+	return m.guardDiscard(ctx, slot)
+}
+
 // guardStart reloads slot (unless it has no row yet), refuses it when it is
 // pinned or held, and returns it with its PR (guardPR).
 func (m *Manager) guardStart(ctx context.Context, slot store.Slot) (store.Slot, store.PR, error) {

@@ -26937,7 +26937,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
     the PR moved past. A force-push's old PR head is the PR's, not the fixer's: it is not kept. Then, with nothing
     on HEAD on no ref, the guard takes HEAD as the checkout's own (`fixOwnHead`) whatever you typed, and magnum's
     slot guard holds it only over changes in its tree your typing explains (`dirty_worktree`): the one rule for a
-    fix checkout's commits below. The fixer's
+    fix checkout's commits below. Since T3b's third check the keep runs only in the switch's guard, before the
+    switch moves HEAD away, and in the release: the data steps (`reset_db`, the installs, the flush) move no HEAD,
+    so their guard (`fixDataGuard`) leaves HEAD and its record alone and runs magnum's slot guard without its
+    look at HEAD (`slots.GuardChanges`: pins, holds, a person's agent or process, the changes your typing
+    explains). Every step's guard kept a commit made in the copy between a claim whose flush failed and the
+    next one, with a ref and an event that said something moved while nothing did; the next step that moves HEAD
+    keeps it, and a HEAD recorded there unkept would count as pushed at the release. The fixer's
     own sessions refuse a claim of their checkout as any session does until T4a, which starts them, gives the
     guard their AtWork. In the engine the claim runs off the loop (`claimFix`), apart from the tasks' claims, so
     `max_active` never counts it; its waits (no fix copy free, a guard's hold, a pane in it) cost the fix nothing,
@@ -27018,7 +27024,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     after it, and fails when switchFix records the head last); the third check,
     `TestARebaseLeftInProgressKeepsItsReplayedAndItsOriginalTip` (C1, failing first) with
     `TestInProgressStartIsWhereAnAbortPutsHEAD` in internal/gitx, and
-    `TestASwitchCutBeforeTheCheckoutMovedKeepsNothingOfThePRsOldHead` (C2, failing first).
+    `TestASwitchCutBeforeTheCheckoutMovedKeepsNothingOfThePRsOldHead` (C2, failing first) and
+    `TestAClaimStepThatMovesNoHeadKeepsNothing` (failing first).
   - The Redis databases. Copy n's 16 Redis databases start at n × 16 and the fix copies are numbered past the
     tasks', so a repository whose copies use Redis offsets (its `env` names `REDIS_DB_OFFSET` or renders `{n*16}`:
     `config.FactoryRepo.UsesRedis`) needs `(max_copies + fix_copies + 1) × 16` databases on that Redis, the highest

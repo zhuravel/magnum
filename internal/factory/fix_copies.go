@@ -448,10 +448,13 @@ func (c *copySet) claimMade(ctx context.Context, owner store.PR, sl store.Slot) 
 // fix copy's readyData: reset_db, installs, the Redis flush; none for a
 // per-PR checkout, which has no databases). Each is a step of subject
 // slot:<name>:fix:<assignment>:<head>, with begin and ok or fail rows, and
-// runs the checkout's guard (fixGuard) first. A claim cut short runs again
-// the steps not done for that head, each after its guard, and never one
-// that is done: a later claim at the same head keeps what the fixer did in
-// the checkout, and one at a newer head switches to it.
+// runs the checkout's guard first: the switch's fixGuard, which keeps
+// HEAD's commits on no remote before the switch moves HEAD away, and the
+// data steps' fixDataGuard, which leaves HEAD alone, as they do. A claim
+// cut short runs again the steps not done for that head, each after its
+// guard, and never one that is done: a later claim at the same head keeps
+// what the fixer did in the checkout, and one at a newer head switches to
+// it.
 func (c *copySet) prepareFix(ctx context.Context, w registry.PRWork, owner store.PR, sl store.Slot, head string,
 	data func(step claimStep) error) error {
 	a, err := c.st.OpenAssignmentBySlot(ctx, sl.ID)
@@ -459,21 +462,24 @@ func (c *copySet) prepareFix(ctx context.Context, w registry.PRWork, owner store
 		return err
 	}
 	subject := fmt.Sprintf("slot:%s:fix:%d:%s", sl.Name, a.ID, textx.ShortSHA(head))
-	step := func(name string, fn func(ctx context.Context) error) error {
-		return steps.Step(ctx, c.st, subject, name, func(ctx context.Context) error {
-			if err := c.fixGuard(ctx, w, owner, sl, head); err != nil {
-				return err
-			}
-			return fn(ctx)
-		})
+	guarded := func(guard func(ctx context.Context) error) claimStep {
+		return func(name string, fn func(ctx context.Context) error) error {
+			return steps.Step(ctx, c.st, subject, name, func(ctx context.Context) error {
+				if err := guard(ctx); err != nil {
+					return err
+				}
+				return fn(ctx)
+			})
+		}
 	}
-	if err := step("switch", func(ctx context.Context) error { return c.switchFix(ctx, sl, a, head) }); err != nil {
+	moves := guarded(func(ctx context.Context) error { return c.fixGuard(ctx, w, owner, sl, head) })
+	if err := moves("switch", func(ctx context.Context) error { return c.switchFix(ctx, sl, a, head) }); err != nil {
 		return err
 	}
 	if data == nil {
 		return nil
 	}
-	return data(step)
+	return data(guarded(func(ctx context.Context) error { return c.fixDataGuard(ctx, w, owner, sl) }))
 }
 
 // switchFix records head as the head of the claim's assignment a, then
@@ -533,12 +539,12 @@ func (c *copySet) keepUnpushed(ctx context.Context, w registry.PRWork, sl store.
 	return nil
 }
 
-// fixGuard is what each step of PR work w's claim runs before it changes
-// checkout sl: no factory pane works in it (paneInPath: the PR's own fix
-// sessions too, as yet), its HEAD is made the checkout's own, its commits
-// on no remote kept (fixOwnHead, with head the PR's remote head), and
-// magnum's slot guard lets it go (a person's agent or process in it, their
-// changes).
+// fixGuard is what the switch step of PR work w's claim runs before it
+// moves checkout sl's HEAD away: no factory pane works in it (paneInPath:
+// the PR's own fix sessions too, as yet), its HEAD is made the checkout's
+// own, its commits on no remote kept (fixOwnHead, with head the PR's remote
+// head), and magnum's slot guard lets it go (a person's agent or process in
+// it, their changes).
 func (c *copySet) fixGuard(ctx context.Context, w registry.PRWork, owner store.PR, sl store.Slot, head string) error {
 	if err := c.paneInPath(ctx, sl.Path, owner, nil, workKey(w)); err != nil {
 		return err
@@ -547,6 +553,21 @@ func (c *copySet) fixGuard(ctx context.Context, w registry.PRWork, owner store.P
 		return err
 	}
 	return c.slots.Guard(ctx, sl)
+}
+
+// fixDataGuard is what each step of PR work w's claim that moves no HEAD
+// runs before it (a fix copy's readyData: reset_db, the installs, the Redis
+// flush): no factory pane works in checkout sl (paneInPath), and magnum's
+// slot guard without its look at HEAD lets it go (slots.GuardChanges: a
+// person's agent or process in it, their changes). HEAD keeps its commits,
+// which the next step that moves it (a claim's switch to a newer head, the
+// release) keeps; a keep here would say something moved while nothing did,
+// and a HEAD recorded here unkept would count as pushed (unpushedPastClaim).
+func (c *copySet) fixDataGuard(ctx context.Context, w registry.PRWork, owner store.PR, sl store.Slot) error {
+	if err := c.paneInPath(ctx, sl.Path, owner, nil, workKey(w)); err != nil {
+		return err
+	}
+	return c.slots.GuardChanges(ctx, sl)
 }
 
 // fixOwnHead makes checkout sl's HEAD the checkout's own before a step of

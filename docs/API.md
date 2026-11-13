@@ -30899,6 +30899,15 @@ func (m *Manager) Guard(ctx context.Context, slot store.Slot) error
     (not a hold): the caller retries later. Git checks are skipped when the slot
     directory is missing.
 
+func (m *Manager) GuardChanges(ctx context.Context, slot store.Slot) error
+    GuardChanges is Guard without its look at HEAD, for a step that moves no
+    HEAD (the factory's fix claim readies a fix copy's data after its switch):
+    the slot's pin and holds, a person's agent or process in it, and the tracked
+    changes a person typed since its checkout, held as HoldDirtyWorktree,
+    as guardDiscard refuses them. A HEAD that moved is no reason to refuse,
+    and nothing is saved or recorded for it: the step leaves HEAD where it is,
+    so its commits stay on it.
+
 func (m *Manager) GuardLive(ctx context.Context, slot store.Slot) error
     GuardLive is the part of Guard that saves nothing: it refuses a pinned or
     held slot (HoldPinned, its hold_reason) and a human's agent or process in

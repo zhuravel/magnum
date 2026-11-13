@@ -1202,6 +1202,49 @@ func TestASwitchCutBeforeTheCheckoutMovedKeepsNothingOfThePRsOldHead(t *testing.
 	}
 }
 
+// A claim step that moves no HEAD (the Redis flush, an install) keeps
+// nothing: a commit made in the copy from a shell after a claim the flush
+// failed stays on HEAD through the next claim's flush, with no kept ref and
+// no factory.fix_kept event, and is kept when the release moves HEAD away.
+// Every step's guard kept it, so a ref and an event said something moved
+// while nothing did (T3b's third check).
+func TestAClaimStepThatMovesNoHeadKeepsNothing(t *testing.T) {
+	r := newFixRig(t, 1, 1)
+	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
+	w := r.prWork("talkable/talkable", 7)
+	r.mu.Lock()
+	r.failRedis = 1
+	r.mu.Unlock()
+	r.clock.Add(time.Minute)
+	if _, err := r.c.ClaimFix(r.ctx, w); err == nil || !strings.Contains(err.Error(), "Could not connect to Redis") {
+		t.Fatalf("the claim with Redis down = %v, want the flush's failure", err)
+	}
+	name := "factory2"
+	path := r.slot(name).Path
+	mine := r.commit(path, "fix.txt", "v2\n") // from a shell in the copy, after the switch
+
+	if fc := r.claimFix(w); fc.Name != name {
+		t.Fatalf("the claim once Redis is back = %+v, want %s", fc, name)
+	}
+	if got, _ := r.head(path); got != mine {
+		t.Fatalf("%s is at %s after the claim, want your commit %s still on HEAD", name, got, mine)
+	}
+	if got := r.keptRefs(r.main); got != "" || r.eventsSay(name, "factory.fix_kept", "") {
+		t.Fatalf("the claim's flush kept %q, want nothing: it moves no HEAD", got)
+	}
+	if n := r.stepBegins("slot:"+name+":fix:", "flush_redis"); n != 2 {
+		t.Fatalf("the flush began %d times, want twice", n)
+	}
+
+	r.releaseFix(w)
+	if sl := r.slot(name); sl.State != store.SlotFree || sl.HoldReason != nil {
+		t.Fatalf("%s after the release = %s, hold %q, want free", name, sl.State, store.Deref(sl.HoldReason))
+	}
+	if got, ref := r.keptRefs(r.main), fixKeptRef(7, mine); got != ref+" "+mine {
+		t.Fatalf("the release kept %q, want %s at your commit", got, ref)
+	}
+}
+
 // stopRebase leaves a replay of the fixer's commits in progress in checkout
 // dir, claimed at PR number's head claimed, as `magnum fix-sync` killed
 // mid-replay does: the fixer commits p1 and p2, the PR's author pushes a
