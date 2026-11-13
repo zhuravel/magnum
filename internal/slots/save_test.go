@@ -352,3 +352,30 @@ func TestARemovalLeavesOutAnUntrackedFileItCannotCopy(t *testing.T) {
 		t.Fatalf("saved.txt or the event does not name locked.txt as left out:\n%s", note)
 	}
 }
+
+// A removal writes each untracked file it saves straight into the save's
+// own folder, with no temporary file and no disk flush per file: a name of
+// 238 to 255 bytes is saved (an atomic write's temporary name passed 255
+// bytes and the file was left out), and a tree of many small files no
+// longer pays two full disk flushes for each.
+func TestARemovalSavesAFileWhoseNameLeavesNoRoomForATemporaryOne(t *testing.T) {
+	f := newPerPR(t, true)
+	h := f.h
+	sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, f.repoName(), f.pr, f.sha7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sl.Path, longName), "long\n")
+
+	if err := h.m.RemovePRWorktree(h.ctx, sl, false); err != nil {
+		t.Fatalf("RemovePRWorktree: %v", err)
+	}
+	save := h.onlySave(t, h.layout.PRSaves("zhuravel", "widget", f.pr.Number), sl.Name)
+	if got := readFile(t, filepath.Join(save, "untracked", longName)); got != "long\n" {
+		t.Fatalf("the file of a 240-byte name saved = %q", got)
+	}
+	ents, err := os.ReadDir(filepath.Join(save, "untracked"))
+	if err != nil || len(ents) != 1 {
+		t.Fatalf("untracked/ holds %v, %v; want the one file and no temporary one", ents, err)
+	}
+}

@@ -380,11 +380,33 @@ func saveFile(src, dst *os.Root, f string, budget *int64) string {
 			return "cannot be written: " + errText(err)
 		}
 	}
-	if err := fsx.WriteFileAtomicIn(dst, f, b, 0o600); err != nil {
+	if err := writeSaved(dst, f, b, 0o600); err != nil {
 		return "cannot be written: " + errText(err)
 	}
 	*budget -= int64(len(b))
 	return ""
+}
+
+// writeSaved writes b to name in dst, the save's own folder, which nothing
+// else writes: created there, with no temporary file (whose longer name a
+// file name near 255 bytes leaves no room for) and no disk flush, which an
+// atomic write pays twice per file. saved.txt, written last and durably,
+// marks the save whole; a file cut short is removed.
+func writeSaved(dst *os.Root, name string, b []byte, perm fs.FileMode) (err error) {
+	f, err := dst.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = dst.Remove(name)
+		}
+	}()
+	_, err = f.Write(b)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // errText is err's cause without the path a file operation's error names
