@@ -180,6 +180,8 @@ func (e *Engine) handleRequest(ctx context.Context, q registry.Request) {
 		respond(e, ctx, q, e.focusRequest)
 	case ReqRate:
 		respond(e, ctx, q, e.rateTask)
+	case ReqFinishReview:
+		respond(e, ctx, q, e.finishReview)
 	case ReqTalk:
 		e.talkRequest(ctx, q)
 	case ReqFix, ReqFixOff, ReqFixOn, ReqFixDone, ReqFixDecide, ReqFixCI, ReqMergeParent, ReqFixStop, ReqHandoff:

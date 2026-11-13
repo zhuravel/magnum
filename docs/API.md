@@ -14629,6 +14629,10 @@ const RedisOffsetEnv = config.RedisOffsetEnv
     database from. A repository whose env names it gets each copy's own offset
     there, whatever value the env gives it.
 
+const ReqFinishReview = "finish_review"
+    ReqFinishReview is your request to end a task's local review now
+    (FinishReviewPayload).
+
 const RetryFixTurns = 2
     RetryFixTurns is how many more fix turns a role whose change the factory's
     checks still refuse gets after your retry at its stage's cap (StageFixTurns
@@ -14786,6 +14790,26 @@ func Fingerprint(f evalrun.LocalFinding) string
     its line rounded down to a window of 10, and a hash of its title without its
     priority ("app/credit.rb:40:1a2b3c4d5e6f"). A finding re-ranked, or moved
     within its window, is the same one.
+
+func FinishReviewPlan(ctx context.Context, reg *registry.Registry, l paths.Layout, t registry.Task) (string, error)
+    FinishReviewPlan is what finish-review does to task t now, read from reg
+    and the task's directory under l, as its y/N, its --dry-run, the screen's
+    question and the daemon's answer say it: the round in flight finishes (or
+    is read, or the writer's fix of its findings finishes), or, between rounds,
+    the review ends at once on the writer's fix of the last round's findings,
+    which no round reviews; a head no round reviewed yet gets its round first.
+    Then no round starts.
+
+func FinishReviewQuestion(key, plan string) string
+    FinishReviewQuestion is the y/N of finish-review on the task of key,
+    whose plan (FinishReviewPlan) it names: the CLI's and the screen's S's.
+
+func FinishReviewRefusal(cfg *config.Config, t registry.Task) error
+    FinishReviewRefusal is why finish-review refuses task t under cfg,
+    nil when it goes on: the task is live (at work, or waiting on someone else)
+    at a review stage of its kind. A task that waits on you is refused (your
+    retry or your answers come first), as is one done, stopped, published,
+    failed or queued, or at another stage.
 
 func FixLoopsOf(ctx context.Context, l paths.Layout, refs []PRRef) (map[PRRef]FixLoops, error)
     FixLoopsOf counts, per PR of refs, the fix loops magnum's registry in
@@ -15291,6 +15315,13 @@ type ErrRunning struct {
 
 func (e ErrRunning) Error() string
     Error implements error.
+
+type FinishReviewPayload struct {
+	TaskID  int64
+	Surface string
+}
+    FinishReviewPayload is a ReqFinishReview: end task TaskID's local review
+    now. Surface is where you asked (the screen, the CLI), for the record.
 
 type FixAsked struct {
 	Head      string    `json:"head"`

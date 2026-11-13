@@ -314,8 +314,23 @@ func (e *Engine) sweepRounds(tasks []registry.Task) {
 // (passAfterCap). A loop that ended at the round limit on a safe stop
 // (review-end.json: endedAt) passes the stage at the head it ended at, and
 // a head since starts a fresh loop at once. A build without the local
-// reviewer, agents or git leaves the task where it is.
+// reviewer, agents or git leaves the task where it is. Your request to end
+// the local review (finish-review) ends the loop at its round's end
+// (endAtRound), or between rounds on the writer's fix of the last round's
+// findings (finishBetween), and one that no end answered goes when the
+// stage passes otherwise.
 func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.FactoryStage) (bool, error) {
+	done, err := e.reviewPass(ctx, t, st)
+	if done && err == nil {
+		if err := dropFinishFile(e.d.Layout.FactoryTaskDir(t.ID)); err != nil {
+			e.log.Warn("drop a request to end the local review that the stage's pass answers", "task", t.ID, "err", err)
+		}
+	}
+	return done, err
+}
+
+// reviewPass is one pass of the review stage (runReview).
+func (e *Engine) reviewPass(ctx context.Context, t registry.Task, st config.FactoryStage) (bool, error) {
 	if e.d.Review == nil || e.d.Runtime == nil || e.d.Git == nil {
 		return false, nil
 	}
@@ -334,16 +349,21 @@ func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.Facto
 	}
 	act := endNone
 	if last != nil {
-		act = e.endedAt(t, *last)
+		if act, err = e.endedAt(ctx, t, *last); err != nil {
+			return false, err
+		}
 	}
 	switch {
 	case act == endPass:
 		return true, nil
-	case act == endFresh: // a head since the loop's end at the round limit: a fresh loop
+	case act == endHeld:
+		return false, nil
+	case act == endFresh: // a head since the loop's end by the limit or by you, or your retry after your end: a fresh loop
 	case last != nil && !last.Ended.IsZero() && (last.Exit == registry.ExitClean || last.Exit == registry.ExitOscillation) &&
 		last.HeadBefore == t.HeadSHA:
 		return true, nil
-	case last != nil && !last.Ended.IsZero() && (last.Exit == registry.ExitUnavailable || last.Exit == registry.ExitCap):
+	case last != nil && !last.Ended.IsZero() && (last.Exit == registry.ExitUnavailable || last.Exit == registry.ExitCap ||
+		last.Exit == registry.ExitOperator):
 		if told, err := e.toldOfStop(ctx, t, *last); err != nil || !told {
 			return false, err // the move to you was lost: made now, and no fresh loop starts
 		}
@@ -356,7 +376,7 @@ func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.Facto
 	if last != nil && last.Ended.IsZero() {
 		return e.goOnCycle(ctx, t, st, c, *last, loop)
 	}
-	if last != nil && last.Exit == registry.ExitCap && act == endNone {
+	if last != nil && (last.Exit == registry.ExitCap || last.Exit == registry.ExitOperator) && act == endNone {
 		rf, due, err := e.capFix(ctx, t, st, *last, cycles)
 		if err != nil {
 			return false, err
@@ -367,6 +387,9 @@ func (e *Engine) runReview(ctx context.Context, t registry.Task, st config.Facto
 		if pass, err := e.passAfterCap(ctx, t, *last); err != nil || pass {
 			return pass, err
 		}
+	}
+	if handled, done, err := e.finishBetween(ctx, t, cycles); handled || err != nil {
+		return done, err
 	}
 	return false, e.startRound(ctx, t, c, nil, len(loop)+1)
 }
@@ -1632,7 +1655,7 @@ func (e *Engine) closeFix(ctx context.Context, t registry.Task, cy registry.Cycl
 	if err := e.endCycle(ctx, cy, head, ""); err != nil {
 		return err
 	}
-	if cy.Exit == registry.ExitCap { // the fix of a "go on" at the cap's head: the fresh loop starts next (capFix), or the stage passes (passAfterCap)
+	if cy.Exit == registry.ExitCap || cy.Exit == registry.ExitOperator { // the fix of a "go on" at a stop's head: the fresh loop starts next (capFix), or the stage passes (passAfterCap)
 		s, ok := readReviewStop(dir)
 		if !ok || s.Cycle != cy.ID {
 			s = reviewStop{Cycle: cy.ID, Why: "the local review's cap"}

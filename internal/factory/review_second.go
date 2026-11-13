@@ -425,8 +425,8 @@ func (e *Engine) decideSecond(ctx context.Context, t registry.Task, c Copy, cy r
 	switch {
 	case why != "":
 		return skip(why)
-	case e.secondHeld(cy) != "":
-		return skip(e.secondHeld(cy))
+	case e.secondHeld(dir, cy) != "":
+		return skip(e.secondHeld(dir, cy))
 	case t.CodexNever:
 		return skip(fmt.Sprintf("Codex never works on %s again, so its rounds ran with %s already", TaskKey(t), fb.Name))
 	}

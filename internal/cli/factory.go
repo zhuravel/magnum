@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	factoryUsage          = "factory [--repo owner/name|name] | factory <daemon|install|uninstall|status|start|answer|decide|retry|talk|let-go|stats|baseline>"
+	factoryUsage          = "factory [--repo owner/name|name] | factory <daemon|install|uninstall|status|start|answer|decide|retry|finish-review|talk|let-go|stats|baseline>"
 	factoryInstallUsage   = "install [--now | --drain [--timeout D]] [--dry-run]"
 	factoryUninstallUsage = "uninstall [--dry-run]"
 	factoryStatusUsage    = "status [--json]"
@@ -36,7 +36,7 @@ func newFactoryCmd(c *Context) *cobra.Command {
 			"daemon's: `magnum factory install` loads the job (and reloads it once, restarting a running factory "+
 			"daemon on this build), `uninstall` removes it, `status` lists the tasks, `start` hands it a task, "+
 			"`answer` answers a task's questions, `decide` decides on a task's ready card, `retry` lets a task that "+
-			"waits on you go on, `talk` starts a task's liaison and steps into its pane, `let-go` lets go of a "+
+			"waits on you go on, `finish-review` ends a task's local review after its round in flight, `talk` starts a task's liaison and steps into its pane, `let-go` lets go of a "+
 			"prompt whose delivery is unknown, `stats` counts what the factory still asks of you against the baseline that "+
 			"`baseline` froze, and `daemon` is what the job runs. With no command, in a terminal, `magnum factory` opens "+
 			"the factory's screen: one line per task, grouped by who it waits on, and the cards behind them (? lists "+
@@ -46,12 +46,12 @@ func newFactoryCmd(c *Context) *cobra.Command {
 				if inspScreen(c) {
 					return runFactoryScreen(c, screen)
 				}
-				return inspUsage(c, "factory", "which factory command?", "<daemon|install|uninstall|status|start|answer|decide|retry|talk|let-go|stats|baseline>")
+				return inspUsage(c, "factory", "which factory command?", "<daemon|install|uninstall|status|start|answer|decide|retry|finish-review|talk|let-go|stats|baseline>")
 			}
-			return inspUsage(c, "factory", fmt.Sprintf("unknown factory command %q", pos[0]), "<daemon|install|uninstall|status|start|answer|decide|retry|talk|let-go|stats|baseline>")
+			return inspUsage(c, "factory", fmt.Sprintf("unknown factory command %q", pos[0]), "<daemon|install|uninstall|status|start|answer|decide|retry|finish-review|talk|let-go|stats|baseline>")
 		})
 	cmd.AddCommand(newFactoryDaemonCmd(c), newFactoryInstallCmd(c), newFactoryUninstallCmd(c), newFactoryStatusCmd(c),
-		newFactoryStartCmd(c), newFactoryAnswerCmd(c), newFactoryDecideCmd(c), newFactoryRetryCmd(c), newFactoryTalkCmd(c), newFactoryLetGoCmd(c), newFactoryStatsCmd(c),
+		newFactoryStartCmd(c), newFactoryAnswerCmd(c), newFactoryDecideCmd(c), newFactoryRetryCmd(c), newFactoryFinishCmd(c), newFactoryTalkCmd(c), newFactoryLetGoCmd(c), newFactoryStatsCmd(c),
 		newFactoryBaselineCmd(c))
 	addFactoryScreenFlags(c, cmd, &screen)
 	return cmd

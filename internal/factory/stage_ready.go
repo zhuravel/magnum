@@ -607,8 +607,9 @@ func (e *Engine) runReady(ctx context.Context, t registry.Task, _ config.Factory
 // readyProblem is why task t has no ready card ("" when it may have one)
 // and the local review's end: the review ended clean or on an oscillation
 // (review-summary.json), passed at its cap after the writer's fix
-// (passAfterCap: exitCapFixed), or ended at the round limit on a safe stop
-// (endAtRound: exitRoundLimit), at the task's head, where the
+// (passAfterCap: exitCapFixed), or ended at the round limit or by you on a
+// safe stop (endAtRound, finishBetween: exitRoundLimit, exitByYou), at the
+// task's head, where the
 // factory's proof holds and the precheck passed, QA passed when the task
 // has QA (qaProblem), and the report and the PR body are there. A review
 // that did not finish, or stopped at its cap for you, never has a card.
@@ -623,7 +624,7 @@ func (e *Engine) readyProblem(t registry.Task) (ReviewSummary, string) {
 		return sum, reviewSummaryFile + " is not valid JSON: " + err.Error()
 	}
 	switch sum.Exit {
-	case registry.ExitClean, registry.ExitOscillation, exitCapFixed, exitRoundLimit:
+	case registry.ExitClean, registry.ExitOscillation, exitCapFixed, exitRoundLimit, exitByYou:
 	case registry.ExitUnavailable:
 		return sum, "review unavailable: the local review did not finish"
 	case registry.ExitCap:
@@ -1292,11 +1293,14 @@ func knownList(sum ReviewSummary) string {
 }
 
 // knownWhy is what the PR body's Known list says of its findings: none
-// blocks, or, for a loop that ended at the round limit, that it ended there
-// with them still open.
+// blocks, or, for a loop that ended at the round limit or by you, that it
+// ended so with them still open.
 func knownWhy(sum ReviewSummary) string {
-	if sum.Exit == exitRoundLimit {
+	switch sum.Exit {
+	case exitRoundLimit:
 		return "its loop ended " + limitWords(sum.Limit, sum.TaskRounds) + " with these still open and unfixed"
+	case exitByYou:
+		return "you ended its loop after " + plural(max(sum.TaskRounds, sum.Rounds, 1), "round") + " with these still open and unfixed"
 	}
 	return "none of it blocks"
 }

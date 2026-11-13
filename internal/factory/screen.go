@@ -1255,6 +1255,14 @@ func readyRecommendation(card ReadyCardFile, failed []string) (choice, why strin
 		return ChoicePush, fmt.Sprintf("the local review ended %s with %s still open, unfixed (KNOWN): read them, then push; "+
 			"the factory's proof holds at %s%s", limitWords(rev.Limit, rev.TaskRounds), plural(len(rev.Leftovers), "finding"),
 			short(card.Head), qaWhy(card.QA))
+	case rev.Exit == exitByYou:
+		fixed := ""
+		if len(rev.FixedAfter) > 0 {
+			fixed = fmt.Sprintf("; the writer fixed %s of its last round, which no round reviewed (FIXED AFTER)", plural(len(rev.FixedAfter), "finding"))
+		}
+		return ChoicePush, fmt.Sprintf("the local review was ended by you after %s with %s still open, unfixed (KNOWN)%s: read them, then push; "+
+			"the factory's proof holds at %s%s", plural(max(rev.TaskRounds, rev.Rounds, 1), "round"), plural(len(rev.Leftovers), "finding"), fixed,
+			short(card.Head), qaWhy(card.QA))
 	}
 	return ChoicePush, fmt.Sprintf("the local review ended clean after %s and the factory's proof holds at %s%s",
 		reviewRounds(rev), short(card.Head), qaWhy(card.QA))
