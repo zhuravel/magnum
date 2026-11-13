@@ -235,6 +235,54 @@ func TestARemovalSavesTheUntrackedFilesWithinTheCap(t *testing.T) {
 	}
 }
 
+// One cap covers the whole save: the patch and the untracked files take
+// from it together, and each file saved takes from what is left. A file
+// that fits the cap but not what the patch left is left out, and of two
+// files that each fit the cap but not together, the second is. The cap
+// test kept one file far past the cap and one far under it, so a cap per
+// file or one the patch did not share passed it too.
+func TestTheCapIsSharedByThePatchAndTheFiles(t *testing.T) {
+	remove := func(t *testing.T, write func(dir string)) (save, note string) {
+		f := newPerPR(t, true)
+		h := f.h
+		h.m.saveCap = 1500
+		sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, f.repoName(), f.pr, f.sha7)
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(sl.Path)
+		if err := h.m.RemovePRWorktree(h.ctx, sl, false); err != nil {
+			t.Fatalf("RemovePRWorktree: %v", err)
+		}
+		save = h.onlySave(t, h.layout.PRSaves("zhuravel", "widget", f.pr.Number), sl.Name)
+		return save, readFile(t, filepath.Join(save, "saved.txt"))
+	}
+	t.Run("the patch's share", func(t *testing.T) {
+		save, note := remove(t, func(dir string) {
+			writeFile(t, filepath.Join(dir, "README"), strings.Repeat("a tracked line\n", 60)) // a patch of about 1 KB
+			writeFile(t, filepath.Join(dir, "mid.txt"), strings.Repeat("m", 1000))
+		})
+		if fi, err := os.Stat(filepath.Join(save, "changes.diff")); err != nil || fi.Size() < 800 || fi.Size() > 1400 {
+			t.Fatalf("changes.diff: %v, %v; want the patch, of 800 to 1400 bytes", fi, err)
+		}
+		if _, err := os.Lstat(filepath.Join(save, "untracked", "mid.txt")); !os.IsNotExist(err) || !strings.Contains(note, "mid.txt (") {
+			t.Fatalf("mid.txt, which fits the cap but not what the patch left: %v, saved.txt:\n%s", err, note)
+		}
+	})
+	t.Run("the files' shares", func(t *testing.T) {
+		save, note := remove(t, func(dir string) {
+			writeFile(t, filepath.Join(dir, "a.txt"), strings.Repeat("a", 900))
+			writeFile(t, filepath.Join(dir, "b.txt"), strings.Repeat("b", 900))
+		})
+		if got := readFile(t, filepath.Join(save, "untracked", "a.txt")); len(got) != 900 {
+			t.Fatalf("a.txt saved: %d bytes", len(got))
+		}
+		if _, err := os.Lstat(filepath.Join(save, "untracked", "b.txt")); !os.IsNotExist(err) || !strings.Contains(note, "b.txt (") {
+			t.Fatalf("b.txt, which fits the cap but not beside a.txt: %v, saved.txt:\n%s", err, note)
+		}
+	})
+}
+
 // Untracked files whose names alone pass the runner's output (8 MB, far
 // past the cap) are none saved by a removal, and the save says so; the
 // tracked changes are saved and the removal goes on.
