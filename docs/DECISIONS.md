@@ -27074,6 +27074,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
     flushed (the engine owner's C4 of T3b's third check). A probe that works on doctor's PATH while the daemon's
     lacks `redis-cli` still passes, as before C9. Test, failing first:
     `TestDoctorFailsAMissingRedisCLIOnlyWhenTheDaemonsPATHLacksItToo`.
+- **The Redis doctor weighs the factory daemon's own PATH** (2026-11-13, task T3d, the engine owner's C3 to C6 of
+  T3b's check at f32479bc). A `redis-cli` missing from doctor's own PATH was weighed against a PATH doctor rebuilt
+  from today's configuration (launchd's, and with `[daemon] shell_path` on a new `$SHELL -ilc` ask), not against
+  the one the running daemon has. A daemon started before `shell_path` was turned off kept the shell's
+  directories while doctor failed the check; one whose own ask of the shell answered nothing lacked them while a
+  new ask found them and doctor said its claims flush (C3). The factory daemon now records the PATH it runs with
+  once its environment is ready (`startFactoryDaemon`, after `daemonEnv`: the locale and the login shell's
+  directories applied): kv `factory.daemon_path` in the factory's agents store, `{"pid", "path"}`
+  (`recordFactoryDaemonPATH`). It is the whole PATH of the process, not a count as the review daemon's
+  `daemon.shell_path` keeps for `magnum status`, because doctor looks a tool up in it. Only `magnum doctor` reads
+  it (read-only, `readFactoryDaemonPATH`), and it names only where the one tool is found, as before: no event, no
+  log line and no screen shows the directories. Doctor uses the record only while its pid is the running factory
+  daemon's pidfile (`d.FactoryPID`): a record stays in the store after its daemon stops, and an earlier daemon's
+  is not the running one's until that one writes its own. Without a record of the running daemon (an older daemon
+  that never wrote one, none running, another pid's) it rebuilds the PATH as before, and the check says so: "the
+  factory daemon recorded no PATH (an older daemon, or none running), so doctor rebuilt its PATH from today's
+  configuration". No migration: a kv row. Tests, failing first:
+  `TestDoctorWeighsAMissingRedisCLIAgainstThePATHTheRunningFactoryDaemonRecorded` (the record decides over
+  `shell_path` and a new ask both ways, with no ask of the shell; another pid's record and no daemon running are
+  rebuilt and said so) and `TestTheFactoryDaemonRecordsThePATHItRunsWith`.
 
 ## Learned rules
 

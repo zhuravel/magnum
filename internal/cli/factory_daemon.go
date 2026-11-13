@@ -109,12 +109,17 @@ func runFactoryDaemonCmd(c *Context, level string, pos []string) int {
 // because the copies' setup, reset and precheck commands run in the
 // daemon's own environment and need what only the shell's exports name
 // (DBngin's redis-server) and a UTF-8 locale (rubocop). The factory log then
-// says what it set and what the shell added.
+// says what it set and what the shell added, and the PATH it ended with is
+// recorded in the agents store (recordFactoryDaemonPATH) for `magnum doctor`.
 func startFactoryDaemon(ctx context.Context, c *Context, lvl slog.Level) (*factoryDaemon, error) {
 	locale, s := daemonEnv(ctx, c.Config)
 	d, err := buildFactoryDaemon(c, lvl)
 	if err == nil {
 		locale.log(d.Log)
+		if rerr := recordFactoryDaemonPATH(ctx, d.Agents, os.Getpid(), daemonSys.Getenv("PATH")); rerr != nil {
+			// The directories stay out of the log: doctor then rebuilds the PATH.
+			d.Log.Warn("the factory daemon's PATH could not be recorded for `magnum doctor`", "err", rerr)
+		}
 	}
 	if err != nil || s == nil {
 		return d, err

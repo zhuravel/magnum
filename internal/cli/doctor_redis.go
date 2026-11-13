@@ -104,34 +104,63 @@ func doctorRedisRepo(ctx context.Context, d doctorDeps, r config.FactoryRepo, co
 // doctor's PATH. Where doctor cannot tell (the login shell did not answer),
 // a WARN. Where it does not, a WARN, and a FAIL where the copies' env names
 // REDIS_DB_OFFSET, since each claim of a copy flushes its Redis databases
-// with redis-cli too, and those claims fail.
+// with redis-cli too, and those claims fail. Each says, when the daemon
+// recorded no PATH, that doctor rebuilt the daemon's from today's
+// configuration.
 func redisCLIMissing(ctx context.Context, d doctorDeps, name, needs, addr string, r config.FactoryRepo) doctorCheck {
 	fix := "install redis-cli (it comes with Redis) where the factory daemon's PATH finds it, then run `magnum doctor` again"
-	switch at, known := doctorDaemonLookPath(ctx, d, "redis-cli"); {
-	case at != "":
+	look := doctorDaemonLookPath(ctx, d, "redis-cli")
+	switch {
+	case look.at != "":
 		return doctorWarned(name, fmt.Sprintf("%s; redis-cli is not on doctor's PATH, so how many the Redis at %s has is unknown, "+
-			"while the factory daemon's PATH finds it at %s, so its claims flush", needs, addr, inspTilde(at)),
+			"while the factory daemon's PATH finds it at %s, so its claims flush%s", needs, addr, inspTilde(look.at), look.note()),
 			"run `magnum doctor` from a shell whose PATH finds redis-cli, as the factory daemon's does")
-	case !known:
+	case !look.known:
 		return doctorWarned(name, fmt.Sprintf("%s; redis-cli is not on doctor's PATH, so how many the Redis at %s has is unknown, "+
 			"and whether the factory daemon's PATH finds it is unknown: the login shell, whose PATH [daemon] shell_path adds to it, "+
-			"did not answer", needs, addr), fix)
+			"did not answer%s", needs, addr, look.note()), fix)
 	}
 	detail := fmt.Sprintf("%s; redis-cli is not on PATH, neither doctor's nor the factory daemon's, so how many the Redis at %s has is unknown",
 		needs, addr)
 	if _, flushes := r.Env[config.RedisOffsetEnv]; flushes {
-		return doctorFailed(name, detail+fmt.Sprintf(", and each claim of %s's copies flushes their Redis databases with it: those claims fail", r.Repo), fix)
+		return doctorFailed(name, detail+fmt.Sprintf(", and each claim of %s's copies flushes their Redis databases with it: those claims fail%s",
+			r.Repo, look.note()), fix)
 	}
-	return doctorWarned(name, detail, fix)
+	return doctorWarned(name, detail+look.note(), fix)
 }
 
-// doctorDaemonLookPath is where the PATH the daemons run with finds
-// executable file ("" for nowhere): launchd's, the LaunchAgent's
-// (launchdPATH), then, with [daemon] shell_path on, the directories of the
-// login shell's PATH it lacks, which the daemon's start appends
-// (daemonShellPATH); doctor asks the shell as the daemon does. known is
-// false when the shell did not answer and launchd's PATH lacks file.
-func doctorDaemonLookPath(ctx context.Context, d doctorDeps, file string) (at string, known bool) {
+// daemonLook is where the PATH the factory daemon runs with finds a file
+// (doctorDaemonLookPath).
+type daemonLook struct {
+	// at is the file's path there; "" for nowhere.
+	at string
+	// known is false when the shell did not answer and launchd's PATH lacks
+	// the file: where the daemon's PATH finds it is then unknown.
+	known bool
+	// recorded is true when the PATH is the running daemon's own record
+	// (factoryDaemonPATH), false when doctor rebuilt it.
+	recorded bool
+}
+
+// note is what a check says when the PATH it weighed was rebuilt: the
+// daemon recorded none, so it is today's configuration's, which a daemon
+// started under another one does not share. "" for the daemon's own record.
+func (l daemonLook) note() string {
+	if l.recorded {
+		return ""
+	}
+	return "; the factory daemon recorded no PATH (an older daemon, or none running), so doctor rebuilt its PATH from today's configuration"
+}
+
+// doctorDaemonLookPath is where the PATH the factory daemon runs with finds
+// executable file: the PATH the running daemon recorded at its start
+// (factoryDaemonPATH of its pid), else, with no such record (an older
+// daemon, none running, an earlier daemon's), the PATH its start would build
+// from today's configuration: launchd's, the LaunchAgent's (launchdPATH),
+// then, with [daemon] shell_path on, the directories of the login shell's
+// PATH it lacks, which the daemon's start appends (daemonShellPATH); doctor
+// asks the shell as the daemon does.
+func doctorDaemonLookPath(ctx context.Context, d doctorDeps, file string) daemonLook {
 	isExec := d.Executable
 	if isExec == nil {
 		isExec = isExecutableFile
@@ -144,9 +173,12 @@ func doctorDaemonLookPath(ctx context.Context, d doctorDeps, file string) (at st
 		}
 		return ""
 	}
+	if path, ok := doctorRecordedDaemonPATH(ctx, d); ok {
+		return daemonLook{at: lookIn(path), known: true, recorded: true}
+	}
 	own := launchdPATH(d.UserHome)
 	if at := lookIn(own); at != "" || d.Config == nil || !d.Config.Daemon.ShellPath {
-		return at, true
+		return daemonLook{at: at, known: true}
 	}
 	shell := "zsh"
 	if d.Getenv != nil {
@@ -156,10 +188,26 @@ func doctorDaemonLookPath(ctx context.Context, d doctorDeps, file string) (at st
 		Label: "doctor"})
 	line, ok := lastPATHLine(out)
 	if err != nil || !ok {
-		return "", false
+		return daemonLook{}
 	}
 	_, added := mergePATH(own, line)
-	return lookIn(strings.Join(added, ":")), true
+	return daemonLook{at: lookIn(strings.Join(added, ":")), known: true}
+}
+
+// doctorRecordedDaemonPATH is the PATH the running factory daemon recorded:
+// false when no daemon runs, or the record is another process's (an earlier
+// daemon's, which stays in the store until the running one writes its own)
+// or missing.
+func doctorRecordedDaemonPATH(ctx context.Context, d doctorDeps) (string, bool) {
+	if d.FactoryPID == nil {
+		return "", false
+	}
+	pid, err := d.FactoryPID()
+	if err != nil || pid <= 0 {
+		return "", false
+	}
+	rec, ok := readFactoryDaemonPATH(ctx, d.Layout.FactoryAgentsDB())
+	return rec.Path, ok && rec.PID == pid
 }
 
 // isExecutableFile reports whether p is a regular file someone may run.

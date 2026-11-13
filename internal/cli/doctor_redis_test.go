@@ -330,6 +330,75 @@ func TestDoctorFailsAMissingRedisCLIOnlyWhenTheDaemonsPATHLacksItToo(t *testing.
 	}
 }
 
+// A redis-cli missing from doctor's own PATH is weighed against the PATH the
+// running factory daemon recorded at its start (factoryDaemonPATH), not one
+// doctor rebuilds from today's configuration and a new ask of the login
+// shell: a daemon started before shell_path was turned off still has the
+// shell's directories, one whose shell did not answer lacks them while a new
+// ask finds them, and a directory .zshrc gained since is not in its PATH
+// (C3 of T3b's third check). Without a record of the running daemon (an
+// older daemon, none running, a record of another pid) doctor rebuilds the
+// PATH as before and says so.
+func TestDoctorWeighsAMissingRedisCLIAgainstThePATHTheRunningFactoryDaemonRecorded(t *testing.T) {
+	_, d, _, _ := doctorFixture(t)
+	fake := d.Run.(*execx.Fake)
+	base := fake.Rules
+	cfg := *d.Config
+	cfg.Factory.Repos = redisRepos()[:1] // its env names REDIS_DB_OFFSET: its claims flush with redis-cli
+	d.Config = &cfg
+	missing := &execx.RunError{Cmd: execx.Cmd{Name: "redis-cli"}, Err: &exec.Error{Name: "redis-cli", Err: exec.ErrNotFound}}
+	shell := execx.Rule{Prefix: []string{"zsh", "-ilc"}, Result: execx.Result{Stdout: []byte("/usr/bin:/opt/redis/bin\n")}}
+	fake.Rules = append([]execx.Rule{{Prefix: []string{"redis-cli"}, Err: missing}, shell}, base...)
+	d.Executable = func(p string) bool { return p == "/opt/redis/bin/redis-cli" }
+	st := storetest.OpenFile(t, d.Layout.FactoryAgentsDB())
+	running := 4242
+	d.FactoryPID = func() (int, error) { return running, nil }
+	record := func(pid int, path string) {
+		t.Helper()
+		if err := recordFactoryDaemonPATH(context.Background(), st, pid, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func() (doctorCheck, int) {
+		t.Helper()
+		before := len(fake.CallsWithPrefix("zsh", "-ilc"))
+		for _, c := range doctorRun(context.Background(), d) {
+			if c.Name == "redis talkable/talkable" {
+				return c, len(fake.CallsWithPrefix("zsh", "-ilc")) - before
+			}
+		}
+		t.Fatal("no redis check of talkable/talkable")
+		return doctorCheck{}, 0
+	}
+	const rebuilt = "recorded no PATH"
+
+	cfg.Daemon.ShellPath = false // turned off since the daemon started with the shell's directories
+	record(4242, launchdPATH(d.UserHome)+":/opt/redis/bin")
+	if c, asked := check(); c.Status != doctorWarn || !strings.Contains(c.Detail, "finds it at /opt/redis/bin/redis-cli") ||
+		strings.Contains(c.Detail, rebuilt) || asked != 0 {
+		t.Fatalf("redis-cli in the PATH the daemon recorded, shell_path off now = %+v (shell asked %d times), want a WARN naming where the daemon finds it, no rebuild and no ask", c, asked)
+	}
+
+	cfg.Daemon.ShellPath = true // on now, but the daemon's own ask of the shell answered nothing
+	record(4242, launchdPATH(d.UserHome))
+	if c, asked := check(); c.Status != doctorFail || !strings.Contains(c.Detail, "neither doctor's nor the factory daemon's") ||
+		strings.Contains(c.Detail, rebuilt) || asked != 0 {
+		t.Fatalf("redis-cli in no PATH the daemon recorded, a new ask would find it = %+v (shell asked %d times), want a FAIL: the daemon's claims cannot flush", c, asked)
+	}
+
+	record(4000, launchdPATH(d.UserHome)) // an earlier daemon's: the running one recorded none yet
+	if c, asked := check(); c.Status != doctorWarn || !strings.Contains(c.Detail, "finds it at /opt/redis/bin/redis-cli") ||
+		!strings.Contains(c.Detail, rebuilt) || !strings.Contains(c.Detail, "today's configuration") || asked != 1 {
+		t.Fatalf("a record of another pid = %+v (shell asked %d times), want the PATH rebuilt from today's configuration, and said so", c, asked)
+	}
+
+	record(4242, launchdPATH(d.UserHome))
+	running = 0 // none running: the next start rebuilds the PATH from the configuration then
+	if c, asked := check(); c.Status != doctorWarn || !strings.Contains(c.Detail, rebuilt) || asked != 1 {
+		t.Fatalf("a record while no daemon runs = %+v (shell asked %d times), want the PATH rebuilt, and said so", c, asked)
+	}
+}
+
 // `magnum config` names, for each [[factory.repo]] whose copies use Redis
 // offsets, how many Redis databases its copies need: it cannot read Redis,
 // so it states the number, (max_copies + fix_copies + 1) × 16.
