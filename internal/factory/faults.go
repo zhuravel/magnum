@@ -299,7 +299,7 @@ func jestFailures(out string) []string {
 	for _, m := range jestFailRe.FindAllString(textx.StripTerminal(out), -1) {
 		m = timingRe.ReplaceAllString(strings.TrimSpace(m), "")
 		switch {
-		case strings.HasPrefix(m, "Tests:") || strings.HasPrefix(m, "Test Suites:"):
+		case jestSummary(m):
 			sums = append(sums, m)
 		case !slices.Contains(fs, m):
 			fs = append(fs, m)
@@ -309,6 +309,18 @@ func jestFailures(out string) []string {
 		return sums
 	}
 	return fs
+}
+
+// jestSummary reports whether jest failure f is a summary line ("Tests: 2
+// failed, …", "Test Suites: 1 failed, …"), which names no failing test.
+func jestSummary(f string) bool {
+	return strings.HasPrefix(f, "Tests:") || strings.HasPrefix(f, "Test Suites:")
+}
+
+// jestNamed reports whether jest failures fs (jestFailures) name a failing
+// test or suite, not only the summary lines.
+func jestNamed(fs []string) bool {
+	return slices.ContainsFunc(fs, func(f string) bool { return !jestSummary(f) })
 }
 
 // runText is what run printed on stdout and stderr, from the ends the
@@ -380,9 +392,12 @@ var timingRe = regexp.MustCompile(`\s*\(\d+(?:\.\d+)?\s*m?s\)$`)
 // that every run of its command prints: rspec's seed and run options,
 // progress dots, its timing and its slowest examples, a tool's banner
 // ("yarn run v1.22.19", "$ prettier …", "> pkg@1.0.0 lint", a step's
-// "Checking formatting...", "Done in 0.42s.") and its version line.
+// "Checking formatting...", "Done in 0.42s.", yarn v1's footer "info Visit
+// … for documentation about this command." and "error Command failed with
+// exit code 1.") and its version line.
 var runNoiseRe = regexp.MustCompile(`^(?:Randomized with seed \d+|Run options:.*|[.*FEP]+|Finished in .*|Top \d+ slowest .*|` +
 	`\(files took .*\)|(?:yarn|pnpm|npm|npx|bun) (?:run )?v?\d+(?:\.\d+)+|\$ .+|> .+|Done in [\d.]+m?s\.?|.*(?:\.\.\.|…)|` +
+	`info Visit \S+ for documentation about this command\.|error Command failed with exit code \d+\.|` +
 	`[\w.-]+ v?\d+\.\d+(?:\.\d+)?(?: .*)?)$`)
 
 // tableRe matches a line of a table a run prints (jest's coverage table): a

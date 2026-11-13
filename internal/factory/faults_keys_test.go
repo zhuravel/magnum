@@ -182,20 +182,12 @@ func TestALintsOffensesAreReadFromItsWholeOutput(t *testing.T) {
 
 // A command missing for a lint run through a script the change defines
 // (package.json's script, a Makefile's recipe, a rake task, a bin/ file of
-// its name) that names that command is the change's: those files count as
-// the crash's cause, as the lint's own script does.
+// its name) whose added lines name that command is the change's: those
+// files count as the crash's cause, as the lint's own script does.
 func TestAMissingCommandOfAScriptTheChangeDefinesIsTheChanges(t *testing.T) {
-	dir := t.TempDir()
-	for rel, text := range map[string]string{"Makefile": "lint:\n\teslnt app\n", "package.json": `{"scripts": {"lint": "eslnt ."}}`,
-		"lib/tasks/lint.rake": "task :lint do\n  sh 'eslnt app'\nend\n"} {
-		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, rel), []byte(text), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	crash := envCrash{cmd: "make lint {files}", copy: dir, sig: envSignature{scriptOnly: true, lacks: "a command"}}
+	crash := envCrash{cmd: "make lint {files}", sig: envSignature{scriptOnly: true, lacks: "a command"}, added: map[string][]string{
+		"Makefile": {"lint:", "\teslnt app"}, "package.json": {`    "lint": "eslnt ."`},
+		"lib/tasks/lint.rake": {"task :lint do", "  sh 'eslnt app'", "end"}}}
 	for _, f := range []string{"Makefile", "package.json", "lib/tasks/lint.rake", "bin/eslnt"} {
 		if got := branchCaused(crash, "/bin/sh: eslnt: command not found", []string{"app/x.rb", f}); !slices.Contains(got, f) {
 			t.Errorf("branchCaused with %s changed = %q; want it", f, got)
@@ -268,22 +260,15 @@ func TestALintsZeroZeroWarningIsNoFatalError(t *testing.T) {
 }
 
 // A script-defining file the change touched is a missing command's cause
-// only when it defines or names that command: a Makefile whose recipe runs
-// it, a bin/ file of its name; one that names it not is the environment's.
+// only when the lines the change added to it define or name that command
+// (a Makefile's recipe that runs it, a bin/ file of its name). One that
+// names it only in lines the base had already (the lint's own recipe), or
+// not at all, is the environment's. zsh's "command not found: <name>" names
+// the command after the words.
 func TestAScriptFileCausesOnlyTheMissingCommandItNames(t *testing.T) {
-	dir := t.TempDir()
-	write := func(rel, text string) {
-		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, rel), []byte(text), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write("Makefile", "lint:\n\teslnt app\n")
-	write("lib/tasks/cleanup.rake", "task :cleanup do\nend\n")
-	crash := envCrash{cmd: "make lint {files}", copy: dir, line: "/bin/sh: eslnt: command not found",
-		sig: envSignature{scriptOnly: true, lacks: "a command"}}
+	crash := envCrash{cmd: "make lint {files}", line: "/bin/sh: eslnt: command not found",
+		sig:   envSignature{scriptOnly: true, lacks: "a command"},
+		added: map[string][]string{"Makefile": {"lint:", "\teslnt app"}, "lib/tasks/cleanup.rake": {"task :cleanup do", "end"}}}
 	if got := branchCaused(crash, crash.line, []string{"Makefile", "lib/tasks/cleanup.rake", "bin/eslnt"}); !slices.Equal(got,
 		[]string{"Makefile", "bin/eslnt"}) {
 		t.Fatalf("branchCaused = %q; want the Makefile that runs eslnt and bin/eslnt, never the rake task", got)
@@ -291,6 +276,18 @@ func TestAScriptFileCausesOnlyTheMissingCommandItNames(t *testing.T) {
 	crash.line = "/bin/sh: shellcheck: command not found"
 	if got := branchCaused(crash, crash.line, []string{"Makefile", "lib/tasks/cleanup.rake"}); len(got) != 0 {
 		t.Fatalf("branchCaused = %q for a command no changed file names; want none", got)
+	}
+	dir := t.TempDir() // the Makefile at the head names shellcheck in a recipe the base had; the change added another target
+	if err := os.WriteFile(filepath.Join(dir, "Makefile"), []byte("lint:\n\tshellcheck bin/*.sh\nother:\n\techo hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	crash.copy, crash.added = dir, map[string][]string{"Makefile": {"other:", "\techo hi"}}
+	if got := branchCaused(crash, crash.line, []string{"Makefile"}); len(got) != 0 {
+		t.Fatalf("branchCaused = %q for a command only the base's lines name; want none", got)
+	}
+	crash.line, crash.added = "zsh: command not found: eslnt", map[string][]string{"bin/lint": {"#!/bin/zsh", "eslnt app"}}
+	if got := branchCaused(crash, crash.line, []string{"bin/lint"}); !slices.Equal(got, []string{"bin/lint"}) {
+		t.Fatalf("branchCaused = %q for zsh's missing eslnt that bin/lint's new lines run; want bin/lint", got)
 	}
 }
 

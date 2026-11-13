@@ -118,14 +118,14 @@ func (rec fixTurnsRecord) grantsOf(attempt, role string) []fixGrant {
 // sameFailure reports whether turns a and b failed the same way: the same
 // check with the same failures.
 func sameFailure(a, b turnFailure) bool {
-	key := func(fs []string) []string { // a lint offense with no line, column or number: the same offense, its lines shifted
+	key := func(check string, fs []string) []string { // a lint offense with no line, column or number: the same offense, its lines shifted
 		out := make([]string, 0, len(fs))
 		for _, f := range fs {
-			out = append(out, acceptKey(f))
+			out = append(out, failureKey(check, f))
 		}
 		return slices.Sorted(slices.Values(out))
 	}
-	return a.Check == b.Check && slices.Equal(key(a.Failures), key(b.Failures))
+	return a.Check == b.Check && slices.Equal(key(a.Check, a.Failures), key(b.Check, b.Failures))
 }
 
 // progressed reports whether turns (a role's, oldest first) show progress:

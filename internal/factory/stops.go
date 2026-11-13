@@ -173,12 +173,12 @@ func (rec stopsRecord) bound(key string) time.Duration {
 // the accept named it. A failure that names nothing is never accepted (the
 // question offers no accept for it).
 func (rec stopsRecord) accepts(key string, failures []string) bool {
-	now := keyCounts(failures)
+	now := keyCounts(key, failures)
 	return slices.ContainsFunc(rec.Accepted, func(a accepted) bool {
 		if a.Check != key || len(a.Failures) == 0 {
 			return false
 		}
-		known := keyCounts(a.Failures)
+		known := keyCounts(key, a.Failures)
 		for k, n := range now {
 			if n > known[k] {
 				return false
@@ -188,11 +188,11 @@ func (rec stopsRecord) accepts(key string, failures []string) bool {
 	})
 }
 
-// keyCounts counts failures by their accept keys (acceptKey).
-func keyCounts(failures []string) map[string]int {
+// keyCounts counts failures of check key by their accept keys (acceptKey).
+func keyCounts(key string, failures []string) map[string]int {
 	out := map[string]int{}
 	for _, f := range failures {
-		out[acceptKey(f)]++
+		out[acceptKey(key, f)]++
 	}
 	return out
 }
@@ -203,19 +203,53 @@ func keyCounts(failures []string) map[string]int {
 var lintOffenseRe = regexp.MustCompile(`^([^\s:]+):\s*\d+(?::\d+)?:?\s+(.*)$`)
 
 // digitsRe is a number in an offense's message, which an edit changes
-// (LineLength's [121/120], a complexity's score, a count).
-var digitsRe = regexp.MustCompile(`\d+`)
+// (LineLength's [121/120], a complexity's score, a count): one that stands
+// alone, never a part of a name or a code (a cop's Style/Rule1,
+// shellcheck's SC2164) nor a limit after a slash (the 120 of [121/120]).
+var digitsRe = regexp.MustCompile(`(^|[^\w/.-])\d+(?:\.\d+)?`)
 
-// acceptKey is failure f as your accept of it holds and the writer's
-// progress compares it: a lint offense as its file, its cop or rule and its
-// message, with no line or column and no number in its message, so it
-// survives lines that shift above it and an edit of its own; any other
-// named failure as it is.
-func acceptKey(f string) string {
+// acceptKey is failure f of check as your accept of it holds and the
+// writer's progress compares it: an offense of a lint (a precheck.lint
+// check) as its file, its cop or rule and its message, with no line or
+// column and no number in its message, so it survives lines that shift
+// above it and an edit of its own; any other failure as it is (jest's
+// "Tests: 5 failed, …" keeps its count).
+func acceptKey(check, f string) string {
+	if !strings.HasPrefix(check, "precheck.lint") {
+		return f
+	}
 	if m := lintOffenseRe.FindStringSubmatch(f); m != nil {
-		return m[1] + ": " + digitsRe.ReplaceAllString(strings.Join(strings.Fields(m[2]), " "), "#")
+		return m[1] + ": " + digitsRe.ReplaceAllString(strings.Join(strings.Fields(m[2]), " "), "${1}#")
 	}
 	return f
+}
+
+// failureKey is failure f of a turn of check as the writer's progress
+// compares it (acceptKey): an entry of every failing check's failures
+// ("<check>: <failure>", noteFailures) is keyed on its own check.
+func failureKey(check, f string) string {
+	if c, rest, ok := cutCheck(f); ok {
+		return c + ": " + acceptKey(c, rest)
+	}
+	return acceptKey(check, f)
+}
+
+// cutCheck cuts an entry of every failing check's failures ("<check>:
+// <failure>", noteFailures) at its check's end: a lint's key
+// ("precheck.lint `<cmd>`") at its closing backtick, any other precheck
+// check's at its first ": ". ok is false for a failure of no such entry.
+func cutCheck(f string) (check, failure string, ok bool) {
+	const lint = "precheck.lint `"
+	if rest, isLint := strings.CutPrefix(f, lint); isLint {
+		if i := strings.Index(rest, "`: "); i >= 0 {
+			return lint + rest[:i+1], rest[i+3:], true
+		}
+		return "", f, false
+	}
+	if !strings.HasPrefix(f, "precheck.") {
+		return "", f, false
+	}
+	return strings.Cut(f, ": ")
 }
 
 // isStopQuestion reports whether q is one of rec's stop questions.

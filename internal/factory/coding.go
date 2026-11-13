@@ -466,7 +466,7 @@ func (r checkResult) failedCheck() (check string, failed []string, unnamed bool)
 		}
 		if len(failed) == 0 { // a jest proof's failing tests, named; else what its head run says, or its why with no sha
 			if jest := jestFailures(r.Proof.Head.Output); len(jest) > 0 {
-				return "the factory's proof", jest, false
+				return "the factory's proof", jest, !jestNamed(jest) // its summary alone names no failing test
 			}
 			head := r.Proof.Head
 			if len(head.out)+len(head.errOut) == 0 {

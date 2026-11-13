@@ -9,10 +9,9 @@ package factory
 
 import (
 	"fmt"
-	"os"
 	"path"
-	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -145,6 +144,8 @@ var envSignatures = []envSignature{
 type envCrash struct {
 	key, cmd, line, copy string
 	sig                  envSignature
+	// added are the lines the change added to each file (definesMissing).
+	added map[string][]string
 }
 
 func (c envCrash) Error() string {
@@ -189,29 +190,47 @@ var lintInputRe = regexp.MustCompile(`(?i)(?:^|/)(?:Gemfile(?:\.lock)?|gems\.(?:
 var scriptDefRe = regexp.MustCompile(`(?:^|/)(?:package\.json|[Mm]akefile|GNUmakefile|Rakefile|Justfile|Taskfile\.ya?ml)$|(?:^|/)lib/tasks/|(?:^|/)bin/`)
 
 // missingRe is the command a shell found missing ("/bin/sh: eslnt: command
-// not found", "sh: 1: eslnt: not found").
-var missingRe = regexp.MustCompile(`([\w.+-]+): (?:command )?not found`)
+// not found", "sh: 1: eslnt: not found"), zshMissingRe zsh's, which names it
+// after the words ("zsh: command not found: eslnt", "bin/x:3: command not
+// found: eslnt").
+var (
+	missingRe    = regexp.MustCompile(`([\w.+-]+): (?:command )?not found`)
+	zshMissingRe = regexp.MustCompile(`command not found: ([\w.+-]+)\s*$`)
+)
 
-// definesMissing reports whether script file f (scriptDefRe) of the copy
+// definesMissing reports whether script file f (scriptDefRe) of the change
 // defines or names the command crash c (its line, else stderr) found
-// missing: a bin/ file of its
+// missing, in the lines the change added to it (c.added): a bin/ file of its
 // name, or a file whose text names it (a package.json script, a Makefile's
 // recipe, a rake task). A missing command no changed file names is the
 // environment's.
 func definesMissing(c envCrash, stderr, f string) bool {
-	m := missingRe.FindStringSubmatch(c.line)
-	if m == nil {
-		m = missingRe.FindStringSubmatch(stderr)
+	name := missingName(c.line)
+	if name == "" {
+		name = missingName(stderr)
 	}
-	if m == nil {
+	if name == "" {
 		return false
 	}
-	name := m[1]
 	if path.Base(f) == name {
 		return true
 	}
-	b, err := os.ReadFile(filepath.Join(c.copy, filepath.FromSlash(f)))
-	return err == nil && regexp.MustCompile(`(?:^|[^\w.-])`+regexp.QuoteMeta(name)+`(?:$|[^\w.-])`).Match(b)
+	named := regexp.MustCompile(`(?:^|[^\w.-])` + regexp.QuoteMeta(name) + `(?:$|[^\w.-])`)
+	return slices.ContainsFunc(c.added[f], named.MatchString)
+}
+
+// missingName is the command line says a shell found missing (zsh's form
+// first: zshMissingRe, missingRe), "" for none.
+func missingName(line string) string {
+	for l := range strings.SplitSeq(line, "\n") {
+		if m := zshMissingRe.FindStringSubmatch(l); m != nil {
+			return m[1]
+		}
+		if m := missingRe.FindStringSubmatch(l); m != nil {
+			return m[1]
+		}
+	}
+	return ""
 }
 
 // branchCaused are the files of the change (files, as the copy names them)

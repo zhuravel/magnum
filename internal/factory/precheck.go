@@ -224,7 +224,7 @@ func (e *Engine) precheck(ctx context.Context, t registry.Task, c Copy) (Prechec
 	p := &precheckRun{e: e, t: t, c: c, repo: repo, head: bh.Head, base: bh.Base, ctx: cctx, parent: ctx, limit: limit, started: started,
 		res: PrecheckResult{Passed: true}}
 	p.readDecisions()
-	p.files, p.touched = files, touched
+	p.files, p.touched, p.added = files, touched, addedLines(diff)
 	defer func() {
 		for _, cancel := range p.renewed {
 			cancel(nil)
@@ -487,7 +487,13 @@ type precheckRun struct {
 	// crash, a sign or a fault's output is read against (branchCaused,
 	// runnerCaused, namesChanged), never a command's {files}.
 	touched []string
-	renewed []context.CancelCauseFunc
+	// added are the lines the change added to each file (a missing
+	// command's cause is read from them: definesMissing); realCopy the
+	// copy's path through its symlinks, as a lint's getcwd prints it
+	// (copyFile), read once.
+	added    map[string][]string
+	realCopy string
+	renewed  []context.CancelCauseFunc
 }
 
 // readDecisions reads your decisions for the task's checks (stops.json)
@@ -522,14 +528,21 @@ func (p *precheckRun) failCheck(key string, failures []string, why, cmd string) 
 }
 
 // failUnnamed is failCheck of a run that named no failing example or
-// offense: its failure is the line firstFailing reads, and your accept of
-// it holds for the check alone (unnamed).
+// offense: its failure is the line firstFailing reads (failUnnamedLines).
 func (p *precheckRun) failUnnamed(key string, run ProofRun, why, cmd string) {
-	failures := firstFailing(run) // the writer's progress compares them; no accept covers them
+	p.failUnnamedLines(key, firstFailing(run), why, cmd)
+}
+
+// failUnnamedLines fails the precheck with why, the writer's to fix, on
+// lines that name no failing example, test or offense (a crash's line, the
+// last line of stderr, a sign, a hang, jest's summary alone): the writer's
+// progress compares them, and no accept covers them (unnamed: the question
+// offers none, and your accept of an older build is never read for them).
+func (p *precheckRun) failUnnamedLines(key string, lines []string, why, cmd string) {
 	if p.res.Passed {
-		p.res.check, p.res.failures, p.res.unnamed = key, failures, true
+		p.res.check, p.res.failures, p.res.unnamed = key, lines, true
 	}
-	p.noteFailures(key, failures)
+	p.noteFailures(key, lines)
 	p.fail(why, cmd)
 }
 
@@ -985,8 +998,8 @@ func (p *precheckRun) lintOnce(cmd, script string, files []string, changed map[s
 		if orphans { // rows of no file: an output the factory cannot read, the writer's whole, never filtered
 			break
 		}
-		file := strings.TrimPrefix(strings.TrimPrefix(o.file, p.c.Path+"/"), "./")
-		if filepath.IsAbs(file) && !slices.Contains(files, file) { // outside the copy (a gem's line): no offense of the change's files
+		file, in := p.copyFile(o.file)
+		if !in { // outside the copy (a gem's line, a Ruby warning of a file it loads): no offense of the change's files
 			continue
 		}
 		r.named++
@@ -998,6 +1011,7 @@ func (p *precheckRun) lintOnce(cmd, script string, files []string, changed map[s
 	if r.run.Exit != 0 && r.named == 0 {
 		stdout, _ := runText(r.run)
 		if r.crash, r.isCrash = crashOf("precheck.lint", cmd, p.c.Path, p.stderr); r.isCrash {
+			r.crash.added = p.added
 			r.theirs = branchCaused(r.crash, p.stderr, p.touchedOr(files))
 		}
 		r.sign = faultSign(r.run.Exit, stdout, p.stderr, r.crash, r.isCrash, cmd)
@@ -1016,9 +1030,30 @@ type namedOffense struct {
 	text string
 }
 
-// rubyWarningRe is a warning Ruby prints for a file it loads
-// ("/gems/foo/lib/foo.rb:5: warning: ostruct was loaded …"), no offense.
-var rubyWarningRe = regexp.MustCompile(`^\S+:\d+: warning: `)
+// copyFile is file, as a lint printed it, relative to the copy: through
+// the copy's path as configured or as its symlinks resolve (realCopy, the
+// getcwd RuboCop and eslint print), on both sides. in is false for an
+// absolute path outside the copy (a gem's file).
+func (p *precheckRun) copyFile(file string) (rel string, in bool) {
+	file = strings.TrimPrefix(file, "./")
+	if !filepath.IsAbs(file) {
+		return file, true
+	}
+	if p.realCopy == "" {
+		p.realCopy, _ = filepath.EvalSymlinks(p.c.Path)
+	}
+	for _, dir := range []string{p.c.Path, p.realCopy} {
+		if rel, ok := strings.CutPrefix(file, dir+"/"); ok && dir != "" {
+			return rel, true
+		}
+	}
+	if real, err := filepath.EvalSymlinks(file); err == nil && p.realCopy != "" {
+		if rel, ok := strings.CutPrefix(real, p.realCopy+"/"); ok {
+			return rel, true
+		}
+	}
+	return file, false
+}
 
 // lintRowRe is a row of a lint's report under its file's line: eslint's
 // stylish and stylelint's "  1:3  ✖  Empty block  block-no-empty".
@@ -1045,9 +1080,6 @@ func namedOffenses(output string) (out []namedOffense, orphans bool) {
 			}
 			n, _ := strconv.Atoi(m[1])
 			out = append(out, namedOffense{file: file, line: n, text: file + ":" + trimmed})
-			continue
-		}
-		if rubyWarningRe.MatchString(trimmed) { // a Ruby warning a gem prints: noise, no offense
 			continue
 		}
 		if m := offenseRe.FindStringSubmatch(trimmed); m != nil && strings.Trim(m[1], "0123456789") != "" {
@@ -1099,7 +1131,7 @@ func (p *precheckRun) settleLint(cmd, script string, r lintRun, tried []string) 
 	check := registry.Check{Kind: registry.CheckLint, Result: registry.CheckPass, Command: script, Exit: r.run.Exit, Took: r.run.Took}
 	switch {
 	case r.hung && p.toWriter(key): // your answer handed its faults to the writer
-		p.failCheck(key, []string{"did not end within " + capText(r.bound)}, "lint: `"+firstWord(cmd)+"` did not end within "+
+		p.failUnnamedLines(key, []string{"did not end within " + capText(r.bound)}, "lint: `"+firstWord(cmd)+"` did not end within "+
 			capText(r.bound), script)
 		return
 	case r.hung: // its stop recorded its check (capStopped)
@@ -1153,13 +1185,13 @@ func (p *precheckRun) lintNoOffense(cmd, script string, r lintRun, tried []strin
 			crash.sig.lacks, clipList(r.theirs))
 		why := fmt.Sprintf("lint: `%s` crashed for lack of %s (%s), and the change touches %s, which the lint loads",
 			firstWord(crash.cmd), crash.sig.lacks, crash.line, clipList(r.theirs))
-		p.failCheck(lintKey(cmd), []string{crash.line}, why, script)
+		p.failUnnamedLines(lintKey(cmd), []string{crash.line}, why, script)
 		return "code"
 	case len(r.theirs) > 0: // any other sign, on a change that touches what the lint loads or that its output names
 		line := cmp.Or(lastLine(p.stderr), r.sign)
 		p.say("\nIt %s, and the change touches %s, which the lint loads or its output names: the writer's to fix.\n", r.sign,
 			clipList(r.theirs))
-		p.failCheck(lintKey(cmd), []string{line}, fmt.Sprintf("lint: `%s` %s (%s), and the change touches %s, which the lint loads",
+		p.failUnnamedLines(lintKey(cmd), []string{line}, fmt.Sprintf("lint: `%s` %s (%s), and the change touches %s, which the lint loads",
 			firstWord(cmd), r.sign, line, clipList(r.theirs)), script)
 		return "code"
 	}
@@ -1171,7 +1203,8 @@ func (p *precheckRun) lintNoOffense(cmd, script string, r lintRun, tried []strin
 		return "code"
 	case p.toWriter(key): // your answer handed its faults to the writer
 		line := cmp.Or(lastLine(p.stderr), r.sign)
-		p.failCheck(key, []string{line}, fmt.Sprintf("lint: `%s` exited %d and named no offense: %s", firstWord(cmd), r.run.Exit, line), script)
+		p.failUnnamedLines(key, []string{line}, fmt.Sprintf("lint: `%s` exited %d and named no offense: %s", firstWord(cmd), r.run.Exit, line),
+			script)
 		return "code"
 	}
 	f := checkFault{key: key, skip: key, what: fmt.Sprintf("exited %d and named no offense by path:line", r.run.Exit), bound: r.bound, tried: tried,
@@ -1205,6 +1238,15 @@ func (p *precheckRun) lintCrashWhy(cmd string) string {
 		p.line = line
 	}
 	return why
+}
+
+// addedLines are the lines diff adds to each file, by its path.
+func addedLines(diff []gitx.FileLines) map[string][]string {
+	out := map[string][]string{}
+	for _, f := range diff {
+		out[f.Path] = f.Added
+	}
+	return out
 }
 
 // changedLines are the lines each file of diff has at the head that the
@@ -1350,6 +1392,7 @@ func (p *precheckRun) runNaming(key, what, script, failing string, files []strin
 		if r.ok && r.run.Exit != 0 && !names(r.run) && !p.toWriter(key) {
 			stdout, stderr := runText(r.run)
 			crash, isCrash := crashOf(key, script, p.c.Path, stderr)
+			crash.added = p.added
 			if !isCrash || len(branchCaused(crash, stderr, p.touchedOr(files))) == 0 {
 				r.sign = faultSign(r.run.Exit, stdout, stderr, crash, isCrash, "")
 			}
@@ -1665,9 +1708,12 @@ func (p *precheckRun) jest(cmd string, files []string) {
 	case run.Exit != 0:
 		check.Result, check.Cause = registry.CheckFail, "code"
 		p.say("\n## Jest\n\n`%s` exited %d:\n\n```\n%s\n```\n", script, run.Exit, run.Output)
-		if len(failed) == 0 {
+		switch {
+		case len(failed) == 0:
 			p.failUnnamed(key, run, fmt.Sprintf("jest: %s exited %d", firstWord(cmd), run.Exit), script)
-		} else {
+		case !jestNamed(failed): // its summary alone names no failing test
+			p.failUnnamedLines(key, failed, fmt.Sprintf("jest: %s exited %d", firstWord(cmd), run.Exit), script)
+		default:
 			p.failCheck(key, failed, fmt.Sprintf("jest: %s exited %d", firstWord(cmd), run.Exit), script)
 		}
 	default:
