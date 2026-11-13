@@ -4692,20 +4692,21 @@ stages = [
   PR's head into `refs/magnum/factory-fix/<N>` of the main clone (never the review's `refs/magnum/pr/<N>`), takes
   the fix copy the PR used last when it is free, else another free one, else adds one up to `fix_copies` (none
   left: `copy: all 2 busy`, a wait that leaves the PR's fix queued), and switches the checkout to that head,
-  detached, after it keeps the fixer's commits on no remote that the checkout carries under
-  `refs/magnum/factory-kept/<N>/<sha>` of the main clone (a `factory.fix_kept` event names the ref; nothing
-  deletes it, so `git update-ref -d` it once you looked); a fix copy then runs `reset_db`, the changed `installs`
-  and the Redis flush as a task's claim does.
+  detached; a fix copy then runs `reset_db`, the changed `installs` and the Redis flush as a task's claim does.
   Each is a step of `slot:<checkout>:fix:<n>:<head>` with begin and ok or fail events, after the checkout's
-  guard, which takes the fixer's own commits and pushes there as the factory's unless you typed in its panes
-  since: a claim a restart cut runs only the steps it left undone, and a restart keeps the checkout the PR's.
+  guard: a claim a restart cut runs only the steps it left undone, and a restart keeps the checkout the PR's.
+  The guard keeps the commits on no remote that the checkout's HEAD carries, the fixer's or yours, under
+  `refs/magnum/factory-kept/<N>/<sha>` of the main clone (a `factory.fix_kept` event names the ref; nothing
+  deletes it, so `git update-ref -d` it once you looked), then takes that HEAD as the checkout's own, whatever
+  you typed in its panes: a commit never holds a fix checkout, and only changes in its tree that your typing
+  explains do (`dirty_worktree`).
   The checkout goes once the PR's fix work ends: the PR merged or closed (magnum's registry says so), or its
   work stayed idle for 10 minutes. A fix copy goes back to its pool on its placeholder, a per-PR checkout is
-  removed with its fix ref, each with a `fix.release` event. The release fetches the PR's head first, so what the
-  fixer pushed counts as pushed, as does the head the claim switched to (a force-push of the PR holds nothing);
-  commits on no remote past it, or changes your typing explains, hold it
-  (`unpushed_commits`, `dirty_worktree`), and a refused release is tried again after 1, 2, 4 and then every 5
-  minutes, with one alert after 30 minutes.
+  removed with its fix ref, each with a `fix.release` event. The release fetches the PR's head first, so what
+  was pushed counts as pushed, as does the head the claim switched to (a force-push of the PR keeps nothing),
+  and keeps any other commit on no remote as the claim does. Beyond a session or a process at work in the
+  checkout, it holds only on `dirty_worktree`, never on a commit or on a HEAD because you typed, and a refused
+  release is tried again after 1, 2, 4 and then every 5 minutes, with one alert after 30 minutes.
 - **Precheck.** `lint` and `migrations` are lists of commands, `specs` and `jest` one command each; a command
   takes `{files}` (the changed files, shell-quoted) and `{base}`, and a `migrations` command also `{version}`
   (the digits a migration's file name starts with) and `{file}`: each runs once per migration the branch

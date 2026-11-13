@@ -697,10 +697,14 @@ func (r *copiesRig) commit(dir, file, content string) string {
 // A claim's guard takes a HEAD the fixer moved as the checkout's own, with
 // a factory.fix_head event, when it is the PR's head the claim fetched (the
 // fixer pushed it) or a descendant of the checkout (the fixer's commits on
-// it), and the claim goes on. Once you typed in the fix's panes after the
-// checkout, a descendant may be yours: it is held as head_drift. No test
-// reached the claim's guard with a moved HEAD (R10 on T3b).
-func TestAClaimTakesTheFixersMovedHeadUnlessYouTyped(t *testing.T) {
+// it), and the claim goes on. No test reached the claim's guard with a
+// moved HEAD (R10 on T3b). It does so whatever you typed in the fix's
+// panes after the checkout: a commit after your typing is kept under
+// refs/magnum/factory-kept/<N>/<sha> before the switch, as any commit on no
+// remote, and held the checkout as head_drift for good before the
+// engine owner's one rule for a fix checkout's commits (C1, C2 and C7 on
+// T3b).
+func TestAClaimTakesTheFixersMovedHeadWhateverYouTyped(t *testing.T) {
 	r := newFixRig(t, 1, 2)
 	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
 	w7 := r.prWork("talkable/talkable", 7)
@@ -732,17 +736,22 @@ func TestAClaimTakesTheFixersMovedHeadUnlessYouTyped(t *testing.T) {
 	yours := r.commit(fc8.Path, "other.txt", "v4\n")
 	r.clock.Add(time.Minute)
 	r.setTyped(w8)
-	r.pushPR(r.origin, 8, "other.txt", "v5\n")
-	r.clock.Add(time.Minute)
-	_, err := r.c.ClaimFix(r.ctx, w8)
-	if hold, ok := errors.AsType[slots.ErrHold](err); !ok || hold.Reason != slots.HoldHeadDrift {
-		t.Fatalf("the claim over a commit after your typing = %v, want held: head_drift", err)
+	newest := r.pushPR(r.origin, 8, "other.txt", "v5\n")
+	if again := r.claimFix(w8); again.Head != newest {
+		t.Fatalf("the claim over a commit after your typing = %+v, want %s at the PR's newest head", again, newest)
 	}
-	if got, _ := r.head(fc8.Path); got != yours {
-		t.Fatalf("%s is at %s, want the commit after your typing %s kept", fc8.Name, got, yours)
+	if got, _ := r.head(fc8.Path); got != newest {
+		t.Fatalf("%s is at %s, want the PR's newest head %s", fc8.Name, got, newest)
 	}
-	if sl := r.slot(fc8.Name); store.Deref(sl.HoldReason) != slots.HoldHeadDrift {
-		t.Fatalf("%s's hold = %q, want head_drift", fc8.Name, store.Deref(sl.HoldReason))
+	if sl := r.slot(fc8.Name); sl.HoldReason != nil {
+		t.Fatalf("%s's hold = %q, want none", fc8.Name, store.Deref(sl.HoldReason))
+	}
+	ref := fixKeptRef(8, yours)
+	if got := r.ref(r.main, ref); got != yours {
+		t.Fatalf("%s = %q, want the commit after your typing %s kept", ref, got, yours)
+	}
+	if !r.eventsSay(fc8.Name, "factory.fix_kept", ref) {
+		t.Fatalf("no factory.fix_kept event names %s", ref)
 	}
 }
 
@@ -885,32 +894,40 @@ func TestAFixCheckoutGoesWhenItsPRClosesOrItsWorkIsGone(t *testing.T) {
 	}
 }
 
-// A fix copy's release, as a per-PR checkout's removal, holds over the
-// fixer's commit on no remote (unpushed_commits, not saved as the copy's
-// hold, so the next try reads it afresh) and frees the copy once the fixer
-// pushed it: the release fetches the PR's head first, so the pushed commit
-// is no head_drift. Only the per-PR checkout's removal had this test (R11
-// on T3b).
-func TestAFixCopysReleaseHoldsTheFixersCommitUntilItIsPushed(t *testing.T) {
+// A fix copy's release, as a per-PR checkout's removal, keeps the fixer's
+// commit on no remote under refs/magnum/factory-kept/<N>/<sha> and frees
+// the copy; a commit the fixer pushed is kept nowhere: the release fetches
+// the PR's head first, so it counts as pushed, and is no head_drift. Only
+// the per-PR checkout's removal had this test (R11 on T3b); the release
+// held on the commit until it was pushed before the engine owner's one
+// rule for a fix checkout's commits (C1, C2 and C7 on T3b).
+func TestAFixCopysReleaseKeepsTheFixersCommitAndFreesTheCopy(t *testing.T) {
 	r := newFixRig(t, 1, 1)
 	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
 	w := r.prWork("talkable/talkable", 7)
 	fc := r.claimFix(w)
-	r.commit(fc.Path, "fix.txt", "v2\n")
-	err := r.c.ReleaseFix(r.ctx, w, "released")
-	if hold, ok := errors.AsType[slots.ErrHold](err); !ok || hold.Reason != slots.HoldUnpushed {
-		t.Fatalf("the release over the fixer's commit = %v, want held: unpushed_commits", err)
-	}
-	if sl := r.slot(fc.Name); sl.HoldReason != nil || sl.PRID == nil {
-		t.Fatalf("%s after the refused release: hold %q, pr %v, want no saved hold and still the PR's", fc.Name, store.Deref(sl.HoldReason), sl.PRID)
-	}
-	r.gitIn(fc.Path, "push", "--quiet", "--force", "origin", "HEAD:refs/pull/7/head") // the fixer pushes it
+	mine := r.commit(fc.Path, "fix.txt", "v2\n")
 	r.releaseFix(w)
 	if sl := r.slot(fc.Name); sl.State != store.SlotFree || sl.HoldReason != nil || sl.PRID != nil {
 		t.Fatalf("%s after the release = %s, hold %q, pr %v, want free", fc.Name, sl.State, store.Deref(sl.HoldReason), sl.PRID)
 	}
+	ref := fixKeptRef(7, mine)
+	if got := r.keptRefs(r.main); got != ref+" "+mine {
+		t.Fatalf("the kept refs = %q, want %s at the fixer's commit", got, ref)
+	}
 	if got := r.ref(r.main, fixRef(7)); got != "" {
 		t.Fatalf("%s is still %s after the release", fixRef(7), got)
+	}
+
+	fc = r.claimFix(w)
+	pushed := r.commit(fc.Path, "fix.txt", "v3\n")
+	r.gitIn(fc.Path, "push", "--quiet", "--force", "origin", "HEAD:refs/pull/7/head") // the fixer pushes it
+	r.releaseFix(w)
+	if sl := r.slot(fc.Name); sl.State != store.SlotFree || sl.HoldReason != nil {
+		t.Fatalf("%s after the release of a pushed commit = %s, hold %q, want free", fc.Name, sl.State, store.Deref(sl.HoldReason))
+	}
+	if got := r.ref(r.main, fixKeptRef(7, pushed)); got != "" {
+		t.Fatalf("the release kept the pushed commit %s as %s", pushed, fixKeptRef(7, pushed))
 	}
 }
 
@@ -950,11 +967,12 @@ func TestAPerPRCheckoutsRemovalHoldsYourChangesAndDropsTheFixers(t *testing.T) {
 	}
 }
 
-// A force-push of the PR between the claim and the release holds nothing:
+// A force-push of the PR between the claim and the release keeps nothing:
 // the head the claim switched to counts as pushed, though the release's
-// fetch moved the fix ref off it. Its commits counted as unpushed_commits,
-// and every later try fetched and held again (R5 on T3b). A commit of the
-// fixer's on it still holds the release.
+// fetch moved the fix ref off it, so it is the PR's and not kept. Its
+// commits counted as unpushed_commits, and every later try fetched and
+// held again (R5 on T3b). A commit of the fixer's on it is kept under
+// refs/magnum/factory-kept/<N>/<sha>, alone, and the copy is freed.
 func TestAForcePushOfThePRDoesNotHoldItsFixCheckout(t *testing.T) {
 	r := newFixRig(t, 1, 1)
 	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
@@ -970,25 +988,130 @@ func TestAForcePushOfThePRDoesNotHoldItsFixCheckout(t *testing.T) {
 	if sl := r.slot(fc.Name); sl.State != store.SlotFree || sl.HoldReason != nil {
 		t.Fatalf("%s after a force-push and the release = %s, hold %v, want free", fc.Name, sl.State, store.Deref(sl.HoldReason))
 	}
+	if got := r.keptRefs(r.main); got != "" {
+		t.Fatalf("the release kept %q, want nothing: the old head is the PR's", got)
+	}
 
-	// The fixer's own commit on the claimed head still holds it.
+	// The fixer's own commit on the claimed head is kept, alone.
 	fc = r.claimFix(w)
-	r.write(filepath.Join(fc.Path, "fix.txt"), "v2\n")
-	r.gitIn(fc.Path, "add", "-A")
-	r.gitIn(fc.Path, "commit", "--quiet", "-m", "the fixer's fix")
+	mine := r.commit(fc.Path, "fix.txt", "v2\n")
 	forcePush("v2\n")
+	r.releaseFix(w)
+	if sl := r.slot(fc.Name); sl.State != store.SlotFree || sl.HoldReason != nil {
+		t.Fatalf("%s after the release over the fixer's commit = %s, hold %v, want free", fc.Name, sl.State, store.Deref(sl.HoldReason))
+	}
+	if got, ref := r.keptRefs(r.main), fixKeptRef(7, mine); got != ref+" "+mine {
+		t.Fatalf("the kept refs = %q, want only %s at the fixer's commit", got, ref)
+	}
+}
+
+// keptRefs lists the refs under refs/magnum/factory-kept/ of clone, each
+// as "<ref> <commit>", one per line ("" for none).
+func (r *copiesRig) keptRefs(clone string) string {
+	r.t.Helper()
+	return r.gitIn(clone, "for-each-ref", "--format=%(refname) %(objectname)", fixKeptPrefix)
+}
+
+// The release frees the checkout when the PR moved past a HEAD the fixer
+// pushed after you typed in the fix's panes (an "Update branch" merge, a
+// suggestion commit, the author's push): HEAD has no commit on no ref, so
+// it is the checkout's own whatever you typed. It held it as head_drift for
+// good (C1 on T3b): only a HEAD equal to the fetched head was taken, and
+// the slot guard compared it with the owner row's head, the claim's.
+func TestAReleaseFreesTheCheckoutTheFixerPushedAfterYouTypedOnceThePRMovedPastIt(t *testing.T) {
+	r := newFixRig(t, 1, 1)
+	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
+	w := r.prWork("talkable/talkable", 7)
+	fc := r.claimFix(w)
 	r.clock.Add(time.Minute)
-	err := r.c.ReleaseFix(r.ctx, w, "released")
-	if hold, ok := errors.AsType[slots.ErrHold](err); !ok || hold.Reason != slots.HoldUnpushed || !strings.Contains(hold.Detail, "1 commit(s)") {
-		t.Fatalf("the release over the fixer's commit = %v, want unpushed_commits for its 1 commit", err)
+	r.setTyped(w) // you answer the fixer in its pane
+	pushed := r.commit(fc.Path, "fix.txt", "v2\n")
+	r.gitIn(fc.Path, "push", "--quiet", "--force", "origin", "HEAD:refs/pull/7/head") // the fixer pushes it
+	author := filepath.Join(r.root, "author-"+filepath.Base(r.origin))
+	r.gitIn(author, "fetch", "--quiet", "origin", "refs/pull/7/head")
+	r.gitIn(author, "reset", "--quiet", "--hard", "FETCH_HEAD")
+	past := r.pushPR(r.origin, 7, "suggestion.txt", "v1\n") // a commit on top of the fixer's push
+	if got := r.gitIn(author, "rev-parse", past+"^"); got != pushed {
+		t.Fatalf("the PR's new head %s has parent %s, want the fixer's push %s", past, got, pushed)
+	}
+	r.releaseFix(w)
+	if sl := r.slot(fc.Name); sl.State != store.SlotFree || sl.HoldReason != nil || sl.PRID != nil {
+		t.Fatalf("%s after the release = %s, hold %q, pr %v, want free with no hold", fc.Name, sl.State, store.Deref(sl.HoldReason), sl.PRID)
+	}
+	if got := r.keptRefs(r.main); got != "" {
+		t.Fatalf("the release kept %q, want nothing: every commit of HEAD is on GitHub", got)
+	}
+}
+
+// The release frees the checkout when the author force-pushed a rebase
+// over the head the fixer pushed: that head is on no ref once the release's
+// fetch moved the fix ref off it, so the release keeps it under
+// refs/magnum/factory-kept/<N>/<sha>, with a factory.fix_kept event, and
+// goes on. It held the release as unpushed_commits on every try (C2 on
+// T3b): only the claimed head counted as pushed.
+func TestAReleaseKeepsTheFixersPushAForcePushLeftBehindAndFreesTheCheckout(t *testing.T) {
+	r := newFixRig(t, 1, 1)
+	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
+	w := r.prWork("talkable/talkable", 7)
+	fc := r.claimFix(w)
+	pushed := r.commit(fc.Path, "fix.txt", "v2\n")
+	r.gitIn(fc.Path, "push", "--quiet", "--force", "origin", "HEAD:refs/pull/7/head") // the fixer pushes it
+	author := filepath.Join(r.root, "author-"+filepath.Base(r.origin))
+	r.gitIn(author, "reset", "--quiet", "--hard", "origin/master")
+	r.pushPR(r.origin, 7, "rebased.txt", "v1\n") // the author rebases and force-pushes
+	r.releaseFix(w)
+	if sl := r.slot(fc.Name); sl.State != store.SlotFree || sl.HoldReason != nil || sl.PRID != nil {
+		t.Fatalf("%s after the release = %s, hold %q, pr %v, want free with no hold", fc.Name, sl.State, store.Deref(sl.HoldReason), sl.PRID)
+	}
+	ref := fixKeptRef(7, pushed)
+	if got := r.keptRefs(r.main); got != ref+" "+pushed {
+		t.Fatalf("the kept refs = %q, want %s at the fixer's push", got, ref)
+	}
+	if !r.eventsSay(fc.Name, "factory.fix_kept", ref) {
+		t.Fatalf("no factory.fix_kept event names %s", ref)
+	}
+}
+
+// A claim lets go of the checkout of the other kind the PR holds (its
+// repository's fix_copies changed) over the fixer's commit on no remote in
+// it: the commit is kept under refs/magnum/factory-kept/<N>/<sha>, with a
+// factory.fix_kept event, and the claim takes the new checkout. The
+// release of the other checkout held on the commit, so the claim waited
+// for good: no fixer could run to push it (C7 on T3b).
+func TestAChangeOfFixCopiesKeepsTheFixersCommitAndClaims(t *testing.T) {
+	r := newFixRig(t, 1, 0)
+	head := r.pushPR(r.origin, 7, "fix.txt", "v1\n")
+	w := r.prWork("talkable/talkable", 7)
+	pc := r.claimFix(w)
+	if !pc.PerPR() {
+		t.Fatalf("the claim with fix_copies = 0 = %+v, want a per-PR checkout", pc)
+	}
+	mine := r.commit(pc.Path, "fix.txt", "v2\n")
+
+	r.cfg.Factory.Repos[0].FixCopies = 1
+	r.c = r.newCopies() // the restart on the new config
+	fc, err := r.c.ClaimFix(r.ctx, w)
+	if err != nil || fc.Name != "factory2" || fc.Head != head {
+		t.Fatalf("the claim with fix_copies = 1 = %+v, %v, want the fix copy factory2 at %s", fc, err, head)
+	}
+	if sl := r.slot(pc.Name); sl.State != store.SlotRemoved || fsx.Exists(pc.Path) {
+		t.Fatalf("the per-PR checkout = %s, want removed once the PR moved", sl.State)
+	}
+	ref := fixKeptRef(7, mine)
+	if got := r.keptRefs(r.main); got != ref+" "+mine {
+		t.Fatalf("the kept refs = %q, want %s at the fixer's commit", got, ref)
+	}
+	if !r.eventsSay(pc.Name, "factory.fix_kept", ref) {
+		t.Fatalf("no factory.fix_kept event names %s", ref)
 	}
 }
 
 // A per-PR checkout goes once the PR's fix work ends: at once when the PR
 // merges or closes, once its work stayed idle for fixIdleEnd, never while
 // the work goes on. Its worktree, its fix ref and its row's hold on it go,
-// with a fix.release event. A commit of the fixer's on no remote holds it
-// until the fixer pushes it.
+// with a fix.release event. A change your typing in the fix's panes
+// explains holds it until it is gone, and the removal is tried again after
+// claimBackoff; a commit no longer holds it (C1, C2 and C7 on T3b).
 func TestAPerPRCheckoutIsRemovedWhenThePRsWorkEnds(t *testing.T) {
 	r := newFixRig(t, 1, 0)
 	shop := r.addShop()
@@ -1018,17 +1141,21 @@ func TestAPerPRCheckoutIsRemovedWhenThePRsWorkEnds(t *testing.T) {
 		return errors.Is(err, os.ErrNotExist) && r.slot("fix-example/shop#"+strconv.Itoa(n)).State == store.SlotRemoved
 	}
 
-	// The fixer's commit, not pushed yet, holds the checkout of the merged PR.
-	r.write(filepath.Join(paths[5], "fix5.txt"), "v2\n")
-	r.gitIn(paths[5], "commit", "--quiet", "-am", "the fixer's fix")
+	// Your file, after you typed in the fix's panes, holds the checkout of
+	// the merged PR.
+	notes := filepath.Join(paths[5], "notes.txt")
+	r.write(notes, "mine\n")
+	r.setTyped(works[5])
 	h.tick()
 	if removed(5) {
-		t.Fatal("the removal lost the fixer's commit on no remote")
+		t.Fatal("the removal lost your file")
 	}
-	if evs := h.events(0, "fix.release"); len(evs) != 1 || evs[0].Phase != registry.PhaseFail || !strings.Contains(evs[0].Text, "unpushed_commits") {
-		t.Fatalf("fix.release events %+v, want the removal held over the commit on no remote", evs)
+	if evs := h.events(0, "fix.release"); len(evs) != 1 || evs[0].Phase != registry.PhaseFail || !strings.Contains(evs[0].Text, "dirty_worktree") {
+		t.Fatalf("fix.release events %+v, want the removal held over your file", evs)
 	}
-	r.gitIn(paths[5], "push", "--quiet", "--force", "origin", "HEAD:refs/pull/5/head") // the fixer pushes it
+	if err := os.Remove(notes); err != nil {
+		t.Fatal(err)
+	}
 	r.clock.Add(claimBackoff(1))
 	h.tick()
 	if !removed(5) {
@@ -1045,7 +1172,7 @@ func TestAPerPRCheckoutIsRemovedWhenThePRsWorkEnds(t *testing.T) {
 	}
 	evs := h.events(0, "fix.release")
 	if len(evs) != 2 || !strings.Contains(evs[1].Text, "removed fix-example/shop#5 of example/shop#5: the PR merged") {
-		t.Fatalf("fix.release events %+v, want the merged PR's removal once its commit was pushed", evs)
+		t.Fatalf("fix.release events %+v, want the merged PR's removal once your file was gone", evs)
 	}
 
 	r.clock.Add(fixIdleEnd)
@@ -1166,7 +1293,7 @@ func TestAFixCheckoutOfIdleWorkGoesAtTenMinutesAndARefusedReleaseWaits(t *testin
 	}
 	h.copies.mu.Lock()
 	h.copies.fix.reserved = []FixReservation{{WorkID: w.ID, Checkout: "fix-talkable/talkable#7", PerPR: true, Repo: "talkable/talkable", Number: 7}}
-	h.copies.fix.releaseErr = slots.ErrHold{Reason: slots.HoldUnpushed, Detail: "HEAD has 1 commit(s) on no remote"}
+	h.copies.fix.releaseErr = slots.ErrHold{Reason: slots.HoldDirtyWorktree, Detail: "notes.txt, and someone typed into PR #7's magnum panes"}
 	h.copies.mu.Unlock()
 	h.clock.Add(9*time.Minute + 59*time.Second)
 	h.tick()

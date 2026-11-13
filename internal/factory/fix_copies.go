@@ -257,7 +257,7 @@ func (c *copySet) dropOtherCheckout(ctx context.Context, w registry.PRWork, copi
 	}
 	unlock := c.lockCopy(sl.Name)
 	defer unlock()
-	return c.releaseFixSlot(ctx, w, owner, sl, "its repository's fix_copies changed")
+	return c.releaseFixSlot(ctx, w, sl, "its repository's fix_copies changed")
 }
 
 // claimFixCopy is ClaimFix in a fix copy of repo.
@@ -338,7 +338,7 @@ func (c *copySet) perPRCheckout(ctx context.Context, w registry.PRWork, owner st
 		return store.Slot{}, err
 	}
 	if sl.State == store.SlotRemoving {
-		if err := c.removePerPR(ctx, w, owner, sl, "its fix work came back"); err != nil {
+		if err := c.removePerPR(ctx, w, sl, "its fix work came back"); err != nil {
 			return store.Slot{}, err
 		}
 		if sl, err = c.st.SlotByID(ctx, sl.ID); err != nil {
@@ -466,7 +466,7 @@ func (c *copySet) prepareFix(ctx context.Context, w registry.PRWork, owner store
 			return fn(ctx)
 		})
 	}
-	if err := step("switch", func(ctx context.Context) error { return c.switchFix(ctx, w, sl, a, head) }); err != nil {
+	if err := step("switch", func(ctx context.Context) error { return c.switchFix(ctx, sl, a, head) }); err != nil {
 		return err
 	}
 	if data == nil {
@@ -477,12 +477,9 @@ func (c *copySet) prepareFix(ctx context.Context, w registry.PRWork, owner store
 
 // switchFix switches checkout sl to head (slots.Resync) and records it as
 // the checkout of the claim's assignment a, with the time, which a person's
-// typing in the PR's fix panes is read against (the guard). The fixer's
-// commits on no remote that HEAD carries are kept first (keepUnpushed).
-func (c *copySet) switchFix(ctx context.Context, w registry.PRWork, sl store.Slot, a store.Assignment, head string) error {
-	if err := c.keepUnpushed(ctx, w, sl, head); err != nil {
-		return err
-	}
+// typing in the PR's fix panes is read against (the guard). The commits on
+// no remote that HEAD carries were kept by the step's guard (fixOwnHead).
+func (c *copySet) switchFix(ctx context.Context, sl store.Slot, a store.Assignment, head string) error {
 	if err := c.slots.Resync(ctx, sl, head); err != nil {
 		return err
 	}
@@ -495,33 +492,30 @@ func (c *copySet) switchFix(ctx context.Context, w registry.PRWork, sl store.Slo
 	return c.st.UpdateAssignmentHead(ctx, a.ID, head)
 }
 
-// fixKeptPrefix holds the fixer's commits a claim's switch would leave on
-// no ref (keepUnpushed): fixKeptRef, apart from the fix refs
+// fixKeptPrefix holds the commits on no remote a fix checkout's HEAD
+// carries when a claim's switch or a release would leave them on no ref
+// (keepUnpushed): fixKeptRef, apart from the fix refs
 // (refs/magnum/factory-fix/<N>, which a release deletes) and the review's
 // refs/magnum/pr/<N>. Nothing deletes them: they are yours to look at.
 const fixKeptPrefix = "refs/magnum/factory-kept/"
 
-// fixKeptRef is where a claim keeps commit sha of PR number's fixer.
+// fixKeptRef is where commit sha of PR number's fix checkout is kept.
 func fixKeptRef(number int, sha string) string {
 	return fixKeptPrefix + strconv.Itoa(number) + "/" + sha
 }
 
-// keepUnpushed keeps checkout sl's HEAD under fixKeptRef in its main clone,
-// with a factory.fix_kept event that names the ref, when the claim of PR
-// work w is about to switch it to head and it carries commits on no remote
-// or magnum ref past the head the PR's last claim switched to
-// (unpushedPastClaim): the switch leaves them on no ref, and the removal of
-// a per-PR checkout deletes the reflog that still names them. A HEAD at
-// head, or with no such commit (the PR's own old head after a force-push
-// among them), keeps nothing. Once kept, the commits count as pushed, so a
-// switch run again keeps nothing twice.
-func (c *copySet) keepUnpushed(ctx context.Context, w registry.PRWork, sl store.Slot, head string) error {
-	if !fsx.Exists(sl.Path) {
+// keepUnpushed keeps got, checkout sl's HEAD, under fixKeptRef in its main
+// clone, with a factory.fix_kept event that names the ref and what comes
+// next (before), when it carries commits on no remote or magnum ref past
+// the head the PR's last claim switched to (unpushedPastClaim): a claim's
+// switch or a release leaves them on no ref, and the removal of a per-PR
+// checkout deletes the reflog that still names them. A HEAD at head, the
+// PR's remote head fetched just now, or with no such commit (the PR's own
+// old head after a force-push among them) keeps nothing. Once kept, the
+// commits count as pushed, so a step run again keeps nothing twice.
+func (c *copySet) keepUnpushed(ctx context.Context, w registry.PRWork, sl store.Slot, got, head, before string) error {
+	if got == head {
 		return nil
-	}
-	got, err := c.git.RevParse(ctx, sl.Path, "HEAD")
-	if err != nil || got == head {
-		return err
 	}
 	n, err := c.unpushedPastClaim(ctx, sl)
 	if err != nil || n == 0 {
@@ -531,82 +525,58 @@ func (c *copySet) keepUnpushed(ctx context.Context, w registry.PRWork, sl store.
 	if err := c.git.KeepCommit(ctx, sl.Path, ref, got); err != nil {
 		return err
 	}
-	c.event(ctx, sl.Name, "info", "factory.fix_kept", fmt.Sprintf("HEAD %s of %s carries %d commit(s) of the fixer's on no remote: kept as %s before the switch to the PR's head %s",
-		textx.ShortSHA(got), sl.Name, n, ref, textx.ShortSHA(head)))
+	c.event(ctx, sl.Name, "info", "factory.fix_kept", fmt.Sprintf("HEAD %s of %s carries %d commit(s) on no remote: kept as %s before %s",
+		textx.ShortSHA(got), sl.Name, n, ref, before))
 	return nil
 }
 
 // fixGuard is what each step of PR work w's claim runs before it changes
 // checkout sl: no factory pane works in it (paneInPath: the PR's own fix
-// sessions too, as yet), HEAD the fixer moved is the factory's own
-// (fixOwnHead, with head the PR's remote head), and magnum's slot guard
-// lets it go (a person's agent or process in it, their changes, a HEAD
-// that moved otherwise).
+// sessions too, as yet), its HEAD is made the checkout's own, its commits
+// on no remote kept (fixOwnHead, with head the PR's remote head), and
+// magnum's slot guard lets it go (a person's agent or process in it, their
+// changes).
 func (c *copySet) fixGuard(ctx context.Context, w registry.PRWork, owner store.PR, sl store.Slot, head string) error {
 	if err := c.paneInPath(ctx, sl.Path, owner, nil, workKey(w)); err != nil {
 		return err
 	}
-	if err := c.fixOwnHead(ctx, owner, sl, head, false); err != nil {
+	if err := c.fixOwnHead(ctx, w, sl, head, "the claim at the PR's head "+textx.ShortSHA(head)); err != nil {
 		return err
 	}
 	return c.slots.Guard(ctx, sl)
 }
 
-// fixOwnHead records a HEAD that moved off checkout sl's recorded checkout
-// as the checkout's own (checked_out_sha), as ownHead does for a task's
-// branch. A HEAD at head, the PR's remote head the claim or the release
-// fetched just now, is all on GitHub: it is the checkout's own whatever
-// you typed. Any other is the checkout's own only when nobody typed into
-// the PR's fix panes since the checkout (owner's human_active_at) and it is
-// the fixer's: at a claim a descendant of the checkout (the fixer's commits
-// on it), at a release (release) any HEAD with no commit on no remote or
-// magnum ref. Any other HEAD is left to the guard, which holds the checkout
-// over it (head_drift). At a release a HEAD with a commit on no remote or
-// magnum ref holds the checkout (unpushed_commits), wherever it is, so the
-// release loses no commit of the fixer's.
-func (c *copySet) fixOwnHead(ctx context.Context, owner store.PR, sl store.Slot, head string, release bool) error {
+// fixOwnHead makes checkout sl's HEAD the checkout's own before a step of
+// PR work w's claim or its release (before, which the event names) changes
+// it, with head the PR's remote head the claim or the release fetched just
+// now ("" when the release could not): the commits of HEAD on no remote or
+// magnum ref past the PR's last claimed head are kept first (keepUnpushed),
+// so none is left on no ref, then a HEAD that moved off the recorded
+// checkout is recorded as it (checked_out_sha), with a factory.fix_head
+// event, whatever you typed into the PR's fix panes since the checkout. So
+// no commit, whoever made it, is lost or holds the checkout (head_drift,
+// unpushed_commits); only changes in its tree do, which magnum's slot guard
+// and removeWorktree hold over your typing (dirty_worktree).
+func (c *copySet) fixOwnHead(ctx context.Context, w registry.PRWork, sl store.Slot, head, before string) error {
 	cur, err := c.st.SlotByID(ctx, sl.ID)
 	if err != nil || !fsx.Exists(cur.Path) {
 		return err
 	}
-	if release {
-		n, err := c.unpushedPastClaim(ctx, cur)
-		if err != nil {
-			return err
-		}
-		if n > 0 {
-			return slots.ErrHold{Reason: slots.HoldUnpushed, Detail: fmt.Sprintf("HEAD of %s has %d commit(s) on no remote, which its release would lose", cur.Name, n)}
-		}
-	}
-	want := store.Deref(cur.CheckedOutSHA)
-	if want == "" {
-		return nil
-	}
 	got, err := c.git.RevParse(ctx, cur.Path, "HEAD")
-	if err != nil || got == want {
-		return err
-	}
-	pr, err := c.st.PRByID(ctx, owner.ID)
 	if err != nil {
 		return err
 	}
-	pushed := head != "" && got == head
-	if !pushed && pr.HumanActiveAt != nil && (cur.LastUsedAt == nil || pr.HumanActiveAt.After(*cur.LastUsedAt)) {
-		return nil
+	if err := c.keepUnpushed(ctx, w, cur, got, head, before); err != nil {
+		return err
 	}
-	own := release || pushed
-	if !own {
-		if own, err = c.git.IsAncestor(ctx, cur.Path, want, got); err != nil {
-			return err
-		}
-	}
-	if !own {
+	want := store.Deref(cur.CheckedOutSHA)
+	if want == "" || got == want {
 		return nil
 	}
 	if err := c.st.UpdateSlotFields(ctx, cur.ID, func(u *store.SlotUpdate) { u.Set("checked_out_sha", got) }); err != nil {
 		return err
 	}
-	c.event(ctx, cur.Name, "info", "factory.fix_head", fmt.Sprintf("HEAD %s, past the checkout %s, is the fixer's own: recorded as %s's checkout",
+	c.event(ctx, cur.Name, "info", "factory.fix_head", fmt.Sprintf("HEAD %s, past the checkout %s, has no commit on no ref: recorded as %s's checkout",
 		textx.ShortSHA(got), textx.ShortSHA(want), cur.Name))
 	return nil
 }
@@ -651,14 +621,14 @@ func (c *copySet) ReleaseFix(ctx context.Context, w registry.PRWork, reason stri
 	}
 	unlock := c.lockCopy(sl.Name)
 	defer unlock()
-	return c.releaseFixSlot(ctx, w, owner, sl, reason)
+	return c.releaseFixSlot(ctx, w, sl, reason)
 }
 
-// releaseFixSlot is ReleaseFix of checkout sl, which owner holds; the
+// releaseFixSlot is ReleaseFix of checkout sl, which PR work w holds; the
 // caller holds the checkout's lock.
-func (c *copySet) releaseFixSlot(ctx context.Context, w registry.PRWork, owner store.PR, sl store.Slot, reason string) error {
+func (c *copySet) releaseFixSlot(ctx context.Context, w registry.PRWork, sl store.Slot, reason string) error {
 	if sl.Kind == store.SlotKindPerPR {
-		if err := c.removePerPR(ctx, w, owner, sl, reason); err != nil {
+		if err := c.removePerPR(ctx, w, sl, reason); err != nil {
 			return fmt.Errorf("remove %s of %s: %w", sl.Name, workKey(w), err)
 		}
 		return nil
@@ -674,7 +644,7 @@ func (c *copySet) releaseFixSlot(ctx context.Context, w registry.PRWork, owner s
 	if _, err := c.stopForRelease(ctx, cp); err != nil {
 		return fmt.Errorf("release %s of %s: %w", cp.Name, workKey(w), err)
 	}
-	if err := c.releaseHead(ctx, w, owner, sl, repo.MainClone); err != nil {
+	if err := c.releaseHead(ctx, w, sl, repo.MainClone); err != nil {
 		return fmt.Errorf("release %s of %s: %w", cp.Name, workKey(w), err)
 	}
 	if err := c.slots.Release(ctx, sl, c.pool(repo, n), reason); err != nil {
@@ -685,10 +655,10 @@ func (c *copySet) releaseFixSlot(ctx context.Context, w registry.PRWork, owner s
 
 // releaseHead is a release's look at checkout sl's HEAD (fixOwnHead): it
 // fetches PR work w's head into its fix ref in clone first, so the commits
-// the fixer pushed since the claim count as pushed and only those on no
-// remote hold the release, and a HEAD at that head is the checkout's own
-// whatever you typed in the fix's panes.
-func (c *copySet) releaseHead(ctx context.Context, w registry.PRWork, owner store.PR, sl store.Slot, clone string) error {
+// pushed since the claim count as pushed and only those on no remote are
+// kept, then takes HEAD as the checkout's own whatever you typed in the
+// fix's panes. A release never holds on a commit.
+func (c *copySet) releaseHead(ctx context.Context, w registry.PRWork, sl store.Slot, clone string) error {
 	head := ""
 	if w.Number > 0 && fsx.Exists(clone) && fsx.Exists(sl.Path) {
 		var err error
@@ -696,7 +666,7 @@ func (c *copySet) releaseHead(ctx context.Context, w registry.PRWork, owner stor
 			return err
 		}
 	}
-	return c.fixOwnHead(ctx, owner, sl, head, true)
+	return c.fixOwnHead(ctx, w, sl, head, "its release")
 }
 
 // dropFixRef deletes PR work w's fix ref in clone once its checkout is
@@ -710,24 +680,23 @@ func (c *copySet) dropFixRef(ctx context.Context, w registry.PRWork, clone strin
 	})
 }
 
-// removePerPR removes per-PR checkout sl of PR work w, which owner holds:
-// steps of subject slot:<name>:remove, guard (no factory pane in it, a
-// HEAD with commits on no remote held and the fixer's other HEAD taken as
-// the factory's own: releaseHead, magnum's slot guard), then the checkout
-// moves to removing, worktree_remove (the
+// removePerPR removes per-PR checkout sl of PR work w: steps of subject
+// slot:<name>:remove, guard (no factory pane in it, HEAD's commits on no
+// remote kept and HEAD taken as the checkout's own: releaseHead, magnum's
+// slot guard), then the checkout moves to removing, worktree_remove (the
 // tracked and untracked changes a person's typing in the PR's fix panes
 // since the checkout explains are held, dirty_worktree; others are the
 // fixer's residue, named in a slot.discarded event and removed), delete_ref
 // (its fix ref), worktree_prune and mark_removed (its PR and assignment
 // let go). A removing checkout resumes after its guard ran again; a
 // removed one is done. No teardown and no database: it has none.
-func (c *copySet) removePerPR(ctx context.Context, w registry.PRWork, owner store.PR, sl store.Slot, reason string) error {
+func (c *copySet) removePerPR(ctx context.Context, w registry.PRWork, sl store.Slot, reason string) error {
 	subject := "slot:" + sl.Name + ":remove"
 	guard := func(ctx context.Context) error {
 		if err := c.paneInPath(ctx, sl.Path, store.PR{}, nil, workKey(w)); err != nil {
 			return err
 		}
-		if err := c.releaseHead(ctx, w, owner, sl, sl.MainClone); err != nil {
+		if err := c.releaseHead(ctx, w, sl, sl.MainClone); err != nil {
 			return err
 		}
 		return c.slots.Guard(ctx, sl)

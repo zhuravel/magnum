@@ -26920,17 +26920,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
     progress aborted, the checkout recorded), and a fix copy runs `reset_db`, the changed `installs` and the
     Redis flush, as a task's claim does (`readyData`). Each is a step of `slot:<checkout>:fix:<assignment>:<head>`
     after the checkout's guard: a claim a restart cut runs only the steps it left undone, and a later claim at the
-    same head keeps what the fixer did there, while one at a newer head switches to it. Before the switch, a HEAD
-    with commits on no remote past the PR's last claimed head is kept under `refs/magnum/factory-kept/<N>/<sha>`
-    of the main clone (`keepUnpushed`, `gitx.KeepCommit`), with a `factory.fix_kept` event that names it, and
-    nothing deletes that ref. The first build left them in the checkout's reflog, as magnum's resync does, but the
-    removal of a per-PR checkout deletes that reflog, so they were lost (the engine owner's R2 and R18 on T3b); a
-    hold until they are pushed would never clear for a commit the PR moved past. A force-push's old PR head is the
-    PR's, not the fixer's: it is not kept. The guard takes a HEAD at the PR's head
-    the claim or the release just fetched as the factory's own whatever you typed (all of it is on GitHub: the
-    engine owner's R1 on T3b, since a release held such a HEAD as `head_drift` for good once you typed, the owner
-    row's head being the claim's), a descendant of the checkout only unless you typed into the PR's fix panes
-    since the checkout, and leaves any other to magnum's slot guard (`head_drift`). The fixer's
+    same head keeps what the fixer did there, while one at a newer head switches to it. The guard of each step
+    keeps a HEAD with commits on no remote or `refs/magnum/*` ref past the PR's last claimed head under
+    `refs/magnum/factory-kept/<N>/<sha>` of the main clone (`keepUnpushed`, `gitx.KeepCommit`), with a
+    `factory.fix_kept` event that names it, and nothing deletes that ref. The first build left them in the
+    checkout's reflog, as magnum's resync does, but the removal of a per-PR checkout deletes that reflog, so they
+    were lost (the engine owner's R2 and R18 on T3b); a hold until they are pushed would never clear for a commit
+    the PR moved past. A force-push's old PR head is the PR's, not the fixer's: it is not kept. Then, with nothing
+    on HEAD on no ref, the guard takes HEAD as the checkout's own (`fixOwnHead`) whatever you typed, and magnum's
+    slot guard holds it only over changes in its tree your typing explains (`dirty_worktree`): the one rule for a
+    fix checkout's commits below. The fixer's
     own sessions refuse a claim of their checkout as any session does until T4a, which starts them, gives the
     guard their AtWork. In the engine the claim runs off the loop (`claimFix`), apart from the tasks' claims, so
     `max_active` never counts it; its waits (no fix copy free, a guard's hold, a pane in it) cost the fix nothing,
@@ -26958,12 +26957,26 @@ skill versions); people add theirs to the sections before it, at the end of the 
     and deleted `refs/magnum/factory-fix/0`: the engine owner's R16 on T3b). A fix copy goes back to its
     pool on its placeholder at `origin/<base>`, a per-PR checkout is removed (its worktree, its fix ref, its row
     let go), each with a `fix.release` event; work that goes on keeps its checkout whatever a restart did. The
-    release fetches the PR's head into the fix ref first, so what the fixer pushed counts as pushed, as does the
+    release fetches the PR's head into the fix ref first, so what was pushed counts as pushed, as does the
     head the claim switched to (its open assignment's, `gitx.UnpushedPast`: a force-push of the PR moves the fix ref
-    off it, and its commits held the checkout as `unpushed_commits` for good, the engine owner's R5 on T3b), and a
-    HEAD with commits on no remote or magnum ref past it still holds it (`unpushed_commits`, never saved as the
-    slot's hold) rather than lose them, as do changes your typing explains; a refused release is tried again after
-    1, 2, 4, then every 5 minutes, with one alert after 30 minutes, as a task's copy's.
+    off it, and its commits held the checkout as `unpushed_commits` for good, the engine owner's R5 on T3b), and
+    keeps any other commit on no remote as the claim does; it holds only on `dirty_worktree` (and on a session or
+    a process at work in the checkout). A refused release is tried again after 1, 2, 4, then every 5 minutes,
+    with one alert after 30 minutes, as a task's copy's.
+  - The one rule for a fix checkout's commits (the engine owner's ruling on C1, C2 and C7 of T3b's second
+    check). The claim, the release and the release of the other kind (`dropOtherCheckout`, when `fix_copies`
+    changed) keep the commits on HEAD on no remote and no `refs/magnum/*` ref under
+    `refs/magnum/factory-kept/<N>/<sha>`, with a `factory.fix_kept` event, then switch or release; once nothing
+    on HEAD is on no ref, HEAD is recorded as the checkout's own whatever you typed; changes in the tree still
+    hold (`holdChanges`, `removeWorktree`). A release never holds on a commit, nor on HEAD because you typed.
+    Round 1 held in three cases where every commit was safe or could be kept. With you typing, a HEAD the fixer
+    pushed that the PR then moved past (an "Update branch" merge, a suggestion commit, the author's push) was
+    held as `head_drift` for good, since only a HEAD equal to the fetched head was taken (C1). A HEAD the fixer
+    pushed that the author's force-push left on no ref held the release as `unpushed_commits` on every try,
+    since only the claimed head counted as pushed (C2). And a commit in the checkout of the other kind held
+    `dropOtherCheckout`, so the claim waited for good with no fixer to push it (C7). A commit kept is never
+    lost, so a hold over it bought nothing but a checkout reserved for good; the claim's head_drift over a
+    commit after your typing went with the same rule.
   - Tests, each checked against a mutation of the code it protects: `TestAFixClaimsAFixCopyAtThePRsRemoteHead`,
     `TestFixesDoNotCountTowardMaxActive`, `TestARepoWithoutCopiesGetsAPerPRCheckoutWithoutDatabases`,
     `TestATasksCopyIsNeverAFixCopy`, `TestAFixPrefersThePRsLastCopy`, `TestAFixClaimSurvivesAFactoryRestart` and
@@ -26976,11 +26989,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `TestAChangeOfFixCopiesMovesThePRsCheckout` (R3, R7 and R13's second half, failing first),
     `TestAFixCheckoutGoesWhenItsPRClosesOrItsWorkIsGone` (R16, failing first) with
     `TestKeepCommitKeepsOnlyUnderARefOfItsOwn` in internal/gitx and, for code that had no test,
-    `TestAClaimTakesTheFixersMovedHeadUnlessYouTyped` (R10), `TestAFixCopysReleaseHoldsTheFixersCommitUntilItIsPushed`
+    `TestAClaimTakesTheFixersMovedHeadWhateverYouTyped` (R10), `TestAFixCopysReleaseKeepsTheFixersCommitAndFreesTheCopy`
     (R11), `TestAPerPRCheckoutsRemovalHoldsYourChangesAndDropsTheFixers` (R13) and
     `TestAFixClaimWaitsWhileNoCheckoutIsFreeAndFailsOnAnyOtherError` (R12) and
     `TestAFixCheckoutOfIdleWorkGoesAtTenMinutesAndARefusedReleaseWaits` (R15) and
-    `TestAFixCopyIsKeptApartInRepairAndOutage` (R17).
+    `TestAFixCopyIsKeptApartInRepairAndOutage` (R17); the one rule for a fix checkout's commits,
+    `TestAReleaseFreesTheCheckoutTheFixerPushedAfterYouTypedOnceThePRMovedPastIt` (C1),
+    `TestAReleaseKeepsTheFixersPushAForcePushLeftBehindAndFreesTheCheckout` (C2) and
+    `TestAChangeOfFixCopiesKeepsTheFixersCommitAndClaims` (C7), each failing first.
   - The Redis databases. Copy n's 16 Redis databases start at n × 16 and the fix copies are numbered past the
     tasks', so a repository whose copies use Redis offsets (its `env` names `REDIS_DB_OFFSET` or renders `{n*16}`:
     `config.FactoryRepo.UsesRedis`) needs `(max_copies + fix_copies + 1) × 16` databases on that Redis, the highest
