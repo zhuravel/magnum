@@ -121,3 +121,19 @@ func TestFactoryFinishReviewRefusesATaskOutsideItsLocalReview(t *testing.T) {
 		}
 	}
 }
+
+// A finish-review typed in a terminal starts with no config loaded (the
+// CLI loads it per command), so the command loads it before it judges the
+// task's stage: without it every task "is not in its local review". On
+// 2026-11-13 the operator's `magnum factory finish-review 9` on a task at
+// its local review was refused so.
+func TestFactoryFinishReviewLoadsTheConfigBeforeItJudgesTheStage(t *testing.T) {
+	storetest.Serial(t)
+	dt := newFactoryStartTest(t, 250, func(registry.Request) (string, string) { return registry.RequestDone, "" })
+	finishTask(t, dt, "PR-12536", registry.TaskActive, "local_review", true)
+	dt.ctx.Config = nil // as Main leaves it before a command loads it
+	finishTerminal(t, true, "")
+	if code := dt.run("factory", "finish-review", "PR-12536", "--dry-run"); code != 0 || strings.Contains(dt.stderr.String(), "not in its local review") {
+		t.Errorf("exit %d, stderr %q; want the plan of a task at its local review", code, dt.stderr)
+	}
+}

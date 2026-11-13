@@ -43,6 +43,13 @@ func runFactoryFinishCmd(c *Context, dry bool, pos []string) int {
 		fmt.Fprintln(c.Stderr, "magnum factory finish-review: the factory has no task yet (`magnum factory start` makes one)")
 		return 1
 	}
+	// The stage's type comes from the config's kinds, which a command run
+	// from the terminal has not loaded yet: without it every task reads as
+	// outside its local review.
+	if err := c.LoadConfig(); err != nil {
+		fmt.Fprintf(c.Stderr, "magnum %s: %v\n", name, err)
+		return 1
+	}
 	reg, err := openFactoryRegistry(c.Layout)
 	if err != nil {
 		fmt.Fprintf(c.Stderr, "magnum %s: %v\n", name, err)
