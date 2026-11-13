@@ -14,17 +14,39 @@ import (
 )
 
 // The phases of a PR's fix work (PRWork.Phase, migrations/0009_pr_work.sql).
+// Only PRWorkFixing, PRWorkLocalReview and PRWorkPushing hold an agent or a
+// push (PRWorkBusy).
 const (
-	// PRWorkIdle: no fix loop runs on the PR.
+	// PRWorkIdle: no work on the PR.
 	PRWorkIdle = "idle"
-	// PRWorkFixing: the fixer works on the head the cycle fixes.
+	// PRWorkQueued: the fix waits for [factory] fix_max_active or a copy.
+	PRWorkQueued = "queued"
+	// PRWorkFixing: the fixer's turn on the head the cycle fixes.
 	PRWorkFixing = "fixing"
-	// PRWorkReviewing: the fixer pushed, and magnum re-reviews the pushed
-	// head.
+	// PRWorkLocalReview: a local review round of the fix cycle.
+	PRWorkLocalReview = "local_review"
+	// PRWorkPushing: the push and its confirmation on GitHub, the late
+	// settle included.
+	PRWorkPushing = "pushing"
+	// PRWorkReviewing: the fix pushed, and it waits for magnum's re-review
+	// of the pushed head.
 	PRWorkReviewing = "reviewing"
+	// PRWorkHeld: it waits for you (a held merge, a needs-you entry, the
+	// cap).
+	PRWorkHeld = "held"
 )
 
-var prWorkPhases = map[string]bool{PRWorkIdle: true, PRWorkFixing: true, PRWorkReviewing: true}
+var prWorkPhases = map[string]bool{PRWorkIdle: true, PRWorkQueued: true, PRWorkFixing: true, PRWorkLocalReview: true, PRWorkPushing: true,
+	PRWorkReviewing: true, PRWorkHeld: true}
+
+// PRWorkBusy reports whether phase holds an agent or a push (fixing,
+// local_review or pushing): the work a restart of the factory daemon would
+// land in the middle of, which `magnum factory install` waits for, and the
+// phases in which the factory fixes the PR under its lease. Queued,
+// reviewing and held hold neither, and idle is no work.
+func PRWorkBusy(phase string) bool {
+	return phase == PRWorkFixing || phase == PRWorkLocalReview || phase == PRWorkPushing
+}
 
 // PRWork is the factory's record of the fix work on one of your PRs
 // (pr_work): its repository (owner/name) and number, its task (0 for a PR
@@ -151,10 +173,12 @@ func (r *Registry) PRWorkByID(ctx context.Context, id int64) (PRWork, error) {
 	return w, nil
 }
 
-// BusyPRWork are the PR work rows whose phase is not idle, by id: the fix
-// loops at work, which `magnum factory install --drain` waits for.
+// BusyPRWork are the PR work rows whose phase holds an agent or a push
+// (PRWorkBusy: fixing, local_review or pushing), by id: the fix loops at
+// work, which `magnum factory install --drain` waits for.
 func (r *Registry) BusyPRWork(ctx context.Context) ([]PRWork, error) {
-	rows, err := r.db.QueryContext(ctx, "SELECT "+prWorkColumns+" FROM pr_work WHERE phase != ? ORDER BY id", PRWorkIdle)
+	rows, err := r.db.QueryContext(ctx, "SELECT "+prWorkColumns+" FROM pr_work WHERE phase IN (?, ?, ?) ORDER BY id",
+		PRWorkFixing, PRWorkLocalReview, PRWorkPushing)
 	if err != nil {
 		return nil, fmt.Errorf("busy pr work: %w", err)
 	}

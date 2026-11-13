@@ -26841,15 +26841,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
   stands on, with no fixer started: `[factory] fix` stays `"off"` until the switch day, and while it is off every PR
   request of the fix lane is answered that the factory does not fix PRs yet, naming the key.
   - The record: migration `0009_pr_work.sql` of the factory registry, the `pr_work` table, one row per PR (repository,
-    case aside, and number), most with no task. It holds your opt-out, the loop's phase (`idle`, `fixing` or
-    `reviewing`, a CHECK enum), its head, cycle and cap, the factory's lease (holder and end, both or neither), the
-    heads it pushed, its CI records and the open ledger in internal/fixwork's types, so magnum's records import with
-    their format, and `flipped_at`, `imported_at` and `worked_at` (a PR with no `worked_at` may go back to magnum).
-    It reaches the live factory only through `magnum factory install --drain`; the CLI never migrates the factory
-    registry under a running factory daemon. Magnum reads it read only (`factoryread.LeaseOf`): the factory fixes
-    the PR now only in phase `fixing` under a lease that runs, so a factory that stopped holds no review; no row, no
-    table (an older factory) and no registry give the zero lease and no error, and an unreadable file is an error for
-    the review side to decide on (T2).
+    case aside, and number), most with no task. It holds your opt-out, the loop's phase, its head, cycle and cap,
+    the factory's lease (holder and end, both or neither), the heads it pushed, its CI records and the open ledger
+    in internal/fixwork's types, so magnum's records import with their format, and `flipped_at`, `imported_at` and
+    `worked_at` (a PR with no `worked_at` may go back to magnum). The phase is a CHECK enum of seven, all set now
+    because a migration is costly to change once it lands (the coordinator's ruling of 2026-11-13, on the
+    builder's concern): `idle` (no work), `queued` (it waits for `fix_max_active` or a copy), `fixing` (the
+    fixer's turn), `local_review` (a local round of the fix cycle, T5a), `pushing` (the push and its confirmation,
+    the late settle included), `reviewing` (it waits for magnum's re-review) and `held` (it waits for you: a held
+    merge, a needs-you entry, the cap). Only `fixing`, `local_review` and `pushing` hold an agent or a push
+    (`registry.PRWorkBusy`). The migration reaches the live factory only through `magnum factory install
+    --drain`; the CLI never migrates the factory registry under a running factory daemon. Magnum reads the row
+    read only (`factoryread.LeaseOf`): the factory fixes the PR now only in one of those three phases under a lease
+    that runs, so a factory that stopped holds no review and a queued, reviewing or held loop holds none either; no
+    row, no table (an older factory) and no registry give the zero lease and no error, and an unreadable file is an
+    error for the review side to decide on (T2).
   - The factory's one write into magnum.db is a request plus a wake of magnum's daemon (`MagnumWriter`), opened with
     every migration refused: a magnum.db of another schema, or none, is refused and left as it was.
   - The PR request kinds (`fix`, `fix_off`, `fix_on`, `fix_done`, `fix_decide`, `fix_ci`, `merge_parent`,
@@ -26866,12 +26872,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - `magnum push` holds the lock of its repository and branch for its run and refuses (exit 2) while another
     agent's push holds it, so magnum's fixer and the factory's never push one branch at once; it now needs magnum's
     state directory for the lock, and still no config or registry. `magnum factory install` counts a PR work row
-    that is not idle as work in flight: plain install refuses, `--drain` waits for it.
+    in `fixing`, `local_review` or `pushing` as work in flight (`factoryread.FixJobs`): plain install refuses,
+    `--drain` waits for it. A queued, reviewing or held loop holds no agent and no push, and the drain does not
+    wait for it.
   - Tests: `TestOnlyTheFixerRoleMayCarryAnIdentity`, `TestTheMagnumWriterRefusesToMigrate`,
     `TestAFixerPaneCarriesTheAppTokenAlone`, `TestPushRefusesABranchAnotherAgentHolds`,
     `TestTheFactoryDaemonSnapshotsTheFixSkill`, `TestInstallDrainWaitsForAFixJob`,
-    `TestEveryFixRequestIsAnsweredWhileFixIsOff`, `TestTheLeaseOfAPRWithNoRowIsZero` and
-    `TestAnOlderFactoryRegistryGivesAZeroLease`. `TestTheFactoryStartsNoFixerWithoutAFreshOwnerRow` moved to T4a: T3a
+    `TestEveryFixRequestIsAnsweredWhileFixIsOff`, `TestTheLeaseOfAPRWithNoRowIsZero`,
+    `TestAnOlderFactoryRegistryGivesAZeroLease` and, for the phases, `TestTheDrainWaitsOnlyForAPhaseWithAnAgentOrAPush`,
+    `TestTheLeaseAndTheFixJobsCountOnlyAPhaseWithAnAgentOrAPush` and `TestEveryPRWorkPhaseIsTakenAndOnlyThreeAreBusy`.
+    `TestTheFactoryStartsNoFixerWithoutAFreshOwnerRow` moved to T4a: T3a
     starts no fixer, and the owner row's type is T2's.
 
 ## Learned rules

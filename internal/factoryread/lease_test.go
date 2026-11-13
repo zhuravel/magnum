@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -103,11 +104,12 @@ func TestAnOlderFactoryRegistryGivesAZeroLease(t *testing.T) {
 	}
 }
 
-// The lease says whether the factory fixes the PR now: its loop is in phase
-// fixing under a lease that runs. A lease that ran out (a factory that
-// stopped while it worked) and a loop whose push magnum re-reviews hold
-// nothing; the phase, the head, the cycle and whether the factory worked
-// the PR since its import read as the row has them.
+// The lease says whether the factory fixes the PR now: its loop is in a
+// phase that holds an agent or a push under a lease that runs. A lease that
+// ran out (a factory that stopped while it worked) and a loop whose push
+// magnum re-reviews hold nothing; the phase, the head, the cycle and
+// whether the factory worked the PR since its import read as the row has
+// them.
 func TestTheLeaseSaysWhetherTheFactoryFixesThePRNow(t *testing.T) {
 	now := time.Now().UTC()
 	path := fixture(t,
@@ -135,8 +137,47 @@ func TestTheLeaseSaysWhetherTheFactoryFixesThePRNow(t *testing.T) {
 		t.Errorf("LeaseOf(#1) = %+v, want its holder, its end and the times of the flip, the import and the first work", got)
 	}
 	jobs, err := FixJobs(context.Background(), path)
-	if err != nil || len(jobs) != 3 || jobs[0].Number != 1 || jobs[2].Phase != "reviewing" || jobs[0].Since.IsZero() {
-		t.Fatalf("FixJobs = %+v, %v; want the three loops whose phase is not idle, by row", jobs, err)
+	if err != nil || len(jobs) != 2 || jobs[0].Number != 1 || jobs[1].Number != 2 || jobs[0].Since.IsZero() {
+		t.Fatalf("FixJobs = %+v, %v; want the two loops in phase fixing, by row (the reviewing one holds no agent)", jobs, err)
+	}
+}
+
+// Each phase of a PR's fix work, under a lease that runs: the factory fixes
+// the PR now (Lease.Fixing), and its loop is a fix job install waits for
+// (FixJobs), only in the phases that hold an agent or a push, fixing,
+// local_review and pushing. A loop that is queued, waits for magnum's
+// re-review or waits for you holds neither.
+func TestTheLeaseAndTheFixJobsCountOnlyAPhaseWithAnAgentOrAPush(t *testing.T) {
+	until := time.Now().Add(10 * time.Minute)
+	phases := []struct {
+		phase string
+		busy  bool
+	}{{"idle", false}, {"queued", false}, {"fixing", true}, {"local_review", true}, {"pushing", true}, {"reviewing", false}, {"held", false}}
+	var rows []string
+	for i, p := range phases {
+		cycle := 1
+		if p.phase == "idle" {
+			cycle = 0
+		}
+		rows = append(rows, workRow("talkable/talkable", i+1, p.phase, cycle, "factory 100", until, "", "", ""))
+	}
+	path := fixture(t, rows...)
+	jobs, err := FixJobs(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, p := range phases {
+		l, err := LeaseOf(context.Background(), path, "talkable/talkable", i+1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if l.Phase != p.phase || l.Fixing != p.busy {
+			t.Errorf("phase %s: the lease reads %s, fixing %v; want fixing %v", p.phase, l.Phase, l.Fixing, p.busy)
+		}
+		listed := slices.ContainsFunc(jobs, func(j FixJob) bool { return j.Number == i+1 && j.Phase == p.phase })
+		if listed != p.busy {
+			t.Errorf("phase %s: FixJobs lists it %v, want %v", p.phase, listed, p.busy)
+		}
 	}
 }
 

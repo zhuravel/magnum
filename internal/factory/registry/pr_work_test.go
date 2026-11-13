@@ -115,7 +115,7 @@ func TestAPRWorkRowIsOnePerPRAndKeepsTheFixRecords(t *testing.T) {
 // The phase moves by compare-and-set: a move from a phase the row is not
 // in is ErrConflict and changes nothing, a missing row is ErrNotFound, an
 // unknown phase or a loop without its cycle is refused, and the busy rows
-// are the ones whose phase is not idle.
+// are the ones whose phase holds an agent or a push.
 func TestThePRWorkPhaseMovesByCompareAndSet(t *testing.T) {
 	t.Parallel()
 	r := registrytest0(t)
@@ -136,7 +136,7 @@ func TestThePRWorkPhaseMovesByCompareAndSet(t *testing.T) {
 	if err := r.UpdatePRWork(ctx, 999, nil, registry.PRWorkIdle, nil); !errors.Is(err, registry.ErrNotFound) {
 		t.Errorf("a move of a missing row: %v, want ErrNotFound", err)
 	}
-	if err := r.UpdatePRWork(ctx, b.ID, nil, "queued", nil); err == nil {
+	if err := r.UpdatePRWork(ctx, b.ID, nil, "sleeping", cycle); err == nil {
 		t.Error("an unknown phase was taken")
 	}
 	if err := r.UpdatePRWork(ctx, b.ID, nil, registry.PRWorkFixing, nil); err == nil {
@@ -145,9 +145,55 @@ func TestThePRWorkPhaseMovesByCompareAndSet(t *testing.T) {
 	if err := r.UpdatePRWork(ctx, b.ID, nil, "", func(u *registry.PRWorkUpdate) { u.Set("phase", registry.PRWorkFixing) }); err == nil {
 		t.Error("the phase was set as a column")
 	}
+	if err := r.UpdatePRWork(ctx, b.ID, nil, registry.PRWorkReviewing, cycle); err != nil {
+		t.Fatal(err)
+	}
 	busy, err := r.BusyPRWork(ctx)
 	if err != nil || len(busy) != 1 || busy[0].ID != a.ID {
-		t.Fatalf("BusyPRWork = %+v, %v; want the fixing row alone", busy, err)
+		t.Fatalf("BusyPRWork = %+v, %v; want the fixing row alone (the reviewing one holds no agent)", busy, err)
+	}
+}
+
+// Every phase of the ruling is one the table takes, and the busy ones are
+// those that hold an agent or a push: fixing, local_review and pushing.
+// queued, reviewing and held hold neither, and idle is no work.
+func TestEveryPRWorkPhaseIsTakenAndOnlyThreeAreBusy(t *testing.T) {
+	t.Parallel()
+	r := registrytest0(t)
+	ctx := t.Context()
+	cycle := func(u *registry.PRWorkUpdate) { u.Set("cycle", 1); u.Set("cap", 3) }
+	for i, tc := range []struct {
+		phase string
+		busy  bool
+	}{
+		{registry.PRWorkIdle, false}, {registry.PRWorkQueued, false}, {registry.PRWorkFixing, true}, {registry.PRWorkLocalReview, true},
+		{registry.PRWorkPushing, true}, {registry.PRWorkReviewing, false}, {registry.PRWorkHeld, false},
+	} {
+		w, err := r.EnsurePRWork(ctx, "example/app", 100+i)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.UpdatePRWork(ctx, w.ID, nil, tc.phase, cycle); err != nil {
+			t.Errorf("phase %s: %v", tc.phase, err)
+		}
+		if got := registry.PRWorkBusy(tc.phase); got != tc.busy {
+			t.Errorf("PRWorkBusy(%s) = %v, want %v", tc.phase, got, tc.busy)
+		}
+	}
+	busy, err := r.BusyPRWork(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var phases []string
+	for _, w := range busy {
+		phases = append(phases, w.Phase)
+	}
+	if want := []string{registry.PRWorkFixing, registry.PRWorkLocalReview, registry.PRWorkPushing}; !reflect.DeepEqual(phases, want) {
+		t.Fatalf("BusyPRWork phases %v, want %v", phases, want)
+	}
+	// The table's own check refuses any other word, whatever writes it.
+	if _, err := r.DBForTest().ExecContext(ctx, "UPDATE pr_work SET phase = 'sleeping' WHERE number = 100"); err == nil {
+		t.Fatal("the table took the phase sleeping")
 	}
 }
 

@@ -16503,15 +16503,27 @@ const (
     not have arrived, and it is never sent again.
 
 const (
-	// PRWorkIdle: no fix loop runs on the PR.
+	// PRWorkIdle: no work on the PR.
 	PRWorkIdle = "idle"
-	// PRWorkFixing: the fixer works on the head the cycle fixes.
+	// PRWorkQueued: the fix waits for [factory] fix_max_active or a copy.
+	PRWorkQueued = "queued"
+	// PRWorkFixing: the fixer's turn on the head the cycle fixes.
 	PRWorkFixing = "fixing"
-	// PRWorkReviewing: the fixer pushed, and magnum re-reviews the pushed
-	// head.
+	// PRWorkLocalReview: a local review round of the fix cycle.
+	PRWorkLocalReview = "local_review"
+	// PRWorkPushing: the push and its confirmation on GitHub, the late
+	// settle included.
+	PRWorkPushing = "pushing"
+	// PRWorkReviewing: the fix pushed, and it waits for magnum's re-review
+	// of the pushed head.
 	PRWorkReviewing = "reviewing"
+	// PRWorkHeld: it waits for you (a held merge, a needs-you entry, the
+	// cap).
+	PRWorkHeld = "held"
 )
     The phases of a PR's fix work (PRWork.Phase, migrations/0009_pr_work.sql).
+    Only PRWorkFixing, PRWorkLocalReview and PRWorkPushing hold an agent or a
+    push (PRWorkBusy).
 
 const (
 	QuestionOpen     = "open"
@@ -16666,6 +16678,13 @@ func LatestSchemaVersion() int
 func NormLabel(s string) string
     NormLabel is an option's label as answers are matched to it: trimmed,
     lowercased, without a final period.
+
+func PRWorkBusy(phase string) bool
+    PRWorkBusy reports whether phase holds an agent or a push (fixing,
+    local_review or pushing): the work a restart of the factory daemon
+    would land in the middle of, which `magnum factory install` waits for,
+    and the phases in which the factory fixes the PR under its lease. Queued,
+    reviewing and held hold neither, and idle is no work.
 
 func QuestionKey(text string) string
     QuestionKey is how a question is told from the questions the task asked, in
@@ -17193,8 +17212,9 @@ func (r *Registry) BeginEffect(ctx context.Context, key, kind string, taskID int
     kind and one task: reusing it for another is ErrConflict.
 
 func (r *Registry) BusyPRWork(ctx context.Context) ([]PRWork, error)
-    BusyPRWork are the PR work rows whose phase is not idle, by id: the fix
-    loops at work, which `magnum factory install --drain` waits for.
+    BusyPRWork are the PR work rows whose phase holds an agent or a push
+    (PRWorkBusy: fixing, local_review or pushing), by id: the fix loops at work,
+    which `magnum factory install --drain` waits for.
 
 func (r *Registry) Checks(ctx context.Context, taskID int64) ([]Check, error)
     Checks returns a task's checks in the order they were recorded.
@@ -19085,16 +19105,19 @@ type FixJob struct {
 	Cycle  int
 	Since  time.Time
 }
-    FixJob is a fix loop the factory runs on one of your PRs, as its PR work row
-    says (a phase that is not idle): the PR (owner/name and number), the phase,
+    FixJob is a fix loop the factory runs on one of your PRs, as its PR work
+    row says (a phase that holds an agent or a push: fixing, local_review or
+    pushing, registry.PRWorkBusy): the PR (owner/name and number), the phase,
     the cycle and since when the loop is in its phase (zero: unknown).
 
 func FixJobs(ctx context.Context, path string) ([]FixJob, error)
     FixJobs are the fix loops at work in the factory's registry at path
     (registry.BusyPRWork, read only): what `magnum factory install --drain`
-    waits for besides the work its daemon records. A registry that does not
-    exist, or one without the PR work table (a factory older than it), has none;
-    one that cannot be read is an error.
+    waits for besides the work its daemon records. A loop that is queued,
+    waits for magnum's re-review or waits for you holds no agent and no push,
+    and is none of them. A registry that does not exist, or one without the PR
+    work table (a factory older than it), has none; one that cannot be read is
+    an error.
 
 type Lease struct {
 	ID                    int64
@@ -19107,18 +19130,20 @@ type Lease struct {
 	Worked                bool
 	WorkedAt              time.Time
 }
-    Lease is the factory's hold on the fixes of one of your PRs, as magnum reads
-    it from the factory's PR work row (pr_work, registry.PRWork) to hold its
-    rounds while the factory's fixer works (DECISIONS "The factory becomes the
-    only fixer"): the row (ID; 0 when the factory has none), whether the factory
-    fixes the PR now (Fixing: its fix loop is in phase fixing and its lease runs
-    at the read; a lease that ran out, a factory that stopped while it worked,
-    holds nothing), the loop's phase, the head its cycle fixes (in phase
-    reviewing, the head it pushed), its cycle of at most Cap, who holds the
-    lease and until when, when magnum handed the PR's fixes to the factory and
-    when the factory read magnum's records of it, and whether the factory worked
-    the PR since (Worked, at WorkedAt): a PR it has not worked may go back to
-    magnum.
+    Lease is the factory's hold on the fixes of one of your PRs, as magnum
+    reads it from the factory's PR work row (pr_work, registry.PRWork) to hold
+    its rounds while the factory's fixer works (DECISIONS "The factory becomes
+    the only fixer"): the row (ID; 0 when the factory has none), whether the
+    factory fixes the PR now (Fixing: its fix loop is in a phase that holds an
+    agent or a push, fixing, local_review or pushing (registry.PRWorkBusy),
+    and its lease runs at the read; a lease that ran out, a factory that
+    stopped while it worked, holds nothing, and a loop that is queued, waits for
+    magnum's re-review or waits for you fixes nothing now), the loop's phase,
+    the head its cycle fixes (from pushing on, the head it pushed), its cycle
+    of at most Cap, who holds the lease and until when, when magnum handed the
+    PR's fixes to the factory and when the factory read magnum's records of it,
+    and whether the factory worked the PR since (Worked, at WorkedAt): a PR it
+    has not worked may go back to magnum.
 
 func LeaseOf(ctx context.Context, path, repo string, number int) (Lease, error)
     LeaseOf reads the lease of PR number of repo ("owner/name", any case) in

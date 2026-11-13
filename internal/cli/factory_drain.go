@@ -10,9 +10,11 @@ package cli
 // (daemon_drain.go). A backoff repair of a broken copy holds neither back:
 // the restart cuts it, the copy stays broken as it was, and the restarted
 // daemon repairs it again after its guard (cutRepairs says so). A fix loop
-// on one of your PRs (a PR work row of the factory's registry whose phase
-// is not idle, factoryread.FixJobs) is work in flight too: install refuses
-// while one runs and --drain waits for it, as for a local review round.
+// on one of your PRs that holds an agent or a push (a PR work row of the
+// factory's registry in phase fixing, local_review or pushing,
+// factoryread.FixJobs) is work in flight too: install refuses while one
+// runs and --drain waits for it, as for a local review round. A queued,
+// reviewing or held loop holds neither, and install does not wait for it.
 
 import (
 	"context"

@@ -17,10 +17,13 @@ import (
 // reads it from the factory's PR work row (pr_work, registry.PRWork) to
 // hold its rounds while the factory's fixer works (DECISIONS "The factory
 // becomes the only fixer"): the row (ID; 0 when the factory has none),
-// whether the factory fixes the PR now (Fixing: its fix loop is in phase
-// fixing and its lease runs at the read; a lease that ran out, a factory
-// that stopped while it worked, holds nothing), the loop's phase, the head
-// its cycle fixes (in phase reviewing, the head it pushed), its cycle of at
+// whether the factory fixes the PR now (Fixing: its fix loop is in a phase
+// that holds an agent or a push, fixing, local_review or pushing
+// (registry.PRWorkBusy), and its lease runs at the read; a lease that ran
+// out, a factory that stopped while it worked, holds nothing, and a loop
+// that is queued, waits for magnum's re-review or waits for you fixes
+// nothing now), the loop's phase, the head its cycle fixes (from pushing on,
+// the head it pushed), its cycle of at
 // most Cap, who holds the lease and until when, when magnum handed the
 // PR's fixes to the factory and when the factory read magnum's records of
 // it, and whether the factory worked the PR since (Worked, at WorkedAt): a
@@ -74,12 +77,13 @@ func LeaseOf(ctx context.Context, path, repo string, number int) (Lease, error) 
 		}
 	}
 	l.Worked = !l.WorkedAt.IsZero()
-	l.Fixing = l.Phase == registry.PRWorkFixing && l.Holder != "" && l.Until.After(time.Now())
+	l.Fixing = registry.PRWorkBusy(l.Phase) && l.Holder != "" && l.Until.After(time.Now())
 	return l, nil
 }
 
 // FixJob is a fix loop the factory runs on one of your PRs, as its PR
-// work row says (a phase that is not idle): the PR (owner/name and number),
+// work row says (a phase that holds an agent or a push: fixing,
+// local_review or pushing, registry.PRWorkBusy): the PR (owner/name and number),
 // the phase, the cycle and since when the loop is in its phase (zero:
 // unknown).
 type FixJob struct {
@@ -92,7 +96,9 @@ type FixJob struct {
 
 // FixJobs are the fix loops at work in the factory's registry at path
 // (registry.BusyPRWork, read only): what `magnum factory install --drain`
-// waits for besides the work its daemon records. A registry that does not
+// waits for besides the work its daemon records. A loop that is queued,
+// waits for magnum's re-review or waits for you holds no agent and no push,
+// and is none of them. A registry that does not
 // exist, or one without the PR work table (a factory older than it), has
 // none; one that cannot be read is an error.
 func FixJobs(ctx context.Context, path string) ([]FixJob, error) {
@@ -101,7 +107,8 @@ func FixJobs(ctx context.Context, path string) ([]FixJob, error) {
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.QueryContext(ctx, "SELECT repo, number, phase, cycle, phase_at FROM pr_work WHERE phase != ? ORDER BY id", registry.PRWorkIdle)
+	rows, err := db.QueryContext(ctx, "SELECT repo, number, phase, cycle, phase_at FROM pr_work WHERE phase IN (?, ?, ?) ORDER BY id",
+		registry.PRWorkFixing, registry.PRWorkLocalReview, registry.PRWorkPushing)
 	if err != nil {
 		return nil, fmt.Errorf("read the factory's fix loops: %w", err)
 	}

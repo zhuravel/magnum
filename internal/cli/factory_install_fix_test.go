@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,18 +17,87 @@ import (
 // registry and the row's id.
 func fixLoop(t *testing.T, dt *daemonGroupTest) (*registry.Registry, int64) {
 	t.Helper()
+	return fixLoopIn(t, dt, registry.PRWorkFixing)
+}
+
+// fixLoopIn is fixLoop with the loop in phase.
+func fixLoopIn(t *testing.T, dt *daemonGroupTest, phase string) (*registry.Registry, int64) {
+	t.Helper()
 	reg := registrytest.OpenFile(t, dt.ctx.Layout.FactoryDB(), registry.Options{})
 	w, err := reg.EnsurePRWork(t.Context(), "example/shop", 7)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := reg.UpdatePRWork(t.Context(), w.ID, []string{registry.PRWorkIdle}, registry.PRWorkFixing, func(u *registry.PRWorkUpdate) {
+	if err := reg.UpdatePRWork(t.Context(), w.ID, []string{registry.PRWorkIdle}, phase, func(u *registry.PRWorkUpdate) {
 		u.Set("cycle", 1)
 		u.Set("cap", 3)
 	}); err != nil {
 		t.Fatal(err)
 	}
 	return reg, w.ID
+}
+
+// A restart of the factory daemon lands in the middle of a fix only while
+// the loop holds an agent or a push: fixing (the fixer's turn),
+// local_review (a local round of the fix cycle) and pushing (the push and
+// its confirmation). There `factory install` refuses and `--drain` waits
+// until the loop leaves the phase. A loop that is queued (for
+// fix_max_active or a copy), waits for magnum's re-review or waits for you
+// (held) holds neither, so install goes on and the drain does not wait for
+// it, and idle is no work.
+func TestTheDrainWaitsOnlyForAPhaseWithAnAgentOrAPush(t *testing.T) {
+	for _, tc := range []struct {
+		phase string
+		waits bool
+	}{
+		{registry.PRWorkIdle, false}, {registry.PRWorkQueued, false}, {registry.PRWorkFixing, true}, {registry.PRWorkLocalReview, true},
+		{registry.PRWorkPushing, true}, {registry.PRWorkReviewing, false}, {registry.PRWorkHeld, false},
+	} {
+		t.Run(tc.phase, func(t *testing.T) {
+			named := "fix loop of example/shop#7 (" + tc.phase + ", cycle 1"
+			dt, _ := factoryInstallTest(t)
+			writeFactoryWork(t, dt.ctx.Layout, factory.WorkRecord{PID: 250, Work: []factory.WorkItem{}})
+			fixLoopIn(t, dt, tc.phase)
+			code := dt.run("factory", "install")
+			switch {
+			case tc.waits && (code != 1 || !strings.Contains(dt.stderr.String(), named)):
+				t.Fatalf("install: exit %d, stderr %s; want the refusal naming %q", code, dt.stderr, named)
+			case !tc.waits && (code != 0 || reloads(dt) != 1):
+				t.Fatalf("install: exit %d, %d reloads, stderr %s; want the job reloaded at once", code, reloads(dt), dt.stderr)
+			}
+
+			dt, _ = factoryInstallTest(t)
+			l := dt.ctx.Layout
+			writeFactoryWork(t, l, factory.WorkRecord{PID: 250, Work: []factory.WorkItem{}})
+			reg, id := fixLoopIn(t, dt, tc.phase)
+			sleeps := 0
+			daemonSys.Sleep = func(context.Context, time.Duration) error {
+				sleeps++
+				v, _ := factory.ReadDrain(l)
+				switch sleeps {
+				case 1: // the daemon's tick took the drain
+					writeFactoryWork(t, l, factory.WorkRecord{PID: 250, Drain: v, Work: []factory.WorkItem{}})
+				case 3: // the loop left its phase
+					if err := reg.UpdatePRWork(t.Context(), id, nil, registry.PRWorkReviewing, nil); err != nil {
+						t.Errorf("the loop's move: %v", err)
+					}
+				}
+				return nil
+			}
+			if code := dt.run("factory", "install", "--drain"); code != 0 || reloads(dt) != 1 {
+				t.Fatalf("install --drain: exit %d, %d reloads, stderr %s", code, reloads(dt), dt.stderr)
+			}
+			out := dt.stdout.String()
+			if tc.waits {
+				actContains(t, out, named, "drained after 15s: nothing in flight")
+				return
+			}
+			actContains(t, out, "drained after 5s: nothing in flight")
+			if strings.Contains(out, "fix loop") {
+				t.Fatalf("the drain named a loop that holds no agent and no push:\n%s", out)
+			}
+		})
+	}
 }
 
 // A fix loop on one of your PRs is work in flight: `factory install
