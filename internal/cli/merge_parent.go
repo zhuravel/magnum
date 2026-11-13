@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const mergeParentUsage = "merge-parent <url|owner/repo#N|repo#N|N> [--wait] [--timeout <duration>] [--dry-run] [--json] [--yes]"
+const mergeParentUsage = "merge-parent <url|owner/repo#N|repo#N|N> [--drop | --wait] [--timeout <duration>] [--dry-run] [--json] [--yes]"
 
 func newMergeParentCmd(c *Context) *cobra.Command {
 	o := fixOpts{merge: true}
@@ -36,7 +36,8 @@ func newMergeParentCmd(c *Context) *cobra.Command {
 			"App's bot with its Workflows token, naming the merge, and y starts the push off the daemon's loop (--wait follows "+
 			"it), bound to the merge too: a head, base or tip that moved, another merge, another fix identity or a "+
 			"10-minute-old question pushes nothing. --yes never pushes a held merge. A push to the PR, a base or a base tip "+
-			"that moves, a merge or a close drops it.\n\n"+
+			"that moves, a merge or a close drops it, and so does --drop, which asks y/N and pushes nothing (the morning list "+
+			"of `magnum fix --drained` names it for a PR that hands over to the factory).\n\n"+
 			"A terminal asks y/N first, naming who merges which tip of which base into which branch and as which login, "+
 			"from the daemon's dry run, which fetches the base first. y sends the merge bound to that plan: the daemon "+
 			"refuses it, saying what moved and that nothing was merged, when the PR's head, its base, the base's tip or the "+
@@ -51,6 +52,7 @@ func newMergeParentCmd(c *Context) *cobra.Command {
 		func(pos []string) int { return runMergeParent(c, o, pos) })
 	fs := cmd.Flags()
 	fs.BoolVar(&o.wait, "wait", false, "follow the merge until it ends: merged, needs you, aborted or ended")
+	fs.BoolVar(&o.drop, "drop", false, "drop the merge of the parent magnum holds for your y: nothing is pushed")
 	fs.DurationVar(&o.timeout, "timeout", fixDefaultTimeout, "with --wait: stop following after this `duration` (0 = no limit); the merge goes on")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "ask the daemon what would happen; nothing is started or changed")
 	fs.BoolVar(&o.json, "json", false, "print the result as JSON (progress goes to stderr)")
@@ -66,6 +68,8 @@ func runMergeParent(c *Context, o fixOpts, pos []string) int {
 		return actUsage(c, o.verb(), "which PR?", mergeParentUsage)
 	case len(pos) > 1:
 		return actUsage(c, o.verb(), "one PR at a time", mergeParentUsage)
+	case o.drop && o.wait:
+		return actUsage(c, o.verb(), "--drop pushes nothing, so there is nothing for --wait to follow", mergeParentUsage)
 	}
 	if code, refused := refuseInAgentPane(c, o.verb()); refused {
 		return code

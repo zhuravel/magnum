@@ -17,6 +17,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -265,6 +266,76 @@ func pushRecord(raw string, pr store.PR, label string, now time.Time) FixRecord 
 		rec.What = fmt.Sprintf("a fixer's push record of %s", cmp.Or(short, "no head"))
 	}
 	return rec
+}
+
+// requestDrop handles the morning list's drops (FixPayload.DropPush, and
+// Drop with FixModeMerge), each alone: the record of a fixer's push that
+// magnum keeps for its late settle, or the merge of the parent it holds
+// for your y, dropped by a compare with the row read, while no round or
+// job holds the PR. A push record its loop's settle confirms, or whose
+// late settle began, is refused: the loop or the next poll ends it.
+func (e *Engine) requestDrop(ctx context.Context, repo store.Repo, pr store.PR, p FixPayload) (string, error) {
+	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
+	switch {
+	case p.DropPush && (p.Drop || p.Mode != "" || p.Off || p.On || p.Done || len(p.Decide) > 0):
+		return "", errors.New("magnum fix --drop-push goes alone")
+	case p.Drop && (p.Mode != FixModeMerge || p.Asked != nil):
+		return "", errors.New("magnum merge-parent --drop goes alone")
+	case e.roundActive(pr.ID):
+		return "", fmt.Errorf("%s: %s; ask again shortly", label, e.heldReason(pr.ID))
+	case p.Drop:
+		return e.dropHeldRequest(ctx, repo, pr, label, p.DryRun || e.d.DryRun)
+	}
+	key := kvPRFixPush(pr.ID)
+	raw, ok, err := e.st.GetKV(ctx, key)
+	switch {
+	case err != nil:
+		return "", err
+	case !ok:
+		return "", fmt.Errorf("%s: magnum keeps no fixer's push record of it", label)
+	}
+	var rec fixPush
+	if json.Unmarshal([]byte(raw), &rec) == nil {
+		switch {
+		case rec.Kind == fixPushConfirming && e.confirmingLoop(ctx, pr, rec):
+			return "", fmt.Errorf("%s: its loop's settle confirms the push of %s now: it ends with the loop (`magnum abort %s` ends the loop)",
+				label, textx.ShortSHA(rec.Pushed), label)
+		case e.pushStarted(ctx, rec):
+			return "", fmt.Errorf("%s: the late settle of the push of %s began: the next poll finishes it", label, textx.ShortSHA(rec.Pushed))
+		}
+	}
+	short := cmp.Or(textx.ShortSHA(rec.Pushed), "a head")
+	if p.DryRun || e.d.DryRun {
+		return fmt.Sprintf("dry run: would drop the record of the fixer's push of %s on %s: magnum would settle it no more", short, label), nil
+	}
+	switch gone, err := e.st.DeleteKVIf(ctx, key, raw); {
+	case err != nil:
+		return "", err
+	case !gone:
+		return "", fmt.Errorf("%s: the push record changed meanwhile; nothing dropped, ask again", label)
+	}
+	e.event(ctx, "info", prSubject(repo, pr.Number), "fix.push_dropped", "the record of the fixer's push of "+short+
+		" is dropped by magnum fix --drop-push: magnum settles it no more", map[string]any{"pushed": rec.Pushed, "run": rec.Run})
+	return fmt.Sprintf("dropped the record of the fixer's push of %s on %s: magnum settles it no more", short, label), nil
+}
+
+// dropHeldRequest drops the merge of pr's parent that magnum holds for
+// your y (`magnum merge-parent --drop`): its row, ref and held-merge.diff
+// (dropHeldMerge, which says so in fix.held_dropped and in the PR's
+// attention).
+func (e *Engine) dropHeldRequest(ctx context.Context, repo store.Repo, pr store.PR, label string, dry bool) (string, error) {
+	row, ok := e.heldMergeOf(ctx, pr)
+	if !ok {
+		return "", fmt.Errorf("%s: magnum holds no merge of its parent", label)
+	}
+	what := fmt.Sprintf("the held merge %s of %s at %s on %s", textx.ShortSHA(row.h.Merge), row.h.Base, textx.ShortSHA(row.h.Tip), label)
+	if dry {
+		return "dry run: would drop " + what, nil
+	}
+	if !e.dropHeldMerge(ctx, repo, pr, row, "dropped by magnum merge-parent --drop", false) {
+		return "", fmt.Errorf("%s: the held merge changed meanwhile; nothing dropped, ask again", label)
+	}
+	return "dropped " + what + ": nothing was pushed", nil
 }
 
 // FixInFlight is the morning list (`magnum fix --drained`, the doctor):

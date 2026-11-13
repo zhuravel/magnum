@@ -132,6 +132,7 @@ var doctorHelpEntries = []doctorHelpEntry{
 	{"disk", "free disk"}, {"memory", "memory pressure and swap"}, {"codex staging", "codex staging"},
 	{"launchd", "launchd agent"}, {"launchd mise", "the mise it starts the daemon through"},
 	{"terminal", "Automation permission"}, {"plugin", "herdr plugin link"},
+	{"fix handover", "handing over to the factory"}, {"factory lease", "the factory's lease"},
 	{"registry", "registry"},
 	{"controls", "pause.json and reboot-drain.json"},
 }

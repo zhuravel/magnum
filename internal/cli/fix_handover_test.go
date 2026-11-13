@@ -1,0 +1,205 @@
+package cli
+
+import (
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/fixwork"
+	"github.com/zhuravel/magnum/internal/store"
+)
+
+// setKVJSON stores v as JSON under key.
+func (h *actHarness) setKVJSON(key string, v any) {
+	h.t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if err := h.st.SetKV(h.ctx, key, string(b)); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// The morning list names every PR whose fix work keeps it from handing over
+// to the factory, each record with what it is and the operator's action: a
+// loop and its fixer's run end at the cycle boundary once the PR hands
+// over; a held merge waits for P or a drop; a push record the PR's head
+// left behind is his to drop; magnum's push waiting for its CI, a held fix
+// and a pending request end by themselves. A PR with none is not listed.
+func TestTheDrainedListNamesHisActionForEachRecord(t *testing.T) {
+	h := newActHarness(t)
+	if code := h.cmd("fix", "--drained"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), "none of magnum's fix work is in flight: every PR can hand over to the factory")
+
+	at := h.now
+	pr5 := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.setFixRow(pr5, engine.FixPhaseReviewing, 1)
+	h.fixRunOf(pr5, 1, store.RunEnded)
+	pr6 := h.seedPR("talkable/talkable", 6, store.PRNeedsAttention)
+	h.setKVJSON(engine.KVPRHeldMerge(pr6.ID), fixwork.HeldMerge{Repo: "talkable/talkable", Number: 6, Merge: "d3d3d3d3", Head: pr6.HeadSHA,
+		Base: "master", Tip: "c0c0c0c0", At: at})
+	h.setKVJSON(fmt.Sprintf("pr.%d.fix_push", pr6.ID), fixwork.Push{Kind: fixwork.PushUnconfirmed, Run: "fix-1", Pushed: "b2b2b2b2", Failed: at})
+	h.setKVJSON(fmt.Sprintf("pr.%d.pushed", pr6.ID), fixwork.CIPush{Head: "b2b2b2b2", At: at})
+	h.setKVJSON(engine.KVPRFixHandover(pr6.ID), map[string]any{"at": at, "by": "magnum fix --handover"})
+	pr7 := h.seedPR("talkable/talkable", 7, store.PRReviewed)
+	h.setKVJSON(engine.KVPRFixHeld(pr7.ID), fixwork.HeldFix{At: at, Head: pr7.HeadSHA, By: "magnum fix"})
+	if _, err := h.st.EnqueueRequest(h.ctx, engine.ReqFix, engine.FixPayload{PRTarget: engine.PRTarget{Repo: "talkable/talkable", Number: 7}}); err != nil {
+		t.Fatal(err)
+	}
+	h.seedPR("talkable/talkable", 8, store.PRReviewed)
+
+	h.out.Reset()
+	if code := h.cmd("fix", "--drained"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	out := h.out.String()
+	actContains(t, out,
+		"talkable#5  https://github.com/talkable/talkable/pull/5\n",
+		"  a fix loop waiting for the re-review of its push (cycle 1 of 3)\n"+
+			"    → `magnum fix --handover talkable/talkable#5` ends it at its cycle boundary, with no next cycle (`magnum abort talkable/talkable#5` ends it now)",
+		"    → nothing: it ends with its loop",
+		"talkable#6  https://github.com/talkable/talkable/pull/6  (hands over to the factory once this ends)\n",
+		"  the push of b2b2b2b, kept for its late settle until "+fixwork.WaitClock(at.Add(24*time.Hour), h.now)+"\n",
+		"    → `magnum fix --drop-push talkable/talkable#6` drops it (nothing to do once the PR's head is b2b2b2b: the poll settles it)",
+		"  a merge of master at c0c0c0c held for your y\n"+
+			"    → P pushes it (`magnum merge-parent talkable/talkable#6`), or `magnum merge-parent --drop talkable/talkable#6` drops it",
+		"  magnum's push of b2b2b2b waits for its CI start\n    → nothing: it goes within 2m",
+		"talkable#7  https://github.com/talkable/talkable/pull/7\n",
+		"  a fix held: it starts after the restart\n    → nothing: it starts after the restart, and its loop ends at its cycle boundary; `magnum abort talkable/talkable#7` drops it",
+		"  a pending `magnum fix` request (1)\n    → nothing: the daemon answers it at its next tick",
+	)
+	if strings.Contains(out, "talkable#8") {
+		t.Errorf("a PR with no fix work is listed:\n%s", out)
+	}
+
+	h.out.Reset()
+	if code := h.cmd("fix", "--drained", "--json"); code != 0 {
+		t.Fatalf("--json exit %d: %s", code, h.errb.String())
+	}
+	var list []engine.UndrainedPR
+	if err := json.Unmarshal(h.out.Bytes(), &list); err != nil {
+		t.Fatalf("%v\n%s", err, h.out.String())
+	}
+	var got []string
+	for _, u := range list {
+		for _, r := range u.Records {
+			got = append(got, fmt.Sprintf("%d:%s", u.Number, r.Kind))
+		}
+	}
+	want := []string{"5:loop", "5:run", "6:push", "6:held_merge", "6:pushed", "7:held_fix", "7:request"}
+	if !slices.Equal(got, want) || !list[1].Handing || list[0].Handing {
+		t.Errorf("records = %v (handing %v %v), want %v", got, list[0].Handing, list[1].Handing, want)
+	}
+
+	if code := h.cmd("fix", "5", "--drained"); code != 2 {
+		t.Errorf("--drained with a PR: exit %d", code)
+	}
+}
+
+// --handover asks y/N on a terminal, then queues the daemon's request: one
+// PR, every own PR, or back with one PR or all; --drop-push and
+// merge-parent's --drop queue the morning list's drops. Each goes alone.
+func TestFixHandoverAndTheDropsQueueTheirRequests(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 4242
+	h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.d.StdinTTY, h.d.StdoutTTY = true, true
+	h.onSleep = func(h *actHarness) {
+		h.completePending(store.RequestDone, "the factory fixes talkable/talkable#5 from now on")
+	}
+
+	h.stdin("n\n")
+	if code := h.cmd("fix", "--handover", "5"); code != 1 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), "Hand the fixes of talkable#5 to the factory")
+	actContains(t, h.errb.String(), "nothing queued")
+	if reqs := h.requests(); len(reqs) != 0 {
+		t.Fatalf("queued without a y: %+v", reqs)
+	}
+	h.stdin("y\n")
+	h.out.Reset()
+	if code := h.cmd("fix", "--handover", "5"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), "the factory fixes talkable/talkable#5 from now on")
+	for _, args := range [][]string{{"--handover", "all", "--yes"}, {"--handover", "back", "5", "--yes"}, {"--handover", "back", "all", "--yes"},
+		{"5", "--drop-push", "--yes"}} {
+		if code := h.cmd("fix", args...); code != 0 {
+			t.Fatalf("fix %v: exit %d: %s", args, code, h.errb.String())
+		}
+	}
+	if code := h.cmd("merge-parent", "5", "--drop", "--yes"); code != 0 {
+		t.Fatalf("merge-parent --drop: exit %d: %s", code, h.errb.String())
+	}
+	reqs := h.requests()
+	if len(reqs) != 6 {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	one, all := actDecode[engine.HandoverPayload](t, reqs[0].Payload), actDecode[engine.HandoverPayload](t, reqs[1].Payload)
+	back, backAll := actDecode[engine.HandoverPayload](t, reqs[2].Payload), actDecode[engine.HandoverPayload](t, reqs[3].Payload)
+	switch {
+	case reqs[0].Kind != engine.ReqFixHandover || one.Number != 5 || one.All || one.Back:
+		t.Errorf("one = %s %+v", reqs[0].Kind, one)
+	case !all.All || all.Back || all.Number != 0:
+		t.Errorf("all = %+v", all)
+	case !back.Back || back.All || back.Number != 5:
+		t.Errorf("back = %+v", back)
+	case !backAll.Back || !backAll.All:
+		t.Errorf("back all = %+v", backAll)
+	}
+	push, drop := actDecode[engine.FixPayload](t, reqs[4].Payload), actDecode[engine.FixPayload](t, reqs[5].Payload)
+	if reqs[4].Kind != engine.ReqFix || !push.DropPush || push.Number != 5 || reqs[5].Kind != engine.ReqFix || !drop.Drop || drop.Mode != engine.FixModeMerge {
+		t.Errorf("drops = %s %+v / %s %+v", reqs[4].Kind, push, reqs[5].Kind, drop)
+	}
+
+	n := len(h.requests())
+	for _, args := range [][]string{{"--handover", "all", "5"}, {"--handover", "back"}, {"--handover", "5", "--off"}, {"5", "--drop-push", "--wait"}} {
+		h.errb.Reset()
+		if code := h.cmd("fix", args...); code != 2 {
+			t.Errorf("fix %v: exit %d, want 2", args, code)
+		}
+	}
+	if code := h.cmd("merge-parent", "5", "--drop", "--wait"); code != 2 {
+		t.Errorf("merge-parent --drop --wait: exit %d, want 2", code)
+	}
+	if got := len(h.requests()); got != n {
+		t.Errorf("a usage error queued %d requests", got-n)
+	}
+}
+
+// The doctor names the PRs that wait to hand over to the factory and the
+// reads of the factory's lease that failed open; with neither, one line
+// counts magnum's fix work in flight.
+func TestTheDoctorNamesTheHandoverAndTheLeasesThatFailedOpen(t *testing.T) {
+	h := newActHarness(t)
+	d := doctorDeps{Store: h.st, Config: h.d.Cfg}
+	cs := doctorFixHandover(h.ctx, d)
+	if len(cs) != 1 || cs[0].Status != doctorPass || !strings.Contains(cs[0].Detail, "none of magnum's fix work is in flight") {
+		t.Fatalf("checks = %+v", cs)
+	}
+	pr5 := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.setFixRow(pr5, engine.FixPhaseFixing, 1)
+	h.setKVJSON(engine.KVPRFixHandover(pr5.ID), map[string]any{"at": h.now, "by": "magnum fix --handover"})
+	pr6 := h.seedPR("talkable/talkable", 6, store.PRReviewed)
+	h.setKVJSON(engine.KVPRFixLeaseUnread(pr6.ID), engine.LeaseUnread{Since: h.now, Err: "database is locked", Open: true})
+	cs = doctorFixHandover(h.ctx, d)
+	if len(cs) != 2 {
+		t.Fatalf("checks = %+v", cs)
+	}
+	if c := cs[0]; c.Status != doctorWarn || !strings.Contains(c.Detail, "1 PRs wait to hand over to the factory until magnum's fix work on them ends: talkable#5 (loop)") ||
+		!strings.Contains(c.Fix, "magnum fix --drained") {
+		t.Errorf("handover = %+v", c)
+	}
+	if c := cs[1]; c.Status != doctorWarn || !strings.Contains(c.Detail, "magnum reviews 1 PRs the factory fixes without its lease, which it cannot read (failed open): talkable#6 since") ||
+		!strings.Contains(c.Detail, "(database is locked)") {
+		t.Errorf("lease = %+v", c)
+	}
+}

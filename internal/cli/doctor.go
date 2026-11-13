@@ -50,7 +50,10 @@ func newDoctorCmd(c *Context) *cobra.Command {
 			"(whether the `zsh -lc` shell the agents run their tools in sees mise's shims), free disk, the machine's memory "+
 			"pressure and swap (a WARN at critical pressure; nothing in magnum acts on it), codex staging, the launchd agent "+
 			"and the mise it starts the daemon through, the terminal's Automation permission on macOS (named, never probed: "+
-			"doctor opens no window), the herdr plugin link, the registry, and the factory's pause.json and reboot-drain.json "+
+			"doctor opens no window), the herdr plugin link, the PRs handing over to the factory (a WARN naming those whose fix "+
+			"work of magnum's has not ended yet; `magnum fix --drained` says your action for each) and the factory's lease of "+
+			"the PRs it fixes (a WARN naming those whose lease magnum cannot read: their rounds wait 10 minutes, then magnum "+
+			"reviews them without it), the registry, and the factory's pause.json and reboot-drain.json "+
 			"(a WARN for one its daemon cannot read: an unreadable pause holds nothing, an unreadable drain holds until "+
 			"`magnum resume`). "+
 			"Each check prints PASS, WARN, FAIL or SKIP with the exact fix. Read-only; exits 1 when a check fails.",
@@ -201,7 +204,7 @@ func doctorRun(ctx context.Context, d doctorDeps) []doctorCheck {
 	groups := []func(context.Context, doctorDeps) []doctorCheck{
 		doctorConfig, doctorHerdrChecks, doctorAgentChecks, doctorSessionHooks, doctorHooksTrust, doctorAgentHooks, doctorHookSocket, doctorSkill, doctorFixRole, doctorWhiteboard, doctorPrompts, doctorGH, doctorIdentities, doctorJira, doctorMySQLCheck, doctorRedis,
 		doctorClones, doctorFixerPushURL, doctorFixerRepos, doctorSchemaReset, doctorMise, doctorLoginShell, doctorDisk, doctorMemory, doctorStaging, doctorLaunchd, doctorLaunchdMise, doctorTerminal, doctorPluginCheck,
-		doctorLearnEditor, doctorRegistry, doctorControls,
+		doctorLearnEditor, doctorFixHandover, doctorRegistry, doctorControls,
 	}
 	out := make([][]doctorCheck, len(groups))
 	var wg sync.WaitGroup

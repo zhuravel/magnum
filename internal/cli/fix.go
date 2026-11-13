@@ -32,7 +32,8 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-const fixUsage = "fix <url|owner/repo#N|repo#N|N> [--off | --on | --done | --ci | --decide <thread>=<reply>...] [--wait] [--timeout <duration>] [--dry-run] [--json] [--yes]"
+const fixUsage = "fix <url|owner/repo#N|repo#N|N> [--off | --on | --done | --ci | --drop-push | --decide <thread>=<reply>...] [--wait] [--timeout <duration>] [--dry-run] [--json] [--yes]" +
+	" | fix --drained [--json] | fix --handover all|<pr>|back <pr|all> [--dry-run] [--json] [--yes]"
 
 // fixDefaultTimeout is how long --wait follows a loop by default.
 const fixDefaultTimeout = reviewDefaultTimeout
@@ -66,6 +67,12 @@ type fixOpts struct {
 	// where a screen asked (attentionSum of the board's row); nil = the PR's
 	// last_error, which the command shows before its y/N.
 	seenSum *string
+	// drained is --drained, the morning list (fix_handover in this file);
+	// handover is --handover's value (all, back or a PR); dropPush is
+	// --drop-push, and drop merge-parent's --drop: the morning list's drops.
+	drained        bool
+	handover       string
+	dropPush, drop bool
 }
 
 func newFixCmd(c *Context) *cobra.Command {
@@ -122,7 +129,16 @@ func newFixCmd(c *Context) *cobra.Command {
 			"the cap, a head magnum has not reviewed or whose review leaves work (fix that first), a drain and a low GitHub "+
 			"budget (a CI fix is never held); its plan reads why the check failed (the base's CI, the failed jobs and the end of "+
 			"their logs, once for the head) and keeps it for the start. "+
-			"--dry-run only asks the daemon what would happen.",
+			"--dry-run only asks the daemon what would happen.\n\n"+
+			"The factory takes the fix loop over (the handover): --handover <pr> hands one own PR's fixes to the factory, at "+
+			"once when none of magnum's fix work is in flight on it, else once that ends (magnum starts no new loop on it "+
+			"meanwhile, and a loop in flight ends at its cycle boundary, with no next cycle); --handover all does so for every "+
+			"own PR, now and later. --handover back <pr> returns a PR only while the factory has not worked it since its "+
+			"import, and calls off a handover that waits; --handover back all lifts --handover all and returns every PR it may. "+
+			"Each asks y/N on a terminal (--yes does not). --drained prints the morning list: every PR whose fix work keeps it "+
+			"from handing over (a loop, a fixer's push record, a held merge, a held fix, magnum's push waiting for its CI, a "+
+			"pending request, a fixer's run), with your action for each. --drop-push drops the record of a fixer's push that "+
+			"magnum keeps for its late settle (up to 24h), which the morning list names when the PR's head moved past it.",
 		func(pos []string) int { return runFix(c, o, pos) })
 	fs := cmd.Flags()
 	fs.BoolVar(&o.off, "off", false, "take the PR out of autofix: its findings stay yours (starts no loop)")
@@ -135,6 +151,9 @@ func newFixCmd(c *Context) *cobra.Command {
 	fs.BoolVar(&o.dryRun, "dry-run", false, "ask the daemon what would happen; nothing is started or changed")
 	fs.BoolVar(&o.json, "json", false, "print the result as JSON (progress goes to stderr)")
 	fs.BoolVar(&o.yes, "yes", false, "do not ask for confirmation")
+	fs.BoolVar(&o.drained, "drained", false, "list every PR whose fix work keeps it from handing over to the factory, with your action for each")
+	fs.StringVar(&o.handover, "handover", "", "hand a PR's fixes (`all`, `<pr>`) to the factory, or `back` one (`back <pr|all>`)")
+	fs.BoolVar(&o.dropPush, "drop-push", false, "drop the record of a fixer's push magnum keeps for its late settle")
 	cmd.ValidArgsFunction = completeFirst(c.completePRs)
 	return cmd
 }
@@ -156,6 +175,14 @@ func (o fixOpts) usage() string {
 }
 
 func runFix(c *Context, o fixOpts, pos []string) int {
+	switch {
+	case o.drained:
+		return runFixDrained(c, o, pos)
+	case o.handover != "":
+		return runFixHandover(c, o, pos)
+	case o.dropPush && (o.done || o.off || o.on || o.ci || len(o.decide) > 0 || o.wait):
+		return actUsage(c, "fix", "--drop-push goes alone, without --off, --on, --done, --ci, --decide or --wait", fixUsage)
+	}
 	switch {
 	case len(pos) == 0:
 		return actUsage(c, "fix", "which PR?", fixUsage)
@@ -269,7 +296,7 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 	if !o.json {
 		reviewDescribe(ctx, c.Stdout, d, t, label, false, o.dryRun)
 	}
-	payload := engine.FixPayload{PRTarget: t.prTarget(), DryRun: o.dryRun, Off: o.off, On: o.on, Decide: o.decisions}
+	payload := engine.FixPayload{PRTarget: t.prTarget(), DryRun: o.dryRun, Off: o.off, On: o.on, Decide: o.decisions, DropPush: o.dropPush, Drop: o.drop}
 	if o.merge {
 		payload.Mode, payload.Asked = engine.FixModeMerge, o.asked
 	}
@@ -304,7 +331,7 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 		fmt.Fprintf(fixProgress(c, o), "%s is pinned: this fix unpins it (a person's changes in its slot still hold the fix)\n", label)
 	}
 	question := ""
-	if o.merge && fixAsks(d, o) && !o.json { // the y/N names what the daemon would merge, into which branch, as whom
+	if o.merge && !o.drop && fixAsks(d, o) && !o.json { // the y/N names what the daemon would merge, into which branch, as whom
 		plan, answer, err := mergeParentPlan(ctx, c.Stderr, d, payload)
 		if err != nil {
 			return fixFail(c, o, out, err)
@@ -566,6 +593,10 @@ func fixConfirm(ctx context.Context, c *Context, d *actDeps, label, login, quest
 		question, declined = fmt.Sprintf("Autofix %s again?", label), "nothing changed"
 	case o.done:
 		question, declined = fmt.Sprintf("Mark what the fixer left on %s done (back to reviewed, no review)?", label), "nothing changed"
+	case o.dropPush:
+		question, declined = fmt.Sprintf("Drop the record of the fixer's push on %s (magnum settles it no more)?", label), "nothing changed"
+	case o.drop:
+		question, declined = fmt.Sprintf("Drop the merge of the parent magnum holds for your y on %s (nothing is pushed)?", label), "nothing changed"
 	case len(o.decisions) == 1:
 		question = fmt.Sprintf("Post this reply as you in %s and fix it?", label)
 	case len(o.decisions) > 1:
@@ -764,4 +795,128 @@ func fixRunReplied(ctx context.Context, d *actDeps, runID string) bool {
 	}
 	r, err := d.Store.RunByID(ctx, runID)
 	return err == nil && r.Kind == store.RunFix && store.Deref(r.Outcome) == "replied"
+}
+
+// runFixDrained is `magnum fix --drained`, the morning list: every PR whose
+// fix work in flight keeps it from handing over to the factory
+// (engine.FixInFlight, from the registry), each record with your action.
+// It takes no PR and changes nothing; empty is the deletion's gate.
+func runFixDrained(c *Context, o fixOpts, pos []string) int {
+	switch {
+	case len(pos) > 0:
+		return actUsage(c, "fix", "--drained lists every PR: it takes none", fixUsage)
+	case o.handover != "" || o.off || o.on || o.done || o.ci || o.dropPush || o.wait || o.dryRun || len(o.decide) > 0:
+		return actUsage(c, "fix", "--drained goes alone (--json aside)", fixUsage)
+	}
+	d, err := actNewDeps(c, actFull)
+	if err != nil {
+		return cmdFail(c, "fix", err)
+	}
+	defer d.Close()
+	ctx, stop := signalContext()
+	defer stop()
+	list, err := engine.FixInFlight(ctx, d.Store, d.Cfg, d.now())
+	if err != nil {
+		return cmdFail(c, "fix", err)
+	}
+	if o.json {
+		if list == nil {
+			list = []engine.UndrainedPR{}
+		}
+		if err := writeJSON(c.Stdout, list); err != nil {
+			return cmdFail(c, "fix", err)
+		}
+		return 0
+	}
+	if len(list) == 0 {
+		fmt.Fprintln(c.Stdout, "none of magnum's fix work is in flight: every PR can hand over to the factory")
+		return 0
+	}
+	for _, u := range list {
+		line := d.actLabel(u.Repo, u.Number) + "  " + u.URL
+		if u.Handing {
+			line += "  (hands over to the factory once this ends)"
+		}
+		fmt.Fprintln(c.Stdout, line)
+		for _, r := range u.Records {
+			fmt.Fprintf(c.Stdout, "  %s\n    → %s\n", actClean(r.What), actClean(r.Action))
+		}
+	}
+	return 0
+}
+
+// runFixHandover is `magnum fix --handover all|<pr>|back <pr|all>`: it asks
+// y/N on a terminal (--yes, a dry run and a script do not), then the
+// daemon, which flips a quiet PR at once (engine.ReqFixHandover); with no
+// daemon nothing is queued.
+func runFixHandover(c *Context, o fixOpts, pos []string) int {
+	if o.off || o.on || o.done || o.ci || o.dropPush || o.wait || len(o.decide) > 0 {
+		return actUsage(c, "fix", "--handover goes alone (--dry-run, --json and --yes aside)", fixUsage)
+	}
+	var p engine.HandoverPayload
+	ref := ""
+	switch {
+	case o.handover == "all" && len(pos) == 0:
+		p.All = true
+	case o.handover == "back" && len(pos) == 1 && pos[0] == "all":
+		p.Back, p.All = true, true
+	case o.handover == "back" && len(pos) == 1:
+		p.Back, ref = true, pos[0]
+	case o.handover != "all" && o.handover != "back" && len(pos) == 0:
+		ref = o.handover
+	default:
+		return actUsage(c, "fix", "--handover takes all, one PR, or back with one PR or all", fixUsage)
+	}
+	p.DryRun = o.dryRun
+	if code, refused := refuseInAgentPane(c, "fix"); refused {
+		return code
+	}
+	d, err := actNewDeps(c, actFull)
+	if err != nil {
+		return cmdFail(c, "fix", err)
+	}
+	defer d.Close()
+	ctx, stop := signalContext()
+	defer stop()
+	what := "every own PR"
+	if ref != "" {
+		t, err := d.resolveRef(ctx, ref)
+		if err != nil {
+			return cmdFail(c, "fix", verbFix("fix", err))
+		}
+		p.PRTarget, what = t.prTarget(), d.actLabel(t.full(), t.PR.Number)
+	}
+	if fixAsks(d, o) {
+		if o.json {
+			return actUsage(c, "fix", "--json needs --yes to apply (a terminal asks y/N first); nothing queued", fixUsage)
+		}
+		question := fmt.Sprintf("Hand the fixes of %s to the factory (at once while none of magnum's fix work is in flight, else once it ends)?", what)
+		switch {
+		case p.Back && p.All:
+			question = "Stop handing own PRs to the factory, and return every PR it has not worked since its import to magnum?"
+		case p.Back:
+			question = fmt.Sprintf("Return the fixes of %s to magnum (only while the factory has not worked it since its import)?", what)
+		}
+		if !d.confirm(ctx, c.Stdout, question) {
+			fmt.Fprintln(c.Stderr, "nothing queued")
+			if ctx.Err() != nil {
+				return 130
+			}
+			return 1
+		}
+	}
+	q := d.quick()
+	q.NeedDaemon = true
+	res, err := d.reqs().send(ctx, engine.ReqFixHandover, p, q)
+	if err != nil {
+		if errors.Is(err, errNoDaemon) {
+			err = fmt.Errorf("%s: nothing was queued: %w", what, err)
+		}
+		return cmdFail(c, "fix", err)
+	}
+	if o.json {
+		_ = writeJSON(c.Stdout, res.view())
+		return res.jsonCode()
+	}
+	return res.print(c.Stdout, c.Stderr)
 }

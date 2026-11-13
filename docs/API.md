@@ -11471,6 +11471,14 @@ type FixPayload struct {
 	Mode    string        `json:"mode,omitempty"`
 	Asked   *MergeAsked   `json:"asked,omitempty"`
 	CIAsked *CIFixAsked   `json:"ci_asked,omitempty"`
+	// DropPush drops the record of a fixer's push that magnum keeps for its
+	// late settle (`magnum fix --drop-push`), and Drop, with Mode
+	// FixModeMerge, the merge of the parent magnum holds for your y
+	// (`magnum merge-parent --drop`): the morning list's actions on fix work
+	// that keeps a PR from handing over to the factory (fix_drained.go).
+	// Each goes alone, also on a PR the factory fixes.
+	DropPush bool `json:"drop_push,omitempty"`
+	Drop     bool `json:"drop,omitempty"`
 }
     FixPayload is a `magnum fix` request: start a fix loop on the PR (DryRun:
     answer what would happen and do nothing), or switch the fix job off for it

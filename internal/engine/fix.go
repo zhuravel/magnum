@@ -77,6 +77,14 @@ type FixPayload struct {
 	Mode    string        `json:"mode,omitempty"`
 	Asked   *MergeAsked   `json:"asked,omitempty"`
 	CIAsked *CIFixAsked   `json:"ci_asked,omitempty"`
+	// DropPush drops the record of a fixer's push that magnum keeps for its
+	// late settle (`magnum fix --drop-push`), and Drop, with Mode
+	// FixModeMerge, the merge of the parent magnum holds for your y
+	// (`magnum merge-parent --drop`): the morning list's actions on fix work
+	// that keeps a PR from handing over to the factory (fix_drained.go).
+	// Each goes alone, also on a PR the factory fixes.
+	DropPush bool `json:"drop_push,omitempty"`
+	Drop     bool `json:"drop,omitempty"`
 }
 
 const (
@@ -358,6 +366,9 @@ func (e *Engine) requestFix(ctx context.Context, p FixPayload, carried *external
 		return "", err
 	}
 	subject := prSubject(repo, pr.Number)
+	if p.DropPush || p.Drop { // fix_drained.go: the morning list's drops, which end magnum's records
+		return e.requestDrop(ctx, repo, pr, p)
+	}
 	// fix_owner.go: a PR magnum does not fix gets none of its fix requests
 	if err := e.ownerRefusal(ctx, fmt.Sprintf("%s#%d", repo.FullName(), pr.Number), pr.ID); err != nil {
 		return "", err

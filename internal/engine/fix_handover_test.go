@@ -367,3 +367,54 @@ func TestOnlyAPRTheFactoryHasNotWorkedReturnsToMagnum(t *testing.T) {
 		t.Errorf("fix.return_refused = %+v, %v", ev, ok)
 	}
 }
+
+// The morning list's drops end the records that keep a PR from handing
+// over and do not end by themselves: `magnum fix --drop-push` drops the
+// record of a fixer's push kept for its late settle, and `magnum
+// merge-parent --drop` the merge of the parent held for your y, each by a
+// compare with the row read, also on a PR the factory fixes since.
+func TestTheMorningListsDropsEndAPushRecordAndAHeldMerge(t *testing.T) {
+	storetest.Parallel(t)
+	t.Run("push", func(t *testing.T) {
+		h, _, pr := unconfirmedFix(t)
+		factoryOwns(h)
+		id := h.fix(FixPayload{DropPush: true, DryRun: true})
+		h.handle()
+		if res := h.wantDone(id); !strings.HasPrefix(res, "dry run: would drop the record of the fixer's push of b2b2b2b") {
+			t.Errorf("dry run = %q", res)
+		}
+		id = h.fix(FixPayload{DropPush: true})
+		h.handle()
+		if res := h.wantDone(id); res != "dropped the record of the fixer's push of b2b2b2b on talkable/talkable#2: magnum settles it no more" {
+			t.Errorf("drop = %q", res)
+		}
+		if _, ok := h.fixPushOf(2); ok {
+			t.Error("the push record stayed")
+		}
+		if _, ok := h.fixEvent("fix.push_dropped"); !ok {
+			t.Error("no fix.push_dropped event")
+		}
+		if q, recs, err := h.e.fixQuiet(h.ctx, h.heldRepo(), pr); err != nil || !q {
+			t.Errorf("quiet = %v, %+v, %v; want quiet once the record went", q, recs, err)
+		}
+	})
+	t.Run("held merge", func(t *testing.T) {
+		h, mg := holdMerged(t)
+		id := h.fix(FixPayload{Mode: FixModeMerge, Drop: true})
+		h.handle()
+		if res := h.wantDone(id); !strings.HasPrefix(res, "dropped the held merge d3d3d3d of master at c0c0c0c on talkable/talkable#2") {
+			t.Errorf("drop = %q", res)
+		}
+		wantDropped(t, h, mg, "dropped by magnum merge-parent --drop")
+		wantNoPush(t, mg)
+	})
+	t.Run("alone", func(t *testing.T) {
+		h, _ := fixHarness(t)
+		fixablePR(h, "zhuravel", nil)
+		for _, p := range []FixPayload{{DropPush: true, Off: true}, {Drop: true}, {Drop: true, Mode: FixModeMerge, Asked: &MergeAsked{}}} {
+			if said := h.refusedFix(p); !strings.Contains(said, "goes alone") {
+				t.Errorf("%+v = %q", p, said)
+			}
+		}
+	})
+}
