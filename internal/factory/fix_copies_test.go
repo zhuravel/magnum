@@ -1106,6 +1106,52 @@ func TestAChangeOfFixCopiesKeepsTheFixersCommitAndClaims(t *testing.T) {
 	}
 }
 
+// A claim's switch records the newer head as its assignment's before it
+// moves the checkout there, so a switch cut once the checkout moved still
+// leaves the newer head as the claim's: a release after a force-push of the
+// PR then counts that head, the PR's, as pushed and keeps nothing. The
+// switch recorded it last, so the cut left the older head as the claim's,
+// and the release took the PR's own head for commits on no remote (C4 on
+// T3b).
+func TestACutSwitchLeavesTheNewerHeadAsTheClaims(t *testing.T) {
+	r := newFixRig(t, 1, 1)
+	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
+	w := r.prWork("talkable/talkable", 7)
+	fc := r.claimFix(w)
+	newer := r.pushPR(r.origin, 7, "fix.txt", "v2\n")
+	ctx, cancel := context.WithCancel(r.ctx)
+	defer cancel()
+	r.c.now = func() time.Time {
+		if res, err := r.real.Run(r.ctx, gitCmd(fc.Path, "rev-parse", "HEAD")); err == nil && res.Out() == newer {
+			cancel() // the daemon goes down once the checkout is at the newer head
+		}
+		return r.clock.Now()
+	}
+	r.clock.Add(time.Minute)
+	if _, err := r.c.ClaimFix(ctx, w); err == nil {
+		t.Fatal("the claim cut once its checkout moved succeeded")
+	}
+	if got, _ := r.head(fc.Path); got != newer {
+		t.Fatalf("%s is at %s after the cut switch, want the newer head %s", fc.Name, got, newer)
+	}
+	a, err := r.st.OpenAssignmentBySlot(r.ctx, r.slot(fc.Name).ID)
+	if err != nil || store.Deref(a.HeadSHA) != newer {
+		t.Fatalf("the claim's head after the cut switch = %q, %v, want the newer head %s", store.Deref(a.HeadSHA), err, newer)
+	}
+
+	r.c = r.newCopies() // the restart
+	author := filepath.Join(r.root, "author-"+filepath.Base(r.origin))
+	r.gitIn(author, "reset", "--quiet", "--hard", "origin/master")
+	r.pushPR(r.origin, 7, "rebased.txt", "v1\n") // the author rebases and force-pushes
+	r.releaseFix(w)
+	if sl := r.slot(fc.Name); sl.State != store.SlotFree || sl.HoldReason != nil {
+		t.Fatalf("%s after the release = %s, hold %q, want free", fc.Name, sl.State, store.Deref(sl.HoldReason))
+	}
+	if got := r.keptRefs(r.main); got != "" {
+		t.Fatalf("the release kept %q, want nothing: the head the cut switch moved to is the PR's", got)
+	}
+}
+
 // A per-PR checkout goes once the PR's fix work ends: at once when the PR
 // merges or closes, once its work stayed idle for fixIdleEnd, never while
 // the work goes on. Its worktree, its fix ref and its row's hold on it go,

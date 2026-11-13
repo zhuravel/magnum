@@ -26917,7 +26917,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `refs/magnum/factory-fix/<N>` of the main clone (`gitx.FetchPRInto`, which refuses `refs/magnum/pr/`): the
     two daemons share main clones, and a fetch into the review's ref would move it between a review's fetch and
     its checkout. It then switches the checkout to that head, detached, with `slots.Resync` (an operation left in
-    progress aborted, the checkout recorded), and a fix copy runs `reset_db`, the changed `installs` and the
+    progress aborted, the checkout recorded), after it records that head as its assignment's, which the release
+    counts as pushed: recorded last, a switch cut once the checkout moved left the older head there, and after a
+    force-push the release took the PR's own head for commits on no remote (the engine owner's C4 on T3b),
+    and a fix copy runs `reset_db`, the changed `installs` and the
     Redis flush, as a task's claim does (`readyData`). Each is a step of `slot:<checkout>:fix:<assignment>:<head>`
     after the checkout's guard: a claim a restart cut runs only the steps it left undone, and a later claim at the
     same head keeps what the fixer did there, while one at a newer head switches to it. The guard of each step
@@ -26996,7 +26999,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `TestAFixCopyIsKeptApartInRepairAndOutage` (R17); the one rule for a fix checkout's commits,
     `TestAReleaseFreesTheCheckoutTheFixerPushedAfterYouTypedOnceThePRMovedPastIt` (C1),
     `TestAReleaseKeepsTheFixersPushAForcePushLeftBehindAndFreesTheCheckout` (C2) and
-    `TestAChangeOfFixCopiesKeepsTheFixersCommitAndClaims` (C7), each failing first.
+    `TestAChangeOfFixCopiesKeepsTheFixersCommitAndClaims` (C7), each failing first, and
+    `TestACutSwitchLeavesTheNewerHeadAsTheClaims` (C4, failing first).
   - The Redis databases. Copy n's 16 Redis databases start at n × 16 and the fix copies are numbered past the
     tasks', so a repository whose copies use Redis offsets (its `env` names `REDIS_DB_OFFSET` or renders `{n*16}`:
     `config.FactoryRepo.UsesRedis`) needs `(max_copies + fix_copies + 1) × 16` databases on that Redis, the highest

@@ -475,21 +475,24 @@ func (c *copySet) prepareFix(ctx context.Context, w registry.PRWork, owner store
 	return data(step)
 }
 
-// switchFix switches checkout sl to head (slots.Resync) and records it as
-// the checkout of the claim's assignment a, with the time, which a person's
-// typing in the PR's fix panes is read against (the guard). The commits on
-// no remote that HEAD carries were kept by the step's guard (fixOwnHead).
+// switchFix records head as the head of the claim's assignment a, then
+// switches checkout sl to it (slots.Resync) and records the time, which a
+// person's typing in the PR's fix panes is read against (the guard). The
+// assignment's head comes first: the release counts it as pushed
+// (unpushedPastClaim), so a switch cut once the checkout moved must not
+// leave the older head there, or the PR's own head would count as commits
+// on no remote. The commits on no remote that HEAD carries were kept by the
+// step's guard (fixOwnHead).
 func (c *copySet) switchFix(ctx context.Context, sl store.Slot, a store.Assignment, head string) error {
+	if store.Deref(a.HeadSHA) != head {
+		if err := c.st.UpdateAssignmentHead(ctx, a.ID, head); err != nil {
+			return err
+		}
+	}
 	if err := c.slots.Resync(ctx, sl, head); err != nil {
 		return err
 	}
-	if err := c.st.UpdateSlotFields(ctx, sl.ID, func(u *store.SlotUpdate) { u.Set("last_used_at", c.now()) }); err != nil {
-		return err
-	}
-	if store.Deref(a.HeadSHA) == head {
-		return nil
-	}
-	return c.st.UpdateAssignmentHead(ctx, a.ID, head)
+	return c.st.UpdateSlotFields(ctx, sl.ID, func(u *store.SlotUpdate) { u.Set("last_used_at", c.now()) })
 }
 
 // fixKeptPrefix holds the commits on no remote a fix checkout's HEAD
