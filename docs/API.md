@@ -14832,7 +14832,9 @@ func Guard(next execx.Runner, cfg *config.Config) execx.Runner
 func HoldWait(h Hold, now time.Time) (who, what string)
     HoldWait is the wait a hold gives the task it stops, at now: its who
     ("held") and its what, the hold's reason and since when ("MySQL does not
-    answer (since 17:03)"; a hold of another day says the day too).
+    answer (since 17:03)"; a hold of another day says the day too). A drain's
+    reason already names its start (restart.go, control.go), so its wait is the
+    reason alone, never a second "(since …)".
 
 func Kick(l paths.Layout) (int, error)
     Kick asks the running factory daemon for a pass now (SIGUSR1); it returns
