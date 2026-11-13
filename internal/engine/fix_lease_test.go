@@ -2,10 +2,13 @@ package engine
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/factoryread"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -157,4 +160,36 @@ func (h *harness) leaseUnread(prID int64) (LeaseUnread, bool) {
 func (h *harness) factoryWait() (Wait, bool) {
 	h.t.Helper()
 	return h.e.factoryWaitOf(h.ctx, h.pr(2))
+}
+
+// The daemon reads the factory's lease through factoryread: a lease that
+// holds an agent or a push is the factory's fixer at work, which holds the
+// PR's round, a loop waiting for magnum's re-review holds nothing, and so
+// does every other phase and a lease that ran out; the cycle, the cap, the
+// head and the work since the import go as read. A registry that is not
+// there is the zero lease, and no error.
+func TestTheFactorysLeaseIsReadAsTheReviewSideTakesIt(t *testing.T) {
+	now := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		lease factoryread.Lease
+		want  FixLease
+	}{
+		{factoryread.Lease{Fixing: true, Phase: registry.PRWorkLocalReview, Head: "c3c3c3c", Cycle: 2, Cap: 3, Worked: true},
+			FixLease{Fixing: true, Phase: FixPhaseFixing, Head: "c3c3c3c", Cycle: 2, Cap: 3, Worked: true, ReadAt: now}},
+		{factoryread.Lease{Phase: registry.PRWorkReviewing, Head: "c3c3c3c", Cycle: 1, Cap: 3, Worked: true},
+			FixLease{Phase: FixPhaseReviewing, Head: "c3c3c3c", Cycle: 1, Cap: 3, Worked: true, ReadAt: now}},
+		{factoryread.Lease{Phase: registry.PRWorkFixing, Cycle: 1, Cap: 3}, FixLease{Cycle: 1, Cap: 3, ReadAt: now}}, // the lease ran out
+		{factoryread.Lease{Phase: registry.PRWorkQueued}, FixLease{ReadAt: now}},
+	} {
+		if got := leaseFromFactory(tc.lease, now); got != tc.want {
+			t.Errorf("leaseFromFactory(%+v) = %+v, want %+v", tc.lease, got, tc.want)
+		}
+		if l := leaseFromFactory(tc.lease, now); (leaseView{owned: true, lease: l}).holds() != (tc.lease.Fixing) {
+			t.Errorf("%s: holds the round %v, want %v", tc.lease.Phase, !tc.lease.Fixing, tc.lease.Fixing)
+		}
+	}
+	read := factoryLeaseReader(filepath.Join(t.TempDir(), "factory", "factory.db"), func() time.Time { return now })
+	if l, err := read(t.Context(), "talkable/talkable", 2); err != nil || l != (FixLease{ReadAt: now}) {
+		t.Errorf("a registry that is not there = %+v, %v; want the zero lease", l, err)
+	}
 }

@@ -4176,9 +4176,8 @@ held fix and the late settle of a push all refuse it ("the factory fixes this PR
   status comment says the fixes are being applied. The factory's own re-review of its push goes on. When
   Magnum cannot read the factory's records of the PR, the round waits 10 minutes from the first failed read,
   then Magnum reviews the PR anyway, with a warning (`fix.lease_open`). `magnum doctor` names such PRs, and
-  the PRs that wait to hand over. Until the daemon is built with the reader of the factory's records,
-  nothing of this applies: rounds go on as before, and `--handover back` is refused, since Magnum cannot
-  tell whether the factory worked the PR.
+  the PRs that wait to hand over. Magnum reads the factory's records read only, from the factory's
+  registry; with no factory registry on the Mac, the factory fixes nothing and rounds go on as before.
 
 ### Whiteboards of reviewed PRs
 

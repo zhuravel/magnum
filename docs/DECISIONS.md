@@ -19329,8 +19329,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
     the factory holds the lease, and the status comment shows its cycle. A failed read holds the round for
     10 minutes from the first failure (`pr.<id>.fix_lease_unread`), then magnum reviews, with fix.lease_open
     once and a doctor line. A nil reader is inert (TestAnUnwiredLeaseReaderChangesNothing): nothing is read,
-    held, refused or reported. The reader is factoryread's, from T3a; until it is wired in internal/app the
-    review side behaves as before and `back` refuses.
+    held, refused or reported. The daemon's wiring (engine.FromApp) reads the lease with T3a's
+    factoryread.LeaseOf, read only: a lease held in fixing, local_review or pushing is the factory's fixer at
+    work, a loop in reviewing waits for magnum's re-review and holds nothing, and a registry, table or row that
+    is not there is no lease.
   - The factory's requests. ReviewPayload gains FixRef and LocalRound (fixwork's types). A forced re-review
     with FixRef, taken only for a PR the factory fixes, passes the lease's refusal; the PR keeps the fix until
     the round that takes it ends, which no lease holds, and the round's end names it in fix.factory_round, in

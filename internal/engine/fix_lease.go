@@ -22,6 +22,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/factoryread"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -42,6 +44,38 @@ type FixLease struct {
 	Cap    int
 	Worked bool
 	ReadAt time.Time
+}
+
+// leaseFromFactory is the factory's lease as factoryread reads it from its
+// PR work row, as the review side takes it, read at now: a lease that holds
+// an agent or a push (factoryread.Lease.Fixing: phase fixing, local_review
+// or pushing, under a lease that has not run out) is the factory's fixer at
+// work (FixPhaseFixing, which holds the PR's round), a loop that waits for
+// magnum's re-review is FixPhaseReviewing, and any other (idle, queued,
+// held, a lease that ran out) holds nothing.
+func leaseFromFactory(l factoryread.Lease, now time.Time) FixLease {
+	out := FixLease{Fixing: l.Fixing, Head: l.Head, Cycle: l.Cycle, Cap: l.Cap, Worked: l.Worked, ReadAt: now}
+	switch {
+	case l.Fixing:
+		out.Phase = FixPhaseFixing
+	case l.Phase == registry.PRWorkReviewing:
+		out.Phase = FixPhaseReviewing
+	}
+	return out
+}
+
+// factoryLeaseReader is Deps.FixLeaseOf over the factory's registry at path
+// (factoryread.LeaseOf, read only, across processes), each read stamped by
+// now: a registry, a table or a row that is not there is the zero lease,
+// and a registry that cannot be read is an error.
+func factoryLeaseReader(path string, now func() time.Time) func(ctx context.Context, repo string, number int) (FixLease, error) {
+	return func(ctx context.Context, repo string, number int) (FixLease, error) {
+		l, err := factoryread.LeaseOf(ctx, path, repo, number)
+		if err != nil {
+			return FixLease{}, err
+		}
+		return leaseFromFactory(l, now()), nil
+	}
 }
 
 // fixLeaseGrace is how long a round waits on a PR the factory fixes while

@@ -462,10 +462,11 @@ type Deps struct {
 
 	// FixLeaseOf reads the factory's lease of a PR's fixes, the PR Number
 	// of repo ("owner/name"), from the factory's registry, read only
-	// (factoryread's, through the daemon's wiring; fix_lease.go). nil = no
-	// reader: the review side reads no lease and holds nothing, as before
-	// the factory fixed PRs, and `magnum fix --handover back` refuses,
-	// since magnum cannot tell whether the factory worked the PR.
+	// (factoryread.LeaseOf, which FromApp sets for the daemon;
+	// fix_lease.go). nil = no reader: the review side reads no lease and
+	// holds nothing, as before the factory fixed PRs, and `magnum fix
+	// --handover back` refuses, since magnum cannot tell whether the
+	// factory worked the PR.
 	FixLeaseOf func(ctx context.Context, repo string, number int) (FixLease, error)
 
 	// Staging reads where each open PR of a repository with staging envs
@@ -1026,6 +1027,12 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 		d.Probe = gitProbe(a.Git)
 	}
 	d.Webhooks = webhookSource(a)
+	if a.AgentTag == "" && a.Layout.Valid() {
+		// fix_lease.go: the factory's lease of the PRs it fixes, from its
+		// registry, read only; a replay or a local review reviews no PR the
+		// factory fixes.
+		d.FixLeaseOf = factoryLeaseReader(a.Layout.FactoryDB(), time.Now)
+	}
 	if a.HookFailures != nil {
 		d.HookFailures = a.HookFailures // hooks.go
 	}
