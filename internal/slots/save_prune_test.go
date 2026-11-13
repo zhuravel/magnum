@@ -41,6 +41,74 @@ func TestASaveTheSameAsTheSlotsLastIsNotKept(t *testing.T) {
 	}
 }
 
+// A save is the slot's last one again only when it also names what that
+// save names: the files it left out and the untracked files the tree
+// keeps. A removal whose patch repeats the last switch's but that leaves
+// out a file past the cap is kept, and its saved.txt and event name the
+// file; a switch that keeps one more untracked file in the tree is kept;
+// one that keeps the same files again is not. The check compared
+// changes.diff alone, so the removal's save was dropped and its event said
+// the earlier save held a file it never held, with no word of why the file
+// was left out.
+func TestASaveRepeatsTheLastOnlyWithTheSameFilesLeftOutAndKept(t *testing.T) {
+	t.Run("a removal that leaves out a file", func(t *testing.T) {
+		f := newPerPR(t, true)
+		h := f.h
+		h.m.saveCap = 1500
+		sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, f.repoName(), f.pr, f.sha7)
+		if err != nil {
+			t.Fatal(err)
+		}
+		folder := h.layout.PRSaves("zhuravel", "widget", f.pr.Number)
+		writeFile(t, filepath.Join(sl.Path, "README"), "residue\n")
+		if err := h.m.Resync(h.ctx, sl, f.sha7); err != nil {
+			t.Fatalf("Resync: %v", err)
+		}
+		h.now = h.now.Add(time.Minute)
+		writeFile(t, filepath.Join(sl.Path, "README"), "residue\n")
+		writeFile(t, filepath.Join(sl.Path, "large.txt"), strings.Repeat("x", 2000))
+		if err := h.m.RemovePRWorktree(h.ctx, h.slot(sl.Name), false); err != nil {
+			t.Fatalf("RemovePRWorktree: %v", err)
+		}
+		got := saves(t, folder)
+		if len(got) != 2 {
+			t.Fatalf("saves = %q, want the removal's kept beside the switch's", got)
+		}
+		if note := readFile(t, filepath.Join(got[1], "saved.txt")); !strings.Contains(note, "large.txt (") {
+			t.Fatalf("the removal's saved.txt does not name large.txt as left out:\n%s", note)
+		}
+		evs := h.discarded(t, sl.Name)
+		if ev := evs[len(evs)-1].Message; !strings.Contains(ev, got[1]) || !strings.Contains(ev, "large.txt (") || strings.Contains(ev, "unchanged") {
+			t.Fatalf("the removal's slot.discarded = %q, want it to name its own save and why large.txt was left out", ev)
+		}
+	})
+	t.Run("a switch that keeps one more file", func(t *testing.T) {
+		h := newHarness(t)
+		sl, pr := h.claimedCheckout(8, h.shaPR8)
+		folder := h.layout.PRSaves("talkable", "talkable", pr.Number)
+		resync := func(want int) {
+			t.Helper()
+			h.now = h.now.Add(time.Minute)
+			strayEdit(t, sl.Path)
+			if err := h.m.Resync(h.ctx, h.slot(sl.Name), h.shaPR7); err != nil {
+				t.Fatalf("Resync: %v", err)
+			}
+			if got := saves(t, folder); len(got) != want {
+				t.Fatalf("saves = %q, want %d", got, want)
+			}
+		}
+		writeFile(t, filepath.Join(sl.Path, "a.txt"), "a\n")
+		resync(1) // against PR #8's head
+		resync(2) // against PR #7's: another patch
+		writeFile(t, filepath.Join(sl.Path, "b.txt"), "b\n")
+		resync(3) // the same patch, one more file kept
+		resync(3) // the same patch and the same files kept: a repeat
+		if ev := h.discarded(t, sl.Name)[3].Message; !strings.Contains(ev, "unchanged") {
+			t.Fatalf("the fourth slot.discarded = %q, want it to name the save it repeats", ev)
+		}
+	})
+}
+
 // fakeSave makes a save named name (its time and slot) in folder, as
 // saveChanges leaves one.
 func fakeSave(t *testing.T, folder, name string) string {

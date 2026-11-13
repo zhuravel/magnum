@@ -117,10 +117,10 @@ type saved struct {
 // note is what a slot.discarded event adds about the save: where it is,
 // and the first maxListed of what it left out.
 func (s saved) note() string {
-	if s.same {
-		return "; unchanged since the save " + s.dir + ", which holds them"
-	}
 	out := "; saved to " + s.dir
+	if s.same {
+		out = "; unchanged since the save " + s.dir + ", which holds them"
+	}
 	if len(s.skipped) > 0 {
 		out += fmt.Sprintf("; the save left out %d: %s", len(s.skipped), clipNames(s.skipped))
 	}
@@ -143,12 +143,12 @@ func clipNames(names []string) string {
 // git does not ignore, within the cap (saveCap); without it saved.txt only
 // names those files, which the step keeps. A file that cannot be read is
 // left out and named, never a failure; a write into the save that fails
-// is one. The files magnum wrote into the
-// tree (the mise file it rendered, the copy_files and what setup wrote:
-// ownFiles) are neither saved nor named, and a save that would hold
-// nothing else is not kept (s.dir is ""); nor is one whose patch is the
-// slot's last save's and that copied no file (s.same, s.dir that save).
-// Saves past SaveKeep in the folder go first (pruneSaveFolder). A save
+// is one. The files magnum wrote into the tree (the mise file it
+// rendered, the copy_files and what setup wrote: ownFiles) are neither
+// saved nor named, and a save that would hold nothing else is not kept
+// (s.dir is ""); nor is one that copied no file and repeats the slot's
+// last save (repeatedSave: s.same, s.dir that save). Saves past SaveKeep
+// in the folder go first (pruneSaveFolder). A save
 // that fails (its folder, the patch, the listing of the untracked files,
 // saved.txt) leaves nothing behind, and the step that called it discards
 // nothing.
@@ -193,14 +193,14 @@ func (m *Manager) saveChanges(ctx context.Context, sl store.Slot, ch changes, un
 // settleSave keeps save s of slot sl, in folder, with its saved.txt (HEAD
 // head, before what), and returns what the slot.discarded event names:
 // itself, nothing for a save that holds nothing (magnum's own files alone),
-// or the slot's last save (lastSave) when s copied no file and its patch is
-// that save's (samePatch), which then stands for it; s is removed in both.
+// or the slot's last save when s copied no file and repeats it
+// (repeatedSave), which then stands for it; s is removed in both.
 func (m *Manager) settleSave(folder string, sl store.Slot, s saved, head, what string) (saved, error) {
 	last := ""
 	if !s.empty() && s.untracked == 0 {
-		last = lastSave(folder, s.dir, sl.Name)
+		last = repeatedSave(folder, sl.Name, s)
 	}
-	if !s.empty() && (last == "" || !samePatch(last, s.dir)) {
+	if !s.empty() && last == "" {
 		return s, s.writeNote(sl, head, what, m.saveCapOr(), m.now())
 	}
 	if err := os.RemoveAll(s.dir); err != nil {
@@ -209,7 +209,7 @@ func (m *Manager) settleSave(folder string, sl store.Slot, s saved, head, what s
 	if last == "" {
 		return saved{}, nil
 	}
-	return saved{dir: last, same: true}, nil
+	return saved{dir: last, same: true, skipped: s.skipped}, nil
 }
 
 // saveRemoved saves the untracked files of slot sl that a removal deletes
@@ -599,6 +599,25 @@ func errText(err error) string {
 // (git status names a wholly untracked folder once).
 const keptListed = 1000
 
+// The lines of saved.txt that start its two lists, each item "- <path>"
+// on a line of its own up to the next empty line (savedLists reads them
+// back): the untracked files the step keeps in the tree, and what the
+// save left out.
+const (
+	keptHeading    = "Untracked, kept in the tree by "
+	leftOutHeading = "Left out ("
+)
+
+// keptLines is how saved.txt lists the untracked files kept in the tree:
+// the first keptListed, then how many more.
+func keptLines(kept []string) []string {
+	out := slices.Clone(kept[:min(len(kept), keptListed)])
+	if more := len(kept) - keptListed; more > 0 {
+		out = append(out, fmt.Sprintf("(+%d more)", more))
+	}
+	return out
+}
+
 // sizeWord is n bytes for a person: bytes, KB or MB.
 func sizeWord(n int64) string {
 	switch {
@@ -627,17 +646,14 @@ func (s saved) writeNote(sl store.Slot, head, what string, limit int64, now time
 			s.untracked, saveFiles, execx.ShellQuote(filepath.Join(s.dir, saveFiles)+"/."), quoted)
 	}
 	if len(s.kept) > 0 {
-		fmt.Fprintf(&b, "\nUntracked, kept in the tree by %s and not saved (%d):\n", what, len(s.kept))
-		for _, p := range s.kept[:min(len(s.kept), keptListed)] {
+		fmt.Fprintf(&b, "\n%s%s and not saved (%d):\n", keptHeading, what, len(s.kept))
+		for _, p := range keptLines(s.kept) {
 			b.WriteString("- " + p + "\n")
-		}
-		if more := len(s.kept) - keptListed; more > 0 {
-			fmt.Fprintf(&b, "- (+%d more)\n", more)
 		}
 	}
 	if len(s.skipped) > 0 {
-		fmt.Fprintf(&b, "\nLeft out (a save keeps %s at most, only regular files and symlinks it can read and write, and never a file git ignores or magnum wrote):\n",
-			sizeWord(limit))
+		fmt.Fprintf(&b, "\n%sa save keeps %s at most, only regular files and symlinks it can read, and never a file git ignores or magnum wrote):\n",
+			leftOutHeading, sizeWord(limit))
 		for _, p := range s.skipped {
 			b.WriteString("- " + p + "\n")
 		}

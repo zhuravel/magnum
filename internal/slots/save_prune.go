@@ -4,9 +4,10 @@ package slots
 // its folder's name starts with), then pruned: by the next save in its
 // folder (saveChanges) and by each daemon's prune of every folder of saves
 // (PruneSaves over paths.Layout.ReviewSaveFolders or FactorySaveFolders),
-// for the PRs that never save again. A save whose changes.diff is the same,
-// byte for byte, as the newest save of the same slot in its folder, and
-// that copied no untracked file, is not kept (lastSave, samePatch):
+// for the PRs that never save again. A save that copied no untracked file
+// and repeats the newest save of the same slot in its folder (its
+// changes.diff the same, byte for byte, and its saved.txt naming the same
+// files left out and kept in the tree) is not kept (repeatedSave):
 // post_checkout's residue saves once, not at every round.
 
 import (
@@ -117,6 +118,51 @@ func pruneSaveFolder(folder string, now time.Time) (int, error) {
 		n++
 	}
 	return n, errors.Join(errs...)
+}
+
+// repeatedSave is the newest save of slot in folder (lastSave) when save s,
+// at s.dir, which copied no file, repeats it: the same changes.diff
+// (samePatch), and the same files left out and kept in the tree, as its
+// saved.txt names them (savedLists); "" when it does not. A save left out
+// a file or kept one in the tree that the other did not, or for another
+// reason, is no repeat: the earlier save does not say so.
+func repeatedSave(folder, slot string, s saved) string {
+	last := lastSave(folder, s.dir, slot)
+	if last == "" || !samePatch(last, s.dir) {
+		return ""
+	}
+	kept, skipped, ok := savedLists(last)
+	if !ok || !slices.Equal(kept, keptLines(s.kept)) || !slices.Equal(skipped, s.skipped) {
+		return ""
+	}
+	return last
+}
+
+// savedLists reads the two lists of the saved.txt of the save at dir, as
+// writeNote writes them: the untracked files kept in the tree (keptLines)
+// and what the save left out; false for a saved.txt it cannot read.
+func savedLists(dir string) (kept, skipped []string, ok bool) {
+	b, err := os.ReadFile(filepath.Join(dir, saveNote))
+	if err != nil {
+		return nil, nil, false
+	}
+	var list *[]string
+	for line := range strings.Lines(string(b)) {
+		line = strings.TrimSuffix(line, "\n")
+		switch {
+		case strings.HasPrefix(line, keptHeading):
+			list = &kept
+		case strings.HasPrefix(line, leftOutHeading):
+			list = &skipped
+		case line == "":
+			list = nil
+		case list != nil:
+			if item, ok := strings.CutPrefix(line, "- "); ok {
+				*list = append(*list, item)
+			}
+		}
+	}
+	return kept, skipped, true
 }
 
 // lastSave is the newest save of slot in folder but the one at dir (by its
