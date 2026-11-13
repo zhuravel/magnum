@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -886,10 +887,17 @@ func TestLsofListenersReadsTheListenersAndTheirDirectories(t *testing.T) {
 
 // The real spawn starts the server with the factory's shims first on its
 // PATH, BROWSER=true and none of the variables the copies never inherit.
+// The fake mise writes its env to a FIFO that the test reads to the end
+// (readFIFO), so the test waits for all of env's output, however long a
+// busy machine takes to start the server, and never reads a file that env
+// is still writing.
 func TestSpawnServerGivesTheServerTheShimsAndNoSecrets(t *testing.T) {
 	storetest.Serial(t)
 	bin := t.TempDir()
 	out := filepath.Join(t.TempDir(), "env")
+	if err := syscall.Mkfifo(out, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(bin, "mise"), []byte("#!/bin/sh\nenv > '"+out+"'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -904,14 +912,7 @@ func TestSpawnServerGivesTheServerTheShimsAndNoSecrets(t *testing.T) {
 	if _, err := r.c.spawnServer(r.ctx, c.Path, c.Env, "bin/worktree-run", r.c.serverLog(c.Name), r.c.serverPidFile(c.Name)); err != nil {
 		t.Fatal(err)
 	}
-	var env []byte
-	for range 200 {
-		if b, err := os.ReadFile(out); err == nil && strings.Contains(string(b), "PATH=") {
-			env = b
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	env := readFIFO(t, out)
 	lines := strings.Split(string(env), "\n")
 	for _, want := range []string{"PATH=" + r.cfg.Layout.FactoryShims() + ":" + path, "BROWSER=true"} {
 		if !slices.Contains(lines, want) {
@@ -920,5 +921,35 @@ func TestSpawnServerGivesTheServerTheShimsAndNoSecrets(t *testing.T) {
 	}
 	if strings.Contains(string(env), "GH_TOKEN") {
 		t.Errorf("the server's env has GH_TOKEN:\n%s", env)
+	}
+}
+
+// readFIFO reads the FIFO at path from the moment a writer opens it until
+// its last writer closes it. If no writer has closed it within a minute, it
+// opens the write end itself, so a read still waiting for a writer ends, and
+// fails t.
+func readFIFO(t *testing.T, path string) []byte {
+	t.Helper()
+	type read struct {
+		b   []byte
+		err error
+	}
+	done := make(chan read, 1)
+	go func() {
+		b, err := os.ReadFile(path)
+		done <- read{b, err}
+	}()
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		return r.b
+	case <-time.After(time.Minute):
+		if w, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+			_ = w.Close()
+		}
+		t.Fatalf("no writer of %s closed it within a minute", path)
+		return nil
 	}
 }
