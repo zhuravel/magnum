@@ -18,7 +18,6 @@ import (
 	"fmt"
 
 	"github.com/zhuravel/magnum/internal/fixwork"
-	"github.com/zhuravel/magnum/internal/store"
 )
 
 // errNotMagnums is a fixer start refused because magnum does not fix the
@@ -63,13 +62,4 @@ func (e *Engine) ownerRefusal(ctx context.Context, label string, prID int64) err
 	}
 	return ownerRefused{fmt.Sprintf("%s is returning from the factory to magnum (since %s); no fixer starts on it until magnum takes it back",
 		label, waitClock(o.At, e.now()))}
-}
-
-// ownerRefusalOf is ownerRefusal of pr, named by its repository's row.
-func (e *Engine) ownerRefusalOf(ctx context.Context, pr store.PR) error {
-	label := fmt.Sprintf("PR %d", pr.ID)
-	if repo, err := e.st.RepoByID(ctx, pr.RepoID); err == nil {
-		label = fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
-	}
-	return e.ownerRefusal(ctx, label, pr.ID)
 }

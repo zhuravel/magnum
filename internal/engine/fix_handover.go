@@ -107,7 +107,7 @@ func (e *Engine) handoverRefusal(ctx context.Context, pr store.PR, by string, pr
 	}
 	switch handing, err := e.handingOver(ctx, pr); {
 	case err != nil:
-		return fmt.Errorf("PR #%d: whether it hands over to the factory cannot be read (%v): %w", pr.Number, err, errFixHandingOver)
+		return fmt.Errorf("PR #%d: whether it hands over to the factory cannot be read (%w): %w", pr.Number, err, errFixHandingOver)
 	case handing:
 		return fmt.Errorf("PR #%d hands over to the factory (`magnum fix --handover`): magnum starts no new loop on it: %w", pr.Number, errFixHandingOver)
 	}
@@ -145,7 +145,7 @@ func (e *Engine) handOverOne(ctx context.Context, repo store.Repo, pr store.PR, 
 	case !e.ownPR(pr):
 		return "", fmt.Errorf("PR #%d is %s's, not yours: the factory fixes your own PRs alone", pr.Number, cmp.Or(deref(pr.AuthorLogin), "someone else"))
 	case err != nil:
-		return "", fmt.Errorf("%s: who fixes this PR cannot be read (%v): nothing changed", label, err)
+		return "", fmt.Errorf("%s: who fixes this PR cannot be read (%w): nothing changed", label, err)
 	case ok && o.Factory():
 		return fmt.Sprintf("the factory fixes %s already (since %s)", label, waitClock(o.At, e.now())), nil
 	case ok:
@@ -372,7 +372,7 @@ func (e *Engine) returnToMagnum(ctx context.Context, repo store.Repo, pr store.P
 	o, raw, ok, err := e.fixOwner(ctx, pr.ID)
 	switch {
 	case err != nil:
-		return "", fmt.Errorf("%s: who fixes this PR cannot be read (%v): nothing changed", label, err)
+		return "", fmt.Errorf("%s: who fixes this PR cannot be read (%w): nothing changed", label, err)
 	case !ok:
 		return e.callOffHandover(ctx, repo, pr, dry)
 	case !o.Factory():

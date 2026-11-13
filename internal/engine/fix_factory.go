@@ -132,7 +132,7 @@ func (e *Engine) requestFixAttention(ctx context.Context, p fixwork.AttentionPay
 	why := oneLine(strings.TrimSpace(p.Why), 500)
 	switch o, _, ok, err := e.fixOwner(ctx, pr.ID); {
 	case err != nil:
-		return "", fmt.Errorf("%s: who fixes this PR cannot be read (%v)", label, err)
+		return "", fmt.Errorf("%s: who fixes this PR cannot be read (%w)", label, err)
 	case !ok || !o.Factory():
 		return "", fmt.Errorf("%s: the factory does not fix this PR: its attention is magnum's", label)
 	case !attentionCauseRe.MatchString(p.Cause):

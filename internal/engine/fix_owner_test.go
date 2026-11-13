@@ -58,44 +58,57 @@ func TestEveryStartPathRefusesAFactoryOwnedPR(t *testing.T) {
 		run func(t *testing.T) (h *harness, said string, runs int)
 	}{
 		{"magnum fix", func(t *testing.T) (*harness, string, int) {
+			t.Helper()
 			h, _ := fixHarness(t)
 			fixablePR(h, "zhuravel", map[string]int{"P2": 2})
 			factoryOwns(h)
-			return h, h.refusedFix(FixPayload{}), 0
+			said := h.refusedFix(FixPayload{})
+			return h, said, 0
 		}},
 		{"magnum fix --dry-run", func(t *testing.T) (*harness, string, int) {
+			t.Helper()
 			h, _ := fixHarness(t)
 			fixablePR(h, "zhuravel", map[string]int{"P2": 2})
 			factoryOwns(h)
-			return h, h.refusedFix(FixPayload{DryRun: true}), 0
+			said := h.refusedFix(FixPayload{DryRun: true})
+			return h, said, 0
 		}},
 		{"magnum fix during a drain, which holds a fix", func(t *testing.T) (*harness, string, int) {
+			t.Helper()
 			h, _ := fixHarness(t)
 			fixablePR(h, "zhuravel", map[string]int{"P2": 2})
 			h.e.setKV(h.ctx, KVDaemonDraining, store.FormatTime(h.clock.Now()))
 			factoryOwns(h)
-			return h, h.refusedFix(FixPayload{}), 0
+			said := h.refusedFix(FixPayload{})
+			return h, said, 0
 		}},
 		{"magnum fix --decide", func(t *testing.T) (*harness, string, int) {
+			t.Helper()
 			h, _ := fixHarness(t)
 			fixablePR(h, "zhuravel", map[string]int{"P2": 2})
 			factoryOwns(h)
-			return h, h.refusedFix(FixPayload{Decide: []FixDecision{{Thread: 4100, Text: "keep it"}}}), 0
+			said := h.refusedFix(FixPayload{Decide: []FixDecision{{Thread: 4100, Text: "keep it"}}})
+			return h, said, 0
 		}},
 		{"magnum fix --ci", func(t *testing.T) (*harness, string, int) {
+			t.Helper()
 			h, _ := fixHarness(t)
 			fixablePR(h, "zhuravel", map[string]int{"P2": 2})
 			factoryOwns(h)
-			return h, h.refusedFix(FixPayload{Mode: FixModeCI}), 0
+			said := h.refusedFix(FixPayload{Mode: FixModeCI})
+			return h, said, 0
 		}},
 		{"magnum merge-parent", func(t *testing.T) (*harness, string, int) {
+			t.Helper()
 			h, mg := mergeHarness(t, withFixerApp)
 			fixablePR(h, "zhuravel", nil)
 			mg.behind = true
 			factoryOwns(h)
-			return h, h.refusedFix(FixPayload{Mode: FixModeMerge}), 0
+			said := h.refusedFix(FixPayload{Mode: FixModeMerge})
+			return h, said, 0
 		}},
 		{"the push of a held merge", func(t *testing.T) (*harness, string, int) {
+			t.Helper()
 			h, mg := holdMerged(t)
 			plan := h.planMerge()
 			runs := len(h.fixRuns(h.pr(2).ID))
@@ -108,6 +121,7 @@ func TestEveryStartPathRefusesAFactoryOwnedPR(t *testing.T) {
 			return h, deref(r.Result), runs
 		}},
 		{"autofix after a round", func(t *testing.T) (*harness, string, int) {
+			t.Helper()
 			logs := &syncBuffer{}
 			h, _ := autofixHarness(t, "zhuravel", findings(map[string]int{"P2": 2}, "COMMENTED"), func(h *harness) { h.d.Logger = newTeeLogger(t, logs) })
 			factoryOwns(h)
@@ -116,6 +130,7 @@ func TestEveryStartPathRefusesAFactoryOwnedPR(t *testing.T) {
 			return h, logs.String(), 0
 		}},
 		{"autofix = open's look", func(t *testing.T) (*harness, string, int) {
+			t.Helper()
 			logs := &syncBuffer{}
 			h, _ := openHarness(t, findings(map[string]int{"P2": 2}, "COMMENTED"), func(h *harness) { h.d.Logger = newTeeLogger(t, logs) })
 			factoryOwns(h)
@@ -128,6 +143,7 @@ func TestEveryStartPathRefusesAFactoryOwnedPR(t *testing.T) {
 			return h, logs.String(), 0
 		}},
 		{"a fix held for the restart, at the start", func(t *testing.T) (*harness, string, int) {
+			t.Helper()
 			h, _ := fixHarness(t)
 			heldFixDuringADrain(t, h)
 			factoryOwns(h)
@@ -138,6 +154,7 @@ func TestEveryStartPathRefusesAFactoryOwnedPR(t *testing.T) {
 			return h, ev.Message, 0
 		}},
 		{"a fix held for a drain, after it", func(t *testing.T) (*harness, string, int) {
+			t.Helper()
 			h, _ := fixHarness(t)
 			heldFixDuringADrain(t, h)
 			factoryOwns(h)
@@ -148,6 +165,7 @@ func TestEveryStartPathRefusesAFactoryOwnedPR(t *testing.T) {
 			return h, ev.Message, 0
 		}},
 		{"a fix held for the fixer's pause, after it", func(t *testing.T) (*harness, string, int) {
+			t.Helper()
 			h, _ := fixHarness(t)
 			pr := heldFixDuringADrain(t, h)
 			factoryOwns(h)
@@ -159,6 +177,7 @@ func TestEveryStartPathRefusesAFactoryOwnedPR(t *testing.T) {
 			return h, ev.Message, 0
 		}},
 		{"a fix held for the GitHub budget, after it", func(t *testing.T) (*harness, string, int) {
+			t.Helper()
 			h, _ := fixHarness(t)
 			pr := heldFixDuringADrain(t, h)
 			factoryOwns(h)
@@ -170,6 +189,7 @@ func TestEveryStartPathRefusesAFactoryOwnedPR(t *testing.T) {
 			return h, ev.Message, 0
 		}},
 		{"a loop's next cycle", func(t *testing.T) (*harness, string, int) {
+			t.Helper()
 			h, git := fixHarness(t)
 			pr := loopToReReview(t, h, git, findings(map[string]int{"P2": 1}, "COMMENTED"), fixPushed2)
 			factoryOwns(h)
@@ -178,6 +198,7 @@ func TestEveryStartPathRefusesAFactoryOwnedPR(t *testing.T) {
 			return h, ev.Message, len(h.fixRuns(pr.ID))
 		}},
 		{"the late settle of an unconfirmed push", func(t *testing.T) (*harness, string, int) {
+			t.Helper()
 			logs := &syncBuffer{}
 			h, _, pr := unconfirmedFixWithLogs(t, logs)
 			runs := len(h.fixRuns(pr.ID))
