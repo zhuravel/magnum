@@ -1189,3 +1189,53 @@ func TestAFixCheckoutOfIdleWorkGoesAtTenMinutesAndARefusedReleaseWaits(t *testin
 		t.Fatalf("%d releases once the backoff passed, want two", n)
 	}
 }
+
+// The fix copies are kept apart in repair and outage, as in claims: a fix
+// claim that finds no fix copy free repairs its broken fix copy at the
+// start, never a broken task copy it cannot take, and a broken fix copy
+// neither makes the tasks' outage nor keeps one from them. No test broke a
+// fix copy (R17 on T3b).
+func TestAFixCopyIsKeptApartInRepairAndOutage(t *testing.T) {
+	r := newFixRig(t, 1, 1)
+	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
+	w := r.prWork("talkable/talkable", 7)
+	r.breakAll("factory1")
+	r.failSetup["factory2"] = 2
+	if _, err := r.c.ClaimFix(r.ctx, w); !errors.Is(err, ErrNoCopy) {
+		t.Fatalf("the fix claim with its copy's setup failing = %v, want a wait", err)
+	}
+	if sl := r.slot("factory2"); sl.State != store.SlotBroken {
+		t.Fatalf("factory2 = %s, want broken", sl.State)
+	}
+	setups := func(n int) int {
+		return len(r.calls("bin/worktree-setup", filepath.Join(r.root, "talkable.factory"+strconv.Itoa(n))))
+	}
+	task, fix := setups(1), setups(2)
+	r.c = r.newCopies() // a restart: each broken copy's start repair is owed
+	if fc := r.claimFix(w); fc.Name != "factory2" {
+		t.Fatalf("the fix claim after the restart took %s, want its repaired fix copy factory2", fc.Name)
+	}
+	if got := setups(2); got != fix+1 {
+		t.Fatalf("factory2's setup ran %d more times, want once: its repair", got-fix)
+	}
+	if got := setups(1); got != task {
+		t.Fatalf("the fix claim repaired the task copy factory1 (%d more setups), which it cannot take", got-task)
+	}
+	if sl := r.slot("factory1"); sl.State != store.SlotBroken {
+		t.Fatalf("factory1 = %s, want still broken: its repair is a task claim's", sl.State)
+	}
+
+	o := newFixRig(t, 2, 1)
+	o.setupStderr = "redis-server: command not found\n"
+	o.pushPR(o.origin, 7, "fix.txt", "v1\n")
+	o.breakAll("factory1", "factory2")
+	o.failSetup["factory3"] = 2
+	o.stderrFor["factory3"] = "createdb: could not connect to the server"
+	if _, err := o.c.ClaimFix(o.ctx, o.prWork("talkable/talkable", 7)); !errors.Is(err, ErrNoCopy) {
+		t.Fatalf("the fix claim with its copy's setup failing = %v, want a wait", err)
+	}
+	outs, err := o.c.Outages(o.ctx)
+	if err != nil || len(outs) != 1 || !strings.Contains(outs[0].Cause, "redis-server: command not found") {
+		t.Fatalf("Outages with both task copies broken one way and the fix copy another = %+v, %v; want the tasks' outage", outs, err)
+	}
+}
