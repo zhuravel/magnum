@@ -721,7 +721,9 @@ func (m *Manager) presentDatabases(ctx context.Context, pool config.Pool, names 
 // changes (tracked or untracked) a human may have made since the checkout
 // (HumanEvidence; the removal guard checked herdr) are a HoldDirtyWorktree;
 // anything else left in the tree is magnum's residue, removed with --force
-// after a slot.discarded event names it.
+// once it is saved and a slot.discarded event names it and the save
+// (noteDiscard). A save that fails refuses the removal, but a forced one,
+// which logs it and goes on: you asked for it.
 func (m *Manager) removeWorktree(ctx context.Context, sl store.Slot, force bool) error {
 	if missing(sl.Path) && missing(sl.MainClone) {
 		return nil
@@ -748,12 +750,12 @@ func (m *Manager) removeWorktree(ctx context.Context, sl store.Slot, force bool)
 			}
 		}
 	}
-	dirty, err := m.noteDiscard(ctx, sl, true)
+	dirty, err := m.noteDiscard(ctx, sl, true, "the removal of the worktree")
 	switch {
 	case err != nil && !force:
 		return err
 	case err != nil:
-		m.logErr(ctx, err, "slots: list the changes in %s before a forced removal: %v", sl.Path, err)
+		m.logErr(ctx, err, "slots: list and save the changes in %s before a forced removal, which removes them unsaved: %v", sl.Path, err)
 	}
 	return m.git.WorktreeRemove(ctx, sl.MainClone, sl.Path, force || dirty)
 }

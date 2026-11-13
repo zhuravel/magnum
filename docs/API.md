@@ -22929,6 +22929,15 @@ func (c *Client) DiffHead(ctx context.Context, dir string, paths ...string) ([]b
     runs no external diff or textconv. A patch over execx.MaxOutput is an error,
     never part of one. It is read-only and does not take the index lock.
 
+func (c *Client) DiffHeadTo(ctx context.Context, dir, file string, paths ...string) error
+    DiffHeadTo writes the binary patch of the work tree at dir against HEAD to
+    file, an absolute path git creates or truncates, as DiffHead makes it but
+    with no rename pairs (`git diff --binary --no-renames HEAD`): a deletion
+    and an addition each patch their own path, so the patch of one path is
+    that path's alone. paths are taken literally from the top; none is every
+    tracked change. Nothing bounds it but the disk: the caller reads its size.
+    It reads the work tree only and does not take the index lock.
+
 func (c *Client) DiffLines(ctx context.Context, dir, base, head string, skip ...string) ([]FileLines, error)
     DiffLines is the diff head made relative to its merge base with base,
     file by file in git's order, with its hunks' places in head's files and
@@ -27597,6 +27606,17 @@ func (l Layout) FactoryPRStatus() string
     for the PRs its tasks published, pr-status/<owner>/<repo>/<number>.json
     (internal/prstatus names one and holds its contract), beside FactoryDB.
 
+func (l Layout) FactoryPRWork(repo string, number int) string
+    FactoryPRWork is the folder of the fix work of PR number of repo
+    (owner/name), <owner>/<name>/pr-<number> under factory/pr-work, nested
+    as FactoryCheckout is. The factory prunes it with the PR's kept refs
+    (refs/magnum/factory-kept/<number>/) once the PR closed or merged.
+
+func (l Layout) FactoryPRWorkSaves(repo string, number int) string
+    FactoryPRWorkSaves is where the saves of the fix checkouts of PR number of
+    repo go (savesDir in FactoryPRWork): what their trees held before a claim's
+    switch, a release or a removal discarded it.
+
 func (l Layout) FactoryPause() string
     FactoryPause is pause.json, the pause `magnum pause` asks of the factory
     daemon (since when, until when, why), beside FactoryDrain.
@@ -27633,6 +27653,10 @@ func (l Layout) FactoryStaging() string
 
 func (l Layout) FactoryTaskDir(id int64) string
     FactoryTaskDir is one task's directory in FactoryTasks, named by its id.
+
+func (l Layout) FactoryTaskSaves(id int64) string
+    FactoryTaskSaves is where the saves of task id's copy go (savesDir in
+    FactoryTaskDir): what its tree held before a release discarded it.
 
 func (l Layout) FactoryTasks() string
     FactoryTasks is the root of the factory's task directories.
@@ -27709,6 +27733,11 @@ func (l Layout) PRReviews(owner, repo string, number int) string
     PRReviews is the root of one PR's review reports: its per-head directories
     (ReviewDir) and what spans its heads (the evidence map).
 
+func (l Layout) PRSaves(owner, repo string, number int) string
+    PRSaves is where the saves of the review slots of one PR go (savesDir in
+    PRReviews): what a slot's tree held before a checkout, a resync, a release
+    or a removal discarded it.
+
 func (l Layout) Pid() string
     Pid is the daemon's pidfile under State.
 
@@ -27733,6 +27762,10 @@ func (l Layout) Reviews() string
 func (l Layout) Skill() string
     Skill is the checkout's judge skill; "" without a checkout (the binary's
     embedded copy is used).
+
+func (l Layout) SlotSaves(slot string) string
+    SlotSaves is where the saves of a checkout that holds no PR go, by its name
+    (a single path element): savesDir/<slot> in the data directory.
 
 func (l Layout) State() string
     State is where logs, locks, the pidfile and the gh config dirs live:
@@ -30702,6 +30735,10 @@ const Refused3730 = "MySQL error 3730 (a table the schema does not know refers t
     Refused3730 names MySQL's refusal in the errors and events of a reset that
     hit it.
 
+const SaveCap = 50 << 20
+    SaveCap bounds what one save keeps, the patch and the untracked files
+    together: past it, a path's patch or a file is left out and named.
+
 const SchemaFile = "db/schema.rb"
     SchemaFile is read for the `define(version: …)` the slot's dev database must
     match after a release.
@@ -31051,24 +31088,24 @@ func (m *Manager) CheckSchema(ctx context.Context, slot store.Slot, pool config.
 func (m *Manager) Checkout(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool, targetSHA string) error
     Checkout puts pr's head into a claimed or held slot that belongs to pr.
     Steps (subject "slot:<name>:pr:<N>:<sha7>", a new generation on every call;
-    each step is idempotent): fetch (refs/pull/N/head → refs/magnum/pr/N,
-    plus origin/<base> for pool slots; when the fetched head differs from
-    targetSHA the fetched head is used and a slot.head_moved event is written),
-    guard, switch (detached at refs/magnum/pr/N, discarding tracked changes the
-    guard took for magnum's residue after a slot.discarded event names them;
-    the target commit is written to the kv store first and checked_out_sha
-    right after, so a retry after a failure in a later step recognizes HEAD as
-    magnum's own switch, not a human's commit), and for pool slots render_mise,
-    deps (pool.post_checkout through mise exec, 30m, when the hash of the
-    LockFiles and the commands differs from lock_sha) and schema (dirty_schema
-    = 1 when the PR changes pool.schema_paths since its merge base with
-    origin/<base>), for per-PR slots render_mise alone (PreparePerPR,
-    as at the worktree's creation: the main clone's local mise file with the
-    [[repo]] strip_env and env as the daemon has them now, its copy_files);
-    finally verify (HEAD == fetched head → checked_out_sha, last_used_at).
-    The slot state is left as it was: moving claimed → busy after the prompt is
-    acked is the engine's job. Read the slot again for the sha actually checked
-    out. pool is ignored for per-PR slots.
+    each step is idempotent): fetch (refs/pull/N/head → refs/magnum/pr/N, plus
+    origin/<base> for pool slots; when the fetched head differs from targetSHA
+    the fetched head is used and a slot.head_moved event is written), guard,
+    switch (detached at refs/magnum/pr/N, discarding tracked changes the guard
+    took for magnum's residue once they are saved and a slot.discarded event
+    names them and the save (noteDiscard); the target commit is written to the
+    kv store first and checked_out_sha right after, so a retry after a failure
+    in a later step recognizes HEAD as magnum's own switch, not a human's
+    commit), and for pool slots render_mise, deps (pool.post_checkout through
+    mise exec, 30m, when the hash of the LockFiles and the commands differs from
+    lock_sha) and schema (dirty_schema = 1 when the PR changes pool.schema_paths
+    since its merge base with origin/<base>), for per-PR slots render_mise
+    alone (PreparePerPR, as at the worktree's creation: the main clone's local
+    mise file with the [[repo]] strip_env and env as the daemon has them now,
+    its copy_files); finally verify (HEAD == fetched head → checked_out_sha,
+    last_used_at). The slot state is left as it was: moving claimed → busy after
+    the prompt is acked is the engine's job. Read the slot again for the sha
+    actually checked out. pool is ignored for per-PR slots.
 
 func (m *Manager) CheckoutFetched(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool, targetSHA, fetched string) error
     CheckoutFetched is Checkout of the head Fetch brought into the slot's main
@@ -31165,9 +31202,9 @@ func (m *Manager) Guard(ctx context.Context, slot store.Slot) error
         agents package sets when someone types into the PR's magnum panes.
 
     Without such evidence changes are magnum's own residue (tests rewriting
-    db/schema.rb, bundle install touching Gemfile.lock, copy_files the repo
-    does not ignore): Guard passes, and the step that discards them records a
-    slot.discarded event naming them (noteDiscard).
+    db/schema.rb, bundle install touching Gemfile.lock, copy_files the repo does
+    not ignore): Guard passes, and the step that discards them saves them first,
+    with a slot.discarded event naming them and the save (noteDiscard).
 
     Drift, unpushed commits and held changes are persisted as hold_reason,
     so the slot stays held until Unpin; live holds (agent, process) on a clean
@@ -31272,28 +31309,29 @@ func (m *Manager) RecreateDatabases(ctx context.Context, slot store.Slot, pool c
 func (m *Manager) Release(ctx context.Context, slot store.Slot, pool config.Pool, reason string) error
     Release hands a claimed or held pool slot back to the pool. Steps (subject
     "slot:<name>:release"): guard (Guard: pins, holds, a human's agent or
-    process, HEAD drift, tracked changes a human made), then the slot moves
-    to releasing, fetch_base, abort_in_progress (a merge, rebase, cherry-pick
-    or revert left in progress, which git would refuse the reset over,
-    is aborted after a slot.discarded event for the tracked changes it drops,
-    with a slot.aborted event: abortInProgress), reset (placeholder branch
-    → origin/<base>, tracked changes discarded after a slot.discarded event,
-    checked_out_sha cleared; origin/<base>'s commit is written to the kv store
-    first, as Checkout's switch does, so a release interrupted after the reset
-    is no head drift), delete_ref (refs/magnum/pr/N, kept for a row of another
-    repository: otherRepository), render_mise, deps, schema_check (resetSchema:
-    a LazySchema pool keeps the databases unless MAX(schema_migrations.version)
-    of the development database differs from the version of the schema recorded
-    for them; otherwise when dirty_schema is set or that version differs from
-    db/schema.rb at HEAD: the slot moves to dirty_schema and pool.reset_db
-    runs through mise exec, 30m; a second failure in a row moves the slot to
-    broken, with its PR released unless it is pinned, and returns ErrBroken,
-    as does a slot whose readiness reset_db failed in BreakAfterResetFailures
-    rounds in a row) and mark_free (store.ReleaseSlot: free, pr_id cleared,
-    assignment closed with reason). A releasing or dirty_schema slot resumes
-    after its last completed step, after Guard ran again: whatever a human did
-    since the last attempt refuses the release before its next destructive step.
-    Per-PR slots are removed instead (RemovePRWorktree semantics).
+    process, HEAD drift, tracked changes a human made), then the slot moves to
+    releasing, fetch_base, abort_in_progress (a merge, rebase, cherry-pick or
+    revert left in progress, which git would refuse the reset over, is aborted
+    after a save and a slot.discarded event for the tracked changes it drops,
+    with a slot.aborted event: abortInProgress), reset (placeholder branch →
+    origin/<base>, tracked changes discarded after a save and a slot.discarded
+    event: noteDiscard, checked_out_sha cleared; origin/<base>'s commit is
+    written to the kv store first, as Checkout's switch does, so a release
+    interrupted after the reset is no head drift), delete_ref (refs/magnum/pr/N,
+    kept for a row of another repository: otherRepository), render_mise, deps,
+    schema_check (resetSchema: a LazySchema pool keeps the databases unless
+    MAX(schema_migrations.version) of the development database differs from
+    the version of the schema recorded for them; otherwise when dirty_schema
+    is set or that version differs from db/schema.rb at HEAD: the slot
+    moves to dirty_schema and pool.reset_db runs through mise exec, 30m;
+    a second failure in a row moves the slot to broken, with its PR released
+    unless it is pinned, and returns ErrBroken, as does a slot whose readiness
+    reset_db failed in BreakAfterResetFailures rounds in a row) and mark_free
+    (store.ReleaseSlot: free, pr_id cleared, assignment closed with reason).
+    A releasing or dirty_schema slot resumes after its last completed step,
+    after Guard ran again: whatever a human did since the last attempt refuses
+    the release before its next destructive step. Per-PR slots are removed
+    instead (RemovePRWorktree semantics).
 
 func (m *Manager) Remove(ctx context.Context, slot store.Slot, pool config.Pool, force bool) error
     Remove tears a pool slot down: steps of subject "slot:<name>:remove" are
@@ -31361,10 +31399,11 @@ func (m *Manager) Resync(ctx context.Context, slot store.Slot, sha string) error
       - abort_in_progress ends a merge, rebase, cherry-pick or revert left in
         progress (the fixer's base merge, fix-sync's replay), which git would
         refuse the switch over (abortInProgress);
-      - switch notes the tracked changes it drops (a slot.discarded event) and
-        records the resulting HEAD as checked_out_sha through the pending-switch
-        key, as a checkout does. A HEAD that already is sha with no tracked
-        changes is only recorded, with no switch.
+      - switch saves and notes the tracked changes it drops (noteDiscard: a save
+        in the PR's folder and a slot.discarded event that names it) and records
+        the resulting HEAD as checked_out_sha through the pending-switch key,
+        as a checkout does. A HEAD that already is sha with no tracked changes
+        is only recorded, with no switch.
 
     Resync can run again after any failure, and again for the same sha.
 
@@ -31382,6 +31421,13 @@ func (m *Manager) RunLogged(ctx context.Context, c execx.Cmd, logName string) er
     stream cut to its last logStreamTail bytes, and the end line. The rotation
     is decided before the begin line for the largest block a command can append,
     so a command's lines land in one file and a log stays under SlotLogMax.
+
+func (m *Manager) SetSaveDir(dir func(sl store.Slot, pr store.PR) string)
+    SetSaveDir names where the saves of a slot's changes go (saveChanges):
+    dir answers the folder for slot sl and the PR row that holds it (the zero PR
+    for none), "" for this package's own (savesFolder). The factory's copies set
+    theirs, a task's folder or a PR work's; call it before the manager's first
+    discard.
 
 func (m *Manager) ShellCmd(dir string, env map[string]string, script, label string, timeout time.Duration) execx.Cmd
     ShellCmd is the command that runs script in dir with env, a per-PR hook's

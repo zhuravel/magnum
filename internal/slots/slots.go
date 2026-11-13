@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
@@ -171,6 +172,10 @@ type Manager struct {
 	git   *gitx.Client
 	mise  string
 	heavy chan struct{} // 1-slot semaphore for heavy commands
+	// saveDir is SetSaveDir's function (nil: savesFolder's own folders);
+	// saveCap bounds a save (0: SaveCap), a test's smaller one.
+	saveDir atomic.Pointer[func(sl store.Slot, pr store.PR) string]
+	saveCap int64
 }
 
 // New returns a Manager.

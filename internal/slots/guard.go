@@ -38,8 +38,8 @@ import (
 //
 // Without such evidence changes are magnum's own residue (tests rewriting
 // db/schema.rb, bundle install touching Gemfile.lock, copy_files the repo
-// does not ignore): Guard passes, and the step that discards them records a
-// slot.discarded event naming them (noteDiscard).
+// does not ignore): Guard passes, and the step that discards them saves them
+// first, with a slot.discarded event naming them and the save (noteDiscard).
 //
 // Drift, unpushed commits and held changes are persisted as hold_reason, so
 // the slot stays held until Unpin; live holds (agent, process) on a clean
@@ -482,12 +482,16 @@ func (m *Manager) holdChanges(ctx context.Context, sl store.Slot, untracked bool
 const maxListed = 20
 
 // noteDiscard runs right before a step that discards the slot's changes (a
-// switch or reset with --discard-changes; with untracked, a worktree removal
-// with --force) and reports whether there are any. It records a
-// slot.discarded event with their counts and the first maxListed paths, so
-// what the guard took for magnum's residue can be audited. A switch or reset
-// keeps untracked files: they count only with untracked.
-func (m *Manager) noteDiscard(ctx context.Context, sl store.Slot, untracked bool) (bool, error) {
+// switch or reset with --discard-changes, an abort; with untracked, a
+// worktree removal with --force; what names the step) and reports whether
+// there are any. It saves the tree first (saveChanges: the tracked changes'
+// patch and the untracked files git does not ignore), unless all it holds
+// is the local mise file magnum rendered, then records a slot.discarded
+// event with their counts, the first maxListed paths and the save, so what
+// the guard took for magnum's residue can be audited and put back. A
+// switch or reset keeps untracked files: they count only with untracked. A
+// save that fails is an error, and the step discards nothing.
+func (m *Manager) noteDiscard(ctx context.Context, sl store.Slot, untracked bool, what string) (bool, error) {
 	if sl.Path == "" || !fsx.Exists(sl.Path) {
 		return false, nil
 	}
@@ -499,18 +503,24 @@ func (m *Manager) noteDiscard(ctx context.Context, sl store.Slot, untracked bool
 	if len(paths) == 0 {
 		return false, nil
 	}
-	listed := strings.Join(paths[:min(len(paths), maxListed)], ", ")
-	if more := len(paths) - maxListed; more > 0 {
-		listed += fmt.Sprintf(" (+%d more)", more)
+	msg := fmt.Sprintf("discarding %s in %s: %s", ch.describe(untracked), sl.Path, clipNames(paths))
+	if len(ch.tracked) > 0 || len(withoutRenderedMiseLocal(sl.Path, slices.Clone(ch.untracked))) > 0 {
+		s, err := m.saveChanges(ctx, sl, ch, what)
+		if err != nil {
+			return false, err
+		}
+		msg += s.note()
 	}
-	m.event(ctx, "slot:"+sl.Name, "info", "slot.discarded",
-		fmt.Sprintf("discarding %s in %s: %s", ch.describe(untracked), sl.Path, listed))
+	m.event(ctx, "slot:"+sl.Name, "info", "slot.discarded", msg)
 	return true, nil
 }
 
-// changes are a working tree's changed paths, relative to its root.
+// changes are a working tree's changed paths, relative to its root:
+// tracked by their path (a rename's destination) and sources, the source
+// paths of renames and copies.
 type changes struct {
 	tracked, untracked []string
+	sources            []string
 }
 
 func (c changes) paths(untracked bool) []string {
@@ -543,7 +553,8 @@ func (m *Manager) worktreeChanges(ctx context.Context, dir string) (changes, err
 }
 
 // changesOf sorts status entries into tracked changes and untracked files. A
-// rename or copy counts once, by its destination path.
+// rename or copy counts once, by its destination path; its source is in
+// sources.
 func changesOf(entries []gitx.StatusEntry) changes {
 	var ch changes
 	for _, e := range entries {
@@ -553,6 +564,9 @@ func changesOf(entries []gitx.StatusEntry) changes {
 			ch.untracked = append(ch.untracked, e.Path)
 		default:
 			ch.tracked = append(ch.tracked, e.Path)
+			if e.OrigPath != "" {
+				ch.sources = append(ch.sources, e.OrigPath)
+			}
 		}
 	}
 	return ch

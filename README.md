@@ -934,6 +934,20 @@ has no changes and none of its commits is missing from the remotes (a person wen
 pushed), the guard takes it as the checkout Magnum expects (a `slot.head_recorded` event) and the round goes
 on; any other moved HEAD is held as before.
 
+What the guard lets go as Magnum's residue is saved before it goes. Before a step drops a slot's tracked
+changes (the switch of a checkout or a resync, the release's reset, the abort of a merge, rebase, cherry-pick or
+revert left in progress) or removes a per-PR worktree with what it holds, Magnum saves the tree into a folder of
+its own in the PR's folder of reports, `reviews/<owner>/<repo>/<N>/saves/<time>-<slot>/` in its data directory
+(`~/.local/share/magnum`; a slot that holds no PR saves under `saves/<slot>/` there): `changes.diff`, the binary
+patch of the tracked changes against HEAD (`git -C <slot> apply <save>/changes.diff` on a checkout at that HEAD
+puts them back), `untracked/`, every untracked file git does not ignore at its path (not the local mise file
+Magnum renders), and `saved.txt`, which says from where, at which HEAD and before what, how to put it back and
+what it left out. A save keeps at most 50 MB: past that, the patch goes path by path and a file is left out,
+each named with its size, as are a symlink (with its target) and a repository inside the tree; files git ignores
+are never saved. The `slot.discarded` event names the save and what it left out (`magnum logs <slot>`). A save
+that fails fails the step, which then discards nothing (a forced removal logs it and goes on). Nothing prunes
+the saves yet.
+
 A round that fails three times on one head (a timeout, an error, a setup failure charged to the PR) parks
 its PR in needs attention. When the cause was Magnum's own (an unknown role, a launch line that broke), the
 fix is a new build, config or prompts, so the attention records what the daemon ran (the build's commit

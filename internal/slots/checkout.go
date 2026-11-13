@@ -95,8 +95,9 @@ func (m *Manager) Reserve(ctx context.Context, pr store.PR, pool config.Pool) (s
 // refs/magnum/pr/N, plus origin/<base> for pool slots; when the fetched head
 // differs from targetSHA the fetched head is used and a slot.head_moved event
 // is written), guard, switch (detached at refs/magnum/pr/N, discarding
-// tracked changes the guard took for magnum's residue after a slot.discarded
-// event names them; the target commit is written to the kv store first and
+// tracked changes the guard took for magnum's residue once they are saved
+// and a slot.discarded event names them and the save (noteDiscard); the
+// target commit is written to the kv store first and
 // checked_out_sha right after, so a retry after a failure in a later step
 // recognizes HEAD as magnum's own switch, not a human's commit), and for
 // pool slots render_mise, deps (pool.post_checkout
@@ -227,7 +228,9 @@ func (m *Manager) checkoutSteps(ctx context.Context, subject string, sl store.Sl
 		return err
 	}
 	if err := m.step(ctx, subject, "switch", func(ctx context.Context) error {
-		m.discarding(ctx, sl)
+		if err := m.discarding(ctx, sl, fmt.Sprintf("the switch to PR #%d's head %s", pr.Number, textx.ShortSHA(sha))); err != nil {
+			return err
+		}
 		return m.switchTo(ctx, sl, gitx.PRRef(pr.Number), sha)
 	}); err != nil {
 		return err
@@ -287,13 +290,14 @@ func (m *Manager) checkoutSteps(ctx context.Context, subject string, sl store.Sl
 	})
 }
 
-// discarding records the tracked changes a switch or reset with
-// --discard-changes is about to drop (noteDiscard); untracked files stay. A
-// failure to list them is logged, never blocks the step.
-func (m *Manager) discarding(ctx context.Context, sl store.Slot) {
-	if _, err := m.noteDiscard(ctx, sl, false); err != nil {
-		m.logErr(ctx, err, "slots: list the changes in %s before discarding them: %v", sl.Path, err)
-	}
+// discarding saves and records the tracked changes a switch or reset with
+// --discard-changes, or an abort, is about to drop (noteDiscard; what names
+// the step); untracked files stay, and are saved with them. A failure to
+// list or save them fails the step, which then drops nothing: a failure to
+// list them was logged, and the step dropped them unsaved.
+func (m *Manager) discarding(ctx context.Context, sl store.Slot, what string) error {
+	_, err := m.noteDiscard(ctx, sl, false, what)
+	return err
 }
 
 // switchTo detaches the slot at ref, whose commit is sha, and records the
@@ -335,7 +339,8 @@ func (m *Manager) switchTo(ctx context.Context, sl store.Slot, ref, sha string) 
 //   - abort_in_progress ends a merge, rebase, cherry-pick or revert left in
 //     progress (the fixer's base merge, fix-sync's replay), which git would
 //     refuse the switch over (abortInProgress);
-//   - switch notes the tracked changes it drops (a slot.discarded event) and
+//   - switch saves and notes the tracked changes it drops (noteDiscard: a
+//     save in the PR's folder and a slot.discarded event that names it) and
 //     records the resulting HEAD as checked_out_sha through the pending-switch
 //     key, as a checkout does. A HEAD that already is sha with no tracked
 //     changes is only recorded, with no switch.
@@ -385,7 +390,7 @@ func (m *Manager) Resync(ctx context.Context, slot store.Slot, sha string) error
 		if was, err = m.git.RevParse(ctx, sl.Path, "HEAD"); err != nil {
 			return err
 		}
-		dropped, err := m.noteDiscard(ctx, sl, false)
+		dropped, err := m.noteDiscard(ctx, sl, false, "the resync to "+textx.ShortSHA(full))
 		if err != nil {
 			return err
 		}
@@ -411,7 +416,8 @@ func (m *Manager) Resync(ctx context.Context, slot store.Slot, sha string) error
 // could not be undone, or that was killed mid-replay (its exit 3), leaves
 // a rebase. Its guard is InProgress: a slot in nothing is left alone, and
 // a resumed step finds nothing once its abort took. The tracked changes
-// the abort drops get their slot.discarded event first (discarding), as a
+// the abort drops are saved and get their slot.discarded event first
+// (discarding; a save that fails fails the step), as a
 // switch's do; the switch then drops what else the tree holds, as it
 // always does. The step runs only where the caller's guard let the slot
 // go: never over a person's changes.
@@ -420,7 +426,9 @@ func (m *Manager) abortInProgress(ctx context.Context, sl store.Slot) error {
 	if err != nil || op == "" {
 		return err
 	}
-	m.discarding(ctx, sl)
+	if err := m.discarding(ctx, sl, "the abort of the "+op+" left in progress"); err != nil {
+		return err
+	}
 	if err := m.git.AbortOperation(ctx, sl.Path, op); err != nil {
 		return err
 	}
@@ -487,9 +495,10 @@ func (m *Manager) markSchema(ctx context.Context, sl store.Slot, pool config.Poo
 // process, HEAD drift, tracked changes a human made), then the slot moves to
 // releasing, fetch_base, abort_in_progress (a merge, rebase, cherry-pick or
 // revert left in progress, which git would refuse the reset over, is
-// aborted after a slot.discarded event for the tracked changes it drops,
-// with a slot.aborted event: abortInProgress), reset (placeholder branch →
-// origin/<base>, tracked changes discarded after a slot.discarded event,
+// aborted after a save and a slot.discarded event for the tracked changes
+// it drops, with a slot.aborted event: abortInProgress), reset (placeholder
+// branch → origin/<base>, tracked changes discarded after a save and a
+// slot.discarded event: noteDiscard,
 // checked_out_sha cleared;
 // origin/<base>'s commit is written to the kv store first, as Checkout's
 // switch does, so a release interrupted after the reset is no head drift),
@@ -574,7 +583,9 @@ func (m *Manager) releaseSteps(ctx context.Context, subject string, sl store.Slo
 		if err := m.d.Store.SetKV(ctx, switchingKey(sl.ID), base); err != nil {
 			return err
 		}
-		m.discarding(ctx, sl)
+		if err := m.discarding(ctx, sl, "the release's reset to origin/"+pool.Base); err != nil {
+			return err
+		}
 		if err := m.git.ResetPlaceholder(ctx, sl.Path, placeholder(sl), pool.Base); err != nil {
 			return err
 		}

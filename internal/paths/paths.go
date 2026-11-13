@@ -339,6 +339,44 @@ func (l Layout) FactoryCheckout(repo string, number int) string {
 	return filepath.Join(l.FactoryCheckouts(), owner, name, "pr-"+strconv.Itoa(number))
 }
 
+// savesDir names the folder of saves in a task's, a PR work's or a PR's
+// folder: what a checkout's tree held before magnum discarded it, one
+// folder per save.
+const savesDir = "saves"
+
+// FactoryTaskSaves is where the saves of task id's copy go (savesDir in
+// FactoryTaskDir): what its tree held before a release discarded it.
+func (l Layout) FactoryTaskSaves(id int64) string {
+	return filepath.Join(l.FactoryTaskDir(id), savesDir)
+}
+
+// FactoryPRWork is the folder of the fix work of PR number of repo
+// (owner/name), <owner>/<name>/pr-<number> under factory/pr-work, nested
+// as FactoryCheckout is. The factory prunes it with the PR's kept refs
+// (refs/magnum/factory-kept/<number>/) once the PR closed or merged.
+func (l Layout) FactoryPRWork(repo string, number int) string {
+	owner, name, _ := strings.Cut(repo, "/")
+	return filepath.Join(l.factoryDir(), "pr-work", owner, name, "pr-"+strconv.Itoa(number))
+}
+
+// FactoryPRWorkSaves is where the saves of the fix checkouts of PR number
+// of repo go (savesDir in FactoryPRWork): what their trees held before a
+// claim's switch, a release or a removal discarded it.
+func (l Layout) FactoryPRWorkSaves(repo string, number int) string {
+	return filepath.Join(l.FactoryPRWork(repo, number), savesDir)
+}
+
+// PRSaves is where the saves of the review slots of one PR go (savesDir in
+// PRReviews): what a slot's tree held before a checkout, a resync, a
+// release or a removal discarded it.
+func (l Layout) PRSaves(owner, repo string, number int) string {
+	return filepath.Join(l.PRReviews(owner, repo, number), savesDir)
+}
+
+// SlotSaves is where the saves of a checkout that holds no PR go, by its
+// name (a single path element): savesDir/<slot> in the data directory.
+func (l Layout) SlotSaves(slot string) string { return filepath.Join(l.data(), savesDir, slot) }
+
 // FactoryPRStatus is the root of the status files the factory daemon writes
 // for the PRs its tasks published, pr-status/<owner>/<repo>/<number>.json
 // (internal/prstatus names one and holds its contract), beside FactoryDB.

@@ -268,7 +268,9 @@ func (m *Manager) perPRSteps(ctx context.Context, subject string, sl store.Slot,
 		if err := m.Guard(ctx, sl); err != nil {
 			return err
 		}
-		m.discarding(ctx, sl)
+		if err := m.discarding(ctx, sl, fmt.Sprintf("the switch to PR #%d's head %s", pr.Number, textx.ShortSHA(sha))); err != nil {
+			return err
+		}
 		return m.git.SwitchDetach(ctx, sl.Path, gitx.PRRef(pr.Number))
 	}); err != nil {
 		return err

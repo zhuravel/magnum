@@ -508,6 +508,38 @@ skill versions); people add theirs to the sections before it, at the end of the 
   the provision; TestACommandAddedBeforeAProvisioningEndsRunsAtTheFirstCheckout (mark_free fails once, a command
   is added, the resume records the old hash and the first checkout runs the new list). Mutations that drop the
   step, run it before the setup or before verify_dbs, or hash again at mark_free, each fail one.
+- **Save before discard** (2026-11-13, task T3c of the fix loop's move into the factory, on the operator's rule
+  that no change goes without a trace). A slot's guard lets the changes it takes for Magnum's residue go (no
+  person's agent or process in the slot, no typing in its PR's panes since the checkout), and the step after it
+  discarded them: a switch or a reset with `--discard-changes`, the abort of an operation left in progress, a
+  per-PR worktree's `worktree remove --force`. The only trace was a `slot.discarded` event naming up to 20 paths;
+  typing in a pane no longer holds a factory fix copy, and a change made from a shell outside the panes shows no
+  person to the guard. Every such step now saves the tree first (`noteDiscard` → `saveChanges`, in
+  internal/slots/save.go), in a folder of its own named `<UTC time>-<slot>`: `changes.diff`, the binary patch of
+  the tracked changes against HEAD with no rename pairs (`gitx.DiffHeadTo`: `git diff --binary --no-renames
+  --output=<file> HEAD`, written by git to the file since a patch can be past the runner's 8 MB output), which
+  `git apply` puts back on that HEAD; `untracked/`, each untracked file git does not ignore (`ls-files --others
+  --exclude-standard`), a regular file read through an `os.Root` of the tree, but the local mise file Magnum
+  rendered; and `saved.txt`, what, from where, at which HEAD, before which step, how to put it back and what
+  it left out. The `slot.discarded` event names the save. Untracked files are saved at a switch too, which keeps
+  them, so a save is the whole tree's picture; a tree whose only change is the rendered mise file saves nothing.
+  - Bounds: ignored files are never saved (a tree's caches and builds, which a switch keeps). One save keeps at
+    most 50 MB (`SaveCap`) of the patch and the files together; a whole patch past it is written path by path,
+    each path's patch that still fits, and a file past what is left is left out; each is named with its size in
+    the event (its first 20) and in `saved.txt` (all), as is a symlink (with its target, its whole content) and a
+    repository inside the tree. A save that cannot be made fails the step, which then discards nothing (a failure
+    to list the changes was logged and the step went on); a forced removal, which you asked for, logs it and goes
+    on, as before.
+  - Where: a review slot's saves go in its PR's folder of reports (`paths.Layout.PRSaves`:
+    `reviews/<owner>/<repo>/<N>/saves/`), a slot that holds no PR's under `saves/<slot>/` of the data directory
+    (`SlotSaves`). The factory names its own folders for its copies and fix checkouts
+    (`slots.Manager.SetSaveDir`). Nothing prunes a review slot's saves yet: they are small (a lockfile or a
+    schema rewritten), and a prune of the PR's folder of reports does not exist either.
+  - Tests, failing first: `TestASwitchSavesTrackedAndUntrackedChangesBeforeItDiscardsThem` (the patch, a binary
+    change and a deletion included, applies on the old HEAD; the untracked file is saved, ignored ones and the
+    mise file are not; a clean switch saves nothing), `TestAnAbortAndAReleaseSaveWhatTheyDrop` and
+    `TestTheSaveSkipsIgnoredFilesAndNamesWhatTheCapSkipped` (a cap of 1500 bytes: the patch path by path, a file
+    past the cap, a symlink, named in the event and in `saved.txt`; an ignored file neither saved nor named).
 
 ## Scheduling
 
