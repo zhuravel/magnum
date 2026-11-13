@@ -19292,6 +19292,54 @@ skill versions); people add theirs to the sections before it, at the end of the 
     the review refusal fail open after a grace, with a warn event and a doctor line while they do. The move starts
     only after the held merge, confirm-push and the first phase of pause and drain landed; the readers of the fix
     data move in the same commits as the data; only the fixer role may carry an identity.
+- **Magnum's half of the owner interlock** (2026-11-13, T2 of the move; the engine owner's rules above). Magnum
+  is the arbiter of who fixes a PR, and a PR changes owner only at a quiet point.
+  - The owner row. `pr.<id>.fix_owner` is a key-value row (no migration), with its key, type and parser in
+    internal/fixwork (owner.go), so the factory reads the same row with the same type. It names the factory or
+    "returning", the time of the flip (the factory keys its one import by it) and who flipped it; no row means
+    magnum. A row that does not read is a failed read, never no row. testdata/owner holds the rows as this build
+    writes them (TestOwnerRowsWrittenByThisBuildDecodeInFixwork).
+  - The fixer side fails closed. Every path that can create a fix row reads the owner row first and refuses a
+    PR magnum does not fix, and a failed read refuses too: the request handler (each mode of `magnum fix`, a
+    merge of the parent and the push of a held merge), prepareFix and prepareMerge (autofix after a round, the
+    look's start, a held fix, a loop's next cycle), holdFix, startHeldFix (the held fix is dropped, with why),
+    the look of autofix = "open" (it skips the PR) and the late settle of an unconfirmed push. claimFixRow reads
+    the row again under the PR's reservation, right before a loop's row is written; the flip takes the same
+    reservation, so a start and a flip never interleave. TestEveryStartPathRefusesAFactoryOwnedPR enumerates
+    fifteen paths.
+  - The drain proof. fixQuiet is false while any of magnum's fix work is in flight on the PR: a loop's row, a
+    fixer's push record, a held merge, a held fix, magnum's push waiting for its CI, a pending fix or abort
+    request, a fix run whose verdict is not written, a fix job's reservation. Each record names the operator's
+    action (FixRecord): the morning list, `magnum fix --drained`, and a doctor line print them. Two records
+    do not end by themselves and get their drops: `magnum fix --drop-push` and `magnum merge-parent --drop`.
+  - The handover. A request kind of its own, fix_handover, takes one PR, `all` (every own PR, now and later:
+    `fix.handover_all`), `back <pr>` or `back all`. The handover is written first (`pr.<id>.fix_handover`), so
+    no loop nobody asked for starts from then on and a loop in flight ends at its cycle boundary with no next
+    cycle (errFixHandingOver, fix.ended); a `magnum fix` asked by hand still runs its cycle. The flip is a
+    compare-and-set against no row (store.AddKV), in the request's own step when the PR is quiet, else at the
+    tick that finds it quiet.
+  - The way back is one way. `back` returns only a PR the factory has not worked since its import, as its
+    lease says; a lease that cannot be read, or no reader, refuses. It goes through "returning", where neither
+    daemon starts a fixer: the tick takes the row away once a fresh lease read still shows no work, or puts it
+    back to the factory under its first flip (FixOwner.Flipped) when the factory worked it before it saw the
+    return, so the factory imports it no second time.
+  - The review side fails open. Deps.FixLeaseOf reads the factory's lease (FixLease: fixing now, the phase, the
+    head, the cycle and cap, worked since the import, the time of the read). For a PR the factory fixes,
+    dispatch holds the round while the factory's fixer works, waitFor says so, `magnum review` is refused while
+    the factory holds the lease, and the status comment shows its cycle. A failed read holds the round for
+    10 minutes from the first failure (`pr.<id>.fix_lease_unread`), then magnum reviews, with fix.lease_open
+    once and a doctor line. A nil reader is inert (TestAnUnwiredLeaseReaderChangesNothing): nothing is read,
+    held, refused or reported. The reader is factoryread's, from T3a; until it is wired in internal/app the
+    review side behaves as before and `back` refuses.
+  - The factory's requests. ReviewPayload gains FixRef and LocalRound (fixwork's types). A forced re-review
+    with FixRef, taken only for a PR the factory fixes, passes the lease's refusal; the PR keeps the fix until
+    the round that takes it ends, which no lease holds, and the round's end names it in fix.factory_round, in
+    the place ForcedAt has for magnum's own loop. LocalRound is kept and passed on, and not acted on until T5b.
+    fix_attention (fixwork.ReqFixAttention) raises or lifts the attention of a PR the factory fixes, silently.
+    The abort of the factory's forced round is magnum's abort request, unchanged. A kind an older build does
+    not know fails as unknown, and a re-review naming the factory's fix fails on a build before this one with
+    the field it predates (TestAnOlderBuildAnswersTheNewKindsAsUnknown): never run a build older than this one
+    while a PR is factory-owned.
 
 ## The factory (2026-11-03)
 
