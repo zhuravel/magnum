@@ -91,11 +91,25 @@ func factoryLeaseReader(path string, now func() time.Time) func(ctx context.Cont
 // reviews it anyway (the review side fails open).
 const fixLeaseGrace = 10 * time.Minute
 
-// fixLeaseGap is how long after the last failed read of a PR's lease a
-// failed read is a first one again, whose grace starts anew: each tick
-// reads it (sweepLeaseUnreads), every poll interval, so a gap this long
-// means no tick ran (the daemon stopped, or the Mac slept).
+// fixLeaseGap is the least time after the last failed read of a PR's lease
+// at which a failed read is a first one again, whose grace starts anew
+// (leaseGap): each tick reads it (sweepLeaseUnreads), every poll interval,
+// so a gap this long means no tick ran (the daemon stopped, or the Mac
+// slept).
 const fixLeaseGap = fixLeaseGrace / 2
+
+// leaseGapPolls is how many poll intervals a gap between failed reads spans
+// at least before the grace starts anew: a tick and the wait after it take
+// one, and a slow tick (a GitHub outage that stretches the poll) more.
+const leaseGapPolls = 3
+
+// leaseGap is the gap after which a failed read is a first one again:
+// fixLeaseGap, or leaseGapPolls poll intervals when that is longer, so that
+// under a long poll_interval each tick does not start the grace anew, which
+// would never end (as fix_open.go and sleptBefore scale their gaps).
+func (e *Engine) leaseGap() time.Duration {
+	return max(fixLeaseGap, leaseGapPolls*e.cfg.Daemon.PollInterval.Duration)
+}
 
 // KVPRFixLeaseUnread holds, while it lasts, the failed read of the
 // factory's lease of PR prID (LeaseUnread as JSON): the doctor names it.
@@ -289,7 +303,7 @@ func (e *Engine) noteLease(ctx context.Context, pr store.PR, v leaseView) bool {
 		return held
 	}
 	now := e.now()
-	if recorded && now.Sub(u.lastFailure()) > fixLeaseGap { // no failed read for a while: the daemon stopped, or the Mac slept
+	if recorded && now.Sub(u.lastFailure()) > e.leaseGap() { // no failed read for a while: the daemon stopped, or the Mac slept
 		recorded = false
 	}
 	if !recorded {

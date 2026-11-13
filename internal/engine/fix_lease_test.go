@@ -394,6 +394,50 @@ func TestAFailureAfterAGapStartsTheGraceAgain(t *testing.T) {
 	}
 }
 
+// The gap that starts the grace anew is a few poll intervals at least: under
+// a poll_interval of 6 minutes, each tick 6 minutes after the last, the
+// failed reads follow each other, so the grace counts from the first, the
+// round fails open once it ends, and the warn is logged once, not at every
+// tick (C2).
+func TestALongPollIntervalStillFailsOpenAfterTheGrace(t *testing.T) {
+	logs := &syncBuffer{}
+	lease := &fakeLease{}
+	lease.set(FixLease{}, errors.New("database is locked"))
+	const interval = 6 * time.Minute
+	h := newHarness(t, func(h *harness) {
+		h.cfg.Daemon.PollInterval.Duration = interval
+		h.d.FixLeaseOf = lease.reader(h.clock.Now)
+		h.d.Logger = newTeeLogger(t, logs)
+	})
+	h.reviewedPR(2, "b1")
+	factoryOwns(h)
+	pollPR(h, time.Hour, 2, "b2")
+	h.advance(6 * time.Minute) // past the push quiet period
+	pr := h.pr(2)
+	rounds := len(h.rd.all())
+	first := h.clock.Now()
+	h.tick()
+	if got := len(h.rd.all()); got != rounds {
+		t.Fatalf("rounds = %d, want %d: the grace holds the round", got, rounds)
+	}
+	h.advance(interval)
+	h.tick()
+	if u, ok := h.leaseUnread(pr.ID); !ok || !u.Since.Equal(first) {
+		t.Errorf("the failed read = %+v, %v; want its grace from the first failure at %v", u, ok, first)
+	}
+	h.advance(interval)
+	h.tick()
+	if got := len(h.rd.all()); got != rounds+1 {
+		t.Errorf("rounds = %d, want %d: magnum reviews once the grace ends", got, rounds+1)
+	}
+	if n := len(h.fixEvents("fix.lease_open")); n != 1 {
+		t.Errorf("fix.lease_open events = %d, want 1", n)
+	}
+	if n := strings.Count(logs.String(), "its round waits"); n != 1 {
+		t.Errorf("the warn was logged %d times, want once", n)
+	}
+}
+
 // A dry-run daemon, whose registry is a private copy, records a failed
 // lease read as the real one does: it warns once, not at every tick, and
 // shows the fail-open the real daemon would do once the grace ends.
