@@ -564,7 +564,8 @@ func TestAFixClaimSurvivesAFactoryRestart(t *testing.T) {
 // A per-PR checkout goes once the PR's fix work ends: at once when the PR
 // merges or closes, once its work stayed idle for fixIdleEnd, never while
 // the work goes on. Its worktree, its fix ref and its row's hold on it go,
-// with a fix.release event.
+// with a fix.release event. A commit of the fixer's on no remote holds it
+// until the fixer pushes it.
 func TestAPerPRCheckoutIsRemovedWhenThePRsWorkEnds(t *testing.T) {
 	r := newFixRig(t, 1, 0)
 	shop := r.addShop()
@@ -594,6 +595,18 @@ func TestAPerPRCheckoutIsRemovedWhenThePRsWorkEnds(t *testing.T) {
 		return errors.Is(err, os.ErrNotExist) && r.slot("fix-example/shop#"+strconv.Itoa(n)).State == store.SlotRemoved
 	}
 
+	// The fixer's commit, not pushed yet, holds the checkout of the merged PR.
+	r.write(filepath.Join(paths[5], "fix5.txt"), "v2\n")
+	r.gitIn(paths[5], "commit", "--quiet", "-am", "the fixer's fix")
+	h.tick()
+	if removed(5) {
+		t.Fatal("the removal lost the fixer's commit on no remote")
+	}
+	if evs := h.events(0, "fix.release"); len(evs) != 1 || evs[0].Phase != registry.PhaseFail || !strings.Contains(evs[0].Text, "unpushed_commits") {
+		t.Fatalf("fix.release events %+v, want the removal held over the commit on no remote", evs)
+	}
+	r.gitIn(paths[5], "push", "--quiet", "--force", "origin", "HEAD:refs/pull/5/head") // the fixer pushes it
+	r.clock.Add(claimBackoff(1))
 	h.tick()
 	if !removed(5) {
 		t.Fatalf("the checkout of the merged PR is still there (%s)", r.slot("fix-example/shop#5").State)
@@ -608,8 +621,8 @@ func TestAPerPRCheckoutIsRemovedWhenThePRsWorkEnds(t *testing.T) {
 		t.Fatal("a checkout went before its work ended for good")
 	}
 	evs := h.events(0, "fix.release")
-	if len(evs) != 1 || !strings.Contains(evs[0].Text, "removed fix-example/shop#5 of example/shop#5: the PR merged") {
-		t.Fatalf("fix.release events %+v, want the merged PR's removal", evs)
+	if len(evs) != 2 || !strings.Contains(evs[1].Text, "removed fix-example/shop#5 of example/shop#5: the PR merged") {
+		t.Fatalf("fix.release events %+v, want the merged PR's removal once its commit was pushed", evs)
 	}
 
 	r.clock.Add(fixIdleEnd)
