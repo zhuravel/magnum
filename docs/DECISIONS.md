@@ -648,6 +648,45 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `TestAForcedRemovalWhoseSaveFailsSaysItsChangesWentUnsaved`, `TestARemovedSlotKeepsNoSaveFailure` and, in the
     CLI, `TestDoctorNamesNoRemovedSlotsFailingSave`. Each check of C1, C4 and C13 was also proven by a mutation
     that fails its test.
+- **Save before discard, after the engine owner's third check** (2026-11-13, T3c's last P3 follow-ups, on his check
+  of the second round). It lands with T3c, and changes what the three entries above say where they differ.
+  - What the setup wrote is Magnum's only in a worktree the provisioning made (C1). The second round recorded what
+    was new after a setup that ran again over a kept worktree (a revived broken row, a repaired pool slot), but a
+    person may be at work there while it runs (up to 45 minutes), and their new file was then recorded as Magnum's
+    and deleted unsaved. The worktree_add step now records whether it made the worktree or kept a listed one (kv
+    `slot.<id>.tree_added`); over a kept one the record is the copy_files alone, and a removal saves what the
+    setup wrote there as a person's. That costs a save of the setup's files on such a worktree, which a person's
+    lost file does not repay.
+  - A copy_files folder is Magnum's for the files the main clone holds there (C2). The record names the folder as
+    a prefix, and every untracked file under it was dropped, though the copy writes only the main clone's regular
+    files and removes nothing: a person's hand-written file there was deleted unsaved. A path under a folder entry
+    is now Magnum's only when the main clone holds it as a regular file; the record stays a prefix, so a folder of
+    many generated files keeps it small.
+  - A copied file a person edited is named, not saved (b): one that differs from the main clone's copy is left out
+    as "magnum's own, edited, not saved", in `saved.txt` and the event. It is still not saved, since Magnum's files
+    hold the main clone's secrets. A file the main clone holds none of (what the setup wrote) is not compared; one
+    the setup wrote at a path the main clone also holds is, and may be named for nothing.
+  - A read that fails for the whole process fails the save (a): EMFILE, ENFILE and ENOMEM are no reason about the
+    file, which the next attempt reads, so a removal is refused (a forced one goes on) rather than deleting it as
+    one that "cannot be read".
+  - A forced removal keeps what a failed save copied (C3). Failing a save on a write that fails (the second
+    round's C2) made its deferred removal delete the files already copied, and the forced removal then deleted the
+    tree. Under force the save is kept in part: `saved.txt` says it failed part way, with the error, and names every
+    file it does not hold as "not saved: the save failed", past the event's 20 too; a patch that failed is dropped,
+    since a path's patch may be cut short. A save that cannot make its folder keeps nothing, and the event's 20
+    names are then all there is. A save that is not forced stays all or nothing.
+  - The forced warning comes first (C4, C5): `git worktree remove --force` that stops part way (a folder of mode
+    0555) has deleted files, and its retry finds the worktree unlisted and ends the removal, so the "forced, not
+    saved" event is written before git runs, and names the save kept in part, whose `saved.txt` is the full list.
+  - The removal deletes a recorded save failure with no event (C6, words only). The first entry's "a forced
+    removal that went on too" no longer held after the second round: no `slot.save_ok` follows a forced removal
+    whose save failed.
+  - Tests, failing first: `TestASetupOverAKeptWorktreeRecordsOnlyTheCopiedFiles` (it replaces
+    `TestASetupRunAgainRecordsOnlyTheFilesItWrote`, whose setup's file over the kept worktree is now saved),
+    `TestAPersonsFileInACopiedFolderIsSaved`, `TestARemovalNamesMagnumsOwnFilesAPersonEdited`,
+    `TestAReadThatFailsForTheWholeProcessFailsTheSave` (a test's read function, `Manager.readTree`, returns the
+    errors), `TestAForcedRemovalKeepsWhatItsFailedSaveCopied` (serial, the file size limited) and
+    `TestAForcedRemovalWarnsBeforeGitDeletesAnything`.
 
 ## Scheduling
 

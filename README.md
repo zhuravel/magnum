@@ -944,11 +944,16 @@ puts them back), and `saved.txt`, which says from where, at which HEAD and befor
 what it left out. A switch, a reset and an abort keep the untracked files, so their save only names them in
 `saved.txt`; a removal deletes them, so its save copies them into `untracked/`, every untracked file git does not
 ignore at its path, with its owner's permission bits and a symlink as the link (never what it points to), but not
-the files Magnum wrote there: the local mise file it renders, the copy_files of the `[[repo]]` or the `[[pool]]`,
-and what the setup wrote, the untracked files there after it that were not before it
-(`cp -R <save>/untracked/. <slot>` puts them back). A file the removal cannot read (a mode-000 file, one gone
-meanwhile) is left out and named with the reason, and the removal goes on; a write into the save that fails (a
-full disk, a quota, a name the save's folder refuses) fails the save, and the removal deletes nothing.
+the files Magnum wrote there: the local mise file it renders, the copy_files of the `[[repo]]` or the `[[pool]]`
+(of a copied folder, the files the main clone holds there; a file you add in it is yours), and what the setup
+wrote in a worktree its provisioning made, the untracked files there after it that were not before it
+(`cp -R <save>/untracked/. <slot>` puts them back). Over a worktree kept from an earlier attempt, what the setup
+wrote is saved as yours, since you may have written a file there while it ran. A copied file you edited since,
+one that differs from the main clone's, is not saved either, but named "magnum's own, edited, not saved". A
+file the removal cannot read (a mode-000 file, one gone meanwhile) is left out and named with the reason, and the
+removal goes on; a write into the save that fails (a full disk, a quota, a name the save's folder refuses), or a
+read that fails for the whole process (too many open files, no memory), fails the save, and the removal deletes
+nothing.
 A save keeps at most 50 MB: git is stopped at the cap, the patch then goes path by path and a file is left out,
 each named with its size, as is a repository inside the tree (untracked files whose names alone pass 8 MB are
 none saved, and the save says so); files git ignores are never saved. The `slot.discarded` event names the save
@@ -959,8 +964,9 @@ Saves are kept 14 days: the next save in a folder and each daemon's prune (the r
 the factory hourly) delete the older ones. A save or a listing of the changes that fails fails the step, which
 then discards nothing and retries at its next attempt; the first failure of a slot is raised once, a
 `slot.save_failed` event and a toast, and `magnum doctor` names the slot until a save works or the slot is
-removed. A forced removal goes on over a save that fails: its `slot.discarded` event, a warning, names what it
-deleted and says "forced, not saved".
+removed. A forced removal goes on over a save that fails: its `slot.discarded` event, a warning written before
+git deletes anything, names what it deletes and says "forced, not saved"; a save that failed part way keeps what
+it copied, and its `saved.txt`, which the warning names, lists every file it does not hold.
 
 A round that fails three times on one head (a timeout, an error, a setup failure charged to the PR) parks
 its PR in needs attention. When the cause was Magnum's own (an unknown role, a launch line that broke), the
