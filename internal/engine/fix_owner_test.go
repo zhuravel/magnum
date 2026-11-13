@@ -195,14 +195,7 @@ func TestEveryStartPathRefusesAFactoryOwnedPR(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, said, runs := tc.run(t)
-			held, _ := kvValue(h, KVPRFixHeld(h.pr(2).ID))
-			if held != "" { // a held fix stays for the factory's import, never started or dropped
-				h.e.delKV(h.ctx, KVPRFixHeld(h.pr(2).ID))
-				if _, ok := h.fixEvent("fix.dropped"); ok {
-					t.Error("a held fix was dropped")
-				}
-			}
-			wantNoFixerSince(t, h, runs)
+			wantNoFixerSince(t, h, runs) // no held fix either: the held-fix cases checked theirs, kept, and set it aside
 			if !strings.Contains(said, refusal) {
 				t.Errorf("it said %q, want %q", said, refusal)
 			}
@@ -213,7 +206,9 @@ func TestEveryStartPathRefusesAFactoryOwnedPR(t *testing.T) {
 // heldFixOfTheFactory holds a fix of PR #2 through a drain, makes the
 // factory own the PR, ends the drain and takes act, a path that would start
 // the held fix: it fails unless the held fix stays as it was, for the
-// factory's import. It returns what the engine logged.
+// factory's import, and none was dropped. Then it sets the held fix aside,
+// so that its caller's check finds no other. It returns what the engine
+// logged.
 func heldFixOfTheFactory(t *testing.T, act func(h *harness, pr store.PR)) (*harness, string, int) {
 	t.Helper()
 	logs := &syncBuffer{}
@@ -227,6 +222,10 @@ func heldFixOfTheFactory(t *testing.T, act func(h *harness, pr store.PR)) (*harn
 	if now, ok := kvValue(h, KVPRFixHeld(pr.ID)); !ok || now != held {
 		t.Errorf("the held fix = %q, %v; want it kept as %s for the factory's import", now, ok, held)
 	}
+	if _, ok := h.fixEvent("fix.dropped"); ok {
+		t.Error("a held fix was dropped")
+	}
+	h.e.delKV(h.ctx, KVPRFixHeld(pr.ID))
 	return h, logs.String(), 0
 }
 
