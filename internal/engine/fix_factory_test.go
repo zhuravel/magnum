@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -271,6 +272,73 @@ func TestTheEndOfTheFactorysReReviewIsWrittenOnce(t *testing.T) {
 			t.Errorf("fix.factory_round = %s by %q, want stopped by your review", outcome, by)
 		}
 	})
+}
+
+// A clean re-review of the factory's push that holds its approval
+// (approve_after_full_pass reached) posts a comment and forces the full
+// pass from inside its own round (settleApprovalHold). That forced round
+// carries no fix, and must not end the fix the posting round holds (C4):
+// the factory hears the one end of its re-review, posted, with the review,
+// and the full pass that follows carries no fix of the factory's.
+func TestAHeldCleanFactoryReReviewReportsItsPostedEnd(t *testing.T) {
+	h := holdHarness(t, []string{store.VerdictBlocking, store.VerdictBlocking, store.VerdictBlocking, store.VerdictClean})
+	h.rd.mu.Lock()
+	planned := h.rd.script
+	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
+		res, err := planned(in)
+		if err == nil {
+			res.ReviewURL = fmt.Sprintf("https://github.com/talkable/talkable/pull/2#pullrequestreview-%d", res.ReviewID)
+		}
+		return res, err
+	}
+	h.rd.mu.Unlock()
+	h.reviewedPR(2, "b1")
+	pushAndRereview(t, h, "b2")
+	pushAndRereview(t, h, "b3")
+	factoryOwns(h)
+	h.advance(30 * time.Minute)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b4"})
+	h.tick()
+	ref := fixwork.FixRef{Work: 7, Cycle: 3, Head: "b4"}
+	if r := h.reReviewOf(ref); r.State != store.RequestDone {
+		t.Fatalf("the factory's re-review: %s %q", r.State, deref(r.Result))
+	}
+	h.advance(5 * time.Minute)
+	h.tick()
+	ins := h.rd.all()
+	wantHeld(t, "the factory's re-review", ins[len(ins)-1])
+	if pr := h.wantState(2, store.PRRereviewPending); !pr.Forced || deref(pr.LastReviewEvent) != "COMMENTED" {
+		t.Fatalf("after the held re-review: forced %v, event %q; want its comment and the full pass forced", pr.Forced, deref(pr.LastReviewEvent))
+	}
+	var data struct {
+		FixRef    fixwork.FixRef `json:"fix_ref"`
+		Outcome   string         `json:"outcome"`
+		ReviewURL string         `json:"review_url"`
+		By        string         `json:"by"`
+	}
+	ended := func() {
+		t.Helper()
+		evs := h.fixEvents("fix.factory_round")
+		if len(evs) != 1 {
+			t.Fatalf("fix.factory_round events = %+v, want the re-review's one end", evs)
+		}
+		if err := json.Unmarshal(evs[0].Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		if data.FixRef != ref || data.Outcome != pipeline.OutcomePosted || !strings.Contains(data.ReviewURL, "#pullrequestreview-") || data.By != "" {
+			t.Errorf("fix.factory_round = %s, want the fix posted with its review", evs[0].Data)
+		}
+	}
+	ended()
+	if r, raw := h.e.fixRefOf(h.ctx, h.pr(2).ID); r != nil {
+		t.Errorf("the PR keeps the fix after its round: %s", raw)
+	}
+	h.advance(time.Minute)
+	h.tick() // the full pass before the approval
+	if ins := h.rd.all(); len(ins) != 5 || !ins[4].FullPass {
+		t.Fatalf("rounds = %d, want the full pass after the held re-review", len(ins))
+	}
+	ended()
 }
 
 // closePR2 merges PR #2 on GitHub and lets the poll confirm it (twice, a

@@ -65,13 +65,29 @@ func (e *Engine) fixRefRefusal(ctx context.Context, pr store.PR, label string, p
 // for re-reviews (kvPRFixRef), or, for any other forced round (by: who
 // forces it), ends one an earlier request left (endFixRef: stopped, by),
 // whose round this one takes the place of: no end of the factory's fix
-// goes unsaid.
+// goes unsaid. A fix is never ended from inside the round that holds it
+// (C4): the full pass a held approval forces from its own round
+// (settleApprovalHold) leaves the row to that round, whose end names it
+// with its outcome and review (fixRefAfterRound), before the full pass can
+// start.
 func (e *Engine) keepFixRef(ctx context.Context, repo store.Repo, pr store.PR, p ReviewPayload, by string) {
 	if p.FixRef == nil {
+		if e.roundOfFix(pr.ID) {
+			return
+		}
 		e.endFixRef(ctx, repo, pr, pipeline.OutcomeStopped, by)
 		return
 	}
 	e.setKV(ctx, kvPRFixRef(pr.ID), rowJSON(fixRefRow{FixRef: *p.FixRef, LocalRound: p.LocalRound, At: e.now().UTC()}))
+}
+
+// roundOfFix reports whether a round of the factory's fix holds PR prID
+// (roundHandle.fixRef): that round names the fix's end.
+func (e *Engine) roundOfFix(prID int64) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	h := e.rounds[prID]
+	return h != nil && h.fixRef != nil
 }
 
 // fixRefOf is the factory's fix PR prID's forced round re-reviews (nil:
@@ -165,11 +181,7 @@ func (e *Engine) endFixRef(ctx context.Context, repo store.Repo, pr store.PR, ou
 // row goes. A round of the fix in flight, which a close lets run on as one
 // asked for (stopClosedRound), names its own end (fixRefAfterRound).
 func (e *Engine) endFixRefAtClose(ctx context.Context, repo store.Repo, pr store.PR, c closeStop) {
-	e.mu.Lock()
-	h, held := e.rounds[pr.ID]
-	running := held && h.fixRef != nil
-	e.mu.Unlock()
-	if !running {
+	if !e.roundOfFix(pr.ID) {
 		e.endFixRef(ctx, repo, pr, pipeline.OutcomeClosed, c.by())
 	}
 }
