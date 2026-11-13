@@ -150,8 +150,9 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 			sig := r.signature(ctx, st, run)
 			r.mu.Lock()
 			switch {
-			case st.since.IsZero(): // read back after a restart: what the session shows now is what a move is told against,
-				st.sig, st.since = sig, now // and a later pass, never this one, decides: its due time may have passed while the daemon was down
+			case st.since.IsZero(): // read back after a restart: re-armed, never kept (a move while the daemon was down is unseen)
+				r.voidDue(st)               // its "due void"; the role stays on its recoveries' ladder (recovering)
+				st.sig, st.since = sig, now // a fresh no-progress finding from here, and its wait, before any recovery
 				r.mu.Unlock()
 				return Event{}, false
 			case sig != was:

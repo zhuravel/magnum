@@ -133,26 +133,6 @@ func (g *rig) setTaskState(state string) {
 	}
 }
 
-// A recovery that waits after a no-progress finding outlives a restart as
-// such: the restart takes a fresh look at the session (a new baseline) and
-// runs the recovery at its due time unless the session moves, though its
-// session is live.
-func TestANoProgressWaitOutlivesARestart(t *testing.T) {
-	g := newRig(t)
-	g.lostThenResumed("fx-repro", "sid-1")
-	g.h.setStatus(g.agent("fx-repro"), herdr.StatusWorking)
-	g.watchdog()
-	g.clock.Add(NoProgressAfter)
-	g.watchdog() // no progress: recovery 3 waits its 5 minutes
-	starts := len(g.h.startCalls())
-	g.restart()
-	g.watchdog()
-	g.afterWait(3)
-	if got := len(g.h.startCalls()); got != starts+1 {
-		t.Fatalf("%d starts after a restart during a no-progress wait, want the recovery once", got-starts)
-	}
-}
-
 // A waited recovery voided in memory (the session moved again) is voided in
 // its events too: a restart reads no due recovery back.
 func TestAVoidedWaitStaysVoidAfterARestart(t *testing.T) {
@@ -173,33 +153,44 @@ func TestAVoidedWaitStaysVoidAfterARestart(t *testing.T) {
 	}
 }
 
-// A no-progress wait read back after a restart past its due time takes one
-// look at the session before its recovery: a session that works again
-// since is never recovered, and a still one is, at the next pass.
-func TestANoProgressWaitReadBackPastItsDueLooksOnceMore(t *testing.T) {
-	for _, moves := range []bool{true, false} {
+// A no-progress wait read back after a restart, before its due time or
+// past it, is re-armed: it is void (a "due void" event), and the session
+// needs a fresh no-progress finding (NoProgressAfter still) and that
+// finding's wait before any recovery. At the observe cadence (5 s) a
+// session still for a minute after the restart is never quit; one still for
+// the whole fresh finding and its wait is recovered once.
+func TestANoProgressWaitIsReArmedAfterARestart(t *testing.T) {
+	for _, past := range []bool{false, true} {
 		g := newRig(t)
 		g.lostThenResumed("fx-repro", "sid-1")
 		g.h.setStatus(g.agent("fx-repro"), herdr.StatusWorking)
 		g.watchdog()
 		g.clock.Add(NoProgressAfter)
-		g.watchdog() // no progress: recovery 3 waits its 5 minutes
-		starts := len(g.h.startCalls())
-		g.clock.Add(RecoveryWaits[2] + time.Minute) // the daemon is down past the wait's due time
+		g.watchdog() // no progress: the next recovery waits
+		starts, voids := len(g.h.startCalls()), len(g.recoverEvents(dueVoidWord))
+		if past {
+			g.clock.Add(RecoveryWaits[MaxRecoveries-1] + time.Minute) // the daemon is down past the wait's due time
+		}
 		g.restart()
-		g.watchdog() // the first look takes what the session shows
+		pass := func() {
+			g.clock.Add(5 * time.Second)
+			g.watchdog()
+		}
+		g.watchdog() // the first look after the restart
+		for range 12 {
+			pass()
+		}
 		if n := len(g.h.startCalls()); n != starts {
-			t.Fatalf("%d starts in the pass that took the first look after the restart, want none", n-starts)
+			t.Fatalf("past %v: %d starts in a still minute after the restart, want none before a fresh finding", past, n-starts)
 		}
-		if moves {
-			g.h.screen(g.agent("fx-repro"), "Bash(bin/rspec)\nrunning the specs again\n") // it works again
+		if n := len(g.recoverEvents(dueVoidWord)); n != voids+1 {
+			t.Fatalf("past %v: %d due voids after the restart, want the read-back wait voided once", past, n-voids)
 		}
-		g.clock.Add(time.Minute)
-		g.watchdog()
-		g.clock.Add(time.Minute)
-		g.watchdog()
-		if want := map[bool]int{true: starts, false: starts + 1}[moves]; len(g.h.startCalls()) != want {
-			t.Fatalf("session moves %v: %d starts after the restart, want %d", moves, len(g.h.startCalls())-starts, want-starts)
+		for i := 0; i < 300 && len(g.h.startCalls()) == starts; i++ { // 25 minutes at most
+			pass()
+		}
+		if n := len(g.h.startCalls()); n != starts+1 {
+			t.Fatalf("past %v: %d starts for a session still through a fresh finding and its wait, want the recovery once", past, n-starts)
 		}
 	}
 }
@@ -213,7 +204,7 @@ func TestARunThatEndsAfterARestartVoidsItsWait(t *testing.T) {
 	g.h.setStatus(g.agent("fx-repro"), herdr.StatusWorking)
 	g.watchdog()
 	g.clock.Add(NoProgressAfter)
-	g.watchdog() // no progress: recovery 3 waits its 5 minutes
+	g.watchdog() // no progress: the next recovery waits
 	active, err := g.st.ActiveRuns(g.ctx)
 	if err != nil || len(active) != 1 {
 		t.Fatalf("runs in flight %+v, %v; want the recovery turn", active, err)
