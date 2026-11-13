@@ -233,7 +233,9 @@ func (e *Engine) fixEnded(ctx context.Context, res []FixReservation) map[int64]f
 		w, err := e.reg.PRWorkByID(ctx, r.WorkID)
 		switch {
 		case errors.Is(err, registry.ErrNotFound):
-			out[r.WorkID] = fixEnd{w: registry.PRWork{ID: r.WorkID}, why: "its PR's fix work is gone"}
+			// The PR as the checkout's owner row names it: the release
+			// fetches its head and deletes its fix ref.
+			out[r.WorkID] = fixEnd{w: registry.PRWork{ID: r.WorkID, Repo: r.Repo, Number: r.Number}, why: "its PR's fix work is gone"}
 			continue
 		case err != nil:
 			e.log.Warn("read the PR work of a fix checkout", "work", r.WorkID, "err", err)

@@ -70,6 +70,19 @@ func fixOwnerWork(nodeID string) (int64, bool) {
 	return id, err == nil && id > 0
 }
 
+// fixOwnerPR is the PR an owner row stands for, owner/name and its number,
+// read from the URL fixOwner gives it (https://github.com/<owner>/<name>/
+// pull/<N>); "" and 0 for a URL of another form.
+func fixOwnerPR(owner store.PR) (string, int) {
+	rest, ok := strings.CutPrefix(owner.URL, "https://github.com/")
+	repo, n, cut := strings.Cut(rest, "/pull/")
+	number, err := strconv.Atoi(n)
+	if !ok || !cut || err != nil || number < 1 || strings.Count(repo, "/") != 1 {
+		return "", 0
+	}
+	return repo, number
+}
+
 // workKey names PR work w as the events do: owner/name#N.
 func workKey(w registry.PRWork) string { return w.Repo + "#" + strconv.Itoa(w.Number) }
 
@@ -89,12 +102,16 @@ type FixCheckout struct {
 func (f FixCheckout) PerPR() bool { return f.Number == 0 }
 
 // FixReservation is a checkout the fix work of a PR (its pr_work row)
-// holds, from its claim until its release: the checkout's name and whether
-// it is a per-PR checkout.
+// holds, from its claim until its release: the checkout's name, whether it
+// is a per-PR checkout, and the PR as the checkout's owner row names it
+// (Repo, owner/name, and Number), which a release of work whose row is
+// gone reads.
 type FixReservation struct {
 	WorkID   int64
 	Checkout string
 	PerPR    bool
+	Repo     string
+	Number   int
 }
 
 // fixOwner upserts the owner row of PR work w in the agents store: number
@@ -819,7 +836,8 @@ func (c *copySet) FixReserved(ctx context.Context) ([]FixReservation, error) {
 	var out []FixReservation
 	err := c.eachReserved(ctx, func(sl store.Slot, owner store.PR) {
 		if id, ok := fixOwnerWork(owner.NodeID); ok {
-			out = append(out, FixReservation{WorkID: id, Checkout: sl.Name, PerPR: sl.Kind == store.SlotKindPerPR})
+			repo, number := fixOwnerPR(owner)
+			out = append(out, FixReservation{WorkID: id, Checkout: sl.Name, PerPR: sl.Kind == store.SlotKindPerPR, Repo: repo, Number: number})
 		}
 	})
 	if err != nil {

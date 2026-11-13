@@ -15243,10 +15243,13 @@ type FixReservation struct {
 	WorkID   int64
 	Checkout string
 	PerPR    bool
+	Repo     string
+	Number   int
 }
     FixReservation is a checkout the fix work of a PR (its pr_work row) holds,
-    from its claim until its release: the checkout's name and whether it is a
-    per-PR checkout.
+    from its claim until its release: the checkout's name, whether it is a
+    per-PR checkout, and the PR as the checkout's owner row names it (Repo,
+    owner/name, and Number), which a release of work whose row is gone reads.
 
 type FixStopPayload struct {
 	PRRef

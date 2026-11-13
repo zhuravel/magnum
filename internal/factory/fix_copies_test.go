@@ -3,6 +3,7 @@ package factory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -273,7 +274,7 @@ func TestAFixClaimsAFixCopyAtThePRsRemoteHead(t *testing.T) {
 		t.Fatalf("the claim moved the PR's phase to %s; the fix lane moves it", got.Phase)
 	}
 	res, err := r.c.FixReserved(r.ctx)
-	if err != nil || !slices.Equal(res, []FixReservation{{WorkID: w.ID, Checkout: "factory3"}}) {
+	if err != nil || !slices.Equal(res, []FixReservation{{WorkID: w.ID, Checkout: "factory3", Repo: "talkable/talkable", Number: 7}}) {
 		t.Fatalf("FixReserved = %+v, %v, want factory3 for the PR", res, err)
 	}
 
@@ -401,7 +402,7 @@ func TestARepoWithoutCopiesGetsAPerPRCheckoutWithoutDatabases(t *testing.T) {
 		t.Fatalf("the checkout's row = %+v, want a claimed per-PR row with no database, at the head", sl)
 	}
 	res, err := r.c.FixReserved(r.ctx)
-	if err != nil || !slices.Equal(res, []FixReservation{{WorkID: w.ID, Checkout: fc.Name, PerPR: true}}) {
+	if err != nil || !slices.Equal(res, []FixReservation{{WorkID: w.ID, Checkout: fc.Name, PerPR: true, Repo: "example/shop", Number: 5}}) {
 		t.Fatalf("FixReserved = %+v, %v, want the per-PR checkout", res, err)
 	}
 	if tasks, err := r.c.Reserved(r.ctx); err != nil || len(tasks) != 0 {
@@ -547,7 +548,7 @@ func TestAFixClaimSurvivesAFactoryRestart(t *testing.T) {
 	}
 	r.c = r.newCopies() // the restart
 	res, err := r.c.FixReserved(r.ctx)
-	if err != nil || !slices.Equal(res, []FixReservation{{WorkID: w.ID, Checkout: "factory2"}}) {
+	if err != nil || !slices.Equal(res, []FixReservation{{WorkID: w.ID, Checkout: "factory2", Repo: "talkable/talkable", Number: 7}}) {
 		t.Fatalf("FixReserved after the restart = %+v, %v, want factory2 still the PR's", res, err)
 	}
 	fc := r.claimFix(r.work(w.ID))
@@ -835,8 +836,52 @@ func TestAChangeOfFixCopiesMovesThePRsCheckout(t *testing.T) {
 		t.Fatalf("the per-PR checkout = %s, want removed once the PR moved", sl.State)
 	}
 	res, err := r.c.FixReserved(r.ctx)
-	if err != nil || !slices.Equal(res, []FixReservation{{WorkID: w.ID, Checkout: "factory2"}}) {
+	if err != nil || !slices.Equal(res, []FixReservation{{WorkID: w.ID, Checkout: "factory2", Repo: "talkable/talkable", Number: 7}}) {
 		t.Fatalf("FixReserved = %+v, %v, want only factory2", res, err)
+	}
+}
+
+// A fix checkout goes when its PR closes, as when it merges, and when its
+// PR work's row is gone: the release of the gone row's checkout knows the
+// PR from the checkout's owner row, so it fetches the PR's head (what the
+// fixer pushed counts as pushed) and deletes that PR's fix ref. It ran as
+// PR number 0: it skipped the fetch, held a pushed commit as unpushed and
+// deleted refs/magnum/factory-fix/0 (R16 on T3b). Nothing deletes a row
+// today; a claim for work with no row stands for one that went.
+func TestAFixCheckoutGoesWhenItsPRClosesOrItsWorkIsGone(t *testing.T) {
+	r := newFixRig(t, 1, 0)
+	shop := r.addShop()
+	clone := filepath.Join(r.root, "shop")
+	r.pushPR(shop, 5, "fix.txt", "v1\n")
+	r.pushPR(shop, 6, "other.txt", "v1\n")
+	closed := r.prWork("example/shop", 5)
+	if err := r.reg.UpdatePRWork(r.ctx, closed.ID, nil, registry.PRWorkFixing, nil); err != nil {
+		t.Fatal(err)
+	}
+	gone := registry.PRWork{ID: closed.ID + 100, Repo: "example/shop", Number: 6}
+	pc5, pc6 := r.claimFix(closed), r.claimFix(gone)
+	r.commit(pc6.Path, "other.txt", "v2\n")
+	r.gitIn(pc6.Path, "push", "--quiet", "--force", "origin", "HEAD:refs/pull/6/head") // the fixer pushed it
+	mag := &fakeMagnum{prs: map[PRRef]PRState{{Repo: "example/shop", Number: 5}: {GHState: store.GHClosed}}}
+	h := newHarness(t, func(d *Deps) {
+		d.Registry, d.Copies, d.Clock, d.Magnum = r.reg, r.c, r.clock.Now, mag
+	})
+	h.tick()
+	for _, c := range []struct {
+		fc     FixCheckout
+		number int
+		why    string
+	}{{pc5, 5, "the PR closed"}, {pc6, 6, "its PR's fix work is gone"}} {
+		if sl := r.slot(c.fc.Name); sl.State != store.SlotRemoved || fsx.Exists(c.fc.Path) {
+			t.Fatalf("%s = %s, want removed: %s", c.fc.Name, sl.State, c.why)
+		}
+		if got := r.ref(clone, fixRef(c.number)); got != "" {
+			t.Fatalf("%s is still %s after its checkout went", fixRef(c.number), got)
+		}
+		want := fmt.Sprintf("removed %s of example/shop#%d: %s", c.fc.Name, c.number, c.why)
+		if !slices.ContainsFunc(h.events(0, "fix.release"), func(ev registry.Event) bool { return ev.Text == want }) {
+			t.Fatalf("fix.release events %+v, want %q", h.events(0, "fix.release"), want)
+		}
 	}
 }
 
@@ -947,7 +992,7 @@ func TestAPerPRCheckoutIsRemovedWhenThePRsWorkEnds(t *testing.T) {
 		t.Fatal("the checkout of work that waits for its re-review went")
 	}
 	res, err := r.c.FixReserved(r.ctx)
-	if err != nil || !slices.Equal(res, []FixReservation{{WorkID: works[4].ID, Checkout: "fix-example/shop#4", PerPR: true}}) {
+	if err != nil || !slices.Equal(res, []FixReservation{{WorkID: works[4].ID, Checkout: "fix-example/shop#4", PerPR: true, Repo: "example/shop", Number: 4}}) {
 		t.Fatalf("FixReserved = %+v, %v, want only the checkout of the work that goes on", res, err)
 	}
 

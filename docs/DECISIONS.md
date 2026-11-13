@@ -26953,7 +26953,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     (its row's) until its release; its next claim makes it at the new one.
   - The end. Each tick lets go the checkouts of fix work that ended (`payFixDebts`): the PR merged or closed, as
     magnum's registry says, or its work stayed `idle` for 10 minutes, which is how "idle for good" reads (a loop
-    that ended, and no new verdict queued it again meanwhile), or its row is gone. A fix copy goes back to its
+    that ended, and no new verdict queued it again meanwhile), or its row is gone, whose release reads the PR from
+    the checkout's owner row (`FixReservation.Repo` and `Number`, from its URL; it ran as PR 0, skipped the fetch
+    and deleted `refs/magnum/factory-fix/0`: the engine owner's R16 on T3b). A fix copy goes back to its
     pool on its placeholder at `origin/<base>`, a per-PR checkout is removed (its worktree, its fix ref, its row
     let go), each with a `fix.release` event; work that goes on keeps its checkout whatever a restart did. The
     release fetches the PR's head into the fix ref first, so what the fixer pushed counts as pushed, as does the
@@ -26971,7 +26973,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     T3b, `TestAReleaseTakesThePushedHeadWhateverYouTyped` (R1, failing first),
     `TestAForcePushOfThePRDoesNotHoldItsFixCheckout` (R5, failing first),
     `TestAClaimKeepsTheFixersUnpushedCommitsBeforeItSwitches` (R2 and R18, failing first),
-    `TestAChangeOfFixCopiesMovesThePRsCheckout` (R3, R7 and R13's second half, failing first) with
+    `TestAChangeOfFixCopiesMovesThePRsCheckout` (R3, R7 and R13's second half, failing first),
+    `TestAFixCheckoutGoesWhenItsPRClosesOrItsWorkIsGone` (R16, failing first) with
     `TestKeepCommitKeepsOnlyUnderARefOfItsOwn` in internal/gitx and, for code that had no test,
     `TestAClaimTakesTheFixersMovedHeadUnlessYouTyped` (R10).
   - The Redis databases. Copy n's 16 Redis databases start at n × 16 and the fix copies are numbered past the
