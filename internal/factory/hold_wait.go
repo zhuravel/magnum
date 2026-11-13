@@ -62,8 +62,13 @@ func StoppingHold(hs []Hold, t registry.Task) (Hold, bool) {
 
 // HoldWait is the wait a hold gives the task it stops, at now: its who
 // ("held") and its what, the hold's reason and since when ("MySQL does not
-// answer (since 17:03)"; a hold of another day says the day too).
+// answer (since 17:03)"; a hold of another day says the day too). A drain's
+// reason already names its start (restart.go, control.go), so its wait is the
+// reason alone, never a second "(since …)".
 func HoldWait(h Hold, now time.Time) (who, what string) {
+	if h.isDrain() {
+		return waitHeld, h.Reason
+	}
 	return waitHeld, h.Reason + " (since " + holdClock(now, h.Since) + ")"
 }
 

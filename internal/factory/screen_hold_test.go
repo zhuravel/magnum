@@ -115,12 +115,14 @@ func TestTheScreenNamesTheDrainsOnATaskWithNoWait(t *testing.T) {
 	r.task("PR-12390", "bug", "Waits for a copy", registry.TaskActive, "coding", waitCopy, "preparing factory3")
 	working := r.task("PR-12395", "bug", "Writing", registry.TaskActive, "coding", "", "")
 	r.session(working, "fx-writer", "working", screenNow.Add(-8*time.Minute), screenNow.Add(-20*time.Second))
-	drain := Hold{Kind: HoldDrain, Reason: "`magnum factory install --drain` (pid 4300): nothing new starts until the restart", Since: heldSince}
-	reboot := Hold{Kind: HoldReboot, Reason: "draining for a reboot: nothing new starts; `magnum resume` ends it", Since: heldSince}
+	// The drains' reasons carry their start, as restart.go and control.go
+	// write them, so the wait adds no "(since …)" of its own.
+	drain := Hold{Kind: HoldDrain, Reason: "`magnum factory install --drain` (pid 4300, since 09:00:00): nothing new starts until the restart", Since: heldSince}
+	reboot := Hold{Kind: HoldReboot, Reason: "draining for a reboot since Nov 3 09:00: nothing new starts; `magnum resume` ends it", Since: heldSince}
 	for _, h := range []Hold{drain, reboot} {
 		r.holds(h)
 		d := r.data(screenNow)
-		words := h.Reason + " (since 09:00)"
+		words := h.Reason
 		row := rowOf(t, d, "PR-12393")
 		want := tui.WaitsOn{Who: "held", What: words, Short: h.Reason}
 		if len(row.WaitsOn) != 1 || row.WaitsOn[0] != want || row.Mark != tui.MarkWaits {

@@ -27729,8 +27729,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (`HoldDrain`) and the one for a reboot (`HoldReboot`), are: the tick runs the stages, but nothing new starts and
   what they hold back records no wait (a `heldError` of `holdRestart` skips `waitOn`), so a task with none would
   show `-` for as long as a reboot's drain lasts. `StoppingHold` takes a hold that stops every stage first, then
-  a drain (`Hold.isDrain`), and under a drain `o` says `nothing runs: it waits on held: <reason> (since
-  <time>)`; the engine owner's review asked for it. A task with a wait of its own keeps it, which is more
+  a drain (`Hold.isDrain`), and under a drain `o` says `nothing runs: it waits on held: <reason>`; the
+  engine owner's review asked for it. A drain's reason already names its start (`restart.go`, `control.go`),
+  so `HoldWait` adds no second `(since <time>)` to it, as the engine owner's last P3 asked. A task with a wait of its own keeps it, which is more
   specific. `magnum factory status` prints the hold in the row (`held: MySQL does not
   answer (since 17:03)`) and `--json` gives it as the task's `waits_who` and `waits_what`, so a reader of
   those two fields sees what the row says, and as `held_by` (`kind`, `reason`, `since`), so one who needs the

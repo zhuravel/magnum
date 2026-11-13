@@ -142,7 +142,7 @@ func TestAnActiveTaskWithNoWaitShowsTheDrains(t *testing.T) {
 			holdStatusTasks(t, dt)
 			h.Since = time.Now().Add(-40 * time.Minute)
 			writeHolds(t, dt, h)
-			words := h.Reason + " (since " + inspClock(time.Now(), h.Since) + ")"
+			words := h.Reason // a drain's reason carries its start: no second "(since …)"
 
 			if code := dt.run("factory", "status"); code != 0 {
 				t.Fatalf("exit %d, stderr %s", code, dt.stderr)
