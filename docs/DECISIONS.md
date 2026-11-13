@@ -26837,6 +26837,42 @@ skill versions); people add theirs to the sections before it, at the end of the 
     the retro.
   - The interlock, from the factory's side: the factory reads magnum's `pr.<id>.fix_owner` across processes, and a
     failed or stale read starts no fixer.
+- **The factory's foundations for fixing PRs** (2026-11-13, task T3a of the move above). What the fix lane (T4a)
+  stands on, with no fixer started: `[factory] fix` stays `"off"` until the switch day, and while it is off every PR
+  request of the fix lane is answered that the factory does not fix PRs yet, naming the key.
+  - The record: migration `0009_pr_work.sql` of the factory registry, the `pr_work` table, one row per PR (repository,
+    case aside, and number), most with no task. It holds your opt-out, the loop's phase (`idle`, `fixing` or
+    `reviewing`, a CHECK enum), its head, cycle and cap, the factory's lease (holder and end, both or neither), the
+    heads it pushed, its CI records and the open ledger in internal/fixwork's types, so magnum's records import with
+    their format, and `flipped_at`, `imported_at` and `worked_at` (a PR with no `worked_at` may go back to magnum).
+    It reaches the live factory only through `magnum factory install --drain`; the CLI never migrates the factory
+    registry under a running factory daemon. Magnum reads it read only (`factoryread.LeaseOf`): the factory fixes
+    the PR now only in phase `fixing` under a lease that runs, so a factory that stopped holds no review; no row, no
+    table (an older factory) and no registry give the zero lease and no error, and an unreadable file is an error for
+    the review side to decide on (T2).
+  - The factory's one write into magnum.db is a request plus a wake of magnum's daemon (`MagnumWriter`), opened with
+    every migration refused: a magnum.db of another schema, or none, is refused and left as it was.
+  - The PR request kinds (`fix`, `fix_off`, `fix_on`, `fix_done`, `fix_decide`, `fix_ci`, `merge_parent`,
+    `fix_stop`, `handoff`) each have a payload and checks, and the ones with a plan answer a dry run with it and
+    take a y bound to it (head, base, tip, conflicts, held merge, failed checks, assignee; 10 minutes), as the
+    engine's merge of the parent does. Their work is one interface, `PRWorker`, which T4a fills.
+  - Configuration: `[factory] fix` (on or off), `fix_max_active` (2: at most 2 fix loops on the first day),
+    `fix_local_review` and a `[[factory.repo]]`'s `fix_copies` (0). The fixer is the built-in role `fx-fixer`
+    (claude-fix moved here: the fix prompt and the magnum-fix skill), the only factory role that may be a fix role
+    and the only one that may carry an identity, its watch's fix identity resolved as `FixRoleFor` does; no stage
+    names it. Its pane carries that identity's token alone: every other GitHub token variable is blank, and a
+    fixer whose identity does not resolve does not start. The factory daemon copies the fix skill when it starts,
+    into a directory of its own.
+  - `magnum push` holds the lock of its repository and branch for its run and refuses (exit 2) while another
+    agent's push holds it, so magnum's fixer and the factory's never push one branch at once; it now needs magnum's
+    state directory for the lock, and still no config or registry. `magnum factory install` counts a PR work row
+    that is not idle as work in flight: plain install refuses, `--drain` waits for it.
+  - Tests: `TestOnlyTheFixerRoleMayCarryAnIdentity`, `TestTheMagnumWriterRefusesToMigrate`,
+    `TestAFixerPaneCarriesTheAppTokenAlone`, `TestPushRefusesABranchAnotherAgentHolds`,
+    `TestTheFactoryDaemonSnapshotsTheFixSkill`, `TestInstallDrainWaitsForAFixJob`,
+    `TestEveryFixRequestIsAnsweredWhileFixIsOff`, `TestTheLeaseOfAPRWithNoRowIsZero` and
+    `TestAnOlderFactoryRegistryGivesAZeroLease`. `TestTheFactoryStartsNoFixerWithoutAFreshOwnerRow` moved to T4a: T3a
+    starts no fixer, and the owner row's type is T2's.
 
 ## Learned rules
 
