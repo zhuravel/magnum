@@ -1407,10 +1407,10 @@ func (r *copiesRig) onlySave(folder, name string) string {
 }
 
 // A task copy's release saves the changes its reset discards first, in
-// the task's folder (saves/ there): the patch of the tracked changes and
-// the untracked files, which the copy keeps, and handoff.md says where.
-// Only handoff.md's list of up to 20 paths and the slot.discarded event
-// were left.
+// the task's folder (saves/ there): the patch of the tracked changes, and
+// saved.txt names the untracked files, which the copy keeps; handoff.md
+// says where. Only handoff.md's list of up to 20 paths and the
+// slot.discarded event were left.
 func TestATaskCopysReleaseSavesItsChangesBeforeTheReset(t *testing.T) {
 	r := newCopiesRig(t, 1)
 	task := r.task("PR-12345")
@@ -1431,14 +1431,18 @@ func TestATaskCopysReleaseSavesItsChangesBeforeTheReset(t *testing.T) {
 	if patch, err := os.ReadFile(filepath.Join(save, "changes.diff")); err != nil || !strings.Contains(string(patch), "+GEM mine") {
 		t.Fatalf("the saved patch = %q, %v, want your Gemfile.lock", patch, err)
 	}
-	if got, err := os.ReadFile(filepath.Join(save, "untracked", "notes", "plan.txt")); err != nil || string(got) != "my plan\n" {
-		t.Fatalf("the saved untracked file = %q, %v", got, err)
+	if got, err := os.ReadFile(filepath.Join(c.Path, "notes", "plan.txt")); err != nil || string(got) != "my plan\n" {
+		t.Fatalf("the untracked file the reset keeps = %q, %v", got, err)
 	}
-	if _, err := os.Lstat(filepath.Join(save, "untracked", "tmp")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("an ignored file was saved: %v", err)
+	if _, err := os.Lstat(filepath.Join(save, "untracked")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the reset, which keeps them, copied untracked files: %v", err)
 	}
-	if note, err := os.ReadFile(filepath.Join(save, "saved.txt")); err != nil || !strings.Contains(string(note), head) {
-		t.Fatalf("saved.txt = %q, %v, want the HEAD %s it was saved at", note, err, head)
+	note, err := os.ReadFile(filepath.Join(save, "saved.txt"))
+	if err != nil || !strings.Contains(string(note), head) || !strings.Contains(string(note), "notes/") {
+		t.Fatalf("saved.txt = %q, %v, want the HEAD %s it was saved at and the untracked notes/ named", note, err, head)
+	}
+	if strings.Contains(string(note), "tmp/") {
+		t.Fatalf("saved.txt names an ignored file:\n%s", note)
 	}
 	b, err := os.ReadFile(filepath.Join(r.cfg.Layout.FactoryTaskDir(task.ID), HandoffFile))
 	if err != nil || !strings.Contains(string(b), r.cfg.Layout.FactoryTaskSaves(task.ID)) || !strings.Contains(string(b), "Gemfile.lock") {

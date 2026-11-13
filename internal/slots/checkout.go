@@ -292,7 +292,7 @@ func (m *Manager) checkoutSteps(ctx context.Context, subject string, sl store.Sl
 
 // discarding saves and records the tracked changes a switch or reset with
 // --discard-changes, or an abort, is about to drop (noteDiscard; what names
-// the step); untracked files stay, and are saved with them. A failure to
+// the step); untracked files stay, and the save names them. A failure to
 // list or save them fails the step, which then drops nothing: a failure to
 // list them was logged, and the step dropped them unsaved.
 func (m *Manager) discarding(ctx context.Context, sl store.Slot, what string) error {

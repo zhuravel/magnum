@@ -485,12 +485,13 @@ const maxListed = 20
 // switch or reset with --discard-changes, an abort; with untracked, a
 // worktree removal with --force; what names the step) and reports whether
 // there are any. It saves the tree first (saveChanges: the tracked changes'
-// patch and the untracked files git does not ignore), unless all it holds
-// is the local mise file magnum rendered, then records a slot.discarded
-// event with their counts, the first maxListed paths and the save, so what
-// the guard took for magnum's residue can be audited and put back. A
-// switch or reset keeps untracked files: they count only with untracked. A
-// save that fails is an error, and the step discards nothing.
+// patch, and with untracked the untracked files git does not ignore),
+// unless all it holds is the local mise file magnum rendered, then records
+// a slot.discarded event with their counts, the first maxListed paths and
+// the save, so what the guard took for magnum's residue can be audited and
+// put back. A switch or reset keeps untracked files: they count only with
+// untracked, and its save only names them. A save that fails is an error,
+// and the step discards nothing.
 func (m *Manager) noteDiscard(ctx context.Context, sl store.Slot, untracked bool, what string) (bool, error) {
 	if sl.Path == "" || !fsx.Exists(sl.Path) {
 		return false, nil
@@ -505,7 +506,7 @@ func (m *Manager) noteDiscard(ctx context.Context, sl store.Slot, untracked bool
 	}
 	msg := fmt.Sprintf("discarding %s in %s: %s", ch.describe(untracked), sl.Path, clipNames(paths))
 	if len(ch.tracked) > 0 || len(withoutRenderedMiseLocal(sl.Path, slices.Clone(ch.untracked))) > 0 {
-		s, err := m.saveChanges(ctx, sl, ch, what)
+		s, err := m.saveChanges(ctx, sl, ch, untracked, what)
 		if err != nil {
 			return false, err
 		}
