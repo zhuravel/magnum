@@ -213,6 +213,55 @@ func unownedHarness(t *testing.T, lease *fakeLease) *harness {
 	return h
 }
 
+// The live configuration until a PR hands over: the daemon reads the
+// factory's lease (FromApp wires the reader), and no PR has an owner row.
+// Whatever the lease reader says, failing or holding, nothing changes: the
+// round runs at once, `magnum review` is taken, no failed read is recorded
+// or told, no wait names the factory and the status comment shows no fix of
+// the factory's.
+func TestAWiredReaderChangesNothingForAPRWithNoOwnerRow(t *testing.T) {
+	storetest.Parallel(t)
+	for _, tc := range []struct {
+		name  string
+		lease FixLease
+		err   error
+	}{
+		{"a reader that fails", FixLease{}, errors.New("database is locked")},
+		{"a reader whose lease holds", FixLease{Fixing: true, Phase: FixPhaseFixing, Head: "b2", Cycle: 1, Cap: 3}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lease := &fakeLease{}
+			lease.set(tc.lease, tc.err)
+			h := unownedHarness(t, lease)
+			pr := h.pr(2)
+			if w, ok := h.factoryWait(); ok {
+				t.Errorf("a wait on the factory: %+v", w)
+			}
+			rounds := len(h.rd.all())
+			h.tick()
+			if got := len(h.rd.all()); got != rounds+1 {
+				t.Errorf("rounds = %d, want %d: the re-review runs at once", got, rounds+1)
+			}
+			review := h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}})
+			h.handle()
+			if r := h.request(review); r.State != store.RequestDone {
+				t.Errorf("magnum review: %s %q", r.State, deref(r.Result))
+			}
+			if u, ok := h.leaseUnread(pr.ID); ok {
+				t.Errorf("a failed read is recorded: %+v", u)
+			}
+			for _, kind := range []string{"fix.lease_open", "fix.lease_read"} {
+				if ev, ok := h.fixEvent(kind); ok {
+					t.Errorf("%s: %q", kind, ev.Message)
+				}
+			}
+			if st, ok := h.e.factoryFix(h.ctx, h.pr(2)); ok {
+				t.Errorf("the status comment shows the factory's fix: %+v", st)
+			}
+		})
+	}
+}
+
 // When magnum's registry cannot read a PR's owner row, who fixes the PR is
 // not known: dispatch holds its round, as for a fix loop's row that cannot
 // be read, and `magnum review` is refused naming that read, but no failed
