@@ -160,3 +160,55 @@ func TestYarnsFooterIsNoFailureLine(t *testing.T) {
 		t.Fatalf("the failure read %q; want the warning, past yarn's footer", got)
 	}
 }
+
+// A Ruby warning of a gem installed under the copy (BUNDLE_PATH=vendor/bundle,
+// untracked) is no offense: a lint that prints one and then crashes (exit
+// 2) never passes as "1 offense, none on a changed line". A row of a file
+// git tracks in the copy still counts.
+func TestARubyWarningOfAGemUnderTheCopyIsNoOffense(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12613", "bug")
+	r.fix(task)
+	r.commit("PR-12613 the lint's own change", map[string]string{".rubocop.yml": "plugins:\n  - rubocop-rspec_rails\n"})
+	r.lintCrash = func([]string) string {
+		return r.copyDir + "/vendor/bundle/ruby/3.3.0/gems/activesupport-7.0.8/lib/active_support/notifications/fanout.rb:3: " +
+			"warning: mutex_m was loaded from the standard library, but will no longer be part of the default gems\n" +
+			"cannot load such file -- rubocop-rspec_rails\n"
+	}
+	if res, err := r.e.precheck(r.ctx, task, r.cp); err != nil || res.Passed {
+		t.Fatalf("precheck %+v, %v; want the crash's failure, never a pass on a vendored gem's warning", res, err)
+	}
+	r.lintCrash = nil
+	r.lint = func([]string) string { return "README:1:1: warning: a line of a tracked file\n" }
+	if res, err := r.e.precheck(r.ctx, task, r.cp); err != nil || !res.Passed {
+		t.Fatalf("precheck %+v, %v; want a pass: a tracked file's offense on no changed line", res, err)
+	}
+}
+
+// jest's own banners ("● Validation Warning:", "● Validation Error:",
+// "● Deprecation Warning:", "● Multiple configurations found:") name no
+// failing test: a run that names nothing else offers no accept, in the
+// precheck as in the proof.
+func TestJestsBannersNameNoFailingTest(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12614", "bug")
+	r.fix(task)
+	r.mu.Lock()
+	r.adds = map[string]string{"bin/jest": "\u25cf Validation Warning:\n\n  Unknown option \"testURL\" with value \"http://localhost\" was found.\n"}
+	r.mu.Unlock()
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil || res.Passed || !res.unnamed || slices.Contains(optionLabels(fixQuestionOf(res).q), optionAccept) {
+		t.Fatalf("precheck %+v, %v; want the writer's unnamed failure, its question with no accept", res, err)
+	}
+	for _, banner := range []string{"Validation Error:", "Deprecation Warning:", "Multiple configurations found:"} {
+		_, f, unnamed := checkResult{Proof: &Proof{Why: "app/javascript/credit.test.js fails at the head (3f2a1bc)",
+			Head: ProofRun{Exit: 1, Output: "\u25cf " + banner + "\n"}}}.failedCheck()
+		if !unnamed {
+			t.Fatalf("the proof's failures %q for %q are named; want them unnamed", f, banner)
+		}
+	}
+	if fs := jestFailures("\u25cf Deprecation Warning:\nFAIL app/javascript/credit.test.js\n  \u2715 renders the points\n"); !jestNamed(fs) ||
+		slices.Contains(fs, "\u25cf Deprecation Warning:") {
+		t.Fatalf("jest's failures %q; want the failing test named, never the banner", fs)
+	}
+}

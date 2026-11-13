@@ -493,7 +493,10 @@ type precheckRun struct {
 	// (copyFile), read once.
 	added    map[string][]string
 	realCopy string
-	renewed  []context.CancelCauseFunc
+	// tracked caches whether git tracks a file the lint's rows name at the
+	// head (trackedFile).
+	tracked map[string]bool
+	renewed []context.CancelCauseFunc
 }
 
 // readDecisions reads your decisions for the task's checks (stops.json)
@@ -999,8 +1002,8 @@ func (p *precheckRun) lintOnce(cmd, script string, files []string, changed map[s
 			break
 		}
 		file, in := p.copyFile(o.file)
-		if !in { // outside the copy (a gem's line, a Ruby warning of a file it loads): no offense of the change's files
-			continue
+		if !in || !slices.Contains(files, file) && !p.trackedFile(file) { // outside the copy, or a file git does not track
+			continue // there (a gem's under vendor/bundle, a Ruby warning of a file it loads): no offense of the change's files
 		}
 		r.named++
 		_, touched := changed[file]
@@ -1028,6 +1031,23 @@ type namedOffense struct {
 	file string
 	line int
 	text string
+}
+
+// trackedFile reports whether git tracks file (relative to the copy) at the
+// precheck's head: a lint's row of an untracked file (a gem installed
+// under the copy, vendor/bundle, node_modules) names no offense of the
+// change's. A git that cannot tell counts the file as tracked, as before.
+func (p *precheckRun) trackedFile(file string) bool {
+	if known, ok := p.tracked[file]; ok {
+		return known
+	}
+	has, err := p.e.d.Git.HasFile(p.parent, p.c.Path, p.head, file)
+	known := err != nil || has
+	if p.tracked == nil {
+		p.tracked = map[string]bool{}
+	}
+	p.tracked[file] = known
+	return known
 }
 
 // copyFile is file, as a lint printed it, relative to the copy: through

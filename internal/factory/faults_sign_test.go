@@ -109,10 +109,12 @@ func TestALintInAFormatTheFactoryCannotReadIsTheWriters(t *testing.T) {
 // stylelint's exit 2 is its report of offenses (stylelint 17 prints it on
 // stderr, in rows of line:column under the file's line), never a fault: its
 // offenses are read by the changed lines (none here: the change leaves
-// a.css), and nobody is asked.
+// a.css, which master tracks), and nobody is asked.
 func TestStylelintsExit2WithItsReportIsNeverAFault(t *testing.T) {
 	r := newCodingRig(t)
 	r.cfg.Factory.Repos[0].Precheck.Lint = []string{"bin/lint stylelint {files}"}
+	r.moveMaster("app/assets/stylesheets/a.css", "a {}\nb { color: #zzz; }\n")
+	r.git(r.copyDir, "fetch", "--quiet", "origin")
 	task := r.codingTask("PR-12591", "bug")
 	r.fix(task)
 	r.lintCrash = func([]string) string {

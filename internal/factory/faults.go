@@ -293,13 +293,14 @@ var jestFailRe = regexp.MustCompile(`(?m)^\s*(?:FAIL\s+\S+|[✕×]\s+.+|●\s+.+
 // jestFailures are the failing tests jest's output names (stdout and
 // stderr, where jest writes them), each once, read through its colors and
 // with no timing ("(12 ms)"), so the same test failing again is the same
-// failure; its summary lines only when they are all it names.
+// failure; its summary lines and its own banners (jestBannerRe) only when
+// they are all it names.
 func jestFailures(out string) []string {
 	var fs, sums []string
 	for _, m := range jestFailRe.FindAllString(textx.StripTerminal(out), -1) {
 		m = timingRe.ReplaceAllString(strings.TrimSpace(m), "")
 		switch {
-		case jestSummary(m):
+		case jestSummary(m) || jestBannerRe.MatchString(m): // a summary, or jest's own banner: no failing test
 			sums = append(sums, m)
 		case !slices.Contains(fs, m):
 			fs = append(fs, m)
@@ -317,10 +318,15 @@ func jestSummary(f string) bool {
 	return strings.HasPrefix(f, "Tests:") || strings.HasPrefix(f, "Test Suites:")
 }
 
+// jestBannerRe is a banner jest prints of its own ("● Validation Warning:",
+// "● Validation Error:", "● Deprecation Warning:", "● Multiple
+// configurations found:"), which names no failing test.
+var jestBannerRe = regexp.MustCompile(`^●\s+(?:Validation (?:Warning|Error)|Deprecation Warning|Multiple configurations found):?$`)
+
 // jestNamed reports whether jest failures fs (jestFailures) name a failing
-// test or suite, not only the summary lines.
+// test or suite, not only the summary lines and jest's own banners.
 func jestNamed(fs []string) bool {
-	return slices.ContainsFunc(fs, func(f string) bool { return !jestSummary(f) })
+	return slices.ContainsFunc(fs, func(f string) bool { return !jestSummary(f) && !jestBannerRe.MatchString(f) })
 }
 
 // runText is what run printed on stdout and stderr, from the ends the
