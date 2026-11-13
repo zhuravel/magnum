@@ -195,15 +195,14 @@ func (m *Manager) saveChanges(ctx context.Context, sl store.Slot, ch changes, un
 		s = saved{}
 	}()
 	own := m.ownFiles(ctx, sl)
-	listed := withoutRenderedMiseLocal(sl.Path, slices.Clone(ch.untracked))
-	s.unsaved = slices.Concat(ch.tracked, listed) // magnum's own files with them, until they are sorted out
-	if listed, err = withoutOwn(sl.Path, sl.MainClone, listed, own, m.sameMainOr()); err != nil {
-		return s, err
-	}
+	listed, err := m.untrackedListed(ctx, sl, ch.untracked, own, untracked && force)
 	if !untracked { // the step keeps them
 		s.kept, listed = listed, nil
 	}
-	s.unsaved = slices.Concat(ch.tracked, listed)
+	s.unsaved = slices.Concat(ch.tracked, listed) // with err, magnum's own files with them
+	if err != nil {
+		return s, err
+	}
 	if head, err = m.git.RevParse(ctx, sl.Path, "HEAD"); err != nil {
 		return s, err
 	}
@@ -224,6 +223,54 @@ func (m *Manager) saveChanges(ctx context.Context, sl store.Slot, ch changes, un
 	}
 	s.unsaved = nil
 	return m.settleSave(folder, sl, s, head, what)
+}
+
+// untrackedListed is what saveChanges names of the untracked paths of
+// slot sl, git status's (untracked): a person's, without the mise file
+// magnum rendered and its own files (own: withoutOwn). For a forced
+// removal (byFile), which deletes them unsaved if its save fails, a wholly
+// untracked folder that git status names once ("dir/") is listed file by
+// file (filesOfFolders), so that save's saved.txt names each, a person's
+// file in a copied folder too. With a sort that fails (err), it is them
+// all, unsorted.
+func (m *Manager) untrackedListed(ctx context.Context, sl store.Slot, untracked, own []string, byFile bool) ([]string, error) {
+	paths := withoutRenderedMiseLocal(sl.Path, slices.Clone(untracked))
+	var whole []string
+	if byFile {
+		paths, whole = m.filesOfFolders(ctx, sl.Path, paths)
+	}
+	theirs, err := withoutOwn(sl.Path, sl.MainClone, paths, own, m.sameMainOr())
+	if err != nil {
+		return slices.Concat(paths, whole), err
+	}
+	return append(theirs, whole...), nil
+}
+
+// filesOfFolders splits paths, git status's untracked paths of the tree at
+// dir, into files, those that name a file and the untracked files git does
+// not ignore in those that name a wholly untracked folder ("dir/"), one by
+// one (UntrackedFiles; a repository inside the tree stays "dir/"), sorted;
+// and whole, those folders when that listing fails (past the runner's
+// output, git's error), which are named whole, never taken for a copied
+// folder of magnum's.
+func (m *Manager) filesOfFolders(ctx context.Context, dir string, paths []string) (files, whole []string) {
+	for _, p := range paths {
+		if strings.HasSuffix(p, "/") {
+			whole = append(whole, p)
+		} else {
+			files = append(files, p)
+		}
+	}
+	if len(whole) == 0 {
+		return files, nil
+	}
+	in, err := m.git.UntrackedFiles(ctx, dir, whole...)
+	if err != nil {
+		return files, whole
+	}
+	files = append(files, in...)
+	slices.Sort(files)
+	return files, nil
 }
 
 // dropPatch removes what a patch that failed wrote into the save (a path's

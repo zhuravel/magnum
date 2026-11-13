@@ -174,6 +174,73 @@ func TestAForcedRemovalWhoseSaveFailsSaysItsChangesWentUnsaved(t *testing.T) {
 	}
 }
 
+// A forced removal whose save fails before it copies the untracked files
+// (here at the patch, as on a full disk) names each file it deletes
+// unsaved in the saved.txt it keeps, a wholly untracked folder's file by
+// file: git status names such a folder once ("probe/"). When the folder
+// was a copied one ("mocks/"), the record of magnum's own files took that
+// entry for its own, so a person's file in it was named nowhere, and
+// `worktree remove --force` deleted it. The copy as the main clone holds
+// it stays magnum's, unnamed. A folder whose files cannot be listed is
+// named whole, a copied one too.
+func TestAForcedRemovalsFailedSaveNamesEachFileOfAnUntrackedFolder(t *testing.T) {
+	// removed is the saved.txt of a forced removal of a pool slot with a
+	// person's file in the copied mocks/ and in probe/, both wholly
+	// untracked, and a tracked change, whose git fails where fails says.
+	removed := func(t *testing.T, fails func(c execx.Cmd) bool) string {
+		t.Helper()
+		h := newHarness(t)
+		writeFile(t, filepath.Join(h.main, "mocks", "generated.js"), "generated\n")
+		h.pool.CopyFiles = append(h.pool.CopyFiles, "mocks")
+		sl := h.provisioned(1)
+		if !fsx.Exists(filepath.Join(sl.Path, "mocks", "generated.js")) {
+			t.Fatal("the provisioning did not copy mocks/generated.js")
+		}
+		writeFile(t, filepath.Join(sl.Path, "mocks", "userApi.js"), "written by hand\n")
+		writeFile(t, filepath.Join(sl.Path, "probe", "a_spec.rb"), "a\n")
+		writeFile(t, filepath.Join(sl.Path, "probe", "deep", "b_spec.rb"), "b\n")
+		strayEdit(t, sl.Path)
+		h.fake.Rules = append([]execx.Rule{{Prefix: []string{"git"}, Result: execx.Result{Code: 128, Stderr: []byte("fatal: No space left on device\n")}}},
+			h.fake.Rules...)
+		h.run.fakeGit = fails
+
+		if err := h.m.Remove(h.ctx, sl, h.pool, true); err != nil {
+			t.Fatalf("a forced removal: %v", err)
+		}
+		if got := h.slot(sl.Name); got.State != store.SlotRemoved || fsx.Exists(sl.Path) {
+			t.Fatalf("state %s, directory left %v; want a forced removal to go on", got.State, fsx.Exists(sl.Path))
+		}
+		got := saves(t, h.layout.SlotSaves(sl.Name))
+		if len(got) != 1 {
+			t.Fatalf("saves = %q, want the one kept in part", got)
+		}
+		return readFile(t, filepath.Join(got[0], "saved.txt"))
+	}
+	named := func(t *testing.T, note string, paths ...string) {
+		t.Helper()
+		for _, p := range paths {
+			if !strings.Contains(note, "- "+p+" (not saved: the save failed)\n") {
+				t.Fatalf("saved.txt does not name %s as not saved:\n%s", p, note)
+			}
+		}
+	}
+	patch := func(c execx.Cmd) bool { return slices.Contains(c.Args, "--binary") }
+
+	t.Run("each file", func(t *testing.T) {
+		note := removed(t, patch)
+		named(t, note, "Gemfile.lock", "mocks/userApi.js", "probe/a_spec.rb", "probe/deep/b_spec.rb")
+		if strings.Contains(note, "generated.js") || strings.Contains(note, "- mocks/ (") || strings.Contains(note, "- probe/ (") {
+			t.Fatalf("saved.txt names the copy or a folder whole:\n%s", note)
+		}
+	})
+	t.Run("a folder that cannot be listed", func(t *testing.T) {
+		note := removed(t, func(c execx.Cmd) bool {
+			return patch(c) || slices.Contains(c.Args, "--exclude-standard") && !strings.HasSuffix(strings.Join(c.Args, " "), " --")
+		})
+		named(t, note, "Gemfile.lock", "mocks/", "probe/")
+	})
+}
+
 // A forced removal's warning that it deletes changes unsaved is written
 // before `git worktree remove --force` runs, so a removal that git stops
 // part way (here at a folder it may not write, mode 0555) still says what

@@ -719,6 +719,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `TestAFileInACopiedFolderThatIsNotTheMainClonesIsSaved` failed first; the process-wide test has a case for a
     file below the folder, proven by the mutation that turns that check off;
     `TestARemovalNamesMagnumsOwnFilesAPersonEdited` keeps the key alone.
+  - A forced save that fails names each file of a wholly untracked folder (C2, C5). Its list of what it does not
+    hold came from git status, which names such a folder once ("mocks/"), and when that was a copied folder the
+    record's folder entry matched it, so a person's file in it was named nowhere when the save failed before it
+    copied the untracked files (the patch on a full disk, HEAD, the listing, the sort, the tree's root). For a
+    forced removal the save now lists those folders file by file first (`git ls-files --others --exclude-standard`
+    on them alone) and sorts out Magnum's files from that; a folder git cannot list (past the runner's output,
+    git's error) is named whole, a copied one too. It costs a forced removal one listing of its untracked folders,
+    which a save that works lists again; a removal that is not forced and a switch list as before.
+    `TestAForcedRemovalsFailedSaveNamesEachFileOfAnUntrackedFolder` failed first (its patch fails); its case of a
+    folder that cannot be listed fails when that folder goes through the sort.
 
 ## Scheduling
 
