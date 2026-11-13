@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -210,5 +211,72 @@ func TestJestsBannersNameNoFailingTest(t *testing.T) {
 	if fs := jestFailures("\u25cf Deprecation Warning:\nFAIL app/javascript/credit.test.js\n  \u2715 renders the points\n"); !jestNamed(fs) ||
 		slices.Contains(fs, "\u25cf Deprecation Warning:") {
 		t.Fatalf("jest's failures %q; want the failing test named, never the banner", fs)
+	}
+}
+
+// A lint's row whose file git cannot tell tracked or not (ls-tree fails)
+// makes its report one the factory cannot read: the writer's, never a pass
+// on a gem's warning under the copy, nor the crash's way.
+func TestARowGitCannotPlaceMakesTheReportUnreadable(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12615", "bug")
+	r.fix(task)
+	r.setFailGit(func(args []string) error {
+		if slices.Contains(args, "ls-tree") && strings.Contains(strings.Join(args, " "), "vendor/bundle") {
+			return errors.New("fatal: unable to read tree")
+		}
+		return nil
+	})
+	r.lintCrash = func([]string) string {
+		return r.copyDir + "/vendor/bundle/ruby/3.3.0/gems/activesupport-7.0.8/lib/active_support/notifications/fanout.rb:3: " +
+			"warning: mutex_m was loaded from the standard library\ncannot load such file -- rubocop-rspec_rails\n"
+	}
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil || res.Passed || res.ForYou || res.fault != nil || !res.unnamed || !strings.Contains(res.Why, "cannot read") {
+		t.Fatalf("precheck %+v, %v; want the writer's unnamed failure of a report the factory cannot read", res, err)
+	}
+}
+
+// stylelint's syntax row ("45:1  \u2716  Unclosed block  CssSyntaxError") in a
+// file the change touched is the writer's whatever its line, as eslint's
+// Parsing error and RuboCop's Lint/Syntax are.
+func TestAStylelintSyntaxRowOfATouchedFileIsTheWriters(t *testing.T) {
+	r := newCodingRig(t)
+	r.cfg.Factory.Repos[0].Precheck.Lint = []string{"bin/lint stylelint {files}"}
+	task := r.codingTask("PR-12616", "bug")
+	r.fix(task)
+	r.commit("PR-12616 the points' badge", map[string]string{"app/assets/stylesheets/a.css": ".points { color: red; }\n"})
+	r.lintCrash = func([]string) string {
+		return "\napp/assets/stylesheets/a.css\n  45:1  \u2716  Unclosed block  CssSyntaxError\n\n\u2716 1 problem (1 error, 0 warnings)\n\n"
+	}
+	res, err := r.e.precheck(r.ctx, task, r.cp)
+	if err != nil || res.Passed || !strings.Contains(res.Why, "1 offense on the changed lines") {
+		t.Fatalf("precheck %+v, %v; want the writer's syntax error in the touched file", res, err)
+	}
+}
+
+// An unnamed failure is keyed on every meaningful line it prints (noise
+// excluded), each once: the same run reads the same, and a run that lost
+// one of its lines (c.js fixed while a.js still fails) is progress.
+func TestEveryLineOfAnUnnamedFailureIsItsKey(t *testing.T) {
+	read := func(stderr string) []string {
+		return firstFailing(ProofRun{Exit: 1, out: []byte("yarn run v1.22.19\n$ prettier --check src\nChecking formatting...\n"),
+			errOut: []byte(stderr)})
+	}
+	const both = "[warn] src/a.js\n[warn] src/c.js\n[warn] src/a.js\n"
+	a, b, one := read(both), read(both), read("[warn] src/a.js\n")
+	if !slices.Equal(a, []string{"[warn] src/a.js", "[warn] src/c.js"}) || !slices.Equal(a, b) {
+		t.Fatalf("the failure read %q and %q; want every line once, the same on every run", a, b)
+	}
+	const key = "precheck.lint `yarn prettier --check {files}`"
+	turn := func(fs []string) turnFailure {
+		t := turnFailure{Check: key}
+		for _, f := range fs {
+			t.Failures = append(t.Failures, key+": "+f)
+		}
+		return t
+	}
+	if !progressed([]turnFailure{turn(a), turn(b), turn(one)}) || progressed([]turnFailure{turn(a), turn(b), turn(a)}) {
+		t.Fatal("a fixed file of an unnamed failure is no progress, or the same failure is")
 	}
 }

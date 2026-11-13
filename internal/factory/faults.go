@@ -336,16 +336,17 @@ func runText(run ProofRun) (stdout, stderr string) {
 	return textx.StripTerminal(string(run.out)), textx.StripTerminal(string(run.errOut))
 }
 
-// firstFailing is the line of run's output that says why it failed when it
-// names no failing example or offense, read the same on every run: the
+// firstFailing are the lines of run's output that say why it failed when
+// it names no failing example or offense, read the same on every run: the
 // error's own (an exception's class and message, else rspec's "An error
 // occurred in …", else its "Failure/Error: …", else a crash's "[BUG] …",
 // else a coverage threshold missed, jest's "Jest: …threshold…" lines or
-// SimpleCov's minimum, whose coverage rising is progress), else the first line that may say why
-// (meaningfulLines), past the noise a run prints anew each time
-// (runNoiseRe) and a table's rules and rows (tableRe: jest's coverage
-// table), its hex addresses read as 0x?; else its exit. It is the failure the writer's progress compares
-// (fix_go_on.go), and its check alone is what your accept of it holds for
+// SimpleCov's minimum, whose coverage rising is progress), else every line
+// that may say why (meaningfulLines, each once, at most maxFailingLines),
+// past the noise a run prints anew each time (runNoiseRe) and a table's
+// rules and rows (tableRe: jest's coverage table), its hex addresses read as
+// 0x?; else its exit. It is the failure the writer's progress compares
+// (fix_go_on.go): a line that goes is progress. No accept covers it
 // (unnamed).
 func firstFailing(run ProofRun) []string {
 	lines := failingLines(run)
@@ -369,10 +370,28 @@ func firstFailing(run ProofRun) []string {
 	}); i >= 0 {
 		return []string{lines[i]}
 	}
-	if line := firstLine(strings.Join(lines, "\n")); line != "" {
-		return []string{line}
+	if all := meaningfulLines(strings.Join(lines, "\n")); len(all) > 0 { // every line, each once: one that goes is progress
+		var out []string
+		for _, l := range all {
+			if l = cleanLine(l); !slices.Contains(out, l) && len(out) < maxFailingLines {
+				out = append(out, l)
+			}
+		}
+		return out
 	}
 	return []string{fmt.Sprintf("exited %d", run.Exit)}
+}
+
+// maxFailingLines bounds the lines firstFailing keys an unnamed failure on.
+const maxFailingLines = 100
+
+// failingWords is failures fs as a why says them: the first 3, then how
+// many more.
+func failingWords(fs []string) string {
+	if len(fs) <= 3 {
+		return strings.Join(fs, "; ")
+	}
+	return strings.Join(fs[:3], "; ") + fmt.Sprintf("; and %d more", len(fs)-3)
 }
 
 // failingLines are the lines of run's output that may say why it failed:

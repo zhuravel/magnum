@@ -875,6 +875,10 @@ type lintRun struct {
 	theirs    []string
 	bound     time.Duration
 	sign      string
+	// unreadable: git could not tell whether a row's file is tracked
+	// (trackedFile), so the factory cannot read the report: the writer's,
+	// why it says.
+	unreadable string
 }
 
 // fault reports whether r named no failure of the code: it hung, or it
@@ -1002,8 +1006,18 @@ func (p *precheckRun) lintOnce(cmd, script string, files []string, changed map[s
 			break
 		}
 		file, in := p.copyFile(o.file)
-		if !in || !slices.Contains(files, file) && !p.trackedFile(file) { // outside the copy, or a file git does not track
-			continue // there (a gem's under vendor/bundle, a Ruby warning of a file it loads): no offense of the change's files
+		if !in {
+			continue // outside the copy (a gem's, a Ruby warning of a file it loads): no offense of the change's files
+		}
+		if !slices.Contains(files, file) {
+			tracked, err := p.trackedFile(file)
+			if err != nil { // a row the factory cannot place: the report is unreadable, the writer's
+				r.unreadable = fmt.Sprintf("git cannot tell whether %s is tracked: %v", file, err)
+				break
+			}
+			if !tracked {
+				continue // a file git does not track in the copy (a gem's under vendor/bundle): no offense of the change's
+			}
 		}
 		r.named++
 		_, touched := changed[file]
@@ -1011,7 +1025,7 @@ func (p *precheckRun) lintOnce(cmd, script string, files []string, changed map[s
 			r.mine = append(r.mine, scrub.Secrets(o.text)) // read from the whole output, which is no scrubbed copy
 		}
 	}
-	if r.run.Exit != 0 && r.named == 0 {
+	if r.run.Exit != 0 && r.named == 0 && r.unreadable == "" {
 		stdout, _ := runText(r.run)
 		if r.crash, r.isCrash = crashOf("precheck.lint", cmd, p.c.Path, p.stderr); r.isCrash {
 			r.crash.added = p.added
@@ -1036,18 +1050,21 @@ type namedOffense struct {
 // trackedFile reports whether git tracks file (relative to the copy) at the
 // precheck's head: a lint's row of an untracked file (a gem installed
 // under the copy, vendor/bundle, node_modules) names no offense of the
-// change's. A git that cannot tell counts the file as tracked, as before.
-func (p *precheckRun) trackedFile(file string) bool {
-	if known, ok := p.tracked[file]; ok {
-		return known
+// change's. A git that cannot tell is that error, which makes the report
+// one the factory cannot read (lintRun.unreadable).
+func (p *precheckRun) trackedFile(file string) (bool, error) {
+	if has, ok := p.tracked[file]; ok {
+		return has, nil
 	}
 	has, err := p.e.d.Git.HasFile(p.parent, p.c.Path, p.head, file)
-	known := err != nil || has
+	if err != nil {
+		return false, err
+	}
 	if p.tracked == nil {
 		p.tracked = map[string]bool{}
 	}
-	p.tracked[file] = known
-	return known
+	p.tracked[file] = has
+	return has, nil
 }
 
 // copyFile is file, as a lint printed it, relative to the copy: through
@@ -1170,6 +1187,12 @@ func (p *precheckRun) settleLint(cmd, script string, r lintRun, tried []string) 
 		check.Result, check.Cause = registry.CheckFail, "code"
 		p.say("\n- `%s`: %s on the changed lines:\n\n```\n%s\n```\n", script, plural(len(r.mine), "offense"), strings.Join(r.mine, "\n"))
 		p.failCheck(key, r.mine, fmt.Sprintf("lint: %s on the changed lines (%s)", plural(len(r.mine), "offense"), firstWord(cmd)), script)
+	case r.unreadable != "": // a report the factory cannot read: the writer's, as any it cannot read
+		check.Result, check.Cause = registry.CheckFail, "code"
+		p.say("\n- `%s` exited %d, and the factory cannot read its report (%s):\n\n```\n%s\n```\n", script, r.run.Exit, r.unreadable,
+			r.run.Output)
+		p.failUnnamed(key, r.run, fmt.Sprintf("lint: `%s` exited %d, and the factory cannot read its report: %s", firstWord(cmd),
+			r.run.Exit, r.unreadable), script)
 	case r.named == 0:
 		check.Result, check.Cause = registry.CheckFail, "unknown"
 		p.say("\n- `%s` exited %d and names no offense by path:line:\n\n```\n%s\n```\n", script, r.run.Exit, r.run.Output)
@@ -1219,7 +1242,7 @@ func (p *precheckRun) lintNoOffense(cmd, script string, r lintRun, tried []strin
 	switch {
 	case r.sign == "": // an output the factory cannot read: the writer's, with it, as any failure the change could have caused
 		p.failUnnamed(key, r.run, fmt.Sprintf("lint: `%s` exited %d and names no offense by path:line: %s", firstWord(cmd), r.run.Exit,
-			strings.Join(firstFailing(r.run), "; ")), script)
+			failingWords(firstFailing(r.run))), script)
 		return "code"
 	case p.toWriter(key): // your answer handed its faults to the writer
 		line := cmp.Or(lastLine(p.stderr), r.sign)
@@ -1944,12 +1967,14 @@ var rubocopFatalRe = regexp.MustCompile(`^\S+:\d+:\d+: F: `)
 
 // fatalRow reports whether offense o is a fatal error of its whole file,
 // whatever its line: eslint's "Parsing error" or fatal 0:0 error (never a
-// warning, never "File ignored …"), RuboCop's F severity or Lint/Syntax.
+// warning, never "File ignored …"), RuboCop's F severity or Lint/Syntax,
+// stylelint's CssSyntaxError.
 func fatalRow(o namedOffense) bool {
 	switch {
 	case strings.Contains(o.text, "File ignored"):
 		return false
-	case strings.Contains(o.text, "Parsing error"), strings.Contains(o.text, "Lint/Syntax"), rubocopFatalRe.MatchString(o.text):
+	case strings.Contains(o.text, "Parsing error"), strings.Contains(o.text, "Lint/Syntax"), rubocopFatalRe.MatchString(o.text),
+		strings.Contains(o.text, "CssSyntaxError"):
 		return true
 	}
 	if o.line != 0 {
