@@ -263,40 +263,58 @@ func TestAWiredReaderChangesNothingForAPRWithNoOwnerRow(t *testing.T) {
 }
 
 // When magnum's registry cannot read a PR's owner row, who fixes the PR is
-// not known: dispatch holds its round, as for a fix loop's row that cannot
-// be read, and `magnum review` is refused naming that read, but no failed
-// read of the factory's lease is recorded or told: the factory may never
-// have had the PR. Once the row reads, the round runs, with no lease event.
-func TestAnOwnerRowThatCannotBeReadIsNoFailedLeaseRead(t *testing.T) {
+// not known: the failed read gets the lease's grace (the engine owner's
+// ruling on R2). Dispatch holds the round from the first failed read and
+// `magnum review` is refused, both naming magnum's registry, never the
+// factory's lease; the failed read is recorded with its source, so the
+// doctor names it and each tick reads it again (sweepLeaseUnreads); once
+// the grace ends magnum reviews the PR, with a warn event, and once the row
+// reads the record goes.
+func TestAnOwnerRowThatCannotBeReadGetsTheGraceThenFailsOpen(t *testing.T) {
 	h := unownedHarness(t, &fakeLease{})
 	pr := h.pr(2)
 	failKVRead(h, fixwork.KVPRFixOwner(pr.ID))
 	rounds := len(h.rd.all())
+	failed := h.clock.Now()
 	h.tick()
 	if got := len(h.rd.all()); got != rounds {
 		t.Fatalf("rounds = %d, want %d: a round started while who fixes the PR cannot be read", got, rounds)
 	}
-	if u, ok := h.leaseUnread(pr.ID); ok {
-		t.Errorf("a failed lease read is recorded: %+v", u)
+	if u, ok := h.leaseUnread(pr.ID); !ok || u.Source != LeaseFromRegistry || u.Open || !u.Since.Equal(failed) {
+		t.Errorf("the failed read = %+v, %v; want it recorded from magnum's registry, not open", u, ok)
 	}
-	if w := waitOf(t, h, 2); w.Reason != WaitFixing || strings.Contains(w.Detail, "lease") || !strings.Contains(w.Detail, "owner row") {
-		t.Errorf("wait = %+v, want the owner row named, not the factory's lease", w)
+	if w := waitOf(t, h, 2); w.Reason != WaitFixing || strings.Contains(w.Detail, "lease") || !strings.Contains(w.Detail, "its owner row, which magnum's registry cannot read") ||
+		!w.Until.Equal(failed.Add(fixLeaseGrace)) {
+		t.Errorf("wait = %+v, want magnum's registry named until the grace ends", w)
 	}
 	review := h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}})
 	h.handle()
-	if r := h.request(review); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "who fixes it cannot be read") ||
+	if r := h.request(review); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "magnum's registry cannot read its owner row") ||
 		strings.Contains(deref(r.Result), "lease") {
 		t.Errorf("magnum review: %s %q", r.State, deref(r.Result))
 	}
-	h.e.delKV(h.ctx, fixwork.KVPRFixOwner(pr.ID)) // the row reads again: none
-	h.tick()
-	if got := len(h.rd.all()); got != rounds+1 {
-		t.Errorf("rounds = %d, want %d once the row reads", got, rounds+1)
+	for range fixLeaseGrace / time.Minute { // the daemon's ticks, each of which fails to read the row
+		h.advance(time.Minute)
+		h.tick()
 	}
-	for _, kind := range []string{"fix.lease_open", "fix.lease_read"} {
-		if ev, ok := h.fixEvent(kind); ok {
-			t.Errorf("%s on a PR the factory never had: %q", kind, ev.Message)
-		}
+	if got := len(h.rd.all()); got != rounds+1 {
+		t.Fatalf("rounds = %d, want %d: magnum reviews after the grace", got, rounds+1)
+	}
+	if ev, ok := h.fixEvent("fix.lease_open"); !ok || ev.Level != "warn" || strings.Contains(ev.Message, "lease") ||
+		!strings.Contains(ev.Message, "magnum's registry cannot read the PR's owner row") {
+		t.Errorf("fix.lease_open = %+v, %v; want a warn naming magnum's registry", ev, ok)
+	}
+	unread, err := FixLeaseUnreads(h.ctx, h.st)
+	if u := unread[pr.ID]; err != nil || !u.Open || u.Source != LeaseFromRegistry {
+		t.Errorf("the doctor reads %+v (%v), want the failed read of magnum's registry, open", unread, err)
+	}
+	h.e.delKV(h.ctx, fixwork.KVPRFixOwner(pr.ID)) // the row reads again: none
+	h.tick()                                      // the PR was reviewed: no dispatch candidate, the tick's own look reads it
+	if u, ok := h.leaseUnread(pr.ID); ok {
+		t.Errorf("a read that works left the failed one: %+v", u)
+	}
+	if ev, ok := h.fixEvent("fix.lease_read"); !ok || strings.Contains(ev.Message, "lease") || !strings.Contains(ev.Message, "owner row") {
+		t.Errorf("fix.lease_read = %q, %v; want the owner row named", ev.Message, ok)
 	}
 }
 

@@ -292,4 +292,17 @@ func TestTheDoctorNamesAnOwnerRowThatDoesNotParseAsMagnumsOwn(t *testing.T) {
 		!strings.Contains(c.Detail, "1 PRs' rounds wait for their owner row, which cannot be read: talkable#6") || strings.Contains(c.Name, "lease") {
 		t.Errorf("owner row headlines = %+v", c)
 	}
+	// An owner row magnum's registry cannot read is named as that
+	// registry's failed read, and its fix sends the operator there (R2).
+	pr8 := h.seedPR("talkable/talkable", 8, store.PRReviewed)
+	h.setKVJSON(engine.KVPRFixLeaseUnread(pr8.ID), engine.LeaseUnread{Since: h.now, Err: "database disk image is malformed", Open: true,
+		Source: engine.LeaseFromRegistry})
+	if cs = doctorFixHandover(h.ctx, d); len(cs) != 2 {
+		t.Fatalf("checks = %+v", cs)
+	}
+	if c := cs[1]; !strings.Contains(c.Detail, "magnum reviews 2 PRs without their owner row") || strings.Contains(c.Detail, "lease") ||
+		!strings.Contains(c.Detail, "talkable#8 since") || !strings.Contains(c.Detail, "(magnum's registry cannot read it: database disk image is malformed)") ||
+		!strings.Contains(c.Fix, "magnum's registry cannot read an owner row (pr.*.fix_owner)") || !strings.Contains(c.Fix, "this build cannot parse") {
+		t.Errorf("registry = %+v", c)
+	}
 }

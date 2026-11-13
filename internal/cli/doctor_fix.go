@@ -70,6 +70,7 @@ func doctorFixHandover(ctx context.Context, d doctorDeps) []doctorCheck {
 // whose round waits for the grace; none for no such PR.
 func doctorLeaseUnreads(ctx context.Context, d doctorDeps, unread map[int64]engine.LeaseUnread) []doctorCheck {
 	var leases, owners leaseGroup
+	parsed, registry := false, false
 	for _, id := range slices.Sorted(maps.Keys(unread)) {
 		u := unread[id]
 		label := fmt.Sprintf("PR %d", id)
@@ -79,8 +80,11 @@ func doctorLeaseUnreads(ctx context.Context, d doctorDeps, unread map[int64]engi
 			}
 		}
 		why, g := cmp.Or(actClean(u.Err), "no error"), &leases
-		if u.Source == engine.LeaseFromOwner { // magnum's own row, not the factory's registry
-			why, g = "its owner row in magnum's registry: "+why, &owners
+		switch u.Source { // magnum's own row, not the factory's registry
+		case engine.LeaseFromOwner:
+			why, g, parsed = "its owner row in magnum's registry: "+why, &owners, true
+		case engine.LeaseFromRegistry:
+			why, g, registry = "magnum's registry cannot read it: "+why, &owners, true
 		}
 		g.add(fmt.Sprintf("%s since %s (%s)", label, u.Since.Local().Format("Jan 2 15:04"), why), u.Open)
 	}
@@ -89,9 +93,17 @@ func doctorLeaseUnreads(ctx context.Context, d doctorDeps, unread map[int64]engi
 		"the factory's registry cannot be read; `magnum factory status` says whether its daemon runs"); ok {
 		out = append(out, c)
 	}
+	var fixes []string
+	if registry {
+		fixes = append(fixes, "magnum's registry cannot read an owner row (pr.*.fix_owner): its database is busy or damaged; "+
+			"the registry line says whether it reads")
+	}
+	if parsed {
+		fixes = append(fixes, "magnum's registry holds an owner row (pr.*.fix_owner) this build cannot parse: a newer build wrote it, "+
+			"or it is damaged; run the build that wrote it")
+	}
 	if c, ok := owners.check("fix owner row", "without their owner row, which it cannot read", "their owner row, which cannot be read",
-		"magnum's registry holds an owner row (pr.*.fix_owner) this build cannot parse: a newer build wrote it, "+
-			"or it is damaged; run the build that wrote it"); ok {
+		strings.Join(fixes, "; ")); ok {
 		out = append(out, c)
 	}
 	return out
