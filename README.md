@@ -4152,7 +4152,8 @@ the `c` key of the board, the status dashboard and the factory screen start a CI
 fixes, and Magnum is the arbiter: a PR the factory fixes has a row of its own in the registry
 (`pr.<id>.fix_owner`), and no row means Magnum fixes it. Magnum starts no fixer on a PR the factory fixes,
 nor on one whose row it cannot read: `magnum fix`, `f`, `c`, `P`, autofix, the look of autofix = "open", a
-held fix and the late settle of a push all refuse it ("the factory fixes this PR since 09:30").
+held fix and the late settle of a push all refuse it ("the factory fixes this PR since 09:30"). `d` (`magnum
+fix --done`) starts no fixer, so it still lifts what Magnum's own fix left you before the PR handed over.
 
 - `magnum fix --handover <pr>` hands one own PR to the factory. When none of Magnum's fix work is in flight
   on it, the factory takes it at once. Otherwise the PR hands over once that work ends: Magnum starts no new
@@ -4168,22 +4169,30 @@ held fix and the late settle of a push all refuse it ("the factory fixes this PR
   idle on it gives it back. `--handover back all` lifts `--handover all` and returns every PR it may.
 - `magnum fix --drained` is the morning list: every PR whose fix work keeps it from handing over, with your
   action for each. It reads the registry alone: the daemon's own reservations of PRs (a fix job winding down)
-  are not in it, as its last line says; `magnum fix --handover <pr> --dry-run` asks the daemon, which counts them. A loop at work, a fixer's run, Magnum's push waiting for its CI (2 minutes) and a pending
-  request end by themselves. A merge of the parent held for your y waits for `P`, or `magnum merge-parent
-  --drop <pr>`, which drops it and pushes nothing. A fixer's push that Magnum keeps for its late settle (up to
-  24 hours) settles once GitHub shows it as the PR's head; when the head moved past it, `magnum fix
-  --drop-push <pr>` drops it. `--json` prints the list. A fix held for a restart, a pause or the GitHub budget
-  holds no PR back: it goes with the PR, and the factory picks it up as a queued request. Magnum neither
-  starts nor drops it once the factory fixes the PR. The list counts such held fixes on a line of their own.
+  are not in it, as its last line says; `magnum fix --handover <pr> --dry-run` asks the daemon, which counts
+  them. A loop at work, a fixer's run, Magnum's push waiting for its CI (2 minutes) and a pending request end
+  by themselves; a fixer's run that no loop backs (its end was never written) ends with `magnum abort <pr>`. A
+  merge of the parent held for your y waits for `P`, or `magnum merge-parent --drop <pr>`, which drops it and
+  pushes nothing. A fixer's push that Magnum keeps for its late settle (up to 24 hours) settles once GitHub
+  shows it as the PR's head; when the head moved past it, `magnum fix --drop-push <pr>` drops it. `--json`
+  prints the list. A fix held for a restart, a pause or the GitHub budget holds no PR back: it goes with the
+  PR, and the factory picks it up as a queued request. Magnum neither starts nor drops it once the factory
+  fixes the PR. The list counts such held fixes on a line of their own.
 - The factory stops its own re-review with `magnum abort`'s request, naming its fix: only a round of that
-  fix stops, or is taken back while it waits in line, and any other round runs on. Your `magnum abort`
-  stops any round, as before.
+  fix stops (also one paused mid-turn), or is taken back while it waits in line, and any other round runs on.
+  Your `magnum abort` stops any round, as before. Every end of the factory's re-review, a stop included, is a
+  `fix.factory_round` event naming its fix, which the factory reads; a round paused by a usage limit or a
+  lost login has not ended, and its continue names the fix when it does.
 - While the factory's fixer works on a PR it fixes, the PR's next round waits for it, as for Magnum's own
   fixer ("re-review waits for the factory's fixer (fix cycle 1 of 3)"), `magnum review` is refused, and the
-  status comment says the fixes are being applied. The factory's own re-review of its push goes on. When
-  Magnum cannot read the factory's records of the PR, the round waits 10 minutes from the first failed read,
-  then Magnum reviews the PR anyway, with a warning (`fix.lease_open`). `magnum doctor` names such PRs, and
-  the PRs that wait to hand over. Magnum reads the factory's records read only, from the factory's
+  status comment says the fixes are being applied. The factory's own re-review of its push goes on, and
+  `magnum review` is refused too while the factory waits for it, in line or not. When Magnum cannot read the
+  factory's records of the PR, the round waits 10 minutes from the first failed read (anew after a gap with no
+  failed read, when the daemon stopped or the Mac slept), then Magnum reviews the PR anyway, with a warning
+  (`fix.lease_open`). `magnum doctor` names such PRs until a read works, the PR leaves the factory or closes,
+  and it names an owner row this build cannot parse as Magnum's own row; it names the PRs that wait to hand
+  over too. When Magnum cannot read a PR's owner row from its own registry, nothing is said of the factory:
+  the round waits for the read, as for a fix loop's row that cannot be read. Magnum reads the factory's records read only, from the factory's
   registry; with no factory registry on the Mac, the factory fixes nothing and rounds go on as before.
 
 ### Whiteboards of reviewed PRs

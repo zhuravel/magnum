@@ -19355,6 +19355,49 @@ skill versions); people add theirs to the sections before it, at the end of the 
     naming the factory's fix fails on a build before this one with the field it predates
     (TestAnOlderBuildAnswersTheNewKindsAsUnknown): never run a build older than this one while a PR is
     factory-owned.
+- **The interlock after the engine owner's review of T2** (2026-11-13, his findings R1 to R28 on 3a34b311, and
+  his rulings). What changed from the entry above:
+  - A handover waits for `[factory] fix = "on"` (his ruling on R3). `magnum fix --handover`, one PR or all, its
+    dry run too, is refused while the key is off, naming it: nothing on the factory's side would fix the PRs.
+    The way back goes whatever the key says. `back all --dry-run` judges each PR as after the lift, as the real
+    run does (R18).
+  - A failed read is named for what failed. A failed read of the handover rows is a plain error: a loop's next
+    cycle ends as one that did not start (fix.failed, with the attention), never as a handover nobody asked
+    for; errFixHandingOver is kept for a handover that was read (R1). A failed read of the owner row in
+    magnum's own registry says nothing of the factory: who fixes the PR is unknown, so dispatch holds the round
+    as for a loop's row that cannot be read, `magnum review` is refused naming that read, and nothing is
+    recorded (R2). An owner row that reads but does not parse (a newer build's, or damaged) is still the
+    grace's failed read, recorded with its source (LeaseUnread.Source "owner"), and its wait, refusal, warn
+    and doctor line name magnum's row, not the factory's registry (R25).
+  - A failed lease read lasts only while it does. Each tick reads again every recorded
+    `pr.<id>.fix_lease_unread` (sweepLeaseUnreads), round or none: the row goes once the lease reads or the
+    factory no longer fixes the PR, and at once for a PR gone or closed or a daemon with no reader (R8). The
+    row keeps the last failed read too (Last): a failure more than 5 minutes after the last one (no tick ran:
+    the daemon stopped, the Mac slept) is a first failure again, whose grace starts anew (R10). A dry-run
+    daemon records it in its private registry, so it warns once and shows the fail-open (R11). A failed read
+    no round recorded is no wait, so waitFor's other reasons say what holds the PR (R12).
+  - The factory's re-review is the factory's. `magnum review` is refused while the factory's loop waits for
+    magnum's re-review of its push (phase reviewing, as factoryread reads it: no fixer at work) and while
+    that re-review waits in line, forced with its fix kept, whatever the lease says (R9). A round whose judge
+    turn paused on a usage limit or a lost login keeps the fix and writes no fix.factory_round: its continue
+    is the same round, and names the fix when it ends (R13). The factory's abort also stops a round of its
+    fix that paused mid-turn or whose state stays without its round (R15), and it chooses the round under the
+    lock its stop order goes in with (stopHeld with the fix, R17). Any stop of the factory's re-review, your
+    `magnum abort` or `magnum ignore`, the factory's own abort or the PR's close, writes fix.factory_round with
+    the outcome stopped (closed) and who stopped it (endFixRef), so the factory's loop never waits for a
+    round that ended without one (R16).
+  - What magnum's fix left stays the operator's. `magnum fix --done` passes the owner refusal on a PR the
+    factory fixes, which it starts no fixer on, and its held-fix check skips such a PR, whose held fix waits
+    for the import (R6). `magnum abort` ends a fixer's run whose verdict was never written while no loop backs
+    it, the morning list's action for that record (endOrphanFixRuns, fix.run_ended, R5).
+  - The morning list says that it reads the registry alone: the daemon's reservations (a fix job winding down)
+    are not in it, and `magnum fix --handover <pr> --dry-run` asks the daemon, which counts them (his condition
+    on T2). The drops' words say what a drop does (R28), and the shared contract names the abort's FixRef (R24).
+  - Tests. Every start path runs twice, with the factory's row and with a row that does not parse
+    (startPaths), and a flip that lands between prepareFix and claimFixRow is refused there (R21, R26:
+    a refused path that writes a held fix fails). TestAWiredReaderChangesNothingForAPRWithNoOwnerRow pins the
+    live configuration (R20). TestTheFactorysAttentionNeverToastsNorReveals fails on any toast, batched toast
+    or reveal of fix_attention (his condition, proved once by mutation).
 
 ## The factory (2026-11-03)
 
