@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/store"
@@ -35,6 +36,7 @@ func (h *actHarness) setKVJSON(key string, v any) {
 // to import: the list counts those apart.
 func TestTheDrainedListNamesHisActionForEachRecord(t *testing.T) {
 	h := newActHarness(t)
+	h.d.Cfg.Factory.Fix = config.FactoryFixOn // a handover waits for the key while it is off: no PR hands over
 	if code := h.cmd("fix", "--drained"); code != 0 {
 		t.Fatalf("exit %d: %s", code, h.errb.String())
 	}
@@ -237,6 +239,7 @@ func TestTheDropsSayWhatTheyDo(t *testing.T) {
 // counts magnum's fix work in flight.
 func TestTheDoctorNamesTheHandoverAndTheLeasesThatFailedOpen(t *testing.T) {
 	h := newActHarness(t)
+	h.d.Cfg.Factory.Fix = config.FactoryFixOn // a handover waits for the key while it is off (TestTheDoctorSaysAHandoverWaitsForTheKey)
 	d := doctorDeps{Store: h.st, Config: h.d.Cfg}
 	cs := doctorFixHandover(h.ctx, d)
 	if len(cs) != 1 || cs[0].Status != doctorPass || !strings.Contains(cs[0].Detail, "none of magnum's fix work is in flight") {
@@ -259,6 +262,36 @@ func TestTheDoctorNamesTheHandoverAndTheLeasesThatFailedOpen(t *testing.T) {
 	if c := cs[1]; c.Status != doctorWarn || !strings.Contains(c.Detail, "magnum reviews 1 PRs the factory fixes without its lease, which it cannot read (failed open): talkable#6 since") ||
 		!strings.Contains(c.Detail, "(database is locked)") {
 		t.Errorf("lease = %+v", c)
+	}
+}
+
+// A handover written while [factory] fix was "on" waits for the key once
+// it is off, and the doctor says so (the engine owner's ruling on R3): no
+// PR flips meanwhile, and the line names the way out. With the key on,
+// no such line.
+func TestTheDoctorSaysAHandoverWaitsForTheKey(t *testing.T) {
+	h := newActHarness(t)
+	d := doctorDeps{Store: h.st, Config: h.d.Cfg}
+	h.setKVJSON(engine.KVFixHandoverAll, map[string]any{"at": h.now, "by": "magnum fix --handover all"})
+	pr6 := h.seedPR("talkable/talkable", 6, store.PRReviewed)
+	h.setKVJSON(engine.KVPRFixHandover(pr6.ID), map[string]any{"at": h.now, "by": "magnum fix --handover"})
+	waits := func() (doctorCheck, bool) {
+		for _, c := range doctorFixHandover(h.ctx, d) {
+			if strings.Contains(c.Detail, "no PR flips to the factory") {
+				return c, true
+			}
+		}
+		return doctorCheck{}, false
+	}
+	c, ok := waits()
+	if !ok || c.Status != doctorWarn || !strings.Contains(c.Detail, "`magnum fix --handover all` waits for [factory] fix = \"on\", and so does the handover of talkable#6") ||
+		!strings.Contains(c.Detail, "no PR flips to the factory") ||
+		!strings.Contains(c.Fix, "magnum fix --handover back all") {
+		t.Errorf("the key's line = %+v, %v; checks %+v", c, ok, doctorFixHandover(h.ctx, d))
+	}
+	h.d.Cfg.Factory.Fix = config.FactoryFixOn
+	if c, ok := waits(); ok {
+		t.Errorf("with the key on: %+v", c)
 	}
 }
 

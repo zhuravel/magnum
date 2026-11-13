@@ -92,7 +92,13 @@ func handoverAllOf(ctx context.Context, st *store.Store) (bool, error) {
 // handingOver reports whether pr hands over to the factory: a handover of
 // its own waits (KVPRFixHandover), or every own PR goes and pr is one. A
 // failed read is an error, which refuses the starts (handoverRefusal).
+// While [factory] fix is not "on" no PR hands over: a handover written
+// while it was waits for the key (the engine owner's ruling on R3), and
+// magnum fixes the PR meanwhile as if none were asked.
 func (e *Engine) handingOver(ctx context.Context, pr store.PR) (bool, error) {
+	if !e.cfg.Factory.Fixes() {
+		return false, nil
+	}
 	if _, ok, err := e.st.GetKV(ctx, KVPRFixHandover(pr.ID)); err != nil || ok {
 		return ok, err
 	}
@@ -305,7 +311,10 @@ func (e *Engine) handoverPRs(ctx context.Context, all bool) ([]handoverPR, error
 // handOvers is the tick's handover pass: each PR a handover waits for
 // flips to the factory once its fix work is quiet (flipToFactory), and
 // each PR returning to magnum comes back or stays the factory's
-// (returnPass). It returns how many flipped and how many still wait.
+// (returnPass). It returns how many flipped and how many still wait. While
+// [factory] fix is not "on" no PR flips, --handover all's included (the
+// engine owner's ruling on R3): the handovers wait for the key, which a
+// warn says once and the doctor's line names; the way back goes on.
 func (e *Engine) handOvers(ctx context.Context) (flipped, waiting int) {
 	if e.d.DryRun {
 		return 0, 0
@@ -313,6 +322,13 @@ func (e *Engine) handOvers(ctx context.Context) (flipped, waiting int) {
 	prs, err := e.handoverPRs(ctx, false)
 	if err != nil {
 		e.warnUnlessStopped(ctx, err, "fix handover: the PRs it waits for")
+	}
+	if !e.cfg.Factory.Fixes() {
+		if len(prs) > 0 && e.logOnce("handover-key", fmt.Sprint(len(prs)), e.now()) {
+			e.log.Warn("fix handover: the handovers wait for [factory] fix = \"on\"; no PR flips to the factory meanwhile", "prs", len(prs))
+		}
+		e.returnPass(ctx)
+		return 0, len(prs)
 	}
 	for _, c := range prs {
 		ok, _, err := e.flipToFactory(ctx, c.repo, c.pr, c.by)

@@ -412,7 +412,7 @@ func FixInFlight(ctx context.Context, st *store.Store, cfg *config.Config, now t
 		if err != nil {
 			return nil, err
 		}
-		handing := pending || (all && deref(pr.AuthorLogin) != "" && self(deref(pr.AuthorLogin)))
+		handing := cfg.Factory.Fixes() && (pending || (all && deref(pr.AuthorLogin) != "" && self(deref(pr.AuthorLogin)))) // the handovers wait for the key (handingOver)
 		label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
 		out = append(out, UndrainedPR{ID: id, Repo: repo.FullName(), Number: pr.Number, URL: pr.URL, Handing: handing,
 			Records: f.records(pr, label, handing, now)})

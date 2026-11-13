@@ -21,9 +21,11 @@ import (
 )
 
 // doctorFixHandover is the fix handover's lines: a WARN while a PR that
-// hands over to the factory waits for its fix work to end, or while a read
-// of the factory's lease or of an owner row failed (doctorLeaseUnreads),
-// and a PASS that counts magnum's fix work in flight otherwise.
+// hands over to the factory waits for its fix work to end, while a
+// handover waits for [factory] fix = "on" (doctorHandoverKey), or while a
+// read of the factory's lease or of an owner row failed
+// (doctorLeaseUnreads), and a PASS that counts magnum's fix work in flight
+// otherwise.
 func doctorFixHandover(ctx context.Context, d doctorDeps) []doctorCheck {
 	if d.Store == nil || d.Config == nil {
 		return nil
@@ -60,7 +62,57 @@ func doctorFixHandover(ctx context.Context, d doctorDeps) []doctorCheck {
 	default:
 		out = append(out, doctorOK(name, "none of magnum's fix work is in flight: every PR can hand over to the factory"+held))
 	}
+	if c, ok := doctorHandoverKey(ctx, d); ok {
+		out = append(out, c)
+	}
 	return append(out, doctorLeaseUnreads(ctx, d, unread)...)
+}
+
+// doctorHandoverKey is the WARN of the handovers that wait for [factory]
+// fix = "on" (the engine owner's ruling on R3): `magnum fix --handover all`
+// or one PR's, written while the key was on, flips no PR while it is off,
+// and magnum fixes those PRs meanwhile. ok false: the key is on, or no
+// handover waits.
+func doctorHandoverKey(ctx context.Context, d doctorDeps) (doctorCheck, bool) {
+	if d.Config.Factory.Fixes() {
+		return doctorCheck{}, false
+	}
+	_, all, err := d.Store.GetKV(ctx, engine.KVFixHandoverAll)
+	all = all && err == nil
+	keys, _ := d.Store.KVKeys(ctx, "pr.*.fix_handover")
+	var prs []string
+	for _, key := range keys {
+		var id int64
+		if _, err := fmt.Sscanf(key, "pr.%d.", &id); err != nil || engine.KVPRFixHandover(id) != key {
+			continue
+		}
+		label := fmt.Sprintf("PR %d", id)
+		if pr, err := d.Store.PRByID(ctx, id); err == nil {
+			if repo, err := d.Store.RepoByID(ctx, pr.RepoID); err == nil {
+				label = actRefLabel(d.Config.Daemon.DefaultRepo, repo.FullName(), pr.Number)
+			}
+		}
+		prs = append(prs, label)
+	}
+	slices.Sort(prs)
+	handovers := "the handover of " + strings.Join(prs, ", ")
+	if len(prs) > 1 {
+		handovers = "the handovers of " + strings.Join(prs, ", ")
+	}
+	const key = `[factory] fix = "on"`
+	var what string
+	switch {
+	case all && len(prs) > 0:
+		what = "`magnum fix --handover all` waits for " + key + ", and so does " + handovers
+	case all:
+		what = "`magnum fix --handover all` waits for " + key
+	case len(prs) > 0:
+		what = handovers + " " + textx.Plural(len(prs), "waits", "wait") + " for " + key
+	default:
+		return doctorCheck{}, false
+	}
+	return doctorWarned("fix handover", what+": no PR flips to the factory, and magnum fixes them meanwhile",
+		"set "+key+" and restart both daemons to hand them over, or `magnum fix --handover back all` calls them off"), true
 }
 
 // doctorLeaseUnreads are the lines of the PRs whose failed reads hold or

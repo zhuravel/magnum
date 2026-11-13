@@ -77,6 +77,45 @@ func TestTheHandoverIsRefusedWhileTheFactoryDoesNotFix(t *testing.T) {
 	}
 }
 
+// A handover written while [factory] fix was "on" (one PR's, or every own
+// PR's) waits for the key once it is off: the tick flips no PR to a factory
+// that fixes none, and meanwhile the PR does not hand over, so magnum's
+// autofix and a loop's next cycle run on it as before (the engine owner's
+// ruling on R3, which covers C8). With the key on again, the tick flips it.
+func TestTheTickFlipsNoPRWhileTheFactoryDoesNotFix(t *testing.T) {
+	storetest.Parallel(t)
+	for _, tc := range []struct {
+		name string
+		key  func(pr store.PR) string
+	}{
+		{"every own PR", func(store.PR) string { return KVFixHandoverAll }},
+		{"one PR", func(pr store.PR) string { return KVPRFixHandover(pr.ID) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := fixHarness(t)
+			pr := fixablePR(h, "zhuravel", nil)
+			if err := h.st.SetKV(h.ctx, tc.key(pr), rowJSON(handover{At: h.clock.Now().UTC(), By: handoverBy})); err != nil {
+				t.Fatal(err)
+			}
+			h.tick()
+			if o, ok := ownerOf(h); ok {
+				t.Fatalf("the PR flipped to a factory that does not fix: %+v", o)
+			}
+			if handing, err := h.e.handingOver(h.ctx, h.pr(2)); handing || err != nil {
+				t.Errorf("handing over = %v, %v; want magnum to go on fixing it while the key is off", handing, err)
+			}
+			factoryFixOn(h)
+			if handing, err := h.e.handingOver(h.ctx, h.pr(2)); !handing || err != nil {
+				t.Errorf("handing over with the key on = %v, %v", handing, err)
+			}
+			h.tick()
+			if o, ok := ownerOf(h); !ok || !o.Factory() {
+				t.Errorf("owner with the key on = %+v, %v; want the factory", o, ok)
+			}
+		})
+	}
+}
+
 // Each record of magnum's fix work in flight on a PR keeps it from handing
 // over, and names itself with the operator's action: a loop's row, a
 // fixer's push record, a held merge, magnum's push waiting for its CI, a
@@ -317,7 +356,7 @@ func failKVRead(h *harness, key string) {
 // start: no handover was read, so none is named, and the operator hears
 // that findings are left.
 func TestAFailedReadOfTheHandoverEndsTheLoopWithItsAttention(t *testing.T) {
-	h, git := fixHarness(t)
+	h, git := fixHarness(t, factoryFixOn) // with the key off, no handover row is read (handingOver)
 	pr := loopToReReview(t, h, git, findings(map[string]int{"P2": 1}, "COMMENTED"), fixPushed2)
 	failKVRead(h, KVFixHandoverAll)
 	reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"}) // the re-review finds a P2: the next cycle would start
