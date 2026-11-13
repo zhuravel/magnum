@@ -158,15 +158,18 @@ func TestTheFactorysFixerHoldsTheRoundAndRefusesAReview(t *testing.T) {
 	}
 }
 
-// While the factory waits for magnum's re-review of its push (its lease in
-// phase reviewing, as factoryread reads it: no fixer at work), `magnum
-// review` is refused, and so it is while the factory's re-review waits in
-// line (forced, its fix kept), whatever the lease says: the operator's
-// review would take its place and drop its fix. The factory's round then
-// runs and names the fix.
-func TestMagnumReviewIsRefusedWhileTheFactoryWaitsForItsReReview(t *testing.T) {
+// While the factory's re-review of its push is still to come on magnum's
+// side, `magnum review` is refused: a round of its fix in flight, or its
+// re-review forced with its fix kept, waiting in line, whatever the lease
+// says (the operator's review would take its place). The factory's loop
+// waiting in phase reviewing (as factoryread reads it: no fixer at work)
+// refuses nothing by itself (C7): a factory that stopped in that phase
+// after magnum's re-review of its push posted held off every review of the
+// PR for good, with no way out. The factory's round runs and names the fix.
+func TestMagnumReviewIsRefusedWhileTheFactorysReReviewIsToCome(t *testing.T) {
+	reviewing := leaseFromFactory(factoryread.Lease{Phase: registry.PRWorkReviewing, Head: "b2", Cycle: 1, Cap: 3, Worked: true}, time.Time{})
 	lease := &fakeLease{}
-	lease.set(leaseFromFactory(factoryread.Lease{Phase: registry.PRWorkReviewing, Head: "b2", Cycle: 1, Cap: 3, Worked: true}, time.Time{}), nil)
+	lease.set(reviewing, nil)
 	h := leaseHarness(t, lease)
 	pr := h.pr(2)
 	rounds := len(h.rd.all())
@@ -176,11 +179,17 @@ func TestMagnumReviewIsRefusedWhileTheFactoryWaitsForItsReReview(t *testing.T) {
 		h.handle()
 		return h.request(id)
 	}
-	if r := review(); r.State != store.RequestFailed ||
-		!strings.Contains(deref(r.Result), "the factory fixes it (cycle 1 of 3, waiting for the re-review of its push at b2)") {
-		t.Errorf("magnum review while the factory waits in reviewing: %s %q", r.State, deref(r.Result))
+	if why := h.e.factoryReviewRefusal(h.ctx, pr, "talkable/talkable#2"); why != "" {
+		t.Errorf("the factory's loop in phase reviewing, with nothing to come, refuses: %q", why)
 	}
 	ref := fixwork.FixRef{Work: 7, Cycle: 1, Head: "b2"}
+	if !h.e.reserve(pr.ID, &roundHandle{cancel: func() {}, fixRef: &ref}) { // a round of its fix in flight
+		t.Fatal("the PR could not be reserved")
+	}
+	if why := h.e.factoryReviewRefusal(h.ctx, pr, "talkable/talkable#2"); !strings.Contains(why, "the factory's re-review of its push of b2 (cycle 1) runs") {
+		t.Errorf("with a round of the factory's fix in flight: %q", why)
+	}
+	h.e.unreserve(pr.ID)
 	if r := h.reReviewOf(ref); r.State != store.RequestDone {
 		t.Fatalf("the factory's re-review: %s %q", r.State, deref(r.Result))
 	}
@@ -197,6 +206,10 @@ func TestMagnumReviewIsRefusedWhileTheFactoryWaitsForItsReReview(t *testing.T) {
 	}
 	if ev, ok := h.fixEvent("fix.factory_round"); !ok || !strings.Contains(ev.Message, "the re-review of the factory's push of b2 (cycle 1)") {
 		t.Errorf("fix.factory_round = %+v, %v", ev, ok)
+	}
+	lease.set(reviewing, nil) // the factory stopped before it read the round's end
+	if r := review(); r.State != store.RequestDone {
+		t.Errorf("magnum review once the factory's re-review posted: %s %q", r.State, deref(r.Result))
 	}
 }
 

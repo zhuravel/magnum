@@ -7,8 +7,9 @@ package engine
 // owner row, fix_owner.go), dispatch holds the PR's rounds while the
 // factory's fixer works on it (phase fixing), as it holds them for magnum's
 // own fixer (fixHolds, WaitFixing), `magnum review` is refused while the
-// factory's fixer works on it or its loop waits for magnum's re-review of
-// its push, and the status comment says that the factory fixes it. A read
+// factory's fixer works on it or its re-review of its push is still to
+// come on magnum's side, and the status comment says that the factory
+// fixes it. A read
 // that fails (the PR's owner row, which magnum's registry cannot read or
 // this build cannot parse, or the factory's lease) holds the round for
 // fixLeaseGrace from the first failure, then fails open: magnum reviews, a
@@ -32,6 +33,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/factoryread"
+	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -210,13 +212,6 @@ func (v leaseView) unreadWords() string { return wordsOf(v.source).wait }
 // fixing reports whether the factory works on the PR now (its lease held,
 // in any phase).
 func (v leaseView) fixing() bool { return v.owned && v.err == nil && v.lease.Fixing }
-
-// reviewing reports whether the factory's loop waits for magnum's re-review
-// of its push (phase reviewing, a lease that holds no agent, as factoryread
-// reads it).
-func (v leaseView) reviewing() bool {
-	return v.owned && v.err == nil && v.lease.Phase == FixPhaseReviewing
-}
 
 // holds reports whether the factory's fixer works on the PR (phase
 // fixing): its rounds wait.
@@ -430,13 +425,15 @@ func (e *Engine) factoryWaitOf(ctx context.Context, pr store.PR) (Wait, bool) {
 }
 
 // factoryReviewRefusal is `magnum review`'s refusal of pr (label) while the
-// factory fixes it: its fixer at work, or its loop waiting for the
-// re-review of its push (phase reviewing: that re-review is the factory's
-// own request), its re-review waiting in line (forced, its fix kept,
-// whatever the lease says: the operator's review would take its place and
-// drop its fix, keepFixRef), or a failed read within its grace (the lease,
-// or who fixes the PR), which it records as dispatch does (noteLease). "" =
-// it may review. With no reader it refuses nothing.
+// factory fixes it: its fixer at work, its re-review still to come on
+// magnum's side (factoryRoundRefusal, whatever the lease says: the
+// operator's review would take its place and end its fix, keepFixRef), or a
+// failed read within its grace (the lease, or who fixes the PR), which it
+// records as dispatch does (noteLease). The factory's loop waiting in phase
+// reviewing refuses nothing by itself: once magnum's re-review ran, that
+// phase lasts until the factory reads its end, and a factory that stopped
+// meanwhile would hold off every review of the PR for good. "" = it may
+// review. With no reader it refuses nothing.
 func (e *Engine) factoryReviewRefusal(ctx context.Context, pr store.PR, label string) string {
 	v, ok := e.leaseOf(ctx, pr)
 	if !ok {
@@ -454,7 +451,7 @@ func (e *Engine) factoryReviewRefusal(ctx context.Context, pr store.PR, label st
 		}
 		return fmt.Sprintf("%s: %s (%s); ask again after %s, when magnum reviews it anyway",
 			label, wordsOf(v.source).refusal, leaseErrWords(v.err), waitClock(since.Add(fixLeaseGrace), e.now()))
-	case v.fixing() || v.reviewing():
+	case v.fixing():
 		cycle := fmt.Sprintf("cycle %d", v.lease.Cycle)
 		if v.lease.Cap > 0 {
 			cycle = fmt.Sprintf("cycle %d of %d", v.lease.Cycle, v.lease.Cap)
@@ -466,12 +463,23 @@ func (e *Engine) factoryReviewRefusal(ctx context.Context, pr store.PR, label st
 }
 
 // factoryRoundRefusal is `magnum review`'s refusal of pr (label) while the
-// factory's re-review of its push is still to come on magnum's side: its
-// fix kept (kvPRFixRef) on a PR open on GitHub that is forced and in line
-// (queued, rereview_pending, or paused mid-turn) or in its round. A fix
-// row a closed PR kept, or one no forced round is coming for, refuses
-// nothing: no round of it runs. "" = no refusal.
+// factory's re-review of its push is still to come on magnum's side: a
+// round of its fix in flight (roundHandle.fixRef), or its fix kept
+// (kvPRFixRef) on a PR open on GitHub that is forced and in line (queued,
+// rereview_pending, or paused mid-turn) or in its round. A fix row a closed
+// PR kept, or one no forced round is coming for, refuses nothing: no round
+// of it runs. "" = no refusal.
 func (e *Engine) factoryRoundRefusal(ctx context.Context, pr store.PR, label string) string {
+	e.mu.Lock()
+	var running *fixwork.FixRef
+	if h := e.rounds[pr.ID]; h != nil {
+		running = h.fixRef
+	}
+	e.mu.Unlock()
+	if running != nil {
+		return fmt.Sprintf("%s: the factory's re-review of its push of %s (cycle %d) runs; a review of yours would take its place",
+			label, textx.ShortSHA(running.Head), running.Cycle)
+	}
 	r, _ := e.fixRefOf(ctx, pr.ID)
 	if r == nil || !pr.Forced || pr.GHState != store.GHOpen {
 		return ""
