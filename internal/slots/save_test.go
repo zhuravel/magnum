@@ -403,6 +403,75 @@ func TestAWholePatchOfNoBytesWritesNoChangesDiff(t *testing.T) {
 	}
 }
 
+// The local mise file magnum rendered is magnum's own, never a person's:
+// a removal does not save it (the fixture's .gitignore names only the other
+// spelling, so git lists it), a removal whose only change it is makes no
+// save, and a switch's saved.txt does not name it among the files it
+// keeps. A file of that name without magnum's marker is a person's, and
+// is saved. The old check used the ignored spelling and could not fail.
+func TestASaveLeavesOutOnlyTheMiseFileMagnumRendered(t *testing.T) {
+	newRendered := func(t *testing.T) (*perPRFixture, store.Slot) {
+		f := newPerPR(t, true)
+		writeFile(t, filepath.Join(f.main, MiseLocal), "[env]\nA = \"1\"\n")
+		sl, err := f.h.m.CreatePRWorktree(f.h.ctx, f.watch, f.repoName(), f.pr, f.sha7)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ch, err := f.h.m.worktreeChanges(f.h.ctx, sl.Path); err != nil || !slices.Equal(ch.untracked, []string{MiseLocal}) {
+			t.Fatalf("untracked = %q, %v; want %s, which the fixture does not ignore", ch.untracked, err, MiseLocal)
+		}
+		return f, sl
+	}
+	folder := func(f *perPRFixture) string { return f.h.layout.PRSaves("zhuravel", "widget", f.pr.Number) }
+
+	t.Run("a switch does not name it", func(t *testing.T) {
+		f, sl := newRendered(t)
+		writeFile(t, filepath.Join(sl.Path, "README"), "residue\n")
+		writeFile(t, filepath.Join(sl.Path, "mine.txt"), "mine\n")
+		if err := f.h.m.Resync(f.h.ctx, sl, f.sha7); err != nil {
+			t.Fatalf("Resync: %v", err)
+		}
+		note := readFile(t, filepath.Join(f.h.onlySave(t, folder(f), sl.Name), "saved.txt"))
+		if !strings.Contains(note, "mine.txt") || strings.Contains(note, MiseLocal) {
+			t.Fatalf("saved.txt names %s, or not mine.txt:\n%s", MiseLocal, note)
+		}
+	})
+	t.Run("a removal does not save it", func(t *testing.T) {
+		f, sl := newRendered(t)
+		writeFile(t, filepath.Join(sl.Path, "README"), "residue\n")
+		if err := f.h.m.RemovePRWorktree(f.h.ctx, sl, false); err != nil {
+			t.Fatalf("RemovePRWorktree: %v", err)
+		}
+		save := f.h.onlySave(t, folder(f), sl.Name)
+		if _, err := os.Lstat(filepath.Join(save, "untracked", MiseLocal)); !os.IsNotExist(err) {
+			t.Fatalf("the rendered %s was saved: %v", MiseLocal, err)
+		}
+	})
+	t.Run("a removal of it alone makes no save", func(t *testing.T) {
+		f, sl := newRendered(t)
+		if err := f.h.m.RemovePRWorktree(f.h.ctx, sl, false); err != nil {
+			t.Fatalf("RemovePRWorktree: %v", err)
+		}
+		if got := saves(t, folder(f)); len(got) != 0 {
+			t.Fatalf("saves = %q, want none for magnum's own file", got)
+		}
+		if got := f.h.slot(sl.Name); got.State != store.SlotRemoved {
+			t.Fatalf("state = %s, want removed", got.State)
+		}
+	})
+	t.Run("a person's file of that name is saved", func(t *testing.T) {
+		f, sl := newRendered(t)
+		writeFile(t, filepath.Join(sl.Path, MiseLocal), "[env]\nMINE = \"1\"\n")
+		if err := f.h.m.RemovePRWorktree(f.h.ctx, sl, false); err != nil {
+			t.Fatalf("RemovePRWorktree: %v", err)
+		}
+		save := f.h.onlySave(t, folder(f), sl.Name)
+		if got := readFile(t, filepath.Join(save, "untracked", MiseLocal)); got != "[env]\nMINE = \"1\"\n" {
+			t.Fatalf("the person's %s saved = %q", MiseLocal, got)
+		}
+	})
+}
+
 // A removal whose untracked files are all left out keeps no untracked/
 // folder in its save, as a save with no path's patch keeps no changes.diff.
 func TestASaveThatCopiesNoUntrackedFileHasNoUntrackedFolder(t *testing.T) {
