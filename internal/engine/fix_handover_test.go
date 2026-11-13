@@ -589,6 +589,40 @@ func TestFixDoneLiftsMagnumsAttentionOnAPRTheFactoryFixes(t *testing.T) {
 	}
 }
 
+// An attention the factory raised on a PR it fixes is the factory's to
+// lift (the engine owner's ruling on R6, after C9): `magnum fix --done`
+// refuses it, even in magnum's calls words, and sends the operator to the
+// factory or the way back, since the factory would never learn of the lift
+// and its loop would wait while magnum shows the PR reviewed. Once the PR
+// is magnum's again, whose factory can lift nothing, --done lifts it.
+func TestFixDoneRefusesAnAttentionTheFactoryRaised(t *testing.T) {
+	h := newHarness(t)
+	h.reviewedPR(2, "b1")
+	factoryOwns(h)
+	id := h.enqueue(fixwork.ReqFixAttention, fixwork.AttentionPayload{Repo: "talkable/talkable", Number: 2, Raise: true, Cause: "needs_you",
+		Why: "1 finding needs your call: https://github.com/talkable/talkable/pull/2#discussion_r4100"})
+	h.handle()
+	if r := h.request(id); r.State != store.RequestDone {
+		t.Fatalf("the factory's raise: %s %q", r.State, deref(r.Result))
+	}
+	done := func() store.Request {
+		t.Helper()
+		id := h.fix(FixPayload{Done: true, Seen: deref(h.pr(2).LastError)})
+		h.handle()
+		return h.request(id)
+	}
+	if r := done(); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "the factory raised it") ||
+		!strings.Contains(deref(r.Result), "`magnum fix --handover back talkable/talkable#2`") {
+		t.Errorf("magnum fix --done of the factory's attention: %s %q", r.State, deref(r.Result))
+	}
+	h.wantState(2, store.PRNeedsAttention)
+	h.e.delKV(h.ctx, fixwork.KVPRFixOwner(h.pr(2).ID)) // magnum fixes it again
+	if r := done(); r.State != store.RequestDone {
+		t.Errorf("magnum fix --done once magnum fixes the PR: %s %q", r.State, deref(r.Result))
+	}
+	h.wantState(2, store.PRReviewed)
+}
+
 // The morning list's drops end the records that keep a PR from handing
 // over and do not end by themselves: `magnum fix --drop-push` drops the
 // record of a fixer's push kept for its late settle, and `magnum

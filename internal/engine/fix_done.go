@@ -15,7 +15,8 @@ package engine
 // may have left more), only the attention you saw (FixPayload.Seen; one you
 // did not see, Seen "", is refused), only on the head magnum reviewed, and
 // never while a loop runs or a fix is held, whose end could leave you
-// something new.
+// something new. An attention the factory raised on a PR it fixes is the
+// factory's to lift (factoryAttentionRefusal): --done refuses it.
 
 import (
 	"cmp"
@@ -47,6 +48,9 @@ func (e *Engine) fixDone(ctx context.Context, repo store.Repo, pr store.PR, seen
 	if kind, _ := e.getKV(ctx, KVPRAttention(pr.ID)); kind != attention.KindFix {
 		return "", fmt.Errorf("PR #%d needs attention for %s, not for what the fixer left you: %s",
 			pr.Number, cmp.Or(kind, "a reason magnum did not record"), look)
+	}
+	if err := e.factoryAttentionRefusal(ctx, ref, pr, msg); err != nil { // fix_factory.go: the factory lifts its own
+		return "", err
 	}
 	_, under, _ := strings.Cut(msg, "\n")
 	switch reviewed := deref(pr.ReviewedSHA); {
@@ -94,7 +98,7 @@ func (e *Engine) fixDone(ctx context.Context, repo store.Repo, pr store.PR, seen
 	if err != nil {
 		return "", err
 	}
-	e.delKV(ctx, KVPRAttention(pr.ID), kvPRAttentionRun(pr.ID))
+	e.delKV(ctx, KVPRAttention(pr.ID), kvPRAttentionRun(pr.ID), kvPRAttentionBy(pr.ID))
 	e.event(ctx, "info", prSubject(repo, pr.Number), "fix.acknowledged",
 		"you did what the fixer left: the review of "+head+" stands, with no new round", map[string]any{"head": pr.HeadSHA, "by": fixDoneBy})
 	return fmt.Sprintf("PR #%d is back to reviewed at %s: you did what the fixer left; no review runs", pr.Number, head), nil

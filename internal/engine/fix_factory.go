@@ -247,15 +247,61 @@ func (e *Engine) requestFactoryAbort(ctx context.Context, id int64, repo store.R
 	e.complete(ctx, id, err, res)
 }
 
+// kvPRAttentionBy holds who raised PR prID's attention when it was not
+// magnum (attentionBy as JSON): the factory's raise (requestFixAttention),
+// which only the factory lifts.
+func kvPRAttentionBy(prID int64) string { return fmt.Sprintf("pr.%d.attention_by", prID) }
+
+// attentionBy is a kvPRAttentionBy row: who raised the attention whose
+// message is Message (the PR's last_error then: a later attention with
+// other words is not the row's), with what cause, and when.
+type attentionBy struct {
+	By      string    `json:"by"`
+	Message string    `json:"message"`
+	Cause   string    `json:"cause,omitempty"`
+	At      time.Time `json:"at"`
+}
+
+// attentionByFactory is attentionBy.By of the factory's raise.
+const attentionByFactory = "factory"
+
+// factoryAttentionRefusal is `magnum fix --done`'s refusal of pr's
+// attention msg (ref, its owner/name#N) while the factory raised it and
+// fixes the PR (the engine owner's ruling on R6): the factory lifts it
+// itself once the operator answers it there, and would never learn of a
+// lift by magnum, so its loop would wait while magnum shows the PR
+// reviewed. A row of who fixes the PR that cannot be read refuses too. nil
+// for magnum's own attention, and once the PR is magnum's again, whose
+// factory lifts nothing.
+func (e *Engine) factoryAttentionRefusal(ctx context.Context, ref string, pr store.PR, msg string) error {
+	raw, ok := e.getKV(ctx, kvPRAttentionBy(pr.ID))
+	var by attentionBy
+	if !ok || json.Unmarshal([]byte(raw), &by) != nil || by.By != attentionByFactory || by.Message != msg {
+		return nil
+	}
+	switch o, _, owned, err := e.fixOwner(ctx, pr.ID); {
+	case err != nil:
+		return fmt.Errorf("PR #%d needs you for an attention the factory raised, and who fixes the PR cannot be read (%w): ask again shortly; nothing changed",
+			pr.Number, err)
+	case !owned || !o.Factory():
+		return nil
+	}
+	return fmt.Errorf("PR #%d needs you for what the factory's fix left, and the factory raised it: it lifts it once you answer it there "+
+		"(`magnum fix --done` lifts only what magnum's own fix left), or `magnum fix --handover back %s` returns the PR to magnum; nothing changed",
+		pr.Number, ref)
+}
+
 // attentionCauseRe is the factory's cause of an attention: a short word.
 var attentionCauseRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 
 // requestFixAttention raises or lifts the attention of a PR the factory
 // fixes (fixwork.AttentionPayload), silently: no toast and no reveal, since
 // the factory alerts the operator itself. A raise moves a reviewed PR to
-// needs attention, kind fix, with the factory's why as its message; a lift
-// puts it back while its attention is still that one. Both say so in an
-// event (fix.factory_attention), with the cause.
+// needs attention, kind fix, with the factory's why as its message, and
+// marks it as the factory's (kvPRAttentionBy), which `magnum fix --done`
+// refuses (factoryAttentionRefusal); a lift puts it back while its
+// attention is still that one. Both say so in an event
+// (fix.factory_attention), with the cause.
 func (e *Engine) requestFixAttention(ctx context.Context, p fixwork.AttentionPayload) (string, error) {
 	repo, pr, err := e.resolve(ctx, PRTarget{Repo: p.Repo, Number: p.Number})
 	if err != nil {
@@ -294,7 +340,7 @@ func (e *Engine) requestFixAttention(ctx context.Context, p fixwork.AttentionPay
 		if err != nil {
 			return "", fmt.Errorf("%s moved on meanwhile: %w", label, err)
 		}
-		e.delKV(ctx, KVPRAttention(pr.ID), kvPRAttentionRun(pr.ID))
+		e.delKV(ctx, KVPRAttention(pr.ID), kvPRAttentionRun(pr.ID), kvPRAttentionBy(pr.ID))
 		e.event(ctx, "info", subject, "fix.factory_attention", "the factory lifted the PR's attention ("+p.Cause+")", data)
 		return fmt.Sprintf("%s: the attention is lifted: PR %s", label, to), nil
 	}
@@ -312,6 +358,7 @@ func (e *Engine) requestFixAttention(ctx context.Context, p fixwork.AttentionPay
 		return "", fmt.Errorf("%s moved on meanwhile: %w", label, err)
 	}
 	e.setKV(ctx, KVPRAttention(pr.ID), attention.KindFix)
+	e.setKV(ctx, kvPRAttentionBy(pr.ID), rowJSON(attentionBy{By: attentionByFactory, Message: msg, Cause: p.Cause, At: e.now().UTC()})) // only the factory lifts it
 	e.event(ctx, "warn", subject, "fix.factory_attention", "the factory raised the PR's attention ("+p.Cause+"): "+msg, data)
 	return fmt.Sprintf("%s needs you: %s", label, msg), nil
 }
