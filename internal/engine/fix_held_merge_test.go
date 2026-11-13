@@ -916,7 +916,7 @@ func TestAHoldThatFailsLeavesNothingAndNeedsYouAsBefore(t *testing.T) {
 			role: role, head: fixHead, mode: FixModeMerge}
 		id, _, _ := h.e.fixerSignature(job.role.Identity)
 		held, why := h.e.holdMerge(h.ctx, job, id, fixHead, fixMergeHead, fixConflict{Base: "master", SHA: fixBaseTip},
-			pushRefusal{why: "keeps the PR's own workflow changes", own: []string{".github/workflows/ci.yml"}, files: []string{".github/workflows/ci.yml"}})
+			pushRefusal{Why: "keeps the PR's own workflow changes", Own: []string{".github/workflows/ci.yml"}, Files: []string{".github/workflows/ci.yml"}})
 		if why != "" || held.Merge != fixMergeHead {
 			t.Fatalf("holdMerge = %+v, %q; want it held", held, why)
 		}

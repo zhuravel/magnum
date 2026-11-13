@@ -18942,6 +18942,10 @@ const OpenStalePolls = 4
     after each tick ends, so ticks start an interval plus a tick's length apart,
     and one failed poll puts the last good one two such spans back.
 
+const WorkflowsPath = ".github/workflows"
+    WorkflowsPath is where a repository's GitHub workflows live: a merge that
+    changes it is not the fixer App's to push.
+
 
 VARIABLES
 
@@ -19025,6 +19029,12 @@ func FixNeedsAsked(msg string, entries []string) []string
     all and none otherwise, since it cannot say which went; one that asks for no
     call keeps none. The factory screen draws what it keeps.
 
+func ForgedWords(at string, err error) string
+    ForgedWords says why magnum pushes or holds nothing of at (the merge in
+    words): err, an object a read of its workflow files went through, is not
+    what its name says (gitx.ErrObjectMismatch), so what magnum read of the
+    clone is not what GitHub would get.
+
 func MagnumDue(f Facts) (why string, late bool, until time.Time)
     MagnumDue is rule 5: magnum has not reviewed the head (its reviewed head
     is another, or a round is due or running): the wait's words, whether it
@@ -19100,6 +19110,13 @@ func ReadCIFailures(ctx context.Context, gh CIReadClient, owner, name string, pr
     it Moved; either returns at once, with no file. A log alone that could not
     be read is that job's Unread in the file.
 
+func RefusedHeadBranch(repo store.Repo, pr store.PR, base string) string
+    RefusedHeadBranch says why magnum never pushes to pr's branch, "" when it
+    may: master, main, repo's default branch and the PR's base (its row's,
+    and base, the one the job merges), as `magnum push` refuses them
+    (internal/cli/push.go). A PR from main into production is not the bot's to
+    push to.
+
 func ReviewKey(run string) string
     ReviewKey is the key of magnum's review of run.
 
@@ -19147,6 +19164,13 @@ func WaitClock(t, now time.Time) string
 func WorkWords(items []Item) string
     WorkWords counts items by kind and class: "1 review of magnum's and 1 thread
     of a person".
+
+func WorkflowRead[T any](ctx context.Context, g IsolatedGit, dir string, commits []string, read func(iso string) (T, error)) (T, error)
+    WorkflowRead is read of a merge's workflow files in dir's objects, in a
+    repository of the daemon's own (IsolatedGit.Isolated), after every object of
+    the workflow files at commits is hashed again (VerifyObjects): what decides
+    or shows a push with the Workflows token is what GitHub would get of it.
+    A forged object is gitx.ErrObjectMismatch (ForgedWords).
 
 func WriteCIFiles(dir string, b []byte, md string) error
     WriteCIFiles writes ci-failures.json (b) and ci-failures.md (md) into dir.
@@ -19774,6 +19798,19 @@ type Hold struct{ From, To time.Time }
     Hold is a span that held a round nobody forced: a `magnum pause` that ended,
     or a window of [daemon] quiet_hours.
 
+type IsolatedGit interface {
+	Isolated(ctx context.Context, dir string, fn func(iso string) error) error
+	VerifyObjects(ctx context.Context, dir, path string, commits ...string) error
+}
+    IsolatedGit reads a clone's objects where none of the clone's own settings
+    apply, and checks them (*gitx.Client has it): Isolated runs its func in
+    a bare repository of its own that shares the clone's objects (no config,
+    attribute, merge driver or ref of the clone's, which the fixer's pane can
+    write), and VerifyObjects hashes again every object a read of a path at some
+    commits goes through (gitx.ErrObjectMismatch for one whose content is not
+    its name: git never hashes an object again when it reads it, while GitHub
+    has the real one).
+
 type Item struct {
 	Key          string `json:"key"`
 	Class        string `json:"class"`
@@ -20166,6 +20203,28 @@ type PushMerge struct {
 }
     PushMerge is a conflict of the head with its base (the engine's Conflict) as
     a record keeps it.
+
+type PushRefusal struct {
+	Why   string
+	Own   []string
+	Files []string
+}
+    PushRefusal is why the engine's pushMerge pushed nothing (Why; "" when it
+    pushed): for a merge of the tip GitHub names for the base whose only fault
+    is that it keeps the PR's own workflow changes, Own names them (the workflow
+    files that differ from that tip) and Files the workflow files the push
+    changes against the head, so the settle may hold it for your y (holdMerge);
+    both are empty for any other refusal.
+
+func OwnWorkflowsRefusal(at string, b Conflict, tip, login string, own, workflows []string) PushRefusal
+    OwnWorkflowsRefusal is pushMerge's refusal of at (the merge in words),
+    a merge of b that brings the base's workflow changes (workflows: its
+    workflow files, against the head), whose workflow files own differ from tip,
+    the base's tip on GitHub, as login, the identity that would push it: one
+    that is not of that tip is never pushed; one of that tip whose only fault
+    is that it keeps the PR's own workflow changes names them and its workflow
+    files, so the settle may hold it for your y. Zero when own is empty: nothing
+    to refuse.
 
 type Settle struct {
 	Quiet, Max, Late, HandsOff time.Duration

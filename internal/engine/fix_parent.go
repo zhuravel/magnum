@@ -52,10 +52,6 @@ const FixModeMerge = "merge"
 // fixMergeBy is who starts a merge of the parent (FixState.By).
 const fixMergeBy = "magnum merge-parent"
 
-// workflowsPath is where a repository's GitHub workflows live: a merge
-// that changes it is not the fixer App's to push.
-const workflowsPath = ".github/workflows"
-
 // parentGit is the git the daemon's merge of a PR's parent takes beyond Git
 // (*gitx.Client has it): the merged tree, its merge commit, the paths a
 // change touches, the paths two commits have otherwise, a first-parent
@@ -74,47 +70,6 @@ type parentGit interface {
 }
 
 var _ parentGit = (*gitx.Client)(nil)
-
-// isolatedGit reads a clone's objects where none of the clone's own
-// settings apply, and checks them (*gitx.Client has it): Isolated runs its
-// func in a bare repository of its own that shares the clone's objects
-// (no config, attribute, merge driver or ref of the clone's, which the
-// fixer's pane can write), and VerifyObjects hashes again every object a
-// read of a path at some commits goes through (gitx.ErrObjectMismatch for
-// one whose content is not its name: git never hashes an object again
-// when it reads it, while GitHub has the real one).
-type isolatedGit interface {
-	Isolated(ctx context.Context, dir string, fn func(iso string) error) error
-	VerifyObjects(ctx context.Context, dir, path string, commits ...string) error
-}
-
-// workflowRead is read of a merge's workflow files in dir's objects, in a
-// repository of the daemon's own (isolatedGit.Isolated), after every
-// object of the workflow files at commits is hashed again
-// (VerifyObjects): what decides or shows a push with the Workflows token
-// is what GitHub would get of it. A forged object is
-// gitx.ErrObjectMismatch (forgedWords).
-func workflowRead[T any](ctx context.Context, g isolatedGit, dir string, commits []string, read func(iso string) (T, error)) (T, error) {
-	var out T
-	err := g.Isolated(ctx, dir, func(iso string) error {
-		if err := g.VerifyObjects(ctx, iso, workflowsPath, commits...); err != nil {
-			return err
-		}
-		var err error
-		out, err = read(iso)
-		return err
-	})
-	return out, err
-}
-
-// forgedWords says why magnum pushes or holds nothing of at (the merge in
-// words): err, an object a read of its workflow files went through, is not
-// what its name says (gitx.ErrObjectMismatch), so what magnum read of the
-// clone is not what GitHub would get.
-func forgedWords(at string, err error) string {
-	return fmt.Sprintf("an object of the workflow files of %s in the clone is not what its name says (%v), so what magnum read of it is "+
-		"not what GitHub would get", at, err)
-}
 
 // daemonPusher is the identity a push of a merge that carries its base's
 // workflow files goes out as (*identity.App has it): a token of the
@@ -151,7 +106,7 @@ const workflowsWord = "with Workflows"
 // holds such a merge for your y (holdMerge).
 func (e *Engine) pushMerge(ctx context.Context, job *fixJob, pg parentGit, id *config.Identity, head, merge string, b fixConflict) (how string, refused pushRefusal, err error) {
 	if why := refusedHeadBranch(job.repo, job.pr, b.Base); why != "" {
-		return "", pushRefusal{why: why}, nil
+		return "", pushRefusal{Why: why}, nil
 	}
 	src := e.d.Identities[id.Name]
 	if src == nil {
@@ -175,28 +130,23 @@ func (e *Engine) pushMerge(ctx context.Context, job *fixJob, pg parentGit, id *c
 		files := textx.Count(len(workflows), "file", "files")
 		tip, why := e.baseOnGitHub(ctx, job, b, head)
 		if why != "" {
-			return "", pushRefusal{why: fmt.Sprintf("%s brings workflow changes (%s), and %s", at, files, why)}, nil
+			return "", pushRefusal{Why: fmt.Sprintf("%s brings workflow changes (%s), and %s", at, files, why)}, nil
 		}
 		own, err := workflowRead(ctx, pg, dir, []string{head, tip, merge}, func(iso string) ([]string, error) {
 			return pg.DifferingPaths(ctx, iso, merge, tip, workflowsPath)
 		})
 		switch {
 		case errors.Is(err, gitx.ErrObjectMismatch):
-			return "", pushRefusal{why: forgedWords(at, err)}, nil
+			return "", pushRefusal{Why: forgedWords(at, err)}, nil
 		case err != nil:
 			return "", pushRefusal{}, fmt.Errorf("whether %s keeps the PR's own workflow changes: %w", at, err)
 		}
-		switch {
-		case len(own) > 0 && tip != b.SHA:
-			return "", pushRefusal{why: fmt.Sprintf("%s has workflow files that are not as the tip %s of %s on GitHub has them (%s), which %s never pushes",
-				at, textx.ShortSHA(tip), b.Base, strings.Join(own[:min(3, len(own))], ", "), id.Login)}, nil
-		case len(own) > 0:
-			return "", pushRefusal{why: fmt.Sprintf("%s keeps the PR's own workflow changes (%s), which %s never pushes", at,
-				strings.Join(own[:min(3, len(own))], ", "), id.Login), own: own, files: workflows}, nil
+		if r := ownWorkflowsRefusal(at, b, tip, id.Login, own, workflows); r.Why != "" {
+			return "", r, nil
 		}
 		var why2 string
 		if env, release, why2, err = e.workflowsToken(ctx, id, at, files); err != nil || why2 != "" {
-			return "", pushRefusal{why: why2}, err
+			return "", pushRefusal{Why: why2}, err
 		}
 		how = workflowsWord
 	}
@@ -205,18 +155,6 @@ func (e *Engine) pushMerge(ctx context.Context, job *fixJob, pg parentGit, id *c
 		return "", pushRefusal{}, fmt.Errorf("the push of the merge %s: %w", textx.ShortSHA(merge), err)
 	}
 	return how, pushRefusal{}, nil
-}
-
-// pushRefusal is why pushMerge pushed nothing (why; "" when it pushed):
-// for a merge of the tip GitHub names for the base whose only fault is
-// that it keeps the PR's own workflow changes, own names them (the
-// workflow files that differ from that tip) and files the workflow files
-// the push changes against the head, so the settle may hold it for your y
-// (holdMerge); both are empty for any other refusal.
-type pushRefusal struct {
-	why   string
-	own   []string
-	files []string
 }
 
 // workflowsToken is the fix identity id's token with Workflows write for
@@ -242,19 +180,6 @@ func (e *Engine) workflowsToken(ctx context.Context, id *config.Identity, at, fi
 		release = rel
 	}
 	return env, release, "", nil
-}
-
-// refusedHeadBranch says why magnum never pushes to pr's branch, "" when
-// it may: master, main, repo's default branch and the PR's base (its
-// row's, and base, the one the job merges), as `magnum push` refuses them
-// (internal/cli/push.go). A PR from main into production is not the bot's
-// to push to.
-func refusedHeadBranch(repo store.Repo, pr store.PR, base string) string {
-	branch := deref(pr.HeadRef)
-	if slices.ContainsFunc([]string{"master", "main", repo.DefaultBranch, deref(pr.BaseRef), base}, func(b string) bool { return b != "" && strings.EqualFold(b, branch) }) {
-		return fmt.Sprintf("magnum never pushes to %s (master, main, the default branch or the PR's base)", branch)
-	}
-	return ""
 }
 
 // baseOnGitHub checks b, the commit of the PR's base a merge into head
@@ -390,7 +315,7 @@ func (e *Engine) mergeParent(ctx context.Context, job *fixJob) (refused string, 
 	}
 	data := map[string]any{"base": b.Base, "tip": b.SHA, "head": head, "merge": merge, "identity": id.Name, "cycle": job.state.Cycle}
 	how, refusal, err := e.pushMerge(ctx, job, pg, id, head, merge, b)
-	switch refused = refusal.why; {
+	switch refused = refusal.Why; {
 	case err != nil:
 		return "", err
 	case refused != "":
@@ -492,14 +417,14 @@ func (e *Engine) pushHanded(ctx context.Context, job *fixJob, head string) (stri
 	switch {
 	case err != nil:
 		return "", err
-	case len(refused.own) > 0: // fix_held_merge.go: yours to read and push, or the merge by hand when it cannot be held
+	case len(refused.Own) > 0: // fix_held_merge.go: yours to read and push, or the merge by hand when it cannot be held
 		h, why := e.holdMerge(ctx, job, id, job.head, head, b, refused)
 		if why != "" {
 			return why, nil
 		}
-		return "", fixMergeHeld{h: h, refused: refused.why}
-	case refused.why != "":
-		return refused.why, nil
+		return "", fixMergeHeld{h: h, refused: refused.Why}
+	case refused.Why != "":
+		return refused.Why, nil
 	}
 	e.event(ctx, "info", job.subject(), "fix.parent_pushed", fmt.Sprintf("magnum pushed %s's merge of %s at %s into %s as %s %s: the head is %s",
 		job.role.Name, base, textx.ShortSHA(tip), job.label(), id.Login, how, textx.ShortSHA(head)),

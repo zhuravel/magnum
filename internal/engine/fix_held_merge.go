@@ -139,19 +139,19 @@ func heldFindings(job *fixJob) bool { return job.mode == "" && !job.forMerge }
 // leaves no ref and no file.
 func (e *Engine) holdMerge(ctx context.Context, job *fixJob, id *config.Identity, head, merge string, b fixConflict, r pushRefusal) (HeldMerge, string) {
 	hg, ok := e.d.Git.(heldGit)
-	if !ok || len(r.own) == 0 {
-		return HeldMerge{}, r.why
+	if !ok || len(r.Own) == 0 {
+		return HeldMerge{}, r.Why
 	}
 	if pr, err := e.st.PRByID(ctx, job.pr.ID); err != nil || !e.ownPR(pr) {
-		return HeldMerge{}, r.why
+		return HeldMerge{}, r.Why
 	}
-	at, files := fmt.Sprintf("the merge of %s at %s", b.Base, textx.ShortSHA(b.SHA)), textx.Count(len(r.files), "file", "files")
+	at, files := fmt.Sprintf("the merge of %s at %s", b.Base, textx.ShortSHA(b.SHA)), textx.Count(len(r.Files), "file", "files")
 	_, release, why, err := e.workflowsToken(ctx, id, at, files) // no merge is held that no y could push
 	release()
 	switch {
 	case err != nil:
 		e.log.Warn("fix: the Workflows token of a merge to hold", "subject", job.subject(), "err", err)
-		return HeldMerge{}, r.why
+		return HeldMerge{}, r.Why
 	case why != "":
 		return HeldMerge{}, why
 	}
@@ -162,12 +162,12 @@ func (e *Engine) holdMerge(ctx context.Context, job *fixJob, id *config.Identity
 	clone := cmp.Or(job.slot.MainClone, job.slot.Path)
 	dir := e.d.Layout.PRReviews(job.repo.Owner, job.repo.Name, job.pr.Number)
 	h := HeldMerge{Repo: job.repo.FullName(), Number: job.pr.Number, Merge: merge, Head: head, Base: b.Base, Tip: b.SHA,
-		Workflows: slices.Clone(r.files), Conflicts: conflicts, Role: job.role.Name, Identity: id.Name, Login: id.Login, Clone: clone,
+		Workflows: slices.Clone(r.Files), Conflicts: conflicts, Role: job.role.Name, Identity: id.Name, Login: id.Login, Clone: clone,
 		Diff: filepath.Join(dir, HeldMergeFile), Findings: heldFindings(job), At: e.now().UTC()}
 	h.Attention = heldMergeAttention(h)
 	failed := func(what string, err error) (HeldMerge, string) {
 		e.log.Warn("fix: hold the merge of the parent: "+what, "subject", job.subject(), "err", err)
-		return HeldMerge{}, r.why
+		return HeldMerge{}, r.Why
 	}
 	diff, err := heldDiff(ctx, hg, clone, h)
 	switch {
@@ -189,8 +189,8 @@ func (e *Engine) holdMerge(ctx context.Context, job *fixJob, id *config.Identity
 	}
 	e.event(ctx, "info", job.subject(), "fix.merge_held", fmt.Sprintf("magnum holds %s's merge %s of %s at %s into %s for your y: it keeps the "+
 		"PR's own workflow changes (%s); %s", h.Role, textx.ShortSHA(h.Merge), h.Base, textx.ShortSHA(h.Tip), job.label(),
-		escapeControls(strings.Join(r.own[:min(3, len(r.own))], ", ")), h.Diff),
-		map[string]any{"base": h.Base, "tip": h.Tip, "head": h.Head, "merge": h.Merge, "workflows": len(h.Workflows), "own": len(r.own),
+		escapeControls(strings.Join(r.Own[:min(3, len(r.Own))], ", ")), h.Diff),
+		map[string]any{"base": h.Base, "tip": h.Tip, "head": h.Head, "merge": h.Merge, "workflows": len(h.Workflows), "own": len(r.Own),
 			"conflicts": h.Conflicts, "cycle": job.state.Cycle})
 	return h, ""
 }

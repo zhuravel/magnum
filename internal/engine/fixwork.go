@@ -6,6 +6,8 @@ package engine
 // had, through these aliases, until its fix code goes.
 
 import (
+	"context"
+
 	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -239,3 +241,24 @@ var (
 	copyCIFiles    = fixwork.CopyCIFiles
 	ciFailuresText = fixwork.CIFailuresText
 )
+
+// The checks of a push of a merge of the parent, under the engine's names.
+const workflowsPath = fixwork.WorkflowsPath
+
+type (
+	isolatedGit = fixwork.IsolatedGit
+	pushRefusal = fixwork.PushRefusal
+)
+
+var (
+	forgedWords         = fixwork.ForgedWords
+	ownWorkflowsRefusal = fixwork.OwnWorkflowsRefusal
+	refusedHeadBranch   = fixwork.RefusedHeadBranch
+)
+
+// workflowRead is fixwork.WorkflowRead: read of a merge's workflow files
+// in dir's objects, in a repository of the daemon's own, after every
+// object of them at commits is hashed again.
+func workflowRead[T any](ctx context.Context, g isolatedGit, dir string, commits []string, read func(iso string) (T, error)) (T, error) {
+	return fixwork.WorkflowRead(ctx, g, dir, commits, read)
+}
