@@ -159,6 +159,54 @@ func TestDoctorCountsTheCopiesAlreadyMadeForTheRedisDatabases(t *testing.T) {
 	}
 }
 
+// The Redis FAIL offers a lower max_copies or fix_copies only while no copy
+// past the Redis's databases exists: talkable's copies 4 and 5, made while
+// max_copies + fix_copies is still 5, stay whatever the keys say, so
+// lowering them would give a PASS on the next run while their flush fails.
+// It offered lowering whenever no copy was made past the keys (C3 of T3b's
+// third check). With copies made only up to 3, lowering still helps.
+func TestDoctorOffersLowerKeysOnlyWhileNoCopyPastTheRedisExists(t *testing.T) {
+	_, d, _, _ := doctorFixture(t)
+	fake := d.Run.(*execx.Fake)
+	cfg := *d.Config
+	cfg.Factory.Repos = redisRepos()[:1] // max_copies 3, fix_copies 2
+	d.Config = &cfg
+	fake.Rules = append([]execx.Rule{
+		{Prefix: []string{"redis-cli", "-h", "127.0.0.1"}, Result: execx.Result{Stdout: []byte("databases\n64\n")}},
+	}, fake.Rules...)
+	st := storetest.OpenFile(t, d.Layout.FactoryAgentsDB())
+	made := func(names ...string) {
+		t.Helper()
+		for _, n := range names {
+			if _, err := st.CreateSlot(context.Background(), store.Slot{Name: n, RepoFullName: "talkable/talkable", Kind: store.SlotKindPool,
+				Path: "/p/talkable." + n, MainClone: "/p/main", State: store.SlotFree}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	check := func() doctorCheck {
+		t.Helper()
+		for _, c := range doctorRun(context.Background(), d) {
+			if c.Name == "redis talkable/talkable" {
+				return c
+			}
+		}
+		t.Fatal("no redis check of talkable/talkable")
+		return doctorCheck{}
+	}
+
+	made("factory1", "factory2", "factory3")
+	if c := check(); c.Status != doctorFail || !strings.Contains(c.Fix, "databases 96") || !strings.Contains(c.Fix, "or lower talkable/talkable's max_copies or fix_copies") {
+		t.Fatalf("talkable with copies 1 to 3 made, on a Redis with 64 = %+v, want a FAIL that offers lowering the keys", c)
+	}
+	made("factory4", "factory5")
+	c := check()
+	if c.Status != doctorFail || !strings.Contains(c.Fix, "databases 96") || strings.Contains(c.Fix, "lower") ||
+		!strings.Contains(c.Fix, "copies 4 to 5 exist already") {
+		t.Fatalf("talkable with copies 4 and 5 made, on a Redis with 64 = %+v, want a FAIL naming the copies that exist, never lowering the keys", c)
+	}
+}
+
 // A redis-cli that is not on PATH is no Redis that does not answer: doctor
 // names redis-cli and says how to install it, never to start a Redis that
 // runs, and fails where the copies' claims flush their Redis databases with

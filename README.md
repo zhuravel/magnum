@@ -4653,7 +4653,8 @@ stages = [
   install as the fix: a FAIL when the `env` names `REDIS_DB_OFFSET`, since each claim's flush needs it too, a
   WARN otherwise. Its highest copy is also one the factory already made past
   `max_copies + fix_copies` (a pool slot of its agents store): a lower `max_copies` or `fix_copies` retires no
-  copy, and a task's claim takes such a copy, so the check counts it. Each
+  copy, and a task's claim takes such a copy, so the check counts it, and its FAIL offers lower keys as a fix
+  only while no copy past the Redis's databases exists. Each
   of these is a step of `slot:<copy>:claim:<n>` with begin and ok or fail events (a failed one runs again at
   the next claim, a done one never), and each runs the copy's guard first: magnum's slot guard over the herdr
   sessions, the factory's and yours, and `[herdr] review_session` when it is a third, where the local review's

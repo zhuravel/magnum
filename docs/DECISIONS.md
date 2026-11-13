@@ -27051,7 +27051,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
     as the fix of a Redis that ran (the engine owner's C9 on T3b). Doctor names `redis-cli` and its install as
     the fix, a FAIL where the copies' `env` names `REDIS_DB_OFFSET`, since each claim flushes their databases with
     it too and those claims fail, a WARN otherwise (`redisCLIMissing`). Test, failing first:
-    `TestDoctorNamesAMissingRedisCLIThatTheClaimsFlushNeedsToo`.
+    `TestDoctorNamesAMissingRedisCLIThatTheClaimsFlushNeedsToo`. The FAIL offers a lower `max_copies` or
+    `fix_copies` only while no copy past the Redis's databases exists, the highest copy made (`redisCopies.made`)
+    below the first that cannot flush; otherwise it names those copies as existing already. It offered lowering
+    whenever no copy was made past the keys themselves, so with copies 4 and 5 made and the keys still at 5, the
+    first run's fix gave a PASS on the next after the operator lowered them (the engine owner's C3 of T3b's
+    third check). Test, failing first: `TestDoctorOffersLowerKeysOnlyWhileNoCopyPastTheRedisExists`.
 
 ## Learned rules
 

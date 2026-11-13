@@ -39,8 +39,8 @@ func doctorRedis(ctx context.Context, d doctorDeps) []doctorCheck {
 	var out []doctorCheck
 	for _, r := range d.Config.Factory.Repos {
 		if r.UsesRedis() {
-			last := max(r.LastCopy(), factory.LastCopyMade(r, made[r.Repo]))
-			out = append(out, doctorRedisRepo(ctx, d, r, redisCopies{last: last, unread: unread}))
+			made := factory.LastCopyMade(r, made[r.Repo])
+			out = append(out, doctorRedisRepo(ctx, d, r, redisCopies{last: max(r.LastCopy(), made), made: made, unread: unread}))
 		}
 	}
 	if len(out) == 0 {
@@ -50,11 +50,13 @@ func doctorRedis(ctx context.Context, d doctorDeps) []doctorCheck {
 }
 
 // redisCopies is how far a repository's copies reach for its Redis check:
-// last, its highest copy, and why the copies the factory made could not be
-// read (unread; nil when they were, or the factory has no agents store).
+// last, its highest copy, the configuration's or one made, made, the
+// highest copy the factory made (0 for none), and why the copies it made
+// could not be read (unread; nil when they were, or the factory has no
+// agents store).
 type redisCopies struct {
-	last   int
-	unread error
+	last, made int
+	unread     error
 }
 
 // need is how many databases the copies up to last need: the highest
@@ -108,18 +110,24 @@ func redisCLIMissing(name, needs, addr string, r config.FactoryRepo) doctorCheck
 
 // redisTooFew is the FAIL of repository r's Redis at addr, which has have
 // databases, fewer than its copies need: it names the copies whose claims
-// cannot flush theirs, and the fix. Lowering max_copies or fix_copies is a
-// fix only while no copy past them exists.
+// cannot flush theirs, first to copies.last, and the fix. Lowering
+// max_copies or fix_copies is a fix only while none of those copies exists
+// (copies.made below first): no code retires a copy the factory made.
 func redisTooFew(name, needs, addr string, r config.FactoryRepo, copies redisCopies, have int) doctorCheck {
+	first := max(have/config.RedisDBsPerCopy, 1)
 	fix := fmt.Sprintf("set `databases %d` (or more) in the redis.conf of the Redis at %s and restart it (CONFIG SET cannot change it)",
 		copies.need(), addr)
-	if copies.last > r.LastCopy() {
-		fix += ": the copies made past max_copies + fix_copies stay, whatever the keys say"
+	if copies.made >= first {
+		verb := " exist"
+		if copies.made == first {
+			verb = " exists"
+		}
+		fix += fmt.Sprintf(": %s%s already and stay, whatever max_copies and fix_copies say", copiesRange(first, copies.made), verb)
 	} else {
 		fix += fmt.Sprintf(", or lower %s's max_copies or fix_copies", r.Repo)
 	}
 	return doctorFailed(name, fmt.Sprintf("%s, and the Redis at %s has %d: the claims of %s cannot flush theirs", needs, addr, have,
-		copiesRange(max(have/config.RedisDBsPerCopy, 1), copies.last)), fix)
+		copiesRange(first, copies.last)), fix)
 }
 
 // copiesRange names copies first to last: "copy 5", "copies 4 to 5".
