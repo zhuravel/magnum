@@ -885,6 +885,35 @@ func TestAFixCheckoutGoesWhenItsPRClosesOrItsWorkIsGone(t *testing.T) {
 	}
 }
 
+// A fix copy's release, as a per-PR checkout's removal, holds over the
+// fixer's commit on no remote (unpushed_commits, not saved as the copy's
+// hold, so the next try reads it afresh) and frees the copy once the fixer
+// pushed it: the release fetches the PR's head first, so the pushed commit
+// is no head_drift. Only the per-PR checkout's removal had this test (R11
+// on T3b).
+func TestAFixCopysReleaseHoldsTheFixersCommitUntilItIsPushed(t *testing.T) {
+	r := newFixRig(t, 1, 1)
+	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
+	w := r.prWork("talkable/talkable", 7)
+	fc := r.claimFix(w)
+	r.commit(fc.Path, "fix.txt", "v2\n")
+	err := r.c.ReleaseFix(r.ctx, w, "released")
+	if hold, ok := errors.AsType[slots.ErrHold](err); !ok || hold.Reason != slots.HoldUnpushed {
+		t.Fatalf("the release over the fixer's commit = %v, want held: unpushed_commits", err)
+	}
+	if sl := r.slot(fc.Name); sl.HoldReason != nil || sl.PRID == nil {
+		t.Fatalf("%s after the refused release: hold %q, pr %v, want no saved hold and still the PR's", fc.Name, store.Deref(sl.HoldReason), sl.PRID)
+	}
+	r.gitIn(fc.Path, "push", "--quiet", "--force", "origin", "HEAD:refs/pull/7/head") // the fixer pushes it
+	r.releaseFix(w)
+	if sl := r.slot(fc.Name); sl.State != store.SlotFree || sl.HoldReason != nil || sl.PRID != nil {
+		t.Fatalf("%s after the release = %s, hold %q, pr %v, want free", fc.Name, sl.State, store.Deref(sl.HoldReason), sl.PRID)
+	}
+	if got := r.ref(r.main, fixRef(7)); got != "" {
+		t.Fatalf("%s is still %s after the release", fixRef(7), got)
+	}
+}
+
 // A force-push of the PR between the claim and the release holds nothing:
 // the head the claim switched to counts as pushed, though the release's
 // fetch moved the fix ref off it. Its commits counted as unpushed_commits,
