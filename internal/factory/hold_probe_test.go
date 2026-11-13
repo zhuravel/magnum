@@ -3,6 +3,7 @@ package factory
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -15,8 +16,12 @@ import (
 // mysqlPing is a MySQL ping a test turns up and down: it records each call
 // and the time its context allowed it (zero: none, the tick's own).
 type mysqlPing struct {
-	mu        sync.Mutex
-	down      bool
+	mu   sync.Mutex
+	down bool
+	// flapping answers the calls bounded by a deadline (the hold's probe)
+	// and fails the others (the try's own ping, on the tick's context): a
+	// MySQL that answers the probe and is gone again by the try.
+	flapping  bool
 	calls     int
 	bounded   int           // the calls whose context had a deadline
 	longest   time.Duration // the longest of those deadlines, from the call
@@ -29,17 +34,32 @@ func (p *mysqlPing) set(down bool) {
 	p.down = down
 }
 
+func (p *mysqlPing) flap(on bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.flapping = on
+}
+
+// count is how many pings ran, and how many of them were a try's own
+// (unbounded).
+func (p *mysqlPing) count() (calls, unbounded int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls, p.unbounded
+}
+
 func (p *mysqlPing) ping(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.calls++
-	if dl, ok := ctx.Deadline(); ok {
+	dl, bounded := ctx.Deadline()
+	if bounded {
 		p.bounded++
 		p.longest = max(p.longest, time.Until(dl))
 	} else {
 		p.unbounded++
 	}
-	if p.down {
+	if p.down && !(p.flapping && bounded) {
 		return errors.New("mysqlx: ping: dial tcp 127.0.0.1:3306: connect: connection refused")
 	}
 	return nil
@@ -235,5 +255,113 @@ func TestAHoldWithNoCheapProbeKeepsItsSchedule(t *testing.T) {
 	h.e.d.MySQL = nil // a build with no MySQL ping has nothing to ask
 	if probe := h.e.holdProbe(Hold{Kind: HoldInfra, Reason: causeMySQL}); probe != nil {
 		t.Error("a probe without a MySQL ping")
+	}
+}
+
+// A MySQL that flaps answered the hold's probe and failed the try's own ping
+// right after it: the try failed and counted, as a scheduled one does, and
+// the next tick asked the probe again, which answered, so every tick ran a
+// full try. After a try that a probe made due fails, the hold asks nothing
+// before the Next that failure scheduled: no probe, no try, no change to the
+// hold. At that Next the scheduled try runs as before, and after it the
+// probe asks again: a MySQL that now answers lifts the hold at the next tick.
+func TestAFailedTryAfterAProbeWaitsForTheScheduleBeforeTheNextProbe(t *testing.T) {
+	h, my, c := mysqlHarness(t)
+	at := time.Duration(0) // the daemon's ticks come every poll, 30 seconds, or a gap would pass for a sleep
+	tickTo := func(to time.Duration) {
+		for ; at <= to; at += 30 * time.Second {
+			h.clock.Set(t0.Add(at))
+			h.tick()
+		}
+	}
+	tickTo(6 * time.Minute) // MySQL down: the hold's start and its tries at 2 and 6 minutes, the next due at 14m
+	my.flap(true)           // the probe's ping answers from now on, the try's own fails
+	tickTo(6*time.Minute + 30*time.Second)
+	hd := h.e.holds[HoldInfra]
+	failedAt := t0.Add(6*time.Minute + 30*time.Second)
+	if hd == nil || hd.Tries != 3 || !hd.Next.Equal(failedAt.Add(16*time.Minute)) {
+		t.Fatalf("hold %+v, want the try the probe made due at 6m30s failed and counted: three tries, the next at 22m30s", hd)
+	}
+	was := *hd
+	pings, _ := my.count()
+	for ; at < 22*time.Minute+30*time.Second; at += 30 * time.Second {
+		h.clock.Set(t0.Add(at))
+		h.tick()
+		if n, _ := my.count(); n != pings {
+			t.Fatalf("at %v the hold asked MySQL %d times before the Next its failed try scheduled (22m30s)", at, n-pings)
+		}
+		if hd := h.e.holds[HoldInfra]; hd == nil || *hd != was {
+			t.Fatalf("at %v the hold changed before its Next: %+v, was %+v", at, hd, was)
+		}
+	}
+
+	h.clock.Set(t0.Add(at)) // 22m30s, the scheduled try: the try's own ping alone, which fails and counts
+	h.tick()
+	at += 30 * time.Second
+	if n, unbounded := my.count(); n != pings+1 || unbounded != 5 {
+		t.Fatalf("at 22m30s %d pings, %d of all a try's own, want the scheduled try's ping alone (the fifth)", n-pings, unbounded)
+	}
+	if hd := h.e.holds[HoldInfra]; hd == nil || hd.Tries != 4 || !hd.Next.Equal(t0.Add(52*time.Minute+30*time.Second)) {
+		t.Fatalf("hold %+v, want the scheduled try failed: four tries, the next at 52m30s", hd)
+	}
+
+	my.flap(false)
+	my.set(false) // MySQL answers for good: the probe asks again after the scheduled try, and the hold lifts
+	tickTo(23 * time.Minute)
+	if _, held := h.e.holds[HoldInfra]; held {
+		t.Fatalf("the probe asked nothing after the scheduled try: %+v", h.e.holds[HoldInfra])
+	}
+	if ran := c.at; len(ran) != 1 || !ran[0].Equal(t0.Add(23*time.Minute)) {
+		t.Fatalf("the stage ran at %v, want once, at 23m", ran)
+	}
+	if n := strings.Count(strings.Join(holdEvents(h), "\n"), "answers again"); n != 1 {
+		t.Fatalf("hold events %q, want one line that says MySQL answers again for the outage", holdEvents(h))
+	}
+}
+
+// A MySQL that flaps for the whole outage (each probe answers, each try's own
+// ping fails) made every tick a failed try: 62 tries in 31 minutes, a hold
+// event each, the backoff at its 30-minute cap within 2 minutes. Each try
+// a probe made due now waits for the Next its failure scheduled, so the tries
+// keep the hold's schedule (infraBackoff after each): the probe's at 30
+// seconds, then at its Next (4m30s) the scheduled one, the probe's again at
+// the tick after it (5m), the scheduled one at 21m and the probe's at 21m30s.
+// The hold reaches NEEDS YOU at 30 minutes, as one whose MySQL stays down
+// does, with five tries, and no stage runs.
+func TestAFlappingMySQLReachesNeedsYouNoFasterThanTheSchedule(t *testing.T) {
+	h, my, c := mysqlHarness(t)
+	my.flap(true)
+	var tries []time.Duration // the ticks whose try failed and counted
+	for at := time.Duration(0); at <= 31*time.Minute; at += 30 * time.Second {
+		h.clock.Set(t0.Add(at))
+		before := 0
+		if hd := h.e.holds[HoldInfra]; hd != nil {
+			before = hd.Tries
+		}
+		h.tick()
+		hd := h.e.holds[HoldInfra]
+		if hd == nil {
+			t.Fatalf("at %v the hold lifted though every try's ping failed", at)
+		}
+		if hd.Tries > before {
+			tries = append(tries, at)
+		}
+		if blockers := h.e.Blocking(); (len(blockers) > 0) != (at >= holdNeedsYou) {
+			t.Fatalf("at %v blockers %q, want NEEDS YOU from 30 minutes on, not before", at, blockers)
+		}
+	}
+	want := []time.Duration{30 * time.Second, 4*time.Minute + 30*time.Second, 5 * time.Minute, 21 * time.Minute,
+		21*time.Minute + 30*time.Second}
+	if !slices.Equal(tries, want) {
+		t.Fatalf("failed tries at %v, want %v: after each try a probe made due, none before the Next it scheduled", tries, want)
+	}
+	if hd := h.e.holds[HoldInfra]; hd.Tries != 5 || !hd.Next.Equal(t0.Add(51*time.Minute+30*time.Second)) {
+		t.Fatalf("hold %+v, want five tries, the next at 51m30s", *hd)
+	}
+	if evs := holdEvents(h); len(evs) != 7 {
+		t.Fatalf("hold events %q, want the begin, one line that MySQL answers again and the five failed tries", evs)
+	}
+	if n := len(c.list()); n != 0 {
+		t.Fatalf("the stage ran %d times while every try's ping failed", n)
 	}
 }

@@ -406,8 +406,11 @@ type Engine struct {
 	envCrashed map[int64]envCrashes
 	holdTry    bool
 	// probeNoted is the Since of the infrastructure hold whose probe said
-	// its cause answers again (probeHold): one line for each outage.
+	// its cause answers again (probeHold): one line for each outage. probed
+	// is the try such a probe last made due: once it failed, no probe asks
+	// before the Next it scheduled (probeFailed).
 	probeNoted time.Time
+	probed     probedTry
 	// holdsWritten is the holds as this daemon last saved them for the
 	// screen (saveHolds), holdsSaved whether it saved them yet.
 	holdsWritten []byte

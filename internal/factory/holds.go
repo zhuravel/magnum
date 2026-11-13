@@ -195,13 +195,16 @@ func (e *Engine) holdProbe(h Hold) func(context.Context) error {
 // bounded by holdProbeTime. A cause that answers makes the hold's try due now
 // instead of at its schedule, and the full try follows in this tick (Tick's
 // advance): it lifts the hold, or fails and counts, as a scheduled one does.
-// A probe that does not answer changes nothing: the backoff, the tries and
-// the time to NEEDS YOU go on. A tick at or after the hold's Next asks
-// nothing: its try is the question. Each outage says so once, when its cause
-// first answers (probeNoted), in the log and in a hold event.
+// After such a try failed, no tick asks before the Next it scheduled
+// (probeFailed): a cause that answers the probe and fails the try right after
+// (a MySQL that flaps) would make every tick a try. A probe that does not
+// answer changes nothing: the backoff, the tries and the time to NEEDS YOU go
+// on. A tick at or after the hold's Next asks nothing: its try is the
+// question. Each outage says so once, when its cause first answers
+// (probeNoted), in the log and in a hold event.
 func (e *Engine) probeHold(ctx context.Context, herdrUp bool, now time.Time) {
 	h := e.holds[HoldInfra]
-	if h == nil || !herdrUp || e.draining.Load() || !now.Before(h.Next) {
+	if h == nil || !herdrUp || e.draining.Load() || !now.Before(h.Next) || e.probeFailed(*h) {
 		return
 	}
 	probe := e.holdProbe(*h)
@@ -214,6 +217,7 @@ func (e *Engine) probeHold(ctx context.Context, herdrUp bool, now time.Time) {
 	if err != nil {
 		return
 	}
+	e.probed = probedTry{since: h.Since, tries: h.Tries}
 	scheduled := h.Next
 	h.Next = now
 	if e.probeNoted.Equal(h.Since) {
@@ -224,6 +228,22 @@ func (e *Engine) probeHold(ctx context.Context, herdrUp bool, now time.Time) {
 	e.log.Info("infrastructure hold: MySQL answers again; the try runs now", "scheduled", scheduled)
 	e.event(ctx, 0, "hold", registry.PhaseInfo, fmt.Sprintf("infra: MySQL answers again (a probe, 2 s at most); the try runs now, not at %s",
 		scheduled.Local().Format("15:04")))
+}
+
+// probedTry is the try a hold's probe last made due (probeHold): the hold's
+// Since and its Tries when the probe answered.
+type probedTry struct {
+	since time.Time
+	tries int
+}
+
+// probeFailed reports whether the try hold h's probe last made due failed
+// and counted (one try more than when the probe answered) with no try since:
+// the hold then waits for the Next that failure scheduled (infraBackoff), as
+// after a scheduled try, and the try at that Next asks again before the
+// probe does.
+func (e *Engine) probeFailed(h Hold) bool {
+	return e.probed.since.Equal(h.Since) && h.Tries == e.probed.tries+1
 }
 
 // lift ends the hold under key (its kind, or a repository's, repoHoldKey),

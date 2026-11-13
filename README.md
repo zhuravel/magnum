@@ -5903,7 +5903,9 @@ again ends when they do, and 3 such crashes at one head send that task to you); 
 needs you. A hold whose cause is MySQL does not wait for its schedule once MySQL is back: each tick between the
 tries asks the MySQL ping alone, at most 2 seconds, and the first tick after it answers runs the hold's try at
 once (it lifts the hold, or fails and counts as a scheduled try does; one hold event says `MySQL answers again`
-for each outage); a probe that does not answer changes nothing, and a hold of another cause (SSH, DNS, TLS,
+for each outage). After such a try fails, no tick asks again before the next try it scheduled, so a MySQL that
+answers the probe and is gone by the try keeps the hold's schedule instead of making every tick a try; a probe
+that does not answer changes nothing, and a hold of another cause (SSH, DNS, TLS,
 the environment, the same failure on two tasks) keeps its schedule. Every copy of a repository broken with one cause is an infrastructure hold of that repository alone,
 which stops no stage (see **Copies** above). A stage that keeps failing for a cause of its own (gh
 logged out, a token without scope, a push the remote's hooks refuse) is tried again no sooner than a poll after each

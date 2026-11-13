@@ -27767,11 +27767,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   and the same failure on two tasks have no cheap question, so they keep today's schedule, as does a repository's
   infrastructure hold (it has its own repair), and a build with no MySQL ping has no probe. No Redis cause is
   named by a hold in this build, so there is no Redis probe; a cause added later gets one in `holdProbe`. A
-  MySQL that flaps (the probe answers, the try's ping fails) counts a failed try each time and runs no stage,
-  since the try's ping comes first.
+  MySQL that flaps (the probe answers, the try's own ping fails) would make every tick a full try that fails
+  and counts: 62 tries in 31 minutes, a hold event each, the backoff at its 30-minute cap within 2 minutes. So
+  after a try that a probe made due fails, no tick asks the probe before the `Next` that failure scheduled
+  (`probeFailed`; `probed` is the hold's `Since` and its `Tries` when the probe answered): the try counts and
+  schedules as a scheduled one does (`Tries`, `infraBackoff`), the scheduled try at that `Next` runs as before,
+  and after it the probe asks again. A MySQL that flaps for the whole outage then tries at 30 seconds (the
+  probe's), 4m30s (the schedule's), 5 minutes (the probe's), 21 minutes and 21m30s: five tries when the hold
+  reaches NEEDS YOU at 30 minutes, which is time from `Since` and comes no sooner. No try runs a stage, since
+  the try's ping comes first.
   Tests, failing first: `TestAnInfraHoldLiftsAtTheFirstTickAfterMySQLAnswersAgain`,
-  `TestAProbeThatFailsKeepsTheBackoffAndItsTries` and `TestAHoldWithNoCheapProbeKeepsItsSchedule`. No
-  migration, no new key.
+  `TestAProbeThatFailsKeepsTheBackoffAndItsTries`, `TestAHoldWithNoCheapProbeKeepsItsSchedule`,
+  `TestAFailedTryAfterAProbeWaitsForTheScheduleBeforeTheNextProbe` and
+  `TestAFlappingMySQLReachesNeedsYouNoFasterThanTheSchedule`. No migration, no new key.
 
 ## Learned rules
 
