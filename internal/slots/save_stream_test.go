@@ -2,6 +2,7 @@ package slots
 
 import (
 	"flag"
+	"fmt"
 	"math/rand/v2"
 	"os"
 	"os/signal"
@@ -10,6 +11,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
 )
@@ -176,5 +178,69 @@ func TestAWriteIntoTheSaveThatFailsRefusesTheRemoval(t *testing.T) {
 	}
 	if evs := h.discarded(t, sl.Name); len(evs) != 0 {
 		t.Fatalf("slot.discarded events = %+v, want none", evs)
+	}
+}
+
+// A forced removal whose save fails part way goes on, as you asked, and
+// keeps what the save copied: its saved.txt names every file the save
+// does not hold, past the event's 20 too, with the error, and the
+// slot.discarded warning names the save. The failed save was removed
+// whole, the files it had copied with it, before `worktree remove --force`
+// deleted them all.
+func TestAForcedRemovalKeepsWhatItsFailedSaveCopied(t *testing.T) {
+	storetest.Serial(t)
+	f := newPerPR(t, true)
+	h := f.h
+	limit := fileLimit()
+	h.m.saveCap = 2*limit + 1<<20 // the file fits the cap: only its write fails
+	sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, f.repoName(), f.pr, f.sha7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sl.Path, "a-notes.txt"), "mine\n")
+	dump := make([]byte, limit+200<<10)
+	_, _ = rand.NewChaCha8([32]byte{9}).Read(dump)
+	if err := os.WriteFile(filepath.Join(sl.Path, "b-dump.sql"), dump, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var after []string
+	for i := range 24 {
+		name := fmt.Sprintf("c-%02d.txt", i)
+		writeFile(t, filepath.Join(sl.Path, name), "later\n")
+		after = append(after, name)
+	}
+
+	undo := limitFileSize(t, limit, true)
+	err = h.m.RemovePRWorktree(h.ctx, sl, true)
+	undo()
+	if err != nil {
+		t.Fatalf("a forced removal: %v", err)
+	}
+	if got := h.slot(sl.Name); got.State != store.SlotRemoved || fsx.Exists(sl.Path) {
+		t.Fatalf("state %s, directory left %v; want a forced removal to go on", got.State, fsx.Exists(sl.Path))
+	}
+	got := saves(t, h.layout.PRSaves("zhuravel", "widget", f.pr.Number))
+	if len(got) != 1 {
+		t.Fatalf("saves = %q, want the one the failed save copied into", got)
+	}
+	if b, err := os.ReadFile(filepath.Join(got[0], "untracked", "a-notes.txt")); err != nil || string(b) != "mine\n" {
+		t.Fatalf("a-notes.txt saved = %q, %v; want it kept", b, err)
+	}
+	if _, err := os.Lstat(filepath.Join(got[0], "untracked", "b-dump.sql")); !os.IsNotExist(err) {
+		t.Fatalf("the dump cut short is in the save: %v", err)
+	}
+	note := readFile(t, filepath.Join(got[0], "saved.txt"))
+	for _, p := range append([]string{"b-dump.sql"}, after...) {
+		if !strings.Contains(note, "- "+p+" (not saved: the save failed)\n") {
+			t.Fatalf("saved.txt does not name %s as not saved:\n%s", p, note)
+		}
+	}
+	if !strings.Contains(note, "failed part way") || !strings.Contains(note, "file too large") {
+		t.Fatalf("saved.txt does not say the save failed part way, with its error:\n%s", note)
+	}
+	evs := h.discarded(t, sl.Name)
+	if len(evs) != 1 || evs[0].Level != "warn" || !strings.Contains(evs[0].Message, got[0]) ||
+		!strings.Contains(evs[0].Message, "(+5 more)") || !strings.Contains(evs[0].Message, "forced") {
+		t.Fatalf("slot.discarded events = %+v, want one warning that names the save, 20 files and how many more", evs)
 	}
 }

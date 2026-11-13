@@ -788,23 +788,22 @@ func (m *Manager) removeWorktree(ctx context.Context, sl store.Slot, force bool)
 // step retries then, the failure is not raised as one that does
 // (saveFailed), but logged, and unsaved is the slot.discarded event, at
 // level warn, that the caller writes once the worktree went: the changes
-// it deleted, "forced, not saved", and the save's error. A record of an
-// earlier failure goes with the slot's removal (markRemoved).
+// it deleted, the part of the save kept (keepPartial: what it copied, and
+// a saved.txt that names all it does not hold), "forced, not saved", and
+// the save's error. A record of an earlier failure goes with the slot's
+// removal (markRemoved).
 func (m *Manager) noteRemoval(ctx context.Context, sl store.Slot, force bool) (dirty bool, unsaved string, err error) {
 	const what = "the removal of the worktree"
 	if !force {
 		dirty, err := m.noteDiscard(ctx, sl, true, what)
 		return dirty, "", err
 	}
-	msg, _, err := m.saveDiscard(ctx, sl, true, what)
+	msg, _, err := m.saveDiscard(ctx, sl, true, true, what)
 	if err == nil {
 		return m.noteSaved(ctx, sl, msg), "", nil
 	}
 	m.logErr(ctx, err, "slots: list and save the changes in %s before a forced removal, which removes them unsaved: %v", sl.Path, err)
-	if msg == "" {
-		msg = fmt.Sprintf("discarding the changes in %s, which could not be listed", sl.Path)
-	}
-	return true, msg + "; forced, not saved (" + failureLine(err) + ")", nil
+	return true, msg, nil
 }
 
 // missing reports whether path definitely does not exist (an unreadable

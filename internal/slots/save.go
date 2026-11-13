@@ -25,6 +25,7 @@ package slots
 // which a discard keeps anyway, but for a removal's.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -108,20 +109,31 @@ func pathElement(name string) string {
 // holds and how many untracked files it saved, what it left out, each
 // "<path> (<why>)", and the untracked files the step keeps in the tree (a
 // switch's, a reset's, an abort's), which it names only. same says the
-// save was the slot's last one again, which dir names (lastSave).
+// save was the slot's last one again, which dir names (lastSave). unsaved
+// is what the save does not hold if it fails at that point, which a
+// forced removal deletes unsaved; failed, the error of such a save, kept
+// in part (keepPartial), and noNote why its saved.txt could not be
+// written either.
 type saved struct {
 	dir                string
 	tracked, untracked int
 	skipped, kept      []string
 	same               bool
+	unsaved            []string
+	failed, noNote     string
 }
 
 // note is what a slot.discarded event adds about the save: where it is,
 // and the first maxListed of what it left out.
 func (s saved) note() string {
 	out := "; saved to " + s.dir
-	if s.same {
+	switch {
+	case s.same:
 		out = "; unchanged since the save " + s.dir + ", which holds them"
+	case s.noNote != "":
+		out = "; saved in part to " + s.dir + ", with no saved.txt (" + s.noNote + ")"
+	case s.failed != "":
+		out = "; saved in part to " + s.dir + ", whose saved.txt names all it does not hold"
 	}
 	if len(s.skipped) > 0 {
 		out += fmt.Sprintf("; the save left out %d: %s", len(s.skipped), clipNames(s.skipped))
@@ -154,8 +166,10 @@ func clipNames(names []string) string {
 // in the folder go first (pruneSaveFolder). A save
 // that fails (its folder, the patch, the listing of the untracked files,
 // saved.txt) leaves nothing behind, and the step that called it discards
-// nothing.
-func (m *Manager) saveChanges(ctx context.Context, sl store.Slot, ch changes, untracked bool, what string) (s saved, err error) {
+// nothing; but with force, a forced removal's, which goes on over it, the
+// save keeps what it copied, with a saved.txt that names all it does not
+// hold (keepPartial), and s is that save.
+func (m *Manager) saveChanges(ctx context.Context, sl store.Slot, ch changes, untracked, force bool, what string) (s saved, err error) {
 	folder, err := m.savesFolder(ctx, sl)
 	if err != nil {
 		return saved{}, err
@@ -166,31 +180,78 @@ func (m *Manager) saveChanges(ctx context.Context, sl store.Slot, ch changes, un
 	if s.dir, err = newSaveDir(folder, m.now(), sl.Name); err != nil {
 		return saved{}, fmt.Errorf("slots: save the changes in %s: %w", sl.Path, err)
 	}
+	head := ""
 	defer func() {
-		if err != nil {
-			_ = os.RemoveAll(s.dir)
-			err = fmt.Errorf("slots: save the changes in %s: %w", sl.Path, err)
+		if err == nil {
+			return
 		}
+		err = fmt.Errorf("slots: save the changes in %s: %w", sl.Path, err)
+		if force {
+			s = m.keepPartial(sl, s, head, what, err)
+			return
+		}
+		_ = os.RemoveAll(s.dir)
+		s = saved{}
 	}()
-	head, err := m.git.RevParse(ctx, sl.Path, "HEAD")
-	if err != nil {
+	own := m.ownFiles(ctx, sl)
+	listed := withoutOwn(sl.MainClone, withoutRenderedMiseLocal(sl.Path, slices.Clone(ch.untracked)), own)
+	if !untracked { // the step keeps them
+		s.kept, listed = listed, nil
+	}
+	s.unsaved = slices.Concat(ch.tracked, listed)
+	if head, err = m.git.RevParse(ctx, sl.Path, "HEAD"); err != nil {
 		return s, err
 	}
 	budget := m.saveCapOr()
 	if len(ch.tracked) > 0 {
 		used, err := m.savePatch(ctx, sl.Path, s.dir, ch.patchPaths(), budget, &s)
 		if err != nil {
+			s.dropPatch()
 			return s, err
 		}
 		budget -= used
 	}
-	own := m.ownFiles(ctx, sl)
-	if !untracked {
-		s.kept = withoutOwn(sl.MainClone, withoutRenderedMiseLocal(sl.Path, slices.Clone(ch.untracked)), own)
-	} else if err := m.saveRemoved(ctx, sl, own, budget, &s); err != nil {
-		return s, err
+	s.unsaved = listed
+	if untracked {
+		if err := m.saveRemoved(ctx, sl, own, budget, &s); err != nil {
+			return s, err
+		}
 	}
+	s.unsaved = nil
 	return m.settleSave(folder, sl, s, head, what)
+}
+
+// dropPatch removes what a patch that failed wrote into the save (a path's
+// patch may be cut short), so a save kept in part holds none of it.
+func (s *saved) dropPatch() {
+	_ = os.Remove(filepath.Join(s.dir, saveDiff))
+	_ = os.Remove(filepath.Join(s.dir, saveDiff+".part"))
+	s.tracked, s.skipped = 0, nil
+}
+
+// keepPartial keeps save s of slot sl, which failed with err before a
+// forced removal (HEAD head, "" when it failed first, before what): the
+// removal goes on, so what the save copied stays, and saved.txt says it
+// failed part way and names, as not saved, all it does not hold
+// (s.unsaved), past the event's maxListed too. A saved.txt that cannot be
+// written either leaves what was copied, which the event says (noNote);
+// a save that then holds nothing goes.
+func (m *Manager) keepPartial(sl store.Slot, s saved, head, what string, err error) saved {
+	s.failed = textx.FirstLine(execx.Redact(err.Error())) // whole: failureLine clips the cause past a long path
+	for _, p := range s.unsaved {
+		s.skipped = append(s.skipped, p+" (not saved: the save failed)")
+	}
+	s.unsaved = nil
+	werr := s.writeNote(sl, cmp.Or(head, "unknown"), what, m.saveCapOr(), m.now())
+	if werr == nil {
+		return s
+	}
+	if s.tracked == 0 && s.untracked == 0 {
+		_ = os.RemoveAll(s.dir)
+		return saved{}
+	}
+	s.noNote = failureLine(werr)
+	return s
 }
 
 // settleSave keeps save s of slot sl, in folder, with its saved.txt (HEAD
@@ -235,10 +296,10 @@ func (m *Manager) saveRemoved(ctx context.Context, sl store.Slot, own []string, 
 	if err != nil {
 		return err
 	}
+	s.skipped = append(s.skipped, edited...)
 	if err := m.saveUntracked(sl.Path, s.dir, theirs, budget, s); err != nil {
 		return err
 	}
-	s.skipped = append(s.skipped, edited...)
 	return nil
 }
 
@@ -449,9 +510,10 @@ func (m *Manager) saveUntracked(tree, dir string, files []string, budget int64, 
 		u.read = fsx.ReadRegularIn
 	}
 	defer u.close()
-	for _, f := range files {
+	for i, f := range files {
 		why, err := u.save(f)
 		if err != nil {
+			s.unsaved = files[i:]
 			return err
 		}
 		if why != "" {
@@ -680,6 +742,10 @@ func (s saved) writeNote(sl store.Slot, head, what string, limit int64, now time
 		// Not -p: it would also set the tree's own folders to the save's 0700.
 		fmt.Fprintf(&b, "- %d untracked file(s) under %s/, each with its owner's bits: `cp -R %s %s` puts them back\n",
 			s.untracked, saveFiles, execx.ShellQuote(filepath.Join(s.dir, saveFiles)+"/."), quoted)
+	}
+	if s.failed != "" {
+		fmt.Fprintf(&b, "\nThe save failed part way (%s), and the forced removal went on: it deleted, unsaved, all this save does not hold, named below as not saved.\n",
+			s.failed)
 	}
 	if len(s.kept) > 0 {
 		fmt.Fprintf(&b, "\n%s%s and not saved (%d):\n", keptHeading, what, len(s.kept))

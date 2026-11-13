@@ -494,7 +494,7 @@ const maxListed = 20
 // is an error, and the step discards nothing; it is raised once per slot
 // (saveFailed), and the next one that works clears it (saveWorked).
 func (m *Manager) noteDiscard(ctx context.Context, sl store.Slot, untracked bool, what string) (bool, error) {
-	msg, kind, err := m.saveDiscard(ctx, sl, untracked, what)
+	msg, kind, err := m.saveDiscard(ctx, sl, untracked, false, what)
 	if err != nil {
 		return false, m.saveFailed(ctx, sl, kind, what, err)
 	}
@@ -503,18 +503,21 @@ func (m *Manager) noteDiscard(ctx context.Context, sl store.Slot, untracked bool
 
 // saveDiscard lists the changes in slot sl's tree that the step (what)
 // discards, untracked files counted only with untracked, and saves them
-// (saveChanges) unless all it holds is the local mise file magnum
+// (saveChanges; with force, a forced removal's, which keeps what a save
+// that fails copied) unless all it holds is the local mise file magnum
 // rendered. msg is the slot.discarded event's words: the changes, their
 // first maxListed paths and the save ("" when the tree holds no change). A
 // listing or a save that fails is err, of kind SaveFailedListing or
-// SaveFailedSave; msg then names the changes it listed, without a save.
-func (m *Manager) saveDiscard(ctx context.Context, sl store.Slot, untracked bool, what string) (msg, kind string, err error) {
+// SaveFailedSave; msg then is a forced removal's warning (noteRemoval):
+// the changes it listed, the part of the save kept, and "forced, not
+// saved" with the error.
+func (m *Manager) saveDiscard(ctx context.Context, sl store.Slot, untracked, force bool, what string) (msg, kind string, err error) {
 	if sl.Path == "" || !fsx.Exists(sl.Path) {
 		return "", "", nil
 	}
 	ch, err := m.worktreeChanges(ctx, sl.Path)
 	if err != nil {
-		return "", SaveFailedListing, err
+		return fmt.Sprintf("discarding the changes in %s, which could not be listed", sl.Path) + forcedUnsaved(saved{}, err), SaveFailedListing, err
 	}
 	paths := ch.paths(untracked)
 	if len(paths) == 0 {
@@ -524,14 +527,25 @@ func (m *Manager) saveDiscard(ctx context.Context, sl store.Slot, untracked bool
 	if len(ch.tracked) == 0 && len(withoutRenderedMiseLocal(sl.Path, slices.Clone(ch.untracked))) == 0 {
 		return msg, "", nil
 	}
-	s, err := m.saveChanges(ctx, sl, ch, untracked, what)
-	if err != nil {
-		return msg, SaveFailedSave, err
-	}
+	s, err := m.saveChanges(ctx, sl, ch, untracked, force, what)
 	if s.dir != "" {
 		msg += s.note()
 	}
+	if err != nil {
+		return msg + forcedUnsaved(s, err), SaveFailedSave, err
+	}
 	return msg, "", nil
+}
+
+// forcedUnsaved is what a forced removal's warning adds about the save
+// that failed with err: nothing saved, or with s, the part of it kept
+// (keepPartial), the rest.
+func forcedUnsaved(s saved, err error) string {
+	what := "not saved"
+	if s.dir != "" {
+		what = "the rest not saved"
+	}
+	return "; forced, " + what + " (" + failureLine(err) + ")"
 }
 
 // noteSaved records a discard whose save worked (or that had nothing to
