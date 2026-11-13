@@ -210,6 +210,63 @@ func pausedFactoryRound(t *testing.T, ref fixwork.FixRef) *harness {
 	return h
 }
 
+// closePR2 merges PR #2 on GitHub and lets the poll confirm it (twice, a
+// confirmGap apart): the PR moves to closed.
+func closePR2(h *harness) {
+	h.t.Helper()
+	h.open(prSpec{n: 1, head: "base1"}) // #2 left the OPEN list
+	h.gh.mu.Lock()
+	h.gh.closed[2] = "MERGED"
+	h.gh.mu.Unlock()
+	h.tick()
+	h.advance(confirmGap)
+	h.tick()
+	h.wantState(2, store.PRClosed)
+}
+
+// A PR that merges while the factory's re-review of its fix waits (here
+// paused mid-turn, whose continue a closed PR never gets) ends that fix
+// with the close: fix.factory_round names it, closed, and the row goes, so
+// the factory's loop stops waiting and the operator's post-merge review is
+// not refused as one that "waits in line" (C5). A fix row a closed PR still
+// holds refuses nothing, and `magnum ignore` of a closed PR ends it too.
+func TestAClosedPRsFactoryReReviewEndsWithTheClose(t *testing.T) {
+	ref := fixwork.FixRef{Work: 7, Cycle: 1, Head: "b2"}
+	h := pausedFactoryRound(t, ref)
+	pr := h.pr(2)
+	closePR2(h)
+	if outcome, by := factoryRoundOf(t, h, ref); outcome != pipeline.OutcomeClosed || by != "the PR's merge on GitHub" {
+		t.Errorf("fix.factory_round = %s by %q, want closed by the merge", outcome, by)
+	}
+	if r, raw := h.e.fixRefOf(h.ctx, pr.ID); r != nil {
+		t.Errorf("the closed PR keeps the fix: %s", raw)
+	}
+
+	// A row the close left (a build before this one): it refuses no review,
+	// and an ignore of the closed PR ends it.
+	h.e.setKV(h.ctx, kvPRFixRef(pr.ID), rowJSON(fixRefRow{FixRef: ref, At: h.clock.Now().UTC()}))
+	if why := h.e.factoryReviewRefusal(h.ctx, h.pr(2), "talkable/talkable#2"); why != "" {
+		t.Errorf("the refusal of a closed PR's review: %q", why)
+	}
+	id := h.enqueue(ReqIgnore, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.handle()
+	if r := h.request(id); r.State != store.RequestDone {
+		t.Fatalf("magnum ignore: %s %q", r.State, deref(r.Result))
+	}
+	evs := h.fixEvents("fix.factory_round")
+	if len(evs) != 2 || !strings.Contains(evs[len(evs)-1].Message, "ended closed: magnum ignore") {
+		t.Errorf("fix.factory_round events = %+v, want the ignore's, closed", evs)
+	}
+	if r, raw := h.e.fixRefOf(h.ctx, pr.ID); r != nil {
+		t.Errorf("the closed PR keeps the fix after the ignore: %s", raw)
+	}
+	review := h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.handle()
+	if r := h.request(review); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "post-merge") {
+		t.Errorf("the post-merge review: %s %q", r.State, deref(r.Result))
+	}
+}
+
 // The factory's abort of its own round paused mid-turn stops it, as `magnum
 // abort` stops a paused round: its turn would otherwise continue later,
 // past the hold of the factory's next fixer, and post on an old head. An

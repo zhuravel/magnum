@@ -1107,6 +1107,7 @@ func (e *Engine) confirmMissing(ctx context.Context, gh GitHub, repo store.Repo,
 				// after the merge, for nobody (abort.go).
 				whiteboard := e.whiteboardHolds(pr.ID) // its stop hands back no slot (whiteboard.go)
 				stop := e.stopClosedRound(pr.ID, closeStop{state: st.State, count: count})
+				e.endFixRefAtClose(ctx, repo, cur, closeStop{state: st.State, count: count}) // fix_factory.go
 				slotNote := fmt.Sprintf("slot released after %s", e.cfg.Daemon.CloseGrace.Duration)
 				switch {
 				case pinned:

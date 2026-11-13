@@ -442,9 +442,8 @@ func (e *Engine) factoryReviewRefusal(ctx context.Context, pr store.PR, label st
 	if !ok {
 		return ""
 	}
-	if r, _ := e.fixRefOf(ctx, pr.ID); r != nil && pr.Forced {
-		return fmt.Sprintf("%s: the factory's re-review of its push of %s (cycle %d) waits in line; a review of yours would take its place",
-			label, textx.ShortSHA(r.FixRef.Head), r.FixRef.Cycle)
+	if why := e.factoryRoundRefusal(ctx, pr, label); why != "" {
+		return why
 	}
 	held := e.noteLease(ctx, pr, v)
 	switch {
@@ -464,6 +463,30 @@ func (e *Engine) factoryReviewRefusal(ctx context.Context, pr store.PR, label st
 			phaseWords(v.lease.Phase), textx.ShortSHA(v.lease.Head))
 	}
 	return ""
+}
+
+// factoryRoundRefusal is `magnum review`'s refusal of pr (label) while the
+// factory's re-review of its push is still to come on magnum's side: its
+// fix kept (kvPRFixRef) on a PR open on GitHub that is forced and in line
+// (queued, rereview_pending, or paused mid-turn) or in its round. A fix
+// row a closed PR kept, or one no forced round is coming for, refuses
+// nothing: no round of it runs. "" = no refusal.
+func (e *Engine) factoryRoundRefusal(ctx context.Context, pr store.PR, label string) string {
+	r, _ := e.fixRefOf(ctx, pr.ID)
+	if r == nil || !pr.Forced || pr.GHState != store.GHOpen {
+		return ""
+	}
+	where := ""
+	switch {
+	case slices.Contains(store.InFlightStates, pr.State):
+		where = "runs"
+	case pr.State == store.PRQueued || pr.State == store.PRRereviewPending || pr.State == store.PRPaused:
+		where = "waits in line"
+	default:
+		return ""
+	}
+	return fmt.Sprintf("%s: the factory's re-review of its push of %s (cycle %d) %s; a review of yours would take its place",
+		label, textx.ShortSHA(r.FixRef.Head), r.FixRef.Cycle, where)
 }
 
 // phaseWords is a lease's phase in words.

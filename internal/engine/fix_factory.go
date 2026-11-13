@@ -120,11 +120,11 @@ const factoryAbortBy = "the factory's abort"
 
 // endFixRef ends the factory's fix that pr's forced round re-reviews (its
 // kvPRFixRef row) when a stop or a close ends that round before it ran to
-// its end (stopPR, dropQueued): fix.factory_round names the fix with the
-// outcome (stopped, or closed) and who stopped it (by: `magnum abort`,
-// `magnum ignore`, the factory's abort, the PR's close), so the factory's
-// loop stops waiting for the round, and the row goes. A row that does not
-// read goes without an event; a PR with none is left alone.
+// its end (stopPR, dropQueued, endFixRefAtClose): fix.factory_round names
+// the fix with the outcome (stopped, or closed) and who stopped it (by:
+// `magnum abort`, `magnum ignore`, the factory's abort, the PR's close), so
+// the factory's loop stops waiting for the round, and the row goes. A row
+// that does not read goes without an event; a PR with none is left alone.
 func (e *Engine) endFixRef(ctx context.Context, repo store.Repo, pr store.PR, outcome, by string) {
 	r, raw := e.fixRefOf(ctx, pr.ID)
 	if raw == "" {
@@ -140,6 +140,22 @@ func (e *Engine) endFixRef(ctx context.Context, repo store.Repo, pr store.PR, ou
 	}
 	if _, err := e.st.DeleteKVIf(ctx, kvPRFixRef(pr.ID), raw); err != nil {
 		e.warnUnlessStopped(ctx, err, "drop the factory's fix of a stopped round", "pr", pr.ID)
+	}
+}
+
+// endFixRefAtClose ends the factory's fix that pr kept (its kvPRFixRef row)
+// when the poll confirmed the PR closed or merged on GitHub (confirmMissing,
+// c): a re-review of it that waits in line or paused mid-turn never runs on
+// a closed PR, so fix.factory_round names it, closed by the close, and the
+// row goes. A round of the fix in flight, which a close lets run on as one
+// asked for (stopClosedRound), names its own end (fixRefAfterRound).
+func (e *Engine) endFixRefAtClose(ctx context.Context, repo store.Repo, pr store.PR, c closeStop) {
+	e.mu.Lock()
+	h, held := e.rounds[pr.ID]
+	running := held && h.fixRef != nil
+	e.mu.Unlock()
+	if !running {
+		e.endFixRef(ctx, repo, pr, pipeline.OutcomeClosed, c.by())
 	}
 }
 

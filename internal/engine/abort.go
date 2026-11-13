@@ -416,6 +416,9 @@ func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, factory, roundR
 		if _, err := e.settleStopped(ctx, pr, ignore); err != nil {
 			return "", err
 		}
+		// The factory's re-review a closed PR still kept ends with the
+		// close: no round of it runs on a closed PR (fix_factory.go).
+		e.endFixRef(ctx, repo, pr, pipeline.OutcomeClosed, "magnum "+map[bool]string{false: "abort", true: "ignore"}[ignore])
 		res := fmt.Sprintf("ignored %s (%s: muted only, cleanup releases it)", label, pr.State)
 		e.event(ctx, "info", subject, "pr.ignored", res, nil)
 		return res, nil
