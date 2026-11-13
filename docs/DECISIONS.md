@@ -27055,8 +27055,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `fix_copies` only while no copy past the Redis's databases exists, the highest copy made (`redisCopies.made`)
     below the first that cannot flush; otherwise it names those copies as existing already. It offered lowering
     whenever no copy was made past the keys themselves, so with copies 4 and 5 made and the keys still at 5, the
-    first run's fix gave a PASS on the next after the operator lowered them (the engine owner's C3 of T3b's
-    third check). Test, failing first: `TestDoctorOffersLowerKeysOnlyWhileNoCopyPastTheRedisExists`. The copies
+    first run's fix could not work: after the operator lowered them the next run failed again, now with no
+    lowering in its fix, since the copies made still count (the engine owner's C3 of T3b's third check; the
+    first version of this entry said that run gave a PASS, which it never did: C5 of the check at f32479bc).
+    Test, failing first: `TestDoctorOffersLowerKeysOnlyWhileNoCopyPastTheRedisExists`. The copies
     made are matched to a `[[factory.repo]]` without case, as the store matches `repo_full_name` and the factory
     then claims them: matched with case, copies made as `Talkable/Talkable` did not count once the key read
     `talkable/talkable`, and a Redis of 64 databases got C8's PASS again (the engine owner's C6 of T3b's third

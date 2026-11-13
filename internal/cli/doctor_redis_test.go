@@ -162,9 +162,10 @@ func TestDoctorCountsTheCopiesAlreadyMadeForTheRedisDatabases(t *testing.T) {
 // The Redis FAIL offers a lower max_copies or fix_copies only while no copy
 // past the Redis's databases exists: talkable's copies 4 and 5, made while
 // max_copies + fix_copies is still 5, stay whatever the keys say, so
-// lowering them would give a PASS on the next run while their flush fails.
-// It offered lowering whenever no copy was made past the keys (C3 of T3b's
-// third check). With copies made only up to 3, lowering still helps.
+// lowering them would not help: the next run would fail again, now without
+// the lowering in its fix, since the copies made still count. It offered
+// lowering whenever no copy was made past the keys (C3 of T3b's third
+// check). With copies made only up to 3, lowering still helps.
 func TestDoctorOffersLowerKeysOnlyWhileNoCopyPastTheRedisExists(t *testing.T) {
 	_, d, _, _ := doctorFixture(t)
 	fake := d.Run.(*execx.Fake)
