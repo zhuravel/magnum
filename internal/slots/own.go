@@ -20,9 +20,10 @@ import (
 // clone's own files (secrets among them), and whatever the setup wrote. A
 // removal saves none of them (saveChanges); the worktree keeps a record of
 // them in the kv store (ownFilesKey): the copy_files each render_mise
-// copies, and the untracked files the setup step wrote (there after it,
-// not before it: recordingSetup). A worktree made before the record
-// existed has the copy_files of its next checkout alone.
+// copies, and the untracked files the setup step wrote in a worktree its
+// provisioning made (there after it, not before it: recordingSetup). A
+// worktree made before the record existed has the copy_files of its next
+// checkout alone.
 
 // ownFilesKey is the kv key of the record of the files magnum wrote into
 // slot id: a JSON list of paths relative to the worktree, a folder's with
@@ -95,22 +96,62 @@ func copiedFiles(mainClone string, files []string) []string {
 	return out
 }
 
+// treeAddedKey is the kv key that says the worktree_add step of slot id's
+// provisioning made its worktree, rather than kept one git still listed
+// from an earlier attempt (noteTreeAdded).
+func treeAddedKey(id int64) string { return fmt.Sprintf("slot.%d.tree_added", id) }
+
+// noteTreeAdded records, as the worktree_add step of slot sl's
+// provisioning ends, whether it made the worktree (added) or kept one
+// listed from an earlier attempt, for recordingSetup. A record that fails
+// fails the step, whose retry finds the worktree listed and keeps it.
+func (m *Manager) noteTreeAdded(ctx context.Context, sl store.Slot, added bool) error {
+	if sl.ID == 0 || m.d.DryRun {
+		return nil
+	}
+	var err error
+	if added {
+		err = m.d.Store.SetKV(ctx, treeAddedKey(sl.ID), "1")
+	} else {
+		err = m.d.Store.DeleteKV(ctx, treeAddedKey(sl.ID))
+	}
+	if err != nil {
+		return fmt.Errorf("slots: record whether the worktree of %s is new: %w", sl.Name, err)
+	}
+	return nil
+}
+
+// treeAdded reports whether the worktree_add step of slot sl's
+// provisioning made its worktree (noteTreeAdded); no record, or one that
+// cannot be read, is a worktree kept.
+func (m *Manager) treeAdded(ctx context.Context, sl store.Slot) bool {
+	_, ok, err := m.d.Store.GetKV(ctx, treeAddedKey(sl.ID))
+	return err == nil && ok
+}
+
 // recordingSetup runs setup, the setup step of slot sl, then makes what it
 // wrote, with copied (copiedFiles of the copy_files the step's render
 // copied), the slot's record of the files magnum wrote into it: the
-// untracked files there after it that were not before it. Setup also runs
-// over a worktree kept from an earlier attempt (a per-PR row whose setup
-// failed, revived; a pool slot provisioned again over its listed
-// worktree), whose untracked files may be a person's by then: they stay
-// theirs, and so does a file the setup rewrote over one that was there. A
-// record a removed row of the same name left goes. Best effort, as
-// recordOwnFiles: a listing that fails records copied alone and is
-// logged, and a removal then saves what the setup wrote as a person's.
+// untracked files there after it that were not before it, in a worktree
+// the provisioning's worktree_add made (treeAdded). Setup also runs over a
+// worktree kept from an earlier attempt (a per-PR row whose setup failed,
+// revived; a pool slot repaired or provisioned again over its listed
+// worktree), where a person may be at work: a file new after the setup
+// may be theirs, written while it ran, so the record is copied alone, and
+// a removal saves what the setup wrote there as a person's. A file the
+// setup rewrote over one that was there stays theirs in both. A record a
+// removed row of the same name left goes. Best effort, as recordOwnFiles:
+// a listing that fails records copied alone and is logged, and a removal
+// then saves what the setup wrote as a person's.
 func (m *Manager) recordingSetup(ctx context.Context, sl store.Slot, copied []string, setup func() error) error {
 	if sl.ID == 0 || m.d.DryRun {
 		return setup()
 	}
-	before, listed := m.untrackedForRecord(ctx, sl, "before")
+	var before []string
+	listed := false
+	if m.treeAdded(ctx, sl) {
+		before, listed = m.untrackedForRecord(ctx, sl, "before")
+	}
 	if err := setup(); err != nil {
 		return err
 	}

@@ -607,16 +607,20 @@ func TestARemovalSavesNothingMagnumWroteAndASymlinkAsTheLink(t *testing.T) {
 }
 
 // The setup that runs again over a worktree kept from an earlier attempt
-// (its setup failed, the row went broken, the retry revived it) records as
-// magnum's only the files it wrote: those untracked after it and not
-// before. A person's file made in the broken worktree meanwhile is saved
-// by the removal. Every untracked file after the setup was recorded, so
-// the person's file was neither saved nor named, and `worktree remove
-// --force` deleted it.
-func TestASetupRunAgainRecordsOnlyTheFilesItWrote(t *testing.T) {
+// (its setup failed, the row went broken, the retry revived it) records
+// none of what it leaves as magnum's, only the copy_files: a person at work
+// in that worktree may write a file while the setup runs (up to 45
+// minutes), and nothing tells it from one the setup wrote. The removal
+// saves the person's file from before the setup, the one written during
+// it and the setup's own, never the copied key. The files new after the
+// setup were recorded, so the one written during it was neither saved nor
+// named, and `worktree remove --force` deleted it.
+func TestASetupOverAKeptWorktreeRecordsOnlyTheCopiedFiles(t *testing.T) {
 	f := newPerPR(t, true)
 	h := f.h
-	h.m = h.newManager(Deps{Repos: []config.Repo{{Repo: f.repoName(), Setup: []string{"touch .env.setup"}}}})
+	writeFile(t, filepath.Join(f.main, "master.key"), "main clone secret\n")
+	h.m = h.newManager(Deps{Repos: []config.Repo{{Repo: f.repoName(),
+		CopyFiles: []string{"master.key"}, Setup: []string{"touch .env.setup"}}}})
 	h.failScript["touch .env.setup"] = 1
 	if _, err := h.m.CreatePRWorktree(h.ctx, f.watch, f.repoName(), f.pr, f.sha7); !errors.Is(err, ErrBroken) {
 		t.Fatalf("CreatePRWorktree with a setup that fails: %v, want ErrBroken", err)
@@ -626,23 +630,36 @@ func TestASetupRunAgainRecordsOnlyTheFilesItWrote(t *testing.T) {
 		t.Fatalf("state %s, worktree kept %v; want a broken row with its worktree", broken.State, fsx.Exists(broken.Path))
 	}
 	writeFile(t, filepath.Join(broken.Path, "notes", "debug.md"), "what I found\n")
+	h.onScript = func(script, dir string) {
+		if script == "touch .env.setup" {
+			writeFile(t, filepath.Join(dir, "notes", "repro.rb"), "written while the setup ran\n")
+		}
+	}
 
 	sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, f.repoName(), f.pr, f.sha7)
 	if err != nil {
 		t.Fatalf("CreatePRWorktree again: %v", err)
 	}
-	if !fsx.Exists(filepath.Join(sl.Path, ".env.setup")) {
-		t.Fatal("the setup that ran again did not write .env.setup")
+	for _, p := range []string{"master.key", ".env.setup", filepath.Join("notes", "repro.rb")} {
+		if !fsx.Exists(filepath.Join(sl.Path, p)) {
+			t.Fatalf("the worktree has no %s", p)
+		}
 	}
 	if err := h.m.RemovePRWorktree(h.ctx, sl, false); err != nil {
 		t.Fatalf("RemovePRWorktree: %v", err)
 	}
 	save := h.onlySave(t, h.layout.PRSaves("zhuravel", "widget", f.pr.Number), sl.Name)
-	if got := readFile(t, filepath.Join(save, "untracked", "notes", "debug.md")); got != "what I found\n" {
-		t.Fatalf("notes/debug.md saved = %q", got)
+	for p, want := range map[string]string{
+		filepath.Join("notes", "debug.md"): "what I found\n",
+		filepath.Join("notes", "repro.rb"): "written while the setup ran\n",
+		".env.setup":                       "written by setup\n",
+	} {
+		if got := readFile(t, filepath.Join(save, "untracked", p)); got != want {
+			t.Fatalf("%s saved = %q, want %q", p, got, want)
+		}
 	}
-	if _, err := os.Lstat(filepath.Join(save, "untracked", ".env.setup")); !os.IsNotExist(err) {
-		t.Fatalf("the setup's .env.setup saved: %v", err)
+	if _, err := os.Lstat(filepath.Join(save, "untracked", "master.key")); !os.IsNotExist(err) {
+		t.Fatalf("the copied master.key saved: %v", err)
 	}
 }
 

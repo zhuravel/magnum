@@ -259,8 +259,15 @@ func (m *Manager) perPRSteps(ctx context.Context, subject string, sl store.Slot,
 		case err != nil:
 			return err
 		case !ok:
-			return m.git.WorktreeAdd(ctx, sl.MainClone, sl.Path, gitx.PRRef(pr.Number), true, "")
-		case w.Head == sha:
+			if err := m.git.WorktreeAdd(ctx, sl.MainClone, sl.Path, gitx.PRRef(pr.Number), true, ""); err != nil {
+				return err
+			}
+			return m.noteTreeAdded(ctx, sl, true)
+		}
+		if err := m.noteTreeAdded(ctx, sl, false); err != nil {
+			return err
+		}
+		if w.Head == sha {
 			return nil
 		}
 		// Left by an earlier attempt (setup failed, then the PR moved on):

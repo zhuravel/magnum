@@ -271,11 +271,23 @@ func (m *Manager) provisionSteps(ctx context.Context, subject string, sl store.S
 }
 
 // ensurePoolWorktree adds the slot's worktree on its placeholder branch at
-// origin/<base> unless git already lists the path.
+// origin/<base> unless git already lists the path, and records which it
+// did (noteTreeAdded).
 func (m *Manager) ensurePoolWorktree(ctx context.Context, sl store.Slot, pool config.Pool) error {
-	if _, ok, err := m.listedWorktree(ctx, sl); err != nil || ok {
+	if _, ok, err := m.listedWorktree(ctx, sl); err != nil {
+		return err
+	} else if ok {
+		return m.noteTreeAdded(ctx, sl, false)
+	}
+	if err := m.addPoolWorktree(ctx, sl, pool); err != nil {
 		return err
 	}
+	return m.noteTreeAdded(ctx, sl, true)
+}
+
+// addPoolWorktree adds the worktree of pool slot sl, which git does not
+// list, on its placeholder branch at origin/<base>.
+func (m *Manager) addPoolWorktree(ctx context.Context, sl store.Slot, pool config.Pool) error {
 	if err := m.git.FetchBranch(ctx, sl.MainClone, pool.Base); err != nil {
 		return err
 	}

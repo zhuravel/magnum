@@ -230,7 +230,10 @@ type harness struct {
 	// failStderr is what a failing script prints ("boom" when unset).
 	failStderr string
 	setupSlug  func(slot string) string
-	freeDisk   uint64
+	// onScript runs as each script that does not fail runs, in its tree:
+	// a person at work there meanwhile.
+	onScript func(script, dir string)
+	freeDisk uint64
 
 	shaMaster string
 	shaPR7    string // touches db/schema.rb and Gemfile.lock
@@ -370,11 +373,14 @@ func (h *harness) mise(c execx.Cmd) (execx.Result, error) {
 	if fail > 0 {
 		h.failScript[mc.Script] = fail - 1
 	}
-	slugFn, stderr := h.setupSlug, cmp.Or(h.failStderr, "boom")
+	slugFn, stderr, during := h.setupSlug, cmp.Or(h.failStderr, "boom"), h.onScript
 	h.mu.Unlock()
 	if fail != 0 {
 		return execx.Result{Code: 1, Stderr: []byte(stderr + " ghp_abcdefghijklmnopqrstuvwxyz0123456789")},
 			&execx.ExitError{Cmd: c, Code: 1, Stderr: stderr}
+	}
+	if during != nil {
+		during(mc.Script, mc.Dir)
 	}
 	slot := mc.Env["WT_BRANCH"]
 	switch {
