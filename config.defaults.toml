@@ -906,7 +906,8 @@ fix = "off"                       # "on": the factory fixes your own PRs (the fi
                                   # only fixer once magnum's fix loop moved here; "off": not yet, and every PR request
                                   # of the fix lane (a fix, its off, on, done and decide, a CI fix, a merge of the
                                   # parent, a stop, a hand-off) is answered that the factory does not fix yet, naming
-                                  # this key
+                                  # this key; magnum then flips no PR to it (`magnum fix --handover` is refused, and
+                                  # one asked while the key was "on" waits for it)
 fix_max_active = 2                # fix loops at once across your PRs, in fix copies and per-PR checkouts alike (at
                                   # least 1); fixes do not count toward max_active
 fix_local_review = true           # a fix cycle runs magnum's local review on the fixer's change before its push (a

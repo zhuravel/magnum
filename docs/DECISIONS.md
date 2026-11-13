@@ -19398,6 +19398,40 @@ skill versions); people add theirs to the sections before it, at the end of the 
     a refused path that writes a held fix fails). TestAWiredReaderChangesNothingForAPRWithNoOwnerRow pins the
     live configuration (R20). TestTheFactorysAttentionNeverToastsNorReveals fails on any toast, batched toast
     or reveal of fix_attention (his condition, proved once by mutation).
+- **The interlock after the engine owner's check of the first fix round** (2026-11-13, his findings C2 to C12
+  on bf1d5f12, and his rulings R2, R3 and R6). What changed from the two entries above:
+  - Magnum's own failed read of an owner row gets the lease's grace (his ruling on R2). A read of
+    `pr.<id>.fix_owner` (or of the PR's repository) that magnum's registry cannot do is recorded as the
+    lease's failed reads are, with its source (`LeaseUnread.Source` "registry"): the round waits 10 minutes
+    from the first failure, then magnum reviews the PR with fix.lease_open, the sweep reads it again at each
+    tick, and the doctor names it. The entry above, where such a read held the round with nothing recorded,
+    is replaced: a row that stayed unreadable held the PR's rounds for good.
+  - Each place names what failed (C3): the wait, the warn, fix.lease_open, fix.lease_read and `magnum
+    review`'s refusal take their words from the source, and the doctor has a "fix owner row" line for
+    magnum's own rows beside the "factory lease" line, neither naming the other's registry.
+  - The grace starts anew only after a gap of at least three poll intervals (C2): a fixed 5 minutes made
+    every tick under a poll_interval of 5 minutes or more a first failure, so the PR never failed open.
+  - No PR flips while `[factory] fix` is not "on" (his ruling on R3, which covers C8): the tick's handover
+    pass flips nothing, `--handover all`'s included, and a PR does not hand over meanwhile, so magnum's
+    autofix and a loop's next cycle run on it as before; a doctor WARN says that the handovers wait for the
+    key. The handover's dry run answers the drain proof under either key and says that the real run is
+    refused, since the morning list sends the operator to it (C11); the doctor's PASS line says so too.
+  - Only the factory lifts the attention it raised (his ruling on R6, after C9). The raise is marked
+    (`pr.<id>.attention_by`, the factory and the message), and `magnum fix --done` refuses an attention so
+    marked while the factory fixes the PR, sending the operator to the factory or to `--handover back`:
+    magnum's lift would never reach the factory, whose loop would wait while magnum shows the PR reviewed.
+    It still lifts magnum's own attention there. Its held-fix check is skipped only when the owner row reads
+    and names the factory or returning; a failed read refuses (C10).
+  - The factory's re-review ends once, at every end (C5, C6, C7). A PR's close ends the fix it kept, closed
+    by the merge or the close (confirmMissing; and `magnum ignore` of a closed PR), unless a round of the
+    fix runs, which ends itself. Both writers of fix.factory_round delete the row first and write only when
+    their delete took it, and the operator's forced review in place of a kept fix ends it (stopped, by
+    `magnum review`), so no end is said twice or not at all. `magnum review` is refused only while that
+    re-review is still to come on magnum's side, a round of the fix in flight or the fix kept on an open PR
+    in line or in its round; the factory's loop waiting in phase reviewing refuses nothing by itself, since
+    a factory that stopped there held off every review of the PR for good.
+  - `magnum abort` of a PR whose review waits in line also ends a fixer's run no loop backs, and the
+    morning list's action says that it takes the review back (C12).
 
 ## The factory (2026-11-03)
 
