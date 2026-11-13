@@ -150,6 +150,50 @@ func TestAnUnsafeStopAtMaxRoundsWaitsOnYou(t *testing.T) {
 	}
 }
 
+// After a safe end at max_rounds, the review comes back with no new commit
+// (a send back the writer committed nothing for) and passes at once, with
+// no round; a new head (a send back's commits, your own) gets exactly one
+// round, the task's next, whose blocking end stops at the limit again and
+// goes to the ready card counting the task's rounds: the count is the
+// task's, not the loop's, and the old summary's head passes no other.
+func TestANewHeadAfterTheRoundLimitGetsOneRound(t *testing.T) {
+	r := newReviewRig(t, result(capFindings(1, 2)...), result(capFindings(3, 4)...), result(capFindings(5, 6)...), result())
+	r.cfg.Factory.LocalReview.MaxRounds = 2
+	task, _ := r.reviewTask("PR-12519")
+	first := r.toFixPrompt(task, 1)
+	r.writerFixes(task, first.N, fixedCredit(1), nil)
+	r.run(12, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+	ended := r.reload(task.ID)
+	if ended.Stage != "pr_body" || len(r.rv.calls()) != 2 || r.summary(task.ID).Exit != exitRoundLimit {
+		t.Fatalf("task %s at %s after %d rounds, want past the review at the limit after 2", ended.State, ended.Stage, len(r.rv.calls()))
+	}
+
+	if err := r.reg.TransitionTask(r.ctx, task.ID, nil, registry.TaskActive, func(u *registry.TaskUpdate) { u.Set("stage", "local_review") }); err != nil {
+		t.Fatal(err)
+	}
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "local_review" })
+	if got := r.reload(task.ID); got.Stage != "pr_body" || len(r.rv.calls()) != 2 || got.HeadSHA != ended.HeadSHA {
+		t.Fatalf("task at %s after %d rounds, want it past the review again at %s with no round", got.Stage, len(r.rv.calls()), short(ended.HeadSHA))
+	}
+
+	moved := r.moveHead(task)
+	r.run(12, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+	got := r.reload(task.ID)
+	cs := r.cycles(task.ID)
+	if got.Stage != "pr_body" || len(r.rv.calls()) != 3 || r.fixPrompts() != 1 || len(cs) != 3 || cs[2].HeadBefore != moved || cs[2].Exit != registry.ExitCap {
+		t.Fatalf("task %s at %s waits %q after %d rounds, %d fix turns and cycles %+v, want one round at %s that ends at the limit",
+			got.State, got.Stage, got.WaitsWhat, len(r.rv.calls()), r.fixPrompts(), cs, short(moved))
+	}
+	sum := r.summary(task.ID)
+	if want := []string{capFinding(5, "P2").Title, capFinding(6, "P2").Title}; sum.Exit != exitRoundLimit || sum.Head != moved || sum.TaskRounds != 3 ||
+		sum.Limit != 2 || !slices.Equal(leftTitles(sum), want) {
+		t.Fatalf("summary %+v, want the limit's end after 3 rounds at %s with round 3's findings left", sum, short(moved))
+	}
+	if _, why := readyRecommendation(ReadyCardFile{Head: moved, Review: sum}, nil); !strings.Contains(why, "round limit (2 rounds; it ran 3)") {
+		t.Errorf("recommendation %q, want the limit and the task's 3 rounds", why)
+	}
+}
+
 // A product question still open at max_rounds makes the stop unsafe: only
 // you answer it, so the task waits on you rather than passing the question
 // to the ready card's KNOWN unasked (where the card's w would not send it,
