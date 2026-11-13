@@ -945,10 +945,11 @@ cap_go_on = 2                     # times over a task's life a safe stop at the 
                                   # fixed after the last round, not reviewed again. Any other stop waits for you
 max_rounds = 8                    # the most local review rounds over a task's life (0 to 30; 0 = no limit), every
                                   # round counted: a fresh loop's after a retry, an extra round's, a go-on's. When a
-                                  # round ends at the limit no round starts. A safe stop (as cap_go_on's) passes the
-                                  # stage: the ready card lists the round's open findings under KNOWN and says
-                                  # "ended at the round limit (8 rounds)". Any other stop waits for you, naming the
-                                  # limit; a retry hands its findings to the writer, then one round reviews the fix.
+                                  # round ends at the limit no round starts. A safe stop (as cap_go_on's, with no
+                                  # product question open) passes the stage: the ready card lists the round's open
+                                  # findings under KNOWN and says "ended at the round limit (8 rounds)". Any other
+                                  # stop waits for you, naming the limit; a retry hands its findings to the writer
+                                  # (its questions to you first), then one round reviews the fix.
                                   # A task past the limit stops at the end of its round in flight. `magnum factory
                                   # finish-review <task>` (the task card's S) ends a task's local review the same way
                                   # now: the round in flight finishes, none starts, and the card says it was "ended by

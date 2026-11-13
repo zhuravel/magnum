@@ -27635,6 +27635,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   in internal/cli; `TestTheFactoryScreensFinishKeyAsksYN` in internal/tui;
   `TestFactoryLocalReviewMaxRoundsDefaultsToEightAndTakesZeroToThirty` in internal/config.
   `TestACleanTenthRoundGetsItsSecondOpinionAsRoundEleven` sets `max_rounds = 0`, since it runs 11 rounds.
+- **The round limit's review round: QA, the second opinion and open questions** (2026-11-13, the engine owner's
+  review of the round limit before it landed; task 9 is past the limit, so its loop ends at the first round the
+  build runs). This amends the round limit's entry above.
+  - *QA takes the limit's end as a pass* (P1). `qaFixReviewed` (`closeQAFix`, `qaReviewFirst`) read only a newest
+    cycle that ended clean or on an oscillation at the task's head as a review that passed there, but the limit's
+    safe stop ends its cycle `cap`, yours `operator`, and `passAfterCap` keeps `cap`. After QA's fix moved the head,
+    one round reviewed it and passed at the limit, then QA read its old run, sent the task back to the review, which
+    passed at once (`endPass`), and so on at every pass: no alert, no QA run at the fix, never the card. It now also
+    takes `review-summary.json` at the task's head with exit `round_limit`, `ended_by_you` or `cap_fixed`.
+  - *A pending second opinion does not run after your request or past the limit.* `dropSecond` drops one waiting to
+    begin when `secondHeld` holds, as when its judge goes, and the loop ends clean on the round it follows.
+    finish-review's plan said "the writer's fix of round N's findings (FIXED AFTER)" for that clean round and then
+    the opinion's full round ran; `fixedAtHead` now needs the round's `review-<n>.json`, and the plan names the
+    drop (`secondPending`).
+  - *A second opinion you ended is spent.* `secondSpent` read every `operator` cycle as cut; since the limit, that
+    exit follows a round that ran to its result, so it counts as spent when `local-review-<n>.json` is there, and
+    the second opinion stays once per task across a send back or a QA fix.
+  - *An open product question makes the limit's stop unsafe* (`questionsOpen` in `endAtRound`, also for your end at
+    a round's end): under KNOWN it read as one you decided, never asked, and `w` would not send it. Your retry asks
+    it first (`capFix`). The cap's own go-on (`capSafe`) is unchanged: it asks them before the writer's turn.
+  Tests, failing first: `TestAReviewThatPassedAtMaxRoundsLetsQAWalkItsFix`,
+  `TestQAReadsAReviewThatPassedWithNoCleanCycleAsPassed`, `TestFinishReviewDropsASecondOpinionThatHasNotBegun`,
+  `TestAPendingSecondOpinionWithoutItsJudgeEndsTheStageClean`'s `max_rounds` case,
+  `TestACleanRoundBeforeItsSecondOpinionIsNoWritersFix`, `TestASecondOpinionYouEndedIsSpent` and
+  `TestAnOpenProductQuestionAtMaxRoundsWaitsOnYou` in internal/factory; `TestTheFinishKeysQuestionShowsWholeOnTheCard`
+  in internal/tui (S's y/N wraps, as P's and E's do). `TestANewHeadAfterTheRoundLimitGetsOneRound` pins the one
+  round at a new head, checked by mutation.
 
 ## Learned rules
 
