@@ -120,6 +120,11 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 	}
 	s := &screen{ctx: ctx, reg: reg, agents: agents, cfg: cmp.Or(o.Config, &config.Config{}), l: o.Layout, now: now, tasks: tasks,
 		stagings: readStagingScreen(o.Layout), down: o.DaemonDown}
+	if !o.DaemonDown { // a daemon that is down holds nothing: holds.json is its last one's
+		if s.holds, err = ReadHolds(o.Layout); err != nil {
+			return d, err
+		}
+	}
 	if reg != nil {
 		if s.tracking, err = reg.Trackings(ctx); err != nil {
 			return d, err
@@ -177,9 +182,7 @@ func ScreenData(ctx context.Context, reg *registry.Registry, agents *store.Store
 			}
 		}
 	default:
-		if d.Blocking, d.BlockingLong, err = blockingLines(o.Layout); err != nil {
-			return d, err
-		}
+		d.Blocking, d.BlockingLong = blockingLines(s.holds)
 	}
 	if short, long := s.oldBuildLines(); short != "" {
 		d.Blocking = append(slices.Clone(d.Blocking), short)
@@ -223,6 +226,10 @@ type screen struct {
 	// (ScreenOptions.DaemonDown).
 	stagings map[int64]stagingScreenTask
 	down     bool
+	// holds are the holds of the machine the factory daemon last saved
+	// (ReadHolds), none while it is down: a hold that stops every stage is the
+	// wait of each task with none of its own (holdBlocker).
+	holds []Hold
 	// tracking is where the tasks' Jira issues stand as the factory daemon
 	// last read them, by task id (tracking.go).
 	tracking map[int64]registry.Tracking
@@ -272,6 +279,9 @@ type taskView struct {
 	// agent of the task works.
 	own    *tui.WaitsOn
 	follow string
+	// pane says one of its sessions is live, so o steps into a pane
+	// (paneToOpen's rule in the CLI's Open).
+	pane bool
 }
 
 // read is what the screen shows of task t, nil for a task home leaves out
@@ -439,6 +449,7 @@ func (s *screen) readAgents(v *taskView) error {
 		newest := map[string]store.Session{}
 		for _, x := range ss { // oldest first: the later generation wins
 			newest[x.Role] = x
+			v.pane = v.pane || x.State == store.SessionLive || x.State == store.SessionStarting
 		}
 		for _, x := range newest {
 			v.agents = append(v.agents, x)
@@ -631,6 +642,7 @@ func (s *screen) blockers(v *taskView) []tui.WaitsOn {
 		return []tui.WaitsOn{{Who: "magnum", What: fmt.Sprintf("review of #%d", cmp.Or(v.link.Number, t.PRNumber))}}
 	}
 	var first tui.WaitsOn
+	var held *tui.WaitsOn // the daemon's hold, after an agent at work
 	switch {
 	case waitsOnYou(t):
 		first = s.onYouBlocker(v)
@@ -644,17 +656,16 @@ func (s *screen) blockers(v *taskView) []tui.WaitsOn {
 			}
 		}
 	default:
-		if a, ok := s.agentBlocker(v, false); ok {
-			first = a
-		} else {
-			first = s.stageBlocker(t)
-		}
+		first, held = s.ownlessBlocker(v)
 	}
 	out := []tui.WaitsOn{first}
 	if !isAgents(first.Who) {
 		if a, ok := s.agentBlocker(v, true); ok {
 			out = append(out, a)
 		}
+	}
+	if held != nil {
+		out = append(out, *held)
 	}
 	if v.prov > 0 { // a question coding went on: yours first, the task at work after it
 		what := provisionalWhat(v.prov)
@@ -735,6 +746,62 @@ func (s *screen) agentBlocker(v *taskView, workingOnly bool) (tui.WaitsOn, bool)
 		w.What += fmt.Sprintf(", %d of %d done", finished, len(roles))
 	}
 	return w, true
+}
+
+// ownlessBlocker is the blocker of a live task that names no wait of its own,
+// first, and the hold of the daemon that stops its next step to put after it,
+// nil for none. A hold that stops every stage (holdBlocker) is the blocker;
+// an agent at work stays first, the task works, with the hold after it. With
+// no hold: the agents at work and the roles still to run, else the factory's
+// own step at its stage (stageBlocker).
+func (s *screen) ownlessBlocker(v *taskView) (first tui.WaitsOn, after *tui.WaitsOn) {
+	if hold, held := s.holdBlocker(v.t); held {
+		if a, ok := s.agentBlocker(v, true); ok {
+			return a, &hold
+		}
+		return hold, nil
+	}
+	if a, ok := s.agentBlocker(v, false); ok {
+		return a, nil
+	}
+	return s.stageBlocker(v.t), nil
+}
+
+// holdBlocker is the hold of the daemon that stops task t's next step as its
+// blocker (HoldWait), the reason alone on a narrow screen; false when none
+// stops it (StoppingHold).
+func (s *screen) holdBlocker(t registry.Task) (tui.WaitsOn, bool) {
+	h, ok := StoppingHold(s.holds, t)
+	if !ok {
+		return tui.WaitsOn{}, false
+	}
+	who, what := HoldWait(h, s.now)
+	return tui.WaitsOn{Who: who, What: what, Short: h.Reason}, true
+}
+
+// opensNothing is why o opens nothing on task v, for the screen's message
+// line; "" when it opens something: a live agent's pane, or the output the
+// factory runs for it (v.follow). The factory's hold that stops the task is
+// named first, then its wait (row's first blocker, in the words of its row),
+// which is its stage's own step when it names none.
+func (s *screen) opensNothing(v *taskView, row tui.FactoryRow) string {
+	if v.pane || v.follow != "" {
+		return ""
+	}
+	if h, ok := StoppingHold(s.holds, v.t); ok {
+		return fmt.Sprintf("nothing runs: the factory holds every stage (%s since %s)", h.Reason, holdClock(s.now, h.Since))
+	}
+	if len(row.WaitsOn) == 0 {
+		return "nothing runs: it waits on nothing"
+	}
+	w := row.WaitsOn[0]
+	switch w.Who {
+	case waitNothing: // a task that ended
+		return "nothing runs: " + w.What
+	case "":
+		return "nothing runs: it waits on " + w.What
+	}
+	return "nothing runs: it waits on " + w.Who + ": " + w.What
 }
 
 // stageBlocker is what an active task without a wait of its own waits on:
@@ -874,6 +941,7 @@ func (s *screen) taskCard(v *taskView, row tui.FactoryRow) tui.TaskCard {
 		}
 	}
 	c.Follow = v.follow
+	c.OpensNothing = s.opensNothing(v, row)
 	// A prompt you let go of may not have reached its agent: its first line
 	// is on the WAITING FOR line, which the card always draws.
 	for _, role := range slices.Sorted(maps.Keys(v.letGo)) {
@@ -1470,11 +1538,7 @@ func (s *screen) repos() []string {
 // as the daemon last saved them (ReadHolds): short, and with the reason
 // for a wide screen. A repository's infrastructure hold names the
 // repository.
-func blockingLines(l paths.Layout) (short, long []string, err error) {
-	hs, err := ReadHolds(l)
-	if err != nil {
-		return nil, nil, err
-	}
+func blockingLines(hs []Hold) (short, long []string) {
 	for _, h := range hs {
 		if h.Kind == HoldPause || h.Kind == HoldReboot {
 			continue // the daemons' own lines say them (magnum's screen data: cli's controlLines)
@@ -1486,7 +1550,7 @@ func blockingLines(l paths.Layout) (short, long []string, err error) {
 		short = append(short, line)
 		long = append(long, line+" ("+h.Reason+")")
 	}
-	return short, long, nil
+	return short, long
 }
 
 // stage is task t's current stage of its kind.

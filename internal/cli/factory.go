@@ -195,8 +195,10 @@ func newFactoryStatusCmd(c *Context) *cobra.Command {
 		"Print whether the factory daemon runs, the holds of the machine it keeps (herdr or infra down, the disk, the "+
 			"memory, a drain of `magnum factory install --drain`) and the work it runs that a restart would cut, and list "+
 			"the factory's tasks: each one's key (its Jira key, or "+
-			"`task <id>` for a free prompt), kind, state, stage and what it waits on. --json prints the same as "+
-			"JSON. It never creates the factory's registry, and it refuses to migrate one while a factory daemon "+
+			"`task <id>` for a free prompt), kind, state, stage and what it waits on. An active task that names no wait "+
+			"of its own waits on the hold that stops every stage (herdr down, the machine's infrastructure hold): "+
+			"`held: MySQL does not answer (since 17:03)`. --json prints the same as "+
+			"JSON, with that hold as the task's `held_by`. It never creates the factory's registry, and it refuses to migrate one while a factory daemon "+
 			"of an older build runs on it.",
 		func(pos []string) int { return runFactoryStatusCmd(c, asJSON, pos) })
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
@@ -255,20 +257,28 @@ func factoryDaemonState(c *Context, pid int) ([]factory.Hold, []factory.WorkItem
 }
 
 type factoryTaskJSON struct {
-	ID        int64     `json:"id"`
-	Key       string    `json:"key"`
-	JiraKey   string    `json:"jira_key,omitempty"`
-	Kind      string    `json:"kind"`
-	Repo      string    `json:"repo"`
-	Title     string    `json:"title"`
-	State     string    `json:"state"`
-	Stage     string    `json:"stage"`
+	ID      int64  `json:"id"`
+	Key     string `json:"key"`
+	JiraKey string `json:"jira_key,omitempty"`
+	Kind    string `json:"kind"`
+	Repo    string `json:"repo"`
+	Title   string `json:"title"`
+	State   string `json:"state"`
+	Stage   string `json:"stage"`
+	// WaitsWho and WaitsWhat are the task's wait: its own, else the daemon's
+	// hold that stops it (HeldBy), as "held" and "MySQL does not answer (since
+	// 17:03)".
 	WaitsWho  string    `json:"waits_who,omitempty"`
 	WaitsWhat string    `json:"waits_what,omitempty"`
 	Branch    string    `json:"branch,omitempty"`
 	Copy      string    `json:"copy,omitempty"`
 	PRNumber  int       `json:"pr_number,omitempty"`
 	Updated   time.Time `json:"updated"`
+	// HeldBy is the hold of the running factory daemon that stops the task's
+	// next step, for an active task that names no wait of its own (a hold that
+	// stops every stage: herdr's, the machine's infrastructure hold); none
+	// for any other.
+	HeldBy *factoryHoldJSON `json:"held_by,omitempty"`
 }
 
 func runFactoryStatusCmd(c *Context, asJSON bool, pos []string) int {
@@ -296,6 +306,7 @@ func runFactoryStatusCmd(c *Context, asJSON bool, pos []string) int {
 		}
 	}
 	daemons := factoryStatusDaemons(context.Background(), c, pid) // status_daemons.go
+	now := time.Now()
 	if asJSON {
 		out := factoryStatusJSON{Daemon: factoryDaemonJSON{Running: pid > 0, PID: pid}, Daemons: daemons, Tasks: []factoryTaskJSON{}}
 		for _, h := range holds {
@@ -305,9 +316,14 @@ func runFactoryStatusCmd(c *Context, asJSON bool, pos []string) int {
 			out.Daemon.Work = append(out.Daemon.Work, factoryWorkJSON{Kind: w.Kind, Task: w.Task, What: w.What, Since: w.Since})
 		}
 		for _, t := range tasks {
-			out.Tasks = append(out.Tasks, factoryTaskJSON{ID: t.ID, Key: factory.TaskKey(t), JiraKey: t.JiraKey, Kind: t.Kind,
+			j := factoryTaskJSON{ID: t.ID, Key: factory.TaskKey(t), JiraKey: t.JiraKey, Kind: t.Kind,
 				Repo: t.Repo, Title: t.Title, State: t.State, Stage: t.Stage, WaitsWho: t.WaitsWho, WaitsWhat: t.WaitsWhat,
-				Branch: t.Branch, Copy: t.Copy, PRNumber: t.PRNumber, Updated: t.Updated})
+				Branch: t.Branch, Copy: t.Copy, PRNumber: t.PRNumber, Updated: t.Updated}
+			if h, ok := factory.StoppingHold(holds, t); ok { // no wait of its own: the daemon's hold stops it
+				j.WaitsWho, j.WaitsWhat = factory.HoldWait(h, now)
+				j.HeldBy = &factoryHoldJSON{Kind: h.Kind, Repo: h.Repo, Reason: h.Reason, Since: h.Since}
+			}
+			out.Tasks = append(out.Tasks, j)
 		}
 		if err := writeJSON(c.Stdout, out); err != nil {
 			fmt.Fprintf(c.Stderr, "magnum factory status: %v\n", err)
@@ -315,7 +331,6 @@ func runFactoryStatusCmd(c *Context, asJSON bool, pos []string) int {
 		}
 		return 0
 	}
-	now := time.Now()
 	for _, dc := range daemons {
 		fmt.Fprintln(c.Stdout, statusSafe(dc.line(now), 0))
 	}
@@ -340,7 +355,10 @@ func runFactoryStatusCmd(c *Context, asJSON bool, pos []string) int {
 	fmt.Fprintln(tw, "\nID\tKEY\tKIND\tSTATE\tSTAGE\tWAITS ON")
 	for _, t := range tasks {
 		waits := "-"
-		if t.WaitsWho != "" || t.WaitsWhat != "" {
+		if h, ok := factory.StoppingHold(holds, t); ok { // no wait of its own: the daemon's hold stops it
+			who, what := factory.HoldWait(h, now)
+			waits = who + ": " + what
+		} else if t.WaitsWho != "" || t.WaitsWhat != "" {
 			waits = t.WaitsWho + ": " + t.WaitsWhat
 		}
 		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\n", t.ID, factory.TaskKey(t), t.Kind, t.State, orDash(t.Stage), waits)

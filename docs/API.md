@@ -14829,6 +14829,11 @@ func Guard(next execx.Runner, cfg *config.Config) execx.Runner
     error (ErrDenied) says why. A runner Guard made is returned as it is;
     nil stays nil. The factory daemon runs every command of its own through one.
 
+func HoldWait(h Hold, now time.Time) (who, what string)
+    HoldWait is the wait a hold gives the task it stops, at now: its who
+    ("held") and its what, the hold's reason and since when ("MySQL does not
+    answer (since 17:03)"; a hold of another day says the day too).
+
 func Kick(l paths.Layout) (int, error)
     Kick asks the running factory daemon for a pass now (SIGUSR1); it returns
     the daemon's pid, or 0 when none runs. The pidfile can outlive the daemon
@@ -15544,6 +15549,18 @@ type Hold struct {
 func ReadHolds(l paths.Layout) ([]Hold, error)
     ReadHolds are the holds of the machine in force as the factory daemon last
     saved them (holds.json in layout l); none before its first tick.
+
+func StoppingHold(hs []Hold, t registry.Task) (Hold, bool)
+    StoppingHold is the hold in hs that stops the next step of task t: t is a
+    task the loop advances (active, or waiting) that names no wait of its own.
+    false for a task with one, and for a task the loop leaves alone (it needs
+    you, it is published, it ended).
+
+func (h Hold) StopsEveryStage() bool
+    StopsEveryStage reports whether hold h stops the next step of every task:
+    herdr's hold and the machine's infrastructure hold, which the tick answers
+    by advancing no task (Tick's advance). A repository's infrastructure hold
+    (Repo set) holds its copies alone.
 
 type Jira interface {
 	Ticket(ctx context.Context, key string) (jira.Ticket, error)
@@ -38239,6 +38256,12 @@ type TaskCard struct {
 	// none, and o steps into the task's pane). The card names it on a line
 	// of its own.
 	Follow string
+	// OpensNothing is why o opens nothing on the task, in one line, for the
+	// screen's message line ("nothing runs: the factory holds every stage
+	// (MySQL does not answer since 17:03)"): the task has no live agent to
+	// step into and the factory runs no output to follow. "" when o opens
+	// something (and on a task the data could not read).
+	OpensNothing string
 	// Links are what the task waits on you for, as links (the threads and
 	// findings its PR's verdict says need you), drawn under WAITING FOR.
 	Links []string

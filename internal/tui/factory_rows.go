@@ -548,6 +548,12 @@ type TaskCard struct {
 	// none, and o steps into the task's pane). The card names it on a line
 	// of its own.
 	Follow string
+	// OpensNothing is why o opens nothing on the task, in one line, for the
+	// screen's message line ("nothing runs: the factory holds every stage
+	// (MySQL does not answer since 17:03)"): the task has no live agent to
+	// step into and the factory runs no output to follow. "" when o opens
+	// something (and on a task the data could not read).
+	OpensNothing string
 	// Links are what the task waits on you for, as links (the threads and
 	// findings its PR's verdict says need you), drawn under WAITING FOR.
 	Links []string

@@ -245,6 +245,9 @@ func (m *factoryModel) commonKey(k string) tea.Cmd {
 		if file := m.followOf(id); file != "" {
 			return m.followOutput(id, file)
 		}
+		if why := m.data.Cards[id].Task.OpensNothing; why != "" { // no pane to step into, no output to follow: say why
+			return m.note(why)
+		}
 		return m.stepIn(id)
 	}
 	return nil

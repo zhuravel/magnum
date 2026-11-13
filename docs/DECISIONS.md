@@ -27713,6 +27713,40 @@ skill versions); people add theirs to the sections before it, at the end of the 
   in internal/tui (S's y/N wraps, as P's and E's do). `TestANewHeadAfterTheRoundLimitGetsOneRound` pins the one
   round at a new head, checked by mutation.
 
+- **A hold that stops every stage is the wait of each active task that names none, and o says why it opens
+  nothing** (2026-11-13). After a reboot DBngin's MySQL did not start. The factory daemon held every stage and
+  `magnum factory status` printed `held: infra: MySQL does not answer (since 17:03)` above the table, but task 9,
+  at its local review, showed `-` under WAITS ON, and the factory screen drew "local review" for it. The
+  operator found no agent in herdr, pressed `o`, and nothing opened and nothing said why, so he could not tell
+  what the factory was doing. The tick advances no task while herdr does not answer or the machine's infrastructure
+  hold is between its tries (`Tick`'s `advance`), so no stage ran to name a wait, and the registry's wait of such
+  a task is empty. `Hold.StopsEveryStage` is that rule (herdr's hold and the infrastructure hold with no
+  repository; a repository's hold holds its copies alone), `StoppingHold` picks the hold for a task (one the
+  loop advances, active or waiting, with no `waits_who` and no `waits_what`) and `HoldWait` words it: who `held`,
+  what `<reason> (since <time>)`, the date before the time unless it is today's. The disk and memory holds stop
+  launches, and the pause and the drains stop what starts; the tick still runs the stages, which name them in
+  the wait of the launch they stop (`heldError`), so they are no task's wait here. A task with a wait of its own
+  keeps it, which is more specific. `magnum factory status` prints the hold in the row (`held: MySQL does not
+  answer (since 17:03)`) and `--json` gives it as the task's `waits_who` and `waits_what`, so a reader of
+  those two fields sees what the row says, and as `held_by` (`kind`, `reason`, `since`), so one who needs the
+  registry's own empty wait can tell it from a wait. Only a running daemon's holds count, as for the header's
+  line. The factory screen reads holds.json once per frame (`screen.holds`, none with the daemon down) and puts
+  the hold in the row, in the task card's WAITING FOR and in the help line, with the reason alone on a narrow
+  screen; a task with an agent at work keeps the agent first, so its mark still says it works, and the hold
+  follows it. A task with roles still to run no longer shows them as its wait under a hold, since none runs. `o`
+  steps into the pane of a live session, follows the output the factory runs for the task (live.log, a copy's
+  setup log, a QA server's log), and with neither says why on the message line, asking nothing
+  (`TaskCard.OpensNothing`, which the data fills from the task's sessions and its follow file, so the screen
+  never guesses a pane): `nothing runs: the factory holds every stage (MySQL does not answer since 17:03)` when
+  the hold stops the task, else its wait (`nothing runs: it waits on you: 2 questions before coding`) or, when it
+  names none, its stage's own step (`nothing runs: it waits on magnum: local review`). A task whose agent is
+  idle in a live pane is still stepped into, as before. The pause, the reboot drain and the restart's drain
+  stay out of this on purpose: a stage meets each where it launches and says it in its own wait, as it did.
+  Tests, failing first: `TestAnActiveTaskWithNoWaitShowsTheDaemonsHold` (status text and JSON),
+  `TestATasksOwnWaitWinsOverTheDaemonsHold`, `TestTheScreensOpenKeySaysWhyNothingOpens`, with
+  `TestTheScreenNamesTheDaemonsHoldOnATaskWithNoWait`, `TestOnlyAHoldThatStopsEveryStageIsATasksWait`,
+  `TestTheTaskCardSaysWhyOOpensNothing` and `TestNoTaskNamesTheHoldOfAFactoryDaemonThatIsGone`. No migration.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

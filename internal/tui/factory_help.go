@@ -135,7 +135,7 @@ var factoryKeyHelp = []struct {
 		{"d", "the diff"},
 		{"+ −", "on a published or a done task's card: rate the task, then a digit says why (1 the cause and the fix, 2 how much it changed, " +
 			"3 how it followed my words, 4 the tests, 5 the time it took me) and esc skips the reason; asks nothing: rating again stores a new rating"},
-		{"x", "drop: stop its agents, free its copy, keep the branch (y/N)"}, {"o", "step into its pane, or follow what the factory runs for it (OUTPUT names it; ctrl-c, then q, comes back)"},
+		{"x", "drop: stop its agents, free its copy, keep the branch (y/N)"}, {"o", "step into its pane, or follow what the factory runs for it (OUTPUT names it; ctrl-c, then q, comes back); with neither, it says why nothing opens"},
 		{"b t", "its PR, its Jira issue in the browser (asks nothing)"},
 		{reportKey, "the report of magnum's fixer, when its fix loop left you items, else QA's summary.md where A is offered (asks nothing)"},
 		{"f F K", "on a card with a PR: magnum fixes what is open, fix off (or on again), stop its fix loop (y/N)"},
