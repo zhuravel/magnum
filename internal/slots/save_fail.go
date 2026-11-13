@@ -10,10 +10,12 @@ package slots
 // event at level error and the alert of SetSaveAlert (the review daemon's
 // toast); the retries that fail the same way add nothing, and `magnum
 // doctor` names the slot while the record stands (SaveFailures). The
-// step's next save that works, or nothing left to save, clears it, with a
-// slot.save_ok event, and so does the slot's removal (markRemoved). A
-// forced removal goes on over a failure, which it does not raise: its
-// slot.discarded warning says what it deleted unsaved (noteRemoval).
+// step's next save that works, or nothing left to save, clears it with a
+// slot.save_ok event; the slot's removal deletes it with none
+// (markRemoved). A forced removal goes on over a failure, which it does
+// not raise: its slot.discarded warning, written before the removal, says
+// what it deletes unsaved and names the part of the save kept
+// (noteRemoval, keepPartial).
 
 import (
 	"context"
