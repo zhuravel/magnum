@@ -380,6 +380,31 @@ func TestARemovalSavesAFileWhoseNameLeavesNoRoomForATemporaryOne(t *testing.T) {
 	}
 }
 
+// A removal whose untracked files are all left out keeps no untracked/
+// folder in its save, as a save with no path's patch keeps no changes.diff.
+func TestASaveThatCopiesNoUntrackedFileHasNoUntrackedFolder(t *testing.T) {
+	f := newPerPR(t, true)
+	h := f.h
+	h.m.saveCap = 1000
+	sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, f.repoName(), f.pr, f.sha7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sl.Path, "README"), "residue\n")
+	writeFile(t, filepath.Join(sl.Path, "large.txt"), strings.Repeat("x", 2000))
+
+	if err := h.m.RemovePRWorktree(h.ctx, sl, false); err != nil {
+		t.Fatalf("RemovePRWorktree: %v", err)
+	}
+	save := h.onlySave(t, h.layout.PRSaves("zhuravel", "widget", f.pr.Number), sl.Name)
+	if note := readFile(t, filepath.Join(save, "saved.txt")); !strings.Contains(note, "large.txt (") {
+		t.Fatalf("saved.txt does not name large.txt as left out:\n%s", note)
+	}
+	if _, err := os.Lstat(filepath.Join(save, "untracked")); !os.IsNotExist(err) {
+		t.Fatalf("a save that copied no file has untracked/: %v", err)
+	}
+}
+
 // A saved file keeps its owner's bits, so the `cp -R` saved.txt gives puts
 // an executable script back executable; group and others get nothing. Every
 // file was saved 0600.

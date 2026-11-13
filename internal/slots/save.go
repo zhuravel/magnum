@@ -312,7 +312,8 @@ func appendFile(out *os.File, name string) error {
 // is left, a symlink with its target, a repository inside the tree, any
 // other file that is no regular file, and a file it could not read or
 // write (unreadable, gone, a name the save's folder refuses), with the
-// error. Only the save's folder failing is an error.
+// error. untracked/ is made at the first file saved, so a save that copies
+// none has no such folder. Only that folder failing is an error.
 func saveUntracked(tree, dir string, files []string, budget int64, s *saved) error {
 	if len(files) == 0 {
 		return nil
@@ -322,16 +323,14 @@ func saveUntracked(tree, dir string, files []string, budget int64, s *saved) err
 		return err
 	}
 	defer src.Close()
-	if err := os.Mkdir(filepath.Join(dir, saveFiles), 0o700); err != nil {
-		return err
-	}
-	dst, err := os.OpenRoot(filepath.Join(dir, saveFiles))
-	if err != nil {
-		return err
-	}
-	defer dst.Close()
+	u := &untrackedSave{src: src, dir: filepath.Join(dir, saveFiles), budget: budget}
+	defer u.close()
 	for _, f := range files {
-		if why := saveFile(src, dst, f, &budget); why != "" {
+		why, err := u.save(f)
+		if err != nil {
+			return err
+		}
+		if why != "" {
 			s.skipped = append(s.skipped, f+" ("+why+")")
 			continue
 		}
@@ -340,53 +339,89 @@ func saveUntracked(tree, dir string, files []string, budget int64, s *saved) err
 	return nil
 }
 
-// saveFile copies untracked file f of src to dst and takes its size from
-// budget, or says why it does not ("" when it did): a file it cannot read
-// or write is left out with the error, as a file past the cap is.
-func saveFile(src, dst *os.Root, f string, budget *int64) string {
-	if strings.HasSuffix(f, "/") {
-		return "a repository inside the work tree"
+// untrackedSave copies a removal's untracked files from src, the tree, to
+// dir, the save's untracked/, within budget bytes.
+type untrackedSave struct {
+	src    *os.Root
+	dir    string
+	dst    *os.Root // dir, made and opened at the first file saved
+	budget int64
+}
+
+// folder is the save's untracked/, made at the first call.
+func (u *untrackedSave) folder() (*os.Root, error) {
+	if u.dst != nil {
+		return u.dst, nil
 	}
-	fi, err := src.Lstat(f)
+	if err := os.Mkdir(u.dir, 0o700); err != nil {
+		return nil, err
+	}
+	dst, err := os.OpenRoot(u.dir)
+	if err != nil {
+		return nil, err
+	}
+	u.dst = dst
+	return dst, nil
+}
+
+func (u *untrackedSave) close() {
+	if u.dst != nil {
+		_ = u.dst.Close()
+	}
+}
+
+// save copies untracked file f and takes its size from the budget, or
+// says why it does not ("" when it did): a file it cannot read or write is
+// left out with the error, as a file past the cap is. The error is the
+// save's folder's alone.
+func (u *untrackedSave) save(f string) (string, error) {
+	if strings.HasSuffix(f, "/") {
+		return "a repository inside the work tree", nil
+	}
+	fi, err := u.src.Lstat(f)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return "gone before the save"
+		return "gone before the save", nil
 	case err != nil:
-		return "cannot be read: " + errText(err)
+		return "cannot be read: " + errText(err), nil
 	case fi.Mode()&fs.ModeSymlink != 0:
-		target, err := src.Readlink(f)
+		target, err := u.src.Readlink(f)
 		if err != nil {
-			return "cannot be read: " + errText(err)
+			return "cannot be read: " + errText(err), nil
 		}
-		return "a symlink to " + target
+		return "a symlink to " + target, nil
 	case !fi.Mode().IsRegular():
-		return "not a regular file"
-	case fi.Size() > *budget:
-		return sizeWord(fi.Size()) + ", past the cap"
+		return "not a regular file", nil
+	case fi.Size() > u.budget:
+		return sizeWord(fi.Size()) + ", past the cap", nil
 	}
-	b, err := fsx.ReadRegularIn(src, f, *budget)
+	b, err := fsx.ReadRegularIn(u.src, f, u.budget)
 	switch {
 	case errors.Is(err, fsx.ErrTooLarge):
-		return "grew past the cap"
+		return "grew past the cap", nil
 	case errors.Is(err, fsx.ErrNotRegular):
-		return "not a regular file"
+		return "not a regular file", nil
 	case errors.Is(err, fs.ErrNotExist):
-		return "gone before the save"
+		return "gone before the save", nil
 	case err != nil:
-		return "cannot be read: " + errText(err)
+		return "cannot be read: " + errText(err), nil
+	}
+	dst, err := u.folder()
+	if err != nil {
+		return "", err
 	}
 	if d := path.Dir(f); d != "." {
 		if err := dst.MkdirAll(d, 0o700); err != nil {
-			return "cannot be written: " + errText(err)
+			return "cannot be written: " + errText(err), nil
 		}
 	}
 	// The owner's bits (an executable script stays one when `cp -R` puts
 	// it back), never the group's or others'.
 	if err := writeSaved(dst, f, b, fi.Mode().Perm()&0o700|0o600); err != nil {
-		return "cannot be written: " + errText(err)
+		return "cannot be written: " + errText(err), nil
 	}
-	*budget -= int64(len(b))
-	return ""
+	u.budget -= int64(len(b))
+	return "", nil
 }
 
 // writeSaved writes b to name in dst, the save's own folder, which nothing
