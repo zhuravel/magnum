@@ -15,8 +15,9 @@ package engine
 // fixLeaseGrace from the first failure, then fails open: magnum reviews, a
 // warn event says so once, and the PR's row (KVPRFixLeaseUnread, a
 // key-value row: no migration) shows on the doctor's line until a read
-// works again, which each tick tries (sweepLeaseUnreads), or the PR leaves
-// the factory or closes. Each names what failed (its Source): a read of
+// works again, which each tick tries (sweepLeaseUnreads), the PR leaves
+// the factory, or the PR is gone; a closed or merged PR's row stays while
+// its read fails. Each names what failed (its Source): a read of
 // magnum's own registry says nothing of the factory's. A nil reader is
 // inert: no lease is read, nothing is held or refused, no event or doctor
 // line, as before the factory fixed PRs.
