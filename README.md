@@ -5708,7 +5708,11 @@ event, so a restart counts them, and an alert, news whose toast counts nobody as
 lost: no progress after 3 recoveries: start the role again, give a direction or drop the task?`): starting it again,
 or your direction, starts a fresh session of the role with its context and counts its recoveries again.
 When several agents need you in one pass, the task's wait names each of them; with a stop's question among them,
-the question comes first and the other waits come back after your answer. Your retry starts those steps over. The stage's next prompt to a role of the attempt with no session starts it again
+the question comes first and the other waits come back after your answer. Your retry starts those steps over.
+Under a drain for a reboot (`magnum drain`) these steps start no agent and send no prompt for a role with no turn
+in flight: a waited recovery, the fresh session your answer or the writer's fix budget asks for, and your answer's
+start of a role lost before its first prompt stay due until the drain is lifted. A recovery whose own turn hangs in
+flight takes its step, since only that step ends the turn the drain waits for. The stage's next prompt to a role of the attempt with no session starts it again
 first, as a launch would (it waits for the same holds: the daemon's drain, a disk or memory hold, a CLI's pause or
 login, Codex's budget, the stagger at memory warn), and the prompt goes as after a launch: a role the factory parked
 while the task waited on you is resumed from its conversation, which counts against nothing, and a lost one takes

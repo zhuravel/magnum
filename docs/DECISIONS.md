@@ -26673,6 +26673,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `flushVoids`), at the watchdog's pass and before any new due event, so a restart never reads it back
     (G12). startRound's run again settles a go-on once its look finds the copy clean, as the round's end
     does (G13, G14).
+  - *The drain for a reboot* (the entry above, rebased on 309999fb). Every recovery path of this entry is
+    gated as master's `recoverRole`, `RecoverLost`, `freshStarts` and `modelFallback` are: for a role with
+    no turn in flight it starts no agent and sends no prompt, and it answers the drain's `*WaitError`, so
+    the role stays due. A waited recovery (`recoverDue`) passes whether the role's turn is in flight to
+    `recoverRole`, as the watchdog's no-progress step does since the drain's H2 fix: a recovery turn that
+    hangs takes its next step, since only that step cuts the turn the drain waits for; held, the drain
+    never went quiet (`TestAHungRecoveryTurnTakesItsNextStepUnderTheDrain` failed after the rebase).
+    `SendFresh` (your answer's fresh session, the writer's at its fix budget) and `StartOver` (your
+    answer's start of a role lost before its first prompt) ask the drain before they quit, start over or
+    send anything; `StartOver` now returns an error, and `applyStops` leaves the answer unapplied under
+    the drain's wait, so the next pass after the lift starts the role over and its first prompt carries
+    your answer. A prompt that `bringBack` follows goes through `Send`, which the drain holds first.
   Tests, failing first and each checked by a mutation: `TestALintThatNamesNoOffenseRunsAgainThenAfterTheInstalls`,
   `TestABaseRunThatHangsGetsADoubledBoundThenAQuestion`, `TestYourAnswerToACheckQuestionSkipsItOrGivesItYourBound`,
   `TestARestartInTheMiddleOfTheFaultStepsNeitherDoublesNorLosesOne`,
@@ -26715,8 +26727,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestARuboCopFatalRowOfAChangedFileIsTheWriters`, `TestALintsZeroZeroWarningIsNoFatalError`,
   `TestAScriptFileCausesOnlyTheMissingCommandItNames`, `TestAJestProofsFailureIsItsFailingTests`,
   `TestASecondAnswerForARoleStillLostBeforeItsFirstPromptIsApplied`,
-  `TestAnotherRolesNeedsYouEventOutlivesAStopQuestion`, `TestTwoRolesNeedsYouEventsAreBothTold` and
-  `TestAGoOnAtAStoppedRoundsRunAgainSettlesItsQuestion` in internal/factory.
+  `TestAnotherRolesNeedsYouEventOutlivesAStopQuestion`, `TestTwoRolesNeedsYouEventsAreBothTold`,
+  `TestAGoOnAtAStoppedRoundsRunAgainSettlesItsQuestion` and
+  `TestAStartAnswerUnderTheDrainIsAppliedOnceItIsLifted` in internal/factory.
   In internal/factory/runtime: `TestALostPaneIsRecoveredThreeTimesAfterItsWaitsTheLastInAFreshSession`,
   `TestARestartBetweenTheRecoveriesNeitherDoublesNorLosesOne`, `TestYourRetryStartsTheRecoveriesOverAndSpendsNone`,
   `TestAFreshStartStartsTheRoleWithItsContextAndItsRecoveriesOver`, `TestAFreshSessionStartsTheLoopsLadderOver`,
@@ -26725,8 +26738,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestTheFixBudgetsFreshSessionKeepsThePanesRecoveries`, `TestTheGoOnsStartTheLoopLadderOver`,
   `TestAWaitedRecoveryOutlivesARestart`, `TestADueRecoveryWaitsForATaskThatWaitsOnYou`,
   `TestAWaitedRecoveryOfASessionThatMovesAgainIsVoid`, `TestTheRecoveriesRunningOutHandTheRunOver`,
-  `TestStartOverStartsALostRolesRecoveriesOver`, `TestANoProgressWaitOutlivesARestart` and
-  `TestAVoidedWaitStaysVoidAfterARestart`. In internal/execx: `TestARunASignalEndedReportsTheSignal`.
+  `TestStartOverStartsALostRolesRecoveriesOver`, `TestANoProgressWaitOutlivesARestart`,
+  `TestAVoidedWaitStaysVoidAfterARestart`, `TestAWaitedRecoveryWithNoTurnInFlightStaysDueUnderTheDrain`,
+  `TestASendFreshWaitsForTheDrain` and `TestStartOverWaitsForTheDrain`. In internal/execx: `TestARunASignalEndedReportsTheSignal`.
   In internal/config: `TestFactoryFixGoOnIsTwoByDefaultAndBounded`.
 
 ## Learned rules

@@ -163,7 +163,7 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 		if now.Before(due) {
 			return Event{}, false
 		}
-		return r.recoverDue(ctx, st)
+		return r.recoverDue(ctx, st, run.ID != "")
 	}
 	deadline := time.Time{}
 	if run.ID != "" {
@@ -240,7 +240,10 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 // watch takes a recovery that shows no progress: none for a task that
 // stopped or a stage that moved on, none while it may not restart (a
 // pause, you in its pane), and EventLost once the recoveries ran out.
-func (r *Runtime) recoverDue(ctx context.Context, st *roleState) (Event, bool) {
+// Under a drain for a reboot a role with no turn in flight stays due
+// (recoverRole's *WaitError); one whose turn is in flight (inFlight) takes
+// its step, which cuts that turn, as watch's recovery does.
+func (r *Runtime) recoverDue(ctx context.Context, st *roleState, inFlight bool) (Event, bool) {
 	r.mu.Lock()
 	still, quiet := st.recovering && !st.dueAt.IsZero(), st.dueQuiet
 	r.mu.Unlock()
@@ -272,11 +275,11 @@ func (r *Runtime) recoverDue(ctx context.Context, st *roleState) (Event, bool) {
 	if t.State != registry.TaskActive && t.State != registry.TaskWaiting {
 		return Event{}, false // a task that waits on you: the recovery stays due, for when it is at work again
 	}
-	err = r.recoverRole(ctx, t, a, st.role, "its pane was lost", false)
+	err = r.recoverRole(ctx, t, a, st.role, "its pane was lost", inFlight)
 	if spent, ok := errors.AsType[errRecoveriesSpent](err); ok {
 		return r.lostEvent(t, a, st.role, spent), true
 	}
-	if err != nil && !errors.Is(err, errRefusedRole) {
+	if _, wait := errors.AsType[*WaitError](err); !wait && err != nil && !errors.Is(err, errRefusedRole) { // a drain's wait: still due
 		r.log.Warn("a role's recovery after its wait", "attempt", a.ID, "role", st.role.Name, "err", err)
 	}
 	return Event{}, false

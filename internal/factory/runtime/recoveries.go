@@ -178,11 +178,15 @@ func (r *Runtime) appendEvent(ctx context.Context, id int64, kind, text string) 
 // counted from here: a "starts over" event, and its loop's in the stage,
 // counted from its next prompt), so it spends no recovery. The
 // new run's id comes back; a role that may not restart now (a pause, you in
-// its pane) is that error.
+// its pane) is that error, and a drain for a reboot (mayPrompt) its
+// *WaitError, before anything is quit, started over or sent.
 func (r *Runtime) SendFresh(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, then string,
 	recoveriesOver bool) (string, error) {
 	if a.TaskID != t.ID {
 		return "", fmt.Errorf("start %s afresh: attempt %s is not %s's", role.Name, a.ID, taskKey(t))
+	}
+	if err := r.mayPrompt(); err != nil { // drain.go: the fresh session waits for the drain's lift
+		return "", err
 	}
 	role, err := r.RunsAs(t, role)
 	if err != nil {
@@ -284,19 +288,26 @@ func (r *Runtime) flushVoids(ctx context.Context) {
 // task t over (why: your answer to its lost pane's question, for a role
 // that took no prompt yet): it is lost and stuck no more, and a "starts
 // over" event counts its recoveries from here; the stage's first prompt
-// then brings it back as a launch would.
-func (r *Runtime) StartOver(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, why string) {
+// then brings it back as a launch would. Under a drain for a reboot
+// (mayPrompt) it changes nothing and answers the drain's *WaitError: the
+// role stays lost, and the stage applies your answer once the drain is
+// lifted.
+func (r *Runtime) StartOver(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, why string) error {
+	if err := r.mayPrompt(); err != nil { // drain.go: the role stays lost, and your answer waits for the drain's lift
+		return err
+	}
 	role, err := r.RunsAs(t, role)
 	if err != nil {
-		return
+		return err
 	}
 	st, err := r.stateFor(ctx, a.ID, role.Name)
 	if err != nil {
-		return
+		return err
 	}
 	r.mu.Lock()
 	st.stuck, st.lost, st.pending, st.recovering, st.step = false, false, false, false, 0
 	r.voidDue(st)
 	r.mu.Unlock()
 	r.noteStartOver(ctx, t, a, role.Name, why)
+	return nil
 }

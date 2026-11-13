@@ -16132,7 +16132,7 @@ type Runtime interface {
 	Send(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, text string) (runID string, err error)
 	SendFresh(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, then string, recoveriesOver bool) (runID string, err error)
 	MadeProgress(t registry.Task, a registry.Attempt, role string)
-	StartOver(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, why string)
+	StartOver(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, why string) error
 	Observe(ctx context.Context) ([]runtime.Event, error)
 	Verify(ctx context.Context, runID string, ok bool, why string) error
 	Void(ctx context.Context, runID, why string) error
@@ -18189,7 +18189,8 @@ func (r *Runtime) SendFresh(ctx context.Context, t registry.Task, a registry.Att
     counted from here: a "starts over" event, and its loop's in the stage,
     counted from its next prompt), so it spends no recovery. The new run's id
     comes back; a role that may not restart now (a pause, you in its pane) is
-    that error.
+    that error, and a drain for a reboot (mayPrompt) its *WaitError, before
+    anything is quit, started over or sent.
 
 func (r *Runtime) SettleWorkspaces(ctx context.Context) ([]Orphan, error)
     SettleWorkspaces settles, after a restart, the factory's workspaces (a label
@@ -18207,12 +18208,14 @@ func (r *Runtime) Shift(gap time.Duration)
     Shift moves every turn deadline and progress window by gap, the time the Mac
     slept (the engine's wake): no run counts as hung for a sleep.
 
-func (r *Runtime) StartOver(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, why string)
+func (r *Runtime) StartOver(ctx context.Context, t registry.Task, a registry.Attempt, role config.Role, why string) error
     StartOver starts the recoveries and the ladders of role in attempt a of
     task t over (why: your answer to its lost pane's question, for a role that
     took no prompt yet): it is lost and stuck no more, and a "starts over" event
     counts its recoveries from here; the stage's first prompt then brings it
-    back as a launch would.
+    back as a launch would. Under a drain for a reboot (mayPrompt) it changes
+    nothing and answers the drain's *WaitError: the role stays lost, and the
+    stage applies your answer once the drain is lifted.
 
 func (r *Runtime) Talk(ctx context.Context, t registry.Task, prompt string) (string, error)
     Talk starts or finds task t's liaison (LiaisonRole, on a row of its own:

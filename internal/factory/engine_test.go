@@ -71,6 +71,7 @@ type fakeRuntime struct {
 	recovered     []string // the RecoverLost calls, "<task key>/<role>"
 	progress      []string // the MadeProgress calls, "<task key>/<role>"
 	startedOver   []string // the StartOver calls, "<task key>/<role>"
+	startOverErr  error    // what StartOver answers (a drain for a reboot); nil: it starts the role over
 	runs          int
 	sendErr       error
 	quits         []int64
@@ -407,10 +408,14 @@ func (f *fakeRuntime) SendFresh(ctx context.Context, t registry.Task, a registry
 
 // StartOver records the call, "<task key>/<role>": your answer's start of a
 // role that took no prompt yet.
-func (f *fakeRuntime) StartOver(_ context.Context, t registry.Task, _ registry.Attempt, role config.Role, _ string) {
+func (f *fakeRuntime) StartOver(_ context.Context, t registry.Task, _ registry.Attempt, role config.Role, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.startOverErr != nil { // a drain for a reboot: the start waits
+		return f.startOverErr
+	}
 	f.startedOver = append(f.startedOver, TaskKey(t)+"/"+role.Name)
+	return nil
 }
 
 func (f *fakeRuntime) startOvers() []string {

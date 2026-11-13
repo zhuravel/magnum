@@ -802,7 +802,12 @@ func (e *Engine) applyStops(ctx context.Context, t registry.Task, a registry.Att
 			continue
 		}
 		if !r.prompted { // no prompt yet: a fresh launch, its recoveries over, with the stage's first prompt and your answer after it
-			e.d.Runtime.StartOver(ctx, t, a, r.runAs, "your answer to its lost pane's question")
+			if err := e.d.Runtime.StartOver(ctx, t, a, r.runAs, "your answer to its lost pane's question"); err != nil {
+				if _, wait := errors.AsType[*runtime.WaitError](err); wait {
+					continue // a drain for a reboot: your answer is applied once it is lifted
+				}
+				return err
+			}
 			r.next, r.firstNote, r.firstNoteAt, r.problem, r.pause = "", freshAnswerText(ask), ask.Decided, nil, ""
 			r.ok, r.failed, r.recover, r.letGo = false, "", false, false
 			continue

@@ -312,3 +312,42 @@ func TestTwoRolesNeedsYouEventsAreBothTold(t *testing.T) {
 		t.Fatalf("task %s waits %q; want both roles told", got.State, got.WaitsWhat)
 	}
 }
+
+// Your start answer for a role lost before its first prompt, given while a
+// drain for a reboot holds new prompts, waits for the drain's lift: its
+// recoveries start over and its first prompt goes, your answer after it,
+// once the drain is lifted, never before.
+func TestAStartAnswerUnderTheDrainIsAppliedOnceItIsLifted(t *testing.T) {
+	h := newHarness(t)
+	task := h.kindTask("PR-12553", "bug", "investigate")
+	h.rt.mu.Lock()
+	h.rt.sendErr = errors.New("agent: no session")
+	h.rt.mu.Unlock()
+	h.startStage(task)
+	h.observeEvents(runtime.Event{TaskID: task.ID, Role: "fx-repro", Kind: runtime.EventLost, Reason: "no progress after 3 recoveries"})
+	h.clock.Add(time.Minute)
+	h.tick()
+	got := h.reload(task.ID)
+	if got.State != registry.TaskNeedsYou {
+		t.Fatalf("task %s waits %q; want the lost question", got.State, got.WaitsWhat)
+	}
+	drain := &runtime.WaitError{Who: "restart", What: "the factory drains for a reboot"}
+	h.rt.mu.Lock()
+	h.rt.sendErr, h.rt.startOverErr = drain, drain
+	h.rt.mu.Unlock()
+	h.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: got.QuestionRev, Answers: map[int]string{0: optionDirection + ": use the seeds"}})
+	h.clock.Add(time.Minute)
+	h.tick()
+	if over, ps := h.rt.startOvers(), h.rt.promptsTo("fx-repro"); len(over) != 0 || len(ps) != 0 {
+		t.Fatalf("start-overs %q, prompts %+v under the drain; want none", over, ps)
+	}
+	h.rt.mu.Lock()
+	h.rt.sendErr, h.rt.startOverErr = nil, nil
+	h.rt.mu.Unlock()
+	h.clock.Add(time.Minute)
+	h.tick()
+	ps := h.rt.promptsTo("fx-repro")
+	if over := h.rt.startOvers(); len(over) != 1 || len(ps) != 1 || !strings.Contains(ps[0].Text, "use the seeds") {
+		t.Fatalf("start-overs %q, prompts %+v once the drain was lifted; want one start-over and the first prompt with your words", over, ps)
+	}
+}
