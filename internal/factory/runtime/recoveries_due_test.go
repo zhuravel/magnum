@@ -3,6 +3,7 @@ package runtime
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/herdr"
@@ -169,5 +170,67 @@ func TestAVoidedWaitStaysVoidAfterARestart(t *testing.T) {
 	g.afterWait(3)
 	if got := len(g.h.startCalls()); got != starts {
 		t.Fatalf("%d starts after a restart: the voided wait came back", got-starts)
+	}
+}
+
+// A no-progress wait read back after a restart past its due time takes one
+// look at the session before its recovery: a session that works again
+// since is never recovered, and a still one is, at the next pass.
+func TestANoProgressWaitReadBackPastItsDueLooksOnceMore(t *testing.T) {
+	for _, moves := range []bool{true, false} {
+		g := newRig(t)
+		g.lostThenResumed("fx-repro", "sid-1")
+		g.h.setStatus(g.agent("fx-repro"), herdr.StatusWorking)
+		g.watchdog()
+		g.clock.Add(NoProgressAfter)
+		g.watchdog() // no progress: recovery 3 waits its 5 minutes
+		starts := len(g.h.startCalls())
+		g.clock.Add(RecoveryWaits[2] + time.Minute) // the daemon is down past the wait's due time
+		g.restart()
+		g.watchdog() // the first look takes what the session shows
+		if n := len(g.h.startCalls()); n != starts {
+			t.Fatalf("%d starts in the pass that took the first look after the restart, want none", n-starts)
+		}
+		if moves {
+			g.h.screen(g.agent("fx-repro"), "Bash(bin/rspec)\nrunning the specs again\n") // it works again
+		}
+		g.clock.Add(time.Minute)
+		g.watchdog()
+		g.clock.Add(time.Minute)
+		g.watchdog()
+		if want := map[bool]int{true: starts, false: starts + 1}[moves]; len(g.h.startCalls()) != want {
+			t.Fatalf("session moves %v: %d starts after the restart, want %d", moves, len(g.h.startCalls())-starts, want-starts)
+		}
+	}
+}
+
+// A run that ends after a restart, before any pass built its role's state,
+// voids the wait read back from its events: the stage's verify of it
+// (failed, its file still invalid) recovers nothing.
+func TestARunThatEndsAfterARestartVoidsItsWait(t *testing.T) {
+	g := newRig(t)
+	g.lostThenResumed("fx-repro", "sid-1")
+	g.h.setStatus(g.agent("fx-repro"), herdr.StatusWorking)
+	g.watchdog()
+	g.clock.Add(NoProgressAfter)
+	g.watchdog() // no progress: recovery 3 waits its 5 minutes
+	active, err := g.st.ActiveRuns(g.ctx)
+	if err != nil || len(active) != 1 {
+		t.Fatalf("runs in flight %+v, %v; want the recovery turn", active, err)
+	}
+	id, starts := active[0].ID, len(g.h.startCalls())
+	g.restart()
+	g.h.setStatus(g.agent("fx-repro"), herdr.StatusIdle)
+	g.observeN(2) // the turn ends before any watchdog pass
+	if r := g.storeRun(id); r.State != store.RunEnded {
+		t.Fatalf("the recovery turn is %s after its end, want ended", r.State)
+	}
+	if err := g.r.Verify(g.ctx, id, false, "its file is still invalid"); err != nil {
+		t.Fatal(err)
+	}
+	g.afterWait(3)
+	g.afterWait(3)
+	if n := len(g.h.startCalls()); n != starts {
+		t.Fatalf("%d starts after the turn ended, want none: its wait is void", n-starts)
 	}
 }

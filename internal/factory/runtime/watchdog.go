@@ -150,8 +150,10 @@ func (r *Runtime) watch(ctx context.Context, st *roleState, run store.Run, now t
 			sig := r.signature(ctx, st, run)
 			r.mu.Lock()
 			switch {
-			case st.since.IsZero(): // read back after a restart: what the session shows now is what a move is told against
-				st.sig, st.since = sig, now
+			case st.since.IsZero(): // read back after a restart: what the session shows now is what a move is told against,
+				st.sig, st.since = sig, now // and a later pass, never this one, decides: its due time may have passed while the daemon was down
+				r.mu.Unlock()
+				return Event{}, false
 			case sig != was:
 				r.voidDue(st)
 				st.sig, st.since = sig, now

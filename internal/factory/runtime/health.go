@@ -387,19 +387,25 @@ func (r *Runtime) completed(ctx context.Context, s store.Session, run store.Run)
 }
 
 // ended notes a run that ended well: its RoleRun's end, and the watchdog's
-// and the recoveries' ladders of its role start over.
+// and the recoveries' ladders of its role start over. A recovery that
+// waited is void, one read back from the events after a restart too (the
+// role's state is built for it: stateFor), and its "due void" is written
+// at once.
 func (r *Runtime) ended(ctx context.Context, run store.Run) {
 	rr := registry.RoleRun{AttemptID: run.TargetSHA, Role: run.Role}
 	if run.EndedAt != nil {
 		rr.Ended = *run.EndedAt
 	}
 	r.record(ctx, rr)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if st := r.roles[roleKey{run.TargetSHA, run.Role}]; st != nil {
-		st.step, st.stuck, st.recovering, st.pending, st.sig, st.since = 0, false, false, false, "", time.Time{}
-		r.voidDue(st) // a recovery that waited is void: the role moved
+	st, err := r.stateFor(ctx, run.TargetSHA, run.Role)
+	if err != nil {
+		return // no factory attempt's role
 	}
+	r.mu.Lock()
+	st.step, st.stuck, st.recovering, st.pending, st.sig, st.since = 0, false, false, false, "", time.Time{}
+	r.voidDue(st) // a recovery that waited is void: the role moved
+	r.mu.Unlock()
+	r.flushVoids(ctx)
 }
 
 // pausedRun settles a run that ended on its CLI's pause: abandoned in the
