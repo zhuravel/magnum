@@ -1006,6 +1006,42 @@ func TestAPerPRCheckoutsRemovalSavesItsChangesFirst(t *testing.T) {
 	}
 }
 
+// A per-PR checkout whose save fails is not removed: the release fails,
+// the checkout and its changes stay, and the next release, once the save
+// works, saves them and removes it. No test failed the save before.
+func TestAPerPRCheckoutWhoseSaveFailsIsNotRemoved(t *testing.T) {
+	r := newFixRig(t, 1, 1)
+	shop := r.addShop()
+	r.pushPR(shop, 5, "fix.txt", "v1\n")
+	ws := r.prWork("example/shop", 5)
+	pc := r.claimFix(ws)
+	r.write(filepath.Join(pc.Path, "fix.txt"), "v2 from a shell\n")
+	blocker := filepath.Join(r.root, "not-a-folder")
+	r.write(blocker, "a file\n")
+	r.sm.SetSaveDir(func(store.Slot, store.PR) string { return filepath.Join(blocker, "saves") })
+
+	r.clock.Add(time.Minute)
+	if err := r.c.ReleaseFix(r.ctx, ws, "released"); err == nil {
+		t.Fatal("ReleaseFix with a save that fails: no error")
+	}
+	if sl := r.slot(pc.Name); sl.State == store.SlotRemoved || !fsx.Exists(pc.Path) {
+		t.Fatalf("%s after a failed save = %s, exists %v; want it kept", pc.Name, sl.State, fsx.Exists(pc.Path))
+	}
+	if got, err := os.ReadFile(filepath.Join(pc.Path, "fix.txt")); err != nil || string(got) != "v2 from a shell\n" {
+		t.Fatalf("fix.txt after a failed save = %q, %v; want the change kept", got, err)
+	}
+
+	r.sm.SetSaveDir(func(_ store.Slot, pr store.PR) string { return saveDir(r.cfg.Layout, pr) })
+	r.releaseFix(ws)
+	if sl := r.slot(pc.Name); sl.State != store.SlotRemoved || fsx.Exists(pc.Path) {
+		t.Fatalf("%s after the release = %s, want removed", pc.Name, sl.State)
+	}
+	save := r.onlySave(r.cfg.Layout.FactoryPRWorkSaves("example/shop", 5), pc.Name)
+	if patch, err := os.ReadFile(filepath.Join(save, "changes.diff")); err != nil || !strings.Contains(string(patch), "+v2 from a shell") {
+		t.Fatalf("the saved patch = %q, %v, want fix.txt's change", patch, err)
+	}
+}
+
 // A force-push of the PR between the claim and the release keeps nothing:
 // the head the claim switched to counts as pushed, though the release's
 // fetch moved the fix ref off it, so it is the PR's and not kept. Its

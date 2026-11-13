@@ -54,7 +54,8 @@ func newDoctorCmd(c *Context) *cobra.Command {
 			"work of magnum's has not ended yet, a held fix aside, which goes with its PR; `magnum fix --drained` says your "+
 			"action for each) and the factory's lease of "+
 			"the PRs it fixes (a WARN naming those whose lease magnum cannot read: their rounds wait 10 minutes, then magnum "+
-			"reviews them without it), the registry, and the factory's pause.json and reboot-drain.json "+
+			"reviews them without it), the registry, the slots whose save before a discard keeps failing (a WARN each: its "+
+			"step discards nothing and retries), and the factory's pause.json and reboot-drain.json "+
 			"(a WARN for one its daemon cannot read: an unreadable pause holds nothing, an unreadable drain holds until "+
 			"`magnum resume`). "+
 			"Each check prints PASS, WARN, FAIL or SKIP with the exact fix. Read-only; exits 1 when a check fails.",
@@ -205,7 +206,7 @@ func doctorRun(ctx context.Context, d doctorDeps) []doctorCheck {
 	groups := []func(context.Context, doctorDeps) []doctorCheck{
 		doctorConfig, doctorHerdrChecks, doctorAgentChecks, doctorSessionHooks, doctorHooksTrust, doctorAgentHooks, doctorHookSocket, doctorSkill, doctorFixRole, doctorWhiteboard, doctorPrompts, doctorGH, doctorIdentities, doctorJira, doctorMySQLCheck, doctorRedis,
 		doctorClones, doctorFixerPushURL, doctorFixerRepos, doctorSchemaReset, doctorMise, doctorLoginShell, doctorDisk, doctorMemory, doctorStaging, doctorLaunchd, doctorLaunchdMise, doctorTerminal, doctorPluginCheck,
-		doctorLearnEditor, doctorFixHandover, doctorRegistry, doctorControls,
+		doctorLearnEditor, doctorFixHandover, doctorSaves, doctorRegistry, doctorControls,
 	}
 	out := make([][]doctorCheck, len(groups))
 	var wg sync.WaitGroup

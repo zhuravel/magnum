@@ -490,30 +490,34 @@ const maxListed = 20
 // a slot.discarded event with their counts, the first maxListed paths and
 // the save, so what the guard took for magnum's residue can be audited and
 // put back. A switch or reset keeps untracked files: they count only with
-// untracked, and its save only names them. A save that fails is an error,
-// and the step discards nothing.
+// untracked, and its save only names them. A save or a listing that fails
+// is an error, and the step discards nothing; it is raised once per slot
+// (saveFailed), and the next one that works clears it (saveWorked).
 func (m *Manager) noteDiscard(ctx context.Context, sl store.Slot, untracked bool, what string) (bool, error) {
 	if sl.Path == "" || !fsx.Exists(sl.Path) {
+		m.saveWorked(ctx, sl, "the save before a discard works again")
 		return false, nil
 	}
 	ch, err := m.worktreeChanges(ctx, sl.Path)
 	if err != nil {
-		return false, err
+		return false, m.saveFailed(ctx, sl, SaveFailedListing, what, err)
 	}
 	paths := ch.paths(untracked)
 	if len(paths) == 0 {
+		m.saveWorked(ctx, sl, "the save before a discard works again")
 		return false, nil
 	}
 	msg := fmt.Sprintf("discarding %s in %s: %s", ch.describe(untracked), sl.Path, clipNames(paths))
 	if len(ch.tracked) > 0 || len(withoutRenderedMiseLocal(sl.Path, slices.Clone(ch.untracked))) > 0 {
 		s, err := m.saveChanges(ctx, sl, ch, untracked, what)
 		if err != nil {
-			return false, err
+			return false, m.saveFailed(ctx, sl, SaveFailedSave, what, err)
 		}
 		if s.dir != "" {
 			msg += s.note()
 		}
 	}
+	m.saveWorked(ctx, sl, "the save before a discard works again")
 	m.event(ctx, "slot:"+sl.Name, "info", "slot.discarded", msg)
 	return true, nil
 }

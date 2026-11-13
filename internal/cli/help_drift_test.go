@@ -133,6 +133,7 @@ var doctorHelpEntries = []doctorHelpEntry{
 	{"launchd", "launchd agent"}, {"launchd mise", "the mise it starts the daemon through"},
 	{"terminal", "Automation permission"}, {"plugin", "herdr plugin link"},
 	{"fix handover", "handing over to the factory"}, {"factory lease", "the factory's lease"},
+	{"saves", "save before a discard keeps failing"}, {"save", "save before a discard keeps failing"},
 	{"registry", "registry"},
 	{"controls", "pause.json and reboot-drain.json"},
 }

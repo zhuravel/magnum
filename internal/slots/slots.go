@@ -176,6 +176,8 @@ type Manager struct {
 	// saveCap bounds a save (0: SaveCap), a test's smaller one.
 	saveDir atomic.Pointer[func(sl store.Slot, pr store.PR) string]
 	saveCap int64
+	// saveAlert is SetSaveAlert's function (nil: none).
+	saveAlert atomic.Pointer[func(context.Context, SaveFailure)]
 }
 
 // New returns a Manager.

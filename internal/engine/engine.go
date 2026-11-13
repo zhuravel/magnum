@@ -1068,6 +1068,9 @@ func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 	}
 	e := New(d)
 	bound.bind(e)
+	if a.Slots != nil && a.AgentTag == "" && !a.DryRun {
+		a.Slots.SetSaveAlert(e.toastSaveFailed) // slot_saves.go: a review slot whose save keeps failing
+	}
 	if a.Config != nil && a.GitHub != nil {
 		for _, id := range a.Config.Identities {
 			if c := a.GitHub(id.Name); c != nil {

@@ -757,7 +757,11 @@ func (m *Manager) removeWorktree(ctx context.Context, sl store.Slot, force bool)
 	case err != nil:
 		m.logErr(ctx, err, "slots: list and save the changes in %s before a forced removal, which removes them unsaved: %v", sl.Path, err)
 	}
-	return m.git.WorktreeRemove(ctx, sl.MainClone, sl.Path, force || dirty)
+	if err := m.git.WorktreeRemove(ctx, sl.MainClone, sl.Path, force || dirty); err != nil {
+		return err
+	}
+	m.saveWorked(ctx, sl, "the forced removal went on, with nothing left to save")
+	return nil
 }
 
 // missing reports whether path definitely does not exist (an unreadable
