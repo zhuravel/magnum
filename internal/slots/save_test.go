@@ -450,38 +450,41 @@ func TestAReadThatFailsForTheWholeProcessFailsTheSave(t *testing.T) {
 // for the whole process (too many open files in it or in the system, no
 // memory) fails the save, and the removal deletes nothing, as such a read
 // of a person's file does: the next attempt compares it, and names the
-// copy a person edited. No test failed when editedOwn named such a
-// comparison as one that "cannot be compared", and `worktree remove
-// --force` then deleted the tree.
+// copy a person edited (a file a copy_files entry names: editedOwn) or
+// saves it (a file below a copied folder: sortOwn). No test failed when
+// editedOwn named such a comparison as one that "cannot be compared", and
+// `worktree remove --force` then deleted the tree.
 func TestAComparisonThatFailsForTheWholeProcessFailsTheSave(t *testing.T) {
 	for _, errno := range []syscall.Errno{syscall.EMFILE, syscall.ENFILE, syscall.ENOMEM} {
-		t.Run(errno.Error(), func(t *testing.T) {
-			f, sl := ownFilesWorktree(t)
-			h := f.h
-			writeFile(t, filepath.Join(sl.Path, "master.key"), "a key I tried\n")
-			writeFile(t, filepath.Join(sl.Path, "notes.txt"), "mine\n")
-			h.m.sameMain = func(src *os.Root, mainClone, p string) (bool, error) {
-				if p == "master.key" {
-					return false, &fs.PathError{Op: "open", Path: p, Err: errno}
+		for _, copied := range []string{"master.key", "fixtures/a.json"} {
+			t.Run(errno.Error()+" "+copied, func(t *testing.T) {
+				f, sl := ownFilesWorktree(t)
+				h := f.h
+				writeFile(t, filepath.Join(sl.Path, filepath.FromSlash(copied)), "edited\n")
+				writeFile(t, filepath.Join(sl.Path, "notes.txt"), "mine\n")
+				h.m.sameMain = func(src *os.Root, mainClone, p string) (bool, error) {
+					if p == copied {
+						return false, &fs.PathError{Op: "open", Path: p, Err: errno}
+					}
+					return sameAsMain(src, mainClone, p)
 				}
-				return sameAsMain(src, mainClone, p)
-			}
 
-			if err := h.m.RemovePRWorktree(h.ctx, sl, false); !errors.Is(err, errno) {
-				t.Fatalf("RemovePRWorktree over a comparison that failed with %v: %v, want that error", errno, err)
-			}
-			for p, want := range map[string]string{"master.key": "a key I tried\n", "notes.txt": "mine\n"} {
-				if got := readFile(t, filepath.Join(sl.Path, p)); got != want {
-					t.Fatalf("%s = %q, want it kept", p, got)
+				if err := h.m.RemovePRWorktree(h.ctx, sl, false); !errors.Is(err, errno) {
+					t.Fatalf("RemovePRWorktree over a comparison that failed with %v: %v, want that error", errno, err)
 				}
-			}
-			if got := h.slot(sl.Name); got.State == store.SlotRemoved {
-				t.Fatalf("state = %s, want the removal refused", got.State)
-			}
-			if got := saves(t, h.layout.PRSaves("zhuravel", "widget", f.pr.Number)); len(got) != 0 {
-				t.Fatalf("saves = %q, want none left by the failed save", got)
-			}
-		})
+				for p, want := range map[string]string{copied: "edited\n", "notes.txt": "mine\n"} {
+					if got := readFile(t, filepath.Join(sl.Path, filepath.FromSlash(p))); got != want {
+						t.Fatalf("%s = %q, want it kept", p, got)
+					}
+				}
+				if got := h.slot(sl.Name); got.State == store.SlotRemoved {
+					t.Fatalf("state = %s, want the removal refused", got.State)
+				}
+				if got := saves(t, h.layout.PRSaves("zhuravel", "widget", f.pr.Number)); len(got) != 0 {
+					t.Fatalf("saves = %q, want none left by the failed save", got)
+				}
+			})
+		}
 	}
 }
 
@@ -689,17 +692,18 @@ func ownFilesWorktree(t *testing.T) (*perPRFixture, store.Slot) {
 	return f, sl
 }
 
-// A removal names a file magnum copied that a person edited since, one
-// that differs from the main clone's copy, as "magnum's own, edited, not
-// saved": it saves none of magnum's files, which hold the main clone's
-// secrets, but the edit goes with a trace. A copy as the main clone holds
-// it, and what the setup wrote (no copy of the main clone's), go unnamed.
-// An edited copy was dropped as magnum's, and nothing named it.
+// A removal names a file a copy_files entry names (a key, as a rule) that
+// a person edited since magnum copied it, one that differs from the main
+// clone's copy, as "magnum's own, edited, not saved": it saves none of
+// those, which hold the main clone's secrets, but the edit goes with a
+// trace. A copy as the main clone holds it, and what the setup wrote (no
+// copy of the main clone's), go unnamed. An edited copy was dropped as
+// magnum's, and nothing named it. (A file below a copied folder that
+// differs is saved: TestAFileInACopiedFolderThatIsNotTheMainClonesIsSaved.)
 func TestARemovalNamesMagnumsOwnFilesAPersonEdited(t *testing.T) {
 	f, sl := ownFilesWorktree(t)
 	h := f.h
 	writeFile(t, filepath.Join(sl.Path, "master.key"), "a key I tried\n")
-	writeFile(t, filepath.Join(sl.Path, "fixtures", "a.json"), "{\"id\": 1}\n")
 	writeFile(t, filepath.Join(sl.Path, "notes.txt"), "mine\n")
 
 	if err := h.m.RemovePRWorktree(h.ctx, sl, false); err != nil {
@@ -707,13 +711,11 @@ func TestARemovalNamesMagnumsOwnFilesAPersonEdited(t *testing.T) {
 	}
 	save := h.onlySave(t, h.layout.PRSaves("zhuravel", "widget", f.pr.Number), sl.Name)
 	note := readFile(t, filepath.Join(save, "saved.txt"))
-	for _, p := range []string{"master.key", "fixtures/a.json"} {
-		if !strings.Contains(note, "- "+p+" (magnum's own, edited, not saved)\n") {
-			t.Fatalf("saved.txt does not name the edited %s:\n%s", p, note)
-		}
-		if _, err := os.Lstat(filepath.Join(save, "untracked", p)); !os.IsNotExist(err) {
-			t.Fatalf("%s saved: %v", p, err)
-		}
+	if !strings.Contains(note, "- master.key (magnum's own, edited, not saved)\n") {
+		t.Fatalf("saved.txt does not name the edited master.key:\n%s", note)
+	}
+	if _, err := os.Lstat(filepath.Join(save, "untracked", "master.key")); !os.IsNotExist(err) {
+		t.Fatalf("master.key saved: %v", err)
 	}
 	if strings.Contains(note, ".env.setup") {
 		t.Fatalf("saved.txt names the setup's file:\n%s", note)
@@ -730,6 +732,36 @@ func TestARemovalNamesMagnumsOwnFilesAPersonEdited(t *testing.T) {
 	save = f.h.onlySave(t, f.h.layout.PRSaves("zhuravel", "widget", f.pr.Number), sl.Name)
 	if note := readFile(t, filepath.Join(save, "saved.txt")); strings.Contains(note, "magnum's own") {
 		t.Fatalf("saved.txt names magnum's own files no one edited:\n%s", note)
+	}
+}
+
+// A file below a copied folder is magnum's only while it is the main
+// clone's file there, byte for byte, which the copy wrote: one that
+// differs is a person's, and a removal saves it. That is a file written by
+// hand at a path the main clone came to hold since (a pull in the main
+// clone, no render between), and a copy a person edited. Either counted
+// as magnum's once the main clone held the path, and was only named
+// "magnum's own, edited, not saved" before `worktree remove --force`
+// deleted it.
+func TestAFileInACopiedFolderThatIsNotTheMainClonesIsSaved(t *testing.T) {
+	f, sl := ownFilesWorktree(t)
+	h := f.h
+	writeFile(t, filepath.Join(sl.Path, "fixtures", "userApi.js"), "written by hand\n")
+	writeFile(t, filepath.Join(f.main, "fixtures", "userApi.js"), "the main clone's own\n")
+	writeFile(t, filepath.Join(sl.Path, "fixtures", "a.json"), "{\"id\": 1}\n")
+	writeFile(t, filepath.Join(f.main, "fixtures", "b.json"), "[]\n")
+	writeFile(t, filepath.Join(sl.Path, "fixtures", "b.json"), "[]\n") // as the copy writes it
+
+	if err := h.m.RemovePRWorktree(h.ctx, sl, false); err != nil {
+		t.Fatalf("RemovePRWorktree: %v", err)
+	}
+	save := h.onlySave(t, h.layout.PRSaves("zhuravel", "widget", f.pr.Number), sl.Name)
+	want := map[string]string{"fixtures/userApi.js": "written by hand\n", "fixtures/a.json": "{\"id\": 1}\n"}
+	if got := savedUntracked(t, save); !maps.Equal(got, want) {
+		t.Fatalf("the save's untracked files = %q; want %q, never a copy as the main clone holds it", got, want)
+	}
+	if note := readFile(t, filepath.Join(save, "saved.txt")); strings.Contains(note, "magnum's own") {
+		t.Fatalf("saved.txt names a saved file as magnum's own:\n%s", note)
 	}
 }
 

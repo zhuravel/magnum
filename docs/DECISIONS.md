@@ -705,6 +705,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
     4): `TestAComparisonThatFailsForTheWholeProcessFailsTheSave` gives the removal a comparison that fails with
     EMFILE, ENFILE or ENOMEM (a test's comparison, `Manager.sameMain`) and wants the removal refused with nothing
     deleted. It fails when editedOwn names such a comparison as one that "cannot be compared"; the code was right.
+  - A file below a copied folder is Magnum's only while it is the main clone's file there, byte for byte (C3). The
+    third round counted it Magnum's whenever the main clone held the path, which it decides at the removal, not
+    from what the copy wrote: a file a person wrote by hand at a path the main clone came to hold since (a pull in
+    the main clone, which a per-PR `[[repo]]` shares with the person, and no render between) was named "magnum's
+    own, edited, not saved" and deleted. The removal now compares such a file with the main clone's (the
+    comparison editedOwn uses) and saves one that differs as a person's; one that is the same is neither saved nor
+    named. That saves a copy a person edited in a copied folder too, and a copy left behind when the main clone's
+    file changed since the last render: a folder that holds secrets then puts that copy into the private saves.
+    "Edited, not saved" stays for the files a copy_files entry names, the keys as a rule. A comparison that fails
+    for the whole process fails the save (rule (a)); any other is the person's, and the save reads it itself. A
+    switch's `saved.txt` names such a file among those the switch keeps, as it does a person's.
+    `TestAFileInACopiedFolderThatIsNotTheMainClonesIsSaved` failed first; the process-wide test has a case for a
+    file below the folder, proven by the mutation that turns that check off;
+    `TestARemovalNamesMagnumsOwnFilesAPersonEdited` keeps the key alone.
 
 ## Scheduling
 

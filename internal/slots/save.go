@@ -12,14 +12,15 @@ package slots
 //   - untracked/, for a removal alone, each untracked file git does not
 //     ignore at its path (a symlink as the link, never what it points to),
 //     but the files magnum wrote (ownFiles: the local mise file it
-//     rendered, the copy_files, what setup wrote): a switch, a reset and an
-//     abort keep them;
+//     rendered, the copy_files, what setup wrote; of a copied folder, the
+//     main clone's files as it holds them: sortOwn): a switch, a reset and
+//     an abort keep them;
 //   - saved.txt: what was saved, from where and before what, how to put it
 //     back, the untracked files a switch keeps in the tree, and what the
 //     save left out: past its cap (SaveCap, over the patch and the files
 //     together), no regular file or symlink, a file it could not read, or
-//     a file of magnum's a person edited (editedOwn). A write into the save
-//     that fails fails the save.
+//     a file a copy_files entry names that a person edited (editedOwn). A
+//     write into the save that fails fails the save.
 //
 // Ignored files are never saved: a work tree's caches, logs and builds,
 // which a discard keeps anyway, but for a removal's.
@@ -194,7 +195,11 @@ func (m *Manager) saveChanges(ctx context.Context, sl store.Slot, ch changes, un
 		s = saved{}
 	}()
 	own := m.ownFiles(ctx, sl)
-	listed := withoutOwn(sl.MainClone, withoutRenderedMiseLocal(sl.Path, slices.Clone(ch.untracked)), own)
+	listed := withoutRenderedMiseLocal(sl.Path, slices.Clone(ch.untracked))
+	s.unsaved = slices.Concat(ch.tracked, listed) // magnum's own files with them, until they are sorted out
+	if listed, err = withoutOwn(sl.Path, sl.MainClone, listed, own, m.sameMainOr()); err != nil {
+		return s, err
+	}
 	if !untracked { // the step keeps them
 		s.kept, listed = listed, nil
 	}
@@ -291,7 +296,10 @@ func (m *Manager) saveRemoved(ctx context.Context, sl store.Slot, own []string, 
 	if err != nil {
 		return err
 	}
-	theirs, mine := sortOwn(sl.MainClone, withoutRenderedMiseLocal(sl.Path, files), own)
+	theirs, mine, err := sortOwn(sl.Path, sl.MainClone, withoutRenderedMiseLocal(sl.Path, files), own, m.sameMainOr())
+	if err != nil {
+		return err
+	}
 	edited, err := editedOwn(sl.Path, sl.MainClone, mine, m.sameMainOr())
 	if err != nil {
 		return err

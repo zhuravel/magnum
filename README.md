@@ -945,16 +945,16 @@ what it left out. A switch, a reset and an abort keep the untracked files, so th
 `saved.txt`; a removal deletes them, so its save copies them into `untracked/`, every untracked file git does not
 ignore at its path, with its owner's permission bits and a symlink as the link (never what it points to), but not
 the files Magnum wrote there: the local mise file it renders, the copy_files of the `[[repo]]` or the `[[pool]]`
-(of a copied folder, the files the main clone holds there; a file you add in it is yours), and what the first
-setup over a worktree its provisioning made wrote, the untracked files there after it that were not before it
-(`cp -R <save>/untracked/. <slot>` puts them back). Over a worktree kept from an earlier attempt, and by a setup
-that runs again (a failed one resumed or retried, the way a pool slot's is), what the setup wrote is saved as
-yours, since you may have written a file there while it ran. A copied file you edited since,
-one that differs from the main clone's, is not saved either, but named "magnum's own, edited, not saved". A
-file the removal cannot read (a mode-000 file, one gone meanwhile) is left out and named with the reason, and the
-removal goes on; a write into the save that fails (a full disk, a quota, a name the save's folder refuses), or a
-read that fails for the whole process (too many open files, no memory), fails the save, and the removal deletes
-nothing.
+(of a copied folder, the files that are the main clone's there, byte for byte; a file you add or change in it is
+yours), and what the first setup over a worktree its provisioning made wrote, the untracked files there after it
+that were not before it (`cp -R <save>/untracked/. <slot>` puts them back). Over a worktree kept from an earlier
+attempt, and by a setup that runs again (a failed one resumed or retried, the way a pool slot's is), what the setup
+wrote is saved as yours, since you may have written a file there while it ran. A file a copy_files entry names (a
+key, as a rule) that you edited since, one that differs from the main clone's, is not saved either, but named
+"magnum's own, edited, not saved". A file the removal cannot read (a mode-000 file, one gone meanwhile) is left out
+and named with the reason, and the removal goes on; a write into the save that fails (a full disk, a quota, a name
+the save's folder refuses), or a read or a comparison with the main clone's copy that fails for the whole process
+(too many open files, no memory), fails the save, and the removal deletes nothing.
 A save keeps at most 50 MB: git is stopped at the cap, the patch then goes path by path and a file is left out,
 each named with its size, as is a repository inside the tree (untracked files whose names alone pass 8 MB are
 none saved, and the save says so); files git ignores are never saved. The `slot.discarded` event names the save

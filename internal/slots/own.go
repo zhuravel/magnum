@@ -18,16 +18,17 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-// The files magnum writes into a per-PR worktree besides the local mise
+// The files magnum writes into a slot's worktree besides the local mise
 // file it renders (which its marker tells apart: withoutRenderedMiseLocal)
-// are magnum's too, never a person's: the [[repo]] copy_files, the main
-// clone's own files (secrets among them), and whatever the setup wrote. A
-// removal saves none of them (saveChanges); the worktree keeps a record of
-// them in the kv store (ownFilesKey): the copy_files each render_mise
-// copies, and the untracked files the first setup over a worktree its
-// provisioning made wrote (there after it, not before it: recordingSetup). A
-// worktree made before the record existed has the copy_files of its next
-// checkout alone.
+// are magnum's too, never a person's: the copy_files of its [[repo]] or
+// [[pool]], the main clone's own files (secrets among them), and whatever
+// the setup wrote. A removal saves none of them (saveChanges), but a file
+// below a copied folder that is no longer the main clone's file there
+// (sortOwn); the worktree keeps a record of them in the kv store
+// (ownFilesKey): the copy_files each render_mise copies, and the untracked
+// files the first setup over a worktree its provisioning made wrote (there
+// after it, not before it: recordingSetup). A worktree made before the
+// record existed has the copy_files of its next checkout alone.
 
 // ownFilesKey is the kv key of the record of the files magnum wrote into
 // slot id: a JSON list of paths relative to the worktree, a folder's with
@@ -205,34 +206,85 @@ func (m *Manager) untrackedForRecord(ctx context.Context, sl store.Slot, when st
 	return files, true
 }
 
-// sortOwn splits untracked, the untracked paths of a tree, into a person's
-// (theirs) and the files of own (ownFiles, mine): a path own names, or one
-// below a folder it names (a copy_files folder) that the main clone at
-// mainClone holds as a regular file, as the copy of such a folder writes
-// those alone (copyTreeIntoCheckout). A file added below that folder in
-// the tree is a person's, and so is one whose main clone cannot be read.
-func sortOwn(mainClone string, untracked, own []string) (theirs, mine []string) {
+// sortOwn splits untracked, the untracked paths of the tree at tree, into
+// a person's (theirs) and the paths own names (ownFiles, mine): a file a
+// copy_files entry names, what the setup wrote, a copy_files folder git
+// status names whole. A path below a folder own names (a copy_files
+// folder) is in neither when it is the main clone's regular file there
+// (at mainClone), byte for byte (compare: sameAsMain), as the copy of such
+// a folder writes those alone (copyTreeIntoCheckout); one the main clone
+// holds none of, or one that differs, which a person wrote or edited
+// there, is theirs, and so is one that cannot be compared (the save then
+// reads it itself), but for an error of the whole process (processWide),
+// which fails the save.
+func sortOwn(tree, mainClone string, untracked, own []string, compare sameFunc) (theirs, mine []string, err error) {
 	if len(own) == 0 {
-		return untracked, nil
+		return untracked, nil, nil
 	}
-	main := mainFiles{dir: mainClone}
-	defer main.close()
+	c := copies{tree: tree, main: mainFiles{dir: mainClone}, compare: compare}
+	defer c.close()
 	for _, p := range untracked {
-		if slices.ContainsFunc(own, func(o string) bool {
-			return p == o || strings.HasSuffix(o, "/") && strings.HasPrefix(p, o) && main.holds(p)
-		}) {
+		switch {
+		case slices.Contains(own, p):
 			mine = append(mine, p)
-		} else {
+		case !slices.ContainsFunc(own, func(o string) bool { return strings.HasSuffix(o, "/") && strings.HasPrefix(p, o) }):
 			theirs = append(theirs, p)
+		default:
+			copied, err := c.copied(p)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !copied {
+				theirs = append(theirs, p)
+			}
 		}
 	}
-	return theirs, mine
+	return theirs, mine, nil
 }
 
 // withoutOwn is untracked less the files of own: sortOwn's theirs.
-func withoutOwn(mainClone string, untracked, own []string) []string {
-	theirs, _ := sortOwn(mainClone, untracked, own)
-	return theirs
+func withoutOwn(tree, mainClone string, untracked, own []string, compare sameFunc) ([]string, error) {
+	theirs, _, err := sortOwn(tree, mainClone, untracked, own, compare)
+	return theirs, err
+}
+
+// copies compares the files of a tree below a copy_files folder with the
+// main clone's, the tree read through an os.Root opened at the first
+// comparison.
+type copies struct {
+	tree    string
+	src     *os.Root
+	err     error
+	main    mainFiles
+	compare sameFunc
+}
+
+// copied reports whether file p of the tree is the main clone's regular
+// file there, byte for byte: false when the main clone holds none, and
+// for one that cannot be compared, but an error of the whole process
+// (processWide).
+func (c *copies) copied(p string) (bool, error) {
+	if !c.main.holds(p) {
+		return false, nil
+	}
+	if c.src == nil && c.err == nil {
+		c.src, c.err = os.OpenRoot(c.tree)
+	}
+	same, err := false, c.err
+	if err == nil {
+		same, err = c.compare(c.src, c.main.dir, p)
+	}
+	if err != nil && processWide(err) {
+		return false, err
+	}
+	return err == nil && same, nil
+}
+
+func (c *copies) close() {
+	c.main.close()
+	if c.src != nil {
+		_ = c.src.Close()
+	}
 }
 
 // editedOwn names the files of mine (sortOwn's, in the tree at tree) that
