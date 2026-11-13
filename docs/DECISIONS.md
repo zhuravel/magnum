@@ -751,8 +751,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   record never outlives the first setup. To write `0` on a failure was the other way, but a store that fails
   the delete can fail that write too. `TestHeavyLockHonorsContext` now cancels its provisioning as the setup
   lists the worktree's files, right before the heavy lock: a context cancelled as the step begins now fails at
-  the read of the record. Test, failing first: `TestASetupThatCannotReadTheRecordOfItsNewWorktreeDoesNotRun`
-  (the kv table renamed for one provisioning).
+  the read of the record. Tests, failing first: `TestASetupThatCannotReadTheRecordOfItsNewWorktreeDoesNotRun`
+  (the kv table renamed for one provisioning) and
+  `TestASetupThatCannotDeleteTheRecordOfItsNewWorktreeDoesNotRun` (a trigger fails that one delete).
 
 ## Scheduling
 

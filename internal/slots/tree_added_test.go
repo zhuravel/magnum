@@ -105,3 +105,19 @@ func TestASetupThatCannotReadTheRecordOfItsNewWorktreeDoesNotRun(t *testing.T) {
 	h.sql(t, "ALTER TABLE kv_away RENAME TO kv")
 	h.heldBackSetup(t, sl, err, logs, "read the record")
 }
+
+// A setup that cannot delete the record that its provisioning made the
+// worktree (a store error on that one write) does not run either: the
+// record would stand past it, and the setup's next run, over a worktree a
+// person may be at work in, would take it as the first.
+func TestASetupThatCannotDeleteTheRecordOfItsNewWorktreeDoesNotRun(t *testing.T) {
+	h := keyedPool(t)
+	logs := &levelLog{}
+	h.m = h.newManager(Deps{Log: logs})
+	sl := h.stoppedAfterWorktreeAdd(t)
+	h.sql(t, `CREATE TRIGGER keep_tree_added BEFORE DELETE ON kv WHEN OLD.key LIKE 'slot.%.tree_added'
+  BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`)
+	err := h.m.ProvisionPool(h.ctx, h.pool, 1)
+	h.sql(t, "DROP TRIGGER keep_tree_added")
+	h.heldBackSetup(t, sl, err, logs, "take the record")
+}
