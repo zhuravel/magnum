@@ -228,6 +228,39 @@ func TestAnOpenProductQuestionAtMaxRoundsWaitsOnYou(t *testing.T) {
 	}
 }
 
+// A product question you answered "change it" that the round at the limit
+// finds again was not changed: on a safe stop it stays among the card's
+// known defects, which its w sends to the writer, never dropped as one you
+// decided to keep.
+func TestAChangeYouAskedForThatTheRoundAtTheLimitFindsAgainStaysAKnownDefect(t *testing.T) {
+	q := evalrun.LocalFinding{Severity: "P2", Title: "Should a refund take back the points it gave?", Path: "app/credit.rb", Line: 12, Question: true,
+		Body: "The ticket says nothing of refunds."}
+	r := newReviewRig(t, result(q), result(q, capFinding(1, "P2")))
+	r.cfg.Factory.LocalReview.MaxRounds = 2
+	task, _ := r.reviewTask("PR-12519")
+	r.run(5, func() bool { return !isLive(r.reload(task.ID)) })
+	r.mustAnswer(AnswerPayload{TaskID: task.ID, Revision: 1, Answers: map[int]string{0: changeIt}})
+	r.run(6, func() bool { return len(r.rt.promptsTo("fx-writer")) > 0 })
+	r.writerFixes(task, 1, fixedCredit(1), nil) // a commit that changes something else: the question's code stays
+	r.run(12, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+	got := r.reload(task.ID)
+	if got.Stage != "pr_body" || len(r.rv.calls()) != 2 {
+		t.Fatalf("task %s at %s waits %q after %d rounds, want past the review on a safe stop at round 2", got.State, got.Stage,
+			got.WaitsWhat, len(r.rv.calls()))
+	}
+	sum := r.summary(task.ID)
+	if sum.Exit != exitRoundLimit || !slices.Contains(leftTitles(sum), q.Title) {
+		t.Fatalf("summary %+v, want the round limit's end with the question among its leftovers", sum)
+	}
+	var known []string
+	for _, i := range knownDefects(sum) {
+		known = append(known, i.Title)
+	}
+	if want := []string{q.Title, capFinding(1, "P2").Title}; !slices.Equal(known, want) {
+		t.Errorf("known defects %q, want %q: the change you asked for and the other open finding", known, want)
+	}
+}
+
 // A task that ran more rounds than max_rounds before the limit reached it
 // (task 9 ran 14) stops at the end of its round in flight: a daemon on a
 // build with the limit runs that round again in its cycle, as any restart

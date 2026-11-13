@@ -137,9 +137,9 @@ func limitWords(limit, rounds int) string {
 // loop; res its result, rr its findings, sum the loop's summary as the
 // round left it) by end: a safe stop (unsafeWhy, and no product question
 // open: questionsOpen; your retry after the stop asks them first, capFix)
-// writes the summary with the round's open findings as its leftovers (exit
-// round_limit, or
-// ended_by_you), records the end, ends the cycle (end.exit) and passes the
+// writes the summary with the round's open findings as its leftovers (a
+// change you asked for that the round still finds as a defect: owedChanges;
+// exit round_limit, or ended_by_you), records the end, ends the cycle (end.exit) and passes the
 // stage; any other records the end and stops for you on the round's
 // findings, as at the cap (stopOnFindings), its words naming the limit or
 // you. A recorded end (recorded) keeps its verdict on safety. Your request
@@ -168,7 +168,7 @@ func (e *Engine) endAtRound(ctx context.Context, t registry.Task, st config.Fact
 		}
 		return false, dropFinish(dir, end)
 	}
-	sum.Exit, sum.Leftovers, sum.TaskRounds = exitRoundLimit, slices.Concat(rr.leftovers, rr.live, rr.questions), end.Rounds
+	sum.Exit, sum.Leftovers, sum.TaskRounds = exitRoundLimit, slices.Concat(rr.leftovers, owedChanges(rr.live), rr.questions), end.Rounds
 	if end.By == endByYou {
 		sum.Exit = exitByYou
 	} else {
@@ -189,6 +189,19 @@ func (e *Engine) endAtRound(ctx context.Context, t registry.Task, st config.Fact
 		"%d declined, %d doubts", strings.TrimPrefix(end.words(), "when "), len(loop), cy.N, plural(len(sum.Leftovers), "open finding"),
 		len(sum.Declined), len(sum.Doubts)))
 	return true, dropFinish(dir, end)
+}
+
+// owedChanges are a round's live findings as a safe stop leaves them for
+// the ready card: a product question among them is one you answered "change
+// it" that the round still finds (sortRound), a change the writer owes, so
+// it is a defect there (knownDefects keeps it and the card's w sends it),
+// never one you decided to keep.
+func owedChanges(live []ReviewItem) []ReviewItem {
+	out := slices.Clone(live)
+	for i := range out {
+		out[i].Question = false
+	}
+	return out
 }
 
 // questionsOpen is why n product questions still open make a stop at the

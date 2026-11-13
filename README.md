@@ -5501,8 +5501,9 @@ round of a task's life counts toward `[factory.local_review] max_rounds` (8; 0 t
 loop's after your retry, an extra round's, a go-on's, a second opinion's. A round that ends at the task's 8th round or
 later and still blocks starts no other, before any cap or go-on: a safe stop (the same test as the go-on's, and no
 product question left open, which only you answer: your retry after the stop asks it first) passes the
-stage with the round's open findings left under the ready card's KNOWN, whose line says `the local review ended at the
-round limit (8 rounds) with 3 findings still open, unfixed (KNOWN)` (`(8 rounds; it ran 14)` for a task the limit
+stage with the round's open findings left under the ready card's KNOWN (a product question you answered `change it`
+that the round still finds among them as a defect, which the card's `w` sends), whose line says `the local review ended
+at the round limit (8 rounds) with 3 findings still open, unfixed (KNOWN)` (`(8 rounds; it ran 14)` for a task the limit
 reached past it, which stops at the end of its round in flight), and the PR body's Known list says the loop ended there
 with them unfixed; any other stop waits on you as at the cap, its line naming the limit and why it is not safe (`2
 blocking findings at the round limit (8 rounds; …; verdict blocking), not a safe stop: a P0 or P1 is open: …`), and your

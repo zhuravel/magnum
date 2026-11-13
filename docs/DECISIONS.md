@@ -27793,6 +27793,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestAFailedTryAfterAProbeWaitsForTheScheduleBeforeTheNextProbe` and
   `TestAFlappingMySQLReachesNeedsYouNoFasterThanTheSchedule`. No migration, no new key.
 
+- **A change you asked for that the round at the limit still finds stays a known defect** (2026-11-13, the
+  engine owner's follow-up to the round limit's open questions). Say you answer a product question `change it`.
+  The writer's fix leaves its code as it was. The round at `max_rounds` (or the one your finish-review lets end)
+  finds it again. `sortRound` puts it among the live findings, still marked a question. A safe stop wrote it
+  into the summary's leftovers as a question. `knownDefects` then dropped it as one you decided to keep. So the
+  card did not count it, and its `w` did not send it. Now `endAtRound` leaves the round's live findings as
+  defects: `owedChanges` clears the question mark. The card counts it, and `w` sends it, as any P2 that the
+  limit leaves open. The other way was to make the stop unsafe. This way is smaller: one function at the one
+  place where the live findings become leftovers. The test of a safe stop stays as the y/N, the help, the README
+  and the config say it. An unsafe stop also waits on you for a decision you made already. A P1 among the
+  findings still makes the stop unsafe, as before. Test, failing first:
+  `TestAChangeYouAskedForThatTheRoundAtTheLimitFindsAgainStaysAKnownDefect`.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
