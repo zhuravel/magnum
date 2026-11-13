@@ -9101,7 +9101,6 @@ const (
 	FixRecLoop        = "loop"        // a fix loop's row
 	FixRecPush        = "push"        // a fixer's push record, to confirm or to settle late
 	FixRecHeldMerge   = "held_merge"  // a merge of the parent held for your y
-	FixRecHeldFix     = "held_fix"    // a fix held for a restart, a pause or the GitHub budget
 	FixRecPushed      = "pushed"      // magnum's push, waiting for its CI start
 	FixRecRequest     = "request"     // a pending `magnum fix` or `magnum abort` request
 	FixRecRun         = "run"         // a fix run whose verdict is not written

@@ -144,49 +144,25 @@ func TestEveryStartPathRefusesAFactoryOwnedPR(t *testing.T) {
 		}},
 		{"a fix held for the restart, at the start", func(t *testing.T) (*harness, string, int) {
 			t.Helper()
-			h, _ := fixHarness(t)
-			heldFixDuringADrain(t, h)
-			factoryOwns(h)
-			h.e.delKV(h.ctx, KVDaemonDraining)
-			h.e.startHeldFixes(h.ctx)
-			h.settle()
-			ev, _ := h.fixEvent("fix.dropped")
-			return h, ev.Message, 0
+			return heldFixOfTheFactory(t, func(h *harness, _ store.PR) { h.e.startHeldFixes(h.ctx) })
 		}},
 		{"a fix held for a drain, after it", func(t *testing.T) (*harness, string, int) {
 			t.Helper()
-			h, _ := fixHarness(t)
-			heldFixDuringADrain(t, h)
-			factoryOwns(h)
-			h.e.delKV(h.ctx, KVDaemonDraining)
-			h.e.continueDrainHeldLoops(h.ctx)
-			h.settle()
-			ev, _ := h.fixEvent("fix.dropped")
-			return h, ev.Message, 0
+			return heldFixOfTheFactory(t, func(h *harness, _ store.PR) { h.e.continueDrainHeldLoops(h.ctx) })
 		}},
 		{"a fix held for the fixer's pause, after it", func(t *testing.T) (*harness, string, int) {
 			t.Helper()
-			h, _ := fixHarness(t)
-			pr := heldFixDuringADrain(t, h)
-			factoryOwns(h)
-			h.e.delKV(h.ctx, KVDaemonDraining)
-			h.e.holdForPause(pr.ID)
-			h.e.continuePauseHeld(h.ctx)
-			h.settle()
-			ev, _ := h.fixEvent("fix.dropped")
-			return h, ev.Message, 0
+			return heldFixOfTheFactory(t, func(h *harness, pr store.PR) {
+				h.e.holdForPause(pr.ID)
+				h.e.continuePauseHeld(h.ctx)
+			})
 		}},
 		{"a fix held for the GitHub budget, after it", func(t *testing.T) (*harness, string, int) {
 			t.Helper()
-			h, _ := fixHarness(t)
-			pr := heldFixDuringADrain(t, h)
-			factoryOwns(h)
-			h.e.delKV(h.ctx, KVDaemonDraining)
-			h.e.holdForBudget(pr.ID)
-			h.e.continueBudgetHeld(h.ctx)
-			h.settle()
-			ev, _ := h.fixEvent("fix.dropped")
-			return h, ev.Message, 0
+			return heldFixOfTheFactory(t, func(h *harness, pr store.PR) {
+				h.e.holdForBudget(pr.ID)
+				h.e.continueBudgetHeld(h.ctx)
+			})
 		}},
 		{"a loop's next cycle", func(t *testing.T) (*harness, string, int) {
 			t.Helper()
@@ -219,12 +195,39 @@ func TestEveryStartPathRefusesAFactoryOwnedPR(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, said, runs := tc.run(t)
+			held, _ := kvValue(h, KVPRFixHeld(h.pr(2).ID))
+			if held != "" { // a held fix stays for the factory's import, never started or dropped
+				h.e.delKV(h.ctx, KVPRFixHeld(h.pr(2).ID))
+				if _, ok := h.fixEvent("fix.dropped"); ok {
+					t.Error("a held fix was dropped")
+				}
+			}
 			wantNoFixerSince(t, h, runs)
 			if !strings.Contains(said, refusal) {
 				t.Errorf("it said %q, want %q", said, refusal)
 			}
 		})
 	}
+}
+
+// heldFixOfTheFactory holds a fix of PR #2 through a drain, makes the
+// factory own the PR, ends the drain and takes act, a path that would start
+// the held fix: it fails unless the held fix stays as it was, for the
+// factory's import. It returns what the engine logged.
+func heldFixOfTheFactory(t *testing.T, act func(h *harness, pr store.PR)) (*harness, string, int) {
+	t.Helper()
+	logs := &syncBuffer{}
+	h, _ := fixHarness(t, func(h *harness) { h.d.Logger = newTeeLogger(t, logs) })
+	pr := heldFixDuringADrain(t, h)
+	held, _ := kvValue(h, KVPRFixHeld(pr.ID))
+	factoryOwns(h)
+	h.e.delKV(h.ctx, KVDaemonDraining)
+	act(h, pr)
+	h.settle()
+	if now, ok := kvValue(h, KVPRFixHeld(pr.ID)); !ok || now != held {
+		t.Errorf("the held fix = %q, %v; want it kept as %s for the factory's import", now, ok, held)
+	}
+	return h, logs.String(), 0
 }
 
 // A start whose read of the owner row fails starts no fixer: the fixer side

@@ -29,8 +29,10 @@ func (h *actHarness) setKVJSON(key string, v any) {
 // to the factory, each record with what it is and the operator's action: a
 // loop and its fixer's run end at the cycle boundary once the PR hands
 // over; a held merge waits for P or a drop; a push record the PR's head
-// left behind is his to drop; magnum's push waiting for its CI, a held fix
-// and a pending request end by themselves. A PR with none is not listed.
+// left behind is his to drop; magnum's push waiting for its CI and a
+// pending request end by themselves. A PR with none is not listed, nor one
+// whose only record is a held fix, which goes with the PR for the factory
+// to import: the list counts those apart.
 func TestTheDrainedListNamesHisActionForEachRecord(t *testing.T) {
 	h := newActHarness(t)
 	if code := h.cmd("fix", "--drained"); code != 0 {
@@ -53,7 +55,9 @@ func TestTheDrainedListNamesHisActionForEachRecord(t *testing.T) {
 	if _, err := h.st.EnqueueRequest(h.ctx, engine.ReqFix, engine.FixPayload{PRTarget: engine.PRTarget{Repo: "talkable/talkable", Number: 7}}); err != nil {
 		t.Fatal(err)
 	}
-	h.seedPR("talkable/talkable", 8, store.PRReviewed)
+	pr8 := h.seedPR("talkable/talkable", 8, store.PRReviewed)
+	h.setKVJSON(engine.KVPRFixHeld(pr8.ID), fixwork.HeldFix{At: at, Head: pr8.HeadSHA, By: "magnum fix", Why: fixwork.HeldBudget})
+	h.seedPR("talkable/talkable", 9, store.PRReviewed)
 
 	h.out.Reset()
 	if code := h.cmd("fix", "--drained"); code != 0 {
@@ -72,11 +76,11 @@ func TestTheDrainedListNamesHisActionForEachRecord(t *testing.T) {
 			"    → P pushes it (`magnum merge-parent talkable/talkable#6`), or `magnum merge-parent --drop talkable/talkable#6` drops it",
 		"  magnum's push of b2b2b2b waits for its CI start\n    → nothing: it goes within 2m",
 		"talkable#7  https://github.com/talkable/talkable/pull/7\n",
-		"  a fix held: it starts after the restart\n    → nothing: it starts after the restart, and its loop ends at its cycle boundary; `magnum abort talkable/talkable#7` drops it",
 		"  a pending `magnum fix` request (1)\n    → nothing: the daemon answers it at its next tick",
+		"2 held fixes hold no PR back: each goes with its PR, and the factory imports it\n",
 	)
-	if strings.Contains(out, "talkable#8") {
-		t.Errorf("a PR with no fix work is listed:\n%s", out)
+	if strings.Contains(out, "talkable#8") || strings.Contains(out, "talkable#9") || strings.Contains(out, "a fix held") {
+		t.Errorf("a PR with no fix work in flight is listed:\n%s", out)
 	}
 
 	h.out.Reset()
@@ -93,7 +97,7 @@ func TestTheDrainedListNamesHisActionForEachRecord(t *testing.T) {
 			got = append(got, fmt.Sprintf("%d:%s", u.Number, r.Kind))
 		}
 	}
-	want := []string{"5:loop", "5:run", "6:push", "6:held_merge", "6:pushed", "7:held_fix", "7:request"}
+	want := []string{"5:loop", "5:run", "6:push", "6:held_merge", "6:pushed", "7:request"}
 	if !slices.Equal(got, want) || !list[1].Handing || list[0].Handing {
 		t.Errorf("records = %v (handing %v %v), want %v", got, list[0].Handing, list[1].Handing, want)
 	}
@@ -190,12 +194,13 @@ func TestTheDoctorNamesTheHandoverAndTheLeasesThatFailedOpen(t *testing.T) {
 	h.setKVJSON(engine.KVPRFixHandover(pr5.ID), map[string]any{"at": h.now, "by": "magnum fix --handover"})
 	pr6 := h.seedPR("talkable/talkable", 6, store.PRReviewed)
 	h.setKVJSON(engine.KVPRFixLeaseUnread(pr6.ID), engine.LeaseUnread{Since: h.now, Err: "database is locked", Open: true})
+	h.setKVJSON(engine.KVPRFixHeld(pr6.ID), fixwork.HeldFix{At: h.now, Head: pr6.HeadSHA, By: "magnum fix"}) // holds nothing back
 	cs = doctorFixHandover(h.ctx, d)
 	if len(cs) != 2 {
 		t.Fatalf("checks = %+v", cs)
 	}
-	if c := cs[0]; c.Status != doctorWarn || !strings.Contains(c.Detail, "1 PRs wait to hand over to the factory until magnum's fix work on them ends: talkable#5 (loop)") ||
-		!strings.Contains(c.Fix, "magnum fix --drained") {
+	if c := cs[0]; c.Status != doctorWarn || !strings.Contains(c.Detail, "1 PRs wait to hand over to the factory until magnum's fix work on them ends: talkable#5 (loop); "+
+		"1 held fix holds no PR back, each going with its PR for the factory to import") || !strings.Contains(c.Fix, "magnum fix --drained") {
 		t.Errorf("handover = %+v", c)
 	}
 	if c := cs[1]; c.Status != doctorWarn || !strings.Contains(c.Detail, "magnum reviews 1 PRs the factory fixes without its lease, which it cannot read (failed open): talkable#6 since") ||

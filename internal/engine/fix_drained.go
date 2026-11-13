@@ -4,14 +4,18 @@ package engine
 // changes owner only at a quiet point, when none of magnum's fix work on it
 // is in flight (fixQuiet). Its records are the registry's: a loop's row
 // (KVPRFix), a fixer's push record (kvPRFixPush), a held merge
-// (KVPRHeldMerge), a held fix (KVPRFixHeld), magnum's push waiting for its
-// CI (kvPRPushed), a pending `magnum fix` or `magnum abort` request, a fix
-// run whose verdict is not written; and the daemon's own, a fix job's
-// reservation of the PR. Each record names what it is and what the
-// operator does about it, for the morning list (`magnum fix --drained`)
-// and the doctor: most end by themselves, a held merge waits for P or a
-// drop, and a push record that the PR's head left behind for `magnum fix
-// --drop-push`.
+// (KVPRHeldMerge), magnum's push waiting for its CI (kvPRPushed), a pending
+// `magnum fix` or `magnum abort` request, a fix run whose verdict is not
+// written; and the daemon's own, a fix job's reservation of the PR. Each
+// record names what it is and what the operator does about it, for the
+// morning list (`magnum fix --drained`) and the doctor: most end by
+// themselves, a held merge waits for P or a drop, and a push record that
+// the PR's head left behind for `magnum fix --drop-push`. A held fix
+// (KVPRFixHeld) is none of them: no fixer runs yet, and it may wait hours
+// for quiet hours or the GitHub budget, so it goes with the PR, its row
+// kept for the factory's import (plan section 3), and magnum neither
+// starts nor drops it once the PR is the factory's (startHeldFix,
+// dropHeldFix).
 
 import (
 	"cmp"
@@ -34,7 +38,6 @@ const (
 	FixRecLoop        = "loop"        // a fix loop's row
 	FixRecPush        = "push"        // a fixer's push record, to confirm or to settle late
 	FixRecHeldMerge   = "held_merge"  // a merge of the parent held for your y
-	FixRecHeldFix     = "held_fix"    // a fix held for a restart, a pause or the GitHub budget
 	FixRecPushed      = "pushed"      // magnum's push, waiting for its CI start
 	FixRecRequest     = "request"     // a pending `magnum fix` or `magnum abort` request
 	FixRecRun         = "run"         // a fix run whose verdict is not written
@@ -80,7 +83,7 @@ var flightKeys = []struct {
 	kind string
 	key  func(int64) string
 }{
-	{FixRecLoop, KVPRFix}, {FixRecPush, kvPRFixPush}, {FixRecHeldMerge, KVPRHeldMerge}, {FixRecHeldFix, KVPRFixHeld}, {FixRecPushed, kvPRPushed},
+	{FixRecLoop, KVPRFix}, {FixRecPush, kvPRFixPush}, {FixRecHeldMerge, KVPRHeldMerge}, {FixRecPushed, kvPRPushed},
 }
 
 // readFixFlight reads the fix work in flight from st: of PR prID alone,
@@ -189,11 +192,6 @@ func (f fixFlight) records(pr store.PR, label string, handing bool, now time.Tim
 		}
 		out = append(out, FixRecord{Kind: FixRecHeldMerge, What: what,
 			Action: fmt.Sprintf("P pushes it (`magnum merge-parent %s`), or `magnum merge-parent --drop %s` drops it", label, label)})
-	}
-	if raw, ok := rows[FixRecHeldFix]; ok {
-		starts := HeldFixStarts(raw)
-		out = append(out, FixRecord{Kind: FixRecHeldFix, What: "a fix held: it starts " + starts,
-			Action: fmt.Sprintf("nothing: it starts %s, and its loop ends at its cycle boundary; `magnum abort %s` drops it", starts, label)})
 	}
 	if raw, ok := rows[FixRecPushed]; ok {
 		var p ciPush
@@ -392,7 +390,8 @@ func (e *Engine) fixRecordsOf(ctx context.Context, repo store.Repo, pr store.PR,
 // fixQuiet is the drain proof of pr (of repo): true while none of magnum's
 // fix work is in flight on it, the registry's records (fixRecordsOf) and a
 // fix job's reservation of the PR; otherwise the records say what is. A
-// failed read is no proof.
+// held fix is no fix work in flight: it goes with the PR, for the factory
+// to import. A failed read is no proof.
 func (e *Engine) fixQuiet(ctx context.Context, repo store.Repo, pr store.PR) (bool, []FixRecord, error) {
 	handing, _ := e.handingOver(ctx, pr)
 	return e.fixQuietAs(ctx, repo, pr, handing)

@@ -44,9 +44,10 @@ func handOverPR2(back bool) HandoverPayload {
 
 // Each record of magnum's fix work in flight on a PR keeps it from handing
 // over, and names itself with the operator's action: a loop's row, a
-// fixer's push record, a held merge, a held fix, magnum's push waiting for
-// its CI, a pending fix or abort request, a fix run whose verdict is not
-// written and a fix job's reservation. With none, the PR is quiet.
+// fixer's push record, a held merge, magnum's push waiting for its CI, a
+// pending fix or abort request, a fix run whose verdict is not written and
+// a fix job's reservation. With none, the PR is quiet. (A held fix is none:
+// TestAHeldFixDoesNotBlockTheFlipAndStaysForTheImport.)
 func TestFixQuietIsFalseForEachRecordInFlight(t *testing.T) {
 	h, _ := fixHarness(t)
 	pr := fixablePR(h, "zhuravel", nil)
@@ -81,9 +82,6 @@ func TestFixQuietIsFalseForEachRecordInFlight(t *testing.T) {
 		}},
 		{"a held merge", FixRecHeldMerge, func() func() {
 			return set(KVPRHeldMerge(pr.ID), rowJSON(HeldMerge{Repo: "talkable/talkable", Number: 2, Merge: fixMergeHead, Head: fixHead, Base: "master", Tip: fixBaseTip}))
-		}},
-		{"a held fix", FixRecHeldFix, func() func() {
-			return set(KVPRFixHeld(pr.ID), rowJSON(heldFix{At: now, Head: fixHead, By: fixBy}))
 		}},
 		{"magnum's push waiting for its CI", FixRecPushed, func() func() {
 			return set(kvPRPushed(pr.ID), rowJSON(ciPush{Head: fixPushed, At: now}))
@@ -417,4 +415,47 @@ func TestTheMorningListsDropsEndAPushRecordAndAHeldMerge(t *testing.T) {
 			}
 		}
 	})
+}
+
+// A fix held for a restart, a pause or the GitHub budget does not keep its
+// PR from handing over (plan section 3: one left at the switch is imported
+// as a queued request): the PR flips at once, its held fix's row stays in
+// magnum's registry for the factory's import, and from then on nothing of
+// magnum's starts it or drops it: not the restart, a drain's end, a pause's
+// or the budget's, nor `magnum abort`.
+func TestAHeldFixDoesNotBlockTheFlipAndStaysForTheImport(t *testing.T) {
+	h, _ := fixHarness(t)
+	pr := heldFixDuringADrain(t, h)
+	held, _ := kvValue(h, KVPRFixHeld(pr.ID))
+	if q, recs, err := h.e.fixQuiet(h.ctx, h.heldRepo(), pr); err != nil || !q {
+		t.Fatalf("quiet = %v, %+v, %v; want a held fix to hold nothing back", q, recs, err)
+	}
+	if r := h.handOver(handOverPR2(false)); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "the factory fixes talkable/talkable#2 from now on") {
+		t.Fatalf("handover: %s %q", r.State, deref(r.Result))
+	}
+	h.e.delKV(h.ctx, KVDaemonDraining)
+	h.e.startHeldFixes(h.ctx)
+	h.e.continueDrainHeldLoops(h.ctx)
+	h.e.holdForPause(pr.ID)
+	h.e.continuePauseHeld(h.ctx)
+	h.e.holdForBudget(pr.ID)
+	h.e.continueBudgetHeld(h.ctx)
+	abort := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.handle()
+	h.tick()
+	if r := h.request(abort); r.State != store.RequestFailed {
+		t.Errorf("magnum abort: %s %q, want nothing to stop", r.State, deref(r.Result))
+	}
+	if now, ok := kvValue(h, KVPRFixHeld(pr.ID)); !ok || now != held {
+		t.Errorf("the held fix = %q, %v; want it kept as %s for the factory's import", now, ok, held)
+	}
+	if _, ok := h.fixEvent("fix.dropped"); ok {
+		t.Error("the held fix was dropped")
+	}
+	if st, ok := h.fixStateOf(2); ok || len(h.fixRuns(pr.ID)) != 0 {
+		t.Errorf("a fix loop started: %+v, runs %d", st, len(h.fixRuns(pr.ID)))
+	}
+	if o, ok := ownerOf(h); !ok || !o.Factory() {
+		t.Errorf("owner = %+v, %v; want the factory", o, ok)
+	}
 }

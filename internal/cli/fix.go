@@ -136,8 +136,9 @@ func newFixCmd(c *Context) *cobra.Command {
 			"own PR, now and later. --handover back <pr> returns a PR only while the factory has not worked it since its "+
 			"import, and calls off a handover that waits; --handover back all lifts --handover all and returns every PR it may. "+
 			"Each asks y/N on a terminal (--yes does not). --drained prints the morning list: every PR whose fix work keeps it "+
-			"from handing over (a loop, a fixer's push record, a held merge, a held fix, magnum's push waiting for its CI, a "+
-			"pending request, a fixer's run), with your action for each. --drop-push drops the record of a fixer's push that "+
+			"from handing over (a loop, a fixer's push record, a held merge, magnum's push waiting for its CI, a "+
+			"pending request, a fixer's run), with your action for each; a fix held for a restart, a pause or the GitHub budget "+
+			"holds no PR back: it goes with the PR, and the factory imports it. --drop-push drops the record of a fixer's push that "+
 			"magnum keeps for its late settle (up to 24h), which the morning list names when the PR's head moved past it.",
 		func(pos []string) int { return runFix(c, o, pos) })
 	fs := cmd.Flags()
@@ -830,7 +831,6 @@ func runFixDrained(c *Context, o fixOpts, pos []string) int {
 	}
 	if len(list) == 0 {
 		fmt.Fprintln(c.Stdout, "none of magnum's fix work is in flight: every PR can hand over to the factory")
-		return 0
 	}
 	for _, u := range list {
 		line := d.actLabel(u.Repo, u.Number) + "  " + u.URL
@@ -841,6 +841,11 @@ func runFixDrained(c *Context, o fixOpts, pos []string) int {
 		for _, r := range u.Records {
 			fmt.Fprintf(c.Stdout, "  %s\n    → %s\n", actClean(r.What), actClean(r.Action))
 		}
+	}
+	// A held fix holds no PR back: it goes with the PR, its row kept for the
+	// factory's import (engine/fix_drained.go).
+	if held, err := d.Store.KVKeys(ctx, "pr.*.fix_held"); err == nil && len(held) > 0 {
+		fmt.Fprintf(c.Stdout, "%s no PR back: each goes with its PR, and the factory imports it\n", textx.Count(len(held), "held fix holds", "held fixes hold"))
 	}
 	return 0
 }

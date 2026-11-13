@@ -197,12 +197,20 @@ func (e *Engine) startHeldFixes(ctx context.Context) {
 // a fix the floor held, budgetHeld) and a paused agent kind of the fix role
 // (heldPause, pauseHeld): the daemon waits those out. An autofix's drop
 // toasts nothing: the operator asked for none. It reports whether a fix was
-// held.
+// held. The held fix of a PR magnum does not fix, or whose owner row cannot
+// be read, is neither started nor dropped: its row stays as it is, for the
+// factory's import (fix_owner.go, fix_drained.go).
 func (e *Engine) startHeldFix(ctx context.Context, prID int64, after string) bool {
 	key := KVPRFixHeld(prID)
 	raw, found, err := e.st.GetKV(ctx, key)
 	if err != nil || !found {
 		return false
+	}
+	if err := e.ownerRefusal(ctx, fmt.Sprintf("PR %d", prID), prID); err != nil {
+		if e.logOnce(fmt.Sprintf("held-owner:%d", prID), err.Error(), e.now()) {
+			e.log.Info("fix: a held fix stays as it is: magnum does not start it", "pr", prID, "why", err.Error())
+		}
+		return true
 	}
 	var h heldFix
 	readErr := json.Unmarshal([]byte(raw), &h)
@@ -227,10 +235,7 @@ func (e *Engine) startHeldFix(ctx context.Context, prID int64, after string) boo
 	if readErr == nil && h.By == autofixBy {
 		gone = e.autofixGone(ctx, repo, pr) // nobody asked: autofix's own checks again (fix_loop.go)
 	}
-	owner := e.ownerRefusal(ctx, fmt.Sprintf("%s#%d", repo.FullName(), pr.Number), pr.ID) // fix_owner.go
 	switch {
-	case owner != nil:
-		why = owner.Error()
 	case readErr != nil:
 		why = "its record does not read"
 	case pr.HeadSHA != h.Head:
@@ -288,12 +293,16 @@ func (e *Engine) startHeldFix(ctx context.Context, prID int64, after string) boo
 // the PR by by ("magnum abort", "magnum ignore", a close): its row goes and
 // fix.dropped says so at info, naming the hold it was in ("the fix held
 // while the GitHub budget was low is dropped"). It returns what it did, for
-// the stop's answer ("" = nothing was held).
+// the stop's answer ("" = nothing was held). The held fix of a PR magnum
+// does not fix stays, for the factory's import.
 func (e *Engine) dropHeldFix(ctx context.Context, repo store.Repo, pr store.PR, by string) string {
 	key := KVPRFixHeld(pr.ID)
 	raw, found, err := e.st.GetKV(ctx, key)
 	if err != nil || !found {
 		return ""
+	}
+	if e.ownerRefusal(ctx, fmt.Sprintf("%s#%d", repo.FullName(), pr.Number), pr.ID) != nil {
+		return "" // fix_owner.go: the factory imports it; magnum drops nothing of a PR it does not fix
 	}
 	if gone, err := e.st.DeleteKVIf(ctx, key, raw); err != nil || !gone {
 		return ""

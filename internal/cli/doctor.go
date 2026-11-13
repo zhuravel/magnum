@@ -51,7 +51,8 @@ func newDoctorCmd(c *Context) *cobra.Command {
 			"pressure and swap (a WARN at critical pressure; nothing in magnum acts on it), codex staging, the launchd agent "+
 			"and the mise it starts the daemon through, the terminal's Automation permission on macOS (named, never probed: "+
 			"doctor opens no window), the herdr plugin link, the PRs handing over to the factory (a WARN naming those whose fix "+
-			"work of magnum's has not ended yet; `magnum fix --drained` says your action for each) and the factory's lease of "+
+			"work of magnum's has not ended yet, a held fix aside, which goes with its PR; `magnum fix --drained` says your "+
+			"action for each) and the factory's lease of "+
 			"the PRs it fixes (a WARN naming those whose lease magnum cannot read: their rounds wait 10 minutes, then magnum "+
 			"reviews them without it), the registry, and the factory's pause.json and reboot-drain.json "+
 			"(a WARN for one its daemon cannot read: an unreadable pause holds nothing, an unreadable drain holds until "+

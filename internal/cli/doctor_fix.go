@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // doctorFixHandover is the fix handover's lines: a WARN while a PR that
@@ -42,14 +43,21 @@ func doctorFixHandover(ctx context.Context, d doctorDeps) []doctorCheck {
 			waiting = append(waiting, fmt.Sprintf("%s (%s)", actRefLabel(d.Config.Daemon.DefaultRepo, u.Repo, u.Number), recordKinds(u.Records)))
 		}
 	}
+	// A held fix holds no PR back: it goes with its PR, for the factory's
+	// import (engine/fix_drained.go).
+	held := ""
+	if keys, err := d.Store.KVKeys(ctx, "pr.*.fix_held"); err == nil && len(keys) > 0 {
+		held = fmt.Sprintf("; %s no PR back, each going with its PR for the factory to import",
+			textx.Count(len(keys), "held fix holds", "held fixes hold"))
+	}
 	switch {
 	case len(waiting) > 0:
-		out = append(out, doctorWarned(name, fmt.Sprintf("%d PRs wait to hand over to the factory until magnum's fix work on them ends: %s",
-			len(waiting), strings.Join(waiting, ", ")), "`magnum fix --drained` names your action for each"))
+		out = append(out, doctorWarned(name, fmt.Sprintf("%d PRs wait to hand over to the factory until magnum's fix work on them ends: %s%s",
+			len(waiting), strings.Join(waiting, ", "), held), "`magnum fix --drained` names your action for each"))
 	case len(list) > 0:
-		out = append(out, doctorOK(name, fmt.Sprintf("magnum's fix work is in flight on %d PRs (`magnum fix --drained` lists it)", len(list))))
+		out = append(out, doctorOK(name, fmt.Sprintf("magnum's fix work is in flight on %d PRs (`magnum fix --drained` lists it)%s", len(list), held)))
 	default:
-		out = append(out, doctorOK(name, "none of magnum's fix work is in flight: every PR can hand over to the factory"))
+		out = append(out, doctorOK(name, "none of magnum's fix work is in flight: every PR can hand over to the factory"+held))
 	}
 	if line, ok := doctorLeaseUnreads(ctx, d, unread); ok {
 		out = append(out, line)
