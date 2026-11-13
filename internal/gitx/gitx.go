@@ -391,6 +391,31 @@ func (c *Client) FetchCommit(ctx context.Context, mainClone, sha string, number 
 // so the final lookup returns whatever refs/magnum/pr/N already holds (the sha
 // of an earlier real fetch, possibly stale) or fails with ErrNoSuchRef.
 func (c *Client) FetchPR(ctx context.Context, mainClone string, number int) (string, error) {
+	return c.fetchPR(ctx, mainClone, number, PRRef(number))
+}
+
+// prRefs holds the review's PR heads (PRRef), which FetchPRInto never
+// fetches into.
+const prRefs = "refs/magnum/pr/"
+
+// FetchPRInto is FetchPR into ref, a ref of the caller's own under
+// refs/magnum/ but outside refs/magnum/pr/, which is the review's: the
+// factory's fix checkouts fetch a PR's head into a ref of their own, so the
+// review's ref of the same PR in a shared main clone neither moves under a
+// review's checkout nor goes with a fix checkout's release.
+func (c *Client) FetchPRInto(ctx context.Context, mainClone string, number int, ref string) (string, error) {
+	if err := checkBranch("ref", ref); err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(ref, magnumRefs) || strings.HasPrefix(ref, prRefs) || strings.HasSuffix(ref, "/") {
+		return "", fmt.Errorf("gitx: fetch PR %d into %q: only a ref under %s outside %s", number, ref, magnumRefs, prRefs)
+	}
+	return c.fetchPR(ctx, mainClone, number, ref)
+}
+
+// fetchPR fetches PR number's head into ref of mainClone (FetchPR,
+// FetchPRInto).
+func (c *Client) fetchPR(ctx context.Context, mainClone string, number int, ref string) (string, error) {
 	if number <= 0 {
 		return "", fmt.Errorf("gitx: invalid PR number %d", number)
 	}
@@ -398,10 +423,10 @@ func (c *Client) FetchPR(ctx context.Context, mainClone string, number int) (str
 		return "", fmt.Errorf("gitx: fetch PR %d: %w", number, err)
 	}
 	label := fmt.Sprintf("fetch PR %d", number)
-	if err := c.fetch(ctx, mainClone, label, fmt.Sprintf("+refs/pull/%d/head:%s", number, PRRef(number))); err != nil {
+	if err := c.fetch(ctx, mainClone, label, fmt.Sprintf("+refs/pull/%d/head:%s", number, ref)); err != nil {
 		return "", err
 	}
-	sha, err := c.RevParse(ctx, mainClone, PRRef(number))
+	sha, err := c.RevParse(ctx, mainClone, ref)
 	if err != nil {
 		return "", fmt.Errorf("gitx: fetch PR %d: %w", number, err)
 	}

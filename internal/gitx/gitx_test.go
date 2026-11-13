@@ -81,6 +81,27 @@ func TestFetchPRArgvAndSha(t *testing.T) {
 	wantCall(t, f, 1, false, "git", "-C", clone, "rev-parse", "--verify", "--quiet", "refs/magnum/pr/42^{commit}")
 }
 
+// FetchPRInto fetches a PR's head into the caller's own ref, never into the
+// review's refs/magnum/pr/ nor outside refs/magnum/.
+func TestFetchPRIntoFetchesOnlyIntoARefOfItsOwn(t *testing.T) {
+	c, f := newFake(
+		okRule("git", "-C", clone, "fetch"),
+		outRule(sha1+"\n", "git", "-C", clone, "rev-parse"),
+	)
+	got, err := c.FetchPRInto(context.Background(), clone, 42, "refs/magnum/factory-fix/42")
+	if err != nil || got != sha1 {
+		t.Fatalf("FetchPRInto = %q, %v", got, err)
+	}
+	wantCall(t, f, 0, true, "git", "-C", clone, "fetch", "--no-tags", "origin", "+refs/pull/42/head:refs/magnum/factory-fix/42")
+	wantCall(t, f, 1, false, "git", "-C", clone, "rev-parse", "--verify", "--quiet", "refs/magnum/factory-fix/42^{commit}")
+	for _, bad := range []string{"refs/magnum/pr/42", "refs/heads/main", "refs/magnum/", "refs/magnum/x:y", "", "-x"} {
+		c, f := newFake(okRule("git"))
+		if _, err := c.FetchPRInto(context.Background(), clone, 42, bad); err == nil || len(f.Calls) != 0 {
+			t.Errorf("FetchPRInto into %q = %v with %d git calls, want a refusal before git", bad, err, len(f.Calls))
+		}
+	}
+}
+
 func TestFetchPRErrors(t *testing.T) {
 	c, _ := newFake()
 	if _, err := c.FetchPR(context.Background(), clone, 0); err == nil {

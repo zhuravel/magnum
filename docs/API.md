@@ -22643,6 +22643,13 @@ func (c *Client) FetchPR(ctx context.Context, mainClone string, number int) (str
     holds (the sha of an earlier real fetch, possibly stale) or fails with
     ErrNoSuchRef.
 
+func (c *Client) FetchPRInto(ctx context.Context, mainClone string, number int, ref string) (string, error)
+    FetchPRInto is FetchPR into ref, a ref of the caller's own under
+    refs/magnum/ but outside refs/magnum/pr/, which is the review's:
+    the factory's fix checkouts fetch a PR's head into a ref of their own,
+    so the review's ref of the same PR in a shared main clone neither moves
+    under a review's checkout nor goes with a fix checkout's release.
+
 func (c *Client) FileAt(ctx context.Context, dir, rev, file string) (string, error)
     FileAt is the content of file (a clean path from the top) as rev has it:
     `git cat-file blob <rev>:<file>`, the object store's bytes without
