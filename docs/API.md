@@ -15185,6 +15185,29 @@ func NewMagnum(l paths.Layout, cfg *config.Config) Magnum
     NewMagnum is magnum's review daemon of layout l, configured by cfg, as the
     factory's local review sees it (Magnum).
 
+type MagnumWriter struct {
+	// Has unexported fields.
+}
+    MagnumWriter writes the factory's requests into magnum's registry and
+    wakes magnum's daemon. It is safe for concurrent use: each write opens the
+    registry and closes it again.
+
+func NewMagnumWriter(l paths.Layout) *MagnumWriter
+    NewMagnumWriter is the writer of the requests to magnum's daemon of layout l
+    (its registry Layout.DB, its pidfile Layout.Pid).
+
+func (w *MagnumWriter) EnqueueRequest(ctx context.Context, kind string, payload any) (int64, error)
+    EnqueueRequest writes a pending request of kind, payload as its JSON,
+    into magnum's requests table and returns its id. A kind magnum's daemon does
+    not know fails there as unknown, which an older build answers. It refuses,
+    writing nothing, a registry that does not exist (no review daemon ever ran
+    here) and one whose schema is not this build's: it never migrates it.
+
+func (w *MagnumWriter) KickDaemon() (int, error)
+    KickDaemon wakes magnum's daemon (SIGUSR1, engine.KickDaemon), so it answers
+    the factory's request at once rather than at its next poll; it returns the
+    daemon's pid, 0 when none runs (the request waits for it).
+
 type MemProc struct {
 	PID, PPID int
 	RSS       int64
