@@ -542,6 +542,123 @@ func TestACloseBeforeAPausedRoundLetsGoOfThePREndsItsFix(t *testing.T) {
 	}
 }
 
+// A round of the factory's fix whose judge paused keeps the fix for its
+// continue whenever dispatch may continue it, whatever GitHub's state says
+// at the pause (C2): a paused post-merge round continues on its merged PR,
+// and a PR GitHub could not find for a while continues once GitHub lists it
+// open again. No end is said at the pause, and the continue names the one
+// end, posted.
+func TestAPausedFactoryRoundThatContinuesNamesItsEndOnce(t *testing.T) {
+	storetest.Parallel(t)
+	// posts makes h's continued turn post, after a first turn that pauses.
+	posts := func(h *harness) {
+		h.rd.mu.Lock()
+		h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) { return h.rd.posted(h.ctx, in, 0) }
+		h.rd.mu.Unlock()
+		pausedReReview(h, pipeline.OutcomeUsageLimit, true)
+	}
+	// continues lifts the pause and wants the continue to post the fix's one end.
+	continues := func(h *harness, ref fixwork.FixRef, prs ...prSpec) {
+		h.t.Helper()
+		if evs := h.fixEvents("fix.factory_round"); len(evs) != 0 {
+			h.t.Fatalf("fix.factory_round at the pause: %+v", evs)
+		}
+		if r, _ := h.e.fixRefOf(h.ctx, h.pr(2).ID); r == nil || r.FixRef != ref {
+			h.t.Fatalf("the paused PR keeps %+v, want the fix for its continue", r)
+		}
+		h.advance(2 * time.Hour)
+		if len(prs) > 0 {
+			h.open(prs...)
+		}
+		h.tick()
+		if ins := h.rd.all(); ins[len(ins)-1].Kind != pipeline.KindContinue {
+			h.t.Fatalf("the round after the pause is a %s round, want the continue", ins[len(ins)-1].Kind)
+		}
+		if outcome, by := factoryRoundOf(h.t, h, ref); outcome != pipeline.OutcomePosted || by != "" {
+			h.t.Errorf("fix.factory_round = %s by %q, want posted by its continue", outcome, by)
+		}
+		if r, raw := h.e.fixRefOf(h.ctx, h.pr(2).ID); r != nil {
+			h.t.Errorf("the PR keeps the fix after its continue: %s", raw)
+		}
+	}
+	t.Run("a post-merge round", func(t *testing.T) {
+		h := newHarness(t, func(h *harness) { h.d.FixLeaseOf = (&fakeLease{}).reader(h.clock.Now) })
+		h.mergedBeforeReReview()
+		factoryOwns(h)
+		posts(h)
+		ref := fixwork.FixRef{Work: 7, Cycle: 1, Head: muMergedHead}
+		if r := h.requestPostMerge(2, ReviewPayload{FixRef: &ref}); r.State != store.RequestDone {
+			t.Fatalf("the factory's re-review of the merged PR: %s %q", r.State, deref(r.Result))
+		}
+		if pr := h.wantState(2, store.PRPaused); pr.GHState != store.GHMerged || !pr.Forced {
+			t.Fatalf("PR #2: GitHub %s, forced %v; want the post-merge round paused", pr.GHState, pr.Forced)
+		}
+		continues(h, ref)
+	})
+	t.Run("a PR GitHub could not find, then lists open", func(t *testing.T) {
+		h := leaseHarness(t, &fakeLease{})
+		posts(h)
+		ref := fixwork.FixRef{Work: 7, Cycle: 1, Head: "b2"}
+		if r := h.reReviewOf(ref); r.State != store.RequestDone {
+			t.Fatalf("the factory's re-review: %s %q", r.State, deref(r.Result))
+		}
+		h.gatedTick()
+		h.open(prSpec{n: 1, head: "base1"}) // #2 left the OPEN list, and GitHub does not find it
+		h.gh.mu.Lock()
+		h.gh.notFound = []int{2}
+		h.gh.mu.Unlock()
+		if err := h.e.Tick(h.ctx); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+		if pr := h.pr(2); pr.GHState != store.GHUnknown || pr.State != store.PRReviewing {
+			t.Fatalf("PR #2 = %s, GitHub %s; want its round running, marked UNKNOWN", pr.State, pr.GHState)
+		}
+		h.rd.mu.Lock()
+		close(h.rd.gate) // the judge's turn pauses
+		h.rd.mu.Unlock()
+		h.settle()
+		h.wantState(2, store.PRPaused)
+		h.gh.mu.Lock()
+		h.gh.notFound = nil
+		h.gh.mu.Unlock()
+		continues(h, ref, prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2"})
+	})
+}
+
+// A round of the factory's fix whose judge paused on an open PR that the
+// tick moved out of paused meanwhile (here a Codex flag holds it,
+// holdFlagged) is never continued: dispatch continues paused PRs alone, so
+// the pause is the round's end, with its own outcome, said once (C2).
+func TestAFactoryRoundWhosePauseDispatchNeverContinuesEndsAtThePause(t *testing.T) {
+	ref := fixwork.FixRef{Work: 7, Cycle: 1, Head: "b2"}
+	h := pausedFactoryRound(t, ref)
+	repo, pr, err := h.e.resolve(h.ctx, PRTarget{Ref: "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &roundJob{pr: pr, repo: repo}
+	if job.fixRef, job.fixRefRaw = h.e.fixRefOf(h.ctx, pr.ID); job.fixRef == nil {
+		t.Fatal("no fix kept")
+	}
+	if !h.e.reserve(pr.ID, &roundHandle{cancel: func() {}, asked: true, fixRef: &job.fixRef.FixRef}) {
+		t.Fatal("the PR could not be reserved")
+	}
+	if err := h.st.TransitionPR(h.ctx, pr.ID, []string{store.PRPaused}, store.PRIneligible, func(u *store.PRUpdate) {
+		u.Set("forced", false)
+		u.Set("next_attempt_at", nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.e.fixRefAfterRound(h.ctx, job, pipeline.RoundResult{Outcome: pipeline.OutcomeUsageLimit, Round: 2, TargetSHA: "b2"})
+	h.e.unreserve(pr.ID)
+	if outcome, by := factoryRoundOf(t, h, ref); outcome != pipeline.OutcomeUsageLimit || by != "" {
+		t.Errorf("fix.factory_round = %s by %q, want the pause's own end", outcome, by)
+	}
+	if r, raw := h.e.fixRefOf(h.ctx, pr.ID); r != nil {
+		t.Errorf("the PR keeps the fix no continue takes: %s", raw)
+	}
+}
+
 // The factory's abort of its own round paused mid-turn stops it, as `magnum
 // abort` stops a paused round: its turn would otherwise continue later,
 // past the hold of the factory's next fixer, and post on an old head. An

@@ -4203,8 +4203,9 @@ the factory raised it, `d` asks you to try again shortly.
   round names its end while it still holds the PR, so no review or stop of yours comes in between. A clean
   re-review that holds its approval (`approve_after_full_pass`) names its posted end, and the full pass it
   forces carries no fix. A round paused by a usage limit or a lost login has not ended, and its continue
-  names the fix when it does; on a PR that closed or merged meanwhile no continue comes, so that pause ends
-  it, closed.
+  names the fix when it does, a post-merge round's too, and one on a PR GitHub could not find for a while
+  once it lists the PR open again; on a PR that closed or merged meanwhile no continue comes, so that pause
+  ends it, closed.
 - While the factory's fixer works on a PR it fixes, the PR's next round waits for it, as for Magnum's own
   fixer ("re-review waits for the factory's fixer (fix cycle 1 of 3)"), `magnum review` is refused, and the
   status comment says the fixes are being applied. The factory's own re-review of its push goes on, and

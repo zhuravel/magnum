@@ -19471,6 +19471,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
     marked names no end (roundOfFix), so the close ends the fix, closed by the close. The mark goes in before
     the read, so a close between the two is seen by one of them, and the row's compare-and-delete keeps the
     end to one event.
+  - Whether a paused round of the fix has ended is decided by dispatch's own rule, not by GitHub's state
+    (C2). C5's check called any PR whose GitHub state was not OPEN closed at the pause, but dispatch continues
+    a paused PR whatever that state says then: a post-merge round (the factory's re-review asked after the
+    merge was confirmed) continues on its merged PR, and a PR marked UNKNOWN continues once GitHub lists it
+    open again. The factory heard "closed" for both, and the continue's real end went unsaid. pauseEnd keeps
+    the fix while the PR is paused, the one state continueCandidates continues; a PR the tick moved on
+    meanwhile is never continued, and the pause ends the round, closed by the close for a closing state and
+    with its own outcome otherwise (a Codex flag's hold).
 
 ## The factory (2026-11-03)
 

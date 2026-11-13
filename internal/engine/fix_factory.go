@@ -129,13 +129,14 @@ func (e *Engine) fixRefOf(ctx context.Context, prID int64) (*fixRefRow, string) 
 // or a lost login (pauseContinues) has not ended: the turn continues as the
 // same round once the pause lifts, so the row stays for the continue to
 // take at its dispatch, and no event says it ended (as magnum's own loop
-// waits for it, continueFixLoop). On a PR closed or merged meanwhile
-// (closedOnGitHub, read again: the close lets an asked round run on and
-// leaves its fix to it, endFixRefAtClose) no continue comes, so that pause
-// is the round's end, with the outcome closed and the close as its by (C5).
-// The round marks itself as leaving the fix to its continue before that
-// read (leaveFixToContinue), so a close the poll confirms after the read,
-// while the round still holds the PR, ends the fix itself (C1).
+// waits for it, continueFixLoop). Whether a continue can come is read
+// again (pauseEnd): a PR the tick moved out of paused meanwhile is never
+// continued, so that pause is the round's end, closed by the close on a PR
+// closed or merged meanwhile (the close lets an asked round run on and
+// leaves its fix to it, endFixRefAtClose, C5). The round marks itself as
+// leaving the fix to its continue before that read (leaveFixToContinue),
+// so a close the poll confirms after the read, while the round still holds
+// the PR, ends the fix itself (C1).
 func (e *Engine) fixRefAfterRound(ctx context.Context, job *roundJob, res pipeline.RoundResult) {
 	if job.fixRef == nil {
 		return
@@ -143,11 +144,10 @@ func (e *Engine) fixRefAfterRound(ctx context.Context, job *roundJob, res pipeli
 	outcome, by := res.Outcome, ""
 	if e.pauseContinues(ctx, job.pr, res.Outcome) {
 		e.leaveFixToContinue(job.pr.ID)
-		c, closed := e.closedOnGitHub(ctx, job.pr.ID)
-		if !closed {
+		var ends bool
+		if outcome, by, ends = e.pauseEnd(ctx, job.pr.ID, outcome); !ends {
 			return
 		}
-		outcome, by = pipeline.OutcomeClosed, c.by()
 	}
 	switch gone, err := e.st.DeleteKVIf(ctx, kvPRFixRef(job.pr.ID), job.fixRefRaw); {
 	case err != nil:
@@ -173,19 +173,28 @@ func (e *Engine) fixRefAfterRound(ctx context.Context, job *roundJob, res pipeli
 		roundName(res), ended, textx.ShortSHA(r.FixRef.Head), r.FixRef.Cycle), data)
 }
 
-// closedOnGitHub reads PR prID again and reports whether it is closed or
-// merged (GitHub's state, or a closing state), and how (c.by); a failed
-// read reports it open, so a pause keeps its fix for the continue.
-func (e *Engine) closedOnGitHub(ctx context.Context, prID int64) (c closeStop, closed bool) {
+// pauseEnd reads PR prID again after its round's judge paused, and says
+// whether the pause ends the round (ends), with what outcome and by. A PR
+// still paused keeps its fix for the continue: dispatch continues a paused
+// PR whatever GitHub's state says at the pause (continueCandidates), so a
+// post-merge round continues on its merged PR, and a PR marked UNKNOWN once
+// GitHub lists it open again (C2). A PR in any other state, which the tick
+// moved on meanwhile, is never continued: closed or merged (closingStates),
+// the round ends closed by the close (C5); else it ends with outcome, its
+// own (a Codex flag's hold, say). A failed read keeps the fix for the
+// continue.
+func (e *Engine) pauseEnd(ctx context.Context, prID int64, outcome string) (end, by string, ends bool) {
 	cur, err := e.st.PRByID(ctx, prID)
-	if err != nil {
+	switch {
+	case err != nil:
 		e.warnUnlessStopped(ctx, err, "the factory's fix: the PR after its round paused", "pr", prID)
-		return closeStop{}, false
+		return "", "", false
+	case cur.State == store.PRPaused:
+		return "", "", false
+	case slices.Contains(closingStates, cur.State):
+		return pipeline.OutcomeClosed, closeStop{state: cur.GHState}.by(), true
 	}
-	if cur.GHState == store.GHOpen && !slices.Contains(closingStates, cur.State) {
-		return closeStop{}, false
-	}
-	return closeStop{state: cur.GHState}, true
+	return outcome, "", true
 }
 
 // factoryAbortBy is who stops the factory's re-review when the factory
