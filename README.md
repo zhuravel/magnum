@@ -4654,7 +4654,8 @@ stages = [
   directories under `[daemon] shell_path`, as its start appended them; an older daemon, or none running, recorded
   none, and doctor then rebuilds that PATH from today's configuration and says so): where that PATH finds one,
   doctor reads the Redis with it, as the claims' flush does, and gives the verdict above (a PASS says "so its claims
-  flush"); else, with its install as the fix, a FAIL when the
+  flush"); a WARN, whatever the `env` names, when doctor has to rebuild that PATH and your login shell does not
+  answer, since the daemon's PATH is then unknown; else, with its install as the fix, a FAIL when the
   `env` names `REDIS_DB_OFFSET`, since each claim's flush needs it too, a WARN otherwise. Its highest copy is
   also one the factory already made past
   `max_copies + fix_copies` (a pool slot of its agents store): a lower `max_copies` or `fix_copies` retires no
