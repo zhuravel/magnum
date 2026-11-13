@@ -194,6 +194,57 @@ func TestMagnumReviewIsRefusedWhileTheFactoryWaitsForItsReReview(t *testing.T) {
 	}
 }
 
+// unownedHarness is a harness whose factory lease reader is lease's, with
+// PR #2 reviewed at b1 and pushed to b2 an hour later, past its push quiet
+// period, and no owner row: magnum fixes it.
+func unownedHarness(t *testing.T, lease *fakeLease) *harness {
+	t.Helper()
+	h := newHarness(t, func(h *harness) { h.d.FixLeaseOf = lease.reader(h.clock.Now) })
+	h.reviewedPR(2, "b1")
+	pollPR(h, time.Hour, 2, "b2")
+	h.wantState(2, store.PRRereviewPending)
+	h.advance(6 * time.Minute)
+	return h
+}
+
+// When magnum's registry cannot read a PR's owner row, who fixes the PR is
+// not known: dispatch holds its round, as for a fix loop's row that cannot
+// be read, and `magnum review` is refused naming that read, but no failed
+// read of the factory's lease is recorded or told: the factory may never
+// have had the PR. Once the row reads, the round runs, with no lease event.
+func TestAnOwnerRowThatCannotBeReadIsNoFailedLeaseRead(t *testing.T) {
+	h := unownedHarness(t, &fakeLease{})
+	pr := h.pr(2)
+	failKVRead(h, fixwork.KVPRFixOwner(pr.ID))
+	rounds := len(h.rd.all())
+	h.tick()
+	if got := len(h.rd.all()); got != rounds {
+		t.Fatalf("rounds = %d, want %d: a round started while who fixes the PR cannot be read", got, rounds)
+	}
+	if u, ok := h.leaseUnread(pr.ID); ok {
+		t.Errorf("a failed lease read is recorded: %+v", u)
+	}
+	if w := waitOf(t, h, 2); w.Reason != WaitFixing || strings.Contains(w.Detail, "lease") || !strings.Contains(w.Detail, "owner row") {
+		t.Errorf("wait = %+v, want the owner row named, not the factory's lease", w)
+	}
+	review := h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.handle()
+	if r := h.request(review); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "who fixes it cannot be read") ||
+		strings.Contains(deref(r.Result), "lease") {
+		t.Errorf("magnum review: %s %q", r.State, deref(r.Result))
+	}
+	h.e.delKV(h.ctx, fixwork.KVPRFixOwner(pr.ID)) // the row reads again: none
+	h.tick()
+	if got := len(h.rd.all()); got != rounds+1 {
+		t.Errorf("rounds = %d, want %d once the row reads", got, rounds+1)
+	}
+	for _, kind := range []string{"fix.lease_open", "fix.lease_read"} {
+		if ev, ok := h.fixEvent(kind); ok {
+			t.Errorf("%s on a PR the factory never had: %q", kind, ev.Message)
+		}
+	}
+}
+
 // leaseUnread is PR prID's recorded failed lease read (ok false: none).
 func (h *harness) leaseUnread(prID int64) (LeaseUnread, bool) {
 	h.t.Helper()

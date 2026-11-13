@@ -7,13 +7,17 @@ package engine
 // owner row, fix_owner.go), dispatch holds the PR's rounds while the
 // factory's fixer works on it (phase fixing), as it holds them for magnum's
 // own fixer (fixHolds, WaitFixing), `magnum review` is refused while the
-// factory holds the lease, and the status comment says that the factory
-// fixes it. A read that fails (the owner row or the lease) holds the round
-// for fixLeaseGrace from the first failure, then fails open: magnum
+// factory's fixer works on it or its loop waits for magnum's re-review of
+// its push, and the status comment says that the factory fixes it. A read
+// that fails (an owner row this build cannot parse, or the lease) holds the
+// round for fixLeaseGrace from the first failure, then fails open: magnum
 // reviews, a warn event says so once, and the PR's row (KVPRFixLeaseUnread,
 // a key-value row: no migration) shows on the doctor's line until a read
-// works again. A nil reader is inert: no lease is read, nothing is held or
-// refused, no event or doctor line, as before the factory fixed PRs.
+// works again. A read of magnum's own registry that fails says nothing of
+// the factory: the round waits, as for a fix loop's row that cannot be read,
+// and nothing is recorded. A nil reader is inert: no lease is read, nothing
+// is held or refused, no event or doctor line, as before the factory fixed
+// PRs.
 
 import (
 	"context"
@@ -98,11 +102,15 @@ type LeaseUnread struct {
 
 // leaseView is what the review side reads of the factory's fixes of a PR:
 // owned, the PR has an owner row (the factory's, or returning), its lease,
-// and err, the owner row or the lease could not be read.
+// and err, the owner row (one this build cannot parse) or the lease could
+// not be read. unknown is a read of magnum's registry itself that failed
+// (the owner row, or the PR's repository): who fixes the PR is not known,
+// so it is no failed read of the factory's lease.
 type leaseView struct {
-	owned bool
-	lease FixLease
-	err   error
+	owned   bool
+	lease   FixLease
+	err     error
+	unknown error
 }
 
 // fixing reports whether the factory works on the PR now (its lease held,
@@ -127,13 +135,18 @@ func (e *Engine) leaseOf(ctx context.Context, pr store.PR) (v leaseView, ok bool
 	if e.d.FixLeaseOf == nil {
 		return leaseView{}, false
 	}
-	_, _, owned, err := e.fixOwner(ctx, pr.ID)
-	if err != nil || !owned {
-		return leaseView{owned: owned, err: err}, true
+	_, raw, owned, err := e.fixOwner(ctx, pr.ID)
+	switch {
+	case err != nil && raw == "": // the registry's read failed: who fixes the PR is not known
+		return leaseView{unknown: err}, true
+	case err != nil: // an owner row this build cannot parse (a newer build's, or damaged): there is one
+		return leaseView{owned: true, err: err}, true
+	case !owned:
+		return leaseView{}, true
 	}
 	repo, err := e.st.RepoByID(ctx, pr.RepoID)
 	if err != nil {
-		return leaseView{owned: true, err: err}, true
+		return leaseView{unknown: err}, true
 	}
 	l, err := e.d.FixLeaseOf(ctx, repo.FullName(), pr.Number)
 	return leaseView{owned: true, lease: l, err: err}, true
@@ -188,7 +201,9 @@ const waitFactory = "factory"
 func leaseErrWords(err error) string { return oneLine(err.Error(), 200) }
 
 // factoryHolds reports whether the factory holds pr's next round
-// (dispatch): its fixer works on the PR, or a read failed within its grace.
+// (dispatch): its fixer works on the PR, or a read failed within its grace,
+// or magnum's registry cannot read who fixes it (leaseView.unknown), which
+// records nothing.
 // It records the failed read (KVPRFixLeaseUnread) the first time, and once
 // its grace is over marks it open with a warn event (fix.lease_open): the
 // round goes on without the lease. A read that works again clears it, with
@@ -198,8 +213,14 @@ func (e *Engine) factoryHolds(ctx context.Context, pr store.PR) bool {
 		return false
 	}
 	v, ok := e.leaseOf(ctx, pr)
-	if !ok {
+	switch {
+	case !ok:
 		return false
+	case v.unknown != nil: // as a fix loop's row that cannot be read holds it (fixHolds), with no lease row
+		if e.logOnce(fmt.Sprintf("fix-owner:%d", pr.ID), v.unknown.Error(), e.now()) {
+			e.log.Warn("dispatch holds a PR whose owner row cannot be read", "pr", pr.ID, "err", v.unknown)
+		}
+		return true
 	}
 	return e.noteLease(ctx, pr, v)
 }
@@ -255,8 +276,11 @@ func (e *Engine) factoryWaitOf(ctx context.Context, pr store.PR) (Wait, bool) {
 		return Wait{}, false
 	}
 	v, ok := e.leaseOf(ctx, pr)
-	if !ok {
+	switch {
+	case !ok:
 		return Wait{}, false
+	case v.unknown != nil:
+		return Wait{Reason: WaitFixing, Subject: waitFactory, Detail: fmt.Sprintf("its owner row, which cannot be read (%s)", leaseErrWords(v.unknown))}, true
 	}
 	u, recorded := e.leaseUnreadOf(ctx, pr.ID)
 	return e.leaseWait(v, u, recorded)
@@ -267,9 +291,10 @@ func (e *Engine) factoryWaitOf(ctx context.Context, pr store.PR) (Wait, bool) {
 // re-review of its push (phase reviewing: that re-review is the factory's
 // own request), its re-review waiting in line (forced, its fix kept,
 // whatever the lease says: the operator's review would take its place and
-// drop its fix, keepFixRef), or a failed read within its grace, which it
-// records as dispatch does (noteLease). "" = it may review. With no reader
-// it refuses nothing.
+// drop its fix, keepFixRef), a failed read within its grace, which it
+// records as dispatch does (noteLease), or magnum's own failed read of who
+// fixes it, which records nothing. "" = it may review. With no reader it
+// refuses nothing.
 func (e *Engine) factoryReviewRefusal(ctx context.Context, pr store.PR, label string) string {
 	v, ok := e.leaseOf(ctx, pr)
 	if !ok {
@@ -278,6 +303,9 @@ func (e *Engine) factoryReviewRefusal(ctx context.Context, pr store.PR, label st
 	if r, _ := e.fixRefOf(ctx, pr.ID); r != nil && pr.Forced {
 		return fmt.Sprintf("%s: the factory's re-review of its push of %s (cycle %d) waits in line; a review of yours would take its place",
 			label, textx.ShortSHA(r.FixRef.Head), r.FixRef.Cycle)
+	}
+	if v.unknown != nil {
+		return fmt.Sprintf("%s: who fixes it cannot be read (%s); ask again shortly", label, leaseErrWords(v.unknown))
 	}
 	held := e.noteLease(ctx, pr, v)
 	switch {
