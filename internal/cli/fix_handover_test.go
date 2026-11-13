@@ -306,6 +306,57 @@ func TestTheDoctorSaysAHandoverWaitsForTheKey(t *testing.T) {
 	}
 }
 
+// While [factory] fix is not "on", the factory fixes no PR, and magnum fixes
+// none whose owner row names the factory or "returning": the doctor WARNs
+// for each, naming the way back and the hand (C8), and its PASS line no
+// longer says that every PR can hand over. With the key on, no such line.
+func TestTheDoctorNamesTheFactorysPRsWhileItFixesNone(t *testing.T) {
+	h := newActHarness(t)
+	d := doctorDeps{Store: h.st, Config: h.d.Cfg}
+	owns := func(n int, owner string) {
+		t.Helper()
+		pr := h.seedPR("talkable/talkable", n, store.PRReviewed)
+		raw, err := fixwork.FixOwner{Owner: owner, At: h.now, By: "magnum fix --handover"}.Value()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.st.SetKV(h.ctx, fixwork.KVPRFixOwner(pr.ID), raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	owns(4, fixwork.OwnerReturning)
+	owns(3, fixwork.OwnerFactory)
+	if err := h.st.SetKV(h.ctx, fixwork.KVPRFixOwner(h.seedPR("talkable/talkable", 5, store.PRReviewed).ID), `{"owner":"someone newer"}`); err != nil {
+		t.Fatal(err)
+	}
+	var pass, warn doctorCheck
+	for _, c := range doctorFixHandover(h.ctx, d) {
+		switch {
+		case c.Status == doctorPass:
+			pass = c
+		case strings.Contains(c.Detail, "which fixes none"):
+			warn = c
+		}
+	}
+	if pass.Status != doctorPass || strings.Contains(pass.Detail, "every PR can hand over") {
+		t.Errorf("the PASS line with the key off = %+v", pass)
+	}
+	if warn.Status != doctorWarn ||
+		!strings.Contains(warn.Detail, `2 PRs are the factory's, which fixes none while [factory] fix is "off": talkable#3, talkable#4 (returning)`) ||
+		!strings.Contains(warn.Fix, "magnum fix --handover back") || !strings.Contains(warn.Fix, "by hand") {
+		t.Errorf("the factory's PRs = %+v", warn)
+	}
+	h.d.Cfg.Factory.Fix = config.FactoryFixOn
+	for _, c := range doctorFixHandover(h.ctx, d) {
+		if strings.Contains(c.Detail, "which fixes none") {
+			t.Errorf("with the key on: %+v", c)
+		}
+		if c.Status == doctorPass && !strings.Contains(c.Detail, "every PR can hand over") {
+			t.Errorf("the PASS line with the key on = %+v", c)
+		}
+	}
+}
+
 // A failed read whose source is magnum's own owner row (one this build
 // cannot parse) sends the operator to magnum's registry, never to the
 // factory's, which reads fine.

@@ -17,13 +17,15 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/fixwork"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // doctorFixHandover is the fix handover's lines: a WARN while a PR that
-// hands over to the factory waits for its fix work to end, while a
-// handover waits for [factory] fix = "on" (doctorHandoverKey), or while a
-// read of the factory's lease or of an owner row failed
+// hands over to the factory waits for its fix work to end, while PRs are
+// the factory's and it fixes none (doctorFactorysPRs), while a handover
+// waits for [factory] fix = "on" (doctorHandoverKey), or while a read of
+// the factory's lease or of an owner row failed
 // (doctorLeaseUnreads), and a PASS that counts magnum's fix work in flight
 // otherwise.
 func doctorFixHandover(ctx context.Context, d doctorDeps) []doctorCheck {
@@ -59,6 +61,13 @@ func doctorFixHandover(ctx context.Context, d doctorDeps) []doctorCheck {
 	if !d.Config.Factory.Fixes() {
 		refused = fmt.Sprintf("; the handover itself is refused while [factory] fix is %q", cmp.Or(d.Config.Factory.Fix, "off"))
 	}
+	// While the factory fixes none, the PRs it owns have no fixer (C8): no
+	// line says that every PR can hand over.
+	factorys, fixesNone := doctorFactorysPRs(ctx, d)
+	canHand := ": every PR can hand over to the factory"
+	if fixesNone {
+		canHand = ""
+	}
 	switch {
 	case len(waiting) > 0:
 		out = append(out, doctorWarned(name, fmt.Sprintf("%d PRs wait to hand over to the factory until magnum's fix work on them ends: %s%s",
@@ -66,12 +75,60 @@ func doctorFixHandover(ctx context.Context, d doctorDeps) []doctorCheck {
 	case len(list) > 0:
 		out = append(out, doctorOK(name, fmt.Sprintf("magnum's fix work is in flight on %d PRs (`magnum fix --drained` lists it)%s%s", len(list), held, refused)))
 	default:
-		out = append(out, doctorOK(name, "none of magnum's fix work is in flight: every PR can hand over to the factory"+held+refused))
+		out = append(out, doctorOK(name, "none of magnum's fix work is in flight"+canHand+held+refused))
+	}
+	if fixesNone {
+		out = append(out, factorys)
 	}
 	if c, ok := doctorHandoverKey(ctx, d); ok {
 		out = append(out, c)
 	}
 	return append(out, doctorLeaseUnreads(ctx, d, unread)...)
+}
+
+// doctorFactorysPRs is the WARN of the PRs whose owner row names the factory
+// or "returning" while [factory] fix is not "on" (C8): magnum starts no
+// fixer on them, and the factory fixes none, so nothing fixes them until
+// the way back returns those the factory has not worked, or the operator
+// fixes them by hand. ok false: the key is on, or no such PR. A row that
+// does not parse is the owner row line's (doctorLeaseUnreads).
+func doctorFactorysPRs(ctx context.Context, d doctorDeps) (doctorCheck, bool) {
+	if d.Config.Factory.Fixes() {
+		return doctorCheck{}, false
+	}
+	key := fmt.Sprintf("[factory] fix is %q", cmp.Or(d.Config.Factory.Fix, "off"))
+	vals, err := d.Store.KVValues(ctx, "pr.*.fix_owner")
+	if err != nil {
+		return doctorWarned("fix handover", "the PRs' owner rows cannot be read: "+err.Error(), ""), true
+	}
+	var prs []string
+	for k, raw := range vals {
+		var id int64
+		if _, err := fmt.Sscanf(k, "pr.%d.", &id); err != nil || fixwork.KVPRFixOwner(id) != k {
+			continue
+		}
+		o, err := fixwork.ParseFixOwner(raw)
+		if err != nil {
+			continue
+		}
+		label := fmt.Sprintf("PR %d", id)
+		if pr, err := d.Store.PRByID(ctx, id); err == nil {
+			if repo, err := d.Store.RepoByID(ctx, pr.RepoID); err == nil {
+				label = actRefLabel(d.Config.Daemon.DefaultRepo, repo.FullName(), pr.Number)
+			}
+		}
+		if !o.Factory() {
+			label += " (returning)"
+		}
+		prs = append(prs, label)
+	}
+	if len(prs) == 0 {
+		return doctorCheck{}, false
+	}
+	slices.Sort(prs)
+	return doctorWarned("fix handover", fmt.Sprintf("%d PRs are the factory's, which fixes none while %s: %s", len(prs), key, strings.Join(prs, ", ")),
+		"`magnum fix --handover back <pr>` returns one the factory has not worked since it took it (a returning PR goes back by itself at a tick "+
+			"that finds the factory still idle on it); fix the rest by hand, or set [factory] fix = \"on\" and restart both daemons"), true
 }
 
 // doctorHandoverKey is the WARN of the handovers that wait for [factory]
