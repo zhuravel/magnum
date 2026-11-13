@@ -282,6 +282,73 @@ func TestTheFactorysAbortChoosesItsRoundUnderTheStopsLock(t *testing.T) {
 	h.e.unreserve(pr.ID)
 }
 
+// factoryRoundOf is the outcome and the stop's author the one
+// fix.factory_round event of PR #2 names for fix; it fails the test unless
+// exactly one names it.
+func factoryRoundOf(t *testing.T, h *harness, fix fixwork.FixRef) (outcome, by string) {
+	t.Helper()
+	evs := h.fixEvents("fix.factory_round")
+	if len(evs) != 1 {
+		t.Fatalf("fix.factory_round events = %d, want 1", len(evs))
+	}
+	var data struct {
+		FixRef  fixwork.FixRef `json:"fix_ref"`
+		Outcome string         `json:"outcome"`
+		By      string         `json:"by"`
+	}
+	if err := json.Unmarshal(evs[0].Data, &data); err != nil || data.FixRef != fix {
+		t.Fatalf("fix.factory_round data = %s (%v), want the fix %+v", evs[0].Data, err, fix)
+	}
+	return data.Outcome, data.By
+}
+
+// Your `magnum abort` or `magnum ignore` of the factory's re-review, in line
+// or in flight, ends that round: the PR's fix goes, and fix.factory_round
+// names it with the stop, so the factory's loop stops waiting for it. So
+// does the factory's own abort.
+func TestAStopOfTheFactorysReReviewNamesItsFix(t *testing.T) {
+	storetest.Parallel(t)
+	ref := fixwork.FixRef{Work: 7, Cycle: 1, Head: "b2"}
+	for _, tc := range []struct {
+		name            string
+		running, ignore bool
+		fix             *fixwork.FixRef
+		by              string
+	}{
+		{"your abort of it in line", false, false, nil, "magnum abort"},
+		{"your ignore of it in line", false, true, nil, "magnum ignore"},
+		{"your abort of it in flight", true, false, nil, "magnum abort"},
+		{"your ignore of it in flight", true, true, nil, "magnum ignore"},
+		{"the factory's abort of it in line", false, false, &ref, "the factory's abort"},
+		{"the factory's abort of it in flight", true, false, &ref, "the factory's abort"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := leaseHarness(t, &fakeLease{})
+			if r := h.reReviewOf(ref); r.State != store.RequestDone {
+				t.Fatalf("the factory's re-review: %s %q", r.State, deref(r.Result))
+			}
+			if tc.running {
+				h.gatedTick()
+			}
+			kind := ReqAbort
+			if tc.ignore {
+				kind = ReqIgnore
+			}
+			id := h.enqueue(kind, TargetPayload{PRTarget: PRTarget{Ref: "2"}, FixRef: tc.fix})
+			h.handle()
+			if r := h.request(id); r.State != store.RequestDone {
+				t.Fatalf("%s: %s %q", kind, r.State, deref(r.Result))
+			}
+			if outcome, by := factoryRoundOf(t, h, ref); outcome != pipeline.OutcomeStopped || by != tc.by {
+				t.Errorf("fix.factory_round = %s by %q, want stopped by %q", outcome, by, tc.by)
+			}
+			if r, raw := h.e.fixRefOf(h.ctx, h.pr(2).ID); r != nil {
+				t.Errorf("the PR keeps the fix: %s", raw)
+			}
+		})
+	}
+}
+
 // The factory raises the attention of a reviewed PR it fixes, silently (no
 // toast), with its why as the PR's message and kind fix, and lifts it while
 // it is still that one; it touches no PR magnum fixes.

@@ -111,6 +111,35 @@ func (e *Engine) fixRefAfterRound(ctx context.Context, job *roundJob, res pipeli
 	}
 }
 
+// factoryAbortBy is who stops the factory's re-review when the factory
+// aborts it (fix.factory_round's by).
+const factoryAbortBy = "the factory's abort"
+
+// endFixRef ends the factory's fix that pr's forced round re-reviews (its
+// kvPRFixRef row) when a stop or a close ends that round before it ran to
+// its end (stopPR, dropQueued): fix.factory_round names the fix with the
+// outcome (stopped, or closed) and who stopped it (by: `magnum abort`,
+// `magnum ignore`, the factory's abort, the PR's close), so the factory's
+// loop stops waiting for the round, and the row goes. A row that does not
+// read goes without an event; a PR with none is left alone.
+func (e *Engine) endFixRef(ctx context.Context, repo store.Repo, pr store.PR, outcome, by string) {
+	r, raw := e.fixRefOf(ctx, pr.ID)
+	if raw == "" {
+		return
+	}
+	if r != nil {
+		data := map[string]any{"fix_ref": r.FixRef, "outcome": outcome, "by": by}
+		if r.LocalRound != nil {
+			data["local_round"] = r.LocalRound
+		}
+		e.event(ctx, "info", prSubject(repo, pr.Number), "fix.factory_round", fmt.Sprintf("the re-review of the factory's push of %s (cycle %d) ended %s: %s",
+			textx.ShortSHA(r.FixRef.Head), r.FixRef.Cycle, outcome, by), data)
+	}
+	if _, err := e.st.DeleteKVIf(ctx, kvPRFixRef(pr.ID), raw); err != nil {
+		e.warnUnlessStopped(ctx, err, "drop the factory's fix of a stopped round", "pr", pr.ID)
+	}
+}
+
 // cmpOrOutcome is a round's outcome, error when it names none.
 func cmpOrOutcome(o string) string {
 	if o == "" {
@@ -175,10 +204,10 @@ func (e *Engine) requestFactoryAbort(ctx context.Context, id int64, repo store.R
 		return
 	}
 	if stale {
-		e.stopReserved(rctx, id, repo, pr, false)
+		e.stopReserved(rctx, id, repo, pr, false, true)
 		return
 	}
-	res, err := e.dropQueued(ctx, repo, pr)
+	res, err := e.dropQueued(ctx, repo, pr, factoryAbortBy)
 	e.unreserve(pr.ID)
 	cancel()
 	e.complete(ctx, id, err, res)

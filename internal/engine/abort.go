@@ -192,7 +192,7 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 		return
 	}
 	if queued && !ignore {
-		res, err := e.dropQueued(ctx, repo, pr)
+		res, err := e.dropQueued(ctx, repo, pr, "magnum abort")
 		if err == nil {
 			if note := e.endFixLoop(ctx, repo, pr, "magnum abort"); note != "" { // the loop's re-review taken back
 				res += "; " + note
@@ -203,20 +203,21 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 		e.complete(ctx, id, err, res)
 		return
 	}
-	e.stopReserved(rctx, id, repo, pr, ignore)
+	e.stopReserved(rctx, id, repo, pr, ignore, false)
 }
 
 // stopReserved stops pr, whose round's state stays without its round or
 // whose round paused mid-way, under the reservation the caller took for
 // the stop (rctx, its context): on a goroutine of its own, which drops the
 // reservation, stopPR stops it as a running round is, and the stop
-// request id (an ignore with ignore) hears the outcome (serveStop).
-func (e *Engine) stopReserved(rctx context.Context, id int64, repo store.Repo, pr store.PR, ignore bool) {
+// request id (an ignore with ignore; fix: the factory's abort) hears the
+// outcome (serveStop).
+func (e *Engine) stopReserved(rctx context.Context, id int64, repo store.Repo, pr store.PR, ignore, fix bool) {
 	verb := map[bool]string{false: "abort", true: "ignore"}[ignore]
 	e.mu.Lock()
 	e.inflight[id] = true
 	e.mu.Unlock()
-	orders := []stopOrder{{id: id, ignore: ignore}}
+	orders := []stopOrder{{id: id, ignore: ignore, fix: fix}}
 	e.roundWG.Go(func() {
 		defer e.unreserve(pr.ID)
 		e.safely(rctx, verb, prSubject(repo, pr.Number), func() { e.serveStop(rctx, pr.ID, orders, false) },
@@ -306,8 +307,10 @@ func (e *Engine) roundStops(prID int64) []stopOrder {
 // run, on-request roles), while its agents, sessions and slot are left as they
 // are: nothing started, and a person may be working in its panes. A --as
 // identity switch stays, as `magnum review --as` documents it for good. The
-// caller holds the PR's reservation, so no round claims it meanwhile.
-func (e *Engine) dropQueued(ctx context.Context, repo store.Repo, pr store.PR) (string, error) {
+// caller holds the PR's reservation, so no round claims it meanwhile; by
+// is who takes it back, which fix.factory_round names when the review was
+// the factory's re-review of its fix (endFixRef).
+func (e *Engine) dropQueued(ctx context.Context, repo store.Repo, pr store.PR, by string) (string, error) {
 	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
 	to, err := e.settleStopped(ctx, pr, false)
 	if err != nil {
@@ -316,7 +319,8 @@ func (e *Engine) dropQueued(ctx context.Context, repo store.Repo, pr store.PR) (
 	if to == "" {
 		return "", fmt.Errorf("%s moved on meanwhile; `magnum status %s` says where it is", label, label)
 	}
-	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRFreshParkBusy(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID), KVPRWait(pr.ID), kvPRFixRef(pr.ID))
+	e.endFixRef(ctx, repo, pr, pipeline.OutcomeStopped, by) // fix_factory.go
+	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRFreshParkBusy(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID), KVPRWait(pr.ID))
 	e.clearRequested(ctx, pr.ID)
 	what := "queued review"
 	if pr.Forced {
@@ -350,7 +354,7 @@ func (e *Engine) afterRound(ctx context.Context, prID int64) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), abortTimeout)
 	defer cancel()
 	if len(orders) == 0 {
-		_, _ = e.stopPR(ctx, prID, false, true, closed) // its round.stopped event says what happened
+		_, _ = e.stopPR(ctx, prID, false, false, true, closed) // its round.stopped event says what happened
 		return
 	}
 	e.serveStop(ctx, prID, orders, true)
@@ -359,7 +363,8 @@ func (e *Engine) afterRound(ctx context.Context, prID int64) {
 // serveStop stops the PR for orders and completes them with the outcome.
 func (e *Engine) serveStop(ctx context.Context, prID int64, orders []stopOrder, roundRan bool) {
 	ignore := slices.ContainsFunc(orders, func(o stopOrder) bool { return o.ignore })
-	res, err := e.stopPR(ctx, prID, ignore, roundRan, nil)
+	factory := !slices.ContainsFunc(orders, func(o stopOrder) bool { return !o.fix }) // the factory's abort alone
+	res, err := e.stopPR(ctx, prID, ignore, factory, roundRan, nil)
 	if ctx.Err() != nil && !roundRan {
 		// Daemon shutdown: the requests stay pending for the next start.
 		e.mu.Lock()
@@ -388,10 +393,12 @@ func (e *Engine) serveStop(ctx context.Context, prID int64, orders []stopOrder, 
 // stopped its round (stopClosedRound): the PR stays closed, the runs carry
 // the close, a pool slot is released as merged or closed (cleanup's
 // reasons) and the event is round.stopped with the outcome closed, not
-// pr.aborted. The caller holds the PR's reservation. The result says what
-// happened; the error is set when a step left something behind (the steps
-// after it still ran).
-func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool, closed *closeStop) (string, error) {
+// pr.aborted. factory: the factory's abort of its own re-review alone asked
+// for the stop, which the round's fix.factory_round names (endFixRef). The
+// caller holds the PR's reservation. The result says what happened; the
+// error is set when a step left something behind (the steps after it still
+// ran).
+func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, factory, roundRan bool, closed *closeStop) (string, error) {
 	pr, err := e.st.PRByID(ctx, prID)
 	if err != nil {
 		return "", err
@@ -459,8 +466,16 @@ func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool, 
 	if stoppedCompletion != "" {
 		done = append(done, stoppedCompletion)
 	}
+	fixOutcome, fixBy := pipeline.OutcomeStopped, by
+	switch {
+	case closed != nil:
+		fixOutcome = pipeline.OutcomeClosed
+	case factory:
+		fixBy = factoryAbortBy
+	}
+	e.endFixRef(ctx, repo, pr, fixOutcome, fixBy) // fix_factory.go: the factory's re-review this round was
 	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRFreshParkBusy(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID),
-		kvPRGateReason(pr.ID), KVPRWait(pr.ID), kvPRFixRef(pr.ID))
+		kvPRGateReason(pr.ID), KVPRWait(pr.ID))
 	e.clearRequested(ctx, pr.ID)
 	if note := e.endFixLoop(ctx, repo, pr, by); note != "" {
 		done = append(done, note) // the loop whose re-review this was
