@@ -12,6 +12,38 @@ import (
 const finishAsk = "End PR-12393's local review: round 4 of its local review runs: it finishes, then no round starts after it. " +
 	"A safe stop goes to the ready card; any other waits on you?"
 
+// finishAskLong is S's y/N as the factory words a round in flight, the
+// request asked already: about 390 characters, past the card's three lines.
+const finishAskLong = "End PR-27708's local review: round 15 of its local review runs: it finishes, then no round starts after it. " +
+	"A safe stop (no P0 or P1, a verdict that does not block, no finding declined in its loop, no product question open) goes to " +
+	"the ready card with its open findings under KNOWN, the card saying the review was ended by you; any other waits on you " +
+	"(you asked already, at Nov 13 14:05)?"
+
+// S's y/N wraps on the task card, as P's merge and E's deploy do, since y
+// answers all it names: at 100 columns its unsafe stop's words and "you
+// asked already" show before y, never cut at the card's three lines.
+func TestTheFinishKeysQuestionShowsWholeOnTheCard(t *testing.T) {
+	h := testFactory(t, 100, 40)
+	h.src.change(func(d *FactoryData) {
+		c := d.Cards[5]
+		c.Task = fixtureRetryCard()
+		c.Task.Retry, c.Task.FinishReview = false, finishAskLong
+		d.Cards[5] = c
+	})
+	h.press("ctrl+r")
+	h.open("PR-12330")
+	h.press("S")
+	v := cardSquash(h.view())
+	for _, want := range []string{"any other waits on you", "(you asked already, at Nov 13 14:05)? y/N"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("the card's question lacks %q:\n%s", want, h.view())
+		}
+	}
+	if h.act.calls() != 0 {
+		t.Fatal("S ran something before y")
+	}
+}
+
 // The task card's S ends the task's local review behind the y/N that says
 // what happens (the card's FinishReview, as `magnum factory finish-review`
 // asks it): only y sends it. The hints, the menu and the help offer it;
