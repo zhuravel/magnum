@@ -182,6 +182,8 @@ func (e *Engine) handleRequest(ctx context.Context, q registry.Request) {
 		respond(e, ctx, q, e.rateTask)
 	case ReqTalk:
 		e.talkRequest(ctx, q)
+	case ReqFix, ReqFixOff, ReqFixOn, ReqFixDone, ReqFixDecide, ReqFixCI, ReqMergeParent, ReqFixStop, ReqHandoff:
+		e.prRequest(ctx, q) // fix_requests.go
 	default:
 		e.complete(ctx, q, fmt.Errorf("unknown request kind %q", q.Kind), "")
 	}
@@ -219,7 +221,7 @@ func decode(q registry.Request, v any) error {
 // wordsKinds are the requests that carry your words (a preview's draft, a
 // start's text, an answer, a decision's note): their payload is emptied
 // once answered, since only the inputs table keeps your words, scrubbed.
-var wordsKinds = []string{ReqPreview, ReqStart, ReqAnswer, ReqDecide}
+var wordsKinds = []string{ReqPreview, ReqStart, ReqAnswer, ReqDecide, ReqFixDecide}
 
 // complete marks q done with result, or failed with err's text, its secrets
 // masked (scrub.Secrets: the answer the CLI and the screen show you keeps

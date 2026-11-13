@@ -299,6 +299,11 @@ type Deps struct {
 	// [[factory.repo]] has staging entries); nil reads none, and no row has
 	// staging cells.
 	Staging Staging
+	// PRWork is the work behind the factory's PR requests (fix_requests.go:
+	// a fix, its switches, a CI fix, a merge of the parent, a stop, a
+	// hand-off), the fix lane's; nil answers each that this build does not
+	// fix PRs yet. While [factory] fix is off no request reaches it.
+	PRWork PRWorker
 	// Build is the build the daemon runs (engine.Build.Label), which
 	// work.json names for the CLI's status; Boot reads the Mac's boot at the
 	// start (engine.ReadBoot), which ends a drain for a reboot begun on

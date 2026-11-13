@@ -14297,6 +14297,29 @@ const (
     drain`'s.
 
 const (
+	// ReqFix starts a fix loop on your PR (FixPayload).
+	ReqFix = "fix"
+	// ReqFixOff takes your PR out of the factory's fixes, ReqFixOn puts it
+	// back (FixSwitchPayload).
+	ReqFixOff = "fix_off"
+	ReqFixOn  = "fix_on"
+	// ReqFixDone says you did what a fix loop left you (FixDonePayload).
+	ReqFixDone = "fix_done"
+	// ReqFixDecide posts your replies in the threads the fixer left you,
+	// then starts the loop that builds them (FixDecidePayload).
+	ReqFixDecide = "fix_decide"
+	// ReqFixCI fixes your PR's failed required CI (FixCIPayload).
+	ReqFixCI = "fix_ci"
+	// ReqMergeParent merges your PR's parent into it (MergeParentPayload).
+	ReqMergeParent = "merge_parent"
+	// ReqFixStop stops the fix loop on your PR (FixStopPayload).
+	ReqFixStop = "fix_stop"
+	// ReqHandoff hands your PR to its reviewer (HandoffPayload).
+	ReqHandoff = "handoff"
+)
+    The factory's PR request kinds (FixKinds).
+
+const (
 	HoldInfra  = "infra"
 	HoldHerdr  = "herdr"
 	HoldDisk   = "disk"
@@ -14457,6 +14480,9 @@ var ErrDenied = errors.New("denied")
 var ErrHeld = errors.New("held")
     ErrHeld marks a launch or an effect that the engine held back: the daemon
     drains, or a hold of the machine is on. It costs the task nothing.
+
+var FixKinds = []string{ReqFix, ReqFixOff, ReqFixOn, ReqFixDone, ReqFixDecide, ReqFixCI, ReqMergeParent, ReqFixStop, ReqHandoff}
+    FixKinds are the factory's PR request kinds.
 
 var ReproductionOptions = []string{"give a hint", "take the other cause", "try Docker or a staging", "drop"}
     ReproductionOptions are the options of the question a bug that did not
@@ -14921,6 +14947,11 @@ type Deps struct {
 	// [[factory.repo]] has staging entries); nil reads none, and no row has
 	// staging cells.
 	Staging Staging
+	// PRWork is the work behind the factory's PR requests (fix_requests.go:
+	// a fix, its switches, a CI fix, a merge of the parent, a stop, a
+	// hand-off), the fix lane's; nil answers each that this build does not
+	// fix PRs yet. While [factory] fix is off no request reaches it.
+	PRWork PRWorker
 	// Build is the build the daemon runs (engine.Build.Label), which
 	// work.json names for the CLI's status; Boot reads the Mac's boot at the
 	// start (engine.ReadBoot), which ends a drain for a reboot begun on
@@ -15037,6 +15068,60 @@ type ErrRunning struct {
 func (e ErrRunning) Error() string
     Error implements error.
 
+type FixAsked struct {
+	Head      string    `json:"head"`
+	Base      string    `json:"base,omitempty"`
+	Tip       string    `json:"tip,omitempty"`
+	Conflicts int       `json:"conflicts,omitempty"`
+	Merge     string    `json:"merge,omitempty"`
+	Entries   []string  `json:"entries,omitempty"`
+	Count     int       `json:"count,omitempty"`
+	Assignee  string    `json:"assignee,omitempty"`
+	At        time.Time `json:"at"`
+}
+    FixAsked is what the y/N of a PR request's plan asked about, which the
+    request it confirms is bound to: the PR's head and when the factory planned
+    it, and by kind the parent (Base: the PR's base branch), the tip of it the
+    plan read, how many files its merge conflicts in and the merge the factory
+    holds for your y (Merge) of a merge of the parent, the failed required
+    entries and the count of the CI fix (Count: the n of "CI fix n of 3") of a
+    CI fix, and the login the PR goes to (Assignee) of a hand-off.
+
+type FixCIPayload struct {
+	PRRef
+	DryRun  bool      `json:",omitempty"`
+	Asked   *FixAsked `json:",omitempty"`
+	Surface string    `json:",omitempty"`
+}
+    FixCIPayload is a ReqFixCI: fix the PR's failed required CI, answer its
+    plan (DryRun), or fix it bound to the plan its y/N asked about (Asked; nil:
+    nothing was asked, as `--yes`).
+
+type FixDecidePayload struct {
+	PRRef
+	Decide  []FixDecision
+	Surface string `json:",omitempty"`
+}
+    FixDecidePayload is a ReqFixDecide: your replies (Decide) in the threads
+    the fixer left you on the PR, posted as you, then the loop that builds them.
+    Your words: the payload goes once the request is answered.
+
+type FixDecision struct {
+	Thread int64
+	Reply  string
+}
+    FixDecision is one reply of yours: the thread (its first comment's id) and
+    what you reply there.
+
+type FixDonePayload struct {
+	PRRef
+	Seen    string
+	Surface string `json:",omitempty"`
+}
+    FixDonePayload is a ReqFixDone: you did what a fix loop left you on the PR,
+    and Seen is the digest of what the screen showed you it left (one that
+    changed since is refused, by the worker).
+
 type FixLoops struct {
 	ByHand, ByAutofix int
 	Pushes, Commits   int
@@ -15044,6 +15129,28 @@ type FixLoops struct {
     FixLoops counts the fix loops magnum started on a PR: by hand (`magnum fix`,
     f on the board) and by autofix; and the fixers' pushes on it (fix.pushed)
     and the commits they pushed.
+
+type FixPayload struct {
+	PRRef
+	DryRun  bool   `json:",omitempty"`
+	Surface string `json:",omitempty"`
+}
+    FixPayload is a ReqFix: start a fix loop on the PR (PRRef), or answer what
+    it would do (DryRun). Surface is where you asked (the screen, the CLI).
+
+type FixPlan struct {
+	Ref   string   `json:"ref"`
+	Kind  string   `json:"kind"`
+	Asked FixAsked `json:"asked"`
+	Text  string   `json:"text"`
+}
+    FixPlan is the factory's answer to a dry run of a PR request: the PR
+    (owner/name#N), the request's kind, what its y/N asks about and the plan in
+    words (Text, the answer's last line).
+
+func ParseFixPlan(result string) (FixPlan, bool)
+    ParseFixPlan reads the answer to a dry run of a PR request (its first line);
+    false when it is none (a refusal's words).
 
 type FixRecord struct {
 	Loops, Cycle, Pushes, Threads int
@@ -15057,6 +15164,19 @@ type FixRecord struct {
     starts and ends left the PR to you (fix.needs_you, fix.capped, fix.failed)
     rather than ending it (fix.done, fix.ended, fix.stopped) or starting a
     cycle. Counts only, never an event's text.
+
+type FixStopPayload struct {
+	PRRef
+	Surface string `json:",omitempty"`
+}
+    FixStopPayload is a ReqFixStop: stop the fix loop on the PR.
+
+type FixSwitchPayload struct {
+	PRRef
+	Surface string `json:",omitempty"`
+}
+    FixSwitchPayload is a ReqFixOff or a ReqFixOn: take the PR out of the
+    factory's fixes, or put it back. Neither starts a loop.
 
 type Flags struct {
 	Migrations                         []MigrationFlag
@@ -15111,6 +15231,16 @@ type GitHub interface {
 func NewGitHub(cfg *config.Config, run execx.Runner) GitHub
     NewGitHub is the factory's GitHub over run: gh as your gh identity for each
     repository, the one its local review runs as.
+
+type HandoffPayload struct {
+	PRRef
+	DryRun  bool      `json:",omitempty"`
+	Asked   *FixAsked `json:",omitempty"`
+	Surface string    `json:",omitempty"`
+}
+    HandoffPayload is a ReqHandoff: hand the PR to its reviewer, answer the
+    brief and who it goes to (DryRun), or assign it bound to what its y/N asked
+    about (Asked, which a hand-off needs: it assigns a person).
 
 type Hold struct {
 	Kind, Reason string
@@ -15234,6 +15364,17 @@ type MergeMethods struct{ Merge, Squash, Rebase bool }
 func (m MergeMethods) String() string
     String is the methods m allows, as a prompt names them: "squash", "merge
     commit or squash", "merge commit, squash or rebase"; "" for none.
+
+type MergeParentPayload struct {
+	PRRef
+	DryRun  bool      `json:",omitempty"`
+	Asked   *FixAsked `json:",omitempty"`
+	Surface string    `json:",omitempty"`
+}
+    MergeParentPayload is a ReqMergeParent: merge the PR's parent into it (a
+    merge the factory holds for your y is pushed: Asked.Merge names it), answer
+    its plan (DryRun), or merge bound to the plan its y/N asked about (Asked;
+    nil: nothing was asked, as `--yes`, which never pushes a held merge).
 
 type MigrationFlag struct {
 	Path                                   string
@@ -15420,6 +15561,24 @@ type PRView struct {
 	Draft                      bool
 }
     PRView is a pull request as the factory reads it back after it opened it.
+
+type PRWorker interface {
+	Plan(ctx context.Context, kind string, pr PRRef) (FixPlan, error)
+	Fix(ctx context.Context, p FixPayload) (string, error)
+	SwitchFix(ctx context.Context, p FixSwitchPayload, off bool) (string, error)
+	FixDone(ctx context.Context, p FixDonePayload) (string, error)
+	FixDecide(ctx context.Context, p FixDecidePayload) (string, error)
+	FixCI(ctx context.Context, p FixCIPayload) (string, error)
+	MergeParent(ctx context.Context, p MergeParentPayload) (string, error)
+	StopFix(ctx context.Context, p FixStopPayload) (string, error)
+	Handoff(ctx context.Context, p HandoffPayload) (string, error)
+}
+    PRWorker is the work behind the factory's PR requests, which the fix
+    lane fills. The request's checks, factory fix and a bound y's check ran
+    before any call. Plan answers what a request of kind (ReqFix, ReqFixCI,
+    ReqMergeParent or ReqHandoff) would do on pr now: its words and what its
+    y/N asks about; the factory checks a bound y against it. The others do their
+    request and answer in words; an error is a refusal, its text your answer.
 
 type Pause struct {
 	Generation int64     `json:"generation"`
