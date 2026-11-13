@@ -386,6 +386,9 @@ func (h *harness) mise(c execx.Cmd) (execx.Result, error) {
 		writeFile(h.t, filepath.Join(mc.Dir, "tmp", ".worktree-db-slug"), slug)
 		h.my.add(strings.ReplaceAll(h.schemaVersionAt(mc.Dir), "_", ""), h.pool.DBNames(slug)...)
 		return execx.Result{Stdout: []byte("setup ok token ghp_abcdefghijklmnopqrstuvwxyz0123456789\n")}, nil
+	case strings.HasPrefix(mc.Script, "touch "): // a setup that writes a file of its own
+		writeFile(h.t, filepath.Join(mc.Dir, strings.TrimPrefix(mc.Script, "touch ")), "written by setup\n")
+		return execx.Result{}, nil
 	case mc.Script == "bin/worktree-archive":
 		h.my.remove(h.pool.DBNames(slot)[0]) // leaves the test db behind on purpose
 		return execx.Result{}, nil

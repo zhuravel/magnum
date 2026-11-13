@@ -510,7 +510,9 @@ func (m *Manager) noteDiscard(ctx context.Context, sl store.Slot, untracked bool
 		if err != nil {
 			return false, err
 		}
-		msg += s.note()
+		if s.dir != "" {
+			msg += s.note()
+		}
 	}
 	m.event(ctx, "slot:"+sl.Name, "info", "slot.discarded", msg)
 	return true, nil

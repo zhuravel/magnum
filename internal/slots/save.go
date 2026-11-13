@@ -10,12 +10,15 @@ package slots
 //     (gitx.DiffHeadWrite), which `git apply` puts back on a checkout at that
 //     HEAD;
 //   - untracked/, for a removal alone, each untracked file git does not
-//     ignore at its path, but the local mise file magnum rendered: a
-//     switch, a reset and an abort keep them;
+//     ignore at its path (a symlink as the link, never what it points to),
+//     but the files magnum wrote (ownFiles: the local mise file it
+//     rendered, the copy_files, what setup wrote): a switch, a reset and an
+//     abort keep them;
 //   - saved.txt: what was saved, from where and before what, how to put it
 //     back, the untracked files a switch keeps in the tree, and what the
 //     save left out: past its cap (SaveCap, over the patch and the files
-//     together), no regular file, or a file it could not read or write.
+//     together), no regular file or symlink, or a file it could not read
+//     or write.
 //
 // Ignored files are never saved: a work tree's caches, logs and builds,
 // which a discard keeps anyway, but for a removal's.
@@ -134,8 +137,11 @@ func clipNames(names []string) string {
 // and with untracked (a removal, which deletes them) the untracked files
 // git does not ignore, within the cap (saveCap); without it saved.txt only
 // names those files, which the step keeps. A file that cannot be copied is
-// left out and named, never a failure. A save that fails (its folder, the
-// patch, the listing of the untracked files, saved.txt) leaves nothing
+// left out and named, never a failure. The files magnum wrote into the
+// tree (the mise file it rendered, the copy_files and what setup wrote:
+// ownFiles) are neither saved nor named, and a save that would hold
+// nothing else is not kept (s.dir is ""). A save that fails (its folder,
+// the patch, the listing of the untracked files, saved.txt) leaves nothing
 // behind, and the step that called it discards nothing.
 func (m *Manager) saveChanges(ctx context.Context, sl store.Slot, ch changes, untracked bool, what string) (s saved, err error) {
 	folder, err := m.savesFolder(ctx, sl)
@@ -163,23 +169,38 @@ func (m *Manager) saveChanges(ctx context.Context, sl store.Slot, ch changes, un
 		}
 		budget -= used
 	}
+	own := m.ownFiles(ctx, sl)
 	if !untracked {
-		s.kept = withoutRenderedMiseLocal(sl.Path, slices.Clone(ch.untracked))
-		return s, s.writeNote(sl, head, what, m.saveCapOr(), m.now())
+		s.kept = withoutOwn(withoutRenderedMiseLocal(sl.Path, slices.Clone(ch.untracked)), own)
+	} else if err := m.saveRemoved(ctx, sl, own, budget, &s); err != nil {
+		return s, err
 	}
+	if s.empty() { // magnum's own files alone: nothing of a person's to keep
+		return saved{}, os.RemoveAll(s.dir)
+	}
+	return s, s.writeNote(sl, head, what, m.saveCapOr(), m.now())
+}
+
+// saveRemoved saves the untracked files of slot sl that a removal deletes
+// (UntrackedFiles, one by one), but the files magnum wrote (the rendered
+// mise file, own), within budget, into s. A listing past the runner's
+// output saves none and says so; any other failure to list is an error.
+func (m *Manager) saveRemoved(ctx context.Context, sl store.Slot, own []string, budget int64, s *saved) error {
 	files, err := m.git.UntrackedFiles(ctx, sl.Path)
 	if errors.Is(err, gitx.ErrTreeTooLarge) {
 		// Their names alone pass the runner's output: far past the cap.
 		s.skipped = append(s.skipped, "every untracked file (git lists more than "+sizeWord(execx.MaxOutput)+" of their names)")
-		files, err = nil, nil
+		return nil
 	}
 	if err != nil {
-		return s, err
+		return err
 	}
-	if err := saveUntracked(sl.Path, s.dir, withoutRenderedMiseLocal(sl.Path, files), budget, &s); err != nil {
-		return s, err
-	}
-	return s, s.writeNote(sl, head, what, m.saveCapOr(), m.now())
+	return saveUntracked(sl.Path, s.dir, withoutOwn(withoutRenderedMiseLocal(sl.Path, files), own), budget, s)
+}
+
+// empty reports whether the save holds nothing and names nothing.
+func (s saved) empty() bool {
+	return s.tracked == 0 && s.untracked == 0 && len(s.skipped) == 0 && len(s.kept) == 0
 }
 
 // saveCapOr is the cap of a save: saveCap, a test's smaller one, else
@@ -357,12 +378,12 @@ func appendFile(out *os.File, name string) error {
 
 // saveUntracked saves the untracked files of the tree at tree (files, git's
 // listing of those it does not ignore) under the save's untracked/, each a
-// regular file read through an os.Root of the tree and written private, at
-// most budget bytes together; the others are named in s: a file past what
-// is left, a symlink with its target, a repository inside the tree, any
-// other file that is no regular file, and a file it could not read or
-// write (unreadable, gone, a name the save's folder refuses), with the
-// error. untracked/ is made at the first file saved, so a save that copies
+// regular file read through an os.Root of the tree and written private,
+// or a symlink saved as the link, at most budget bytes together; the
+// others are named in s: a file past what is left, a repository inside the
+// tree, any other file that is no regular file, and a file it could not
+// read or write (unreadable, gone, a name the save's folder refuses), with
+// the error. untracked/ is made at the first file saved, so a save that copies
 // none has no such folder. Only that folder failing is an error.
 func saveUntracked(tree, dir string, files []string, budget int64, s *saved) error {
 	if len(files) == 0 {
@@ -435,11 +456,7 @@ func (u *untrackedSave) save(f string) (string, error) {
 	case err != nil:
 		return "cannot be read: " + errText(err), nil
 	case fi.Mode()&fs.ModeSymlink != 0:
-		target, err := u.src.Readlink(f)
-		if err != nil {
-			return "cannot be read: " + errText(err), nil
-		}
-		return "a symlink to " + target, nil
+		return u.link(f)
 	case !fi.Mode().IsRegular():
 		return "not a regular file", nil
 	case fi.Size() > u.budget:
@@ -471,6 +488,35 @@ func (u *untrackedSave) save(f string) (string, error) {
 		return "cannot be written: " + errText(err), nil
 	}
 	u.budget -= int64(len(b))
+	return "", nil
+}
+
+// link saves symlink f as a symlink to the same target, never what it
+// points to (a link to a folder of keys copies no key), its target's
+// length taken from the budget; or says why it does not, as save does.
+func (u *untrackedSave) link(f string) (string, error) {
+	target, err := u.src.Readlink(f)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "gone before the save", nil
+	case err != nil:
+		return "cannot be read: " + errText(err), nil
+	case int64(len(target)) > u.budget:
+		return "a symlink to " + target + ", past the cap", nil
+	}
+	dst, err := u.folder()
+	if err != nil {
+		return "", err
+	}
+	if d := path.Dir(f); d != "." {
+		if err := dst.MkdirAll(d, 0o700); err != nil {
+			return "cannot be written: " + errText(err), nil
+		}
+	}
+	if err := dst.Symlink(target, f); err != nil {
+		return "cannot be written: " + errText(err), nil
+	}
+	u.budget -= int64(len(target))
 	return "", nil
 }
 
@@ -552,7 +598,7 @@ func (s saved) writeNote(sl store.Slot, head, what string, limit int64, now time
 		}
 	}
 	if len(s.skipped) > 0 {
-		fmt.Fprintf(&b, "\nLeft out (a save keeps %s at most, and only regular files it can read and write; files git ignores are never saved):\n",
+		fmt.Fprintf(&b, "\nLeft out (a save keeps %s at most, only regular files and symlinks it can read and write, and never a file git ignores or magnum wrote):\n",
 			sizeWord(limit))
 		for _, p := range s.skipped {
 			b.WriteString("- " + p + "\n")

@@ -391,8 +391,9 @@ func (m *Manager) runHooks(ctx context.Context, sl store.Slot, p PerPRPlan, hook
 // copy_files that exist (p.Copy, the [[repo]]'s), from sl.MainClone into
 // sl.Path, at the worktree's creation and at each round's
 // checkout (render_mise), every write confined to the worktree
-// (WriteCheckoutFile). Without a local mise file in the main clone nothing
-// is rendered.
+// (WriteCheckoutFile), and adds those copy_files to the worktree's record
+// of the files magnum wrote, which a removal never saves (recordOwnFiles).
+// Without a local mise file in the main clone nothing is rendered.
 func (m *Manager) PreparePerPR(ctx context.Context, sl store.Slot, p PerPRPlan) error {
 	name := MiseLocalName(sl.MainClone)
 	src, err := os.ReadFile(filepath.Join(sl.MainClone, name))
@@ -417,7 +418,11 @@ func (m *Manager) PreparePerPR(ctx context.Context, sl store.Slot, p PerPRPlan) 
 			}
 		}
 	}
-	return copyIntoCheckout(sl.MainClone, sl.Path, p.Copy)
+	if err := copyIntoCheckout(sl.MainClone, sl.Path, p.Copy); err != nil {
+		return err
+	}
+	m.recordOwnFiles(ctx, sl, copiedFiles(sl.MainClone, p.Copy), false) // a removal saves none of them
+	return nil
 }
 
 // perPRDBSlug is the database slug a per-PR worktree's setup used: the

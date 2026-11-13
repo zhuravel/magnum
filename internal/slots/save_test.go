@@ -2,6 +2,7 @@ package slots
 
 import (
 	"bytes"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/store"
@@ -190,8 +192,8 @@ func TestThePatchPastTheCapGoesPathByPath(t *testing.T) {
 
 // A removal saves the untracked files it deletes within what the cap
 // leaves, and names the rest in the event and in saved.txt: a file past
-// what is left is skipped with its size, a symlink is named with its
-// target. Ignored files are never saved, nor named.
+// what is left is skipped with its size; a symlink is saved as the link.
+// Ignored files are never saved, nor named.
 func TestARemovalSavesTheUntrackedFilesWithinTheCap(t *testing.T) {
 	f := newPerPR(t, true)
 	h := f.h
@@ -218,17 +220,18 @@ func TestARemovalSavesTheUntrackedFilesWithinTheCap(t *testing.T) {
 	if got := readFile(t, filepath.Join(save, "untracked", "small.txt")); got != "small\n" {
 		t.Fatalf("small.txt saved = %q", got)
 	}
-	for _, p := range []string{"large.txt", "link", filepath.Join("tmp", "huge.log")} {
+	for _, p := range []string{"large.txt", filepath.Join("tmp", "huge.log")} {
 		if _, err := os.Lstat(filepath.Join(save, "untracked", p)); !os.IsNotExist(err) {
 			t.Fatalf("%s saved: %v", p, err)
 		}
 	}
+	if target, err := os.Readlink(filepath.Join(save, "untracked", "link")); err != nil || target != "/etc/hosts" {
+		t.Fatalf("the symlink saved: %q, %v; want the link itself", target, err)
+	}
 	note := readFile(t, filepath.Join(save, "saved.txt"))
 	ev := h.discarded(t, sl.Name)[0].Message
-	for _, want := range []string{"large.txt", "link", "/etc/hosts"} {
-		if !strings.Contains(note, want) || !strings.Contains(ev, want) {
-			t.Fatalf("saved.txt or the event does not name %q as skipped:\n%s\n%s", want, note, ev)
-		}
+	if !strings.Contains(note, "large.txt (") || !strings.Contains(ev, "large.txt") {
+		t.Fatalf("saved.txt or the event does not name large.txt as skipped:\n%s\n%s", note, ev)
 	}
 	if strings.Contains(note, "huge.log") || strings.Contains(ev, "huge.log") {
 		t.Fatalf("an ignored file is named:\n%s\n%s", note, ev)
@@ -436,6 +439,7 @@ func TestAWholePatchOfNoBytesWritesNoChangesDiff(t *testing.T) {
 	h := newHarness(t)
 	sl, pr := h.claimedCheckout(8, h.shaPR8)
 	strayEdit(t, sl.Path)
+	writeFile(t, filepath.Join(sl.Path, "notes.txt"), "kept\n") // saved.txt names it: the save is kept
 	h.fake.Rules = append(h.fake.Rules, execx.Rule{Prefix: []string{"git"}})
 	h.run.fakeGit = func(c execx.Cmd) bool { return slices.Contains(c.Args, "--binary") }
 
@@ -516,6 +520,84 @@ func TestASaveLeavesOutOnlyTheMiseFileMagnumRendered(t *testing.T) {
 		save := f.h.onlySave(t, folder(f), sl.Name)
 		if got := readFile(t, filepath.Join(save, "untracked", MiseLocal)); got != "[env]\nMINE = \"1\"\n" {
 			t.Fatalf("the person's %s saved = %q", MiseLocal, got)
+		}
+	})
+}
+
+// A removal never saves the files magnum wrote into the worktree, as it
+// never saves the mise file it rendered: the [[repo]] copy_files (a file,
+// and a folder's files), which hold the main clone's secrets, and what the
+// setup wrote; a removal whose only untracked files they are makes no
+// save. A symlink is saved as the link, never what it points to, so a link
+// to a folder of keys copies no key into the saves.
+func TestARemovalSavesNothingMagnumWroteAndASymlinkAsTheLink(t *testing.T) {
+	setup := func(t *testing.T) (*perPRFixture, store.Slot) {
+		f := newPerPR(t, true)
+		h := f.h
+		writeFile(t, filepath.Join(f.main, "master.key"), "main clone secret\n")
+		writeFile(t, filepath.Join(f.main, "fixtures", "a.json"), "{}\n")
+		h.m = h.newManager(Deps{Repos: []config.Repo{{Repo: f.repoName(),
+			CopyFiles: []string{"master.key", "fixtures"}, Setup: []string{"touch .env.setup"}}}})
+		sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, f.repoName(), f.pr, f.sha7)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range []string{"master.key", filepath.Join("fixtures", "a.json"), ".env.setup"} {
+			if !fsx.Exists(filepath.Join(sl.Path, p)) {
+				t.Fatalf("the worktree's setup did not write %s", p)
+			}
+		}
+		return f, sl
+	}
+	folder := func(f *perPRFixture) string { return f.h.layout.PRSaves("zhuravel", "widget", f.pr.Number) }
+
+	t.Run("a removal saves a person's files alone", func(t *testing.T) {
+		f, sl := setup(t)
+		keys := filepath.Join(f.h.root, "keys")
+		writeFile(t, filepath.Join(keys, "id_ed25519"), "a key\n")
+		if err := os.Symlink(keys, filepath.Join(sl.Path, "keys")); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(sl.Path, "notes.txt"), "mine\n")
+		if err := f.h.m.RemovePRWorktree(f.h.ctx, sl, false); err != nil {
+			t.Fatalf("RemovePRWorktree: %v", err)
+		}
+		save := f.h.onlySave(t, folder(f), sl.Name)
+		if got := readFile(t, filepath.Join(save, "untracked", "notes.txt")); got != "mine\n" {
+			t.Fatalf("notes.txt saved = %q", got)
+		}
+		for _, p := range []string{"master.key", "fixtures", ".env.setup"} {
+			if _, err := os.Lstat(filepath.Join(save, "untracked", p)); !os.IsNotExist(err) {
+				t.Fatalf("%s saved: %v", p, err)
+			}
+		}
+		if target, err := os.Readlink(filepath.Join(save, "untracked", "keys")); err != nil || target != keys {
+			t.Fatalf("the symlink saved: %q, %v; want the link to %s", target, err, keys)
+		}
+		var files []string // WalkDir follows no link
+		if err := filepath.WalkDir(save, func(p string, d fs.DirEntry, err error) error {
+			if err == nil && d.Type().IsRegular() {
+				files = append(files, filepath.Base(p))
+			}
+			return err
+		}); err != nil || !slices.Equal(files, []string{"saved.txt", "notes.txt"}) {
+			t.Fatalf("the save's files = %q, %v; want saved.txt and notes.txt alone, no key", files, err)
+		}
+		note := readFile(t, filepath.Join(save, "saved.txt"))
+		if strings.Contains(note, "master.key") || strings.Contains(note, ".env.setup") {
+			t.Fatalf("saved.txt names magnum's own files:\n%s", note)
+		}
+	})
+	t.Run("a removal of magnum's files alone makes no save", func(t *testing.T) {
+		f, sl := setup(t)
+		if err := f.h.m.RemovePRWorktree(f.h.ctx, sl, false); err != nil {
+			t.Fatalf("RemovePRWorktree: %v", err)
+		}
+		if got := saves(t, folder(f)); len(got) != 0 {
+			t.Fatalf("saves = %q, want none for magnum's own files", got)
+		}
+		if got := f.h.slot(sl.Name); got.State != store.SlotRemoved || fsx.Exists(sl.Path) {
+			t.Fatalf("state %s, directory left %v; want removed", got.State, fsx.Exists(sl.Path))
 		}
 	})
 }
