@@ -687,6 +687,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `TestAReadThatFailsForTheWholeProcessFailsTheSave` (a test's read function, `Manager.readTree`, returns the
     errors), `TestAForcedRemovalKeepsWhatItsFailedSaveCopied` (serial, the file size limited) and
     `TestAForcedRemovalWarnsBeforeGitDeletesAnything`.
+- **Save before discard, after the engine owner's fourth check** (2026-11-13, T3c's last round, on his check of
+  the third). It lands with T3c, and changes what the four entries above say where they differ.
+  - Only the first setup over a worktree the provisioning made records what it wrote (C1). The record that the
+    worktree_add step made the worktree (`slot.<id>.tree_added`) stood until the next worktree_add, so a setup run
+    again over it recorded what was new after it: a pool slot's failed setup, which leaves the slot provisioning
+    and is resumed with backoff, the normal way a pool setup is retried, and a per-PR or factory copy's setup cut
+    off and resumed. A person debugging the slot meanwhile had their new file recorded as Magnum's and deleted
+    unsaved at the removal. The setup now reads and deletes the record before it runs; a delete that fails counts
+    as a worktree kept (logged). So a setup run again records the copy_files alone, and a removal saves what it
+    wrote as a person's, the same cost as over a kept worktree. A provisioning that stopped after its
+    worktree_add and before any setup (a failed render) still has its record, for its first setup.
+    `TestAPoolSlotsRemovalSavesNothingMagnumWrote` now has both cases, and
+    `TestARepairOverAKeptPoolWorktreeRecordsOnlyTheCopiedFiles` checks the kept branch of the pool's worktree_add
+    (a repair after a failed render), which no test failed without.
 
 ## Scheduling
 

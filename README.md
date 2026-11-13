@@ -945,10 +945,11 @@ what it left out. A switch, a reset and an abort keep the untracked files, so th
 `saved.txt`; a removal deletes them, so its save copies them into `untracked/`, every untracked file git does not
 ignore at its path, with its owner's permission bits and a symlink as the link (never what it points to), but not
 the files Magnum wrote there: the local mise file it renders, the copy_files of the `[[repo]]` or the `[[pool]]`
-(of a copied folder, the files the main clone holds there; a file you add in it is yours), and what the setup
-wrote in a worktree its provisioning made, the untracked files there after it that were not before it
-(`cp -R <save>/untracked/. <slot>` puts them back). Over a worktree kept from an earlier attempt, what the setup
-wrote is saved as yours, since you may have written a file there while it ran. A copied file you edited since,
+(of a copied folder, the files the main clone holds there; a file you add in it is yours), and what the first
+setup over a worktree its provisioning made wrote, the untracked files there after it that were not before it
+(`cp -R <save>/untracked/. <slot>` puts them back). Over a worktree kept from an earlier attempt, and by a setup
+that runs again (a failed one resumed or retried, the way a pool slot's is), what the setup wrote is saved as
+yours, since you may have written a file there while it ran. A copied file you edited since,
 one that differs from the main clone's, is not saved either, but named "magnum's own, edited, not saved". A
 file the removal cannot read (a mode-000 file, one gone meanwhile) is left out and named with the reason, and the
 removal goes on; a write into the save that fails (a full disk, a quota, a name the save's folder refuses), or a

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -750,45 +751,155 @@ func TestASetupOverAKeptWorktreeRecordsOnlyTheCopiedFiles(t *testing.T) {
 	}
 }
 
-// A pool slot's removal saves nothing magnum wrote either: the pool's
-// copy_files, which each render copies from the main clone (a key among
-// them), and what the pool's setup wrote, by the same rule as a per-PR
-// worktree's setup (a setup that runs again over the slot's worktree
-// leaves a person's file there theirs). Only a per-PR worktree kept a
-// record, so a pool slot's removal copied the main clone's key and the
-// setup's files into the saves.
-func TestAPoolSlotsRemovalSavesNothingMagnumWrote(t *testing.T) {
+// savedUntracked is what save's untracked/ holds: each regular file's
+// content by its slash-separated path there.
+func savedUntracked(t *testing.T, save string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	dir := filepath.Join(save, "untracked")
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() {
+			return err
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err == nil {
+			out[filepath.ToSlash(rel)] = readFile(t, p)
+		}
+		return err
+	})
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// keyedPool is a harness whose pool copies the main clone's
+// config/master.key and whose setup writes .env.setup.
+func keyedPool(t *testing.T) *harness {
+	t.Helper()
 	h := newHarness(t)
 	writeFile(t, filepath.Join(h.main, "config", "master.key"), "main clone secret\n")
 	h.pool.CopyFiles = append(h.pool.CopyFiles, filepath.Join("config", "master.key"))
 	h.pool.Setup = append(h.pool.Setup, "touch .env.setup")
-	h.failScript["touch .env.setup"] = 1
-	if err := h.m.ProvisionPool(h.ctx, h.pool, 1); err == nil {
-		t.Fatal("ProvisionPool with a setup that fails: no error")
-	}
-	writeFile(t, filepath.Join(h.slot(h.pool.Slot(1)).Path, "notes.txt"), "mine\n")
-	sl := h.provisioned(1)
-	for _, p := range []string{filepath.Join("config", "master.key"), ".env.setup"} {
-		if !fsx.Exists(filepath.Join(sl.Path, p)) {
-			t.Fatalf("the provisioning did not write %s", p)
+	return h
+}
+
+// writtenDuringSetup has the pool's "touch .env.setup" write notes/<name>
+// first: a person at work in the slot while the setup runs.
+func (h *harness) writtenDuringSetup(t *testing.T, name string) {
+	t.Helper()
+	h.onScript = func(script, dir string) {
+		if script == "touch .env.setup" {
+			writeFile(t, filepath.Join(dir, "notes", name), "written while the setup ran\n")
 		}
 	}
+}
 
+// A pool slot's removal saves nothing magnum wrote either: the pool's
+// copy_files, which each render copies from the main clone (a key among
+// them), and what the first setup over the worktree its provisioning made
+// wrote, by the same rule as a per-PR worktree's setup. A setup run again
+// after it failed (the provisioning resumed, the normal retry of a pool
+// slot's setup) records the copy_files alone: a person at work in the slot
+// may write a file while it runs, so the removal saves that file and the
+// setup's own as a person's. Only a per-PR worktree kept a record, so a
+// pool slot's removal copied the main clone's key and the setup's files
+// into the saves; then the record that the provisioning made the worktree
+// stood past its first setup, and the setup run again recorded the
+// person's file as magnum's, which the removal deleted unsaved.
+func TestAPoolSlotsRemovalSavesNothingMagnumWrote(t *testing.T) {
+	t.Run("the first setup", func(t *testing.T) {
+		h := keyedPool(t)
+		sl := h.provisioned(1)
+		for _, p := range []string{filepath.Join("config", "master.key"), ".env.setup"} {
+			if !fsx.Exists(filepath.Join(sl.Path, p)) {
+				t.Fatalf("the provisioning did not write %s", p)
+			}
+		}
+		writeFile(t, filepath.Join(sl.Path, "notes.txt"), "mine\n")
+
+		if err := h.m.Remove(h.ctx, sl, h.pool, false); err != nil {
+			t.Fatalf("Remove: %v", err)
+		}
+		save := h.onlySave(t, h.layout.SlotSaves(sl.Name), sl.Name)
+		if got := savedUntracked(t, save); !maps.Equal(got, map[string]string{"notes.txt": "mine\n"}) {
+			t.Fatalf("the save's untracked files = %q; want the person's notes.txt alone", got)
+		}
+		if note := readFile(t, filepath.Join(save, "saved.txt")); strings.Contains(note, "master.key") || strings.Contains(note, ".env.setup") {
+			t.Fatalf("saved.txt names magnum's own files:\n%s", note)
+		}
+	})
+	t.Run("a setup run again after it failed", func(t *testing.T) {
+		h := keyedPool(t)
+		h.failScript["touch .env.setup"] = 1
+		if err := h.m.ProvisionPool(h.ctx, h.pool, 1); err == nil {
+			t.Fatal("ProvisionPool with a setup that fails: no error")
+		}
+		if got := h.slot(h.pool.Slot(1)); got.State != store.SlotProvisioning {
+			t.Fatalf("state = %s, want provisioning, to resume", got.State)
+		}
+		writeFile(t, filepath.Join(h.slot(h.pool.Slot(1)).Path, "notes.txt"), "mine\n")
+		h.writtenDuringSetup(t, "setup-debug.md")
+		sl := h.provisioned(1)
+
+		if err := h.m.Remove(h.ctx, sl, h.pool, false); err != nil {
+			t.Fatalf("Remove: %v", err)
+		}
+		save := h.onlySave(t, h.layout.SlotSaves(sl.Name), sl.Name)
+		want := map[string]string{
+			"notes.txt":            "mine\n",
+			"notes/setup-debug.md": "written while the setup ran\n",
+			".env.setup":           "written by setup\n",
+		}
+		if got := savedUntracked(t, save); !maps.Equal(got, want) {
+			t.Fatalf("the save's untracked files = %q; want %q, never the copied key", got, want)
+		}
+	})
+}
+
+// A repair over a pool slot's worktree that git still lists, kept from a
+// provisioning that stopped after it made the worktree (here at its
+// render), runs the setup over a worktree a person may be at work in: its
+// worktree_add step finds the worktree and records it kept, so the setup
+// records the copy_files alone, and the removal saves what the setup
+// wrote and a person's file written while it ran. The record that the
+// first provisioning made the worktree would stand, and the repair's setup
+// would record the person's file as magnum's, which the removal deletes
+// unsaved.
+func TestARepairOverAKeptPoolWorktreeRecordsOnlyTheCopiedFiles(t *testing.T) {
+	h := keyedPool(t)
+	trust := execx.Rule{Prefix: []string{"mise", "-C", h.pool.Path(1), "trust"}, Result: execx.Result{Code: 1, Stderr: []byte("boom\n")}}
+	h.fake.Rules = append([]execx.Rule{trust}, h.fake.Rules...)
+	if err := h.m.ProvisionPool(h.ctx, h.pool, 1); err == nil {
+		t.Fatal("ProvisionPool with a render that fails: no error")
+	}
+	h.fake.Rules = h.fake.Rules[1:]
+	sl := h.slot(h.pool.Slot(1))
+	if ran := len(h.scriptCalls("touch .env.setup")); sl.State != store.SlotProvisioning || !fsx.Exists(sl.Path) || ran != 0 {
+		t.Fatalf("state %s, worktree %v, setup runs %d; want a provisioning slot with its worktree and no setup run",
+			sl.State, fsx.Exists(sl.Path), ran)
+	}
+	writeFile(t, filepath.Join(sl.Path, "notes", "debug.md"), "what I found\n")
+	h.writtenDuringSetup(t, "repro.rb")
+
+	if err := h.m.Repair(h.ctx, sl, h.pool); err != nil {
+		t.Fatalf("Repair: %v", err)
+	}
+	if n := len(h.run.gitCalls("worktree", "add")); n != 1 {
+		t.Fatalf("worktree add ran %d times, want once: the repair keeps the listed worktree", n)
+	}
+	sl = h.slot(sl.Name)
 	if err := h.m.Remove(h.ctx, sl, h.pool, false); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 	save := h.onlySave(t, h.layout.SlotSaves(sl.Name), sl.Name)
-	var files []string
-	if err := filepath.WalkDir(filepath.Join(save, "untracked"), func(p string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
-			files = append(files, filepath.Base(p))
-		}
-		return err
-	}); err != nil || !slices.Equal(files, []string{"notes.txt"}) {
-		t.Fatalf("the save's untracked files = %q, %v; want the person's notes.txt alone", files, err)
+	want := map[string]string{
+		"notes/debug.md": "what I found\n",
+		"notes/repro.rb": "written while the setup ran\n",
+		".env.setup":     "written by setup\n",
 	}
-	if note := readFile(t, filepath.Join(save, "saved.txt")); strings.Contains(note, "master.key") || strings.Contains(note, ".env.setup") {
-		t.Fatalf("saved.txt names magnum's own files:\n%s", note)
+	if got := savedUntracked(t, save); !maps.Equal(got, want) {
+		t.Fatalf("the save's untracked files = %q; want %q, never the copied key", got, want)
 	}
 }
 
