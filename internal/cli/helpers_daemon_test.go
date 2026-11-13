@@ -89,7 +89,7 @@ func (dt *daemonGroupTest) useMiseKey(t *testing.T) {
 // it reads a frame or builds its actions: for a test that drives those parts
 // without the command. The harnesses leave Config nil (preset holds the
 // test's config) so that a command run whole must load it itself.
-func loaded(t testing.TB, c *Context) *Context {
+func loaded(t *testing.T, c *Context) *Context {
 	t.Helper()
 	if err := c.LoadConfig(); err != nil {
 		t.Fatal(err)
