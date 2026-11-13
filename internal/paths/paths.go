@@ -324,15 +324,19 @@ func (l Layout) FactoryTaskDir(id int64) string {
 }
 
 // FactoryCheckouts is the root of the per-PR checkouts the fixes of your
-// PRs work in when their repository has no fix copies, one folder per
-// repository (FactoryCheckout), beside FactoryDB. They hold no database,
-// so the internal disk does, and no copy of any repository is there.
+// PRs work in when their repository has no fix copies, a folder per owner
+// and per repository (FactoryCheckout), beside FactoryDB. They hold no
+// database, so the internal disk does, and no copy of any repository is
+// there.
 func (l Layout) FactoryCheckouts() string { return filepath.Join(l.factoryDir(), "checkouts") }
 
 // FactoryCheckout is the per-PR checkout of PR number of repo (owner/name)
-// in FactoryCheckouts: <owner>-<name>/pr-<number>.
+// in FactoryCheckouts: <owner>/<name>/pr-<number>, nested, since owners and
+// names may hold the "-" a flat <owner>-<name> would join them with
+// (example-web/app and example/web-app).
 func (l Layout) FactoryCheckout(repo string, number int) string {
-	return filepath.Join(l.FactoryCheckouts(), strings.ReplaceAll(repo, "/", "-"), "pr-"+strconv.Itoa(number))
+	owner, name, _ := strings.Cut(repo, "/")
+	return filepath.Join(l.FactoryCheckouts(), owner, name, "pr-"+strconv.Itoa(number))
 }
 
 // FactoryPRStatus is the root of the status files the factory daemon writes

@@ -277,7 +277,7 @@ func (c *copySet) claimPerPR(ctx context.Context, w registry.PRWork, owner store
 func fixCheckoutName(w registry.PRWork) string { return "fix-" + workKey(w) }
 
 // fixCheckoutPath is where PR work w's per-PR checkout goes: the factory's
-// own folder of magnum's data directory, factory/checkouts/<owner>-<name>/
+// own folder of magnum's data directory, factory/checkouts/<owner>/<name>/
 // pr-<N> (paths.Layout.FactoryCheckout), never the copies' folder of
 // another repository. It holds no database, so the internal disk does.
 func (c *copySet) fixCheckoutPath(w registry.PRWork) string {

@@ -191,8 +191,25 @@ func (r *copiesRig) ref(dir, ref string) string {
 // [[pool]]. It returns the shop's origin.
 func (r *copiesRig) addShop() string {
 	r.t.Helper()
-	origin, clone := filepath.Join(r.root, "shop-origin.git"), filepath.Join(r.root, "shop")
-	work := filepath.Join(r.root, "shop-work")
+	return r.addWatchedAt(r.root, "example", "shop")
+}
+
+// addWatched adds owner/name to the rig as addShop adds example/shop, under
+// a clone_root of its own, and returns its origin.
+func (r *copiesRig) addWatched(owner, name string) string {
+	r.t.Helper()
+	return r.addWatchedAt(filepath.Join(r.root, "watched-"+owner), owner, name)
+}
+
+// addWatchedAt adds owner/name to the rig: a bare origin
+// <root>/<name>-origin.git, its clone <root>/<name> (which clone discovery
+// finds by its GitHub origin) and a [[watch]] of the repository alone whose
+// clone_root is root, and no [[factory.repo]] or [[pool]]. It returns the
+// origin.
+func (r *copiesRig) addWatchedAt(root, owner, name string) string {
+	r.t.Helper()
+	origin, clone := filepath.Join(root, name+"-origin.git"), filepath.Join(root, name)
+	work := filepath.Join(root, name+"-work")
 	for _, d := range []string{origin, work} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			r.t.Fatal(err)
@@ -200,15 +217,15 @@ func (r *copiesRig) addShop() string {
 	}
 	r.gitIn(origin, "init", "--quiet", "--bare", "--template=", "-b", "master")
 	r.gitIn(work, "init", "--quiet", "--template=", "-b", "master")
-	r.write(filepath.Join(work, "README"), "shop\n")
+	r.write(filepath.Join(work, "README"), name+"\n")
 	r.write(filepath.Join(work, "db", "schema.rb"), schemaRB(baseSchema))
 	r.gitIn(work, "add", "-A")
 	r.gitIn(work, "commit", "--quiet", "-m", "init")
 	r.gitIn(work, "remote", "add", "origin", origin)
 	r.gitIn(work, "push", "--quiet", "origin", "master")
-	r.gitIn(r.root, "clone", "--quiet", "--template=", origin, clone)
-	r.origins[clone] = "https://github.com/example/shop.git"
-	r.cfg.Watches = append(r.cfg.Watches, config.Watch{Owner: "example", Include: []string{"shop"}, CloneRoot: r.root})
+	r.gitIn(root, "clone", "--quiet", "--template=", origin, clone)
+	r.origins[clone] = "https://github.com/" + owner + "/" + name + ".git"
+	r.cfg.Watches = append(r.cfg.Watches, config.Watch{Owner: owner, Include: []string{name}, CloneRoot: root})
 	return origin
 }
 
@@ -399,16 +416,20 @@ func TestARepoWithoutCopiesGetsAPerPRCheckoutWithoutDatabases(t *testing.T) {
 }
 
 // A per-PR checkout lives in the factory's own folder of magnum's data
-// directory, factory/checkouts/<owner>-<name>/pr-<N>: one folder per
-// repository, one per PR in it. It went in the folder of the first
+// directory, factory/checkouts/<owner>/<name>/pr-<N>: a folder per owner
+// and per repository, one per PR in it. It went in the folder of the first
 // [[factory.repo]]'s copies, which belongs to another repository (the
-// operator's external volume), whatever repository the PR was of.
+// operator's external volume), whatever repository the PR was of. Owners
+// and names may hold a "-", so example-web/app and example/web-app, joined
+// by one, would share a path (slots.path is unique): nested folders cannot.
 func TestAPerPRCheckoutLivesUnderItsOwnRepositorysFolder(t *testing.T) {
 	r := newFixRig(t, 2, 0)
 	shop := r.addShop()
 	r.pushPR(shop, 5, "fix.txt", "v1\n")
 	r.pushPR(shop, 6, "other.txt", "v1\n")
 	r.pushPR(r.origin, 9, "fix.txt", "v1\n")
+	r.pushPR(r.addWatched("example-web", "app"), 5, "fix.txt", "v1\n")
+	r.pushPR(r.addWatched("example", "web-app"), 5, "fix.txt", "v1\n")
 	checkouts := filepath.Join(r.cfg.Layout.Data(), "factory", "checkouts")
 	copies := filepath.Dir(r.cfg.Factory.Repos[0].Pool().Path(1))
 	for _, c := range []struct {
@@ -416,9 +437,11 @@ func TestAPerPRCheckoutLivesUnderItsOwnRepositorysFolder(t *testing.T) {
 		number int
 		want   string
 	}{
-		{"example/shop", 5, filepath.Join(checkouts, "example-shop", "pr-5")},
-		{"example/shop", 6, filepath.Join(checkouts, "example-shop", "pr-6")},
-		{"talkable/talkable", 9, filepath.Join(checkouts, "talkable-talkable", "pr-9")},
+		{"example/shop", 5, filepath.Join(checkouts, "example", "shop", "pr-5")},
+		{"example/shop", 6, filepath.Join(checkouts, "example", "shop", "pr-6")},
+		{"talkable/talkable", 9, filepath.Join(checkouts, "talkable", "talkable", "pr-9")},
+		{"example-web/app", 5, filepath.Join(checkouts, "example-web", "app", "pr-5")},
+		{"example/web-app", 5, filepath.Join(checkouts, "example", "web-app", "pr-5")},
 	} {
 		fc := r.claimFix(r.prWork(c.repo, c.number))
 		if !fc.PerPR() || fc.Path != c.want {
