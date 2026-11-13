@@ -15071,6 +15071,8 @@ func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx
     who of the claiming task is at work in the copy (its own sessions hold a
     claim only then; nil: they always do). A claim adds copy n on demand with
     sm.ProvisionPool (FactoryRepo.Pool with the copy's env), up to max_copies.
+    sm saves what a copy's or a fix checkout's tree held before it discards it
+    in the factory's folders (saveDir).
 
 type Copy = runtime.Copy
     Copy is a task's copy of a repository: its name and path, its number (copy
@@ -22704,9 +22706,9 @@ var ErrObjectMismatch = errors.New("gitx: the content does not match the name")
     not what its name says.
 
 var ErrTreeTooLarge = errors.New("gitx: tree too large to list")
-    ErrTreeTooLarge is Symlinks' error for a tree, and ChangedNames' for a list
-    of names, whose listing passes execx.MaxOutput: a link or a path it would
-    leave out may be one that matters.
+    ErrTreeTooLarge is Symlinks' error for a tree, and ChangedNames' and
+    UntrackedFiles' for a list of names, whose listing passes execx.MaxOutput:
+    a link or a path it would leave out may be one that matters.
 
 
 FUNCTIONS
@@ -23466,8 +23468,8 @@ func (c *Client) UntrackedFiles(ctx context.Context, dir string, paths ...string
     under paths (each taken literally from the top; none: the whole tree),
     one by one: a wholly untracked directory, which StatusPaths names once,
     as each of its files (a repository inside the work tree stays one entry,
-    ending in /). Relative to the top, sorted. It is read-only and does not take
-    the index lock.
+    ending in /). Relative to the top, sorted. A listing past execx.MaxOutput is
+    ErrTreeTooLarge. It is read-only and does not take the index lock.
 
 func (c *Client) UpdateRef(ctx context.Context, dir, ref, sha string) error
     UpdateRef points ref, under refs/magnum/, at the commit sha (a full id):
@@ -31255,6 +31257,14 @@ func (m *Manager) NextSlotNumber(ctx context.Context, pool config.Pool) (int, er
     non-removed slot and whose path does not exist (an unregistered directory,
     or a removed slot's path that is back, is a human's, not magnum's to take
     over). It does not check pool.max.
+
+func (m *Manager) NoteDiscard(ctx context.Context, sl store.Slot, untracked bool, what string) (bool, error)
+    NoteDiscard is noteDiscard for a caller that discards the changes of slot
+    sl itself (the factory's removal of a per-PR fix checkout), right before it
+    does: it saves the tree (untracked files counted only with untracked; what
+    names the step) and records the slot.discarded event that names the save,
+    and reports whether there was anything. An error means nothing was saved:
+    the caller discards nothing.
 
 func (m *Manager) Pin(ctx context.Context, slot store.Slot) error
     Pin marks the slot pinned: no automatic claim, checkout, release or removal

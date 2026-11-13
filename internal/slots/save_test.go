@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -186,5 +188,30 @@ func TestTheSaveSkipsIgnoredFilesAndNamesWhatTheCapSkipped(t *testing.T) {
 	}
 	if strings.Contains(note, "huge.log") || strings.Contains(ev, "huge.log") {
 		t.Fatalf("an ignored file is named:\n%s\n%s", note, ev)
+	}
+}
+
+// Untracked files whose names alone pass the runner's output (8 MB, far
+// past the cap) are none saved, and the save says so; the tracked changes
+// are saved and the step goes on. The listing's failure failed the step,
+// a switch that keeps those files.
+func TestASaveNamesTheUntrackedFilesItCannotList(t *testing.T) {
+	h := newHarness(t)
+	sl, pr := h.claimedCheckout(8, h.shaPR8)
+	strayEdit(t, sl.Path)
+	h.fake.Rules = append(h.fake.Rules, execx.Rule{Prefix: []string{"git"},
+		Result: execx.Result{Stdout: []byte("a.txt\x00"), Truncated: true}})
+	h.run.fakeGit = func(c execx.Cmd) bool { return slices.Contains(c.Args, "--exclude-standard") }
+
+	if err := h.m.Resync(h.ctx, sl, h.shaPR7); err != nil {
+		t.Fatalf("Resync: %v", err)
+	}
+	save := h.onlySave(t, h.layout.PRSaves("talkable", "talkable", pr.Number), sl.Name)
+	if patch := readFile(t, filepath.Join(save, "changes.diff")); !strings.Contains(patch, "GEM stray") {
+		t.Fatalf("the patch = %q, want the tracked change", patch)
+	}
+	note := readFile(t, filepath.Join(save, "saved.txt"))
+	if !strings.Contains(note, "every untracked file") || !strings.Contains(h.discarded(t, sl.Name)[0].Message, "every untracked file") {
+		t.Fatalf("saved.txt or the event does not say the untracked files were left out:\n%s", note)
 	}
 }

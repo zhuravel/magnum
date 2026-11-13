@@ -103,8 +103,8 @@ func (c *Client) NotTracked(ctx context.Context, dir string) ([]string, error) {
 // under paths (each taken literally from the top; none: the whole tree), one
 // by one: a wholly untracked directory, which StatusPaths names once, as each
 // of its files (a repository inside the work tree stays one entry, ending in
-// /). Relative to the top, sorted. It is read-only and does not take the
-// index lock.
+// /). Relative to the top, sorted. A listing past execx.MaxOutput is
+// ErrTreeTooLarge. It is read-only and does not take the index lock.
 func (c *Client) UntrackedFiles(ctx context.Context, dir string, paths ...string) ([]string, error) {
 	var specs []string
 	if len(paths) > 0 {
@@ -119,7 +119,7 @@ func (c *Client) UntrackedFiles(ctx context.Context, dir string, paths ...string
 		return nil, err
 	}
 	if res.Truncated {
-		return nil, fmt.Errorf("gitx: ls-files --others in %s: more than %d bytes", dir, execx.MaxOutput)
+		return nil, fmt.Errorf("gitx: ls-files --others in %s: more than %d bytes: %w", dir, execx.MaxOutput, ErrTreeTooLarge)
 	}
 	var out []string
 	for p := range strings.SplitSeq(string(res.Stdout), "\x00") {

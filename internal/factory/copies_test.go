@@ -1391,6 +1391,61 @@ func TestReleaseWritesHandoffAndKeepsTheBranch(t *testing.T) {
 	}
 }
 
+// onlySave is the one save in folder (a folder of it), which the copy's
+// one slot.discarded event names.
+func (r *copiesRig) onlySave(folder, name string) string {
+	r.t.Helper()
+	ents, err := os.ReadDir(folder)
+	if err != nil || len(ents) != 1 || !ents[0].IsDir() {
+		r.t.Fatalf("saves in %s = %v, %v, want one", folder, ents, err)
+	}
+	save := filepath.Join(folder, ents[0].Name())
+	if !r.eventsSay(name, "slot.discarded", save) {
+		r.t.Fatalf("no slot.discarded event of %s names the save %s", name, save)
+	}
+	return save
+}
+
+// A task copy's release saves the changes its reset discards first, in
+// the task's folder (saves/ there): the patch of the tracked changes and
+// the untracked files, which the copy keeps, and handoff.md says where.
+// Only handoff.md's list of up to 20 paths and the slot.discarded event
+// were left.
+func TestATaskCopysReleaseSavesItsChangesBeforeTheReset(t *testing.T) {
+	r := newCopiesRig(t, 1)
+	task := r.task("PR-12345")
+	c := r.claim(task)
+	head := r.gitIn(c.Path, "rev-parse", "HEAD")
+	r.write(filepath.Join(c.Path, "Gemfile.lock"), "GEM mine\n")
+	r.write(filepath.Join(c.Path, "notes", "plan.txt"), "my plan\n")
+	r.write(filepath.Join(c.Path, "tmp", "cache.log"), "ignored\n")
+
+	r.release(task)
+	if sl := r.slot(c.Name); sl.State != store.SlotFree {
+		t.Fatalf("%s after the release = %s, want free", c.Name, sl.State)
+	}
+	if got := r.gitIn(c.Path, "status", "--porcelain", "--untracked-files=no"); got != "" {
+		t.Fatalf("the reset left %q", got)
+	}
+	save := r.onlySave(r.cfg.Layout.FactoryTaskSaves(task.ID), c.Name)
+	if patch, err := os.ReadFile(filepath.Join(save, "changes.diff")); err != nil || !strings.Contains(string(patch), "+GEM mine") {
+		t.Fatalf("the saved patch = %q, %v, want your Gemfile.lock", patch, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(save, "untracked", "notes", "plan.txt")); err != nil || string(got) != "my plan\n" {
+		t.Fatalf("the saved untracked file = %q, %v", got, err)
+	}
+	if _, err := os.Lstat(filepath.Join(save, "untracked", "tmp")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("an ignored file was saved: %v", err)
+	}
+	if note, err := os.ReadFile(filepath.Join(save, "saved.txt")); err != nil || !strings.Contains(string(note), head) {
+		t.Fatalf("saved.txt = %q, %v, want the HEAD %s it was saved at", note, err, head)
+	}
+	b, err := os.ReadFile(filepath.Join(r.cfg.Layout.FactoryTaskDir(task.ID), HandoffFile))
+	if err != nil || !strings.Contains(string(b), r.cfg.Layout.FactoryTaskSaves(task.ID)) || !strings.Contains(string(b), "Gemfile.lock") {
+		t.Fatalf("handoff.md = %q, %v, want it to name the change and where it was saved", b, err)
+	}
+}
+
 // The guard still protects work on no branch: a copy left on a detached
 // commit nothing else has is held, not reset.
 func TestReleaseHoldsACopyWhoseCommitsAreOnNoBranch(t *testing.T) {

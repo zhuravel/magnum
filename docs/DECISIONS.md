@@ -529,7 +529,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
     the event (its first 20) and in `saved.txt` (all), as is a symlink (with its target, its whole content) and a
     repository inside the tree. A save that cannot be made fails the step, which then discards nothing (a failure
     to list the changes was logged and the step went on); a forced removal, which you asked for, logs it and goes
-    on, as before.
+    on, as before. Untracked files whose names alone pass the runner's 8 MB (`gitx.UntrackedFiles` is then
+    `ErrTreeTooLarge`) are far past the cap: none is saved, the save says so, and the step goes on. Failing the
+    step on them would fail a switch too, which keeps them, and hold a slot whose tree has an unignored
+    dependency folder for good. Test, which fails without it: `TestASaveNamesTheUntrackedFilesItCannotList`.
   - Where: a review slot's saves go in its PR's folder of reports (`paths.Layout.PRSaves`:
     `reviews/<owner>/<repo>/<N>/saves/`), a slot that holds no PR's under `saves/<slot>/` of the data directory
     (`SlotSaves`). The factory names its own folders for its copies and fix checkouts
@@ -27363,8 +27366,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestALaunchOfACodexRoleGoesOnOnAReadingYouOverruled`; `TestLaunchWaitsWhenCodexIsOverItsSoftCap` now expects
   the command in the gate's wait, and `TestTheFactoryReadsYourCodexOverruleInMagnumsRegistry` reads the mark from
   a registry file. No migration: the review daemon's kv row.
-- **A fix checkout's guards after T3b** (2026-11-13, task T3c of the move above, from the engine owner's check of
-  T3b's third round). It must land before T4a starts fixers.
+- **The fix checkouts after T3b: guards, keeps and saves** (2026-11-13, task T3c of the move above, from the
+  engine owner's check of T3b's third round). It must land before T4a starts fixers.
   - A person's changes under a live hold are saved (C1). `slots.GuardChanges`, the guard of a fix claim's data
     steps (`reset_db`, the installs, the Redis flush), was `guardDiscard`, which returns a person's agent or
     process in the checkout as a transient hold and saves nothing. A claim retried after a failed flush runs
@@ -27396,6 +27399,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
     fix copy keeps its state after the release's reset, until a person ends it. Tests, failing first:
     `TestABisectLeftInProgressKeepsItsBadCommitAndItsStart` and `TestBisectHeadsNamesItsBadCommitAndItsStart` in
     internal/gitx.
+  - The factory's saves (Save before discard in Checkouts and pools). The copies set the slot code's folder for a
+    save (`NewCopies` → `slots.Manager.SetSaveDir`, `saveDir`) by the owner row that holds the checkout: a task's
+    copy saves in the task's folder (`paths.Layout.FactoryTaskSaves`, `factory/tasks/<id>/saves/`), and its
+    `handoff.md` names that folder beside the changes its release discarded; a fix copy or a per-PR checkout saves
+    in the PR work's folder (`FactoryPRWorkSaves`, `factory/pr-work/<owner>/<name>/pr-<N>/saves/`, nested as the
+    checkouts are). So a claim's switch, a release's reset and abort, and a per-PR checkout's `worktree remove
+    --force` (`removeWorktree`, which now calls `slots.Manager.NoteDiscard` for its save and its `slot.discarded`
+    event, after the hold over your typing) save first. T4a's prune, which deletes
+    `refs/magnum/factory-kept/<N>/*` 14 days after the PR closed or merged, deletes the PR work's folder with
+    them: the saves of a PR's fix checkouts are its kept refs' companions, and a folder keyed by the repository and
+    the number, not by the `pr_work` row, is where it finds them whatever became of the row. A task's saves go
+    with the task's folder. The setter, not a `slots.Deps` field, because the factory daemon's wiring
+    (cli/factory_daemon.go) was another builder's file at the time; `NewCopies` sets it before any use. Tests,
+    failing first: `TestATaskCopysReleaseSavesItsChangesBeforeTheReset` and
+    `TestAPerPRCheckoutsRemovalSavesItsChangesFirst` (a per-PR checkout's removal, then a fix copy's release).
 
 ## Learned rules
 

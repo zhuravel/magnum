@@ -515,6 +515,16 @@ func (m *Manager) noteDiscard(ctx context.Context, sl store.Slot, untracked bool
 	return true, nil
 }
 
+// NoteDiscard is noteDiscard for a caller that discards the changes of
+// slot sl itself (the factory's removal of a per-PR fix checkout), right
+// before it does: it saves the tree (untracked files counted only with
+// untracked; what names the step) and records the slot.discarded event
+// that names the save, and reports whether there was anything. An error
+// means nothing was saved: the caller discards nothing.
+func (m *Manager) NoteDiscard(ctx context.Context, sl store.Slot, untracked bool, what string) (bool, error) {
+	return m.noteDiscard(ctx, sl, untracked, what)
+}
+
 // changes are a working tree's changed paths, relative to its root:
 // tracked by their path (a rename's destination) and sources, the source
 // paths of renames and copies.

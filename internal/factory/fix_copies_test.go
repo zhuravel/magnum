@@ -967,6 +967,45 @@ func TestAPerPRCheckoutsRemovalHoldsYourChangesAndDropsTheFixers(t *testing.T) {
 	}
 }
 
+// The removal of a per-PR checkout (worktree remove --force) saves what
+// its tree holds first, in the PR work's folder (saves/ there), which the
+// factory prunes with the PR's kept refs: the patch of the tracked changes
+// and the untracked files git does not ignore, and the slot.discarded
+// event names the save. So does a fix copy's release, before its reset.
+// Only the event's list of up to 20 paths was left, and typing in a pane
+// no longer holds a fix checkout.
+func TestAPerPRCheckoutsRemovalSavesItsChangesFirst(t *testing.T) {
+	r := newFixRig(t, 1, 1)
+	shop := r.addShop()
+	r.pushPR(shop, 5, "fix.txt", "v1\n")
+	ws := r.prWork("example/shop", 5)
+	pc := r.claimFix(ws)
+	r.write(filepath.Join(pc.Path, "fix.txt"), "v2 from a shell\n")
+	r.write(filepath.Join(pc.Path, "probe.txt"), "a probe\n")
+	r.releaseFix(ws)
+	if sl := r.slot(pc.Name); sl.State != store.SlotRemoved || fsx.Exists(pc.Path) {
+		t.Fatalf("%s after the release = %s, want removed", pc.Name, sl.State)
+	}
+	save := r.onlySave(r.cfg.Layout.FactoryPRWorkSaves("example/shop", 5), pc.Name)
+	if patch, err := os.ReadFile(filepath.Join(save, "changes.diff")); err != nil || !strings.Contains(string(patch), "+v2 from a shell") {
+		t.Fatalf("the saved patch = %q, %v, want fix.txt's change", patch, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(save, "untracked", "probe.txt")); err != nil || string(got) != "a probe\n" {
+		t.Fatalf("the saved untracked file = %q, %v", got, err)
+	}
+
+	// A fix copy's release.
+	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
+	w := r.prWork("talkable/talkable", 7)
+	fc := r.claimFix(w)
+	r.write(filepath.Join(fc.Path, "fix.txt"), "v2 from a shell\n")
+	r.releaseFix(w)
+	save = r.onlySave(r.cfg.Layout.FactoryPRWorkSaves("talkable/talkable", 7), fc.Name)
+	if patch, err := os.ReadFile(filepath.Join(save, "changes.diff")); err != nil || !strings.Contains(string(patch), "+v2 from a shell") {
+		t.Fatalf("the fix copy's saved patch = %q, %v, want fix.txt's change", patch, err)
+	}
+}
+
 // A force-push of the PR between the claim and the release keeps nothing:
 // the head the claim switched to counts as pushed, though the release's
 // fetch moved the fix ref off it, so it is the PR's and not kept. Its

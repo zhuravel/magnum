@@ -36,6 +36,7 @@ import (
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/mysqlx"
+	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/scrub"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/steps"
@@ -130,10 +131,12 @@ var _ Copies = (*copySet)(nil)
 // the runtime's AtWork, who of the claiming task is at work in the copy
 // (its own sessions hold a claim only then; nil: they always do). A claim
 // adds copy n on demand with sm.ProvisionPool (FactoryRepo.Pool with the
-// copy's env), up to max_copies.
+// copy's env), up to max_copies. sm saves what a copy's or a fix checkout's
+// tree held before it discards it in the factory's folders (saveDir).
 func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx.Client, run execx.Runner, my slots.MySQL,
 	panes func(context.Context) (herdr.Snapshot, error), owner func(context.Context, registry.Task) (store.PR, error),
 	atWork func(context.Context, registry.Task) (role string, you bool, err error)) Copies {
+	sm.SetSaveDir(func(_ store.Slot, pr store.PR) string { return saveDir(cfg.Layout, pr) })
 	c := &copySet{cfg: cfg, slots: sm, st: st, git: git, run: run, my: my, panes: panes, owner: owner, atWork: atWork,
 		adding: map[string]bool{}, repairs: map[string]*copyRepairs{}, locks: map[string]*sync.Mutex{},
 		kill:   func(pgid int, sig syscall.Signal) error { return syscall.Kill(-pgid, sig) },
@@ -154,6 +157,24 @@ func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx
 		}
 	}
 	return c
+}
+
+// saveDir is where magnum's slot code saves what a checkout of the
+// factory's held before a step discards it (slots.Manager.SetSaveDir), by
+// the owner row that holds it: a task's copy in the task's folder
+// (FactoryTaskSaves), a fix checkout in its PR work's (FactoryPRWorkSaves,
+// which the factory prunes with the PR's kept refs once the PR closed or
+// merged); "" for any other row, the slot code's own folder.
+func saveDir(l paths.Layout, owner store.PR) string {
+	if id, ok := runtime.OwnerTask(owner.NodeID); ok {
+		return l.FactoryTaskSaves(id)
+	}
+	if _, ok := fixOwnerWork(owner.NodeID); ok {
+		if repo, number := fixOwnerPR(owner); repo != "" {
+			return l.FactoryPRWorkSaves(repo, number)
+		}
+	}
+	return ""
 }
 
 // Claim hands task t a copy of its repository for its owner row: the copy
@@ -1175,7 +1196,8 @@ const handoffListed = 20
 
 // writeHandoff writes handoff.md in task t's directory: the copy it left
 // and why, its branch and head, its server, the changes the release
-// discarded, and what the next claimer needs. It replaces the last one.
+// discarded and where it saved them first, and what the next claimer
+// needs. It replaces the last one.
 func (c *copySet) writeHandoff(t registry.Task, repo config.FactoryRepo, cp Copy, reason string, l leftCopy, server string) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s left %s\n\n", TaskKey(t), cp.Name)
@@ -1195,7 +1217,8 @@ func (c *copySet) writeHandoff(t registry.Task, repo config.FactoryRepo, cp Copy
 		if more := len(l.Changed) - handoffListed; more > 0 {
 			listed += fmt.Sprintf(" (+%d more)", more)
 		}
-		fmt.Fprintf(&b, "- uncommitted: %d tracked change(s), discarded by the release: %s\n", len(l.Changed), listed)
+		fmt.Fprintf(&b, "- uncommitted: %d tracked change(s), saved under %s before the release discarded them (the copy's "+
+			"slot.discarded event names the save): %s\n", len(l.Changed), c.cfg.Layout.FactoryTaskSaves(t.ID), listed)
 	}
 	b.WriteString("\n## For the next claimer\n\n")
 	if l.Branch != "" && l.Branch == t.Branch {

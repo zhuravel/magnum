@@ -885,8 +885,11 @@ func (c *copySet) removePerPR(ctx context.Context, w registry.PRWork, sl store.S
 // removeWorktree removes per-PR checkout sl's worktree (removePerPR): none
 // listed is gone already, a listed one whose directory is gone is pruned.
 // Changes in it that a person's typing explains (slots.HumanEvidence) hold
-// it, as dirty_worktree; any others are named in a slot.discarded event
-// and go with it.
+// it, as dirty_worktree; any others are saved in the PR work's folder
+// first (slots.Manager.NoteDiscard: the patch of the tracked changes and
+// the untracked files git does not ignore), with a slot.discarded event
+// that names them and the save, and go with it (worktree remove --force).
+// A save that fails removes nothing.
 func (c *copySet) removeWorktree(ctx context.Context, sl store.Slot) error {
 	if !fsx.Exists(sl.MainClone) {
 		return nil
@@ -921,9 +924,12 @@ func (c *copySet) removeWorktree(ctx context.Context, sl store.Slot) error {
 		if why != "" {
 			return slots.ErrHold{Reason: slots.HoldDirtyWorktree, Detail: fmt.Sprintf("%s holds %d change(s) (%s), and %s", sl.Path, len(changed), listed, why)}
 		}
-		c.event(ctx, sl.Name, "info", "slot.discarded", fmt.Sprintf("%s: its removal discards %d change(s): %s", sl.Name, len(changed), listed))
 	}
-	return c.git.WorktreeRemove(ctx, sl.MainClone, sl.Path, len(changed) > 0)
+	dirty, err := c.slots.NoteDiscard(ctx, sl, true, "the removal of the fix checkout")
+	if err != nil {
+		return err
+	}
+	return c.git.WorktreeRemove(ctx, sl.MainClone, sl.Path, dirty || len(changed) > 0)
 }
 
 // FixReserved lists the checkouts the PRs' fix work holds (FixReservation),

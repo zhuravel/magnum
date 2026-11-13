@@ -943,8 +943,8 @@ patch of the tracked changes against HEAD (`git -C <slot> apply <save>/changes.d
 puts them back), `untracked/`, every untracked file git does not ignore at its path (not the local mise file
 Magnum renders), and `saved.txt`, which says from where, at which HEAD and before what, how to put it back and
 what it left out. A save keeps at most 50 MB: past that, the patch goes path by path and a file is left out,
-each named with its size, as are a symlink (with its target) and a repository inside the tree; files git ignores
-are never saved. The `slot.discarded` event names the save and what it left out (`magnum logs <slot>`). A save
+each named with its size, as are a symlink (with its target) and a repository inside the tree (untracked files
+whose names alone pass 8 MB are none saved, and the save says so); files git ignores are never saved. The `slot.discarded` event names the save and what it left out (`magnum logs <slot>`). A save
 that fails fails the step, which then discards nothing (a forced removal logs it and goes on). Nothing prunes
 the saves yet.
 
@@ -4800,17 +4800,25 @@ stages = [
   guard: a claim a restart cut runs only the steps it left undone, and a restart keeps the checkout the PR's.
   The switch's guard keeps the commits on no remote that the checkout's HEAD carries, the fixer's or yours, under
   `refs/magnum/factory-kept/<N>/<sha>` of the main clone (a `factory.fix_kept` event names the ref; nothing
-  deletes it, so `git update-ref -d` it once you looked), and those of the commit a rebase or a sequence of
+  deletes it, so `git update-ref -d` it once you looked), those of the commit a rebase or a sequence of
   picks left in progress started from (`magnum fix-sync` killed mid-replay), which its abort puts HEAD back on
-  before the switch or the release moves it away, then takes that HEAD as the checkout's own, whatever you typed
-  in its panes: a commit never holds a fix checkout, and only changes in its tree that your typing explains do
-  (`dirty_worktree`). The steps after the switch move no HEAD, so their guard keeps nothing and leaves HEAD as it
-  is; the next switch or the release keeps its commits.
+  before the switch or the release moves it away, and those of the newest commit marked bad and of the start of
+  a `git bisect` left in progress, past the midpoint HEAD waits at, then takes that HEAD as the checkout's own,
+  whatever you typed in its panes: a commit never holds a fix checkout, and only changes in its tree that your
+  typing explains do (`dirty_worktree`), or that a person's own session or process in the checkout makes theirs
+  (held as `dirty_worktree` too, so they stay held once that session ends). The steps after the switch move no
+  HEAD, so their guard keeps nothing and leaves HEAD as it is; the next switch or the release keeps its commits.
+  What the switch, a release's reset or a per-PR checkout's removal drops from the checkout's tree is saved
+  first, as a review slot's is (`changes.diff`, `untracked/` and `saved.txt`, at most 50 MB; the
+  `slot.discarded` event names the save), in the PR work's folder,
+  `factory/pr-work/<owner>/<name>/pr-<N>/saves/` in magnum's data directory, which the fix lane is to prune with
+  the PR's kept refs once the PR merged or closed; a task's copy saves what its release drops in the task's
+  folder, `factory/tasks/<id>/saves/`, and its `handoff.md` says so.
   The checkout goes once the PR's fix work ends: the PR merged or closed (magnum's registry says so), or its
   work stayed idle for 10 minutes. A fix copy goes back to its pool on its placeholder, a per-PR checkout is
   removed with its fix ref, each with a `fix.release` event. The release fetches the PR's head first, so what
-  was pushed counts as pushed, as do the head the claim switched to and the one the checkout records, even of
-  a switch cut short (a force-push of the PR keeps nothing),
+  was pushed counts as pushed, as do the heads the claims switched to, even of a switch cut short (a force-push
+  of the PR keeps nothing), but never a HEAD `magnum unpin` took as the checkout's,
   and keeps any other commit on no remote as the claim does. Beyond a session or a process at work in the
   checkout, it holds only on `dirty_worktree`, never on a commit or on a HEAD because you typed, and a refused
   release is tried again after 1, 2, 4 and then every 5 minutes, with one alert after 30 minutes.

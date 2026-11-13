@@ -33,6 +33,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -157,6 +158,11 @@ func (m *Manager) saveChanges(ctx context.Context, sl store.Slot, ch changes, wh
 		budget -= used
 	}
 	files, err := m.git.UntrackedFiles(ctx, sl.Path)
+	if errors.Is(err, gitx.ErrTreeTooLarge) {
+		// Their names alone pass the runner's output: far past the cap.
+		s.skipped = append(s.skipped, "every untracked file (git lists more than "+sizeWord(execx.MaxOutput)+" of their names)")
+		files, err = nil, nil
+	}
 	if err != nil {
 		return s, err
 	}
