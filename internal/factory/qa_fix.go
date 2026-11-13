@@ -455,10 +455,15 @@ func (e *Engine) reviewStageBefore(t registry.Task) string {
 
 // qaFixReviewed reports whether task t's head needs no review before QA
 // walks it: its kind has no review stage before its qa stage, or the local
-// review's newest cycle ended clean or on an oscillation at that head (the
-// review stage passed there, as runReview passes it).
+// review passed at that head (as runReview passes it): its summary ended
+// there at the round limit or by you on a safe stop (endAtRound,
+// finishBetween), or after the writer's fix at the cap (passAfterCap),
+// or its newest cycle ended clean or on an oscillation there.
 func (e *Engine) qaFixReviewed(ctx context.Context, t registry.Task) (bool, error) {
 	if e.reviewStageBefore(t) == "" {
+		return true, nil
+	}
+	if summaryExitAt(e.d.Layout.FactoryTaskDir(t.ID), t.HeadSHA, exitRoundLimit, exitByYou, exitCapFixed) { // its cycle ended cap or operator
 		return true, nil
 	}
 	cs, err := e.reg.Cycles(ctx, t.ID)

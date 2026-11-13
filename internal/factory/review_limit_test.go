@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -229,5 +230,74 @@ func TestNoSecondOpinionRunsPastMaxRounds(t *testing.T) {
 	if skips := r.reviewEvents(task.ID, registry.PhaseInfo, "no second opinion after round 2"); len(skips) != 1 ||
 		!strings.Contains(skips[0].Text, "max_rounds 2") {
 		t.Errorf("events %+v, want the skip naming the round limit", skips)
+	}
+}
+
+// A review that passed at the round limit passed at its head for QA too:
+// QA's fix moves the head, one round reviews it and ends at the limit
+// again, and QA's fresh run at the fix comes next, then pr_body. QA read
+// only a clean or an oscillation cycle as a pass, so a task past the limit
+// whose QA found defects went back to the review at every pass and never
+// reached a QA run at the fix (task 9 runs QA after its local review).
+func TestAReviewThatPassedAtMaxRoundsLetsQAWalkItsFix(t *testing.T) {
+	r := newQARig(t, result(capFindings(1, 2)...), result(capFindings(3, 4)...))
+	r.cfg.Factory.LocalReview.MaxRounds = 1
+	task, head := r.reviewTask("PR-12516")
+	r.taskFile(task.ID, acceptanceFile, qaAcceptance)
+	if got := r.toQAAt(task, 1); got != head {
+		t.Fatalf("QA at %s, want the head round 1 reviewed %s", short(got), short(head))
+	}
+	if sum := r.summary(task.ID); sum.Exit != exitRoundLimit || sum.Head != head {
+		t.Fatalf("summary %+v, want the round limit's end at %s", sum, short(head))
+	}
+	r.toWalker(task)
+	r.walk(task, escapedWalk("/settings/security"), escapedProbes)
+	r.toWriter(task, 1)
+	r.writerFixesQA(task, 1, head, fixedCredit(1), nil)
+	fix := r.toQAAt(task, 2)
+	if sum := r.summary(task.ID); fix == head || sum.Exit != exitRoundLimit || sum.Head != fix || sum.TaskRounds != 2 {
+		t.Fatalf("summary %+v, want the round limit's end after 2 rounds at the fix %s", sum, short(fix))
+	}
+	r.toWalker(task)
+	if run, _ := readQARun(r.layout.FactoryTaskDir(task.ID)); run.N != 2 || run.Head != fix {
+		t.Fatalf("qa-run.json %+v, want run 2 at the fix %s", run, short(fix))
+	}
+	r.walk(task, oneSecurityPage(), cleanProbes)
+	r.run(4, func() bool { return r.reload(task.ID).Stage != "qa" })
+	if got := r.reload(task.ID); got.Stage != "pr_body" || len(r.rv.calls()) != 2 {
+		t.Fatalf("task %s at %s waits %q: %q after %d review rounds, want pr_body after 2", got.State, got.Stage, got.WaitsWho, got.WaitsWhat,
+			len(r.rv.calls()))
+	}
+	if evs := r.eventsWith(task.ID, "qa", "back to local_review"); len(evs) != 1 {
+		t.Errorf("qa events %q, want one move back to the review, for the fix", evs)
+	}
+	r.qaFree(task.ID)
+}
+
+// Every end that passes the review stage with its cycle ended cap or
+// operator passes it for QA at the summary's head: the round limit's, yours
+// and the writer's fix at the cap; a stop for you (exit cap) or another
+// head does not.
+func TestQAReadsAReviewThatPassedWithNoCleanCycleAsPassed(t *testing.T) {
+	r := newQARig(t)
+	task, head := r.qaTask("PR-12517")
+	for _, tc := range []struct {
+		exit, head string
+		want       bool
+	}{
+		{exitRoundLimit, head, true},
+		{exitByYou, head, true},
+		{exitCapFixed, head, true},
+		{registry.ExitCap, head, false},
+		{exitRoundLimit, "0123456789abcdef0123456789abcdef01234567", false},
+	} {
+		b, err := json.Marshal(ReviewSummary{Exit: tc.exit, Rounds: 1, Head: tc.head})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.taskFile(task.ID, reviewSummaryFile, string(b))
+		if got, err := r.e.qaFixReviewed(r.ctx, task); err != nil || got != tc.want {
+			t.Errorf("a summary of exit %s at %s: reviewed %v (%v), want %v", tc.exit, short(tc.head), got, err, tc.want)
+		}
 	}
 }

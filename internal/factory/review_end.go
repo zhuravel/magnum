@@ -264,9 +264,15 @@ const (
 // summaryEndsAt reports whether review-summary.json in dir ended the loop
 // at the round limit or by you at head.
 func summaryEndsAt(dir, head string) bool {
+	return summaryExitAt(dir, head, exitRoundLimit, exitByYou)
+}
+
+// summaryExitAt reports whether review-summary.json in dir ended the loop
+// at head with one of exits.
+func summaryExitAt(dir, head string, exits ...string) bool {
 	var sum ReviewSummary
 	b, err := os.ReadFile(filepath.Join(dir, reviewSummaryFile))
-	return err == nil && json.Unmarshal(b, &sum) == nil && (sum.Exit == exitRoundLimit || sum.Exit == exitByYou) && head != "" && sum.Head == head
+	return err == nil && json.Unmarshal(b, &sum) == nil && slices.Contains(exits, sum.Exit) && head != "" && sum.Head == head
 }
 
 // secondHeld is why the task's second opinion, one round more, does not
