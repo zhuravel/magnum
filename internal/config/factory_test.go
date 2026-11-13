@@ -519,6 +519,27 @@ func TestFactoryRejectsACopyNameThatIsAReviewSlotName(t *testing.T) {
 	wantError(t, cfg.Validate(), "factory repo acme/app", `copies "/p/app.factory{n}"`, "pool acme/app", `slot_path`)
 }
 
+// The fix copies are copies of the repository numbered past max_copies:
+// their names, directories and ports are checked as the tasks' copies are.
+func TestAFixCopysNameAndPortAreCheckedAsACopys(t *testing.T) {
+	cfg := validFactoryConfig() // max_copies 2: copies f11 and f21; a fix copy would be f31
+	cfg.Factory.Repos[0].CopyName = "f{n}1"
+	cfg.Pools = []Pool{{Repo: "acme/other", MainClone: "/p/other", SlotName: "f3{n}", SlotPath: "/p/other.review{n}", Max: 2}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("no copy renders a pool's slot (f31 is no copy without fix copies): %v", err)
+	}
+	cfg.Factory.Repos[0].FixCopies = 1
+	wantError(t, cfg.Validate(), "factory repo acme/app", `copy_name "f{n}1" renders "f31" for copy 3`, "pool acme/other")
+
+	cfg = validQAConfig()
+	cfg.Factory.Repos[0].Env = map[string]string{"PORT": "6553{n}"} // 65531 and 65532 for the tasks' copies
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("ports 65531 and 65532 are valid: %v", err)
+	}
+	cfg.Factory.Repos[0].FixCopies = 4 // fix copies 3 to 6: copy 6 renders 65536
+	wantError(t, cfg.Validate(), "factory repo acme/app", `env PORT "6553{n}" renders "65536" for copy 6`)
+}
+
 func TestFactoryRejectsAStagingAfterAnUnknownName(t *testing.T) {
 	cfg := validFactoryConfig()
 	cfg.Factory.Repos[0].Staging = []FactoryStaging{

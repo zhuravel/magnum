@@ -6764,7 +6764,8 @@ type FactoryRepo struct {
 	// FixCopies is how many copies of the repository are set apart for the
 	// fixes of your PRs (0, the default: none, and a fix works in a per-PR
 	// checkout without databases): apart from MaxCopies and from [factory]
-	// max_active, and never a task's copy.
+	// max_active, and never a task's copy. They are copies MaxCopies+1 to
+	// MaxCopies+FixCopies of CopyName and Copies.
 	FixCopies int `toml:"fix_copies"`
 	// Setup, Teardown, PostCheckout and ResetDB are the commands of a
 	// copy's life, as a [[pool]] has them.

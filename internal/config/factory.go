@@ -198,7 +198,8 @@ type FactoryRepo struct {
 	// FixCopies is how many copies of the repository are set apart for the
 	// fixes of your PRs (0, the default: none, and a fix works in a per-PR
 	// checkout without databases): apart from MaxCopies and from [factory]
-	// max_active, and never a task's copy.
+	// max_active, and never a task's copy. They are copies MaxCopies+1 to
+	// MaxCopies+FixCopies of CopyName and Copies.
 	FixCopies int `toml:"fix_copies"`
 	// Setup, Teardown, PostCheckout and ResetDB are the commands of a
 	// copy's life, as a [[pool]] has them.
@@ -809,6 +810,10 @@ func (c *Config) FactoryRole(name string) (Role, bool) {
 	return Role{}, false
 }
 
+// copyCount is how many copies the repository may have: max_copies for the
+// tasks and fix_copies past them for the fixes (numbered max_copies+1 on).
+func (r FactoryRepo) copyCount() int { return r.MaxCopies + max(r.FixCopies, 0) }
+
 // Pool is the repository's copies as the Pool the slot code provisions:
 // slots named CopyName at Copies, at most MaxCopies of them, none kept
 // ready (Min 0), the commands and databases the repository sets. The
@@ -1415,7 +1420,7 @@ func (c *Config) validateFactoryRepos() []error {
 			bad("min_free_disk_gb must not be negative, got %d", r.MinFreeDiskGB)
 		}
 		if hasN && r.MaxCopies >= 1 {
-			pool, last := r.Pool(), min(r.MaxCopies, maxCheckedSlots)
+			pool, last := r.Pool(), min(r.copyCount(), maxCheckedSlots)
 			for _, k := range []struct {
 				key, template string
 				seen          map[string]owner
@@ -1639,11 +1644,12 @@ func validateFactoryQA(where string, r FactoryRepo) []error {
 // the copy's server on it, and a port that does not parse is no port at all
 // (the copy's Port is then 0). It renders as the factory renders a copy's
 // env: {copy} or {slot} the copy's name, {n} its number, {n*16} n × 16.
+// The fix copies, past max_copies, are copies too.
 func validateCopyPorts(r FactoryRepo) error {
 	tmpl := r.Env["PORT"]
 	pool := r.Pool()
 	seen := map[int]int{}
-	for n := 1; n <= min(r.MaxCopies, maxCheckedSlots); n++ {
+	for n := 1; n <= min(r.copyCount(), maxCheckedSlots); n++ {
 		v := strings.NewReplacer("{copy}", pool.Slot(n), "{slot}", pool.Slot(n), "{n*16}", strconv.Itoa(n*16), "{n}", strconv.Itoa(n)).Replace(tmpl)
 		port, err := strconv.Atoi(v)
 		switch {
