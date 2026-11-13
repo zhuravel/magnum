@@ -177,6 +177,37 @@ func TestFinishReviewDropsASecondOpinionThatHasNotBegun(t *testing.T) {
 	}
 }
 
+// A second opinion whose round ran to a result is the task's one, even
+// when your finish-review ended the loop at its end (its cycle's exit is
+// the operator's): a fresh loop after a new head (a send back's commits)
+// whose clean round reviews a wide change gets no second opinion again.
+func TestASecondOpinionYouEndedIsSpent(t *testing.T) {
+	r := newReviewRig(t, result(nitFinding), result(capFindings(1, 2)...), result())
+	task, _ := r.wideReviewTask("PR-12530")
+	r.run(6, func() bool { return r.firstDecided(task.ID) })
+	ch := r.blockNextRound()
+	r.finish(task.ID)
+	r.unblock()
+	close(ch)
+	r.run(12, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+	if cs := r.cycles(task.ID); r.reload(task.ID).Stage != "pr_body" || len(cs) != 2 || cs[1].Exit != registry.ExitOperator {
+		t.Fatalf("task at %s, cycles %+v: want the second opinion's round ended by you and the stage passed", r.reload(task.ID).Stage, cs)
+	}
+	r.moveHead(task)
+	r.run(12, func() bool { return r.reload(task.ID).Stage != "local_review" || !isLive(r.reload(task.ID)) })
+	got := r.reload(task.ID)
+	calls := r.rv.calls()
+	if want := [][]string{firstRoles, secondRoles, firstRoles}; got.Stage != "pr_body" || !slices.EqualFunc(roundsOf(calls), want, slices.Equal) {
+		t.Fatalf("task %s at %s waits %q after rounds %v, want %v", got.State, got.Stage, got.WaitsWhat, roundsOf(calls), want)
+	}
+	if again := r.reviewEvents(task.ID, registry.PhaseInfo, "a second opinion runs again"); len(again) != 0 {
+		t.Errorf("events %+v, want no second opinion again", again)
+	}
+	if sum := r.summary(task.ID); sum.Exit != registry.ExitClean || sum.SecondJudge != "" {
+		t.Errorf("summary %+v, want the fresh loop's clean end with no second opinion", sum)
+	}
+}
+
 // A cycle that ended with the loop going on at the task's head is the
 // writer's closed fix only when its round gave the writer findings
 // (review-<n>.json): the clean round a second opinion follows ends so too.

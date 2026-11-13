@@ -26,6 +26,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/scrub"
 )
 
@@ -355,8 +356,10 @@ func countedRound(dir string, loop []registry.Cycle, round int) int {
 
 // secondSpent reports whether task t's second opinion so is spent at clean
 // cycle cy: it is live, and its cycle is cy (it ends clean now) or ended
-// clean or with findings. A void one is not, nor one whose cycle ended
-// unavailable or at the operator: unfinished is that cycle, with its exit.
+// clean or with findings, or at the operator after its round's result
+// (local-review-<n>.json: your end of the loop at that round's end). A
+// void one is not, nor one whose cycle ended unavailable or at the
+// operator with no result: unfinished is that cycle, with its exit.
 func (e *Engine) secondSpent(ctx context.Context, t registry.Task, so secondOpinion, cy registry.Cycle) (spent bool, unfinished registry.Cycle, err error) {
 	switch {
 	case !so.live():
@@ -372,7 +375,8 @@ func (e *Engine) secondSpent(ctx context.Context, t registry.Task, so secondOpin
 	switch {
 	case i < 0:
 		return false, unfinished, nil
-	case cs[i].Exit == registry.ExitUnavailable || cs[i].Exit == registry.ExitOperator:
+	case cs[i].Exit == registry.ExitUnavailable,
+		cs[i].Exit == registry.ExitOperator && !fsx.Exists(filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), reviewRoundFile(cs[i].N))):
 		return false, cs[i], nil
 	}
 	return true, unfinished, nil
