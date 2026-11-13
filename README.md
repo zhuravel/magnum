@@ -4445,10 +4445,10 @@ stages = [
   the fixes, apart from `max_copies`; with none, a fix works in a per-PR checkout without databases. The fixer is
   the factory role `fx-fixer`: magnum's fix role moved here (Claude, `fix = true`, the `fix.md` prompt and the
   magnum-fix skill, which the factory daemon copies when it starts, so an edit reaches it at `magnum factory
-  install --drain`). No stage names it; the fix lane starts it. It is the one factory role that may take an
-  `identity`: unset, it acts as the `fix_identity` of the PR's `[[watch]]` (else its poll identity), as
-  `claude-fix` does, and its pane carries that identity's GitHub token alone (a dedicated fixer App, or a gh
-  identity; never the App a watch reviews, polls or approves as).
+  install --drain`). No stage names it, nor does a `codex_fallback`; the fix lane starts it. It is the one factory
+  role that may take an `identity`: unset, it acts as the `fix_identity` of the PR's `[[watch]]` (else its poll
+  identity), as `claude-fix` does, and its pane carries that identity's GitHub token alone (a dedicated fixer App,
+  or a gh identity; never the App a watch reviews, polls or approves as).
 - **Sensitive files.** `sensitive` lists the path globs (`**` matches whole directories, `*` never crosses
   `/`, as `skip_paths` reads them) of the files whose change the ready card's FLAGS line names for a second
   look; the built-in list is `Gemfile.lock`, the workflows (`.github/workflows/**`) and the config files

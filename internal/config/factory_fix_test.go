@@ -96,6 +96,17 @@ func TestNoStageNamesTheFixer(t *testing.T) {
 	wantError(t, cfg.Validate(), "factory kind bug", `stage "investigate"`, "names fx-fixer, the fixer of your PRs, which no stage runs")
 }
 
+// Nor does a stage run the fixer in a Codex role's place: a codex_fallback
+// that names it would start it in the task's copy with its identity's
+// GitHub config and the fixer's git author, even with fix = "off".
+func TestAFixRoleIsNeverACodexFallback(t *testing.T) {
+	cfg := validFactoryConfig()
+	cfg.Identities = append(cfg.Identities, fixerApp("fixer"))
+	fixerOf(t, cfg).Identity = "fixer"
+	cfg.Factory.CodexFallback["fx-cause"] = FactoryFixerRole
+	wantError(t, cfg.Validate(), "factory.codex_fallback fx-cause", "the fallback fx-fixer is the fixer of your PRs, which no stage runs")
+}
+
 // The fixer acts as the fix identity of the PR's watch, as magnum's fix role
 // does (FixRoleFor): the watch's fix_identity, else the identity the role
 // names, else the watch's poll identity.

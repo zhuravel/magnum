@@ -1320,7 +1320,8 @@ func (c *Config) validateStage(where string, st FactoryStage, roles map[string]R
 }
 
 // validateFactoryPickers checks the tables that pick a kind of task or a
-// fallback: each must name a kind or a role that exists.
+// fallback: each must name a kind or a role that exists, and a fallback a
+// claude role that is not the fixer.
 func (c *Config) validateFactoryPickers() []error {
 	f := c.Factory
 	var errs []error
@@ -1355,6 +1356,11 @@ func (c *Config) validateFactoryPickers() []error {
 			errs = append(errs, fmt.Errorf("factory.codex_fallback %s: the fallback %q names no [[factory.role]]", key, fallback))
 		case r.AgentKind() != KindClaude:
 			errs = append(errs, fmt.Errorf("factory.codex_fallback %s: the fallback %s must be a claude role, not %s", key, fallback, r.AgentKind()))
+		case r.Fix:
+			// It would run in the task's copy as the fixer: its identity's
+			// GitHub config and the fixer's git author, fix on or off.
+			errs = append(errs, fmt.Errorf("factory.codex_fallback %s: the fallback %s is the fixer of your PRs, which no stage runs "+
+				"(the fix lane starts it): name a claude role a stage may run", key, fallback))
 		}
 	}
 	return errs

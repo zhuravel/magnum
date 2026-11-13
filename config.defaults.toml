@@ -964,8 +964,8 @@ chore = ["upgrade", "bump", "dependency", "gem", "rename", "cleanup", "refactor"
 # The factory's agents: session roles like the review pipeline's, one pane each, in the factory's herdr session. why
 # and doing are the words of the factory's screen ("finding the cause": find the cause on its own, apart from the
 # others); a prompt is a file of prompts/ (prompts_dir). No role is a judge of the review pipeline, and none takes
-# an alias: stages and codex_fallback name a role by its name. None but the fixer (fx-fixer, the one fix role) takes
-# an identity: the agents act as you.
+# an alias: stages and codex_fallback name a role by its name, never the fixer (fx-fixer, the one fix role, which the
+# fix lane starts). None but the fixer takes an identity: the agents act as you.
 # A role may also set, like a review [[role]]:
 #   on_permission_prompt = "wait"   # deny | wait, over the kind's: an agent that asks you questions itself
 #                                   # (Claude Code's AskUserQuestion shows a Yes/No question as a permission

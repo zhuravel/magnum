@@ -26866,7 +26866,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `fix_local_review` and a `[[factory.repo]]`'s `fix_copies` (0). The fixer is the built-in role `fx-fixer`
     (claude-fix moved here: the fix prompt and the magnum-fix skill), the only factory role that may be a fix role
     and the only one that may carry an identity, its watch's fix identity resolved as `FixRoleFor` does; no stage
-    names it. Its pane carries that identity's token alone: every other GitHub token variable is blank, and a
+    and no `codex_fallback` names it. Its pane carries that identity's token alone: every other GitHub token variable is blank, and a
     fixer whose identity does not resolve does not start. The factory daemon copies the fix skill when it starts,
     into a directory of its own.
   - `magnum push` holds the lock of its repository and branch for its run and refuses (exit 2) while another
