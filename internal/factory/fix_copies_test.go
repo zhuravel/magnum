@@ -1187,7 +1187,8 @@ func TestASwitchCutBeforeTheCheckoutMovedKeepsNothingOfThePRsOldHead(t *testing.
 	if got, _ := r.head(fc.Path); got != fc.Head {
 		t.Fatalf("%s is at %s after the cut switch, want the older head %s", fc.Name, got, fc.Head)
 	}
-	if a, err := r.st.OpenAssignmentBySlot(r.ctx, r.slot(fc.Name).ID); err != nil || store.Deref(a.HeadSHA) != newer {
+	a, err := r.st.OpenAssignmentBySlot(r.ctx, r.slot(fc.Name).ID)
+	if err != nil || store.Deref(a.HeadSHA) != newer {
 		t.Fatalf("the claim's head after the cut switch = %q, %v, want the newer head %s", store.Deref(a.HeadSHA), err, newer)
 	}
 
@@ -1199,6 +1200,45 @@ func TestASwitchCutBeforeTheCheckoutMovedKeepsNothingOfThePRsOldHead(t *testing.
 	}
 	if got := r.keptRefs(r.main); got != "" {
 		t.Fatalf("the release kept %q, want nothing: the head the checkout stayed at is the PR's", got)
+	}
+	if v, ok, err := r.st.GetKV(r.ctx, claimedKey(a.ID)); err != nil || ok {
+		t.Fatalf("the claim's older heads after the release = %q, %v, %v, want them forgotten", v, ok, err)
+	}
+}
+
+// A HEAD that `magnum slots unpin` recorded as the checkout's is never
+// taken as pushed: the release keeps its commits on no remote. A commit
+// made in a fix copy from a shell is held as head_drift by magnum's slot
+// guard (as a claim's reserve's slots.Release does over a copy a cut
+// release left releasing), and the unpin writes that HEAD to the copy's
+// checked_out_sha with no keep. The release counted checked_out_sha as
+// pushed, so it kept nothing and its reset left the commit on no ref (C2
+// of T3b's third check).
+func TestAnUnpinnedHeadIsNeverTakenAsPushed(t *testing.T) {
+	r := newFixRig(t, 1, 1)
+	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
+	w := r.prWork("talkable/talkable", 7)
+	fc := r.claimFix(w)
+	mine := r.commit(fc.Path, "fix.txt", "v2\n") // from a shell in the copy
+	if hold, ok := errors.AsType[slots.ErrHold](r.sm.Guard(r.ctx, r.slot(fc.Name))); !ok || hold.Reason != slots.HoldHeadDrift {
+		t.Fatalf("the slot guard over your commit = %v, want held: head_drift", hold)
+	}
+	if err := r.sm.Unpin(r.ctx, r.slot(fc.Name)); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Deref(r.slot(fc.Name).CheckedOutSHA); got != mine {
+		t.Fatalf("checked_out_sha after the unpin = %s, want your commit %s", got, mine)
+	}
+
+	r.releaseFix(w)
+	if sl := r.slot(fc.Name); sl.State != store.SlotFree || sl.HoldReason != nil {
+		t.Fatalf("%s after the release = %s, hold %q, want free", fc.Name, sl.State, store.Deref(sl.HoldReason))
+	}
+	if !r.kept(r.main, 7, mine) {
+		t.Fatalf("the release kept %q, want your commit %s kept as %s", r.keptRefs(r.main), mine, fixKeptRef(7, mine))
+	}
+	if !r.eventsSay(fc.Name, "factory.fix_kept", fixKeptRef(7, mine)) {
+		t.Fatalf("no factory.fix_kept event names %s", fixKeptRef(7, mine))
 	}
 }
 

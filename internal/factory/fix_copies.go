@@ -482,16 +482,20 @@ func (c *copySet) prepareFix(ctx context.Context, w registry.PRWork, owner store
 	return data(guarded(func(ctx context.Context) error { return c.fixDataGuard(ctx, w, owner, sl) }))
 }
 
-// switchFix records head as the head of the claim's assignment a, then
+// switchFix records head as the head of the claim's assignment a, the head
+// it had first among the heads its claims switched to (claimedHeads), then
 // switches checkout sl to it (slots.Resync) and records the time, which a
 // person's typing in the PR's fix panes is read against (the guard). The
-// release counts the assignment's head and the checkout's recorded one as
-// pushed (unpushedPastClaim), so a switch cut before the checkout moved
-// (HEAD at the recorded head) or after it (HEAD at the assignment's) leaves
-// no head of the PR's own to count as commits on no remote. The commits on
-// no remote that HEAD carries were kept by the step's guard (fixOwnHead).
+// release counts the assignment's heads as pushed (unpushedPastClaim), so a
+// switch cut before the checkout moved (HEAD at the older head) or after it
+// (HEAD at the assignment's) leaves no head of the PR's own to count as
+// commits on no remote. The commits on no remote that HEAD carries were
+// kept by the step's guard (fixOwnHead).
 func (c *copySet) switchFix(ctx context.Context, sl store.Slot, a store.Assignment, head string) error {
-	if store.Deref(a.HeadSHA) != head {
+	if was := store.Deref(a.HeadSHA); was != head {
+		if err := c.addClaimedHead(ctx, a.ID, was); err != nil {
+			return err
+		}
 		if err := c.st.UpdateAssignmentHead(ctx, a.ID, head); err != nil {
 			return err
 		}
@@ -623,27 +627,58 @@ func (c *copySet) fixOwnHead(ctx context.Context, w registry.PRWork, sl store.Sl
 }
 
 // unpushedPastClaim counts the commits of commit sha of checkout sl on no
-// remote or magnum ref and past the heads its claim switched to: its open
-// assignment's, the PR's remote head the claim fetched, so a force-push of
-// the PR, which moves the fix ref off it at the release's fetch, leaves it
-// pushed, and the checkout's recorded one (sl's checked_out_sha), which
-// every writer records pushed or kept (the claim at the fix ref, the
-// switch at a fetched head, the slot guard at the PR's pushed head,
-// fixOwnHead after its keep). Either may be the other's older head: a
+// remote or magnum ref and past the heads its claims switched to: its open
+// assignment's, the PR's remote head the last claim fetched, so a force-push
+// of the PR, which moves the fix ref off it at the release's fetch, leaves
+// it pushed, and the heads the assignment had before (claimedHeads): a
 // switch cut between the assignment's head and the checkout's move leaves
-// HEAD at the recorded head, which the PR's force-push takes off every ref.
+// HEAD at the older head, which the PR's force-push takes off every ref.
+// The checkout's recorded head (checked_out_sha) is never taken as pushed:
+// `magnum slots unpin` writes the HEAD of a head_drift or unpushed_commits
+// hold there with no keep (C2 of T3b's third check).
 func (c *copySet) unpushedPastClaim(ctx context.Context, sl store.Slot, sha string) (int, error) {
 	var claimed []string
 	switch a, err := c.st.OpenAssignmentBySlot(ctx, sl.ID); {
-	case err == nil && store.Deref(a.HeadSHA) != "":
-		claimed = append(claimed, *a.HeadSHA)
-	case err != nil && !errors.Is(err, store.ErrNotFound):
+	case err == nil:
+		if claimed, err = c.claimedHeads(ctx, a.ID); err != nil {
+			return 0, err
+		}
+		if head := store.Deref(a.HeadSHA); head != "" && !slices.Contains(claimed, head) {
+			claimed = append(claimed, head)
+		}
+	case !errors.Is(err, store.ErrNotFound):
 		return 0, err
 	}
-	if out := store.Deref(sl.CheckedOutSHA); out != "" && !slices.Contains(claimed, out) {
-		claimed = append(claimed, out)
-	}
 	return c.git.UnpushedPast(ctx, sl.Path, sha, claimed...)
+}
+
+// claimedKey is the kv key of the agents store that holds the heads
+// assignment id had before its claims switched it to a newer head of the
+// PR (switchFix), oldest first, separated by spaces.
+func claimedKey(id int64) string {
+	return "factory.fix.assignment." + strconv.FormatInt(id, 10) + ".claimed"
+}
+
+// claimedHeads are the heads assignment id had before its head
+// (claimedKey), nil for none.
+func (c *copySet) claimedHeads(ctx context.Context, id int64) ([]string, error) {
+	v, ok, err := c.st.GetKV(ctx, claimedKey(id))
+	if err != nil || !ok {
+		return nil, err
+	}
+	return strings.Fields(v), nil
+}
+
+// addClaimedHead adds head, the head assignment id had before a claim
+// switches it to a newer one, to its claimedHeads ("" adds nothing). It is
+// written before the assignment's new head, so a claim cut in between
+// still counts both.
+func (c *copySet) addClaimedHead(ctx context.Context, id int64, head string) error {
+	heads, err := c.claimedHeads(ctx, id)
+	if err != nil || head == "" || slices.Contains(heads, head) {
+		return err
+	}
+	return c.st.SetKV(ctx, claimedKey(id), strings.Join(append(heads, head), " "))
 }
 
 // ReleaseFix hands PR work w's checkout back: a fix copy goes back to its
@@ -674,8 +709,26 @@ func (c *copySet) ReleaseFix(ctx context.Context, w registry.PRWork, reason stri
 }
 
 // releaseFixSlot is ReleaseFix of checkout sl, which PR work w holds; the
-// caller holds the checkout's lock.
+// caller holds the checkout's lock. Once it is done, the heads its claims
+// switched to are forgotten (claimedKey): the release closed its
+// assignment.
 func (c *copySet) releaseFixSlot(ctx context.Context, w registry.PRWork, sl store.Slot, reason string) error {
+	a, err := c.st.OpenAssignmentBySlot(ctx, sl.ID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("release %s of %s: %w", sl.Name, workKey(w), err)
+	}
+	if err := c.releaseFixKind(ctx, w, sl, reason); err != nil {
+		return err
+	}
+	if a.ID == 0 {
+		return nil
+	}
+	return c.st.DeleteKV(ctx, claimedKey(a.ID))
+}
+
+// releaseFixKind is releaseFixSlot by the checkout's kind: a per-PR
+// checkout is removed, a fix copy released.
+func (c *copySet) releaseFixKind(ctx context.Context, w registry.PRWork, sl store.Slot, reason string) error {
 	if sl.Kind == store.SlotKindPerPR {
 		if err := c.removePerPR(ctx, w, sl, reason); err != nil {
 			return fmt.Errorf("remove %s of %s: %w", sl.Name, workKey(w), err)

@@ -27341,6 +27341,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
     live hold the tracked changes are saved as the checkout's `dirty_worktree` hold, as Guard saves them, so
     they stay held after the person leaves; a moved HEAD is still no reason to refuse, and nothing is recorded
     for it. `guardDiscard` stays Resync's. Test, failing first: `TestGuardChangesSavesDirtyWorktreeUnderALiveHold`.
+  - An unpinned head is never taken as pushed (C2). The release counted the checkout's `checked_out_sha` as pushed
+    (`unpushedPastClaim`) on the premise that every writer of it records a head pushed or kept, but `magnum slots
+    unpin` writes the HEAD of a `head_drift` or `unpushed_commits` hold there with no keep: a commit made in a fix
+    copy from a shell, held by a claim's `slots.Release` over a copy a cut release left releasing and then
+    unpinned, was counted as pushed, and the release's reset left it on no ref. The release now counts the heads
+    the claim's assignment had: its head and the heads it had before its claims switched it to newer ones, which
+    `switchFix` adds to the agents store's kv (`factory.fix.assignment.<id>.claimed`) before it writes the new
+    head, so a switch cut before the checkout moved still counts the older head HEAD stayed at (C2 of T3b's third
+    check, which `checked_out_sha` covered). The release forgets them once it closed the assignment. Unpin was
+    left as it is: its answer says the next release resets the slot, and for a review slot it does. Test,
+    failing first: `TestAnUnpinnedHeadIsNeverTakenAsPushed`; `TestASwitchCutBeforeTheCheckoutMovedKeepsNothingOfThePRsOldHead`
+    fails when the older head is not recorded.
 
 ## Learned rules
 
