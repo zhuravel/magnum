@@ -359,9 +359,12 @@ func (e *Engine) noteLease(ctx context.Context, pr store.PR, v leaseView) bool {
 // reviewed or closed PR. It reads the PR's owner row and lease again, as
 // dispatch does (noteLease): the row goes once the lease reads or the
 // factory no longer fixes the PR, a read that still fails keeps it (and a
-// grace that ends meanwhile fails open), whatever its source. A PR gone or
-// closed (merged too) drops its row at once, and so does a daemon that
-// reads no lease.
+// grace that ends meanwhile fails open), whatever its source. A closed or
+// merged PR's row is read again the same way (C1): `magnum review` of a
+// merged PR is held for its grace too, and a row dropped while its read
+// still fails would start the grace anew at each ask, so the review would
+// never fail open. A PR gone drops its row at once, and so does a daemon
+// that reads no lease.
 func (e *Engine) sweepLeaseUnreads(ctx context.Context) {
 	keys, err := e.st.KVKeys(ctx, "pr.*.fix_lease_unread")
 	if err != nil {
@@ -379,9 +382,6 @@ func (e *Engine) sweepLeaseUnreads(ctx context.Context) {
 			e.delKV(ctx, key)
 			continue
 		case err != nil:
-			continue
-		case pr.GHState != store.GHOpen || slices.Contains(closingStates, pr.State):
-			e.delKV(ctx, key)
 			continue
 		}
 		if v, ok := e.leaseOf(ctx, pr); ok {

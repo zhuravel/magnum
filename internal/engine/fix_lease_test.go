@@ -390,8 +390,10 @@ func TestAnOwnerRowThatDoesNotParseIsNamedAsMagnumsOwn(t *testing.T) {
 // A failed lease read the doctor names lasts only while it does: each tick
 // reads again the lease of every PR it is recorded for, round or none (a
 // PR reviewed after it failed open is no dispatch candidate any more), and
-// drops it once the lease reads, the factory no longer fixes the PR, or the
-// PR closed.
+// drops it once the lease reads or the factory no longer fixes the PR. A
+// closed PR's is read again the same way: it stays while the read fails,
+// for `magnum review` of the merged PR fails open only on a grace that
+// already ran (C1), and goes once the read works.
 func TestAFailedLeaseReadGoesOnceItReadsOrThePRLeaves(t *testing.T) {
 	storetest.Parallel(t)
 	for _, tc := range []struct {
@@ -402,11 +404,10 @@ func TestAFailedLeaseReadGoesOnceItReadsOrThePRLeaves(t *testing.T) {
 		{"the lease still fails", func(*harness, *fakeLease) {}, false},
 		{"the lease reads again", func(_ *harness, lease *fakeLease) { lease.set(FixLease{}, nil) }, true},
 		{"the factory no longer fixes the PR", func(h *harness, _ *fakeLease) { h.e.delKV(h.ctx, fixwork.KVPRFixOwner(h.pr(2).ID)) }, true},
-		{"the PR closed", func(h *harness, _ *fakeLease) {
-			h.open(prSpec{n: 1, head: "base1"}) // #2 left the OPEN list: closed, which the next tick confirms
-			h.gh.closed[2] = "CLOSED"
-			h.tick()
-			h.advance(confirmGap)
+		{"the PR closed, its lease still failing", func(h *harness, _ *fakeLease) { closeAndConfirm(h) }, false},
+		{"the PR closed, its lease reading again", func(h *harness, lease *fakeLease) {
+			closeAndConfirm(h)
+			lease.set(FixLease{}, nil)
 		}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -424,6 +425,66 @@ func TestAFailedLeaseReadGoesOnceItReadsOrThePRLeaves(t *testing.T) {
 			}
 		})
 	}
+}
+
+// `magnum review` of a merged PR whose owner row magnum's registry cannot
+// read is refused for the grace from its first failed read, and then taken:
+// the sweep keeps a closed PR's failed read while it fails, as an open PR's,
+// so a later ask finds the grace that already ran, rather than one that
+// starts anew at each ask and never fails open (C1). Once the row reads, the
+// failed read goes.
+func TestAMergedPRsReviewFailsOpenAfterTheGraceOfItsOwnerRow(t *testing.T) {
+	lease := &fakeLease{}
+	lease.set(FixLease{Fixing: true, Phase: FixPhaseFixing, Head: "b2", Cycle: 1, Cap: 3}, nil) // no round of b2 runs before the merge
+	h := leaseHarness(t, lease)
+	pr := h.pr(2)
+	closePR2(h) // merged at b2, reviewed at b1
+	failKVRead(h, fixwork.KVPRFixOwner(pr.ID))
+	review := func() store.Request {
+		t.Helper()
+		id := h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}})
+		h.handle()
+		return h.request(id)
+	}
+	asked := h.clock.Now()
+	if r := review(); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "magnum's registry cannot read its owner row") {
+		t.Fatalf("the first ask: %s %q", r.State, deref(r.Result))
+	}
+	for range 3 { // the ticks' sweep reads it again
+		h.advance(4 * time.Minute)
+		h.tick()
+	}
+	if u, ok := h.leaseUnread(pr.ID); !ok || !u.Since.Equal(asked) || !u.Open {
+		t.Fatalf("the failed read = %+v, %v; want it kept from the first ask, open after the grace", u, ok)
+	}
+	if r := review(); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "post-merge") {
+		t.Errorf("the ask after the grace: %s %q, want the post-merge review", r.State, deref(r.Result))
+	}
+	if ev, ok := h.fixEvent("fix.lease_open"); !ok || !strings.Contains(ev.Message, "magnum's registry cannot read the PR's owner row") {
+		t.Errorf("fix.lease_open = %+v, %v", ev, ok)
+	}
+
+	// The row reads again: the failed read goes, closed PR or not.
+	if _, err := h.st.DB().ExecContext(h.ctx, `DELETE FROM kv WHERE key = ?`, fixwork.KVPRFixOwner(pr.ID)); err != nil {
+		t.Fatal(err)
+	}
+	h.advance(time.Minute)
+	h.tick()
+	if u, ok := h.leaseUnread(pr.ID); ok {
+		t.Errorf("the failed read stays after the row reads: %+v", u)
+	}
+}
+
+// closeAndConfirm closes PR #2 on GitHub and lets the poll see it leave the
+// OPEN list, which the next tick, a confirmGap later, confirms.
+func closeAndConfirm(h *harness) {
+	h.t.Helper()
+	h.open(prSpec{n: 1, head: "base1"}) // #2 left the OPEN list: closed, which the next tick confirms
+	h.gh.mu.Lock()
+	h.gh.closed[2] = "CLOSED"
+	h.gh.mu.Unlock()
+	h.tick()
+	h.advance(confirmGap)
 }
 
 // The grace counts from the first of failed reads that follow each other: a
