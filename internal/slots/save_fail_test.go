@@ -126,6 +126,54 @@ func TestAFailedListingDiscardsNothing(t *testing.T) {
 	h.wantKept(t, sl.Name, sl.Path, h.shaPR8)
 }
 
+// A forced removal whose save fails goes on, as you asked, and says what
+// it did: a slot.discarded event at level warn names the changes it
+// deleted and says "forced, not saved", with the save's error. It raised
+// the failure as one the step retries (a slot.save_failed event and the
+// toast saying the step discards nothing and retries), then wrote
+// slot.save_ok "with nothing left to save", after it deleted the changes
+// unsaved.
+func TestAForcedRemovalWhoseSaveFailsSaysItsChangesWentUnsaved(t *testing.T) {
+	f := newPerPR(t, true)
+	h := f.h
+	sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, f.repoName(), f.pr, f.sha7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirty(t, sl.Path)
+	var mu sync.Mutex
+	alerts := 0
+	h.m.SetSaveAlert(func(context.Context, SaveFailure) {
+		mu.Lock()
+		defer mu.Unlock()
+		alerts++
+	})
+	h.failSaves(t)
+
+	if err := h.m.RemovePRWorktree(h.ctx, sl, true); err != nil {
+		t.Fatalf("a forced removal: %v", err)
+	}
+	if got := h.slot(sl.Name); got.State != store.SlotRemoved || fsx.Exists(sl.Path) {
+		t.Fatalf("state %s, directory left %v; want a forced removal to go on", got.State, fsx.Exists(sl.Path))
+	}
+	subject := "slot:" + sl.Name
+	if evs := eventKinds(t, h.st, subject, "slot.save_failed"); len(evs) != 0 || alerts != 0 {
+		t.Fatalf("slot.save_failed events %+v, %d alerts; want none: the forced step retries nothing", evs, alerts)
+	}
+	if evs := eventKinds(t, h.st, subject, "slot.save_ok"); len(evs) != 0 {
+		t.Fatalf("slot.save_ok events = %+v, want none: nothing was saved", evs)
+	}
+	evs := h.discarded(t, sl.Name)
+	if len(evs) != 1 || evs[0].Level != "warn" {
+		t.Fatalf("slot.discarded events = %+v, want one warning", evs)
+	}
+	for _, want := range []string{"Gemfile.lock", "notes.txt", "forced, not saved (slots: save the changes in"} {
+		if !strings.Contains(evs[0].Message, want) {
+			t.Fatalf("slot.discarded = %q, want it to say %q", evs[0].Message, want)
+		}
+	}
+}
+
 // A removal clears its slot's recorded save failure when it marks the slot
 // removed, however it ends: here through a worktree whose folder was
 // deleted by hand after the save failed, which git lists as prunable, so

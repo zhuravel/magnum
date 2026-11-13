@@ -494,32 +494,57 @@ const maxListed = 20
 // is an error, and the step discards nothing; it is raised once per slot
 // (saveFailed), and the next one that works clears it (saveWorked).
 func (m *Manager) noteDiscard(ctx context.Context, sl store.Slot, untracked bool, what string) (bool, error) {
+	msg, kind, err := m.saveDiscard(ctx, sl, untracked, what)
+	if err != nil {
+		return false, m.saveFailed(ctx, sl, kind, what, err)
+	}
+	return m.noteSaved(ctx, sl, msg), nil
+}
+
+// saveDiscard lists the changes in slot sl's tree that the step (what)
+// discards, untracked files counted only with untracked, and saves them
+// (saveChanges) unless all it holds is the local mise file magnum
+// rendered. msg is the slot.discarded event's words: the changes, their
+// first maxListed paths and the save ("" when the tree holds no change). A
+// listing or a save that fails is err, of kind SaveFailedListing or
+// SaveFailedSave; msg then names the changes it listed, without a save.
+func (m *Manager) saveDiscard(ctx context.Context, sl store.Slot, untracked bool, what string) (msg, kind string, err error) {
 	if sl.Path == "" || !fsx.Exists(sl.Path) {
-		m.saveWorked(ctx, sl, "the save before a discard works again")
-		return false, nil
+		return "", "", nil
 	}
 	ch, err := m.worktreeChanges(ctx, sl.Path)
 	if err != nil {
-		return false, m.saveFailed(ctx, sl, SaveFailedListing, what, err)
+		return "", SaveFailedListing, err
 	}
 	paths := ch.paths(untracked)
 	if len(paths) == 0 {
-		m.saveWorked(ctx, sl, "the save before a discard works again")
-		return false, nil
+		return "", "", nil
 	}
-	msg := fmt.Sprintf("discarding %s in %s: %s", ch.describe(untracked), sl.Path, clipNames(paths))
-	if len(ch.tracked) > 0 || len(withoutRenderedMiseLocal(sl.Path, slices.Clone(ch.untracked))) > 0 {
-		s, err := m.saveChanges(ctx, sl, ch, untracked, what)
-		if err != nil {
-			return false, m.saveFailed(ctx, sl, SaveFailedSave, what, err)
-		}
-		if s.dir != "" {
-			msg += s.note()
-		}
+	msg = fmt.Sprintf("discarding %s in %s: %s", ch.describe(untracked), sl.Path, clipNames(paths))
+	if len(ch.tracked) == 0 && len(withoutRenderedMiseLocal(sl.Path, slices.Clone(ch.untracked))) == 0 {
+		return msg, "", nil
 	}
+	s, err := m.saveChanges(ctx, sl, ch, untracked, what)
+	if err != nil {
+		return msg, SaveFailedSave, err
+	}
+	if s.dir != "" {
+		msg += s.note()
+	}
+	return msg, "", nil
+}
+
+// noteSaved records a discard whose save worked (or that had nothing to
+// save): the slot's recorded save failure cleared (saveWorked), and its
+// slot.discarded event, msg, unless the tree holds no change (""); it
+// reports whether it does.
+func (m *Manager) noteSaved(ctx context.Context, sl store.Slot, msg string) bool {
 	m.saveWorked(ctx, sl, "the save before a discard works again")
+	if msg == "" {
+		return false
+	}
 	m.event(ctx, "slot:"+sl.Name, "info", "slot.discarded", msg)
-	return true, nil
+	return true
 }
 
 // NoteDiscard is noteDiscard for a caller that discards the changes of

@@ -80,7 +80,7 @@ func (m *Manager) saveFailed(ctx context.Context, sl store.Slot, kind, what stri
 	if old, ok := m.saveFailure(ctx, sl.ID); ok && old.Kind == kind {
 		return err
 	}
-	f := SaveFailure{Slot: sl.Name, Kind: kind, What: what, Error: textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 300), Since: m.now()}
+	f := SaveFailure{Slot: sl.Name, Kind: kind, What: what, Error: failureLine(err), Since: m.now()}
 	b, jerr := json.Marshal(f)
 	if jerr == nil {
 		jerr = m.d.Store.SetKV(context.WithoutCancel(ctx), saveFailedKey(sl.ID), string(b))
@@ -93,6 +93,12 @@ func (m *Manager) saveFailed(ctx context.Context, sl store.Slot, kind, what stri
 		(*alert)(ctx, f)
 	}
 	return err
+}
+
+// failureLine is what a record or an event says of err, a save's or a
+// listing's: its first line, redacted, 300 characters at most.
+func failureLine(err error) string {
+	return textx.Clip(textx.FirstLine(execx.Redact(err.Error())), 300)
 }
 
 // saveWorked clears slot sl's recorded save failure, if any, with a

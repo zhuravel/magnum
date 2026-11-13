@@ -730,7 +730,7 @@ func (m *Manager) presentDatabases(ctx context.Context, pool config.Pool, names 
 // anything else left in the tree is magnum's residue, removed with --force
 // once it is saved and a slot.discarded event names it and the save
 // (noteDiscard). A save that fails refuses the removal, but a forced one,
-// which logs it and goes on: you asked for it.
+// which goes on: you asked for it (noteRemoval).
 func (m *Manager) removeWorktree(ctx context.Context, sl store.Slot, force bool) error {
 	if missing(sl.Path) && missing(sl.MainClone) {
 		return nil
@@ -757,18 +757,42 @@ func (m *Manager) removeWorktree(ctx context.Context, sl store.Slot, force bool)
 			}
 		}
 	}
-	dirty, err := m.noteDiscard(ctx, sl, true, "the removal of the worktree")
-	switch {
-	case err != nil && !force:
+	dirty, unsaved, err := m.noteRemoval(ctx, sl, force)
+	if err != nil {
 		return err
-	case err != nil:
-		m.logErr(ctx, err, "slots: list and save the changes in %s before a forced removal, which removes them unsaved: %v", sl.Path, err)
 	}
 	if err := m.git.WorktreeRemove(ctx, sl.MainClone, sl.Path, force || dirty); err != nil {
 		return err
 	}
-	m.saveWorked(ctx, sl, "the forced removal went on, with nothing left to save")
+	if unsaved != "" {
+		m.event(ctx, "slot:"+sl.Name, "warn", "slot.discarded", unsaved)
+	}
 	return nil
+}
+
+// noteRemoval saves the tree of slot sl before the removal of its worktree
+// (noteDiscard) and reports whether it holds changes. A listing or a save
+// that fails refuses the removal, but a forced one, which goes on: as no
+// step retries then, the failure is not raised as one that does
+// (saveFailed), but logged, and unsaved is the slot.discarded event, at
+// level warn, that the caller writes once the worktree went: the changes
+// it deleted, "forced, not saved", and the save's error. A record of an
+// earlier failure goes with the slot's removal (markRemoved).
+func (m *Manager) noteRemoval(ctx context.Context, sl store.Slot, force bool) (dirty bool, unsaved string, err error) {
+	const what = "the removal of the worktree"
+	if !force {
+		dirty, err := m.noteDiscard(ctx, sl, true, what)
+		return dirty, "", err
+	}
+	msg, _, err := m.saveDiscard(ctx, sl, true, what)
+	if err == nil {
+		return m.noteSaved(ctx, sl, msg), "", nil
+	}
+	m.logErr(ctx, err, "slots: list and save the changes in %s before a forced removal, which removes them unsaved: %v", sl.Path, err)
+	if msg == "" {
+		msg = fmt.Sprintf("discarding the changes in %s, which could not be listed", sl.Path)
+	}
+	return true, msg + "; forced, not saved (" + failureLine(err) + ")", nil
 }
 
 // missing reports whether path definitely does not exist (an unreadable
