@@ -117,7 +117,7 @@ func TestTheScreenNamesTheDrainsOnATaskWithNoWait(t *testing.T) {
 	r.session(working, "fx-writer", "working", screenNow.Add(-8*time.Minute), screenNow.Add(-20*time.Second))
 	// The drains' reasons carry their start, as restart.go and control.go
 	// write them, so the wait adds no "(since …)" of its own.
-	drain := Hold{Kind: HoldDrain, Reason: "`magnum factory install --drain` (pid 4300, since 09:00:00): nothing new starts until the restart", Since: heldSince}
+	drain := Hold{Kind: HoldDrain, Reason: "`magnum factory install --drain` (pid 4300, since 09:00:00): no new start: work in flight finishes", Since: heldSince}
 	reboot := Hold{Kind: HoldReboot, Reason: "draining for a reboot since Nov 3 09:00: nothing new starts; `magnum resume` ends it", Since: heldSince}
 	for _, h := range []Hold{drain, reboot} {
 		r.holds(h)

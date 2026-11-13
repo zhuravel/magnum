@@ -134,7 +134,7 @@ func TestAnActiveTaskWithNoWaitShowsTheDaemonsHold(t *testing.T) {
 // a task with a wait of its own keeps it.
 func TestAnActiveTaskWithNoWaitShowsTheDrains(t *testing.T) {
 	for _, h := range []factory.Hold{
-		{Kind: factory.HoldDrain, Reason: "`magnum factory install --drain` (pid 4300, since 14:02:11): nothing new starts until the restart"},
+		{Kind: factory.HoldDrain, Reason: "`magnum factory install --drain` (pid 4300, since 14:02:11): no new start: work in flight finishes"},
 		{Kind: factory.HoldReboot, Reason: "draining for a reboot since Nov 13 14:02: nothing new starts; `magnum resume` ends it"},
 	} {
 		t.Run(h.Kind, func(t *testing.T) {

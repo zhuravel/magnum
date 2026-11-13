@@ -84,3 +84,34 @@ func TestADaemonThatStartsShowsNoneOfTheOldDaemonsHolds(t *testing.T) {
 		t.Fatal("Run did not return after SIGTERM")
 	}
 }
+
+// `magnum factory status` cannot see agents, so it names an install drain
+// as the wait of each active task with no wait of its own, one whose agent
+// is mid-turn too, while the screen puts that agent first. The drain's
+// words say what holds for every such task: no new start, and the work in
+// flight finishes (its turn, a round, a check), never that the task is
+// stopped until the restart. A reboot's drain holds the prompts too, so its
+// words stay.
+func TestAnInstallDrainsWaitSaysTheWorkInFlightFinishes(t *testing.T) {
+	h := newHarness(t)
+	h.stage(config.FactoryStageAgents, idleStage)
+	task := h.task("PR-12542", registry.TaskActive, "investigate")
+	h.e.drainerAlive = func(Drain) bool { return true }
+	h.installDrain(4242)
+
+	h.tick()
+
+	hs, err := ReadHolds(h.layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := StoppingHold(hs, h.reload(task.ID))
+	if !ok || got.Kind != HoldDrain {
+		t.Fatalf("holds %+v: want the install drain as the wait of the task with none of its own", hs)
+	}
+	who, what := HoldWait(got, h.clock.Now())
+	if who != waitHeld || !strings.HasSuffix(what, ": no new start: work in flight finishes") || !strings.Contains(what, "pid 4242") ||
+		strings.Contains(what, "until the restart") {
+		t.Errorf("the wait %s: %q, want whose drain it is and that no new start comes while the work in flight finishes", who, what)
+	}
+}

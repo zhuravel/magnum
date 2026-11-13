@@ -445,7 +445,7 @@ func TestFactoryStatusShowsTheDrainAndTheWorkInFlight(t *testing.T) {
 	l := dt.ctx.Layout
 	writeFactoryWork(t, l, factory.WorkRecord{PID: 250, Drain: "x", Work: []factory.WorkItem{factoryRound}})
 	since := time.Now().Add(-10 * time.Minute)
-	b, err := json.Marshal([]factory.Hold{{Kind: factory.HoldDrain, Reason: "`magnum factory install --drain` (pid 4242): nothing new starts until the restart",
+	b, err := json.Marshal([]factory.Hold{{Kind: factory.HoldDrain, Reason: "`magnum factory install --drain` (pid 4242): no new start: work in flight finishes",
 		Since: since}})
 	if err != nil {
 		t.Fatal(err)
@@ -458,7 +458,7 @@ func TestFactoryStatusShowsTheDrainAndTheWorkInFlight(t *testing.T) {
 		t.Fatalf("exit %d, stderr %s", code, dt.stderr)
 	}
 	actContains(t, dt.stdout.String(), "factory daemon: running (pid 250)",
-		"held: drain: `magnum factory install --drain` (pid 4242): nothing new starts until the restart (since "+inspClock(time.Now(), since)+")",
+		"held: drain: `magnum factory install --drain` (pid 4242): no new start: work in flight finishes (since "+inspClock(time.Now(), since)+")",
 		"in flight: local review round 2 of PR-12340 (since "+inspClock(time.Now(), factoryRound.Since)+")")
 
 	dt.stdout.Reset()

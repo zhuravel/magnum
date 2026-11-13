@@ -340,7 +340,7 @@ func TestAnInstallDrainIsAHoldTheScreenDraws(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(hs) != 1 || hs[0].Kind != HoldDrain || !strings.Contains(hs[0].Reason, "pid 4242") ||
-		!strings.Contains(hs[0].Reason, "nothing new starts") || hs[0].Since.IsZero() {
+		!strings.Contains(hs[0].Reason, "no new start") || hs[0].Since.IsZero() {
 		t.Fatalf("holds %+v, want the drain's, whose it is and since when", hs)
 	}
 	if err := LiftDrain(h.layout, value); err != nil {

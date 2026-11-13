@@ -27837,6 +27837,21 @@ skill versions); people add theirs to the sections before it, at the end of the 
   Test, failing first: `TestADaemonThatStartsShowsNoneOfTheOldDaemonsHolds` (its pause case fails without the
   second save).
 
+- **The install drain's wait says that the work in flight finishes** (2026-11-13, the engine owner's follow-up
+  HV-C2 to the holds as a task's wait). `magnum factory status` cannot see the agents. During
+  `magnum factory install --drain`, it named the drain as the wait of each active task with no wait of its own.
+  That included a task whose agent was mid-turn: `` held: `magnum factory install --drain` (pid 4300, since
+  14:02:11): nothing new starts until the restart ``. The screen puts that agent first and the drain after it.
+  But that drain holds back only the starts (a launch, an effect, a round, a check, a claim, a talk). It lets a
+  turn in flight end, and it lets the next prompt go (`MayPrompt`), since the turns outlive a restart. The
+  drain's hold now says `no new start: work in flight finishes` after whose it is (`drainWords`), which holds
+  for any such task. The other way was to show only the reboot's drain as a task's wait in the command, since
+  that drain holds the prompts too. That way a task that the install drain does stop shows `-` again, which the
+  holds as a wait were made to end. The words of the reboot's drain stay. The status line of the hold, the
+  screen's help line and its blocker read the same reason, so they say it too. Test, failing first:
+  `TestAnInstallDrainsWaitSaysTheWorkInFlightFinishes`. The fixtures of the drain in the CLI's and the
+  screen's tests now carry the daemon's words.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

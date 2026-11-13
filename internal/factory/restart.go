@@ -317,7 +317,7 @@ func (e *Engine) takeDrain(ctx context.Context) {
 	if value == "" {
 		delete(e.holds, HoldDrain)
 	} else if h := e.holds[HoldDrain]; h == nil || value != prev {
-		e.holds[HoldDrain] = &Hold{Kind: HoldDrain, Reason: drainOwner(value) + ": nothing new starts until the restart",
+		e.holds[HoldDrain] = &Hold{Kind: HoldDrain, Reason: drainOwner(value) + ": " + drainWords,
 			Since: d.Since.Round(0)}
 	}
 	e.saveWork()
@@ -342,6 +342,15 @@ func (e *Engine) warnDrain(why string) {
 	e.drainWarned = why
 	e.log.Warn("the drain install asked for cannot be read; no drain holds", "file", filepath.Base(e.d.Layout.FactoryDrain()), "why", why)
 }
+
+// drainWords is what the install drain's hold says after whose it is: the
+// wait `magnum factory status` gives each active task with no wait of its
+// own (StoppingHold), which cannot see whether its agent is mid-turn. The
+// drain holds back what would start (a launch, an effect, a round, a check,
+// a claim, a talk), never a turn or a round in flight, nor the prompts, so
+// it says what holds for any such task. A reboot's drain holds the prompts
+// too, and says that nothing new starts.
+const drainWords = "no new start: work in flight finishes"
 
 // drainOwner names the command a drain value came from.
 func drainOwner(value string) string {
