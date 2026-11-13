@@ -262,3 +262,14 @@ var (
 func workflowRead[T any](ctx context.Context, g isolatedGit, dir string, commits []string, read func(iso string) (T, error)) (T, error) {
 	return fixwork.WorkflowRead(ctx, g, dir, commits, read)
 }
+
+// HeldMergeFile is the file in the PR's report directory that shows what
+// a held merge does to the workflow files (fixwork.HeldMergeFile).
+const HeldMergeFile = fixwork.HeldMergeFile
+
+// The held merge's diff, under the engine's names.
+var (
+	heldDiff       = fixwork.HeldDiff
+	writeHeldDiff  = fixwork.WriteHeldDiff
+	escapeControls = fixwork.EscapeControls
+)

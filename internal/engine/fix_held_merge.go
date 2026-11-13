@@ -49,12 +49,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/config"
-	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/notify"
@@ -71,12 +68,6 @@ func KVPRHeldMerge(prID int64) string { return fmt.Sprintf("pr.%d.held_merge", p
 // refs/magnum/held/, never under refs/heads or refs/remotes, and by the
 // id, so no repository's name (".github") makes a name git refuses.
 func HeldMergeRef(prID int64) string { return fmt.Sprintf("refs/magnum/held/%d", prID) }
-
-// HeldMergeFile is the file in the PR's report directory
-// (paths.Layout.PRReviews) that shows what a held merge does to the
-// workflow files: the merge, how the fixer resolved their conflicts, then
-// what its push changes in them. The screens' e opens it in the pager.
-const HeldMergeFile = "held-merge.diff"
 
 // heldRow is a held merge as its row was read: the merge, the row as
 // stored (raw: a drop deletes only that row) and its PR's number.
@@ -195,14 +186,6 @@ func (e *Engine) holdMerge(ctx context.Context, job *fixJob, id *config.Identity
 	return h, ""
 }
 
-// writeHeldDiff writes diff at path, in dir, made private when missing.
-func writeHeldDiff(dir, path string, diff []byte) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	return fsx.WriteFileAtomic(path, diff, 0o600)
-}
-
 // settleHeld ends the settle of the job whose fixer's merge magnum holds
 // (held): the PR's attention, h's words with the calls the loop carried
 // (carriedText; fixAttention keeps the decision calls an earlier attention
@@ -217,7 +200,7 @@ func (e *Engine) settleHeld(ctx context.Context, job *fixJob, held fixMergeHeld)
 		msg = strings.TrimSuffix(msg, ".") + "; " + carried
 	}
 	e.event(ctx, "warn", job.subject(), "fix.needs_you", msg, job.eventData())
-	e.heldMergeAttention(ctx, job, msg)
+	e.heldAttention(ctx, job, msg)
 	if err := writeKVJSON(ctx, e, KVPRHeldMerge(job.pr.ID), "the held merge", held.h); err != nil {
 		e.log.Warn("fix: record the held merge", "subject", job.subject(), "err", err)
 		e.unholdFiles(ctx, job.repo, job.pr, held.h)
@@ -229,7 +212,7 @@ func (e *Engine) settleHeld(ctx context.Context, job *fixJob, held fixMergeHeld)
 // an urgent toast of it on a PR whose state takes no attention, which
 // fixAttention leaves with the events alone: a PR magnum never reviewed,
 // whose needs attention would queue its review at its next push.
-func (e *Engine) heldMergeAttention(ctx context.Context, job *fixJob, msg string) {
+func (e *Engine) heldAttention(ctx context.Context, job *fixJob, msg string) {
 	e.fixAttention(ctx, job, msg)
 	if pr, err := e.st.PRByID(ctx, job.pr.ID); err == nil && pr.State != store.PRReviewed && pr.State != store.PRNeedsAttention &&
 		!slices.Contains(waitingStates, pr.State) {
@@ -241,81 +224,6 @@ func (e *Engine) heldMergeAttention(ctx context.Context, job *fixJob, msg string
 // daemon did not push (why): the merge by hand (mergeByHand).
 func (j *fixJob) handRefusedWords(why string) string {
 	return fmt.Sprintf("magnum did not push %s's merge of the parent of %s: %s; %s", j.role.Name, j.label(), why, j.mergeByHand(why))
-}
-
-// heldNoConflict is held-merge.diff's line, in place of the remerge diff,
-// for a merge that resolved no conflict in a workflow file.
-const heldNoConflict = "No conflict in a workflow file was resolved: the workflow changes come unchanged from %s and the PR.\n"
-
-// heldDiff is held-merge.diff of h in dir's objects: a first line that
-// names the merge, how it resolved the conflicts in the workflow files
-// (`git show --remerge-diff`), or heldNoConflict's one line when it
-// resolved none, then everything its push changes in them against its
-// head (`git diff`), every control character but tab and newline escaped
-// (escapeControls). Both read in a repository of the daemon's own, after
-// the workflow files' objects at the head, the tip and the merge are
-// hashed again (workflowRead): no merge driver or attribute of the
-// clone's runs, and a forged object is gitx.ErrObjectMismatch.
-func heldDiff(ctx context.Context, hg heldGit, dir string, h HeldMerge) ([]byte, error) {
-	var remerge, plain string
-	_, err := workflowRead(ctx, hg, dir, []string{h.Head, h.Tip, h.Merge}, func(iso string) (struct{}, error) {
-		var err error
-		if remerge, err = hg.RemergeDiff(ctx, iso, h.Merge, workflowsPath); err != nil {
-			return struct{}{}, err
-		}
-		plain, err = hg.PathsDiff(ctx, iso, h.Head, h.Merge, workflowsPath)
-		return struct{}{}, err
-	})
-	if err != nil {
-		return nil, err
-	}
-	switch {
-	case strings.TrimSpace(remerge) == "":
-		remerge = fmt.Sprintf(heldNoConflict, h.Base)
-	case !strings.HasSuffix(remerge, "\n"):
-		remerge += "\n"
-	}
-	head := fmt.Sprintf("Held merge %s: %s's merge of %s at %s into the PR's head %s.\n", h.Merge, h.Role, h.Base, textx.ShortSHA(h.Tip),
-		textx.ShortSHA(h.Head))
-	return []byte(escapeControls(head + remerge + plain)), nil
-}
-
-// escapeControls is s with every control character but tab and newline
-// (C0, DEL and C1) and every bidi or invisible format character
-// (hiddenFormat) written as \xNN or \uNNNN: workflow content an agent
-// wrote reaches a pager that runs with LESS=R, where an escape sequence or
-// a carriage return could hide a line, and a "Trojan Source" override could
-// show a line in another order than git runs it. A byte that is no UTF-8
-// stays.
-func escapeControls(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); {
-		r, n := utf8.DecodeRuneInString(s[i:])
-		switch {
-		case r == utf8.RuneError && n == 1:
-			b.WriteByte(s[i])
-		case r == '\t' || r == '\n':
-			b.WriteRune(r)
-		case r < 0x20 || r == 0x7f:
-			fmt.Fprintf(&b, "\\x%02x", r)
-		case r >= 0x80 && r <= 0x9f, hiddenFormat(r):
-			fmt.Fprintf(&b, "\\u%04x", r)
-		default:
-			b.WriteString(s[i : i+n])
-		}
-		i += n
-	}
-	return b.String()
-}
-
-// hiddenFormat reports whether r is a character a line can hide behind or
-// be reordered by: every format character (Unicode's Cf: the embeddings
-// and overrides U+202A–202E, the isolates U+2066–2069, the marks U+200E,
-// U+200F and U+061C, the zero-width U+200B–200D, the byte order mark
-// U+FEFF and their kin) and the line and paragraph separators U+2028,
-// U+2029, which a terminal can break a line at.
-func hiddenFormat(r rune) bool {
-	return unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
 }
 
 // heldMergeAttention is the PR's attention while h is held: "fix: merge ready:
@@ -1011,7 +919,7 @@ func (e *Engine) heldPushed(ctx context.Context, job *fixJob, row heldRow, found
 		}
 		msg += rest
 		e.event(ctx, "warn", job.subject(), "fix.needs_you", msg, data)
-		e.heldMergeAttention(ctx, job, msg)
+		e.heldAttention(ctx, job, msg)
 		return
 	}
 	e.replaceHeldWords(ctx, job.subject(), job.pr.ID, h, pushed) // words a PR the push left in needs attention would still show

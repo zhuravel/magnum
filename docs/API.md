@@ -9454,11 +9454,9 @@ const FormerDismissMessage = "magnum: superseded by the review of %s posted as %
     shows on GitHub; the arguments are the new review's commit (short) and the
     login it was posted as.
 
-const HeldMergeFile = "held-merge.diff"
-    HeldMergeFile is the file in the PR's report directory
-    (paths.Layout.PRReviews) that shows what a held merge does to the workflow
-    files: the merge, how the fixer resolved their conflicts, then what its push
-    changes in them. The screens' e opens it in the pager.
+const HeldMergeFile = fixwork.HeldMergeFile
+    HeldMergeFile is the file in the PR's report directory that shows what a
+    held merge does to the workflow files (fixwork.HeldMergeFile).
 
 const HooksOverruledNote = "new Codex sessions start although hooks.json has hooks without a trust entry, until it changes again"
     HooksOverruledNote is what a resume that overrules the hold means, as its
@@ -18927,6 +18925,12 @@ const FixModeCI = "ci"
     FixModeCI is the mode of a fix loop's first cycle that fixes the PR's failed
     required CI (FixState.Mode, FixPayload.Mode).
 
+const HeldMergeFile = "held-merge.diff"
+    HeldMergeFile is the file in the PR's report directory
+    (paths.Layout.PRReviews) that shows what a held merge does to the workflow
+    files: the merge, how the fixer resolved their conflicts, then what its push
+    changes in them. The screens' e opens it in the pager.
+
 const HeldRestart = "restart"
     HeldRestart is a drain's held fix as Facts.Held carries it (its HeldFix.Why
     is "").
@@ -19016,6 +19020,14 @@ func DecisionOf(items []Item, root int64) bool
     DecisionOf reports whether items hold your decision in the thread whose
     first comment is root (Item.Decision).
 
+func EscapeControls(s string) string
+    EscapeControls is s with every control character but tab and newline (C0,
+    DEL and C1) and every bidi or invisible format character (hiddenFormat)
+    written as \xNN or \uNNNN: workflow content an agent wrote reaches a pager
+    that runs with LESS=R, where an escape sequence or a carriage return could
+    hide a line, and a "Trojan Source" override could show a line in another
+    order than git runs it. A byte that is no UTF-8 stays.
+
 func FixNeedsAsked(msg string, entries []string) []string
     FixNeedsAsked keeps of entries, the "## Needs you" of the fixer's report
     that msg (a fix job's message, a PR's last_error) names, those that
@@ -19034,6 +19046,17 @@ func ForgedWords(at string, err error) string
     words): err, an object a read of its workflow files went through, is not
     what its name says (gitx.ErrObjectMismatch), so what magnum read of the
     clone is not what GitHub would get.
+
+func HeldDiff(ctx context.Context, hg HeldDiffGit, dir string, h HeldMerge) ([]byte, error)
+    HeldDiff is held-merge.diff of h in dir's objects: a first line that names
+    the merge, how it resolved the conflicts in the workflow files (`git show
+    --remerge-diff`), or heldNoConflict's one line when it resolved none,
+    then everything its push changes in them against its head (`git diff`),
+    every control character but tab and newline escaped (EscapeControls).
+    Both read in a repository of the daemon's own, after the workflow files'
+    objects at the head, the tip and the merge are hashed again (WorkflowRead):
+    no merge driver or attribute of the clone's runs, and a forged object is
+    gitx.ErrObjectMismatch.
 
 func MagnumDue(f Facts) (why string, late bool, until time.Time)
     MagnumDue is rule 5: magnum has not reviewed the head (its reviewed head
@@ -19174,6 +19197,9 @@ func WorkflowRead[T any](ctx context.Context, g IsolatedGit, dir string, commits
 
 func WriteCIFiles(dir string, b []byte, md string) error
     WriteCIFiles writes ci-failures.json (b) and ci-failures.md (md) into dir.
+
+func WriteHeldDiff(dir, path string, diff []byte) error
+    WriteHeldDiff writes diff at path, in dir, made private when missing.
 
 
 TYPES
@@ -19745,6 +19771,16 @@ func (s FixState) Short() string
     Short is the loop while its fixer works, as the board's state cell shows it:
     "fixing 1/3 · claude-fix" ("fixing 1/3" when the role is not known), "fixing
     1/3 · confirming e6c1f37" while its settle confirms the push (Confirm).
+
+type HeldDiffGit interface {
+	IsolatedGit
+	RemergeDiff(ctx context.Context, dir, merge string, paths ...string) (string, error)
+	PathsDiff(ctx context.Context, dir, a, b string, paths ...string) (string, error)
+}
+    HeldDiffGit is the git HeldDiff reads a held merge's diff with beyond
+    IsolatedGit (*gitx.Client has it): how the merge resolved its conflicts in
+    some paths (RemergeDiff) and what one commit changes against another there
+    (PathsDiff).
 
 type HeldFix struct {
 	At   time.Time `json:"at"`
