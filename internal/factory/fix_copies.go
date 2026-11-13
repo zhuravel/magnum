@@ -584,13 +584,16 @@ func (c *copySet) fixDataGuard(ctx context.Context, w registry.PRWork, owner sto
 // fix-sync` killed mid-replay leaves HEAD on a replayed commit and the
 // fixer's own tip in the rebase's state alone), which the abort of the
 // switch or the release puts HEAD back on before it moves HEAD away (a
-// start HEAD descends from was kept with HEAD), so none is left on no ref.
-// Then a HEAD that moved off the recorded checkout is recorded as it
-// (checked_out_sha), with a factory.fix_head event, whatever you typed
-// into the PR's fix panes since the checkout. So no commit, whoever made
-// it, is lost or holds the checkout (head_drift, unpushed_commits); only
-// changes in its tree do, which magnum's slot guard and removeWorktree hold
-// over your typing (dirty_worktree).
+// start HEAD descends from was kept with HEAD), and those of the newest
+// commit marked bad and the start of a bisect left in progress
+// (gitx.BisectHeads: HEAD waits at a midpoint older than both, which only
+// the bisect's state names, and a per-PR checkout's removal deletes it), so
+// none is left on no ref. Then a HEAD that moved off the recorded checkout
+// is recorded as it (checked_out_sha), with a factory.fix_head event,
+// whatever you typed into the PR's fix panes since the checkout. So no
+// commit, whoever made it, is lost or holds the checkout (head_drift,
+// unpushed_commits); only changes in its tree do, which magnum's slot guard
+// and removeWorktree hold over your typing (dirty_worktree).
 func (c *copySet) fixOwnHead(ctx context.Context, w registry.PRWork, sl store.Slot, head, before string) error {
 	cur, err := c.st.SlotByID(ctx, sl.ID)
 	if err != nil || !fsx.Exists(cur.Path) {
@@ -600,19 +603,13 @@ func (c *copySet) fixOwnHead(ctx context.Context, w registry.PRWork, sl store.Sl
 	if err != nil {
 		return err
 	}
-	op, start, err := c.git.InProgressStart(ctx, cur.Path)
-	if err != nil {
-		return err
-	}
 	if got != head {
 		if err := c.keepUnpushed(ctx, w, cur, "HEAD", got, before); err != nil {
 			return err
 		}
 	}
-	if start != "" && start != got {
-		if err := c.keepUnpushed(ctx, w, cur, "the start of the "+op+" in progress,", start, before); err != nil {
-			return err
-		}
+	if err := c.keepInProgress(ctx, w, cur, got, before); err != nil {
+		return err
 	}
 	want := store.Deref(cur.CheckedOutSHA)
 	if want == "" || got == want {
@@ -623,6 +620,36 @@ func (c *copySet) fixOwnHead(ctx context.Context, w registry.PRWork, sl store.Sl
 	}
 	c.event(ctx, cur.Name, "info", "factory.fix_head", fmt.Sprintf("HEAD %s, past the checkout %s, has no commit on no ref: recorded as %s's checkout",
 		textx.ShortSHA(got), textx.ShortSHA(want), cur.Name))
+	return nil
+}
+
+// keepInProgress keeps (keepUnpushed) the commits an operation left in
+// progress in checkout sl holds apart from HEAD, got, before a step of PR
+// work w's claim or release (before) moves HEAD away or removes the
+// checkout: the start of a rebase or a sequence of picks
+// (gitx.InProgressStart) and the newest commit marked bad and the start of
+// a bisect (gitx.BisectHeads), each that is not HEAD.
+func (c *copySet) keepInProgress(ctx context.Context, w registry.PRWork, sl store.Slot, got, before string) error {
+	op, start, err := c.git.InProgressStart(ctx, sl.Path)
+	if err != nil {
+		return err
+	}
+	bad, from, err := c.git.BisectHeads(ctx, sl.Path)
+	if err != nil {
+		return err
+	}
+	for _, k := range []struct{ what, sha string }{
+		{"the start of the " + op + " in progress,", start},
+		{"the commit marked bad of the bisect in progress,", bad},
+		{"the start of the bisect in progress,", from},
+	} {
+		if k.sha == "" || k.sha == got {
+			continue
+		}
+		if err := c.keepUnpushed(ctx, w, sl, k.what, k.sha, before); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

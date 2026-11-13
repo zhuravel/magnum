@@ -27353,6 +27353,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
     left as it is: its answer says the next release resets the slot, and for a review slot it does. Test,
     failing first: `TestAnUnpinnedHeadIsNeverTakenAsPushed`; `TestASwitchCutBeforeTheCheckoutMovedKeepsNothingOfThePRsOldHead`
     fails when the older head is not recorded.
+  - A bisect's commits are kept. A `git bisect` left in progress leaves HEAD at a midpoint older than the newest
+    commit marked bad and than the commit it started from, which only its state (`refs/bisect/`, `BISECT_START`,
+    both the worktree's own) and the reflog name: a per-PR checkout's `worktree remove --force` deleted them, and
+    the commits past the midpoint were lost, as a rebase's original tip was before T3b's third check. The keep of
+    a claim's switch and of a release (`fixOwnHead`, now with `keepInProgress`) reads them too
+    (`gitx.BisectHeads`: `refs/bisect/bad`, or the bad term `BISECT_TERMS` names, and `BISECT_START`'s commit or
+    its branch's tip) and keeps each with commits on no ref past the claim under
+    `refs/magnum/factory-kept/<N>/<sha>`, with a `factory.fix_kept` event. The bisect itself is left as it is: a
+    fix copy keeps its state after the release's reset, until a person ends it. Tests, failing first:
+    `TestABisectLeftInProgressKeepsItsBadCommitAndItsStart` and `TestBisectHeadsNamesItsBadCommitAndItsStart` in
+    internal/gitx.
 
 ## Learned rules
 

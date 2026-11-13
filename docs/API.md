@@ -22804,6 +22804,18 @@ func (c *Client) AbortOperation(ctx context.Context, dir, op string) error
     Callers ask InProgress first; with nothing in progress git fails, and any
     other op is an error before git runs.
 
+func (c *Client) BisectHeads(ctx context.Context, repo string) (bad, start string, err error)
+    BisectHeads names the commits a `git bisect` in progress in repo holds
+    where only its own state and the reflog name them: bad, the newest commit
+    marked bad (refs/bisect/bad, or refs/bisect/<term> for the term BISECT_TERMS
+    names for it), and start, the commit it started from, which `git bisect
+    reset` puts HEAD back on (BISECT_START: the commit a detached HEAD was at,
+    or the tip of the branch it names). While it bisects, HEAD is at a midpoint,
+    older than both. Both are "" with no bisect in progress, and either is
+    "" where git has none (no commit marked bad yet, a branch that is gone).
+    refs/bisect/ and BISECT_START are a worktree's own: its removal deletes
+    them. Read-only.
+
 func (c *Client) BlameLine(ctx context.Context, dir, rev, path string, line int) (sha string, at time.Time, err error)
     BlameLine is the commit that last wrote line (from 1) of path at rev, and
     when it was authored (`git blame --porcelain -L <line>,<line> rev -- path`;

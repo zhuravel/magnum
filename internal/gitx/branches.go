@@ -782,6 +782,55 @@ func (c *Client) InProgressStart(ctx context.Context, repo string) (op, start st
 	return op, "", nil
 }
 
+// BisectHeads names the commits a `git bisect` in progress in repo holds
+// where only its own state and the reflog name them: bad, the newest commit
+// marked bad (refs/bisect/bad, or refs/bisect/<term> for the term
+// BISECT_TERMS names for it), and start, the commit it started from, which
+// `git bisect reset` puts HEAD back on (BISECT_START: the commit a detached
+// HEAD was at, or the tip of the branch it names). While it bisects, HEAD
+// is at a midpoint, older than both. Both are "" with no bisect in
+// progress, and either is "" where git has none (no commit marked bad yet,
+// a branch that is gone). refs/bisect/ and BISECT_START are a worktree's
+// own: its removal deletes them. Read-only.
+func (c *Client) BisectHeads(ctx context.Context, repo string) (bad, start string, err error) {
+	res, err := c.git(ctx, repo, call{label: "rev-parse --git-path"}, "rev-parse", "--path-format=absolute",
+		"--git-path", "BISECT_START", "--git-path", "BISECT_TERMS")
+	if err != nil {
+		return "", "", err
+	}
+	files := strings.Split(res.Out(), "\n")
+	if len(files) != 2 {
+		return "", "", fmt.Errorf("gitx: rev-parse --git-path: %d paths for 2 names", len(files))
+	}
+	b, err := os.ReadFile(filepath.Clean(files[0]))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("gitx: the start of the bisect in progress: %w", err)
+	}
+	if name := strings.TrimSpace(string(b)); isOID(name) {
+		start = name
+	} else if checkBranch("bisect start", name) == nil {
+		if start, err = c.RevParse(ctx, repo, "refs/heads/"+name); errors.Is(err, ErrNoSuchRef) {
+			start, err = "", nil
+		}
+		if err != nil {
+			return "", "", err
+		}
+	}
+	term := "bad"
+	if t, err := os.ReadFile(filepath.Clean(files[1])); err == nil {
+		if first, _, _ := strings.Cut(strings.TrimSpace(string(t)), "\n"); checkBranch("bisect term", first) == nil {
+			term = first
+		}
+	}
+	if bad, err = c.RevParse(ctx, repo, "refs/bisect/"+term); errors.Is(err, ErrNoSuchRef) {
+		bad, err = "", nil
+	}
+	return bad, start, err
+}
+
 // WorktreeDiscard removes the worktree at dir of repo, modified and
 // untracked files included, then forgets the stale registrations below
 // root, the directory of worktrees dir is in (the worktree list's prunable

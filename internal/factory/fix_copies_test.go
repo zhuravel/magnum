@@ -1372,6 +1372,70 @@ func TestARebaseLeftInProgressKeepsItsReplayedAndItsOriginalTip(t *testing.T) {
 	}
 }
 
+// leaveBisect leaves a `git bisect` in progress in checkout dir, claimed
+// at claimed: the fixer commits f1 to f4 on it, starts a bisect between f4
+// (bad) and claimed (good) and marks the midpoint bad, so HEAD waits at an
+// older commit. It returns HEAD, the bad commit and the start, f4, which
+// only the bisect's state and the reflog name.
+func (r *copiesRig) leaveBisect(dir, claimed string) (head, bad, start string) {
+	r.t.Helper()
+	for i := range 4 {
+		start = r.commit(dir, "fixer.txt", fmt.Sprintf("f%d\n", i+1))
+	}
+	r.gitIn(dir, "bisect", "start", start, claimed)
+	r.gitIn(dir, "bisect", "bad")
+	head, bad = r.gitIn(dir, "rev-parse", "HEAD"), r.gitIn(dir, "rev-parse", "refs/bisect/bad")
+	if bad == start || head == bad || r.gitIn(dir, "rev-parse", bad+"~1") != head {
+		r.t.Fatalf("the bisect left HEAD %s, bad %s, start %s: want HEAD the parent of an older bad commit", head, bad, start)
+	}
+	return head, bad, start
+}
+
+// A bisect left in progress holds the fixer's commits past its midpoint
+// where only its own state and the reflog name them: the newest commit
+// marked bad (refs/bisect/bad) and the commit it started from
+// (BISECT_START), while HEAD waits at an older midpoint. The removal of a
+// per-PR checkout (worktree remove --force, which deletes the bisect's
+// state and the reflog with the worktree) and the release of a fix copy
+// keep both under refs/magnum/factory-kept/<N>/<sha>, as a rebase's start
+// is kept. Only HEAD was kept, so the commits past the midpoint were lost.
+func TestABisectLeftInProgressKeepsItsBadCommitAndItsStart(t *testing.T) {
+	r := newFixRig(t, 1, 1)
+	shop := r.addShop()
+	r.pushPR(shop, 5, "fix.txt", "v1\n")
+	ws := r.prWork("example/shop", 5)
+	pc := r.claimFix(ws)
+	head, bad, start := r.leaveBisect(pc.Path, pc.Head)
+	r.releaseFix(ws)
+	if sl := r.slot(pc.Name); sl.State != store.SlotRemoved || fsx.Exists(pc.Path) {
+		t.Fatalf("%s after the release = %s, want removed", pc.Name, sl.State)
+	}
+	clone := filepath.Join(r.root, "shop")
+	for _, sha := range []string{head, bad, start} {
+		if !r.kept(clone, 5, sha) {
+			t.Fatalf("the per-PR checkout's removal kept %q, want HEAD %s, the bad commit %s and the start %s", r.keptRefs(clone), head, bad, start)
+		}
+	}
+	if !r.eventsSay(pc.Name, "factory.fix_kept", fixKeptRef(5, start)) {
+		t.Fatalf("no factory.fix_kept event names %s", fixKeptRef(5, start))
+	}
+
+	// A fix copy's release.
+	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
+	w := r.prWork("talkable/talkable", 7)
+	fc := r.claimFix(w)
+	head, bad, start = r.leaveBisect(fc.Path, fc.Head)
+	r.releaseFix(w)
+	if sl := r.slot(fc.Name); sl.State != store.SlotFree || sl.HoldReason != nil {
+		t.Fatalf("%s after the release = %s, hold %q, want free", fc.Name, sl.State, store.Deref(sl.HoldReason))
+	}
+	for _, sha := range []string{head, bad, start} {
+		if !r.kept(r.main, 7, sha) {
+			t.Fatalf("the fix copy's release kept %q, want HEAD %s, the bad commit %s and the start %s", r.keptRefs(r.main), head, bad, start)
+		}
+	}
+}
+
 // A per-PR checkout goes once the PR's fix work ends: at once when the PR
 // merges or closes, once its work stayed idle for fixIdleEnd, never while
 // the work goes on. Its worktree, its fix ref and its row's hold on it go,

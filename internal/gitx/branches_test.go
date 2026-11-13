@@ -3,6 +3,7 @@ package gitx
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -478,6 +479,53 @@ func TestInProgressStartIsWhereAnAbortPutsHEAD(t *testing.T) {
 	}
 	if op, sha := start(); op != "cherry-pick" || sha != p2 {
 		t.Fatalf("during the sequence of picks = %q %q, want cherry-pick and its start %s", op, sha, p2)
+	}
+}
+
+// BisectHeads names what a bisect in progress keeps in its own state: the
+// newest commit marked bad (under the term BISECT_TERMS names) and the
+// commit it started from, a detached HEAD's or a branch's tip, while HEAD
+// waits at an older midpoint. A worktree with no bisect names nothing.
+func TestBisectHeadsNamesItsBadCommitAndItsStart(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	wt := filepath.Join(filepath.Dir(fx.clone), "wt")
+	fx.git(fx.clone, "worktree", "add", "--quiet", "--detach", wt, "main")
+	heads := func() (string, string) {
+		t.Helper()
+		bad, start, err := fx.c.BisectHeads(ctx, wt)
+		if err != nil {
+			t.Fatalf("BisectHeads: %v", err)
+		}
+		return bad, start
+	}
+	if bad, start := heads(); bad != "" || start != "" {
+		t.Fatalf("a quiet worktree = %q %q, want nothing", bad, start)
+	}
+	good := fx.git(wt, "rev-parse", "HEAD")
+	var f []string
+	for i := range 4 {
+		f = append(f, fx.commit(wt, "a.txt", fmt.Sprintf("f%d\n", i), fmt.Sprintf("f%d", i)))
+	}
+
+	// Started on a detached HEAD at f3, bad at f3, good at the start.
+	fx.git(wt, "bisect", "start", f[3], good)
+	if bad, start := heads(); bad != f[3] || start != f[3] {
+		t.Fatalf("once started = %q %q, want bad and start at %s", bad, start, f[3])
+	}
+	fx.git(wt, "bisect", "bad")
+	head := fx.git(wt, "rev-parse", "HEAD")
+	bad, start := heads()
+	if bad == f[3] || !slices.Contains(f, bad) || start != f[3] || head == bad {
+		t.Fatalf("after a midpoint marked bad = %q %q, HEAD %s: want an older bad commit and the start %s", bad, start, head, f[3])
+	}
+	fx.git(wt, "bisect", "reset")
+
+	// Started on a branch, with terms of its own.
+	fx.git(wt, "switch", "--quiet", "-c", "topic")
+	fx.git(wt, "bisect", "start", "--term-new=broken", "--term-old=fine", f[3], good)
+	if bad, start := heads(); bad != f[3] || start != f[3] {
+		t.Fatalf("on a branch with its own terms = %q %q, want bad and start at %s", bad, start, f[3])
 	}
 }
 
