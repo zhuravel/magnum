@@ -175,7 +175,7 @@ func (c *copySet) Claim(ctx context.Context, t registry.Task) (Copy, error) {
 	if err != nil {
 		return Copy{}, fmt.Errorf("claim a copy for %s: %w", TaskKey(t), err)
 	}
-	sl, err := c.reserve(ctx, repo, pr)
+	sl, err := c.reserve(ctx, repo, pr, false)
 	if _, wait := errors.AsType[noCopy](err); wait {
 		return Copy{}, err
 	}
@@ -209,14 +209,42 @@ func (c *copySet) lockCopy(name string) (unlock func()) {
 	return l.Unlock
 }
 
-// reserve is the slot of the copy task row pr gets: the one it holds or a
-// free one (slots.Reserve), else a copy added for it (nextCopy, provision).
-// mu is held only to reserve and to pick the copy to add (noted in adding);
-// the setup runs without it. A copy another claim takes while this one adds
-// it is lost to that claim, and the next pass adds or reserves another.
-// A release a crash cut short ends first: the row keeps that copy until its
-// release is done, and no other one can be its.
-func (c *copySet) reserve(ctx context.Context, repo config.FactoryRepo, pr store.PR) (store.Slot, error) {
+// isFixCopy reports whether copy n of repo is one of its fix copies: the
+// fix_copies numbered past max_copies (max_copies+1 to
+// max_copies+fix_copies), set apart for the fixes of your PRs. Every other
+// copy is the tasks'.
+func isFixCopy(repo config.FactoryRepo, n int) bool {
+	return n > repo.MaxCopies && n <= repo.MaxCopies+repo.FixCopies
+}
+
+// ownsCopy reports whether a claim of its kind (fix: a fix's, else a
+// task's) may take slot name of repo: a copy of repo (copyNumber) among
+// the fix copies for a fix's, among the others for a task's.
+func ownsCopy(repo config.FactoryRepo, name string, fix bool) bool {
+	n, ok := copyNumber(repo, name)
+	return ok && isFixCopy(repo, n) == fix
+}
+
+// copyRange is where a claim of its kind numbers the copies it adds (from
+// first, at most limit of them): the tasks' from 1, max_copies of them; the
+// fixes' from max_copies+1, fix_copies of them.
+func copyRange(repo config.FactoryRepo, fix bool) (first, limit int) {
+	if fix {
+		return repo.MaxCopies + 1, repo.FixCopies
+	}
+	return 1, repo.MaxCopies
+}
+
+// reserve is the slot of the copy owner row pr gets, among the copies a
+// claim of its kind may take (fix: the fix copies, else the tasks'): the
+// one it holds or a free one (reserveFree), else a copy added for it
+// (nextCopy, provision). mu is held only to reserve and to pick the copy to
+// add (noted in adding); the setup runs without it. A copy another claim
+// takes while this one adds it is lost to that claim, and the next pass
+// adds or reserves another. A release a crash cut short ends first: the
+// row keeps that copy until its release is done, and no other one can be
+// its.
+func (c *copySet) reserve(ctx context.Context, repo config.FactoryRepo, pr store.PR, fix bool) (store.Slot, error) {
 	if sl, err := c.st.SlotByPR(ctx, pr.ID); err == nil && slices.Contains([]string{store.SlotReleasing, store.SlotDirtySchema}, sl.State) {
 		n, ok := copyNumber(repo, sl.Name)
 		if !ok {
@@ -229,15 +257,17 @@ func (c *copySet) reserve(ctx context.Context, repo config.FactoryRepo, pr store
 			return store.Slot{}, fmt.Errorf("end the release of %s: %w", sl.Name, err)
 		}
 	}
-	// Each pass adds a copy or says why none: max_copies bounds them.
-	for range repo.MaxCopies + 2 {
+	// Each pass adds a copy or says why none: max_copies (fix_copies) bounds
+	// them.
+	_, limit := copyRange(repo, fix)
+	for range limit + 2 {
 		c.mu.Lock()
-		sl, err := c.slots.Reserve(ctx, pr, repo.Pool())
+		sl, err := c.reserveFree(ctx, repo, pr, fix)
 		if !errors.Is(err, slots.ErrNoFreeSlot) {
 			c.mu.Unlock()
 			return sl, err
 		}
-		n, wait, err := c.nextCopy(ctx, repo)
+		n, wait, err := c.nextCopy(ctx, repo, fix)
 		name := repo.Pool().Slot(n)
 		if err == nil && wait == "" {
 			c.adding[name] = true
@@ -247,7 +277,7 @@ func (c *copySet) reserve(ctx context.Context, repo config.FactoryRepo, pr store
 			return store.Slot{}, err
 		}
 		if wait != "" {
-			broken, ok, err := c.repairable(ctx, repo)
+			broken, ok, err := c.repairable(ctx, repo, fix)
 			c.mu.Unlock()
 			if err != nil {
 				return store.Slot{}, err
@@ -271,22 +301,65 @@ func (c *copySet) reserve(ctx context.Context, repo config.FactoryRepo, pr store
 			return store.Slot{}, err
 		}
 	}
-	return store.Slot{}, fmt.Errorf("no copy of %s became free after adding %d", repo.Repo, repo.MaxCopies)
+	return store.Slot{}, fmt.Errorf("no copy of %s became free after adding %d", repo.Repo, limit)
 }
 
-// nextCopy is the number of the copy a claim adds: one a crash left
-// provisioning first, else the lowest number up to max_copies with no copy
-// and no directory; wait says why there is none ("all 3 busy", "2 busy, 1
-// broken (the next repair at 15:40, or a restart: magnum factory
-// install)"). A broken copy counts toward max_copies and is never
+// reserveFree is slots.Reserve over the copies a claim of its kind may
+// take (ownsCopy): the copy owner row pr holds, else a free one, the copy
+// it used last first (store.FreeSlots); slots.ErrNoFreeSlot when none of
+// them is free. So a task never takes a fix copy, and a fix never a task's.
+func (c *copySet) reserveFree(ctx context.Context, repo config.FactoryRepo, pr store.PR, fix bool) (store.Slot, error) {
+	switch sl, err := c.st.SlotByPR(ctx, pr.ID); {
+	case err == nil && slices.Contains([]string{store.SlotClaimed, store.SlotHeld}, sl.State):
+		return sl, nil
+	case err != nil && !errors.Is(err, store.ErrNotFound):
+		// A store failure is not "no copy": a second copy for the row would
+		// follow.
+		return store.Slot{}, fmt.Errorf("the copy it holds: %w", err)
+	}
+	free, err := c.st.FreeSlots(ctx, repo.Repo, pr.ID)
+	if err != nil {
+		return store.Slot{}, err
+	}
+	pool := repo.Pool()
+	for _, sl := range free {
+		if !ownsCopy(repo, sl.Name, fix) {
+			continue
+		}
+		_, err := c.st.AssignSlot(ctx, pr.ID, sl.ID, pool.DBNames(slots.SlotDBSlug(sl))...)
+		if err == nil {
+			return c.st.SlotByID(ctx, sl.ID)
+		}
+		if !errors.Is(err, store.ErrConflict) {
+			return store.Slot{}, fmt.Errorf("reserve %s: %w", sl.Name, err)
+		}
+	}
+	return store.Slot{}, slots.ErrNoFreeSlot
+}
+
+// nextCopy is the number of the copy a claim of its kind adds (fix: a fix
+// copy, else a task's; copyRange): one a crash left provisioning first,
+// else the lowest number of its range with no copy and no directory; wait
+// says why there is none ("all 3 busy", "2 busy, 1 broken (the next repair
+// at 15:40, or a restart: magnum factory install)"). A broken copy counts
+// toward its range's limit (max_copies, fix_copies) and is never
 // provisioned again by a claim: only a repair brings it back, the start's
 // (repairable), the backoff's (repair.go) or yours. A copy another claim
-// adds or a repair works on now (adding) is busy. The caller holds mu.
-func (c *copySet) nextCopy(ctx context.Context, repo config.FactoryRepo) (n int, wait string, err error) {
+// adds or a repair works on now (adding) is busy. A row that is no copy of
+// the repository counts as the tasks'. The caller holds mu.
+func (c *copySet) nextCopy(ctx context.Context, repo config.FactoryRepo, fix bool) (n int, wait string, err error) {
 	list, err := c.st.ListSlots(ctx, store.SlotFilter{RepoFullName: repo.Repo, Kind: store.SlotKindPool})
 	if err != nil {
 		return 0, "", err
 	}
+	first, limit := copyRange(repo, fix)
+	mine := func(name string) bool {
+		if _, ok := copyNumber(repo, name); !ok {
+			return !fix
+		}
+		return ownsCopy(repo, name, fix)
+	}
+	list = slices.DeleteFunc(list, func(sl store.Slot) bool { return !mine(sl.Name) })
 	live, broken := 0, 0
 	names := map[string]bool{}
 	for _, sl := range list {
@@ -304,13 +377,14 @@ func (c *copySet) nextCopy(ctx context.Context, repo config.FactoryRepo) (n int,
 		names[sl.Name] = true
 	}
 	for name := range c.adding {
-		if _, ok := copyNumber(repo, name); ok && !names[name] {
+		if ownsCopy(repo, name, fix) && !names[name] {
 			live++ // its row comes with its provisioning
 			names[name] = true
 		}
 	}
 	pool := repo.Pool()
-	for n := 1; live < repo.MaxCopies && n <= repo.MaxCopies; n++ {
+	last := first + limit - 1
+	for n := first; live < limit && n <= last; n++ {
 		if names[pool.Slot(n)] {
 			continue
 		}
@@ -320,13 +394,13 @@ func (c *copySet) nextCopy(ctx context.Context, repo config.FactoryRepo) (n int,
 	}
 	busy := live - broken
 	wait = fmt.Sprintf("%d busy", busy)
-	if busy >= repo.MaxCopies {
+	if busy >= limit {
 		wait = fmt.Sprintf("all %d busy", busy)
 	}
 	if broken > 0 {
 		wait += fmt.Sprintf(", %d broken (%s)", broken, c.nextRepairWords(list))
 	}
-	for n := 1; live < repo.MaxCopies && n <= repo.MaxCopies; n++ {
+	for n := first; live < limit && n <= last; n++ {
 		if !names[pool.Slot(n)] {
 			// Its path exists, and no copy is there.
 			wait += fmt.Sprintf(", and %s is a directory that is no copy", pool.Path(n))
@@ -458,15 +532,16 @@ func brokenWhyMax(cause error, n int) string {
 	return cleanLineMax(textx.FirstLine(cause.Error()), n)
 }
 
-// repairable is a broken copy of repo whose start's repair is still owed
-// (this daemon start neither broke it nor repaired it yet) and that no
-// claim or repair works on, noted in repairs and adding so that no other
-// claim repairs it too; false when there is none. A restart is when a fix
-// of a setup's cause (the configuration, the daemon's PATH) takes effect,
-// so each start repairs each broken copy once in the claim that finds no
-// copy (repair); the backoff repairs it again while the daemon runs
-// (repair.go). The caller holds mu.
-func (c *copySet) repairable(ctx context.Context, repo config.FactoryRepo) (store.Slot, bool, error) {
+// repairable is a broken copy of repo, among those a claim of its kind may
+// take (ownsCopy), whose start's repair is still owed (this daemon start
+// neither broke it nor repaired it yet) and that no claim or repair works
+// on, noted in repairs and adding so that no other claim repairs it too;
+// false when there is none. A restart is when a fix of a setup's cause (the
+// configuration, the daemon's PATH) takes effect, so each start repairs
+// each broken copy once in the claim that finds no copy (repair); the
+// backoff repairs it again while the daemon runs (repair.go). The caller
+// holds mu.
+func (c *copySet) repairable(ctx context.Context, repo config.FactoryRepo, fix bool) (store.Slot, bool, error) {
 	list, err := c.st.ListSlots(ctx, store.SlotFilter{RepoFullName: repo.Repo, Kind: store.SlotKindPool})
 	if err != nil {
 		return store.Slot{}, false, err
@@ -476,7 +551,7 @@ func (c *copySet) repairable(ctx context.Context, repo config.FactoryRepo) (stor
 		if sl.State != store.SlotBroken || (r != nil && (r.started || r.running)) || c.adding[sl.Name] {
 			continue
 		}
-		if _, ok := copyNumber(repo, sl.Name); ok {
+		if ownsCopy(repo, sl.Name, fix) {
 			c.startRepair(ctx, repo, sl)
 			return sl, true, nil
 		}
@@ -551,6 +626,19 @@ func (c *copySet) prepare(ctx context.Context, t registry.Task, pr store.PR, rep
 			return err
 		}
 	}
+	return c.readyData(ctx, repo, sl, cp, step)
+}
+
+// claimStep runs one step of a claim protocol (steps.Step of its subject,
+// the copy's guard first).
+type claimStep func(name string, fn func(ctx context.Context) error) error
+
+// readyData is the part of a claim protocol that readies copy cp's data
+// for the code checked out, after the checkout, in order: reset_db when the
+// development database holds a migration that code lacks, each installs
+// entry whose lockfile differs from the copy's last install, and a flush of
+// the copy's Redis databases, each one that has work to do a step (step).
+func (c *copySet) readyData(ctx context.Context, repo config.FactoryRepo, sl store.Slot, cp Copy, step claimStep) error {
 	if why, err := c.foreignSchema(ctx, repo, sl, cp); err != nil {
 		return err
 	} else if why != "" {
@@ -662,10 +750,10 @@ func (c *copySet) createBranch(ctx context.Context, t registry.Task, repo config
 
 // foreignSchema says why the copy's databases need reset_db ("" when they
 // do not): the development database's newest migration
-// (MAX(schema_migrations.version)) is none the task's code has, neither a
-// file of db/migrate nor the version db/schema.rb declares. Another task
-// migrated it. A database at a version the code has is kept (the task
-// migrates it further itself).
+// (MAX(schema_migrations.version)) is none the code checked out (a task's,
+// a PR's) has, neither a file of db/migrate nor the version db/schema.rb
+// declares. Another task or PR migrated it. A database at a version the
+// code has is kept (the task migrates it further itself).
 func (c *copySet) foreignSchema(ctx context.Context, repo config.FactoryRepo, sl store.Slot, cp Copy) (string, error) {
 	db := devDatabase(repo.Pool().DBNames(slots.SlotDBSlug(sl)))
 	if c.my == nil || db == "" || len(repo.ResetDB) == 0 {
@@ -684,7 +772,7 @@ func (c *copySet) foreignSchema(ctx context.Context, repo config.FactoryRepo, sl
 	if err != nil || known[have] {
 		return "", err
 	}
-	return fmt.Sprintf("%s holds migration %s, which the task's code does not have", db, have), nil
+	return fmt.Sprintf("%s holds migration %s, which the code checked out does not have", db, have), nil
 }
 
 // resetDB runs the repository's reset_db commands in the copy.
@@ -959,11 +1047,27 @@ func (c *copySet) Release(ctx context.Context, t registry.Task, reason string) e
 // passed, its turn ended) waits for the factory's next prompt, which the
 // claim comes before. Without AtWork they refuse it as any session does.
 func (c *copySet) paneIn(ctx context.Context, cp Copy, own store.PR, t registry.Task) error {
+	var atWork ownAtWork
+	if c.atWork != nil {
+		atWork = func(ctx context.Context) (string, bool, error) { return c.atWork(ctx, t) }
+	}
+	return c.paneInPath(ctx, cp.Path, own, atWork, TaskKey(t))
+}
+
+// ownAtWork says who of the work that claims a checkout is at work in it
+// (the runtime's AtWork for a task): a role with a run in flight, or you in
+// one of its panes.
+type ownAtWork func(ctx context.Context) (role string, you bool, err error)
+
+// paneInPath is paneIn of the checkout at path, for own, the owner row of
+// the work that claims it (whose words name it), and atWork, who of that
+// work is at work (nil: its sessions refuse it as any session does).
+func (c *copySet) paneInPath(ctx context.Context, path string, own store.PR, atWork ownAtWork, whose string) error {
 	live, err := c.st.LiveSessions(ctx)
 	if err != nil {
 		return err
 	}
-	root := fsx.Canon(cp.Path)
+	root := fsx.Canon(path)
 	in := func(dir string) bool {
 		dir = fsx.Canon(dir)
 		return dir != "" && (dir == root || strings.HasPrefix(dir, root+string(filepath.Separator)))
@@ -974,17 +1078,17 @@ func (c *copySet) paneIn(ctx context.Context, cp Copy, own store.PR, t registry.
 		switch {
 		case !in(cwd):
 			continue
-		case own.ID == 0 || s.PRID != own.ID || c.atWork == nil:
+		case own.ID == 0 || s.PRID != own.ID || atWork == nil:
 			return fmt.Errorf("%w: the %s session works in %s", ErrPaneInCopy, s.Role, cwd)
 		case ownLooked:
 			continue
 		}
 		ownLooked = true
-		switch role, you, err := c.atWork(ctx, t); {
+		switch role, you, err := atWork(ctx); {
 		case err != nil:
 			return err
 		case role != "" && you:
-			return fmt.Errorf("%w: you're in the %s pane of %s (%s)", ErrPaneInCopy, role, TaskKey(t), cwd)
+			return fmt.Errorf("%w: you're in the %s pane of %s (%s)", ErrPaneInCopy, role, whose, cwd)
 		case role != "":
 			return fmt.Errorf("%w: the %s agent works in it (%s)", ErrPaneInCopy, role, cwd)
 		}
@@ -1006,7 +1110,7 @@ func (c *copySet) paneIn(ctx context.Context, cp Copy, own store.PR, t registry.
 		}
 		if len(prs) == 0 {
 			return fmt.Errorf("%w: pane %s of the factory's herdr session works in %s, and no session of the factory's is in it",
-				ErrPaneInCopy, p.ID, cp.Path)
+				ErrPaneInCopy, p.ID, path)
 		}
 	}
 	return nil
@@ -1090,11 +1194,25 @@ func (c *copySet) writeHandoff(t registry.Task, repo config.FactoryRepo, cp Copy
 // release frees it, so the factory's agents store says which tasks hold one
 // whatever the daemon remembers.
 func (c *copySet) Reserved(ctx context.Context) ([]Reservation, error) {
-	list, err := c.st.ListSlots(ctx, store.SlotFilter{})
+	var out []Reservation
+	err := c.eachReserved(ctx, func(sl store.Slot, owner store.PR) {
+		if id, ok := runtime.OwnerTask(owner.NodeID); ok {
+			out = append(out, Reservation{TaskID: id, Copy: sl.Name})
+		}
+	})
 	if err != nil {
 		return nil, fmt.Errorf("the copies reserved: %w", err)
 	}
-	var out []Reservation
+	return out, nil
+}
+
+// eachReserved calls fn with each slot of the agents store an owner row
+// holds (not removed) and that row, by slot; a row gone since is skipped.
+func (c *copySet) eachReserved(ctx context.Context, fn func(sl store.Slot, owner store.PR)) error {
+	list, err := c.st.ListSlots(ctx, store.SlotFilter{})
+	if err != nil {
+		return err
+	}
 	for _, sl := range list {
 		if sl.PRID == nil || sl.State == store.SlotRemoved {
 			continue
@@ -1104,17 +1222,16 @@ func (c *copySet) Reserved(ctx context.Context) ([]Reservation, error) {
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("the copies reserved: %w", err)
+			return err
 		}
-		if id, ok := runtime.OwnerTask(pr.NodeID); ok {
-			out = append(out, Reservation{TaskID: id, Copy: sl.Name})
-		}
+		fn(sl, pr)
 	}
-	return out, nil
+	return nil
 }
 
-// Free is how many copies a claim could take now, over the factory's
-// repositories: the free ones and those max_copies still lets a claim add.
+// Free is how many copies a task's claim could take now, over the
+// factory's repositories: the free ones and those max_copies still lets a
+// claim add. The fix copies are never a task's, and count for nothing here.
 func (c *copySet) Free(ctx context.Context) (int, error) {
 	total := 0
 	for _, repo := range c.cfg.Factory.Repos {
@@ -1124,7 +1241,7 @@ func (c *copySet) Free(ctx context.Context) (int, error) {
 		}
 		live, free := 0, 0
 		for _, sl := range list {
-			if sl.State == store.SlotRemoved {
+			if sl.State == store.SlotRemoved || ownsCopy(repo, sl.Name, true) {
 				continue
 			}
 			live++

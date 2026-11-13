@@ -134,12 +134,19 @@ type Copy = runtime.Copy
 // cdp its DevTools endpoint, http://127.0.0.1:<port>), the reconcile of
 // the servers and the browsers after a restart, and the broken copies (the
 // one whose backoff repair is due, its repair, and the repositories whose
-// every copy broke the same way: repair.go).
+// every copy broke the same way: repair.go). The fixes of your PRs claim
+// checkouts of their own (fix_copies.go): a fix copy, set apart from the
+// tasks', or a per-PR checkout without databases, at the PR's remote head,
+// its release (a per-PR checkout's removal) and the checkouts the PRs'
+// fix work holds.
 type Copies interface {
 	Claim(ctx context.Context, t registry.Task) (Copy, error)
 	Release(ctx context.Context, t registry.Task, reason string) error
 	Free(ctx context.Context) (int, error)
 	Reserved(ctx context.Context) ([]Reservation, error)
+	ClaimFix(ctx context.Context, w registry.PRWork) (FixCheckout, error)
+	ReleaseFix(ctx context.Context, w registry.PRWork, reason string) error
+	FixReserved(ctx context.Context) ([]FixReservation, error)
 	StartServer(ctx context.Context, c Copy) error
 	StopServer(ctx context.Context, c Copy) error
 	StartBrowser(ctx context.Context, c Copy, dir string) (cdp string, err error)

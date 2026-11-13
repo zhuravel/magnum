@@ -107,6 +107,9 @@ type copiesRig struct {
 	// it; failTable fails that many reads of the process table.
 	endAtOnce bool
 	failTable int
+	// origins are the GitHub URLs `git remote get-url origin` answers for
+	// the clones it names (routeRunner): a test sets them before any claim.
+	origins map[string]string
 }
 
 // fakeHerdrView is one herdr session as the copies' guard reads it.
@@ -225,7 +228,8 @@ func newCopiesRig(t *testing.T, maxCopies int) *copiesRig {
 		{Prefix: []string{"mise"}, Fn: r.mise},
 		{Prefix: []string{"redis-cli"}, Fn: r.redis},
 	}}
-	run := routeRunner{real: r.real, fake: fake}
+	r.origins = map[string]string{}
+	run := routeRunner{real: r.real, fake: fake, origins: r.origins}
 	r.git = gitx.New(run)
 	view := herdr.GuardView{Own: r.factoryHerdr, Yours: r.yourHerdr}
 	r.sm = slots.New(slots.Deps{Store: r.st, Run: run, Git: r.git, MySQL: r.dbs, Layout: r.cfg.Layout,
@@ -275,11 +279,22 @@ func (r *copiesRig) newCopies() *copySet {
 }
 
 // routeRunner sends git to the real runner (the rig's temp repositories)
-// and every other command to the fakes.
-type routeRunner struct{ real, fake execx.Runner }
+// and every other command to the fakes. origins, when set, answers `git
+// remote get-url origin` of a clone it names with its URL (a GitHub one,
+// which clone discovery asks for, while fetches still go to the rig's
+// local origin).
+type routeRunner struct {
+	real, fake execx.Runner
+	origins    map[string]string
+}
 
 func (r routeRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) {
 	if c.Name == "git" {
+		if a := c.Args; len(a) == 5 && a[0] == "-C" && a[2] == "remote" && a[3] == "get-url" && a[4] == "origin" {
+			if url, ok := r.origins[a[1]]; ok {
+				return execx.Result{Stdout: []byte(url + "\n")}, nil
+			}
+		}
 		return r.real.Run(ctx, c)
 	}
 	// A fake command ends with its context, as a real one does: one asked

@@ -14846,6 +14846,9 @@ type Copies interface {
 	Release(ctx context.Context, t registry.Task, reason string) error
 	Free(ctx context.Context) (int, error)
 	Reserved(ctx context.Context) ([]Reservation, error)
+	ClaimFix(ctx context.Context, w registry.PRWork) (FixCheckout, error)
+	ReleaseFix(ctx context.Context, w registry.PRWork, reason string) error
+	FixReserved(ctx context.Context) ([]FixReservation, error)
 	StartServer(ctx context.Context, c Copy) error
 	StopServer(ctx context.Context, c Copy) error
 	StartBrowser(ctx context.Context, c Copy, dir string) (cdp string, err error)
@@ -14862,7 +14865,10 @@ type Copies interface {
     cdp its DevTools endpoint, http://127.0.0.1:<port>), the reconcile of the
     servers and the browsers after a restart, and the broken copies (the one
     whose backoff repair is due, its repair, and the repositories whose every
-    copy broke the same way: repair.go).
+    copy broke the same way: repair.go). The fixes of your PRs claim checkouts
+    of their own (fix_copies.go): a fix copy, set apart from the tasks',
+    or a per-PR checkout without databases, at the PR's remote head, its release
+    (a per-PR checkout's removal) and the checkouts the PRs' fix work holds.
 
 func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx.Client, run execx.Runner, my slots.MySQL,
 	panes func(context.Context) (herdr.Snapshot, error), owner func(context.Context, registry.Task) (store.PR, error),
@@ -15114,6 +15120,21 @@ type FixCIPayload struct {
     plan (DryRun), or fix it bound to the plan its y/N asked about (Asked; nil:
     nothing was asked, as `--yes`).
 
+type FixCheckout struct {
+	Name, Path string
+	Number     int
+	Head       string
+	Port       int
+	Env        map[string]string
+}
+    FixCheckout is the checkout a PR's fix works in: a fix copy of its
+    repository (Number, the copy's, with the copy's Port and Env) or its per-PR
+    checkout (Number 0, no port, no env), at Head, the PR's remote head the
+    claim fetched.
+
+func (f FixCheckout) PerPR() bool
+    PerPR reports whether the checkout is a per-PR checkout, not a fix copy.
+
 type FixDecidePayload struct {
 	PRRef
 	Decide  []FixDecision
@@ -15183,6 +15204,15 @@ type FixRecord struct {
     starts and ends left the PR to you (fix.needs_you, fix.capped, fix.failed)
     rather than ending it (fix.done, fix.ended, fix.stopped) or starting a
     cycle. Counts only, never an event's text.
+
+type FixReservation struct {
+	WorkID   int64
+	Checkout string
+	PerPR    bool
+}
+    FixReservation is a checkout the fix work of a PR (its pr_work row) holds,
+    from its claim until its release: the checkout's name and whether it is a
+    per-PR checkout.
 
 type FixStopPayload struct {
 	PRRef

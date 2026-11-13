@@ -900,6 +900,8 @@ type fakeCopies struct {
 	// ended counts the claims that returned, cancelled those that returned
 	// because their context ended.
 	ended, cancelled int
+	// fix is what the fixes' claims and releases do (fix_copies_test.go).
+	fix fakeFixes
 	// onReconcile runs at each Reconcile.
 	onReconcile func()
 	// startedBrowsers and stoppedBrowsers name the copies whose browser

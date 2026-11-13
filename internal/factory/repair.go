@@ -444,18 +444,19 @@ func (c *copySet) Outages(ctx context.Context) ([]Outage, error) {
 	return out, nil
 }
 
-// outage is the cause every copy of repo in list broke with ("" for none):
-// each copy the repository may have (max_copies, 2 at least: one copy says
-// nothing of a shared cause) is broken, or provisioning under a repair,
-// which keeps the cause it broke with (causeOf), and all read the same. A
-// copy whose start's repair has not had its turn yet (it broke under an
-// earlier daemon, and this start may be its fix) makes none.
+// outage is the cause every task copy of repo in list broke with ("" for
+// none): each copy the repository's tasks may have (max_copies, 2 at least:
+// one copy says nothing of a shared cause) is broken, or provisioning under
+// a repair, which keeps the cause it broke with (causeOf), and all read the
+// same. A copy whose start's repair has not had its turn yet (it broke
+// under an earlier daemon, and this start may be its fix) makes none. The
+// fix copies are no task's: they make no outage, and keep none from one.
 func (c *copySet) outage(ctx context.Context, repo config.FactoryRepo, list []store.Slot) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	cause, n := "", 0
 	for _, sl := range list {
-		if _, ok := copyNumber(repo, sl.Name); !ok || sl.State == store.SlotRemoved {
+		if !ownsCopy(repo, sl.Name, false) || sl.State == store.SlotRemoved {
 			continue
 		}
 		sig := ""
