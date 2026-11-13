@@ -19461,6 +19461,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - While `[factory] fix` is not "on", the doctor WARNs for every PR whose owner row names the factory or
     "returning", which nothing fixes then, and its PASS line drops "every PR can hand over" (C8, for
     visibility; the no-fixer outcome is the rollback's, by design).
+- **The interlock after the engine owner's check of the third fix round** (2026-11-13, his findings C1 to C6
+  on f7ea6a2e). What changed from the four entries above:
+  - A close in the paused round's tail ends the fix (C1). Since the round names its end before it lets go of
+    the PR, a close the poll confirmed after fixRefAfterRound read the PR open and paused, and before the
+    unreserve, found the round still holding the PR: endFixRefAtClose left the fix to that round, which had
+    already left it to a continue that a closed PR never gets, so the row stayed for good. The round now marks
+    its handle before that read when it leaves the fix to the continue (roundHandle.fixKept), and a round so
+    marked names no end (roundOfFix), so the close ends the fix, closed by the close. The mark goes in before
+    the read, so a close between the two is seen by one of them, and the row's compare-and-delete keeps the
+    end to one event.
 
 ## The factory (2026-11-03)
 

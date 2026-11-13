@@ -506,6 +506,42 @@ func TestAFactoryRoundThatPausesOnAClosedPREndsClosed(t *testing.T) {
 	}
 }
 
+// A round of the factory's fix whose judge paused on an open PR leaves the
+// fix for its continue (fixRefAfterRound), while the round still holds the
+// PR. A close the poll confirms after that read, and before the round lets
+// go of the PR, finds the round still holding it, but that round names no
+// end of the fix any more, and a closed PR is never continued: the close
+// ends the fix, closed by the merge, and the row goes (C1).
+func TestACloseBeforeAPausedRoundLetsGoOfThePREndsItsFix(t *testing.T) {
+	ref := fixwork.FixRef{Work: 7, Cycle: 1, Head: "b2"}
+	h := pausedFactoryRound(t, ref)
+	repo, pr, err := h.e.resolve(h.ctx, PRTarget{Ref: "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The round's tail, as reservedRound runs it: the PR still reserved as
+	// dispatch reserved it, and the end of the paused turn passed on.
+	job := &roundJob{pr: pr, repo: repo}
+	if job.fixRef, job.fixRefRaw = h.e.fixRefOf(h.ctx, pr.ID); job.fixRef == nil {
+		t.Fatal("no fix kept")
+	}
+	if !h.e.reserve(pr.ID, &roundHandle{cancel: func() {}, asked: true, fixRef: &job.fixRef.FixRef}) {
+		t.Fatal("the PR could not be reserved")
+	}
+	h.e.fixRefAfterRound(h.ctx, job, pipeline.RoundResult{Outcome: pipeline.OutcomeUsageLimit, TargetSHA: "b2"})
+	if evs := h.fixEvents("fix.factory_round"); len(evs) != 0 {
+		t.Fatalf("fix.factory_round for a pause on an open PR: %+v", evs)
+	}
+	closePR2(h) // the poll confirms the merge before the round lets go of the PR
+	h.e.unreserve(pr.ID)
+	if outcome, by := factoryRoundOf(t, h, ref); outcome != pipeline.OutcomeClosed || by != "the PR's merge on GitHub" {
+		t.Errorf("fix.factory_round = %s by %q, want closed by the merge", outcome, by)
+	}
+	if r, raw := h.e.fixRefOf(h.ctx, pr.ID); r != nil {
+		t.Errorf("the closed PR keeps the fix: %s", raw)
+	}
+}
+
 // The factory's abort of its own round paused mid-turn stops it, as `magnum
 // abort` stops a paused round: its turn would otherwise continue later,
 // past the hold of the factory's next fixer, and post on an old head. An

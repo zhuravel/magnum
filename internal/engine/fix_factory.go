@@ -82,12 +82,25 @@ func (e *Engine) keepFixRef(ctx context.Context, repo store.Repo, pr store.PR, p
 }
 
 // roundOfFix reports whether a round of the factory's fix holds PR prID
-// (roundHandle.fixRef): that round names the fix's end.
+// (roundHandle.fixRef) and has yet to name the fix's end: one that left
+// the fix to its continue (roundHandle.fixKept) names none.
 func (e *Engine) roundOfFix(prID int64) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	h := e.rounds[prID]
-	return h != nil && h.fixRef != nil
+	return h != nil && h.fixRef != nil && !h.fixKept
+}
+
+// leaveFixToContinue marks the round of the factory's fix that holds PR
+// prID as one that leaves the fix to its continue (roundHandle.fixKept):
+// from here on a close ends the fix (endFixRefAtClose), as it would once
+// the round lets go of the PR.
+func (e *Engine) leaveFixToContinue(prID int64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if h := e.rounds[prID]; h != nil && h.fixRef != nil {
+		h.fixKept = true
+	}
 }
 
 // fixRefOf is the factory's fix PR prID's forced round re-reviews (nil:
@@ -120,12 +133,16 @@ func (e *Engine) fixRefOf(ctx context.Context, prID int64) (*fixRefRow, string) 
 // (closedOnGitHub, read again: the close lets an asked round run on and
 // leaves its fix to it, endFixRefAtClose) no continue comes, so that pause
 // is the round's end, with the outcome closed and the close as its by (C5).
+// The round marks itself as leaving the fix to its continue before that
+// read (leaveFixToContinue), so a close the poll confirms after the read,
+// while the round still holds the PR, ends the fix itself (C1).
 func (e *Engine) fixRefAfterRound(ctx context.Context, job *roundJob, res pipeline.RoundResult) {
 	if job.fixRef == nil {
 		return
 	}
 	outcome, by := res.Outcome, ""
 	if e.pauseContinues(ctx, job.pr, res.Outcome) {
+		e.leaveFixToContinue(job.pr.ID)
 		c, closed := e.closedOnGitHub(ctx, job.pr.ID)
 		if !closed {
 			return
@@ -213,7 +230,9 @@ func (e *Engine) endFixRef(ctx context.Context, repo store.Repo, pr store.PR, ou
 // a closed PR, so fix.factory_round names it, closed by the close, and the
 // row goes. A round of the fix in flight, which a close lets run on as one
 // asked for (stopClosedRound), names its own end (fixRefAfterRound), closed
-// when its judge then pauses, since no continue comes.
+// when its judge then pauses, since no continue comes. A round that left
+// the fix to its continue, and still holds the PR, names none (roundOfFix):
+// the close ends it here (C1).
 func (e *Engine) endFixRefAtClose(ctx context.Context, repo store.Repo, pr store.PR, c closeStop) {
 	if !e.roundOfFix(pr.ID) {
 		e.endFixRef(ctx, repo, pr, pipeline.OutcomeClosed, c.by())

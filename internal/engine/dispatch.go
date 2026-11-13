@@ -161,6 +161,11 @@ type roundHandle struct {
 	// FixRef, fix_factory.go; nil: none): the factory's abort stops only
 	// the round of its own fix.
 	fixRef *fixwork.FixRef
+	// fixKept: the round's judge paused, and the round left the factory's
+	// fix to its continue (fixRefAfterRound): it names no end of the fix
+	// any more, so a close confirmed before the round lets go of the PR
+	// ends it (endFixRefAtClose, C1).
+	fixKept bool
 }
 
 // activeRounds counts the round and open goroutines.
