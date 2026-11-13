@@ -19,6 +19,7 @@ import (
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/steps"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // fakeFixes is what the fake copies' fix claims and releases do: a claim
@@ -680,6 +681,67 @@ func TestAReleaseTakesThePushedHeadWhateverYouTyped(t *testing.T) {
 	r.releaseFix(ws)
 	if sl := r.slot(pc.Name); sl.State != store.SlotRemoved || sl.HoldReason != nil || fsx.Exists(pc.Path) {
 		t.Fatalf("%s after the release = %s, hold %v, want removed with no hold", pc.Name, sl.State, store.Deref(sl.HoldReason))
+	}
+}
+
+// commit commits every change in dir as the fixer and returns the commit.
+func (r *copiesRig) commit(dir, file, content string) string {
+	r.t.Helper()
+	r.write(filepath.Join(dir, file), content)
+	r.gitIn(dir, "add", "-A")
+	r.gitIn(dir, "commit", "--quiet", "-m", "the fixer's fix")
+	return r.gitIn(dir, "rev-parse", "HEAD")
+}
+
+// A claim's guard takes a HEAD the fixer moved as the checkout's own, with
+// a factory.fix_head event, when it is the PR's head the claim fetched (the
+// fixer pushed it) or a descendant of the checkout (the fixer's commits on
+// it), and the claim goes on. Once you typed in the fix's panes after the
+// checkout, a descendant may be yours: it is held as head_drift. No test
+// reached the claim's guard with a moved HEAD (R10 on T3b).
+func TestAClaimTakesTheFixersMovedHeadUnlessYouTyped(t *testing.T) {
+	r := newFixRig(t, 1, 2)
+	r.pushPR(r.origin, 7, "fix.txt", "v1\n")
+	w7 := r.prWork("talkable/talkable", 7)
+	fc := r.claimFix(w7)
+	pushed := r.commit(fc.Path, "fix.txt", "v2\n")
+	r.gitIn(fc.Path, "push", "--quiet", "--force", "origin", "HEAD:refs/pull/7/head")
+	if again := r.claimFix(w7); again.Name != fc.Name || again.Head != pushed {
+		t.Fatalf("the claim at the head the fixer pushed = %+v, want %s at %s", again, fc.Name, pushed)
+	}
+	if !r.eventsSay(fc.Name, "factory.fix_head", "HEAD "+textx.ShortSHA(pushed)) {
+		t.Fatalf("no factory.fix_head event for the pushed HEAD %s", pushed)
+	}
+
+	r.pushPR(r.origin, 8, "other.txt", "v1\n")
+	w8 := r.prWork("talkable/talkable", 8)
+	fc8 := r.claimFix(w8)
+	mine := r.commit(fc8.Path, "other.txt", "v2\n")
+	newer := r.pushPR(r.origin, 8, "other.txt", "v3\n")
+	if again := r.claimFix(w8); again.Head != newer {
+		t.Fatalf("the claim at the PR's newer head = %+v, want %s", again, newer)
+	}
+	if got, _ := r.head(fc8.Path); got != newer {
+		t.Fatalf("%s is at %s, want the PR's newer head %s", fc8.Name, got, newer)
+	}
+	if !r.eventsSay(fc8.Name, "factory.fix_head", "HEAD "+textx.ShortSHA(mine)) {
+		t.Fatalf("no factory.fix_head event for the fixer's commit %s", mine)
+	}
+
+	yours := r.commit(fc8.Path, "other.txt", "v4\n")
+	r.clock.Add(time.Minute)
+	r.setTyped(w8)
+	r.pushPR(r.origin, 8, "other.txt", "v5\n")
+	r.clock.Add(time.Minute)
+	_, err := r.c.ClaimFix(r.ctx, w8)
+	if hold, ok := errors.AsType[slots.ErrHold](err); !ok || hold.Reason != slots.HoldHeadDrift {
+		t.Fatalf("the claim over a commit after your typing = %v, want held: head_drift", err)
+	}
+	if got, _ := r.head(fc8.Path); got != yours {
+		t.Fatalf("%s is at %s, want the commit after your typing %s kept", fc8.Name, got, yours)
+	}
+	if sl := r.slot(fc8.Name); store.Deref(sl.HoldReason) != slots.HoldHeadDrift {
+		t.Fatalf("%s's hold = %q, want head_drift", fc8.Name, store.Deref(sl.HoldReason))
 	}
 }
 
