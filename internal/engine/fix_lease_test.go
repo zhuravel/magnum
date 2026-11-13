@@ -345,6 +345,38 @@ func TestAFailureAfterAGapStartsTheGraceAgain(t *testing.T) {
 	}
 }
 
+// A dry-run daemon, whose registry is a private copy, records a failed
+// lease read as the real one does: it warns once, not at every tick, and
+// shows the fail-open the real daemon would do once the grace ends.
+func TestADryRunDaemonRecordsAFailedLeaseRead(t *testing.T) {
+	logs := &syncBuffer{}
+	lease := &fakeLease{}
+	lease.set(FixLease{}, errors.New("database is locked"))
+	h := newHarness(t, func(h *harness) {
+		h.d.FixLeaseOf = lease.reader(h.clock.Now)
+		h.d.Logger = newTeeLogger(t, logs)
+	})
+	h.reviewedPR(2, "b1")
+	factoryOwns(h)
+	pollPR(h, time.Hour, 2, "b2")
+	h.advance(6 * time.Minute)
+	pr := h.pr(2)
+	h.e.d.DryRun = true
+	for range fixLeaseGrace/time.Minute + 1 {
+		h.tick()
+		h.advance(time.Minute)
+	}
+	if n := strings.Count(logs.String(), "the factory's lease of a PR cannot be read; its round waits"); n != 1 {
+		t.Errorf("the warn was logged %d times, want once", n)
+	}
+	if u, ok := h.leaseUnread(pr.ID); !ok || !u.Open {
+		t.Errorf("the failed read = %+v, %v; want recorded and open after the grace", u, ok)
+	}
+	if _, ok := h.fixEvent("fix.lease_open"); !ok {
+		t.Error("no fix.lease_open after the grace")
+	}
+}
+
 // leaseUnread is PR prID's recorded failed lease read (ok false: none).
 func (h *harness) leaseUnread(prID int64) (LeaseUnread, bool) {
 	h.t.Helper()

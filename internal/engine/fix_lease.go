@@ -266,7 +266,10 @@ func (e *Engine) factoryHolds(ctx context.Context, pr store.PR) bool {
 }
 
 // noteLease is factoryHolds on v, read already: it records what a failed
-// read or a working one changes, and reports whether the round waits.
+// read or a working one changes, and reports whether the round waits. A
+// dry-run daemon records it too, in its private copy of the registry
+// (Deps.DryRun), so it warns once and shows the fail-open the real daemon
+// would do.
 func (e *Engine) noteLease(ctx context.Context, pr store.PR, v leaseView) bool {
 	u, recorded := e.leaseUnreadOf(ctx, pr.ID)
 	subject := fmt.Sprintf("pr:%d", pr.ID)
@@ -274,7 +277,7 @@ func (e *Engine) noteLease(ctx context.Context, pr store.PR, v leaseView) bool {
 		subject = prSubject(repo, pr.Number)
 	}
 	if v.err == nil {
-		if recorded && !e.d.DryRun {
+		if recorded {
 			e.delKV(ctx, KVPRFixLeaseUnread(pr.ID))
 			msg := "the factory's lease of the PR reads again"
 			if !v.owned {
@@ -295,7 +298,7 @@ func (e *Engine) noteLease(ctx context.Context, pr store.PR, v leaseView) bool {
 	}
 	u.Last, u.Err, u.Source = now.UTC(), leaseErrWords(v.err), v.source()
 	_, held := e.leaseWait(v, u, true)
-	if !held && !u.Open && !e.d.DryRun {
+	if !held && !u.Open {
 		u.Open = true
 		what := "the factory's lease of the PR cannot be read"
 		if v.fromOwner {
@@ -305,9 +308,7 @@ func (e *Engine) noteLease(ctx context.Context, pr store.PR, v leaseView) bool {
 			"without the lease after the %s grace", what, waitClock(u.Since, e.now()), u.Err, humanDuration(fixLeaseGrace)),
 			map[string]any{"since": u.Since, "source": cmp.Or(u.Source, "lease")})
 	}
-	if !e.d.DryRun {
-		e.setKV(ctx, KVPRFixLeaseUnread(pr.ID), rowJSON(u)) // each failed read: its time is the gap's start
-	}
+	e.setKV(ctx, KVPRFixLeaseUnread(pr.ID), rowJSON(u)) // each failed read: its time is the gap's start
 	return held
 }
 
