@@ -627,10 +627,15 @@ func (m *Manager) removeSteps(ctx context.Context, subject string, sl store.Slot
 }
 
 // markRemoved moves a removing slot to removed, clearing its PR and closing
-// any open assignment.
+// any open assignment, and its recorded save failure: the removal is done,
+// whether it saved (noteDiscard clears it then), was forced, or ended with
+// the worktree already gone and nothing to save (removeWorktree's early
+// returns).
 func (m *Manager) markRemoved(ctx context.Context, sl store.Slot, reason string) error {
-	if err := m.d.Store.DeleteKV(ctx, switchingKey(sl.ID)); err != nil {
-		return err
+	for _, key := range []string{switchingKey(sl.ID), saveFailedKey(sl.ID)} {
+		if err := m.d.Store.DeleteKV(ctx, key); err != nil {
+			return err
+		}
 	}
 	if err := m.clearResetFailures(ctx, sl.ID); err != nil {
 		return err

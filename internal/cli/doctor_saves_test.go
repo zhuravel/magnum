@@ -65,3 +65,35 @@ func TestDoctorNamesTheSlotsWhoseSaveFails(t *testing.T) {
 		t.Fatalf("a PASS beside the failing saves: %+v", got)
 	}
 }
+
+// removedSlot writes a removed slot row named name in st and returns its
+// id.
+func removedSlot(t *testing.T, st *store.Store, name string) int64 {
+	t.Helper()
+	sl, err := st.CreateSlot(context.Background(), store.Slot{Name: name, RepoFullName: "example/shop", Kind: store.SlotKindPool,
+		Path: filepath.Join(t.TempDir(), name), MainClone: t.TempDir(), State: store.SlotRemoved})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sl.ID
+}
+
+// Doctor names no removed slot's failing save, in the registry or in the
+// factory's agents store: a removal is done, so its slot's step retries
+// nothing. A record a removal left (one that ended with no save, the
+// factory's own removal of a fix checkout) warned for good of a slot that
+// no longer exists.
+func TestDoctorNamesNoRemovedSlotsFailingSave(t *testing.T) {
+	home := t.TempDir()
+	d := doctorDeps{Layout: paths.Layout{Home: home}, Store: storetest.Open(t, filepath.Join(home, "state", "magnum.db"))}
+	factory := storetest.OpenFile(t, d.Layout.FactoryAgentsDB())
+	since := time.Date(2026, 11, 13, 9, 30, 0, 0, time.UTC)
+	recordSaveFailure(t, d.Store, removedSlot(t, d.Store, "review3"), slots.SaveFailure{Slot: "review3", Kind: slots.SaveFailedSave,
+		What: "the removal of the worktree", Error: "mkdir /x: not a directory", Since: since})
+	recordSaveFailure(t, factory, removedSlot(t, factory, "fix-example-shop#5"), slots.SaveFailure{Slot: "fix-example-shop#5",
+		Kind: slots.SaveFailedSave, What: "the removal of the fix checkout", Error: "mkdir /x: not a directory", Since: since})
+
+	if got := doctorByName(doctorSaves(context.Background(), d)); got["saves"].Status != doctorPass || len(got) != 1 {
+		t.Fatalf("doctor over removed slots' failures: %+v, want the one PASS", got)
+	}
+}

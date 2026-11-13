@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -133,18 +134,32 @@ func ParseSaveFailure(v string) (SaveFailure, bool) {
 }
 
 // SaveFailures lists the slots of st whose save before a discard fails,
-// by slot name.
+// by slot name; never a removed slot's, whose removal is done (a record a
+// removal left that ended with no save, or that is not this package's).
 func SaveFailures(ctx context.Context, st *store.Store) ([]SaveFailure, error) {
 	vals, err := st.KVValues(ctx, SaveFailedGlob)
 	if err != nil {
 		return nil, err
 	}
 	var out []SaveFailure
-	for _, v := range vals {
-		if f, ok := ParseSaveFailure(v); ok {
+	for key, v := range vals {
+		if f, ok := ParseSaveFailure(v); ok && !slotRemoved(ctx, st, key) {
 			out = append(out, f)
 		}
 	}
 	slices.SortFunc(out, func(a, b SaveFailure) int { return strings.Compare(a.Slot, b.Slot) })
 	return out, nil
+}
+
+// slotRemoved reports whether the slot of save failure key (saveFailedKey)
+// is removed in st; a key of no slot row, or one that cannot be read, is
+// not.
+func slotRemoved(ctx context.Context, st *store.Store, key string) bool {
+	id := strings.TrimSuffix(strings.TrimPrefix(key, "slot."), ".save_failed")
+	n, err := strconv.ParseInt(id, 10, 64)
+	if err != nil || saveFailedKey(n) != key {
+		return false
+	}
+	sl, err := st.SlotByID(ctx, n)
+	return err == nil && sl.State == store.SlotRemoved
 }

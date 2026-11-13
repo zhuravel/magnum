@@ -2,6 +2,8 @@ package slots
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -122,6 +124,52 @@ func TestAFailedListingDiscardsNothing(t *testing.T) {
 		t.Fatal("Resync with a listing that fails: no error")
 	}
 	h.wantKept(t, sl.Name, sl.Path, h.shaPR8)
+}
+
+// A removal clears its slot's recorded save failure when it marks the slot
+// removed, however it ends: here through a worktree whose folder was
+// deleted by hand after the save failed, which git lists as prunable, so
+// the removal prunes it and saves nothing. And SaveFailures, which doctor
+// reads, names no removed slot's failure, such as one a removal that is
+// not this package's left. The record stood for good, and doctor warned of
+// a slot that no longer exists.
+func TestARemovedSlotKeepsNoSaveFailure(t *testing.T) {
+	f := newPerPR(t, true)
+	h := f.h
+	sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, f.repoName(), f.pr, f.sha7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirty(t, sl.Path)
+	undo := h.failSaves(t)
+	if err := h.m.RemovePRWorktree(h.ctx, sl, false); err == nil {
+		t.Fatal("RemovePRWorktree with a save that fails: no error")
+	}
+	if _, ok := h.saveFailure(t, sl); !ok {
+		t.Fatal("the failed save is not recorded")
+	}
+	undo()
+	if err := os.RemoveAll(sl.Path); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.m.RemovePRWorktree(h.ctx, h.slot(sl.Name), false); err != nil {
+		t.Fatalf("RemovePRWorktree of a worktree gone: %v", err)
+	}
+	if got := h.slot(sl.Name); got.State != store.SlotRemoved {
+		t.Fatalf("state = %s, want removed", got.State)
+	}
+	if _, ok, err := h.st.GetKV(h.ctx, saveFailedKey(sl.ID)); err != nil || ok {
+		t.Fatalf("the removed slot's save failure: recorded %v, %v; want it cleared", ok, err)
+	}
+
+	_ = h.m.saveFailed(h.ctx, h.slot(sl.Name), SaveFailedSave, "the removal of the worktree", errors.New("left by another removal"))
+	if _, ok, err := h.st.GetKV(h.ctx, saveFailedKey(sl.ID)); err != nil || !ok {
+		t.Fatalf("a failure left for the removed slot: recorded %v, %v", ok, err)
+	}
+	if f, ok := h.saveFailure(t, sl); ok {
+		t.Fatalf("SaveFailures names the removed slot's failure: %+v", f)
+	}
 }
 
 // saveFailure is slot sl's recorded save failure, as SaveFailures reads it.

@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/zhuravel/magnum/internal/slots"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 // doctorSaves names the slots whose save before a discard keeps failing
@@ -13,8 +14,9 @@ import (
 // or fix checkout's in the factory's agents store. Such a slot's step (a
 // switch, a release's reset, a removal) discards nothing and retries at
 // each attempt, so it never moves until its save works; the slots package
-// raised it once, with an event and the review daemon's toast. A WARN per
-// slot with its fix, a PASS with none.
+// raised it once, with an event and the review daemon's toast. A removed
+// slot is not named: its removal is done. A WARN per slot with its fix, a
+// PASS with none.
 func doctorSaves(ctx context.Context, d doctorDeps) []doctorCheck {
 	var all []slots.SaveFailure
 	if d.Store != nil {
@@ -51,7 +53,9 @@ func doctorFactorySaveFailures(ctx context.Context, path string) []slots.SaveFai
 	defer db.Close()
 	ctx, cancel := context.WithTimeout(ctx, completeTimeout)
 	defer cancel()
-	rows, err := db.QueryContext(ctx, `SELECT value FROM kv WHERE key GLOB ? ORDER BY key`, slots.SaveFailedGlob)
+	// Never a removed slot's (slots.SaveFailures): its removal is done.
+	rows, err := db.QueryContext(ctx, `SELECT kv.value FROM kv LEFT JOIN slots ON kv.key = 'slot.' || slots.id || '.save_failed'
+WHERE kv.key GLOB ? AND (slots.state IS NULL OR slots.state != ?) ORDER BY kv.key`, slots.SaveFailedGlob, store.SlotRemoved)
 	if err != nil {
 		return nil
 	}
