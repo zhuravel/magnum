@@ -35,6 +35,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/execx"
@@ -234,7 +235,7 @@ func (m *Manager) saveRemoved(ctx context.Context, sl store.Slot, own []string, 
 	if err != nil {
 		return err
 	}
-	if err := saveUntracked(sl.Path, s.dir, theirs, budget, s); err != nil {
+	if err := m.saveUntracked(sl.Path, s.dir, theirs, budget, s); err != nil {
 		return err
 	}
 	s.skipped = append(s.skipped, edited...)
@@ -431,8 +432,10 @@ func appendFile(out *os.File, name string) error {
 // file saved, so a save that copies none has no such folder. A write into
 // the save that fails (a full disk, a quota, a name its folder refuses) is
 // an error, the save's as a whole: it is no reason about the file, and the
-// removal must not delete what the save does not hold.
-func saveUntracked(tree, dir string, files []string, budget int64, s *saved) error {
+// removal must not delete what the save does not hold. So is a read that
+// fails for the whole process (processWide: too many open files, no
+// memory), whose file the next attempt reads.
+func (m *Manager) saveUntracked(tree, dir string, files []string, budget int64, s *saved) error {
 	if len(files) == 0 {
 		return nil
 	}
@@ -441,7 +444,10 @@ func saveUntracked(tree, dir string, files []string, budget int64, s *saved) err
 		return err
 	}
 	defer src.Close()
-	u := &untrackedSave{src: src, dir: filepath.Join(dir, saveFiles), budget: budget}
+	u := &untrackedSave{src: src, dir: filepath.Join(dir, saveFiles), budget: budget, read: m.readTree}
+	if u.read == nil {
+		u.read = fsx.ReadRegularIn
+	}
 	defer u.close()
 	for _, f := range files {
 		why, err := u.save(f)
@@ -464,6 +470,7 @@ type untrackedSave struct {
 	dir    string
 	dst    *os.Root // dir, made and opened at the first file saved
 	budget int64
+	read   func(root *os.Root, name string, limit int64) ([]byte, error) // fsx.ReadRegularIn
 }
 
 // folder is the save's untracked/, made at the first call.
@@ -491,7 +498,7 @@ func (u *untrackedSave) close() {
 // save copies untracked file f and takes its size from the budget, or
 // says why it does not ("" when it did): a file it cannot read is left out
 // with the error, as a file past the cap is. The error is the save's own
-// (place, the write).
+// (place, the write, a read that fails for the whole process: cannotRead).
 func (u *untrackedSave) save(f string) (string, error) {
 	if strings.HasSuffix(f, "/") {
 		return "a repository inside the work tree", nil
@@ -501,7 +508,7 @@ func (u *untrackedSave) save(f string) (string, error) {
 	case errors.Is(err, fs.ErrNotExist):
 		return "gone before the save", nil
 	case err != nil:
-		return "cannot be read: " + errText(err), nil
+		return cannotRead(err)
 	case fi.Mode()&fs.ModeSymlink != 0:
 		return u.link(f)
 	case !fi.Mode().IsRegular():
@@ -509,7 +516,7 @@ func (u *untrackedSave) save(f string) (string, error) {
 	case fi.Size() > u.budget:
 		return sizeWord(fi.Size()) + ", past the cap", nil
 	}
-	b, err := fsx.ReadRegularIn(u.src, f, u.budget)
+	b, err := u.read(u.src, f, u.budget)
 	switch {
 	case errors.Is(err, fsx.ErrTooLarge):
 		return "grew past the cap", nil
@@ -518,7 +525,7 @@ func (u *untrackedSave) save(f string) (string, error) {
 	case errors.Is(err, fs.ErrNotExist):
 		return "gone before the save", nil
 	case err != nil:
-		return "cannot be read: " + errText(err), nil
+		return cannotRead(err)
 	}
 	dst, err := u.place(f)
 	if err != nil {
@@ -558,7 +565,7 @@ func (u *untrackedSave) link(f string) (string, error) {
 	case errors.Is(err, fs.ErrNotExist):
 		return "gone before the save", nil
 	case err != nil:
-		return "cannot be read: " + errText(err), nil
+		return cannotRead(err)
 	case int64(len(target)) > u.budget:
 		return "a symlink to " + target + ", past the cap", nil
 	}
@@ -605,6 +612,23 @@ func errText(err error) string {
 		return pe.Err.Error()
 	}
 	return err.Error()
+}
+
+// cannotRead is save's answer to err, a read of a file of the tree that
+// failed: the reason "cannot be read: <cause>", but for an error of the
+// whole process (processWide), which fails the save.
+func cannotRead(err error) (string, error) {
+	if processWide(err) {
+		return "", err
+	}
+	return "cannot be read: " + errText(err), nil
+}
+
+// processWide reports whether err is a failure of the whole process, not
+// of the file it read: too many open files in the process or the system,
+// or no memory. The file is readable, and the next attempt saves it.
+func processWide(err error) bool {
+	return errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE) || errors.Is(err, syscall.ENOMEM)
 }
 
 // keptListed caps the untracked files saved.txt names as kept in the tree

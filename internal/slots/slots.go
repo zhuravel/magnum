@@ -176,6 +176,9 @@ type Manager struct {
 	// saveCap bounds a save (0: SaveCap), a test's smaller one.
 	saveDir atomic.Pointer[func(sl store.Slot, pr store.PR) string]
 	saveCap int64
+	// readTree is a test's stand-in for a removal's save's read of a file
+	// of the tree (nil: fsx.ReadRegularIn).
+	readTree func(root *os.Root, name string, limit int64) ([]byte, error)
 	// saveAlert is SetSaveAlert's function (nil: none).
 	saveAlert atomic.Pointer[func(context.Context, SaveFailure)]
 }

@@ -225,7 +225,9 @@ func withoutOwn(mainClone string, untracked, own []string) []string {
 // since magnum copied it, each "<path> (<why>)": a removal saves none of
 // magnum's files, which hold the main clone's secrets, but names those.
 // A file the main clone holds none of, what the setup wrote, is not
-// compared; nor is one gone from the tree.
+// compared; nor is one gone from the tree. A comparison that fails is
+// named with its error, but an error of the whole process (processWide),
+// which fails the save.
 func editedOwn(tree, mainClone string, mine []string) ([]string, error) {
 	if len(mine) == 0 {
 		return nil, nil
@@ -239,6 +241,8 @@ func editedOwn(tree, mainClone string, mine []string) ([]string, error) {
 	for _, p := range mine {
 		same, err := sameAsMain(src, mainClone, p)
 		switch {
+		case err != nil && processWide(err):
+			return nil, err
 		case err != nil:
 			out = append(out, p+" (magnum's own, not saved, cannot be compared with the main clone's: "+errText(err)+")")
 		case !same:

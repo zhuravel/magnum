@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -403,6 +404,44 @@ func TestARemovalLeavesOutAnUntrackedFileItCannotCopy(t *testing.T) {
 	if !strings.Contains(note, "locked.txt (cannot be read: permission denied)") ||
 		!strings.Contains(h.discarded(t, sl.Name)[0].Message, "locked.txt") {
 		t.Fatalf("saved.txt or the event does not name locked.txt as left out:\n%s", note)
+	}
+}
+
+// A read of a file of the tree that fails for the whole process (too many
+// open files in it or in the system, no memory) fails the save, and the
+// removal deletes nothing: the file is readable, the next attempt saves
+// it. It was left out as one that "cannot be read", and `worktree remove
+// --force` deleted it.
+func TestAReadThatFailsForTheWholeProcessFailsTheSave(t *testing.T) {
+	for _, errno := range []syscall.Errno{syscall.EMFILE, syscall.ENFILE, syscall.ENOMEM} {
+		t.Run(errno.Error(), func(t *testing.T) {
+			f := newPerPR(t, true)
+			h := f.h
+			sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, f.repoName(), f.pr, f.sha7)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filepath.Join(sl.Path, "notes.txt"), "mine\n")
+			h.m.readTree = func(root *os.Root, name string, limit int64) ([]byte, error) {
+				if name == "notes.txt" {
+					return nil, &fs.PathError{Op: "open", Path: name, Err: errno}
+				}
+				return fsx.ReadRegularIn(root, name, limit)
+			}
+
+			if err := h.m.RemovePRWorktree(h.ctx, sl, false); !errors.Is(err, errno) {
+				t.Fatalf("RemovePRWorktree over a read that failed with %v: %v, want that error", errno, err)
+			}
+			if got := readFile(t, filepath.Join(sl.Path, "notes.txt")); got != "mine\n" {
+				t.Fatalf("notes.txt = %q, want it kept", got)
+			}
+			if got := h.slot(sl.Name); got.State == store.SlotRemoved {
+				t.Fatalf("state = %s, want the removal refused", got.State)
+			}
+			if got := saves(t, h.layout.PRSaves("zhuravel", "widget", f.pr.Number)); len(got) != 0 {
+				t.Fatalf("saves = %q, want none left by the failed save", got)
+			}
+		})
 	}
 }
 
