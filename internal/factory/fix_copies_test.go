@@ -796,6 +796,50 @@ func TestAClaimKeepsTheFixersUnpushedCommitsBeforeItSwitches(t *testing.T) {
 	}
 }
 
+// A PR whose repository's fix_copies changed since it claimed its checkout
+// lets that checkout go and claims one of the other kind: from a fix copy
+// to a per-PR checkout when fix_copies drops to 0, and back. The release of
+// the fix copy deleted the fix ref the same claim had just fetched, so the
+// per-PR checkout's worktree add failed the fix (R3 and R7 on T3b), and no
+// test changed fix_copies between two claims (R13).
+func TestAChangeOfFixCopiesMovesThePRsCheckout(t *testing.T) {
+	r := newFixRig(t, 1, 1)
+	head := r.pushPR(r.origin, 7, "fix.txt", "v1\n")
+	w := r.prWork("talkable/talkable", 7)
+	if fc := r.claimFix(w); fc.Name != "factory2" {
+		t.Fatalf("the claim = %+v, want the fix copy factory2", fc)
+	}
+
+	r.cfg.Factory.Repos[0].FixCopies = 0
+	r.c = r.newCopies() // the restart on the new config
+	pc := r.claimFix(w)
+	if !pc.PerPR() || pc.Head != head {
+		t.Fatalf("the claim with fix_copies = 0 = %+v, want a per-PR checkout at %s", pc, head)
+	}
+	if got, _ := r.head(pc.Path); got != head {
+		t.Fatalf("the per-PR checkout is at %s, want %s", got, head)
+	}
+	if sl := r.slot("factory2"); sl.State != store.SlotFree || sl.PRID != nil {
+		t.Fatalf("factory2 = %s (pr %v), want free once the PR moved", sl.State, sl.PRID)
+	}
+	if got := r.ref(r.main, fixRef(7)); got != head {
+		t.Fatalf("%s = %q, want the claimed head %s", fixRef(7), got, head)
+	}
+
+	r.cfg.Factory.Repos[0].FixCopies = 1
+	r.c = r.newCopies()
+	if fc := r.claimFix(w); fc.Name != "factory2" || fc.Head != head {
+		t.Fatalf("the claim with fix_copies = 1 again = %+v, want factory2 at %s", fc, head)
+	}
+	if sl := r.slot(pc.Name); sl.State != store.SlotRemoved || fsx.Exists(pc.Path) {
+		t.Fatalf("the per-PR checkout = %s, want removed once the PR moved", sl.State)
+	}
+	res, err := r.c.FixReserved(r.ctx)
+	if err != nil || !slices.Equal(res, []FixReservation{{WorkID: w.ID, Checkout: "factory2"}}) {
+		t.Fatalf("FixReserved = %+v, %v, want only factory2", res, err)
+	}
+}
+
 // A force-push of the PR between the claim and the release holds nothing:
 // the head the claim switched to counts as pushed, though the release's
 // fetch moved the fix ref off it. Its commits counted as unpushed_commits,

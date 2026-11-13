@@ -174,7 +174,8 @@ func (c *copySet) fixPlaceOf(ctx context.Context, w registry.PRWork) (fixPlace, 
 // wait that costs the PR nothing) or its per-PR checkout (perPRCheckout),
 // and runs the fix claim's protocol (prepareFix) under the checkout's own
 // lock. A checkout of the other kind the PR still holds (the configuration
-// changed) is released first.
+// changed) is released first, before the fetch: its release deletes the
+// fix ref, which the per-PR checkout's worktree add then reads.
 func (c *copySet) ClaimFix(ctx context.Context, w registry.PRWork) (FixCheckout, error) {
 	place, err := c.fixPlaceOf(ctx, w)
 	if _, wait := errors.AsType[noCopy](err); wait {
@@ -183,15 +184,15 @@ func (c *copySet) ClaimFix(ctx context.Context, w registry.PRWork) (FixCheckout,
 	if err != nil {
 		return FixCheckout{}, fmt.Errorf("claim a fix checkout for %s: %w", workKey(w), err)
 	}
+	if err := c.dropOtherCheckout(ctx, w, place.copies); err != nil {
+		return FixCheckout{}, fmt.Errorf("claim a fix checkout for %s: %w", workKey(w), err)
+	}
 	head, err := c.fetchFix(ctx, w, place.clone)
 	if err != nil {
 		return FixCheckout{}, fmt.Errorf("claim a fix checkout for %s: %w", workKey(w), err)
 	}
 	owner, err := c.fixOwner(ctx, w, head)
 	if err != nil {
-		return FixCheckout{}, fmt.Errorf("claim a fix checkout for %s: %w", workKey(w), err)
-	}
-	if err := c.dropOtherCheckout(ctx, w, owner, place.copies); err != nil {
 		return FixCheckout{}, fmt.Errorf("claim a fix checkout for %s: %w", workKey(w), err)
 	}
 	if place.copies {
@@ -216,10 +217,18 @@ func (c *copySet) fetchFix(ctx context.Context, w registry.PRWork, clone string)
 	return head, err
 }
 
-// dropOtherCheckout releases the checkout owner row owner holds when it is
-// of the other kind than the claim's (copies: a per-PR checkout, else a fix
-// copy): the repository's fix_copies changed since the PR claimed it.
-func (c *copySet) dropOtherCheckout(ctx context.Context, w registry.PRWork, owner store.PR, copies bool) error {
+// dropOtherCheckout releases the checkout PR work w's owner row holds when
+// it is of the other kind than the claim's (copies: a per-PR checkout, else
+// a fix copy): the repository's fix_copies changed since the PR claimed it.
+// Work with no owner row yet holds none.
+func (c *copySet) dropOtherCheckout(ctx context.Context, w registry.PRWork, copies bool) error {
+	owner, err := c.fixOwnerOf(ctx, w.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
 	sl, err := c.st.SlotByPR(ctx, owner.ID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):

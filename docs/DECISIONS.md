@@ -26910,7 +26910,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - The claim. The fix work's owner row in the factory's agents store is a row of a repository of its own,
     `factory-fix/fix`, numbered by the `pr_work` id (node id `factory:fix:<id>`): the reservation lives in the
     store, so a restart finds it, and a slot release takes it for another repository's row and leaves the
-    review's `refs/magnum/pr/<N>` alone, as for a task's row. The claim fetches `refs/pull/<N>/head` into
+    review's `refs/magnum/pr/<N>` alone, as for a task's row. A checkout of the other kind the PR still holds
+    (its repository's `fix_copies` changed) is let go first, before the fetch: its release deletes the fix ref,
+    which a per-PR checkout's worktree add reads, and run after the fetch it failed that fix (the engine owner's
+    R3 and R7 on T3b). The claim fetches `refs/pull/<N>/head` into
     `refs/magnum/factory-fix/<N>` of the main clone (`gitx.FetchPRInto`, which refuses `refs/magnum/pr/`): the
     two daemons share main clones, and a fetch into the review's ref would move it between a review's fetch and
     its checkout. It then switches the checkout to that head, detached, with `slots.Resync` (an operation left in
@@ -26967,7 +26970,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     folder, `TestAPerPRCheckoutLivesUnderItsOwnRepositorysFolder` (failing first); the engine owner's review of
     T3b, `TestAReleaseTakesThePushedHeadWhateverYouTyped` (R1, failing first),
     `TestAForcePushOfThePRDoesNotHoldItsFixCheckout` (R5, failing first),
-    `TestAClaimKeepsTheFixersUnpushedCommitsBeforeItSwitches` (R2 and R18, failing first) with
+    `TestAClaimKeepsTheFixersUnpushedCommitsBeforeItSwitches` (R2 and R18, failing first),
+    `TestAChangeOfFixCopiesMovesThePRsCheckout` (R3, R7 and R13's second half, failing first) with
     `TestKeepCommitKeepsOnlyUnderARefOfItsOwn` in internal/gitx and, for code that had no test,
     `TestAClaimTakesTheFixersMovedHeadUnlessYouTyped` (R10).
   - The Redis databases. Copy n's 16 Redis databases start at n × 16 and the fix copies are numbered past the
