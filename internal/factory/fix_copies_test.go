@@ -1066,3 +1066,84 @@ func TestAPerPRCheckoutIsRemovedWhenThePRsWorkEnds(t *testing.T) {
 		t.Fatalf("the claim of work that came back = %+v, want its checkout at %s again", fc, paths[6])
 	}
 }
+
+// harnessWork is the queued fix work of PR number of talkable/talkable in
+// the harness's registry, cycle 1.
+func harnessWork(h *harness, number int) registry.PRWork {
+	h.t.Helper()
+	w, err := h.reg.EnsurePRWork(h.ctx, "talkable/talkable", number)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if err := h.reg.UpdatePRWork(h.ctx, w.ID, nil, registry.PRWorkQueued, func(u *registry.PRWorkUpdate) { u.Set("cycle", 1) }); err != nil {
+		h.t.Fatal(err)
+	}
+	if w, err = h.reg.PRWorkByID(h.ctx, w.ID); err != nil {
+		h.t.Fatal(err)
+	}
+	return w
+}
+
+// A fix's claim that finds no checkout free is a wait that costs the fix
+// nothing: the PR's fix is told "copy: all 2 busy", with a fix.claim fail
+// event that says when it claims again, and no claim runs before
+// claimBackoff; the next one runs after it. Any other error of a claim is
+// the fix's failure, returned as it is, and the claim after it runs at
+// once. No test set the fake's claim error (R12 on T3b).
+func TestAFixClaimWaitsWhileNoCheckoutIsFreeAndFailsOnAnyOtherError(t *testing.T) {
+	h := newHarness(t)
+	w := harnessWork(h, 7)
+	setClaimErr := func(err error) {
+		h.copies.mu.Lock()
+		h.copies.fix.claimErr = err
+		h.copies.mu.Unlock()
+	}
+	claim := func() error {
+		t.Helper()
+		_, err := h.e.claimFix(h.ctx, w)
+		return err
+	}
+	setClaimErr(noCopy{what: "all 2 busy"})
+	if err := claim(); !errors.Is(err, ErrHeld) {
+		t.Fatalf("the first claimFix = %v, want a wait while its claim runs", err)
+	}
+	h.e.waitBackground()
+	if err := claim(); !errors.Is(err, ErrHeld) || err.Error() != "copy: all 2 busy" {
+		t.Fatalf("claimFix once the claim found no checkout = %v, want the wait copy: all 2 busy", err)
+	}
+	evs := h.events(0, "fix.claim")
+	if len(evs) != 2 || evs[1].Phase != registry.PhaseFail || !strings.Contains(evs[1].Text, "no checkout for talkable/talkable#7 yet: all 2 busy; claims again at") {
+		t.Fatalf("fix.claim events %+v, want the begin and the wait", evs)
+	}
+	h.clock.Add(claimBackoff(1) - time.Second)
+	if err := claim(); err == nil || err.Error() != "copy: all 2 busy" {
+		t.Fatalf("claimFix inside the backoff = %v, want the wait", err)
+	}
+	h.e.waitBackground()
+	if n := h.copies.fixClaims(); n != 1 {
+		t.Fatalf("%d claims inside the backoff, want no new one", n)
+	}
+
+	setClaimErr(errors.New("the fetch of refs/pull/7/head failed"))
+	h.clock.Add(time.Second)
+	if err := claim(); !errors.Is(err, ErrHeld) {
+		t.Fatalf("claimFix after the backoff = %v, want a wait while a second claim runs", err)
+	}
+	h.e.waitBackground()
+	if n := h.copies.fixClaims(); n != 2 {
+		t.Fatalf("%d claims after the backoff, want a second one", n)
+	}
+	if err := claim(); err == nil || errors.Is(err, ErrHeld) || err.Error() != "the fetch of refs/pull/7/head failed" {
+		t.Fatalf("claimFix once the claim failed = %v, want its error as it is", err)
+	}
+	if evs := h.events(0, "fix.claim"); evs[len(evs)-1].Phase != registry.PhaseFail || evs[len(evs)-1].Text != "the fetch of refs/pull/7/head failed" {
+		t.Fatalf("the last fix.claim event = %+v, want the failure", evs[len(evs)-1])
+	}
+	if err := claim(); !errors.Is(err, ErrHeld) {
+		t.Fatalf("claimFix after a failure = %v, want a new claim at once", err)
+	}
+	h.e.waitBackground()
+	if n := h.copies.fixClaims(); n != 3 {
+		t.Fatalf("%d claims after the failure, want a third one at once", n)
+	}
+}

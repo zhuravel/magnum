@@ -26977,7 +26977,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
     `TestAFixCheckoutGoesWhenItsPRClosesOrItsWorkIsGone` (R16, failing first) with
     `TestKeepCommitKeepsOnlyUnderARefOfItsOwn` in internal/gitx and, for code that had no test,
     `TestAClaimTakesTheFixersMovedHeadUnlessYouTyped` (R10), `TestAFixCopysReleaseHoldsTheFixersCommitUntilItIsPushed`
-    (R11) and `TestAPerPRCheckoutsRemovalHoldsYourChangesAndDropsTheFixers` (R13).
+    (R11), `TestAPerPRCheckoutsRemovalHoldsYourChangesAndDropsTheFixers` (R13) and
+    `TestAFixClaimWaitsWhileNoCheckoutIsFreeAndFailsOnAnyOtherError` (R12).
   - The Redis databases. Copy n's 16 Redis databases start at n × 16 and the fix copies are numbered past the
     tasks', so a repository whose copies use Redis offsets (its `env` names `REDIS_DB_OFFSET` or renders `{n*16}`:
     `config.FactoryRepo.UsesRedis`) needs `(max_copies + fix_copies + 1) × 16` databases on that Redis, the highest
