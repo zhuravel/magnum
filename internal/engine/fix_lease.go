@@ -365,7 +365,11 @@ func (e *Engine) factorysOwnRound(ctx context.Context, pr store.PR) bool {
 }
 
 // factoryWaitOf is the wait of pr while the factory holds its round
-// (waitFor; ok false: it does not), read without recording anything.
+// (waitFor; ok false: it does not), read without recording anything. A
+// failed read is a wait only once dispatch or `magnum review` recorded it,
+// which counts its grace: before (a PR that is no dispatch candidate yet)
+// its grace would start anew at each tick, and what holds the PR is
+// another wait's.
 func (e *Engine) factoryWaitOf(ctx context.Context, pr store.PR) (Wait, bool) {
 	if e.factorysOwnRound(ctx, pr) {
 		return Wait{}, false
@@ -378,6 +382,9 @@ func (e *Engine) factoryWaitOf(ctx context.Context, pr store.PR) (Wait, bool) {
 		return Wait{Reason: WaitFixing, Subject: waitFactory, Detail: fmt.Sprintf("its owner row, which cannot be read (%s)", leaseErrWords(v.unknown))}, true
 	}
 	u, recorded := e.leaseUnreadOf(ctx, pr.ID)
+	if v.err != nil && !recorded {
+		return Wait{}, false
+	}
 	return e.leaseWait(v, u, recorded)
 }
 

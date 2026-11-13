@@ -377,6 +377,34 @@ func TestADryRunDaemonRecordsAFailedLeaseRead(t *testing.T) {
 	}
 }
 
+// A PR the factory fixes whose lease cannot be read waits on the factory
+// only once a failed read is recorded, which dispatch and `magnum review`
+// do: before that (the PR is no dispatch candidate yet, inside its push
+// quiet period) its wait is what holds it, and it stays put from tick to
+// tick instead of a grace that starts anew at each one.
+func TestAnUnrecordedFailedLeaseReadIsNoWait(t *testing.T) {
+	lease := &fakeLease{}
+	lease.set(FixLease{}, errors.New("database is locked"))
+	h := newHarness(t, func(h *harness) { h.d.FixLeaseOf = lease.reader(h.clock.Now) })
+	h.reviewedPR(2, "b1")
+	factoryOwns(h)
+	pollPR(h, time.Hour, 2, "b2") // inside the push quiet period: no candidate
+	pr := h.wantState(2, store.PRRereviewPending)
+	if u, ok := h.leaseUnread(pr.ID); ok {
+		t.Fatalf("a failed read was recorded for a PR no round looked at: %+v", u)
+	}
+	w := waitOf(t, h, 2)
+	if w.Subject == waitFactory {
+		t.Errorf("wait = %+v, want what holds the PR, not the factory's lease", w)
+	}
+	first, _ := kvValue(h, KVPRWait(pr.ID))
+	h.advance(time.Minute)
+	h.tick()
+	if again, _ := kvValue(h, KVPRWait(pr.ID)); again != first {
+		t.Errorf("the wait moved from %s to %s", first, again)
+	}
+}
+
 // leaseUnread is PR prID's recorded failed lease read (ok false: none).
 func (h *harness) leaseUnread(prID int64) (LeaseUnread, bool) {
 	h.t.Helper()
