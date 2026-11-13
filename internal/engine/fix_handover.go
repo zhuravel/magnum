@@ -380,6 +380,13 @@ func (e *Engine) returnToMagnum(ctx context.Context, repo store.Repo, pr store.P
 		}
 		return "", fmt.Errorf("%s: every own PR goes to the factory (`magnum fix --handover all`); `magnum fix --handover back all` lifts that and returns each PR it may", label)
 	}
+	return e.returnOneToMagnum(ctx, repo, pr, dry)
+}
+
+// returnOneToMagnum is returnToMagnum once --handover all is lifted, or
+// would be in a dry run (returnAllToMagnum): it judges pr alone.
+func (e *Engine) returnOneToMagnum(ctx context.Context, repo store.Repo, pr store.PR, dry bool) (string, error) {
+	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
 	o, raw, ok, err := e.fixOwner(ctx, pr.ID)
 	switch {
 	case err != nil:
@@ -449,8 +456,9 @@ func (e *Engine) staysFactorys(ctx context.Context, repo store.Repo, pr store.PR
 }
 
 // returnAllToMagnum lifts --handover all, calls off every handover that waits,
-// and returns every PR the factory fixes and may give back (returnToMagnum); the
-// answer names those that stay the factory's, and why.
+// and returns every PR the factory fixes and may give back (returnOneToMagnum,
+// as after the lift: a dry run judges each PR the same way, the lift
+// skipped); the answer names those that stay the factory's, and why.
 func (e *Engine) returnAllToMagnum(ctx context.Context, dry bool) (string, error) {
 	vals, err := e.st.KVValues(ctx, "pr.*.fix_owner")
 	if err != nil {
@@ -489,7 +497,7 @@ func (e *Engine) returnAllToMagnum(ctx context.Context, dry bool) (string, error
 		if o, err := fixwork.ParseFixOwner(vals[key]); err == nil && !o.Factory() {
 			continue // returning already
 		}
-		if _, err := e.returnToMagnum(ctx, repo, pr, dry); err != nil {
+		if _, err := e.returnOneToMagnum(ctx, repo, pr, dry); err != nil { // judged as after the lift, which a dry run skips
 			stay = append(stay, err.Error())
 			continue
 		}

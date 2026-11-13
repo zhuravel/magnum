@@ -452,6 +452,37 @@ func TestOnlyAPRTheFactoryHasNotWorkedReturnsToMagnum(t *testing.T) {
 	}
 }
 
+// `--handover back all` lifts --handover all and then judges each PR the
+// factory fixes; its dry run judges them the same way, as after the lift,
+// and changes nothing: a PR the factory has not worked would return.
+func TestBackAllsDryRunJudgesThePRsAsAfterTheLift(t *testing.T) {
+	lease := &fakeLease{}
+	h, _ := fixHarness(t, func(h *harness) { h.d.FixLeaseOf = lease.reader(h.clock.Now) }, factoryFixOn)
+	fixablePR(h, "zhuravel", nil)
+	if r := h.handOver(HandoverPayload{All: true}); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "1 PR now") {
+		t.Fatalf("handover all: %s %q", r.State, deref(r.Result))
+	}
+	flip, _ := ownerOf(h)
+	h.advance(time.Minute)
+	r := h.handOver(HandoverPayload{All: true, Back: true, DryRun: true})
+	if r.State != store.RequestDone || deref(r.Result) != "dry run: would lift --handover all; 1 PR would return to magnum" {
+		t.Errorf("back all --dry-run: %s %q", r.State, deref(r.Result))
+	}
+	if o, _ := ownerOf(h); o != flip {
+		t.Errorf("the dry run changed the owner: %+v", o)
+	}
+	if _, ok := kvValue(h, KVFixHandoverAll); !ok {
+		t.Error("the dry run lifted --handover all")
+	}
+	r = h.handOver(HandoverPayload{All: true, Back: true})
+	if r.State != store.RequestDone || deref(r.Result) != "own PRs no longer all go to the factory; 1 PR returns to magnum" {
+		t.Errorf("back all: %s %q", r.State, deref(r.Result))
+	}
+	if o, _ := ownerOf(h); o.Owner != fixwork.OwnerReturning {
+		t.Errorf("owner = %+v, want returning", o)
+	}
+}
+
 // The morning list's drops end the records that keep a PR from handing
 // over and do not end by themselves: `magnum fix --drop-push` drops the
 // record of a fixer's push kept for its late settle, and `magnum
