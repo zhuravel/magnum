@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -212,9 +213,11 @@ func pausedFactoryRound(t *testing.T, ref fixwork.FixRef) *harness {
 }
 
 // The end of the factory's re-review is written once, by whichever end
-// takes the PR's fix row first (C6): a stop served between a round's
-// unreserve and its fixRefAfterRound ends the fix, and the round's own end
-// then writes nothing; a round's end that came first leaves a later stop
+// takes the PR's fix row first (C6): a stop that ended the fix first
+// leaves the round's own end nothing to write (the round names its end
+// while it still holds the PR, so none the tick serves comes between,
+// TestTheFactorysRoundNamesItsEndBeforeItLetsGoOfThePR); a round's end
+// that came first leaves a later stop
 // nothing to end; and the operator's review that takes the place of a fix
 // kept without a forced round ends it once, by "magnum review", so no
 // deleter of the row is silent.
@@ -272,6 +275,63 @@ func TestTheEndOfTheFactorysReReviewIsWrittenOnce(t *testing.T) {
 			t.Errorf("fix.factory_round = %s by %q, want stopped by your review", outcome, by)
 		}
 	})
+}
+
+// logHook is a logger that calls on with each record before its handler
+// writes it.
+type logHook struct {
+	slog.Handler
+	on func(slog.Record)
+}
+
+func (l logHook) Handle(ctx context.Context, r slog.Record) error {
+	l.on(r)
+	return l.Handler.Handle(ctx, r)
+}
+
+func (l logHook) WithAttrs(as []slog.Attr) slog.Handler {
+	return logHook{Handler: l.Handler.WithAttrs(as), on: l.on}
+}
+
+func (l logHook) WithGroup(name string) slog.Handler {
+	return logHook{Handler: l.Handler.WithGroup(name), on: l.on}
+}
+
+// The round of the factory's fix names its end while it still holds the PR
+// (the engine owner's ruling, C6's window): a `magnum review` the tick
+// serves meanwhile is refused as a round in progress, and a stop is told to
+// ask again shortly, so neither can end the fix as "stopped" before the
+// round says how it ended. Here the fix.factory_round event is written while
+// the PR's reservation is still the round's.
+func TestTheFactorysRoundNamesItsEndBeforeItLetsGoOfThePR(t *testing.T) {
+	var prID atomic.Int64
+	var seen, held atomic.Bool
+	h := newHarness(t, func(h *harness) {
+		h.d.FixLeaseOf = (&fakeLease{}).reader(h.clock.Now)
+		h.d.Logger = slog.New(logHook{Handler: slog.NewTextHandler(testWriter{t}, &slog.HandlerOptions{Level: slog.LevelDebug}),
+			on: func(r slog.Record) {
+				if strings.Contains(r.Message, "ended posted: the re-review of the factory's push of b2") {
+					seen.Store(true)
+					held.Store(h.e.roundActive(prID.Load()))
+				}
+			}})
+	})
+	prID.Store(h.reviewedPR(2, "b1").ID)
+	factoryOwns(h)
+	pollPR(h, time.Hour, 2, "b2")
+	h.advance(6 * time.Minute)
+	ref := fixwork.FixRef{Work: 7, Cycle: 1, Head: "b2"}
+	if r := h.reReviewOf(ref); r.State != store.RequestDone {
+		t.Fatalf("the factory's re-review: %s %q", r.State, deref(r.Result))
+	}
+	h.tick()
+	if outcome, _ := factoryRoundOf(t, h, ref); outcome != pipeline.OutcomePosted {
+		t.Fatalf("fix.factory_round = %s, want posted", outcome)
+	}
+	if !seen.Load() || !held.Load() {
+		t.Errorf("fix.factory_round written (%v) while the round held the PR (%v): want it written before the round let go of the PR",
+			seen.Load(), held.Load())
+	}
 }
 
 // A clean re-review of the factory's push that holds its approval

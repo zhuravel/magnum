@@ -47,6 +47,8 @@ func backoff(attempts int) time.Duration {
 // to the PR's fix loop (fixAfterRound, on ctx: a next fix cycle reserves the
 // PR itself), then to its whiteboard (whiteboardAfterRound, which reserves
 // the PR too), unless an abort, an ignore or a shutdown stopped the round.
+// The end of the factory's re-review is named before, under the
+// reservation (reservedRound).
 func (e *Engine) launch(ctx, rctx context.Context, job *roundJob) {
 	subject := prSubject(job.repo, job.pr.Number)
 	e.roundTails.Add(1) // while the reservation is still held: no gap for restartBusy
@@ -57,7 +59,6 @@ func (e *Engine) launch(ctx, rctx context.Context, job *roundJob) {
 			return
 		}
 		e.safely(ctx, "fix", subject, func() { e.fixAfterRound(ctx, job, res) }, nil)
-		e.safely(ctx, "fix", subject, func() { e.fixRefAfterRound(ctx, job, res) }, nil) // fix_factory.go: the factory's re-review
 		e.safely(ctx, "whiteboard", subject, func() { e.whiteboardAfterRound(ctx, job.pr, res) }, nil)
 	})
 }
@@ -67,7 +68,12 @@ func (e *Engine) launch(ctx, rctx context.Context, job *roundJob) {
 // reservation at the end, once the round's end is recorded for the idle
 // park (workEnded). It returns the round's result and whether the round's
 // context was cancelled before (stopped: an abort, an ignore or a
-// shutdown).
+// shutdown). A round that was not stopped names the end of the factory's
+// fix it re-reviewed (fixRefAfterRound) while it still holds the PR: no
+// `magnum review` or stop the tick serves can end that fix in between and
+// leave the round's own end unsaid (afterRound marked the round ended, so a
+// stop is told to ask again shortly, and a review is refused as a round in
+// progress).
 func (e *Engine) reservedRound(ctx context.Context, job *roundJob, subject string) (res pipeline.RoundResult, stopped bool) {
 	defer e.unreserve(job.pr.ID)
 	defer e.workEnded(ctx, job.pr.ID)
@@ -75,7 +81,13 @@ func (e *Engine) reservedRound(ctx context.Context, job *roundJob, subject strin
 		func(ctx context.Context, msg string) { e.roundPanicked(ctx, job, msg) })
 	e.safely(ctx, "round", subject, func() { e.afterRound(ctx, job.pr.ID) }, // magnum abort / ignore (abort.go)
 		func(ctx context.Context, msg string) { e.stopsPanicked(ctx, e.roundStops(job.pr.ID), msg) })
-	return res, ctx.Err() != nil
+	if ctx.Err() != nil {
+		return res, true
+	}
+	// The round ended: a shutdown from here on leaves its end said.
+	fctx := context.WithoutCancel(ctx)
+	e.safely(fctx, "fix", subject, func() { e.fixRefAfterRound(fctx, job, res) }, nil) // fix_factory.go: the factory's re-review
+	return res, false
 }
 
 // roundPanicked settles the PR of a round that panicked as a failed round:

@@ -107,10 +107,12 @@ func (e *Engine) fixRefOf(ctx context.Context, prID int64) (*fixRefRow, string) 
 // fixRefAfterRound passes on the factory's fix the round of job
 // re-reviewed (roundJob.fixRef, taken at its dispatch): the round's end,
 // its outcome, head and review, with the fix and its local round, in a
-// fix.factory_round event, which the factory reads. The event is written
+// fix.factory_round event, which the factory reads. It runs while the
+// round still holds the PR (reservedRound), so no stop or review the tick
+// serves comes between the round's end and this. The event is written
 // once: only when the round's own delete takes the PR's row of the fix, the
-// one the round took, so a stop that ended the fix first (between the
-// round's unreserve and this, endFixRef) leaves it unsaid here. A round
+// one the round took, so another end that took the row first (endFixRef)
+// leaves it unsaid here. A round
 // whose judge turn paused on a usage limit or a lost login (pauseContinues)
 // has not ended: the turn continues as the same round once the pause
 // lifts, so the row stays for the continue to take at its dispatch, and no
