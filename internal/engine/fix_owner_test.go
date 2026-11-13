@@ -2,6 +2,7 @@ package engine
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -44,75 +45,114 @@ func wantNoFixerSince(t *testing.T, h *harness, runs int) {
 	}
 }
 
+// unreadableOwner writes PR #2 an owner row this build cannot parse: who
+// fixes it cannot be read.
+func unreadableOwner(h *harness) {
+	h.t.Helper()
+	if err := h.st.SetKV(h.ctx, fixwork.KVPRFixOwner(h.pr(2).ID), `{"owner":"someone newer"}`); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// startPath is a path that can start a fixer of magnum's on PR #2, or write
+// a row one would start from: run builds the case, calls own at the right
+// moment, which makes magnum not PR #2's fixer, and takes the path: what it
+// said, and the fix runs PR #2 had at that moment.
+type startPath struct {
+	name string
+	run  func(t *testing.T, own func(*harness)) (h *harness, said string, runs int)
+}
+
+// refusesEveryStart takes every start path with own, and fails unless each
+// refuses, saying refusal (a request answers why; a start nobody asked for
+// logs it, or says it in its event), and starts no fixer.
+func refusesEveryStart(t *testing.T, own func(*harness), refusal string) {
+	t.Helper()
+	for _, tc := range startPaths() {
+		t.Run(tc.name, func(t *testing.T) {
+			h, said, runs := tc.run(t, own)
+			wantNoFixerSince(t, h, runs) // no held fix either: the held-fix cases checked theirs, kept, and set it aside
+			if !strings.Contains(said, refusal) {
+				t.Errorf("it said %q, want %q", said, refusal)
+			}
+		})
+	}
+}
+
 // The factory fixes PR #2: every path that can start a fixer of magnum's
-// on it, or write a row one would start from, refuses. A request answers
-// why; a start nobody asked for logs it, or says it in its event.
+// on it, or write a row one would start from, refuses.
 func TestEveryStartPathRefusesAFactoryOwnedPR(t *testing.T) {
 	storetest.Parallel(t)
-	const refusal = "the factory fixes this PR"
-	for _, tc := range []struct {
-		name string
-		// run builds the case, makes the factory own PR #2 at the right
-		// moment and takes the path: what it said, and the fix runs PR #2
-		// had when the factory took it.
-		run func(t *testing.T) (h *harness, said string, runs int)
-	}{
-		{"magnum fix", func(t *testing.T) (*harness, string, int) {
+	refusesEveryStart(t, factoryOwns, "the factory fixes this PR")
+}
+
+// A start whose read of the owner row fails starts no fixer: the fixer side
+// fails closed, on every start path. A row this build cannot parse is that
+// failed read, never no row.
+func TestAFailedReadOfTheOwnerRowStartsNoFixer(t *testing.T) {
+	storetest.Parallel(t)
+	refusesEveryStart(t, unreadableOwner, "who fixes this PR cannot be read")
+}
+
+// startPaths are the paths that can start a fixer of magnum's on PR #2.
+func startPaths() []startPath {
+	return []startPath{
+		{"magnum fix", func(t *testing.T, own func(*harness)) (*harness, string, int) {
 			t.Helper()
 			h, _ := fixHarness(t)
 			fixablePR(h, "zhuravel", map[string]int{"P2": 2})
-			factoryOwns(h)
+			own(h)
 			said := h.refusedFix(FixPayload{})
 			return h, said, 0
 		}},
-		{"magnum fix --dry-run", func(t *testing.T) (*harness, string, int) {
+		{"magnum fix --dry-run", func(t *testing.T, own func(*harness)) (*harness, string, int) {
 			t.Helper()
 			h, _ := fixHarness(t)
 			fixablePR(h, "zhuravel", map[string]int{"P2": 2})
-			factoryOwns(h)
+			own(h)
 			said := h.refusedFix(FixPayload{DryRun: true})
 			return h, said, 0
 		}},
-		{"magnum fix during a drain, which holds a fix", func(t *testing.T) (*harness, string, int) {
+		{"magnum fix during a drain, which holds a fix", func(t *testing.T, own func(*harness)) (*harness, string, int) {
 			t.Helper()
 			h, _ := fixHarness(t)
 			fixablePR(h, "zhuravel", map[string]int{"P2": 2})
 			h.e.setKV(h.ctx, KVDaemonDraining, store.FormatTime(h.clock.Now()))
-			factoryOwns(h)
+			own(h)
 			said := h.refusedFix(FixPayload{})
 			return h, said, 0
 		}},
-		{"magnum fix --decide", func(t *testing.T) (*harness, string, int) {
+		{"magnum fix --decide", func(t *testing.T, own func(*harness)) (*harness, string, int) {
 			t.Helper()
 			h, _ := fixHarness(t)
 			fixablePR(h, "zhuravel", map[string]int{"P2": 2})
-			factoryOwns(h)
+			own(h)
 			said := h.refusedFix(FixPayload{Decide: []FixDecision{{Thread: 4100, Text: "keep it"}}})
 			return h, said, 0
 		}},
-		{"magnum fix --ci", func(t *testing.T) (*harness, string, int) {
+		{"magnum fix --ci", func(t *testing.T, own func(*harness)) (*harness, string, int) {
 			t.Helper()
 			h, _ := fixHarness(t)
 			fixablePR(h, "zhuravel", map[string]int{"P2": 2})
-			factoryOwns(h)
+			own(h)
 			said := h.refusedFix(FixPayload{Mode: FixModeCI})
 			return h, said, 0
 		}},
-		{"magnum merge-parent", func(t *testing.T) (*harness, string, int) {
+		{"magnum merge-parent", func(t *testing.T, own func(*harness)) (*harness, string, int) {
 			t.Helper()
 			h, mg := mergeHarness(t, withFixerApp)
 			fixablePR(h, "zhuravel", nil)
 			mg.behind = true
-			factoryOwns(h)
+			own(h)
 			said := h.refusedFix(FixPayload{Mode: FixModeMerge})
 			return h, said, 0
 		}},
-		{"the push of a held merge", func(t *testing.T) (*harness, string, int) {
+		{"the push of a held merge", func(t *testing.T, own func(*harness)) (*harness, string, int) {
 			t.Helper()
 			h, mg := holdMerged(t)
 			plan := h.planMerge()
 			runs := len(h.fixRuns(h.pr(2).ID))
-			factoryOwns(h)
+			own(h)
 			r := h.mergeBound(plan.Asked)
 			wantNoPush(t, mg)
 			if r.State != store.RequestFailed {
@@ -120,20 +160,20 @@ func TestEveryStartPathRefusesAFactoryOwnedPR(t *testing.T) {
 			}
 			return h, deref(r.Result), runs
 		}},
-		{"autofix after a round", func(t *testing.T) (*harness, string, int) {
+		{"autofix after a round", func(t *testing.T, own func(*harness)) (*harness, string, int) {
 			t.Helper()
 			logs := &syncBuffer{}
 			h, _ := autofixHarness(t, "zhuravel", findings(map[string]int{"P2": 2}, "COMMENTED"), func(h *harness) { h.d.Logger = newTeeLogger(t, logs) })
-			factoryOwns(h)
+			own(h)
 			h.tick() // the review posts findings, and its end would start autofix's loop
 			h.wantState(2, store.PRReviewed)
 			return h, logs.String(), 0
 		}},
-		{"autofix = open's look", func(t *testing.T) (*harness, string, int) {
+		{"autofix = open's look", func(t *testing.T, own func(*harness)) (*harness, string, int) {
 			t.Helper()
 			logs := &syncBuffer{}
 			h, _ := openHarness(t, findings(map[string]int{"P2": 2}, "COMMENTED"), func(h *harness) { h.d.Logger = newTeeLogger(t, logs) })
-			factoryOwns(h)
+			own(h)
 			h.tick()
 			h.pastSettle()
 			h.tick()
@@ -142,43 +182,43 @@ func TestEveryStartPathRefusesAFactoryOwnedPR(t *testing.T) {
 			}
 			return h, logs.String(), 0
 		}},
-		{"a fix held for the restart, at the start", func(t *testing.T) (*harness, string, int) {
+		{"a fix held for the restart, at the start", func(t *testing.T, own func(*harness)) (*harness, string, int) {
 			t.Helper()
-			return heldFixOfTheFactory(t, func(h *harness, _ store.PR) { h.e.startHeldFixes(h.ctx) })
+			return heldFixOfTheFactory(t, own, func(h *harness, _ store.PR) { h.e.startHeldFixes(h.ctx) })
 		}},
-		{"a fix held for a drain, after it", func(t *testing.T) (*harness, string, int) {
+		{"a fix held for a drain, after it", func(t *testing.T, own func(*harness)) (*harness, string, int) {
 			t.Helper()
-			return heldFixOfTheFactory(t, func(h *harness, _ store.PR) { h.e.continueDrainHeldLoops(h.ctx) })
+			return heldFixOfTheFactory(t, own, func(h *harness, _ store.PR) { h.e.continueDrainHeldLoops(h.ctx) })
 		}},
-		{"a fix held for the fixer's pause, after it", func(t *testing.T) (*harness, string, int) {
+		{"a fix held for the fixer's pause, after it", func(t *testing.T, own func(*harness)) (*harness, string, int) {
 			t.Helper()
-			return heldFixOfTheFactory(t, func(h *harness, pr store.PR) {
+			return heldFixOfTheFactory(t, own, func(h *harness, pr store.PR) {
 				h.e.holdForPause(pr.ID)
 				h.e.continuePauseHeld(h.ctx)
 			})
 		}},
-		{"a fix held for the GitHub budget, after it", func(t *testing.T) (*harness, string, int) {
+		{"a fix held for the GitHub budget, after it", func(t *testing.T, own func(*harness)) (*harness, string, int) {
 			t.Helper()
-			return heldFixOfTheFactory(t, func(h *harness, pr store.PR) {
+			return heldFixOfTheFactory(t, own, func(h *harness, pr store.PR) {
 				h.e.holdForBudget(pr.ID)
 				h.e.continueBudgetHeld(h.ctx)
 			})
 		}},
-		{"a loop's next cycle", func(t *testing.T) (*harness, string, int) {
+		{"a loop's next cycle", func(t *testing.T, own func(*harness)) (*harness, string, int) {
 			t.Helper()
 			h, git := fixHarness(t)
 			pr := loopToReReview(t, h, git, findings(map[string]int{"P2": 1}, "COMMENTED"), fixPushed2)
-			factoryOwns(h)
+			own(h)
 			reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"}) // the re-review finds a P2: the next cycle would start
 			ev, _ := h.fixEvent("fix.failed")
 			return h, ev.Message, len(h.fixRuns(pr.ID))
 		}},
-		{"the late settle of an unconfirmed push", func(t *testing.T) (*harness, string, int) {
+		{"the late settle of an unconfirmed push", func(t *testing.T, own func(*harness)) (*harness, string, int) {
 			t.Helper()
 			logs := &syncBuffer{}
 			h, _, pr := unconfirmedFixWithLogs(t, logs)
 			runs := len(h.fixRuns(pr.ID))
-			factoryOwns(h)
+			own(h)
 			h.gh.setHead("talkable/talkable", 2, fixPushed)
 			if err := h.e.poll(h.ctx); err != nil {
 				t.Fatal(err)
@@ -192,30 +232,39 @@ func TestEveryStartPathRefusesAFactoryOwnedPR(t *testing.T) {
 			}
 			return h, logs.String(), runs
 		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			h, said, runs := tc.run(t)
-			wantNoFixerSince(t, h, runs) // no held fix either: the held-fix cases checked theirs, kept, and set it aside
-			if !strings.Contains(said, refusal) {
-				t.Errorf("it said %q, want %q", said, refusal)
+		{"a flip between the start's checks and its claim", func(t *testing.T, own func(*harness)) (*harness, string, int) {
+			t.Helper()
+			h, git := fixHarness(t)
+			fixablePR(h, "zhuravel", map[string]int{"P2": 2})
+			fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") }) // a fixer that started would end
+			var once sync.Once
+			h.gh.mu.Lock()
+			h.gh.onThreads = func() { // prepareFix read no owner row and reads the other reviewers, unreserved
+				once.Do(func() { own(h) }) // the handover's flip lands meanwhile
 			}
-		})
+			h.gh.mu.Unlock()
+			said := h.refusedFix(FixPayload{}) // claimFixRow, under the reservation, reads the row again
+			if threads := h.gh.count("threads:talkable/talkable#2"); threads == 0 {
+				t.Error("the start read no threads: the flip did not land between its checks and its claim")
+			}
+			return h, said, 0
+		}},
 	}
 }
 
-// heldFixOfTheFactory holds a fix of PR #2 through a drain, makes the
-// factory own the PR, ends the drain and takes act, a path that would start
+// heldFixOfTheFactory holds a fix of PR #2 through a drain, makes magnum
+// not its fixer (own), ends the drain and takes act, a path that would start
 // the held fix: it fails unless the held fix stays as it was, for the
 // factory's import, and none was dropped. Then it sets the held fix aside,
 // so that its caller's check finds no other. It returns what the engine
 // logged.
-func heldFixOfTheFactory(t *testing.T, act func(h *harness, pr store.PR)) (*harness, string, int) {
+func heldFixOfTheFactory(t *testing.T, own func(*harness), act func(h *harness, pr store.PR)) (*harness, string, int) {
 	t.Helper()
 	logs := &syncBuffer{}
 	h, _ := fixHarness(t, func(h *harness) { h.d.Logger = newTeeLogger(t, logs) })
 	pr := heldFixDuringADrain(t, h)
 	held, _ := kvValue(h, KVPRFixHeld(pr.ID))
-	factoryOwns(h)
+	own(h)
 	h.e.delKV(h.ctx, KVDaemonDraining)
 	act(h, pr)
 	h.settle()
@@ -227,37 +276,6 @@ func heldFixOfTheFactory(t *testing.T, act func(h *harness, pr store.PR)) (*harn
 	}
 	h.e.delKV(h.ctx, KVPRFixHeld(pr.ID))
 	return h, logs.String(), 0
-}
-
-// A start whose read of the owner row fails starts no fixer: the fixer side
-// fails closed. A row that is not an owner is that failed read, never no
-// row: a request names it, and autofix starts nothing.
-func TestAFailedReadOfTheOwnerRowStartsNoFixer(t *testing.T) {
-	storetest.Parallel(t)
-	t.Run("magnum fix", func(t *testing.T) {
-		h, _ := fixHarness(t)
-		pr := fixablePR(h, "zhuravel", map[string]int{"P2": 2})
-		if err := h.st.SetKV(h.ctx, fixwork.KVPRFixOwner(pr.ID), `{"owner":"someone newer"}`); err != nil {
-			t.Fatal(err)
-		}
-		if said := h.refusedFix(FixPayload{}); !strings.Contains(said, "who fixes this PR cannot be read") {
-			t.Errorf("magnum fix = %q, want the failed read named", said)
-		}
-		wantNoFixerSince(t, h, 0)
-	})
-	t.Run("autofix", func(t *testing.T) {
-		logs := &syncBuffer{}
-		h, _ := autofixHarness(t, "zhuravel", findings(map[string]int{"P2": 2}, "COMMENTED"), func(h *harness) { h.d.Logger = newTeeLogger(t, logs) })
-		if err := h.st.SetKV(h.ctx, fixwork.KVPRFixOwner(h.pr(2).ID), "not json"); err != nil {
-			t.Fatal(err)
-		}
-		h.tick()
-		h.wantState(2, store.PRReviewed)
-		wantNoFixerSince(t, h, 0)
-		if !strings.Contains(logs.String(), "who fixes this PR cannot be read") {
-			t.Error("autofix did not log the failed read")
-		}
-	})
 }
 
 // refusedFix asks for a fix of PR #2 with p and returns the refusal; a
