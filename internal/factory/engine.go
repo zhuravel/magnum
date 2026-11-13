@@ -405,6 +405,9 @@ type Engine struct {
 	envFails   []error
 	envCrashed map[int64]envCrashes
 	holdTry    bool
+	// probeNoted is the Since of the infrastructure hold whose probe said
+	// its cause answers again (probeHold): one line for each outage.
+	probeNoted time.Time
 	// holdsWritten is the holds as this daemon last saved them for the
 	// screen (saveHolds), holdsSaved whether it saved them yet.
 	holdsWritten []byte
@@ -1028,7 +1031,8 @@ func (e *Engine) endHeld(id int64, now time.Time) {
 // and the next batch of those reads, off the loop, with what the intake's
 // tries left of the tick's Jira budget (trackJira), the reads of the plans
 // of the Jira moves among them (jira_plans.go). During an infrastructure or a herdr hold no task advances
-// except on the hold's tries, and while herdr does not answer no copy a
+// except on the hold's tries (a MySQL hold's try comes at once when its cheap probe says MySQL answers
+// again: probeHold), and while herdr does not answer no copy a
 // base run left detached is swept (sweepDetached, each under safely too);
 // a failure that a hold covers costs its task nothing. Last, the alerts
 // are delivered (deliverAlerts). The returned error joins what failed, for
@@ -1070,6 +1074,8 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.pressure(ctx, now, tasks)
 	e.repairCopies(ctx)   // after the disk hold's check: none starts under it
 	e.copyHolds(ctx, now) // after the repair that ended: a copy back in the pool lifts its repository's hold
+	// A cause with a cheap probe that answers again makes the hold's try due now, not at its schedule (holds.go).
+	e.probeHold(ctx, herdrUp, now)
 	infra, held := e.holds[HoldInfra]
 	advance := herdrUp && (!held || !now.Before(infra.Next))
 	e.tried = advance // a pass that advances is the infrastructure hold's try (hold)

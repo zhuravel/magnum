@@ -27747,6 +27747,32 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestTheScreenNamesTheDaemonsHoldOnATaskWithNoWait`, `TestOnlyAHoldThatStopsEveryStageIsATasksWait`,
   `TestTheTaskCardSaysWhyOOpensNothing` and `TestNoTaskNamesTheHoldOfAFactoryDaemonThatIsGone`. No migration.
 
+- **An infrastructure hold whose cause is MySQL tries at once when MySQL answers again** (2026-11-13). DBngin's
+  MySQL was down from 17:03; the operator started it at about 17:30, and the hold lifted at 17:34:49, at the
+  next scheduled try. The tries come 2, 4, 8, 16 and then every 30 minutes (`infraBackoff`), so an outage that
+  ends between two of them keeps every stage held until the next, up to 30 minutes, though the full try (every
+  live task's stage) is costly and the question "does the cause answer again?" is not. While an infrastructure
+  hold waits for its next try, each tick (`Tick`, before it reads the hold's `Next`) asks the cause's cheap probe
+  alone (`probeHold`, `holdProbe`): for the machine's hold whose reason is `causeMySQL`, the ping the try
+  itself starts with (`Deps.MySQL`), bounded to 2 seconds (`holdProbeTime`). If it answers, the hold's `Next`
+  becomes the tick's time and the tick runs the hold's full try, with the same rules as a scheduled one: it
+  lifts the hold when the checks pass, or fails and counts (`Tries`, the backoff after it). If it does not
+  answer, nothing changes: no `Tries`, no new `Next`, no event, and the 30 minutes to NEEDS YOU (`holdNeedsYou`)
+  count as before. A tick at or after `Next` asks nothing, since its try starts with the same ping. The probe
+  runs on the tick alone (never in a loop of its own, so at most one ping, at most 2 seconds, a tick), not
+  while herdr does not answer, and not while the daemon drains. One line for each outage says it, in the log and
+  as a hold event (`infra: MySQL answers again (a probe, 2 s at most); the try runs now, not at 17:48`;
+  `probeNoted` is the outage's `Since`), however many ticks find it answering. The only cause the hold
+  names as a service that answers on a port is MySQL's: SSH, DNS and TLS failures, a crash of the environment
+  and the same failure on two tasks have no cheap question, so they keep today's schedule, as does a repository's
+  infrastructure hold (it has its own repair), and a build with no MySQL ping has no probe. No Redis cause is
+  named by a hold in this build, so there is no Redis probe; a cause added later gets one in `holdProbe`. A
+  MySQL that flaps (the probe answers, the try's ping fails) counts a failed try each time and runs no stage,
+  since the try's ping comes first.
+  Tests, failing first: `TestAnInfraHoldLiftsAtTheFirstTickAfterMySQLAnswersAgain`,
+  `TestAProbeThatFailsKeepsTheBackoffAndItsTries` and `TestAHoldWithNoCheapProbeKeepsItsSchedule`. No
+  migration, no new key.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

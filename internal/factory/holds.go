@@ -168,6 +168,64 @@ func (e *Engine) hold(ctx context.Context, failures []error) (Hold, bool) {
 	return Hold{}, false
 }
 
+// causeMySQL is the infrastructure hold's reason for a MySQL that does not
+// answer (infraCause).
+const causeMySQL = "MySQL does not answer"
+
+// holdProbeTime bounds a hold's probe: it is a tick's cheap question, never
+// its wait.
+const holdProbeTime = 2 * time.Second
+
+// holdProbe is the cheap probe of the cause hold h names, the question "does
+// it answer again?" alone, without the checks behind a try: the ping of the
+// MySQL server for the machine's infrastructure hold whose cause is MySQL's.
+// nil for a cause with none (SSH, DNS, TLS, a crash of the environment, the
+// same failure on two tasks: nothing says cheaply that they are over), a
+// repository's hold, and a build with no MySQL ping. It is the only cause the
+// hold names as a service that answers on a port.
+func (e *Engine) holdProbe(h Hold) func(context.Context) error {
+	if h.Kind == HoldInfra && h.Repo == "" && h.Reason == causeMySQL && e.d.MySQL != nil {
+		return e.d.MySQL
+	}
+	return nil
+}
+
+// probeHold is the question each tick asks of an infrastructure hold that
+// waits for its next try and whose cause has a cheap probe (holdProbe): once,
+// bounded by holdProbeTime. A cause that answers makes the hold's try due now
+// instead of at its schedule, and the full try follows in this tick (Tick's
+// advance): it lifts the hold, or fails and counts, as a scheduled one does.
+// A probe that does not answer changes nothing: the backoff, the tries and
+// the time to NEEDS YOU go on. A tick at or after the hold's Next asks
+// nothing: its try is the question. Each outage says so once, when its cause
+// first answers (probeNoted), in the log and in a hold event.
+func (e *Engine) probeHold(ctx context.Context, herdrUp bool, now time.Time) {
+	h := e.holds[HoldInfra]
+	if h == nil || !herdrUp || e.draining.Load() || !now.Before(h.Next) {
+		return
+	}
+	probe := e.holdProbe(*h)
+	if probe == nil {
+		return
+	}
+	pctx, cancel := context.WithTimeout(ctx, holdProbeTime)
+	err := probe(pctx)
+	cancel()
+	if err != nil {
+		return
+	}
+	scheduled := h.Next
+	h.Next = now
+	if e.probeNoted.Equal(h.Since) {
+		return
+	}
+	e.probeNoted = h.Since
+	// MySQL's is the one cause with a probe (holdProbe): its words name it.
+	e.log.Info("infrastructure hold: MySQL answers again; the try runs now", "scheduled", scheduled)
+	e.event(ctx, 0, "hold", registry.PhaseInfo, fmt.Sprintf("infra: MySQL answers again (a probe, 2 s at most); the try runs now, not at %s",
+		scheduled.Local().Format("15:04")))
+}
+
 // lift ends the hold under key (its kind, or a repository's, repoHoldKey),
 // its blocker with it.
 func (e *Engine) lift(ctx context.Context, key string, now time.Time) {

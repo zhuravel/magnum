@@ -5900,7 +5900,11 @@ first tick after the wake do not count. An SSH, DNS or TLS failure, a failed MyS
 for lack of a UTF-8 locale, or the same failure on two tasks within 10 minutes holds every stage at no cost to
 the tasks, with tries after 2, 4, 8, 16 and then every 30 minutes (a try that runs a crashed lint's checks
 again ends when they do, and 3 such crashes at one head send that task to you); a hold that lasts 30 minutes
-needs you. Every copy of a repository broken with one cause is an infrastructure hold of that repository alone,
+needs you. A hold whose cause is MySQL does not wait for its schedule once MySQL is back: each tick between the
+tries asks the MySQL ping alone, at most 2 seconds, and the first tick after it answers runs the hold's try at
+once (it lifts the hold, or fails and counts as a scheduled try does; one hold event says `MySQL answers again`
+for each outage); a probe that does not answer changes nothing, and a hold of another cause (SSH, DNS, TLS,
+the environment, the same failure on two tasks) keeps its schedule. Every copy of a repository broken with one cause is an infrastructure hold of that repository alone,
 which stops no stage (see **Copies** above). A stage that keeps failing for a cause of its own (gh
 logged out, a token without scope, a push the remote's hooks refuse) is tried again no sooner than a poll after each
 failure, however often other tasks' turns kick a tick (a kicked tick restarts the poll's timer, so a try can come up to

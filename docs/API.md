@@ -15295,16 +15295,17 @@ func (e *Engine) RunLocked(ctx context.Context) error
 func (e *Engine) Tick(ctx context.Context) error
     Tick runs one pass of the loop: the holds (herdr, disk and memory,
     then the infrastructure hold and a MySQL ping before a pass that advances),
-    the requests, the published tasks' PRs (followPRs, whether or not the
-    pass advances), their staging status (stagingPass, whose Refreshes run
-    off the loop), the answers of the last batch of reads of the tasks'
-    Jira issues (takeTracking) and the PRs' status files (writePRStatuses),
-    then each live task's advance under its own panic guard (safely), then the
-    Jira comment each task's milestone would keep, in shadow (jiraComments),
-    and the next batch of those reads, off the loop, with what the intake's
-    tries left of the tick's Jira budget (trackJira), the reads of the plans
-    of the Jira moves among them (jira_plans.go). During an infrastructure or
-    a herdr hold no task advances except on the hold's tries, and while herdr
+    the requests, the published tasks' PRs (followPRs, whether or not the pass
+    advances), their staging status (stagingPass, whose Refreshes run off the
+    loop), the answers of the last batch of reads of the tasks' Jira issues
+    (takeTracking) and the PRs' status files (writePRStatuses), then each live
+    task's advance under its own panic guard (safely), then the Jira comment
+    each task's milestone would keep, in shadow (jiraComments), and the next
+    batch of those reads, off the loop, with what the intake's tries left of
+    the tick's Jira budget (trackJira), the reads of the plans of the Jira moves
+    among them (jira_plans.go). During an infrastructure or a herdr hold no
+    task advances except on the hold's tries (a MySQL hold's try comes at once
+    when its cheap probe says MySQL answers again: probeHold), and while herdr
     does not answer no copy a base run left detached is swept (sweepDetached,
     each under safely too); a failure that a hold covers costs its task nothing.
     Last, the alerts are delivered (deliverAlerts). The returned error joins

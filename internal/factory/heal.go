@@ -161,7 +161,7 @@ func infraCause(err error) string {
 		return c.holdCause()
 	}
 	if _, ok := errors.AsType[mysqlFailure](err); ok {
-		return "MySQL does not answer"
+		return causeMySQL
 	}
 	if cause := engine.InfraCause(err); cause != "" {
 		return cause
