@@ -26861,8 +26861,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - The PR request kinds (`fix`, `fix_off`, `fix_on`, `fix_done`, `fix_decide`, `fix_ci`, `merge_parent`,
     `fix_stop`, `handoff`) each have a payload and checks (the PR's repository spelled as GitHub spells one: owner
     and name of `[A-Za-z0-9._-]` alone, neither `.` nor `..`, so no path part or escape reaches the worker), and
-    the ones with a plan answer a dry run with it and take a y bound to it (head, base, tip, conflicts, held
-    merge, failed checks, assignee; 10 minutes), as the engine's merge of the parent does. Their work is one
+    the ones with a plan (a fix, a CI fix, a merge of the parent, a hand-off) answer a dry run with it. A CI fix, a
+    merge of the parent and a hand-off take a y bound to it (head, base, tip, conflicts, held merge, failed checks,
+    assignee; 10 minutes), as the engine's merge of the parent does; a fix's y carries no plan and binds nothing,
+    as a plain `magnum fix` binds nothing on the engine (whether it binds is T4a's to decide). Their work is one
     interface, `PRWorker`, which T4a fills.
   - Configuration: `[factory] fix` (on or off), `fix_max_active` (2: at most 2 fix loops on the first day),
     `fix_local_review` and a `[[factory.repo]]`'s `fix_copies` (0). The fixer is the built-in role `fx-fixer`

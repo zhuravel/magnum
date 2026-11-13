@@ -7,15 +7,20 @@ package factory
 // unknown fields refused as every request's is, and its checks (prChecks).
 // A fix, a CI fix, a merge of the parent and a hand-off answer a dry run
 // with their plan (FixPlan: what the y/N asks about, as JSON on the
-// answer's first line, then the plan in words), and the y that sends the
-// plan back binds the request to it (FixAsked), as magnum's MergeAsked
-// binds a merge of the parent: a y that names no plan, one asked
-// fixAskedWait or longer ago, and one whose head, base, tip, conflicts,
-// held merge, failed checks or assignee moved since is refused, and nothing
-// is done (askedRefusal). The work behind each kind is the fix lane's
-// (PRWorker, Deps.PRWork). While [factory] fix is off, every one of them is
-// answered that the factory does not fix PRs yet, naming the key, and the
-// worker is never asked.
+// answer's first line, then the plan in words). The y of a CI fix, a merge
+// of the parent or a hand-off that sends the plan back binds the request
+// to it (FixAsked), as magnum's MergeAsked binds a merge of the parent: a
+// binding that names no plan of its kind, one asked fixAskedWait or longer
+// ago, and one whose head, base, tip, conflicts, held merge, failed checks
+// or assignee moved since is refused, and nothing is done (askedRefusal).
+// A hand-off takes no y without its plan; a CI fix and a merge of the
+// parent take a y with none (`--yes`). A fix's y binds nothing (FixPayload
+// carries no plan), as a plain `magnum fix` binds nothing on magnum's
+// engine: nothing checks that the PR is still as its plan read it, which
+// only tells you what the fix would do. The work behind each kind is the
+// fix lane's (PRWorker, Deps.PRWork). While [factory] fix is off, every
+// one of them is answered that the factory does not fix PRs yet, naming
+// the key, and the worker is never asked.
 
 import (
 	"context"
@@ -59,8 +64,9 @@ const (
 var FixKinds = []string{ReqFix, ReqFixOff, ReqFixOn, ReqFixDone, ReqFixDecide, ReqFixCI, ReqMergeParent, ReqFixStop, ReqHandoff}
 
 // FixPayload is a ReqFix: start a fix loop on the PR (PRRef), or answer
-// what it would do (DryRun). Surface is where you asked (the screen, the
-// CLI).
+// what it would do (DryRun). Its y is bound to no plan: it carries none,
+// and nothing checks the PR against one. Surface is where you asked (the
+// screen, the CLI).
 type FixPayload struct {
 	PRRef
 	DryRun  bool   `json:",omitempty"`

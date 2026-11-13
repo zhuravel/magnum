@@ -15151,8 +15151,10 @@ type FixPayload struct {
 	DryRun  bool   `json:",omitempty"`
 	Surface string `json:",omitempty"`
 }
-    FixPayload is a ReqFix: start a fix loop on the PR (PRRef), or answer what
-    it would do (DryRun). Surface is where you asked (the screen, the CLI).
+    FixPayload is a ReqFix: start a fix loop on the PR (PRRef), or answer
+    what it would do (DryRun). Its y is bound to no plan: it carries none, and
+    nothing checks the PR against one. Surface is where you asked (the screen,
+    the CLI).
 
 type FixPlan struct {
 	Ref   string   `json:"ref"`
