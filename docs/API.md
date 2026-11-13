@@ -15551,7 +15551,9 @@ type Hold struct {
 
 func ReadHolds(l paths.Layout) ([]Hold, error)
     ReadHolds are the holds of the machine in force as the factory daemon last
-    saved them (holds.json in layout l); none before its first tick.
+    saved them (holds.json in layout l): the running daemon's, which saves them
+    before it writes its pidfile (a write that fails leaves the last run's until
+    a tick saves them).
 
 func StoppingHold(hs []Hold, t registry.Task) (Hold, bool)
     StoppingHold is the hold in hs that stops the next step of task t: t is a
