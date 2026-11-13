@@ -6,12 +6,16 @@
 // their heads and roles and its answered questions with every answer they
 // had, for the replay of a round as an eval case (LocalReview, `magnum eval
 // add --local-task`), and a task's Codex mark and published PR before its
-// replay (TaskCodex). It only reads: the registry is opened read only
+// replay (TaskCodex); and the factory's hold on the fixes of one of your PRs
+// (LeaseOf), which magnum's review side reads, and the fix loops at work
+// (FixJobs), which `magnum factory install --drain` waits for. It only
+// reads: the registry is opened read only
 // (mode=ro, never created, so nothing writes its file or its WAL), with a
 // busy timeout, and closed after each read; a task's files are read inside
 // an os.Root of its directory. It knows the factory's schema only as far as
 // these reads need (pr_links, review_findings, review_cycles, tasks, events,
-// questions, question_answers) and never migrates it:
+// questions, question_answers, pr_work, which a factory older than it
+// lacks) and never migrates it:
 // internal/factory/registry owns it, whose types (registry.Question) the
 // questions are read into.
 package factoryread

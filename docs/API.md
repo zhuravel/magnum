@@ -51,7 +51,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [registrytest](#registrytest) | Package registrytest gives tests a factory registry without migrating one for each of them: the first call in a test binary migrates a template database in memory, and every call starts from a copy of its bytes. |
 | [runtime](#runtime) | Package runtime is the factory's agent runtime: the owner rows of its tasks in the factory's own agents store, the launches it records before any workspace exists, the prompt ledger that never sends a prompt of unknown delivery twice, the pauses that are not failures, and a watchdog with its recovery steps (docs/superpowers/specs/2026-11-03-factory-design.md, sections 4.3, 10 and 10.1). |
 | [stats](#stats) | Package stats measures how much the factory still asks of the operator: per task, the messages typed, the messages that only start a step, the answer batches, the card decisions, the operator's time on cards and the time a task waited on them, computed from the factory registry's evidence records alone (spans, inputs, questions, decisions and review rounds) and set against the baseline frozen before the first task (milestone 1's exit test); and, for a task with a published PR, the PR's quality: what the local review missed at magnum's first posted round (the escape checks) and the PR's CI failures after the publish (its CI checks). |
-| [factoryread](#factoryread) | Package factoryread is the review side's read of what the factory keeps: the local review round of a pull request the factory published, from its registry (factory.db), and the task's plan, ticket and answers, from the task's directory, for the review retro (DECISIONS "The review retro tags factory-origin misses and their stage"); and a task's local review rounds, their heads and roles and its answered questions with every answer they had, for the replay of a round as an eval case (LocalReview, `magnum eval add --local-task`), and a task's Codex mark and published PR before its replay (TaskCodex). |
+| [factoryread](#factoryread) | Package factoryread is the review side's read of what the factory keeps: the local review round of a pull request the factory published, from its registry (factory.db), and the task's plan, ticket and answers, from the task's directory, for the review retro (DECISIONS "The review retro tags factory-origin misses and their stage"); and a task's local review rounds, their heads and roles and its answered questions with every answer they had, for the replay of a round as an eval case (LocalReview, `magnum eval add --local-task`), and a task's Codex mark and published PR before its replay (TaskCodex); and the factory's hold on the fixes of one of your PRs (LeaseOf), which magnum's review side reads, and the fix loops at work (FixJobs), which `magnum factory install --drain` waits for. |
 | [fixwork](#fixwork) | Package fixwork is the fix loop's code that both daemons need: magnum's engine, which runs the loop today, and the factory, which takes it over (DECISIONS "The fix loop moves into the factory"). |
 | [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a replacement without disk syncs, a size-limited read of a regular file, plain or inside an os.Root, the check of a file holding a secret, an existence check and a canonical path. |
 | [github](#github) | Package github is magnum's GitHub access layer. |
@@ -16305,6 +16305,17 @@ const (
     not have arrived, and it is never sent again.
 
 const (
+	// PRWorkIdle: no fix loop runs on the PR.
+	PRWorkIdle = "idle"
+	// PRWorkFixing: the fixer works on the head the cycle fixes.
+	PRWorkFixing = "fixing"
+	// PRWorkReviewing: the fixer pushed, and magnum re-reviews the pushed
+	// head.
+	PRWorkReviewing = "reviewing"
+)
+    The phases of a PR's fix work (PRWork.Phase, migrations/0009_pr_work.sql).
+
+const (
 	QuestionOpen     = "open"
 	QuestionAnswered = "answered"
 	QuestionVoided   = "voided"
@@ -16414,6 +16425,10 @@ VARIABLES
 var ErrConflict = errors.New("factory registry: conflict")
     ErrConflict is returned (wrapped) when a compare-and-set update matched no
     row because the state moved on, or when a write hits a uniqueness rule.
+
+var ErrLeaseHeld = errors.New("factory registry: another holder's lease runs")
+    ErrLeaseHeld is TakePRWorkLease's error when another holder's lease on the
+    PR runs.
 
 var ErrNotFound = errors.New("factory registry: not found")
     ErrNotFound is returned (wrapped) when a looked-up row, or a row that
@@ -16777,6 +16792,86 @@ type PRLink struct {
     PRLink ties a task to its one PR: the repository, the number, the task's
     branch, the head the PR was opened with and the head the operator approved.
 
+type PRWork struct {
+	ID                    int64
+	Repo                  string
+	Number                int
+	TaskID                int64
+	FixOff                *fixwork.FixOff
+	Phase                 string
+	PhaseAt               time.Time
+	Head                  string
+	Cycle, Cap            int
+	LeaseHolder           string
+	LeaseUntil            time.Time
+	Pushed                []fixwork.CIPush
+	CIFix                 fixwork.CIFixRecord
+	CIDispatch            fixwork.CIStart
+	CIRerun               fixwork.CIRerun
+	Ledger                fixwork.Ledger
+	FlippedAt, ImportedAt time.Time
+	WorkedAt              time.Time
+	Created, Updated      time.Time
+}
+    PRWork is the factory's record of the fix work on one of your PRs (pr_work):
+    its repository (owner/name) and number, its task (0 for a PR no factory
+    task published, most of them), your opt-out of its fixes (FixOff; nil while
+    it fixes the PR), where its fix loop is (Phase since PhaseAt, at Head,
+    cycle Cycle of at most Cap), the factory's lease on it while it works
+    (LeaseHolder until LeaseUntil; both empty for none), the heads it pushed
+    (Pushed, oldest first), its CI records (CIFix, CIDispatch, CIRerun: zero
+    for none) and the open ledger (Ledger), all in internal/fixwork's types,
+    so the records magnum imports keep their format; and when magnum handed
+    the PR's fixes to the factory (FlippedAt), when the factory read magnum's
+    records of it (ImportedAt) and when it first worked the PR since (WorkedAt;
+    zero: never, and the PR may go back to magnum).
+
+func (w PRWork) Leased(now time.Time) bool
+    Leased reports whether the factory's lease on the PR runs at now: it has a
+    holder and its end is after now. A lease that ran out (a daemon that stopped
+    while it worked) holds nothing.
+
+type PRWorkUpdate struct {
+	// Has unexported fields.
+}
+    PRWorkUpdate collects the changes of UpdatePRWork. Settable columns (Set):
+    head, cycle, cap, flipped_at and imported_at; the task, your opt-out and the
+    JSON records through their own setters, worked_at through Worked. The phase
+    moves through UpdatePRWork's `to` (its phase_at with it), the lease through
+    TakePRWorkLease and ReleasePRWorkLease, and updated_at is the registry's.
+
+func (u *PRWorkUpdate) CIDispatch(s fixwork.CIStart)
+    CIDispatch sets the look's start of the PR's CI workflow (zero: none).
+
+func (u *PRWorkUpdate) CIFix(rec fixwork.CIFixRecord)
+    CIFix sets the PR's CI fixes (fixwork.CIFixRecord).
+
+func (u *PRWorkUpdate) CIRerun(rr fixwork.CIRerun)
+    CIRerun sets the look's re-run of the PR's runs (zero: none).
+
+func (u *PRWorkUpdate) FixOff(o *fixwork.FixOff)
+    FixOff sets your opt-out of the factory's fixes on the PR (nil: none).
+
+func (u *PRWorkUpdate) Inc(col string, n int)
+    Inc adds n to the integer column col.
+
+func (u *PRWorkUpdate) Ledger(l fixwork.Ledger)
+    Ledger sets the PR's open ledger.
+
+func (u *PRWorkUpdate) Pushed(p []fixwork.CIPush)
+    Pushed sets the heads the factory pushed to the PR.
+
+func (u *PRWorkUpdate) Set(col string, v any)
+    Set assigns v to column col. v is nil (NULL), a string, an int, an int64,
+    a bool or a time.Time (the zero time stores NULL).
+
+func (u *PRWorkUpdate) Task(id int64)
+    Task sets the PR's task (0: none).
+
+func (u *PRWorkUpdate) Worked()
+    Worked notes that the factory worked the PR (a start, a push, a reply,
+    a ledger change): worked_at keeps the first time after the import.
+
 type Question struct {
 	ID       int64
 	TaskID   int64
@@ -16899,6 +16994,10 @@ func (r *Registry) BeginEffect(ctx context.Context, key, kind string, taskID int
     of a failed run goes into an info event of kind effect. A key belongs to one
     kind and one task: reusing it for another is ErrConflict.
 
+func (r *Registry) BusyPRWork(ctx context.Context) ([]PRWork, error)
+    BusyPRWork are the PR work rows whose phase is not idle, by id: the fix
+    loops at work, which `magnum factory install --drain` waits for.
+
 func (r *Registry) Checks(ctx context.Context, taskID int64) ([]Check, error)
     Checks returns a task's checks in the order they were recorded.
 
@@ -16953,6 +17052,10 @@ func (r *Registry) EndEffect(ctx context.Context, key, state, result string) err
 func (r *Registry) EnqueueRequest(ctx context.Context, kind string, payload any) (int64, error)
     EnqueueRequest inserts a pending request with payload marshalled as JSON
     (nil = {}) and returns its id.
+
+func (r *Registry) EnsurePRWork(ctx context.Context, repo string, number int) (PRWork, error)
+    EnsurePRWork returns the PR work row of PR number of repo (owner/name,
+    any case), first inserting it idle, with no task, when there is none.
 
 func (r *Registry) EscapeCheck(ctx context.Context, id int64) (EscapeCheck, error)
     EscapeCheck is task id's escape check; ErrNotFound before it ran.
@@ -17039,6 +17142,13 @@ func (r *Registry) OpenSuspension(ctx context.Context, taskID int64) (Suspension
     OpenSuspension returns the task's open suspension; a task that is not
     suspended is ErrNotFound.
 
+func (r *Registry) PRWorkByID(ctx context.Context, id int64) (PRWork, error)
+    PRWorkByID is PR work row id; ErrNotFound when there is none.
+
+func (r *Registry) PRWorkOf(ctx context.Context, repo string, number int) (PRWork, error)
+    PRWorkOf is the PR work row of PR number of repo (any case); ErrNotFound
+    when the factory has none.
+
 func (r *Registry) PendingRequests(ctx context.Context, limit int) ([]Request, error)
     PendingRequests returns up to limit pending requests, oldest first (limit <=
     0 = all), so a consumer can skip a request it already handed to a background
@@ -17120,6 +17230,10 @@ func (r *Registry) RecordRoleRun(ctx context.Context, rr RoleRun) error
     The attempt must exist (ErrNotFound), the role is required, and Outcome must
     be one of the outcomes or failed:<cause>.
 
+func (r *Registry) ReleasePRWorkLease(ctx context.Context, id int64, holder string) error
+    ReleasePRWorkLease ends holder's lease on PR work row id; a lease of another
+    holder, or none, is left as it is.
+
 func (r *Registry) ReplaceQuestions(ctx context.Context, taskID int64, rev int, qs []Question) error
     ReplaceQuestions stores qs as revision rev of the task's questions and voids
     the open questions of every earlier revision (answered ones stay), recording
@@ -17193,6 +17307,12 @@ func (r *Registry) Suspend(ctx context.Context, s Suspension) error
     must exist (ErrNotFound) and have no open suspension (ErrConflict); a stage
     is required, and an empty AttemptID means no attempt.
 
+func (r *Registry) TakePRWorkLease(ctx context.Context, id int64, holder string, until time.Time) error
+    TakePRWorkLease gives holder the lease on PR work row id until until:
+    when the row has no lease, its lease ran out, or holder holds it already
+    (a renewal). Another holder's lease that runs is ErrLeaseHeld (wrapping
+    ErrConflict), a missing row ErrNotFound.
+
 func (r *Registry) TaskByID(ctx context.Context, id int64) (Task, error)
     TaskByID looks up a task; a missing one is ErrNotFound.
 
@@ -17243,6 +17363,13 @@ func (r *Registry) UnlinkKey(ctx context.Context, id int64, key string) error
     UnlinkKey takes key back from task id (Jira refused a key LinkKey gave it),
     compare-and-set: a task that holds another key, or none, is no change.
     The key is then free for another task. A missing task is ErrNotFound.
+
+func (r *Registry) UpdatePRWork(ctx context.Context, id int64, from []string, to string, set func(*PRWorkUpdate)) error
+    UpdatePRWork changes PR work row id: its phase moves to `to` (with phase_at;
+    "" keeps the phase) only when it is one of from (nil: any), and set's
+    changes apply in the same UPDATE. A row whose phase is not one of from is
+    ErrConflict, a missing one ErrNotFound. Any phase but idle needs a cycle of
+    1 or more (the table's check).
 
 type Request struct {
 	ID      int64
@@ -18692,14 +18819,17 @@ directory, for the review retro (DECISIONS "The review retro tags factory-origin
 misses and their stage"); and a task's local review rounds, their heads and
 roles and its answered questions with every answer they had, for the replay
 of a round as an eval case (LocalReview, `magnum eval add --local-task`),
-and a task's Codex mark and published PR before its replay (TaskCodex).
-It only reads: the registry is opened read only (mode=ro, never created,
-so nothing writes its file or its WAL), with a busy timeout, and closed after
-each read; a task's files are read inside an os.Root of its directory. It knows
-the factory's schema only as far as these reads need (pr_links, review_findings,
-review_cycles, tasks, events, questions, question_answers) and never migrates
-it: internal/factory/registry owns it, whose types (registry.Question) the
-questions are read into.
+and a task's Codex mark and published PR before its replay (TaskCodex); and the
+factory's hold on the fixes of one of your PRs (LeaseOf), which magnum's review
+side reads, and the fix loops at work (FixJobs), which `magnum factory install
+--drain` waits for. It only reads: the registry is opened read only (mode=ro,
+never created, so nothing writes its file or its WAL), with a busy timeout,
+and closed after each read; a task's files are read inside an os.Root of
+its directory. It knows the factory's schema only as far as these reads
+need (pr_links, review_findings, review_cycles, tasks, events, questions,
+question_answers, pr_work, which a factory older than it lacks) and never
+migrates it: internal/factory/registry owns it, whose types (registry.Question)
+the questions are read into.
 
 CONSTANTS
 
@@ -18739,6 +18869,58 @@ func TaskCodex(ctx context.Context, path string, taskID int64) (never bool, pr s
 
 
 TYPES
+
+type FixJob struct {
+	Repo   string
+	Number int
+	Phase  string
+	Cycle  int
+	Since  time.Time
+}
+    FixJob is a fix loop the factory runs on one of your PRs, as its PR work row
+    says (a phase that is not idle): the PR (owner/name and number), the phase,
+    the cycle and since when the loop is in its phase (zero: unknown).
+
+func FixJobs(ctx context.Context, path string) ([]FixJob, error)
+    FixJobs are the fix loops at work in the factory's registry at path
+    (registry.BusyPRWork, read only): what `magnum factory install --drain`
+    waits for besides the work its daemon records. A registry that does not
+    exist, or one without the PR work table (a factory older than it), has none;
+    one that cannot be read is an error.
+
+type Lease struct {
+	ID                    int64
+	Fixing                bool
+	Phase, Head           string
+	Cycle, Cap            int
+	Holder                string
+	Until                 time.Time
+	FlippedAt, ImportedAt time.Time
+	Worked                bool
+	WorkedAt              time.Time
+}
+    Lease is the factory's hold on the fixes of one of your PRs, as magnum reads
+    it from the factory's PR work row (pr_work, registry.PRWork) to hold its
+    rounds while the factory's fixer works (DECISIONS "The factory becomes the
+    only fixer"): the row (ID; 0 when the factory has none), whether the factory
+    fixes the PR now (Fixing: its fix loop is in phase fixing and its lease runs
+    at the read; a lease that ran out, a factory that stopped while it worked,
+    holds nothing), the loop's phase, the head its cycle fixes (in phase
+    reviewing, the head it pushed), its cycle of at most Cap, who holds the
+    lease and until when, when magnum handed the PR's fixes to the factory and
+    when the factory read magnum's records of it, and whether the factory worked
+    the PR since (Worked, at WorkedAt): a PR it has not worked may go back to
+    magnum.
+
+func LeaseOf(ctx context.Context, path, repo string, number int) (Lease, error)
+    LeaseOf reads the lease of PR number of repo ("owner/name", any case) in
+    the factory's registry at path, read only and in one snapshot, at the time
+    of the call. A PR the factory has no row of, a registry without the PR
+    work table (a factory older than it) and a registry that does not exist
+    (no factory ever ran here) give the zero Lease and no error: the factory
+    fixes none of them. A registry that cannot be read is an error, which the
+    caller decides about (magnum's review side holds its round for a grace,
+    then reviews).
 
 type LocalQuestion struct {
 	registry.Question
