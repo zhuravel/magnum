@@ -278,9 +278,13 @@ func fixProgress(c *Context, o fixOpts) io.Writer { return reviewProgress(c, rev
 // The screens call it with yes set, the board and the dashboard having asked.
 // A merge of the parent without a terminal to ask on (an agent's shell, a
 // pipe, a script) needs --yes, as a staging deploy does: it never starts on
-// nobody's word.
+// nobody's word; so does its drop (merge-parent --drop), which says so.
 func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts) int {
-	if o.merge && !o.dryRun && !o.yes && (!d.StdinTTY || !d.StdoutTTY) {
+	if o.drop && !o.dryRun && !o.yes && (!d.StdinTTY || !d.StdoutTTY) {
+		return actUsage(c, o.verb(), "a drop of the held merge asks y/N on a terminal, and there is none: pass --yes to drop it without asking, "+
+			"or --dry-run to see what it drops; nothing queued", o.usage())
+	}
+	if o.merge && !o.drop && !o.dryRun && !o.yes && (!d.StdinTTY || !d.StdoutTTY) {
 		return actUsage(c, o.verb(), "a merge of the parent asks y/N on a terminal, and there is none: pass --yes to merge without asking, "+
 			"or --dry-run to see the plan; nothing queued", o.usage())
 	}
@@ -328,7 +332,7 @@ func fixMain(ctx context.Context, c *Context, d *actDeps, ref string, o fixOpts)
 		}
 		fmt.Fprintf(fixProgress(c, o), "dry run: the daemon is asked what would happen (request %s %s); %s\n", engine.ReqFix, b, changed)
 	}
-	if t.PR.Pinned && !o.off && !o.on && !o.done && !o.merge && !o.ci {
+	if t.PR.Pinned && !o.off && !o.on && !o.done && !o.merge && !o.ci && !o.dropPush { // a drop unpins nothing
 		fmt.Fprintf(fixProgress(c, o), "%s is pinned: this fix unpins it (a person's changes in its slot still hold the fix)\n", label)
 	}
 	question := ""

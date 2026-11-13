@@ -179,6 +179,39 @@ func TestFixHandoverAndTheDropsQueueTheirRequests(t *testing.T) {
 	}
 }
 
+// The morning list's drops say what they do: a drop unpins nothing, so a
+// pinned PR's drop says nothing of an unpin, and merge-parent's drop with
+// no terminal to ask on names a drop, never a merge, in its refusal.
+func TestTheDropsSayWhatTheyDo(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 4242
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("pinned", true) }); err != nil {
+		t.Fatal(err)
+	}
+	h.onSleep = func(h *actHarness) {
+		h.completePending(store.RequestDone, "dropped the record of the fixer's push of b2b2b2b on talkable/talkable#5: magnum settles it no more")
+	}
+	for _, args := range [][]string{{"fix", "5", "--drop-push", "--yes"}, {"merge-parent", "5", "--drop", "--yes"}} {
+		h.out.Reset()
+		h.errb.Reset()
+		if code := h.cmd(args[0], args[1:]...); code != 0 {
+			t.Fatalf("%v: exit %d: %s", args, code, h.errb.String())
+		}
+		if out := h.out.String() + h.errb.String(); strings.Contains(out, "unpins") {
+			t.Errorf("%v says it unpins:\n%s", args, out)
+		}
+	}
+	h.errb.Reset()
+	if code := h.cmd("merge-parent", "5", "--drop"); code != 2 {
+		t.Fatalf("merge-parent --drop without a terminal: exit %d", code)
+	}
+	if e := h.errb.String(); !strings.Contains(e, "a drop of the held merge asks y/N on a terminal") || !strings.Contains(e, "pass --yes to drop it without asking") ||
+		strings.Contains(e, "to merge") {
+		t.Errorf("refusal = %q", e)
+	}
+}
+
 // The doctor names the PRs that wait to hand over to the factory and the
 // reads of the factory's lease that failed open; with neither, one line
 // counts magnum's fix work in flight.
