@@ -738,6 +738,22 @@ skill versions); people add theirs to the sections before it, at the end of the 
     a read or a comparison that fails with EMFILE, ENFILE or ENOMEM fails the save, and the save_fail.go header's
     list of what fails a save names it too.
 
+- **A setup that cannot take the record of its new worktree does not run** (2026-11-13, the engine owner's
+  follow-up C5 to T3c's last round). `takeTreeAdded` read and deleted `slot.<id>.tree_added` before the first
+  setup over a worktree that the provisioning made. When the read or the delete failed (`SQLITE_BUSY` past the
+  busy timeout, an I/O error), it went on as over a kept worktree. That run recorded the copy_files alone, but
+  the record stayed `1`. If that setup failed, the slot stayed provisioning. The retry's setup then took the
+  record as the first one's, and a file that a person wrote while it ran was recorded as Magnum's. A removal
+  deleted it unsaved and unnamed. The read's failure was not logged either, though the doc said so. Now both
+  failures are logged and fail the setup step before its setup runs, as any failed setup does. A pool slot
+  stays provisioning. Its retry is still the first setup over the worktree, since no setup ran between. A
+  per-PR row goes broken. Its revival keeps the worktree, whose setup records the copy_files alone. So the
+  record never outlives the first setup. To write `0` on a failure was the other way, but a store that fails
+  the delete can fail that write too. `TestHeavyLockHonorsContext` now cancels its provisioning as the setup
+  lists the worktree's files, right before the heavy lock: a context cancelled as the step begins now fails at
+  the read of the record. Test, failing first: `TestASetupThatCannotReadTheRecordOfItsNewWorktreeDoesNotRun`
+  (the kv table renamed for one provisioning).
+
 ## Scheduling
 
 - **No backfill.** PRs open before the first sync are `baseline` until their next push or a manual

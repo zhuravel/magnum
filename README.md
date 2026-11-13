@@ -949,7 +949,9 @@ the files Magnum wrote there: the local mise file it renders, the copy_files of 
 yours), and what the first setup over a worktree its provisioning made wrote, the untracked files there after it
 that were not before it (`cp -R <save>/untracked/. <slot>` puts them back). Over a worktree kept from an earlier
 attempt, and by a setup that runs again (a failed one resumed or retried, the way a pool slot's is), what the setup
-wrote is saved as yours, since you may have written a file there while it ran. A file a copy_files entry names (a
+wrote is saved as yours, since you may have written a file there while it ran; a setup that cannot read or delete
+the record that its provisioning made the worktree does not run (its step fails and is retried), so that record
+never outlives the first setup. A file a copy_files entry names (a
 key, as a rule) that you edited since, one that differs from the main clone's, is not saved either, but named
 "magnum's own, edited, not saved". A file the removal cannot read (a mode-000 file, one gone meanwhile) is left out
 and named with the reason, and the removal goes on; a write into the save that fails (a full disk, a quota, a name

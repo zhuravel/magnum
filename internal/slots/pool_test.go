@@ -564,17 +564,18 @@ func TestHeavyLockHonorsContext(t *testing.T) {
 	}
 
 	// A provision cancelled while it waits for the lock (the context is
-	// cancelled as its setup step begins) stays provisioning (resumable),
-	// not broken.
+	// cancelled as its setup lists the worktree's untracked files, after it
+	// took the record that the provisioning made the worktree and right
+	// before the lock) stays provisioning (resumable), not broken.
 	ctx2, cancel2 := context.WithCancel(h.ctx)
 	defer cancel2()
-	ctx2 = steps.WithFailpoint(ctx2, func(subject, name string, at steps.Point) error {
-		if name == "setup" && at == steps.BeforeRun {
-			cancel2()
-		}
-		return nil
-	})
+	h.run.fakeGit = func(c execx.Cmd) bool { return slices.Contains(c.Args, "--others") }
+	h.fake.Rules = append([]execx.Rule{{Prefix: []string{"git"}, Fn: func(execx.Cmd) (execx.Result, error) {
+		cancel2()
+		return execx.Result{}, nil
+	}}}, h.fake.Rules...)
 	err = h.m.ProvisionPool(ctx2, h.pool, 1)
+	h.run.fakeGit, h.fake.Rules = nil, h.fake.Rules[1:]
 	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "heavy-command lock") {
 		t.Fatalf("ProvisionPool err = %v, want cancelled at the lock", err)
 	}

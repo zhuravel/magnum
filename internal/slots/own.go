@@ -133,19 +133,27 @@ func (m *Manager) noteTreeAdded(ctx context.Context, sl store.Slot, added bool) 
 // provisioning made its worktree (noteTreeAdded), and deletes that record,
 // so only the first setup over the worktree finds it: a setup run again
 // (a failed one resumed or retried) runs over a worktree a person may be
-// at work in. No record, or one that cannot be read or deleted (which is
-// logged), is a worktree kept.
-func (m *Manager) takeTreeAdded(ctx context.Context, sl store.Slot) bool {
+// at work in. No record is a worktree kept. A record that cannot be read
+// or deleted is an error, logged, which fails the setup step before its
+// setup runs: run, the setup would leave the record standing, and a later
+// run of it would take the record as the first; the step's retry takes it
+// with no setup run between.
+func (m *Manager) takeTreeAdded(ctx context.Context, sl store.Slot) (bool, error) {
 	_, ok, err := m.d.Store.GetKV(ctx, treeAddedKey(sl.ID))
-	if err != nil || !ok {
-		return false
+	if err != nil {
+		m.logErr(ctx, err, "slots: read the record that the provisioning of %s made its worktree (its setup runs once it reads): %v",
+			sl.Name, err)
+		return false, fmt.Errorf("slots: read the record that the provisioning of %s made its worktree: %w", sl.Name, err)
+	}
+	if !ok {
+		return false, nil
 	}
 	if err := m.d.Store.DeleteKV(ctx, treeAddedKey(sl.ID)); err != nil {
-		m.logErr(ctx, err, "slots: take the record that the provisioning of %s made its worktree (its setup records the copy_files alone): %v",
+		m.logErr(ctx, err, "slots: take the record that the provisioning of %s made its worktree (its setup runs once it takes it): %v",
 			sl.Name, err)
-		return false
+		return false, fmt.Errorf("slots: take the record that the provisioning of %s made its worktree: %w", sl.Name, err)
 	}
-	return true
+	return true, nil
 }
 
 // recordingSetup runs setup, the setup step of slot sl, then makes what it
@@ -163,14 +171,20 @@ func (m *Manager) takeTreeAdded(ctx context.Context, sl store.Slot) bool {
 // setup rewrote over one that was there stays theirs in both. A record a
 // removed row of the same name left goes. Best effort, as recordOwnFiles:
 // a listing that fails records copied alone and is logged, and a removal
-// then saves what the setup wrote as a person's.
+// then saves what the setup wrote as a person's. A record of the
+// worktree_add step that cannot be taken fails the step before setup
+// runs (takeTreeAdded).
 func (m *Manager) recordingSetup(ctx context.Context, sl store.Slot, copied []string, setup func() error) error {
 	if sl.ID == 0 || m.d.DryRun {
 		return setup()
 	}
+	added, err := m.takeTreeAdded(ctx, sl)
+	if err != nil {
+		return err
+	}
 	var before []string
 	listed := false
-	if m.takeTreeAdded(ctx, sl) {
+	if added {
 		before, listed = m.untrackedForRecord(ctx, sl, "before")
 	}
 	if err := setup(); err != nil {
