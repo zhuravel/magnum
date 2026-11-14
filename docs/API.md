@@ -23356,6 +23356,15 @@ func (c *Client) NotTracked(ctx context.Context, dir string) ([]string, error)
     it, which the factory reads before it switches a copy. It is read-only and
     does not take the index lock.
 
+func (c *Client) OriginURLs(ctx context.Context, dir string, push bool) ([]string, error)
+    OriginURLs are the URLs git reaches origin at from dir, as git itself
+    resolves them: for a fetch (`git remote get-url --all origin`), or with
+    push for a push (`--push`: remote.origin.pushurl's, else its URLs as
+    url.<base>.pushInsteadOf rewrites them), every url.<base>.insteadOf of every
+    config level expanded, each with its credentials stripped (stripUserinfo).
+    A caller checks where a push goes with them instead of reading the config's
+    keys itself. An origin with no URL is an error.
+
 func (c *Client) OwnDiffID(ctx context.Context, dir, base, head string) (string, error)
     OwnDiffID is the verbatim patch id of head's own diff against base:
     the change from their merge base to head (`git diff-tree --patch --unified=0
@@ -23403,6 +23412,16 @@ func (c *Client) PushLease(ctx context.Context, dir, sha, branch, expect string)
     expect is refused before anything is pushed (ErrNotDescendant), so the
     lease never rewrites history; an expect dir does not have is an error too,
     never a push.
+
+func (c *Client) PushLeaseApart(ctx context.Context, dir, url, sha, branch, expect string) error
+    PushLeaseApart is PushLease to url, the remote URL its caller checked
+    (OriginURLs, then whose repository it is), from a repository of its own
+    whose objects are dir's (pushIsolated): no setting of dir's config, which an
+    agent's pane can write, rewrites url (url.<base>.insteadOf, pushInsteadOf)
+    or reaches the push. A github.com SSH url goes over HTTPS with gh as git's
+    only credential helper when HTTPSFetch is on (NetworkRemote), as PushLease
+    reaches such an origin; any other url is pushed to as it is, gh still git's
+    only helper. Its guards are PushLease's.
 
 func (c *Client) PushLeaseGitHub(ctx context.Context, dir, owner, repo, sha, branch, expect string) error
     PushLeaseGitHub is PushLeaseVia to github.com/<owner>/<repo> over HTTPS

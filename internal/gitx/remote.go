@@ -25,6 +25,34 @@ func (c *Client) RemoteURL(ctx context.Context, dir string) (string, error) {
 	return stripUserinfo(res.Out()), nil
 }
 
+// OriginURLs are the URLs git reaches origin at from dir, as git itself
+// resolves them: for a fetch (`git remote get-url --all origin`), or with
+// push for a push (`--push`: remote.origin.pushurl's, else its URLs as
+// url.<base>.pushInsteadOf rewrites them), every url.<base>.insteadOf of
+// every config level expanded, each with its credentials stripped
+// (stripUserinfo). A caller checks where a push goes with them instead of
+// reading the config's keys itself. An origin with no URL is an error.
+func (c *Client) OriginURLs(ctx context.Context, dir string, push bool) ([]string, error) {
+	args, label := []string{"remote", "get-url", "--all", remote}, "remote get-url --all "+remote
+	if push {
+		args, label = []string{"remote", "get-url", "--push", "--all", remote}, "remote get-url --push --all "+remote
+	}
+	res, err := c.git(ctx, dir, call{label: label}, args...)
+	if err != nil {
+		return nil, err
+	}
+	var urls []string
+	for line := range strings.SplitSeq(res.Out(), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			urls = append(urls, stripUserinfo(line))
+		}
+	}
+	if len(urls) == 0 {
+		return nil, fmt.Errorf("gitx: %s: %s has no URL", label, remote)
+	}
+	return urls, nil
+}
+
 // NetworkRemote is how a network command (fetch, ls-remote) reaches a clone
 // whose origin is originURL. With https set, a github.com SSH origin is reached
 // at its HTTPS URL with gh as the only credential helper: opts go before the
@@ -83,6 +111,23 @@ func (c *Client) PushLease(ctx context.Context, dir, sha, branch, expect string)
 	}
 	opts, target := NetworkRemote(url, c.HTTPSFetch)
 	return c.pushLease(ctx, dir, opts, target, sha, branch, expect, nil)
+}
+
+// PushLeaseApart is PushLease to url, the remote URL its caller checked
+// (OriginURLs, then whose repository it is), from a repository of its own
+// whose objects are dir's (pushIsolated): no setting of dir's config,
+// which an agent's pane can write, rewrites url (url.<base>.insteadOf,
+// pushInsteadOf) or reaches the push. A github.com SSH url goes over HTTPS
+// with gh as git's only credential helper when HTTPSFetch is on
+// (NetworkRemote), as PushLease reaches such an origin; any other url is
+// pushed to as it is, gh still git's only helper. Its guards are
+// PushLease's.
+func (c *Client) PushLeaseApart(ctx context.Context, dir, url, sha, branch, expect string) error {
+	target := url
+	if _, to := NetworkRemote(url, c.HTTPSFetch); to != remote {
+		target = to
+	}
+	return c.pushIsolated(ctx, dir, target, sha, branch, expect, nil)
 }
 
 // pushLease is PushLease's and PushLeaseVia's core: the checks, then the
