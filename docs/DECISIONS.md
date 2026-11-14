@@ -28100,6 +28100,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestOriginURLsAreWhereGitSendsAFetchAndAPush`, `TestPushLeaseApartGoesToTheURLItWasGiven` and
   `TestPushLeaseApartGoesOverHTTPSAsFetchesDo` in internal/gitx. No migration, no new key, no new dependencies.
 
+- **F2's follow-up: the second opinion, a GitHub outage, the heavy slot and the publish's URL** (2026-11-14, the
+  four P3s and the nits of F2's review).
+  - The second opinion's width (`reviewedWidth`) read the files the head changes from the copy's `origin/<base>`, the
+    one start F2's rounds no longer trust: with the remote rewritten to the writer's commit X, which adds a
+    migration, and a fix of one file on top of it, the round reviewed X's change (F2) but the width saw one file, and a
+    clean round of the Codex judge got no second opinion, which `second_judge = "wide"` (the default) gives a change
+    of the database. The width now reads the change from where it starts on GitHub, as the round's base is read
+    (`baseOnGitHub`, read again at the round's end rather than kept from its start, which needs no new record: the
+    merge base with the same head moves only when the base on GitHub took one of the head's commits since, or was
+    rewritten). A read that fails decides nothing, never "narrow": the
+    task waits saying why (`the second opinion after round <n> cannot weigh the change: …`), the stage's pass fails,
+    and the round's result is read again a poll later, within the bounds of `taskFailed`. Test, failing first:
+    `TestTheSecondOpinionWeighsTheChangeFromGitHubsBase` (the clean round ended the stage with no second opinion).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

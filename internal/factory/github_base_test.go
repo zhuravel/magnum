@@ -117,6 +117,59 @@ func TestARoundWaitsWhenGitHubsBaseCannotBeRead(t *testing.T) {
 	}
 }
 
+// The second opinion weighs the change the round reviewed: from where it
+// starts on GitHub, never from the copy's origin/<base>. The writer's pane
+// points the main clone's origin at a bare repository of its own whose
+// master is the writer's commit, which adds a migration, and the fix on
+// top of it changes app/credit.rb alone: from origin/master the change is
+// one file, narrow; from master on GitHub it holds the migration, wide, so
+// the clean round of the Codex judge gets its second opinion, which names
+// the migration. A read of GitHub's base that fails at the round's end
+// decides nothing (never "narrow"): it is tried again a poll later.
+func TestTheSecondOpinionWeighsTheChangeFromGitHubsBase(t *testing.T) {
+	r := newReviewRig(t, rounds(2, result())...)
+	task := r.codingTask("PR-12425", "bug")
+	mine := r.commit("the writer's own migration", map[string]string{"db/migrate/20261114_own.rb": "class Own < ActiveRecord::Migration[7.1]\nend\n"})
+	r.rewriteOrigin(mine)
+	head := r.commit(task.JiraKey+" Credit#points counts the activities", map[string]string{
+		"app/credit.rb": strings.Replace(creditRB, "    0\n", "    10\n", 1),
+	})
+	r.taskFile(task.ID, proofFile, `{"specs": ["spec/models/credit_spec.rb"]}`)
+	if err := r.reg.TransitionTask(r.ctx, task.ID, nil, registry.TaskActive, func(u *registry.TaskUpdate) {
+		u.Set("stage", "local_review")
+		u.Set("head_sha", head)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.run(6, func() bool { return len(r.rv.calls()) > 0 })
+	if calls := r.rv.calls(); len(calls) != 1 || !slices.Equal(calls[0].Roles, firstRoles) {
+		t.Fatalf("rounds %v, want round 1 with the Codex judge", roundsOf(calls))
+	}
+
+	dir := r.layout.FactoryTaskDir(task.ID)
+	r.gh.setBase("", errors.New("gh: Not Found (HTTP 404)"), nil)
+	for range 2 {
+		r.clock.Add(45 * time.Second)
+		r.tick()
+		r.e.waitBackground()
+	}
+	if got := r.reload(task.ID); got.Stage != "local_review" || r.firstDecided(task.ID) || fileIn(dir, secondOpinionFile) ||
+		!strings.Contains(got.WaitsWhat, "the second opinion after round 1 cannot weigh the change") || !strings.Contains(got.WaitsWhat, "master on GitHub") ||
+		!slices.ContainsFunc(r.eventTexts(task.ID, "advance"), func(s string) bool { return strings.Contains(s, "master on GitHub") }) {
+		t.Fatalf("task at %s waits %q, cycles %+v, advance events %q; want round 1 undecided while GitHub's base cannot be read, the failure named",
+			got.Stage, got.WaitsWhat, r.cycles(task.ID), r.eventTexts(task.ID, "advance"))
+	}
+
+	r.gh.setBase("", nil, nil)
+	r.clock.Add(45 * time.Second)
+	r.run(6, func() bool { return fileIn(dir, secondOpinionFile) })
+	so, ok := readSecondOpinion(dir)
+	if !ok || !strings.Contains(so.Because, "db/migrate/20261114_own.rb") || so.Judge != "claude-judge" {
+		t.Fatalf("second opinion %+v (%v), want one by claude-judge because of db/migrate/20261114_own.rb; events %q", so, ok,
+			r.eventTexts(task.ID, "review"))
+	}
+}
+
 // The ready card's flags read the change from where it starts on GitHub,
 // and its conflicts with the base GitHub reports, never with the copy's
 // origin/<base>: the writer's pane points the main clone's origin at a

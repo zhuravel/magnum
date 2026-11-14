@@ -429,7 +429,7 @@ func (e *Engine) decideSecond(ctx context.Context, t registry.Task, c Copy, cy r
 	}
 	because := "second_judge is " + config.FactorySecondJudgeAlways
 	if setting != config.FactorySecondJudgeAlways {
-		wide, why, err := e.reviewedWidth(ctx, t, c, cy.HeadBefore)
+		wide, why, err := e.reviewedWidth(ctx, t, c, cy.HeadBefore, round)
 		if err != nil || !wide {
 			return false, err
 		}
@@ -473,14 +473,27 @@ func (e *Engine) stopBeforeSecond(step string) error {
 }
 
 // reviewedWidth is the width (changeWidth) of the change task t's round
-// reviewed at head in copy c: the files head changes against its merge base
-// with the repository's base.
-func (e *Engine) reviewedWidth(ctx context.Context, t registry.Task, c Copy, head string) (bool, string, error) {
+// `round` reviewed at head in copy c: the files head changes from where it
+// starts on GitHub (baseOnGitHub, the base the round's diff started at:
+// roundBase), never from the copy's origin/<base>, whose remote the
+// writer's pane can rewrite. A base that cannot be read decides nothing,
+// never "narrow": the task waits saying why, and the error fails the
+// stage's pass, which reads the round's result again a poll later.
+func (e *Engine) reviewedWidth(ctx context.Context, t registry.Task, c Copy, head string, round int) (bool, string, error) {
 	repo, err := e.factoryRepo(t)
 	if err != nil {
 		return false, "", err
 	}
-	changes, err := e.d.Git.ChangedFiles(ctx, c.Path, "origin/"+baseOf(repo), head)
+	b, err := e.baseOnGitHub(ctx, repo, c, head, nil)
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return false, "", ctx.Err()
+	case err != nil:
+		err = fmt.Errorf("the second opinion after round %d cannot weigh the change: %w", round, err)
+		e.waitOn(ctx, t, waitReview, roundError(err.Error())+"; the factory tries again at the next poll")
+		return false, "", err
+	}
+	changes, err := e.d.Git.ChangedFiles(ctx, c.Path, b.base, head)
 	if err != nil {
 		return false, "", err
 	}

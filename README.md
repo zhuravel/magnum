@@ -5575,7 +5575,9 @@ One clean round is a noisy answer: two runs of the same roles on one head disagr
 same judge run again mostly repeats itself. So a round that ends clean with the watch's judge on Codex gets a
 second opinion before the stage ends (`[factory.local_review] second_judge`: `"wide"`, the default, on a wide
 change, 3 or more files, a file of the database (`db/`) or a security path, by the files the reviewed head changes
-against the base; `"always"` on every change; `"never"`): one more round of the same roles with the watch's
+from where it starts on GitHub, read as the round's base is, never from the copy's `origin/<base>`; a read that
+fails decides nothing, never "narrow": the task waits saying why (`review: the second opinion after round 1 cannot
+weigh the change: …`) and the round's result is read again a poll later; `"always"` on every change; `"never"`): one more round of the same roles with the watch's
 `judge_fallback` (claude-judge) in the judge's place, at the same head, once per task. The event says so (`round 1
 (cycle 1) is clean, and the change touches 3 files: a second opinion runs, round 2 with claude-judge (claude) in
 place of codex-judge (codex), once for PR-12345`), and the card's wait while it runs (`review: round 2 of the local
