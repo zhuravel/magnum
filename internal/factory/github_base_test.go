@@ -116,3 +116,58 @@ func TestARoundWaitsWhenGitHubsBaseCannotBeRead(t *testing.T) {
 		t.Fatalf("GitHub's base read: %+v, %v; want the merge base with master on GitHub", b, err)
 	}
 }
+
+// The ready card's flags read the change from where it starts on GitHub,
+// and its conflicts with the base GitHub reports, never with the copy's
+// origin/<base>: the writer's pane points the main clone's origin at a
+// bare repository of its own whose master is the writer's commit, and its
+// fix builds on that commit, while master on GitHub moved in the line the
+// fix changes. The changed files then hold the writer's commit's file,
+// which the plan did not name, and the conflict is the one with master on
+// GitHub.
+func TestTheCardsFlagsUseGitHubsBase(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12422", "bug")
+	moved := r.moveMaster("app/credit.rb", strings.Replace(creditRB, "    0\n", "    5\n", 1))
+	r.git(r.main, "fetch", "--quiet", "origin") // the copy has master on GitHub's commit, fetched before the rewrite
+	mine := r.commit("the writer's own change", map[string]string{"lib/own.rb": "class Own\nend\n"})
+	r.rewriteOrigin(mine)
+	r.fix(task)
+	r.taskFile(task.ID, reportFile, planReport("app/credit.rb", "spec/models/"))
+
+	f, err := r.e.flags(r.ctx, task, r.cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(f.Conflicts, []string{"app/credit.rb"}) || !slices.Contains(f.NotInPlan, "lib/own.rb") {
+		t.Fatalf("conflicts %q, not in the plan %q; want the conflict with master on GitHub (%s) and the writer's lib/own.rb", f.Conflicts,
+			f.NotInPlan, short(moved))
+	}
+	if f.baseSHA != moved {
+		t.Fatalf("the flags' base is %s, want master on GitHub at %s, the base a merge turn merges", short(f.baseSHA), short(moved))
+	}
+}
+
+// The flags need the base GitHub reports in the copy: a commit the copy
+// has no object of even after the fetch (the main clone's remote reaches
+// another repository than GitHub's), or a read of GitHub that fails, is an
+// error that names it, never a card that says "no conflicts".
+func TestTheCardsFlagsNeedGitHubsBaseInTheCopy(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12423", "bug")
+	r.fix(task)
+	r.taskFile(task.ID, reportFile, planReport("app/credit.rb", "spec/models/"))
+	missing := strings.Repeat("ab", 20)
+	r.gh.setBase(missing, nil, nil)
+	if f, err := r.e.flags(r.ctx, task, r.cp); err == nil || !strings.Contains(err.Error(), short(missing)) {
+		t.Fatalf("flags %+v, %v; want an error naming the missing %s", f, err, short(missing))
+	}
+	r.gh.setBase("", errors.New("gh: Not Found (HTTP 404)"), nil)
+	if f, err := r.e.flags(r.ctx, task, r.cp); err == nil || !strings.Contains(err.Error(), "master on GitHub") || !strings.Contains(err.Error(), "HTTP 404") {
+		t.Fatalf("flags %+v, %v; want an error naming the failed read", f, err)
+	}
+	r.gh.setBase("", nil, nil)
+	if f, err := r.e.flags(r.ctx, task, r.cp); err != nil || len(f.Conflicts) != 0 {
+		t.Fatalf("flags %+v, %v; want them read against master on GitHub", f, err)
+	}
+}

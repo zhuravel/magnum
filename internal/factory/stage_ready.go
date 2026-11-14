@@ -5,11 +5,13 @@ package factory
 // ready stage draws the card you decide on. It draws one only when the
 // review's summary is of that head, the factory's proof holds there and
 // the precheck passed there (Review Focus 1: never after a review that did
-// not finish or stopped at its cap). Before it draws one, it merges a fresh
-// origin/<base> into the head in memory (git merge-tree, Flags.Conflicts):
-// on a conflict the task goes back through its own stages, no second
-// path: the writer merges the base in a coding turn (rework.json names
-// origin/<base> and the paths), the proof and the precheck run again, the
+// not finish or stopped at its cap). Before it draws one, it merges the
+// base GitHub reports into the head in memory (git merge-tree,
+// Flags.Conflicts; never the copy's origin/<base> alone, whose remote the
+// writer's pane can rewrite): on a conflict the task goes back through its
+// own stages, no second path: the writer merges the base in a coding turn
+// (rework.json names origin/<base>, the commit GitHub reported and the
+// paths), the proof and the precheck run again, the
 // new head gets the local review's check of a base merge (a narrow round
 // of the judge on the merge's resolutions, review_merge.go; none for a
 // clean merge), the judge drafts the body again, and the next card is a
@@ -594,13 +596,8 @@ func (e *Engine) runReady(ctx context.Context, t registry.Task, _ config.Factory
 	if err != nil {
 		return false, err
 	}
-	if len(f.Conflicts) > 0 { // the card names them, and the writer merges the base before you read one
-		base := "origin/" + baseOf(repo)
-		baseSHA, err := e.d.Git.RevParse(ctx, c.Path, base)
-		if err != nil {
-			return false, err
-		}
-		return false, e.stageFailed(ctx, t, e.mergeTheBase(ctx, t, card, base, baseSHA, f.Conflicts))
+	if len(f.Conflicts) > 0 { // the card names them, and the writer merges the base before you read one: the commit GitHub reports, which they are with
+		return false, e.stageFailed(ctx, t, e.mergeTheBase(ctx, t, card, "origin/"+baseOf(repo), f.baseSHA, f.Conflicts))
 	}
 	e.toOperator(ctx, t, fmt.Sprintf("%s (card %d): %s", readyWait, card.Revision, card.Title), "the ready card")
 	return false, nil

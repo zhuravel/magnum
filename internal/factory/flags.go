@@ -6,10 +6,11 @@ package factory
 // (Gemfile.lock, the workflows and the config files by default), the files
 // the plan did not name, the guards the change touches that are older than
 // 6 months with the reason the history agent found, the CI jobs whose
-// commands the precheck did not run, and the conflicts with a fresh
-// origin/<base> (git merge-tree, which changes no work tree). Every flag is
-// read from the copy at the task's head and the task's files; none of it
-// changes the copy.
+// commands the precheck did not run, and the conflicts with the base GitHub
+// reports (git merge-tree, which changes no work tree), never with the
+// copy's origin/<base>, whose remote the writer's pane can rewrite. Every
+// flag is read from the copy at the task's head and the task's files; none
+// of it changes the copy.
 
 import (
 	"bufio"
@@ -33,15 +34,19 @@ import (
 // branch adds (with their flags), the sensitive files it changes, the files
 // it changes that the plan did not name, the old guards it touches, the CI
 // jobs whose commands did not run locally ("<workflow>: <job>"), the
-// paths merging origin/<base> into it would conflict in, and what the
-// precheck that passed at the head did not finish (its cap's note, from
-// precheck.json; "" for nothing).
+// paths merging the base GitHub reports into it would conflict in, and
+// what the precheck that passed at the head did not finish (its cap's
+// note, from precheck.json; "" for nothing). The change is read from its
+// merge base with that commit, whose id the flags keep as the base a merge
+// turn is sent to merge.
 type Flags struct {
 	Migrations                         []MigrationFlag
 	Sensitive, NotInPlan, CIJobsNotRun []string
 	OldGuards                          []OldGuard
 	Conflicts                          []string
 	PrecheckUnfinished                 string
+
+	baseSHA string // the commit the base is at on GitHub, the conflicts' and the change's base
 }
 
 // OldGuard is a guard the change touches (a condition, a rescue, a validation,
@@ -58,8 +63,11 @@ type OldGuard struct {
 const oldGuardMonths = 6
 
 // flags reads task t's change in copy c (its branch at its head) for the
-// ready card: see Flags. The conflicts come from a fetch of origin/<base>
-// (its main clone's) and `git merge-tree` against it.
+// ready card: see Flags. The change starts at its merge base with the
+// commit the base is at on GitHub, read as you and fetched to the main
+// clone (baseOnGitHub), and the conflicts come from `git merge-tree`
+// against that commit; without it there are no flags, and the error says
+// why.
 func (e *Engine) flags(ctx context.Context, t registry.Task, c Copy) (Flags, error) {
 	var f Flags
 	repo, err := e.factoryRepo(t)
@@ -73,6 +81,21 @@ func (e *Engine) flags(ctx context.Context, t registry.Task, c Copy) (Flags, err
 	if bh.Problem != "" {
 		return f, fmt.Errorf("the flags of %s: %s", t.Branch, bh.Problem)
 	}
+	// The change and its conflicts are read against the base GitHub
+	// reports, never the copy's origin/<base> (baseOnGitHub): the
+	// conflicts in the same repository of the factory's own, where no
+	// merge driver or attribute of the copy's applies.
+	gb, err := e.baseOnGitHub(ctx, repo, c, bh.Head, func(iso string, b gitHubBase) error {
+		var err error
+		if f.Conflicts, err = e.d.Git.MergeConflicts(ctx, iso, bh.Head, b.tip); err != nil {
+			return fmt.Errorf("git cannot merge %s into %s in memory: %w", b.name, short(bh.Head), err)
+		}
+		return nil
+	})
+	if err != nil {
+		return f, fmt.Errorf("the flags of %s: %w", t.Branch, err)
+	}
+	f.baseSHA, bh.Base = gb.tip, gb.base
 	git := e.d.Git
 	changes, err := git.ChangedFiles(ctx, c.Path, bh.Base, bh.Head)
 	if err != nil {
@@ -98,13 +121,6 @@ func (e *Engine) flags(ctx context.Context, t registry.Task, c Copy) (Flags, err
 		return f, err
 	}
 	f.PrecheckUnfinished = precheckUnfinishedAt(dir, bh.Head)
-	base := baseOf(repo)
-	if err := git.FetchBranch(ctx, cmp.Or(repo.MainClone, c.Path), base); err != nil {
-		return f, err
-	}
-	if f.Conflicts, err = git.MergeConflicts(ctx, c.Path, bh.Head, "origin/"+base); err != nil {
-		return f, err
-	}
 	return f, nil
 }
 
