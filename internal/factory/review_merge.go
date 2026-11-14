@@ -167,12 +167,14 @@ func (e *Engine) baseMergeOf(ctx context.Context, t registry.Task, c Copy, sum R
 }
 
 // checkBaseMerge checks task t's head, in copy c, against reviewed, the
-// head its local review passed, from git alone, in a repository of the
-// factory's own (Isolated: no merge driver, attribute or commit-graph of
-// the copy's), with origin/<base> read in the copy. ok is false for a head
-// that is no merge and has none since reviewed: an ordinary change. A read
-// git cannot make, but for a cancelled one, is a full round with why, never
-// a stop of the stage: a full round is what every head got before.
+// head its local review passed, from git alone. A first look in the copy
+// tells a merge of two parents from any other head (besidesMerge: an
+// ordinary change, or commits besides a merge); a merge is read again, and
+// checked, in a repository of the factory's own (Isolated: no merge
+// driver, attribute or commit-graph of the copy's), with origin/<base>
+// read in the copy (readBaseMerge). ok is false for an ordinary change. A
+// read git cannot make, but for a cancelled one, is a full round with why,
+// never a stop of the stage: a full round is what every head got before.
 func (e *Engine) checkBaseMerge(ctx context.Context, t registry.Task, c Copy, reviewed string) (BaseMerge, bool, error) {
 	repo, err := e.factoryRepo(t)
 	if err != nil {
@@ -190,15 +192,25 @@ func (e *Engine) checkBaseMerge(ctx context.Context, t registry.Task, c Copy, re
 		}
 		return bm, true, nil
 	}
+	parents, err := git.Parents(ctx, c.Path, bm.Head)
+	if err != nil {
+		return full("git cannot read its parents", err)
+	}
+	if len(parents) != 2 {
+		why, err := e.besidesMerge(ctx, c, bm)
+		if err != nil || why != "" {
+			return full(cmp.Or(why, "git cannot list its commits since "+short(reviewed)), err)
+		}
+		return bm, false, nil // an ordinary change
+	}
 	tip, err := git.RevParse(ctx, c.Path, bm.Base)
 	if err != nil {
 		return full("git cannot read "+bm.Base, err)
 	}
-	var merge bool
 	var why string
 	err = git.Isolated(ctx, c.Path, func(iso string) error {
 		var err error
-		merge, why, err = e.readBaseMerge(ctx, iso, &bm, tip)
+		why, err = e.readBaseMerge(ctx, iso, &bm, tip)
 		return err
 	})
 	switch {
@@ -207,62 +219,68 @@ func (e *Engine) checkBaseMerge(ctx context.Context, t registry.Task, c Copy, re
 	case why != "":
 		return full(why, nil)
 	}
-	return bm, merge, nil
+	return bm, true, nil
 }
 
-// readBaseMerge reads bm's head in iso, a repository of the factory's own
-// with the copy's objects, against bm.Reviewed and tip, origin/<base>'s
-// commit, and fills in bm: merge is false for a head that is no merge and
-// has none since the reviewed head; why says why a merge gets a full round
-// (with err, a read git could not make).
-func (e *Engine) readBaseMerge(ctx context.Context, iso string, bm *BaseMerge, tip string) (merge bool, why string, err error) {
+// besidesMerge is why bm's head, which is no merge of two parents, gets a
+// full round as a merge with commits besides it: a merge among the
+// branch's own commits since the reviewed head, along their first parents
+// in copy c; "" for none, an ordinary change.
+func (e *Engine) besidesMerge(ctx context.Context, c Copy, bm BaseMerge) (string, error) {
+	commits, err := e.d.Git.CommitsAfter(ctx, c.Path, bm.Reviewed, bm.Head, true)
+	if err != nil {
+		return "", err
+	}
+	merges := len(slices.DeleteFunc(slices.Clone(commits), func(c gitx.ListedCommit) bool { return !c.Merge() }))
+	if merges == 0 {
+		return "", nil
+	}
+	return fmt.Sprintf("it has %s besides the merge since %s, which the local review passed", plural(len(commits)-merges, "commit"),
+		short(bm.Reviewed)), nil
+}
+
+// readBaseMerge checks bm's head, a merge of two parents, in iso, a
+// repository of the factory's own with the copy's objects, against
+// bm.Reviewed and tip, origin/<base>'s commit, and fills in bm; why says
+// why it gets a full round (with err, a read git could not make).
+func (e *Engine) readBaseMerge(ctx context.Context, iso string, bm *BaseMerge, tip string) (why string, err error) {
 	git := e.d.Git
 	parents, err := git.Parents(ctx, iso, bm.Head)
-	if err != nil {
-		return true, "git cannot read its parents", err
-	}
-	if len(parents) != 2 {
-		// the branch's own commits since the reviewed head, along its first parents
-		commits, err := git.CommitsAfter(ctx, iso, bm.Reviewed, bm.Head, true)
-		if err != nil {
-			return true, "git cannot list its commits since " + short(bm.Reviewed), err
-		}
-		merges := len(slices.DeleteFunc(slices.Clone(commits), func(c gitx.ListedCommit) bool { return !c.Merge() }))
-		if merges == 0 {
-			return false, "", nil // an ordinary change
-		}
-		return true, fmt.Sprintf("it has %s besides the merge since %s, which the local review passed", plural(len(commits)-merges, "commit"),
-			short(bm.Reviewed)), nil
+	switch {
+	case err != nil:
+		return "git cannot read its parents", err
+	case len(parents) != 2:
+		return fmt.Sprintf("it has %d parents, not two", len(parents)), nil
 	}
 	bm.BaseSHA = parents[1]
 	if parents[0] != bm.Reviewed {
-		return true, fmt.Sprintf("its first parent %s is not %s, which the local review passed", short(parents[0]), short(bm.Reviewed)), nil
+		return fmt.Sprintf("its first parent %s is not %s, which the local review passed", short(parents[0]), short(bm.Reviewed)), nil
 	}
 	onBase, err := git.IsAncestor(ctx, iso, parents[1], tip)
 	switch {
 	case err != nil:
-		return true, "git cannot tell whether its second parent is a commit of " + bm.Base, err
+		return "git cannot tell whether its second parent is a commit of " + bm.Base, err
 	case !onBase:
-		return true, fmt.Sprintf("its second parent %s is no commit of %s", short(parents[1]), bm.Base), nil
+		return fmt.Sprintf("its second parent %s is no commit of %s", short(parents[1]), bm.Base), nil
 	}
 	tree, conflicts, err := git.MergeTree(ctx, iso, parents[0], parents[1])
 	if err != nil {
-		return true, "git cannot merge its parents again", err
+		return "git cannot merge its parents again", err
 	}
 	files, err := git.RemergeFiles(ctx, iso, bm.Head)
 	if err != nil {
-		return true, "git cannot produce its remerge diff", err
+		return "git cannot produce its remerge diff", err
 	}
 	own, err := git.TreeOf(ctx, iso, bm.Head)
 	if err != nil {
-		return true, "git cannot read its tree", err
+		return "git cannot read its tree", err
 	}
 	kind, why := mergeKind(len(conflicts) == 0 && tree == own, conflicts, files)
 	bm.Kind = kind
 	if kind == mergeNarrow {
 		bm.Files, bm.Conflicts = files, conflicts
 	}
-	return true, why, nil
+	return why, nil
 }
 
 // mergeKind is what the check makes of a merge of a commit of the base into
