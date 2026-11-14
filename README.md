@@ -5550,8 +5550,9 @@ which the factory fetches from the remote first (the copy's ref is the main clon
 When git's own merge of the two is the merge (no conflict, the same tree), no round runs: the review's end holds at
 the merge, the factory's proof and precheck having run there as at any head, and the ready card says `base merged
 cleanly: no review round`. When the merge resolved conflicts, or changed what git's own merge would not (an evil
-merge), one narrow round runs: the review's judge alone reads `git show --remerge-diff <merge>`, the conflicts' resolutions and
-any extra change, with the plan as the change's purpose, and its findings go to the writer as any round's do. It
+merge), one narrow round runs: the review's judge alone reads the merge's remerge diff (`git show --remerge-diff <merge>`), the
+conflicts' resolutions and any extra change, which the factory makes in its own repository too and writes as the round's
+`remerge.diff`, so no attribute or merge driver of the copy's shows the judge another diff; it reads the plan as the change's purpose, and its findings go to the writer as any round's do. It
 counts toward `max_rounds` as any round does, at and past the limit too; no second opinion follows it, and its end
 keeps what the review before the merge left under KNOWN. The card names it and its files (`base merged with
 conflicts: a narrow round reviewed its resolutions in app/models/concerns/featurable.rb, db/schema.rb`). Any

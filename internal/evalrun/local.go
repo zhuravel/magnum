@@ -49,10 +49,13 @@ import (
 // ScratchRoot, where the round's scratch directory goes instead of the
 // task's directory (LocalRoot), and NoNotes, which withholds the repository
 // notes (Options.NoNotes); the factory sets neither. Remerge marks the
-// factory's narrow round of a base merge (engine.LocalRound.Remerge):
-// HeadSHA merges the base into a head the local review passed, Roles holds
-// the judge alone, and it takes `git show --remerge-diff` of HeadSHA as the
-// diff and the review boundary.
+// factory's narrow round of a base merge: HeadSHA merges the base into a
+// head the local review passed, Roles holds the judge alone, and it takes
+// RemergeDiff, the merge's remerge diff the factory made in a repository of
+// its own (gitx.Isolated: none of the copy's attributes or merge drivers
+// apply), as the diff and the review boundary; RunLocal writes it as the
+// round's remerge.diff (engine.LocalRound.RemergeFile), and a narrow round
+// without it never starts.
 type LocalCase struct {
 	Checkout, BaseSHA, HeadSHA, Branch, Title, Body, TicketMD, AnswersMD string
 	Watch                                                                config.Watch
@@ -64,6 +67,7 @@ type LocalCase struct {
 	ScratchRoot                                                          string
 	NoNotes                                                              bool
 	Remerge                                                              bool
+	RemergeDiff                                                          string
 }
 
 // ConfigError is a local round that cannot run for a configuration problem
@@ -231,12 +235,14 @@ func LocalRoot(l paths.Layout, taskID int64) string {
 	return filepath.Join(l.FactoryTaskDir(taskID), "local-review")
 }
 
-// LocalDescriptionFile and LocalTicketFile are the files a local round
-// writes in its scratch directory for the judge: the change's title and
-// body, and its ticket with the operator's answers after it.
+// LocalDescriptionFile, LocalTicketFile and LocalRemergeFile are the files
+// a local round writes in its scratch directory for the judge: the
+// change's title and body, its ticket with the operator's answers after
+// it, and a base merge's narrow round's remerge diff (LocalCase.RemergeDiff).
 const (
 	LocalDescriptionFile = "description.md"
 	LocalTicketFile      = pipeline.TicketFile
+	LocalRemergeFile     = "remerge.diff"
 )
 
 // localAnswersHeading is the one heading over the operator's answers in the
@@ -288,6 +294,26 @@ func LocalTicket(ticketMD, answersMD string) string {
 	return ticket + "\n\n" + localAnswersHeading + "\n\n" + answers + "\n"
 }
 
+// writeLocalFiles writes case c's ticket file (LocalTicket; none when c has
+// neither a ticket nor answers) and, for a base merge's narrow round, its
+// remerge diff (LocalRemergeFile) in scratch, 0600, and returns their paths
+// ("" for a file it did not write).
+func writeLocalFiles(scratch string, c LocalCase) (ticket, remerge string, err error) {
+	if text := LocalTicket(c.TicketMD, c.AnswersMD); text != "" {
+		ticket = filepath.Join(scratch, LocalTicketFile)
+		if err := fsx.WriteFileAtomic(ticket, []byte(text), 0o600); err != nil {
+			return "", "", err
+		}
+	}
+	if c.Remerge {
+		remerge = filepath.Join(scratch, LocalRemergeFile)
+		if err := fsx.WriteFileAtomic(remerge, []byte(c.RemergeDiff), 0o600); err != nil {
+			return "", "", err
+		}
+	}
+	return ticket, remerge, nil
+}
+
 // localRoundFunc runs a local round's engine: an app of cfg on layout (the
 // round's scratch layout) whose agents carry tag, its engine's RunLocal of
 // lr, and the release of its agents. Deps.localRound replaces it in tests.
@@ -303,9 +329,10 @@ var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 // c.NoNotes), a new agent tag, and the synthetic PR number
 // LocalNumber, so two rounds never share an agent, a herdr workspace label
 // or an eval case lock (it holds the case lock "local-<number>" for the
-// round). It writes the title and body (description.md) and the ticket with
+// round). It writes the title and body (description.md), the ticket with
 // the operator's answers after it (ticket.md, when c has either:
-// LocalTicket) there, and runs engine.RunLocal in the task's copy at
+// LocalTicket) and a narrow round's remerge diff (remerge.diff) there, and
+// runs engine.RunLocal in the task's copy at
 // c.HeadSHA, always with c.BaseSHA (post-review's --local-base), as a gh
 // identity (the watch's, else the first configured: an App's token would be
 // minted from GitHub), with the branch as the head ref and the title with the
@@ -327,6 +354,8 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error) {
 		return LocalResult{}, fmt.Errorf("evalrun: a local round needs its task (1 to %d) and a round of 1 to %d (task %d, round %d)", MaxLocalTask, MaxLocalRound, c.TaskID, c.Round)
 	case !ok || owner == "" || name == "" || strings.Contains(name, "/"):
 		return LocalResult{}, fmt.Errorf("evalrun: a local round needs its repository as owner/name, not %q", c.Repo)
+	case c.Remerge && c.RemergeDiff == "":
+		return LocalResult{}, errors.New("evalrun: a base merge's narrow round needs the merge's remerge diff, which its judge reviews")
 	}
 	id, err := LocalIdentity(d.Config, &c.Watch)
 	if err != nil {
@@ -359,12 +388,9 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error) {
 	if err := fsx.WriteFileAtomic(desc, []byte("# "+strings.TrimSpace(c.Title)+"\n\n"+strings.TrimSpace(c.Body)+"\n"), 0o600); err != nil {
 		return LocalResult{}, fmt.Errorf("evalrun: local round %d: %w", c.Round, err)
 	}
-	ticket := ""
-	if text := LocalTicket(c.TicketMD, c.AnswersMD); text != "" {
-		ticket = filepath.Join(scratch, LocalTicketFile)
-		if err := fsx.WriteFileAtomic(ticket, []byte(text), 0o600); err != nil {
-			return LocalResult{}, fmt.Errorf("evalrun: local round %d: %w", c.Round, err)
-		}
+	ticket, remerge, err := writeLocalFiles(scratch, c)
+	if err != nil {
+		return LocalResult{}, fmt.Errorf("evalrun: local round %d: %w", c.Round, err)
 	}
 	notes := !c.NoNotes
 	if notes {
@@ -382,7 +408,7 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error) {
 		EvalCase: engine.EvalCase{Owner: owner, Repo: name, Number: number, URL: fmt.Sprintf("https://github.com/%s/pull/%d", c.Repo, number),
 			Head: c.HeadSHA, BaseRef: base, DefaultBranch: base, Title: c.Title, HeadRef: c.Branch,
 			Checkout: c.Checkout, MainClone: c.Checkout, Watch: w, Identity: id, Notes: notes},
-		BaseSHA: c.BaseSHA, DescriptionFile: desc, TicketFile: ticket, Env: maps.Clone(c.Env), Remerge: c.Remerge,
+		BaseSHA: c.BaseSHA, DescriptionFile: desc, TicketFile: ticket, Env: maps.Clone(c.Env), RemergeFile: remerge,
 	}
 	run := d.localRound
 	if run == nil {

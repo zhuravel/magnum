@@ -82,15 +82,15 @@ func TestRunLocalAlwaysGivesPostReviewTheBase(t *testing.T) {
 	if !strings.Contains(line, " --dry-run ") || !strings.Contains(line, " --local-base "+c.BaseSHA+" ") {
 		t.Fatalf("post_review %q lacks --dry-run --local-base %s", line, c.BaseSHA)
 	}
-	if in.Local.Remerge {
+	if in.Local.RemergeFile != "" {
 		t.Fatal("a local round of a whole change is a base merge's narrow round")
 	}
 }
 
-// The factory's narrow round of a base merge (LocalRound.Remerge) reaches
-// the round as Local.Remerge, so its judge takes the merge's remerge diff
-// as the boundary; its base stays the change's, which post_review anchors
-// on.
+// The factory's narrow round of a base merge (LocalRound.RemergeFile, the
+// remerge diff the factory wrote) reaches the round as Local.RemergeFile,
+// so its judge takes that file as the boundary; its base stays the
+// change's, which post_review anchors on.
 func TestALocalRoundOfABaseMergeHandsItsJudgeTheRemerge(t *testing.T) {
 	h := newHarness(t, func(h *harness) {
 		h.layout = paths.Layout{Home: h.layout.Home, Scratch: t.TempDir()}
@@ -100,14 +100,14 @@ func TestALocalRoundOfABaseMergeHandsItsJudgeTheRemerge(t *testing.T) {
 		return pipeline.RoundResult{Outcome: pipeline.OutcomeDryRun}, nil
 	}
 	c := localRound(h, t.TempDir(), 2)
-	c.Remerge = true
+	c.RemergeFile = filepath.Join(filepath.Dir(c.DescriptionFile), "remerge.diff")
 	if _, _, err := h.e.RunLocal(h.ctx, c); err != nil {
 		t.Fatal(err)
 	}
 	if len(h.rd.inputs) != 1 {
 		t.Fatalf("rounds: %d", len(h.rd.inputs))
 	}
-	if in := h.rd.inputs[0]; in.Local == nil || !in.Local.Remerge || in.BaseSHA != c.BaseSHA || in.TargetSHA != c.Head {
+	if in := h.rd.inputs[0]; in.Local == nil || in.Local.RemergeFile != c.RemergeFile || in.BaseSHA != c.BaseSHA || in.TargetSHA != c.Head {
 		t.Fatalf("round input: base=%s target=%s local=%+v, want the remerge at the change's base", in.BaseSHA, in.TargetSHA, in.Local)
 	}
 }

@@ -34,20 +34,21 @@ type LocalRound struct {
 	// worktree was prepared with (the per-PR env under the worktree's own
 	// workspace name), so its roles never use a copy's databases.
 	Env map[string]string
-	// Remerge marks the factory's narrow round of a base merge: Head merges
-	// the base into a head the local review passed, and the judge, the
-	// round's only role, takes `git show --remerge-diff` of it as the diff
-	// and the review boundary (pipeline.Local.Remerge); BaseSHA stays the
-	// change's base, which post-review anchors on.
-	Remerge bool
+	// RemergeFile, set for the factory's narrow round of a base merge
+	// alone, is the merge's remerge diff the factory wrote before the round
+	// (evalrun.RunLocal's remerge.diff): Head merges the base into a head
+	// the local review passed, and the judge, the round's only role, takes
+	// that file as the diff and the review boundary
+	// (pipeline.Local.RemergeFile); BaseSHA stays the change's base, which
+	// post-review anchors on.
+	RemergeFile string
 }
 
 // localJob is a local round's part of its round job (roundJob.local): the
-// base, the files, the environment and the remerge mark of its LocalRound.
+// base, the files and the environment of its LocalRound.
 type localJob struct {
-	base, description, ticket string
-	env                       map[string]string
-	remerge                   bool
+	base, description, ticket, remerge string
+	env                                map[string]string
 }
 
 // fullSHA is a full commit id.
@@ -82,5 +83,5 @@ func (e *Engine) RunLocal(ctx context.Context, c LocalRound) (pipeline.RoundResu
 		return pipeline.RoundResult{}, store.PR{}, fmt.Errorf("engine: local %s/%s#%d: a local round runs every role", c.Owner, c.Repo, c.Number)
 	}
 	return e.runEval(ctx, c.EvalCase, &localJob{base: c.BaseSHA, description: c.DescriptionFile, ticket: c.TicketFile, env: maps.Clone(c.Env),
-		remerge: c.Remerge})
+		remerge: c.RemergeFile})
 }

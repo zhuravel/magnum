@@ -27953,11 +27953,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
     whatever its exit), so QA never sends the task back to a review that passes at once.
   - *A conflicted or evil merge* (the merge resolved conflicts, or changed what git's own merge would not have) gets
     one narrow round: the judge alone (`narrowRoles`; the watch's judge, or its fallback on a Codex-never task)
-    with `LocalCase.Remerge`. That reaches the engine's `LocalRound`, the pipeline's `Local` and the judge's prompt
-    (`remerge: true`). The judge takes `git show --remerge-diff <merge>` as the diff and the review boundary, the
-    change's diff only as context, and the plan in `description_file` as the PR's purpose; `post_review` still
-    anchors on the change's diff. It is a cycle like any round: it counts toward `max_rounds` and works at and
-    past the limit, since the limit already gives a new head one round, and its findings follow a round's rules.
+    with `LocalCase.Remerge`. The factory makes the merge's remerge diff (`git show --remerge-diff <merge>` on the
+    check's files) in its own repository (`Isolated`, `remergeDiff`) when the round starts, and `RunLocal` writes it
+    as the round's `remerge.diff` beside `description.md`; the file's path reaches the engine's `LocalRound`, the
+    pipeline's `Local` and the judge's prompt (`remerge_file`). The judge takes that file as the diff and the review
+    boundary and makes no remerge diff in the checkout: there the main clone's `info/attributes`, which every copy
+    shares, a `.gitattributes` or a `merge.<name>.driver` apply, and with `merge=union` the remerge diff of a resolved
+    conflict shows no conflict (a driver would also run its command in the judge's shell). The check produces the
+    whole diff too, so a narrow round never starts on one git cannot produce (past `execx.MaxOutput`): that is a full
+    round. The judge takes the change's diff only as context, and the plan in `description_file` as the PR's
+    purpose; `post_review` still anchors on the change's diff. It is a cycle like any round: it counts toward
+    `max_rounds` and works at and past the limit, since the limit already gives a new head one round, and its
+    findings follow a round's rules.
     Its loop's end keeps what the review before the merge left (leftovers, doubts, FIXED AFTER, the missing
     reviewers: `withMerge`, through `withSecond`), since the narrow round read the merge alone. No second opinion
     follows it (an event says why): the change before the merge passed already. The specs the precheck picks for
@@ -27965,9 +27972,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - *Any other head* gets a full round, as before: commits besides the merge, a merge of something other than the
     base, a merge whose first parent is not the reviewed head, a base the factory cannot fetch, a conflict the
     merge left exactly as git's merge wrote it (in no remerge diff, so a narrow round would never see it:
-    `mergeKind`), or a remerge diff git cannot produce (`gitx.RemergeFiles` fails). An event says why. Conflict markers committed as `git merge` wrote them
-    differ from the remerge's own labels, so they show in the narrow round's diff. A head that is no merge and
-    has none since the reviewed head is an ordinary change: no record, no event.
+    `mergeKind`), or a remerge diff git cannot produce (`gitx.RemergeFiles` or `gitx.RemergeDiff` fails). An event
+    says why. Conflict markers committed as `git merge` wrote them differ from the remerge's own labels, so they
+    show in the narrow round's diff. A head that is no merge and has none since the reviewed head is an ordinary
+    change: no record, no event.
   - `base-merge.json` records the check of the head, with the summary it carries, before the factory acts on it.
     A restart decides alike, and a narrow round that runs again in its cycle stays narrow (`narrowAt`).
   - The ready card's recommendation names the check before the review's end: `base merged cleanly: no review
@@ -27979,12 +27987,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   Tests, failing first: `TestACleanBaseMergeGetsNoReviewRound`, `TestABaseMergeWithConflictsGetsANarrowRoundOnItsResolutions`,
   `TestAnEvilMergeIsReviewedNarrowlyOnWhatGitWouldNotHaveMerged`, `TestCommitsBesidesTheMergeGetAFullRound`,
   `TestOnlyAMergeOfTheBaseIntoTheReviewedHeadSkipsTheFullRound`, `TestANarrowRoundCountsTowardMaxRounds`,
-  `TestTheReadyCardNamesTheBaseMergeCheck`, `TestACleanBaseMergesPassHoldsAfterARestartAndForQA` and
-  `TestABaseMergeOfACommitOnlyTheCopysRefNamesGetsAFullRound` (the fix round: one round fewer, none at the merge,
-  before the fetch) in internal/factory; `TestRemergeFilesAreTheFilesAMergeDiffersInFromGitsOwnMerge` in internal/gitx;
+  `TestTheReadyCardNamesTheBaseMergeCheck`, `TestACleanBaseMergesPassHoldsAfterARestartAndForQA`,
+  `TestABaseMergeOfACommitOnlyTheCopysRefNamesGetsAFullRound` (the fix round: before the fetch, the merge got no
+  round) and `TestANarrowRoundReadsTheRemergeDiffTheFactoryMadeApartFromTheCopy` (the fix round: the case carried
+  no diff, and the copy's union attribute hides the conflict) in internal/factory;
+  `TestRemergeFilesAreTheFilesAMergeDiffersInFromGitsOwnMerge` in internal/gitx;
   `TestANarrowLocalJudgeReviewsTheRemergeDiffOfTheMerge` (agents), `TestANarrowLocalRoundsJudgeReviewsTheRemergeDiff`
   (pipeline), `TestALocalRoundOfABaseMergeHandsItsJudgeTheRemerge` (engine) and
-  `TestRunLocalHandsTheEngineANarrowRoundOfABaseMerge` (evalrun). No migration, no new key.
+  `TestRunLocalHandsTheEngineANarrowRoundOfABaseMerge` (evalrun), the last four on `remerge_file` since the fix
+  round. No migration, no new key.
 
 ## Learned rules
 

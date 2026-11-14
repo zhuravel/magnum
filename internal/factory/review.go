@@ -517,7 +517,8 @@ func loopCycles(cs []registry.Cycle) []registry.Cycle {
 // Its roles are the watch's (reviewRoles), the judge_fallback in the
 // judge's place for the task's second opinion (secondRound), the judge
 // alone at a head whose base merge base-merge.json names narrow (narrowAt:
-// its case's Remerge), its case the change at the task's proven head
+// its case's Remerge, with the merge's remerge diff made apart from the
+// copy, remergeDiff), its case the change at the task's proven head
 // (localCase); the round runs off the loop (launchRound).
 func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *registry.Cycle, round int) error {
 	if e.startsHeld() {
@@ -592,6 +593,12 @@ func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *re
 	release, ok := e.heavy(ctx, t, heavyReview)
 	if !ok {
 		return nil // the task waits "heavy: …"
+	}
+	if narrow { // made once the round may start: a pass that waits makes no repository of its own
+		if lc.RemergeDiff, err = e.remergeDiff(ctx, t, c, lc.HeadSHA); err != nil {
+			release()
+			return err
+		}
 	}
 	if cy == nil {
 		begun, err := e.reg.BeginCycle(ctx, t.ID, bh.Head, skillHash(e.d.ReviewCandidate))

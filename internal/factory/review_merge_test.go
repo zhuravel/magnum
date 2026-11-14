@@ -177,6 +177,49 @@ func TestABaseMergeWithConflictsGetsANarrowRoundOnItsResolutions(t *testing.T) {
 	}
 }
 
+// The narrow round's judge reads the remerge diff the factory made in a
+// repository of its own, never one made in the copy: there the main
+// clone's info/attributes, which every copy shares, can name a merge
+// driver or `merge=union`, under which git's own merge of the parents
+// conflicts nowhere and the remerge diff shows another change than the one
+// the check classified. The round's case carries the Isolated remerge diff
+// (LocalCase.RemergeDiff, which RunLocal writes as the round's
+// remerge.diff), the conflict and its resolution in it.
+func TestANarrowRoundReadsTheRemergeDiffTheFactoryMadeApartFromTheCopy(t *testing.T) {
+	r := newReadyRig(t)
+	task, _ := r.toConflict("PR-12409", nil)
+	r.run(3, func() bool { return len(r.rt.promptsTo("fx-writer")) > 1 })
+	merged := r.writerMerges(task, func() {
+		r.write(r.copyDir, "app/credit.rb", strings.Replace(creditRB, "    0\n", "    10\n", 1)+"# master's 5 come with the campaign\n")
+	})
+	r.write(r.main, ".git/info/attributes", "app/credit.rb merge=union\n")
+	r.toBody(task)
+
+	calls := r.rv.calls()
+	if len(calls) != 2 || !calls[1].Remerge || calls[1].HeadSHA != merged {
+		t.Fatalf("local rounds %+v, want the narrow round at the merge", calls)
+	}
+	var isolated string
+	git := r.e.d.Git
+	if err := git.Isolated(r.ctx, r.copyDir, func(iso string) error {
+		var err error
+		isolated, err = git.RemergeDiff(r.ctx, iso, merged, "app/credit.rb")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	inCopy := r.git(r.copyDir, "show", "--remerge-diff", "--format=", merged)
+	if strings.Contains(inCopy, "CONFLICT") || !strings.Contains(isolated, "CONFLICT") {
+		t.Fatalf("the rig's union attribute does not change the remerge diff: in the copy %q, apart from it %q", inCopy, isolated)
+	}
+	if got := calls[1].RemergeDiff; got != isolated || !strings.Contains(got, "+# master's 5 come with the campaign") {
+		t.Fatalf("the narrow round's remerge diff %q, want the one made apart from the copy %q", got, isolated)
+	}
+	if calls[0].RemergeDiff != "" {
+		t.Fatalf("the first round of the whole change carries a remerge diff %q", calls[0].RemergeDiff)
+	}
+}
+
 // An evil merge (git's own merge is clean, and the merge commit changes
 // more than it would) gets the narrow round on what git would not have
 // merged: the files of its remerge diff, and the card says the merge made
@@ -295,10 +338,24 @@ func TestOnlyAMergeOfTheBaseIntoTheReviewedHeadSkipsTheFullRound(t *testing.T) {
 	r.gitOut(r.copyDir, "merge", "--quiet", "--no-edit", "origin/master")
 	r.git(r.copyDir, "add", "-A")
 	r.git(r.copyDir, "commit", "--quiet", "--no-edit")
-	if bm := check(r.git(r.copyDir, "rev-parse", "HEAD")); bm.Kind != mergeNarrow || !slices.Equal(bm.Conflicts, []string{"app/credit.rb"}) ||
+	markers := r.git(r.copyDir, "rev-parse", "HEAD")
+	if bm := check(markers); bm.Kind != mergeNarrow || !slices.Equal(bm.Conflicts, []string{"app/credit.rb"}) ||
 		!slices.Equal(bm.Files, []string{"app/credit.rb"}) {
 		t.Fatalf("conflict markers committed: %+v, want a narrow round on app/credit.rb", bm)
 	}
+
+	// a remerge diff git names the files of but cannot produce whole (past
+	// execx.MaxOutput, say), which the narrow round would read
+	r.setFailGit(func(args []string) error {
+		if slices.Contains(args, "--remerge-diff") && slices.Contains(args, "--text") {
+			return errors.New("fatal: no remerge diff")
+		}
+		return nil
+	})
+	if bm := check(markers); bm.Kind != mergeFull || !strings.Contains(bm.Why, "remerge diff") {
+		t.Fatalf("a remerge diff git cannot produce whole: %+v, want a full round", bm)
+	}
+	r.setFailGit(nil)
 
 	// an ordinary head: no merge, no record of one
 	at(reviewed)

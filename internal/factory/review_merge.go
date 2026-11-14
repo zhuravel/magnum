@@ -21,10 +21,14 @@ package factory
 //     any head.
 //   - the merge resolved conflicts, or changed what git's own merge would
 //     not have (an evil merge): one narrow round of the judge alone on `git
-//     show --remerge-diff <head>` (evalrun.LocalCase.Remerge), which counts
-//     toward max_rounds as any round does and whose findings follow a
-//     round's rules; its loop keeps what the review before the merge left
-//     (withMerge), and no second opinion follows it.
+//     show --remerge-diff <head>` (evalrun.LocalCase.Remerge), which the
+//     factory makes in its own repository too (remergeDiff) and hands the
+//     judge as the round's remerge.diff (LocalCase.RemergeDiff), so the
+//     judge makes none in the copy, where the copy's attributes and merge
+//     drivers would apply. The round counts toward max_rounds as any round
+//     does and its findings follow a round's rules; its loop keeps what the
+//     review before the merge left (withMerge), and no second opinion
+//     follows it.
 //   - anything else (commits besides the merge, a merge of something other
 //     than the base, parents that are not the reviewed head and the base, a
 //     conflict the merge left as git's merge wrote it, a remerge diff git
@@ -286,11 +290,37 @@ func (e *Engine) readBaseMerge(ctx context.Context, iso string, bm *BaseMerge, t
 		return "git cannot read its tree", err
 	}
 	kind, why := mergeKind(len(conflicts) == 0 && tree == own, conflicts, files)
-	bm.Kind = kind
-	if kind == mergeNarrow {
+	if kind == mergeNarrow { // the diff the narrow round reads (remergeDiff): one git cannot produce whole is a full round
+		if _, err := git.RemergeDiff(ctx, iso, bm.Head, files...); err != nil {
+			return "git cannot produce its remerge diff", err
+		}
 		bm.Files, bm.Conflicts = files, conflicts
 	}
+	bm.Kind = kind
 	return why, nil
+}
+
+// remergeDiff is the remerge diff that the narrow round of task t's head
+// reviews, the base merge base-merge.json names narrow at head: `git show
+// --remerge-diff` of it on the files its check found, made with copy c's
+// objects in a repository of the factory's own (Isolated), as the check
+// made it, so none of the copy's attributes or merge drivers apply, which
+// the writer's pane can write (a union merge would show a resolved
+// conflict as none). evalrun.RunLocal writes it as the round's
+// remerge.diff, the file the judge's prompt names.
+func (e *Engine) remergeDiff(ctx context.Context, t registry.Task, c Copy, head string) (string, error) {
+	rec, ok := readBaseMerge(e.d.Layout.FactoryTaskDir(t.ID))
+	if !ok || rec.Head != head || rec.Kind != mergeNarrow || len(rec.Files) == 0 {
+		return "", fmt.Errorf("the narrow check of the base merge %s is gone from %s", short(head), baseMergeFile)
+	}
+	git := e.d.Git
+	var diff string
+	err := git.Isolated(ctx, c.Path, func(iso string) error {
+		var err error
+		diff, err = git.RemergeDiff(ctx, iso, head, rec.Files...)
+		return err
+	})
+	return diff, err
 }
 
 // mergeKind is what the check makes of a merge of a commit of the base into

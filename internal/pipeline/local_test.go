@@ -67,15 +67,18 @@ func TestALocalRoundsJudgeReadsTheFactorysFiles(t *testing.T) {
 	}
 }
 
-// The factory's narrow round of a base merge (Local.Remerge): its judge's
-// prompt says `remerge: true` and takes `git show --remerge-diff <head>` as
-// the boundary, and post_review still checks the anchors against the
-// change's local diff (--local-base <base>). A local round without it says
-// neither.
+// The factory's narrow round of a base merge (Local.RemergeFile): its
+// judge's prompt names the remerge diff the factory wrote as
+// `remerge_file` and takes it as the boundary, and post_review still checks
+// the anchors against the change's local diff (--local-base <base>). A
+// local round without it says neither.
 func TestANarrowLocalRoundsJudgeReviewsTheRemergeDiff(t *testing.T) {
 	for _, remerge := range []bool{true, false} {
 		e := newEnv(t)
-		local := &Local{DescriptionFile: filepath.Join(t.TempDir(), "description.md"), Remerge: remerge}
+		local := &Local{DescriptionFile: filepath.Join(t.TempDir(), "description.md")}
+		if remerge {
+			local.RemergeFile = filepath.Join(filepath.Dir(local.DescriptionFile), "remerge.diff")
+		}
 		if err := os.WriteFile(local.DescriptionFile, []byte("# PR-12388 Payout methods\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -93,8 +96,8 @@ func TestANarrowLocalRoundsJudgeReviewsTheRemergeDiff(t *testing.T) {
 			t.Fatalf("remerge %v: no judge prompt", remerge)
 		}
 		for _, j := range judge {
-			said := strings.Contains(j.Text, "\nremerge: true\n") && strings.Contains(j.Text, "`git show --remerge-diff "+in.TargetSHA+"`")
-			if said != remerge {
+			said := strings.Contains(j.Text, "\nremerge_file: "+local.RemergeFile+"\n") && strings.Contains(j.Text, "Take `remerge_file`")
+			if said != remerge || strings.Contains(j.Text, "remerge: true") {
 				t.Errorf("remerge %v: the judge's prompt names the narrow round: %v\n%s", remerge, said, j.Text)
 			}
 			if line := promptField(t, j.Text, "post_review"); !strings.Contains(line, " --local-base "+in.BaseSHA+" ") {

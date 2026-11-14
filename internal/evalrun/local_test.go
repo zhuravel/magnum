@@ -13,6 +13,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/pipeline"
 )
@@ -401,24 +402,43 @@ func TestRunLocalReadsTheJudgesResult(t *testing.T) {
 }
 
 // The factory's narrow round of a base merge runs its judge alone on the
-// merge's remerge diff: the case's Remerge and its one role reach the
-// engine's round, whose judge's result the round reads as any round's.
+// merge's remerge diff, which the factory made apart from the copy's
+// attributes and merge drivers: RunLocal writes the case's RemergeDiff as
+// remerge.diff beside description.md (0600), and the file and the case's
+// one role reach the engine's round, whose judge's result the round reads
+// as any round's. A round of a whole change has no such file, and a narrow
+// case without its diff never starts.
 func TestRunLocalHandsTheEngineANarrowRoundOfABaseMerge(t *testing.T) {
 	d, runs := localFixture(t, cleanResult)
 	c := localCase(t, 2)
 	c.Roles, c.Remerge = []string{"codex-judge"}, true
+	c.RemergeDiff = "diff --git a/app/credit.rb b/app/credit.rb\nremerge CONFLICT (content): Merge conflict in app/credit.rb\n-<<<<<<< 1a2b3c4\n+    10\n"
 	res, err := RunLocal(t.Context(), d, c)
 	if err != nil || res.Verdict != "clean" {
 		t.Fatalf("RunLocal = %+v, %v; want the judge's clean result", res, err)
 	}
-	if lr := (*runs)[0].round; !lr.Remerge || !slices.Equal(lr.Watch.Roles, []string{"codex-judge"}) || lr.BaseSHA != c.BaseSHA || lr.Head != c.HeadSHA {
-		t.Fatalf("round %+v, want the judge alone on the remerge, at the change's base", lr)
+	lr := (*runs)[0].round
+	if want := filepath.Join(res.Scratch, LocalRemergeFile); lr.RemergeFile != want || !slices.Equal(lr.Watch.Roles, []string{"codex-judge"}) ||
+		lr.BaseSHA != c.BaseSHA || lr.Head != c.HeadSHA || filepath.Dir(lr.DescriptionFile) != res.Scratch {
+		t.Fatalf("round %+v, want the judge alone on %s, at the change's base", lr, want)
 	}
-	if _, err := RunLocal(t.Context(), d, localCase(t, 3)); err != nil {
+	if b, err := os.ReadFile(lr.RemergeFile); err != nil || string(b) != c.RemergeDiff {
+		t.Fatalf("%s = %q, %v; want the case's remerge diff", lr.RemergeFile, b, err)
+	}
+	if fi, err := os.Stat(lr.RemergeFile); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("%s: %v, %v; want 0600", lr.RemergeFile, fi, err)
+	}
+	whole, err := RunLocal(t.Context(), d, localCase(t, 3))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if lr := (*runs)[1].round; lr.Remerge {
+	if lr := (*runs)[1].round; lr.RemergeFile != "" || fsx.Exists(filepath.Join(whole.Scratch, LocalRemergeFile)) {
 		t.Fatal("a round of a whole change is a base merge's narrow round")
+	}
+	none := localCase(t, 4)
+	none.Roles, none.Remerge = []string{"codex-judge"}, true
+	if _, err := RunLocal(t.Context(), d, none); err == nil || !strings.Contains(err.Error(), "remerge diff") || len(*runs) != 2 {
+		t.Fatalf("a narrow round without its remerge diff: %v (%d rounds); want it refused", err, len(*runs))
 	}
 }
 
