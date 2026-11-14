@@ -27937,7 +27937,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
   which reads the real objects (`GIT_NO_REPLACE_OBJECTS`, no graft file), in a repository of the factory's own
   (`Isolated`), so no merge driver, attribute or commit-graph of the copy's applies, as the held merge reads its
   merge. Only a merge of two parents qualifies: its first parent the reviewed head, its second a commit of
-  origin/<base> (`IsAncestor` of the copy's `origin/<base>`).
+  origin/<base> (`IsAncestor` of the copy's `origin/<base>`). A first look at the head's parents in the copy tells a
+  merge from any other head, so an ordinary head, which every pass of a waiting round reads again, costs two reads
+  and no temporary repository; a commit-graph that lies there can only make a merge read as none, which gets a full
+  round, and a merge's parents are read again in the factory's own repository before anything is decided.
   - *A clean merge* (git's own merge of the parents, `merge-tree`, has no conflict and is the merge's tree) gets no
     round. The review's end is carried to the head: `review-summary.json` at the merge, its exit and findings as
     they were, with `base_merge` (`BaseMerge`, kind `clean`). The stage passes. The factory's proof and precheck
