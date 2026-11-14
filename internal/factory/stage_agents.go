@@ -161,11 +161,11 @@ type PromptData struct {
 	// writes last and QAChanged the user-facing files the change touches (the
 	// repository's qa.when), all in QARun, and QARecheck the pages of the
 	// defects earlier runs handed the writer, which it walks again
-	// (recheck.json in QARun, "" for none); QASignIn and QASkill the
-	// repository's qa.sign_in and qa.skill ("" = none); QAMaxPages its
-	// qa.max_pages and QAMaxShots the most shots of a run.
+	// (recheck.json in QARun, "" for none); QASignIn, QAData and QASkill
+	// the repository's qa.sign_in, qa.data and qa.skill ("" = none);
+	// QAMaxPages its qa.max_pages and QAMaxShots the most shots of a run.
 	QARun, QAURL, QACDP, QAProbe, QAVerdict, QAChanged string
-	QASignIn, QASkill, QASession, QARecheck            string
+	QASignIn, QAData, QASkill, QASession, QARecheck    string
 	QAMaxPages, QAMaxShots                             int
 }
 
@@ -2360,7 +2360,7 @@ func (e *Engine) qaPromptData(d *PromptData, t registry.Task, dir string) {
 		d.QAMaxPages, d.QAMaxShots = run.MaxPages, QAMaxShots
 	}
 	if repo, ok := e.cfg.FactoryRepo(t.Repo); ok && repo.QA != nil {
-		d.QASignIn, d.QASkill = repo.QA.SignIn, repo.QA.Skill
+		d.QASignIn, d.QAData, d.QASkill = repo.QA.SignIn, repo.QA.Data, repo.QA.Skill
 	}
 }
 
@@ -2597,7 +2597,8 @@ func checkData(role config.Role) PromptData {
 		PRBodySkill: "example:create-pr", DBLockCommand: agents.DBLockLine("magnum", copyPath, role.Name), Port: 3000, Magnum: "magnum",
 		MergeMethods: "squash", SatOut: dir + "/findings-fx-points-codex.md", QARun: qaRun, QAURL: "http://app.example.localhost:3000", QACDP: "http://127.0.0.1:9222",
 		QAProbe: qaRun + "/probe.js", QAVerdict: qaRun + "/verdict.json", QAChanged: qaRun + "/changed.txt", QARecheck: qaRun + "/recheck.json",
-		QASignIn: "/dev/sign-in?as=qa@example.com", QASkill: "example:qa", QASession: "magnum-qa-1-1", QAMaxPages: 12,
+		QASignIn: "/dev/sign-in?as=qa@example.com", QAData: "the first seeded shop has demo orders", QASkill: "example:qa",
+		QASession: "magnum-qa-1-1", QAMaxPages: 12,
 		QAMaxShots: 30, Changed: "question 1 of revision 2 (asked by fx-critic)", LastFix: true}
 }
 

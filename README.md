@@ -6059,6 +6059,7 @@ when = "bin/user-facing"                       # reads the changed files on stdi
 url = "http://app.example.localhost:{port}"    # the copy's server, on this Mac, {port} as its port
 ready = "/up"                                  # a 2xx or 3xx answer here says the server is up (default /)
 sign_in = "visit /dev/sign-in?as=qa@example.com"   # one line: how the walker signs in locally (no password)
+data = "the first seeded shop has demo orders; read their ids with bin/rails runner"   # one line: the local records it uses
 skill = "example:qa"                           # the repository's QA skill, read for sign-in and test data only
 server_stop = "overmind kill"                  # runs in the copy before the server's process group is killed
 boot = "5m"                                    # the server must answer ready within this (default 5m)

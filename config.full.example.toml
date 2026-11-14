@@ -348,6 +348,10 @@ databases = [
 #                                          # data and page conventions only (default none)
 #   sign_in = "visit /dev/sign-in?as=qa@example.com"   # one line: how the walker signs in locally; never a
 #                                          # password, name the env var that holds one (default none)
+#   data = "the first seeded shop has demo orders; read their ids with bin/rails runner"   # one line: the local
+#                                          # records the walker uses to reach the change's pages (a seeded account,
+#                                          # its site and its records) and how it finds their ids; never a secret
+#                                          # (default none: the walker looks for itself)
 #   server_stop = "overmind kill"          # runs in the copy, at most 30s, before the server's process group is killed
 #                                          # (default none); a stop then ends what of the copy still listens on its
 #                                          # port, never a process outside it: one outside the copy on the port is

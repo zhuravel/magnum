@@ -373,6 +373,11 @@ type FactoryQA struct {
 	// SignIn is one line that says how the walker signs in locally ("" =
 	// none): never a password, but the env var that holds one.
 	SignIn string `toml:"sign_in"`
+	// Data is one line that names the local records the walker uses to
+	// reach the change's pages (a seeded account, its site and campaigns)
+	// and how it finds their ids ("" = none: the walker looks for itself).
+	// Never a secret.
+	Data string `toml:"data"`
 	// ServerStop runs in the copy before the server's process group is
 	// killed (such as "overmind kill"); "" = none.
 	ServerStop string `toml:"server_stop"`
@@ -1667,6 +1672,9 @@ func validateFactoryQA(where string, r FactoryRepo) []error {
 	}
 	if strings.ContainsAny(q.SignIn, "\r\n") {
 		bad("qa.sign_in must be one line")
+	}
+	if strings.ContainsAny(q.Data, "\r\n") {
+		bad("qa.data must be one line")
 	}
 	switch boot, limit := q.Boot.Duration, q.Cap.Duration; {
 	case boot <= 0:

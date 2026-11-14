@@ -27906,6 +27906,28 @@ skill versions); people add theirs to the sections before it, at the end of the 
   Tests, failing first: `TestAServerThatEndsDuringItsBootFailsTheBootAtOnce` (it waited two boots of 5m0s and
   named neither) and `TestServerRunningFollowsTheRecordedLeader` (no such method).
 
+- **`[factory.repo.qa] data` names the local records the walker uses** (2026-11-14, visual QA for
+  talkable/talkable). A talkable PR that changed many admin pages was published with no screenshots: the
+  repository had no QA block. Its pages sit behind a sign-in and under a site and a campaign, and the walker had
+  `sign_in` for the first and nothing for the second: the seeded accounts have sites, but campaigns come only
+  from an opt-in demo seed, and which site holds them is a fact of the repository's seeds, not of any page. The
+  walker could guess from the seeds or the database, or stop with the state `blocked`; `skill` would carry it,
+  but the repository has no QA skill to name. `data` is one line, like `sign_in` (refused with a newline, never a
+  secret, no default), that `factory-qa.md` renders after the local-data rule as "The local data to use, as the
+  repository's configuration names it: …" (`PromptData.QAData`); a repository without it gets the prompt as
+  before. The rest of what talkable needs is configuration: its server line seeds the demo data and compiles
+  the assets before `rails server` (so `ready` answers only once the pages run the head's JavaScript, on the
+  copy's one port, with no asset server's second port), a `boot` of about 10 minutes for that (the entry above
+  makes a failed step fail it at once), `url` on the admin host and `ready` on the sign-in page. Rejected: a
+  sign-in the factory performs itself before the walk (the walker owns the one browser tab, and the form is
+  the app's own JavaScript; a line of where the seed user and its password are defined does it); a `prepare`
+  key run before the server (a state of its own in the session, its own bound and its own failure, for what
+  `&&` in the server line does now that a failed step ends the boot at once); folding the records into
+  `sign_in` (one line for two jobs, and the prompt calls it the sign-in). Tests, failing first:
+  `TestTheQABlockReadsTheWalkersLocalData`, the "data two lines" row of `TestTheQABlockIsValidated`,
+  `TestTheWalkerGetsTheRepositorysSignInAndLocalData` and the new phrases of
+  `TestCheckPromptsRendersTheQAWalkersPrompt` (none of the key, the field or the sentence existed).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

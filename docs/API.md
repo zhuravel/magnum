@@ -6740,6 +6740,11 @@ type FactoryQA struct {
 	// SignIn is one line that says how the walker signs in locally ("" =
 	// none): never a password, but the env var that holds one.
 	SignIn string `toml:"sign_in"`
+	// Data is one line that names the local records the walker uses to
+	// reach the change's pages (a seeded account, its site and campaigns)
+	// and how it finds their ids ("" = none: the walker looks for itself).
+	// Never a secret.
+	Data string `toml:"data"`
 	// ServerStop runs in the copy before the server's process group is
 	// killed (such as "overmind kill"); "" = none.
 	ServerStop string `toml:"server_stop"`
@@ -16050,11 +16055,11 @@ type PromptData struct {
 	// writes last and QAChanged the user-facing files the change touches (the
 	// repository's qa.when), all in QARun, and QARecheck the pages of the
 	// defects earlier runs handed the writer, which it walks again
-	// (recheck.json in QARun, "" for none); QASignIn and QASkill the
-	// repository's qa.sign_in and qa.skill ("" = none); QAMaxPages its
-	// qa.max_pages and QAMaxShots the most shots of a run.
+	// (recheck.json in QARun, "" for none); QASignIn, QAData and QASkill
+	// the repository's qa.sign_in, qa.data and qa.skill ("" = none);
+	// QAMaxPages its qa.max_pages and QAMaxShots the most shots of a run.
 	QARun, QAURL, QACDP, QAProbe, QAVerdict, QAChanged string
-	QASignIn, QASkill, QASession, QARecheck            string
+	QASignIn, QAData, QASkill, QASession, QARecheck    string
 	QAMaxPages, QAMaxShots                             int
 }
     PromptData is what a factory prompt (factory-*.md, with the blocks of

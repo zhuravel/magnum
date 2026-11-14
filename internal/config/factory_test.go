@@ -1642,7 +1642,8 @@ func TestTheQABlockTakesItsDefaults(t *testing.T) {
 	if q == nil {
 		t.Fatal("the repository has no QA")
 	}
-	if q.When != "bin/user-facing" || q.URL != "http://app.example.localhost:{port}" || q.Skill != "example:qa" || q.SignIn != "" || q.ServerStop != "" {
+	if q.When != "bin/user-facing" || q.URL != "http://app.example.localhost:{port}" || q.Skill != "example:qa" || q.SignIn != "" ||
+		q.Data != "" || q.ServerStop != "" {
 		t.Errorf("qa = %+v", *q)
 	}
 	if q.Ready != "/" || q.Boot.Duration != 5*time.Minute || q.Cap.Duration != 50*time.Minute || q.MaxPages != 12 || q.Fixes != 2 {
@@ -1650,6 +1651,26 @@ func TestTheQABlockTakesItsDefaults(t *testing.T) {
 	}
 	if got := q.PageURL(3110, q.Ready); got != "http://app.example.localhost:3110/" {
 		t.Errorf("PageURL = %q", got)
+	}
+}
+
+// [factory.repo.qa] data is the walker's line on the local records it uses
+// (a seeded site and its campaigns), read as written beside the sign-in.
+func TestTheQABlockReadsTheWalkersLocalData(t *testing.T) {
+	cfg, err := loadCommittedWithLocal(t, testLocalConfig+qaRepoToml+`
+  [factory.repo.qa]
+  when = "bin/user-facing"
+  url = "http://app.example.localhost:{port}"
+  sign_in = "open /login as the seeded admin"
+  data = "the first seeded shop has demo orders; read their ids with bin/rails runner"
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ := cfg.FactoryRepo("talkable/talkable")
+	if r.QA == nil || r.QA.Data != "the first seeded shop has demo orders; read their ids with bin/rails runner" ||
+		r.QA.SignIn != "open /login as the seeded admin" {
+		t.Fatalf("qa = %+v, want its data and sign_in as written", r.QA)
 	}
 }
 
@@ -1695,6 +1716,7 @@ func TestTheQABlockIsValidated(t *testing.T) {
 		"ready":              {func(r *FactoryRepo) { r.QA.Ready = "up" }, "qa.ready"},
 		"skill":              {func(r *FactoryRepo) { r.QA.Skill = "a b" }, "qa.skill"},
 		"sign_in two lines":  {func(r *FactoryRepo) { r.QA.SignIn = "/dev/sign-in\nthen the form" }, "qa.sign_in"},
+		"data two lines":     {func(r *FactoryRepo) { r.QA.Data = "the first shop\r\nits orders" }, "qa.data"},
 		"boot over cap":      {func(r *FactoryRepo) { r.QA.Boot = Duration{time.Hour} }, "qa.boot"},
 		"no boot":            {func(r *FactoryRepo) { r.QA.Boot = Duration{-time.Minute} }, "qa.boot"},
 		"cap over 3h":        {func(r *FactoryRepo) { r.QA.Boot, r.QA.Cap = Duration{time.Hour}, Duration{4 * time.Hour} }, "qa.cap"},

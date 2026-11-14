@@ -1137,6 +1137,26 @@ func TestTheWalkerGetsTheBrowserTheRunAndTheAcceptanceChecks(t *testing.T) {
 	}
 }
 
+// The walker gets the repository's word on how it signs in and on the local
+// records it uses (a seeded site and its campaigns), as qa.sign_in and
+// qa.data say them, so it opens the pages behind the sign-in with the seeds
+// the repository defines rather than guessing.
+func TestTheWalkerGetsTheRepositorysSignInAndLocalData(t *testing.T) {
+	r := newQARig(t)
+	q := r.cfg.Factory.Repos[0].QA
+	q.SignIn = "open /login as the seeded admin"
+	q.Data = "the first seeded shop has demo orders; read their ids with bin/rails runner"
+	task, _ := r.qaTask("PR-12431")
+	r.toWalker(task)
+	text := r.rt.promptsTo("fx-qa")[0].Text
+	for _, want := range []string{"use only the local sign-in `open /login as the seeded admin`",
+		"the first seeded shop has demo orders; read their ids with bin/rails runner"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the walker's prompt lacks %q:\n%s", want, text)
+		}
+	}
+}
+
 // A walk whose pages the factory's checks find clean passes QA: the
 // browser and the server stop before the stage moves, the summary names
 // the head, and the qa check passes there. A questions file the walker
