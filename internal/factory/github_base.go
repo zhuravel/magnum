@@ -16,7 +16,9 @@ package factory
 // copy's). A read that fails, and a commit the copy has no object of after
 // the fetch, start no round and draw no card: the stage fails with why, is
 // tried again a poll later, and the task needs you after a few tries
-// (taskFailed), never a wait in silence.
+// (taskFailed), never a wait in silence; a read GitHub's connection or
+// server failed (gitHubDown) needs you only after an infrastructure hold's
+// wait (holdNeedsYou).
 
 import (
 	"cmp"
@@ -26,6 +28,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/gitx"
 )
 
@@ -48,6 +51,23 @@ func (e *Engine) roundBase(ctx context.Context, t registry.Task, c Copy, repo co
 	return "", err
 }
 
+// gitHubDown is a read of the base on GitHub that failed for GitHub's
+// connection or its server, not for the task (github.ConnectionCause: the
+// network, a 5xx, a 499, a rate limit; cause names it): the stage whose
+// pass it failed waits for GitHub as long as an infrastructure hold waits
+// before it needs you (holdNeedsYou: taskFailed), not stageFailLimit's few
+// tries, which would send every task at a round's start or at its card to
+// you after five minutes of a GitHub outage. A cause of the network's
+// alone (DNS, a refused connection) is still the infrastructure hold's,
+// which reads the same text (infraCause) and holds every stage.
+type gitHubDown struct {
+	cause string
+	err   error
+}
+
+func (g gitHubDown) Error() string { return g.err.Error() }
+func (g gitHubDown) Unwrap() error { return g.err }
+
 // gitHubBase is where a change at a head starts on GitHub: tip, the commit
 // the repository's base is at there, name that commit in words ("master on
 // GitHub at <sha>"), and base, the merge base of the head with tip.
@@ -68,7 +88,11 @@ func (e *Engine) baseOnGitHub(ctx context.Context, repo config.FactoryRepo, c Co
 	tip, why, err := e.githubBase(ctx, repo)
 	switch {
 	case why != "" && err != nil:
-		return gitHubBase{}, fmt.Errorf("%s: %w", why, err)
+		err = fmt.Errorf("%s: %w", why, err)
+		if cause := github.ConnectionCause(err.Error()); cause != "" {
+			return gitHubBase{}, gitHubDown{cause: cause, err: err}
+		}
+		return gitHubBase{}, err
 	case why != "":
 		return gitHubBase{}, errors.New(why)
 	}

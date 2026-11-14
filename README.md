@@ -5441,7 +5441,10 @@ the copy's `origin/<base>`: the copies share the main clone's remote config, whi
 from there would leave out. A read that fails, or a commit the copy has no object of after the fetch, starts no
 round on a guessed base: the task waits saying why (`review: round 1 of the local review cannot start: the factory
 cannot read master on GitHub: …`), the factory tries again a poll later, and after 5 tries (or 5 minutes) the task
-needs you with the reason, as with any stage that keeps failing. A round's roles work in the copy itself: before its result is read, the copy
+needs you with the reason, as with any stage that keeps failing; a GitHub server error or a rate limit there (a 5xx,
+a 499, a 429) is GitHub's, not the task's: the read is tried again each poll, and the task needs you only after 30
+minutes of them in a row, as long as an infrastructure hold waits (`the local review stage has waited 30 minutes for
+GitHub (GitHub server error): …`). A round's roles work in the copy itself: before its result is read, the copy
 must be as the round found it (the task's branch, at the head it reviewed, no tracked change, no untracked file
 the copy did not have before the round, file by file: a reviewer's probe file the writer's `git add -A` would
 commit). What a round left on that branch at that head (a reviewer's `bundle check` adds a line to
@@ -5623,7 +5626,8 @@ fetch of `origin/<base>`), shows the change from the head's merge base with it (
 hash of its diff and the diff its pager shows start there, as the FLAGS line's files do), and merges it into the head
 in memory (`git merge-tree`, in a repository of the factory's own: no work tree touched, no merge driver or
 attribute of the copy's applied); a commit the copy has no object of after the fetch, or a read that fails, draws
-no card ("no conflicts" is never a guess): the stage is tried again a poll later and needs you after 5 tries. On a
+no card ("no conflicts" is never a guess): the stage is tried again a poll later and needs you after 5 tries (after
+30 minutes of a GitHub server error or a rate limit, as at a round's base). On a
 conflict the card names it and the task goes back to its coding
 stage, where the writer merges the base (its prompt names `origin/<base>` and the conflicting paths), the
 proof and the precheck run again, a fresh local loop reviews the merge, the judge drafts the body again, and
@@ -5966,7 +5970,10 @@ failure, however often other tasks' turns kick a tick (a kicked tick restarts th
 about two polls after the failure). Your word moves it at once: an answer, a let go, a decision on the card or a retry
 ends that wait, and the tick it kicks runs the stage; only the factory's own retries keep the spacing. After 5
 failures in a row, or 5 minutes of them, the task needs you with the cause and an alert (`the <stage> stage failed 5 times in a
-row: <cause>`); a pass that goes through, or your retry, starts the count again. The publish has the same bound of its
+row: <cause>`); a pass that goes through, or your retry, starts the count again. A read of the base on GitHub (a
+round's, the second opinion's, the card's) that GitHub answers with a server error or a rate limit counts toward
+neither: the task needs you after 30 minutes of them in a row (`the <stage> stage has waited 30 minutes for GitHub
+(<cause>): …`). The publish has the same bound of its
 own, whatever the cause (`the publish of <sha> failed 5 times in a row: <cause>`), since each try costs GitHub calls. While its herdr session does not answer, the
 factory holds its stages (that hold alone: herdr's own refusals start no infrastructure hold, and a stage that meets herdr down inside its pass counts no failure) and opens `herdr --session <herdr_session>` in your terminal, at most twice an
 hour. A full disk or memory holds new launches, parks the idle agents of tasks that wait on you and stops

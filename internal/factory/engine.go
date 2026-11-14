@@ -1642,18 +1642,22 @@ func TaskKey(t registry.Task) string {
 // A stage that keeps failing for a cause of its own (no infrastructure's)
 // is tried again a poll after each failure (retryLater), and after
 // stageFailLimit failures in a row, or failures for stageFailSpan, the task
-// needs you with the cause.
+// needs you with the cause. A read of the base on GitHub that GitHub's
+// connection or server failed (gitHubDown) counts toward neither: it is
+// tried again each poll, and needs you after holdNeedsYou of them in a row.
 const (
 	stageFailLimit = 5
 	stageFailSpan  = 5 * time.Minute
 )
 
-// stageFails are a task's failures in a row at one stage: how many, since
-// when, when the last one was, and its text.
+// stageFails are a task's failures in a row at one stage: how many of the
+// stage's own and since when (n, first), since when GitHub's (down: the
+// first gitHubDown in the row, zero for none), when the last one was, and
+// its text.
 type stageFails struct {
-	stage, text string
-	n           int
-	first, last time.Time
+	stage, text       string
+	n                 int
+	first, last, down time.Time
 }
 
 // retryLater reports whether the stage task t's pass runs (stageRan)
@@ -1672,23 +1676,34 @@ func (e *Engine) retryLater(t registry.Task, now time.Time) bool {
 // per distinct failure in a row, and counts the failures in a row of its
 // stage: the stageFailLimit-th, or one stageFailSpan after the first, sends
 // the task to you with the cause and an alert (a pass that goes through, or
-// your retry, starts the count again). An error the infrastructure hold
-// covers never comes here (Tick).
+// your retry, starts the count again). A read of the base on GitHub that
+// GitHub's connection or server failed (gitHubDown) counts none: the task
+// needs you once such failures lasted holdNeedsYou in a row, as long as an
+// infrastructure hold waits (gitHubWaited). An error the infrastructure
+// hold covers never comes here (Tick).
 func (e *Engine) taskFailed(ctx context.Context, f taskFailure) {
 	text := textx.Clip(textx.FirstLine(scrub.Text(f.err.Error())), 300)
 	now := e.now()
 	stage := e.stageRan(f.task) // a new task's first pass ran its kind's first stage
 	sf := e.lastFail[f.task.ID]
 	if sf == nil || sf.stage != stage {
-		sf = &stageFails{stage: stage, first: now}
+		sf = &stageFails{stage: stage}
 		e.lastFail[f.task.ID] = sf
 	}
-	sf.n, sf.last = sf.n+1, now
+	sf.last = now
 	if sf.text != text {
 		sf.text = text
 		e.log.Warn("a task's step failed", "task", f.task.ID, "err", f.err)
 		e.event(ctx, f.task.ID, "advance", registry.PhaseFail, text)
 	}
+	if down, ok := errors.AsType[gitHubDown](f.err); ok {
+		e.gitHubWaited(ctx, f.task, sf, down, text, now)
+		return
+	}
+	if sf.n == 0 {
+		sf.first = now
+	}
+	sf.n++
 	if sf.n < stageFailLimit && now.Sub(sf.first) < stageFailSpan {
 		return
 	}
@@ -1696,6 +1711,24 @@ func (e *Engine) taskFailed(ctx context.Context, f taskFailure) {
 	e.toOperator(ctx, f.task, fmt.Sprintf("the %s stage failed %d times in a row: %s; fix its cause (a change of the configuration "+
 		"takes effect after `magnum factory install`, one of magnum's code after `make build && magnum factory install`)%s",
 		stageWhat(cmp.Or(stage, "first")), sf.n, text, retryHint(f.task)), "a stage that keeps failing")
+}
+
+// gitHubWaited weighs task t's failure down, a read of the base on GitHub
+// that GitHub did not answer, in its stage's failures in a row sf (text:
+// as the event says it): the task needs you with the cause and an alert
+// once such failures lasted holdNeedsYou since the first, the bound of an
+// infrastructure hold; before that the stage is tried again a poll later
+// (retryLater), and its wait says why.
+func (e *Engine) gitHubWaited(ctx context.Context, t registry.Task, sf *stageFails, down gitHubDown, text string, now time.Time) {
+	if sf.down.IsZero() {
+		sf.down = now
+	}
+	if now.Sub(sf.down) < holdNeedsYou {
+		return
+	}
+	delete(e.lastFail, t.ID)
+	e.toOperator(ctx, t, fmt.Sprintf("the %s stage has waited %s for GitHub (%s): %s; once GitHub answers again, `magnum factory retry %d`",
+		stageWhat(cmp.Or(sf.stage, "first")), textx.DurationWords(now.Sub(sf.down)), down.cause, text, t.ID), "GitHub does not answer")
 }
 
 // stageWhat is a stage's name as a wait says it ("local_review": "local

@@ -28113,6 +28113,22 @@ skill versions); people add theirs to the sections before it, at the end of the 
     task waits saying why (`the second opinion after round <n> cannot weigh the change: …`), the stage's pass fails,
     and the round's result is read again a poll later, within the bounds of `taskFailed`. Test, failing first:
     `TestTheSecondOpinionWeighsTheChangeFromGitHubsBase` (the clean round ended the stage with no second opinion).
+  - A GitHub server error or a rate limit at the read of GitHub's base (a round's, the second opinion's, the card's)
+    sent the task to you after `stageFailLimit` tries or `stageFailSpan`: the factory's `infraCause` knows the
+    network's failures (DNS, a refused connection, TLS) alone, so a 502 for five minutes sent every task at a round's
+    start or at its card to you with an alert, each needing `magnum factory retry`, where the local review needed no
+    GitHub API at all before F2. Now `baseOnGitHub` names such a failure (`gitHubDown`, by `github.ConnectionCause`:
+    a 5xx, a 499, a rate limit, a closed connection), and `taskFailed` counts it toward neither bound: the stage is
+    tried again each poll (`retryLater`), its wait names GitHub's base, and the task needs you only once such failures
+    lasted `holdNeedsYou` (30 minutes) in a row, the bound of an infrastructure hold (`the <stage> stage has waited 30
+    minutes for GitHub (<cause>): …`), with an alert. The stage's own failures in the same row keep their bounds,
+    counted from the first of them. A cause of the network's is still the infrastructure hold's, as before.
+    Rejected: the infrastructure hold for a GitHub server error, which stops every stage (the writers' turns need no
+    GitHub API) and backs off to 16 minutes between tries, so a review would start up to that long after GitHub
+    answers again. The same failure on two tasks within 10 minutes still starts that hold (`sameOnTwoTasks`), as any
+    failure of a task's does: its blocker comes after the same 30 minutes.
+    Test, failing first: `TestAGitHubServerErrorAtTheRoundsBaseDoesNotSendTheTaskToYouAtOnce` (the task needed you
+    after 4 polls of HTTP 502); it also holds the bound, a 502 that lasts 30 minutes needing you with an alert.
 
 ## Learned rules
 

@@ -117,6 +117,70 @@ func TestARoundWaitsWhenGitHubsBaseCannotBeRead(t *testing.T) {
 	}
 }
 
+// A GitHub server error (or a rate limit) at the read of a round's base is
+// GitHub's, not the task's: the round waits for GitHub, saying so, and the
+// read is tried again each poll for as long as the infrastructure hold
+// waits before it needs you (holdNeedsYou), never stageFailLimit's few
+// tries. GitHub answers 502 for 10 polls, past both of stageFailLimit's
+// bounds: the task never needs you, and once the read works the round
+// starts from master on GitHub. A 502 that lasts holdNeedsYou sends the
+// task to you, naming GitHub, with an alert.
+func TestAGitHubServerErrorAtTheRoundsBaseDoesNotSendTheTaskToYouAtOnce(t *testing.T) {
+	const badGateway = "gh: HTTP 502: Bad Gateway"
+	r := newReviewRig(t, result())
+	onGitHub := r.git(r.origin, "rev-parse", "refs/heads/master")
+	r.gh.setBase("", errors.New(badGateway), nil)
+	task, head := r.reviewTask("PR-12426")
+	r.run(3, nil)
+	for i := range 10 {
+		if got := r.reload(task.ID); got.State != registry.TaskActive {
+			t.Fatalf("after %d polls of HTTP 502 the task is %s, waiting %q; want it active, waiting for GitHub", i, got.State, got.WaitsWhat)
+		}
+		r.clock.Add(45 * time.Second)
+		r.tick()
+		r.e.waitBackground()
+	}
+	got := r.reload(task.ID)
+	if got.State != registry.TaskActive || len(r.rv.calls()) != 0 || !strings.Contains(got.WaitsWhat, "master on GitHub") ||
+		!strings.Contains(got.WaitsWhat, "HTTP 502") {
+		t.Fatalf("task %s waits %q: %q after %d rounds; want it active, no round, the wait naming GitHub's base", got.State, got.WaitsWho,
+			got.WaitsWhat, len(r.rv.calls()))
+	}
+	if n := r.gh.baseReads(); n < 10 {
+		t.Fatalf("GitHub's base was read %d times in 10 polls, want once a poll", n)
+	}
+	r.gh.setBase("", nil, nil)
+	r.clock.Add(45 * time.Second)
+	r.run(4, func() bool { return len(r.rv.calls()) > 0 })
+	if calls := r.rv.calls(); len(calls) != 1 || calls[0].HeadSHA != head || calls[0].BaseSHA != onGitHub {
+		t.Fatalf("%d rounds after GitHub answers again, want one at %s from master on GitHub (%s)", len(calls), short(head), short(onGitHub))
+	}
+
+	r = newReviewRig(t, result())
+	r.gh.setBase("", errors.New(badGateway), nil)
+	task, _ = r.reviewTask("PR-12427")
+	r.run(3, nil)
+	for range 60 {
+		if r.reload(task.ID).State == registry.TaskNeedsYou {
+			break
+		}
+		r.clock.Add(45 * time.Second)
+		r.tick()
+		r.e.waitBackground()
+	}
+	got = r.reload(task.ID)
+	fails := slices.DeleteFunc(r.events(task.ID, "advance"), func(e registry.Event) bool { return e.Phase != registry.PhaseFail })
+	if got.State != registry.TaskNeedsYou || len(fails) == 0 || r.clock.Now().Sub(fails[0].At) < holdNeedsYou ||
+		!strings.HasPrefix(got.WaitsWhat, "the local review stage has waited 30 minutes for GitHub (GitHub server error): ") ||
+		!strings.Contains(got.WaitsWhat, "master on GitHub") || !strings.Contains(got.WaitsWhat, "HTTP 502") {
+		t.Fatalf("task %s waits %q, %d fail events; want you once GitHub failed for %s, the cause named", got.State, got.WaitsWhat, len(fails),
+			holdNeedsYou)
+	}
+	if !slices.ContainsFunc(r.eventTexts(task.ID, "alert"), func(s string) bool { return strings.Contains(s, "HTTP 502") }) {
+		t.Fatalf("alerts %q, want one naming GitHub's answer", r.eventTexts(task.ID, "alert"))
+	}
+}
+
 // The second opinion weighs the change the round reviewed: from where it
 // starts on GitHub, never from the copy's origin/<base>. The writer's pane
 // points the main clone's origin at a bare repository of its own whose
