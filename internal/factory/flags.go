@@ -63,21 +63,27 @@ type OldGuard struct {
 const oldGuardMonths = 6
 
 // cardBase is where the change of a ready card starts on GitHub
-// (baseOnGitHub) and the paths merging that commit into its head would
-// conflict in.
+// (baseOnGitHub), the head's commits after that commit, and the paths
+// merging that commit into its head would conflict in.
 type cardBase struct {
 	gitHubBase
+	commits   int
 	conflicts []string
 }
 
 // cardBaseOf is task t's cardBase at head in copy c: the base on GitHub,
-// and the conflicts from `git merge-tree` against it in the same
-// repository of the factory's own, where no merge driver or attribute of
-// the copy's applies. Without it there is no card, and the error says why.
+// the head's commits after it (`git rev-list`) and the conflicts from `git
+// merge-tree` against it, both in the same repository of the factory's
+// own, where no replace ref, merge driver or attribute of the copy's
+// applies. Without it there is no card, and the error says why.
 func (e *Engine) cardBaseOf(ctx context.Context, t registry.Task, repo config.FactoryRepo, c Copy, head string) (cardBase, error) {
 	var cb cardBase
 	gb, err := e.baseOnGitHub(ctx, repo, c, head, func(iso string, b gitHubBase) error {
-		var err error
+		commits, err := e.d.Git.CommitsAfter(ctx, iso, b.tip, head, false)
+		if err != nil {
+			return fmt.Errorf("git cannot list the commits of %s after %s: %w", short(head), b.name, err)
+		}
+		cb.commits = len(commits)
 		if cb.conflicts, err = e.d.Git.MergeConflicts(ctx, iso, head, b.tip); err != nil {
 			return fmt.Errorf("git cannot merge %s into %s in memory: %w", b.name, short(head), err)
 		}

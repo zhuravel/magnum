@@ -111,8 +111,8 @@ type DecidePayload struct {
 // its revision (a new one each time what it shows changed) and when it was
 // drawn, the head and the base of the change (its merge base with the
 // commit the base is at on GitHub: the PR's diff is base...head), the
-// branch's commits after origin/<base> (0 in a card an
-// older build drew; the PR's status file counts them), the hash of
+// branch's commits after the commit the base is at on GitHub (0 in a card
+// an older build drew; the PR's status file counts them), the hash of
 // report.md and pr-body.md as shown and the hash of the diff (the patch id
 // of base...head), the branch, the PR's title, the copy a push frees (its
 // directory's name) and its path, the FLAGS lines (Flags.Lines, then a line
@@ -526,7 +526,7 @@ func (e *Engine) runDecision(ctx context.Context, t registry.Task, st config.Fac
 
 // cardState is what a card shows of task's change now: its head and base,
 // the hash of report.md and pr-body.md, the hash of the diff and the
-// branch's commits after origin/<base>.
+// branch's commits after the commit the base is at on GitHub.
 type cardState struct {
 	head, base, reportHash, diffHash string
 	commits                          int
@@ -585,7 +585,7 @@ func (e *Engine) runReady(ctx context.Context, t registry.Task, _ config.Factory
 	if err != nil {
 		return false, err
 	}
-	bh.Base = cb.base
+	bh.Base, bh.Commits = cb.base, cb.commits
 	now, err := e.cardNow(ctx, t, c, bh)
 	if err != nil {
 		return false, err
@@ -727,7 +727,8 @@ func holdsKey(branch, key string) bool {
 }
 
 // cardNow is what task t's card shows of its change in copy c now (bh,
-// whose base runReady sets to the one on GitHub: cardBaseOf).
+// whose base and commits runReady sets to those from GitHub's base:
+// cardBaseOf).
 func (e *Engine) cardNow(ctx context.Context, t registry.Task, c Copy, bh branchHead) (cardState, error) {
 	rh, err := reportHash(e.d.Layout.FactoryTaskDir(t.ID))
 	if err != nil {

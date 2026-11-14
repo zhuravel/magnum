@@ -16402,11 +16402,11 @@ type ReadyCardFile struct {
 	Files      []CardFile    `json:"files"`
 	QA         *QAResult     `json:"qa,omitempty"`
 }
-    ReadyCardFile is ready-card.json, the ready card as the factory drew it:
-    its revision (a new one each time what it shows changed) and when it
-    was drawn, the head and the base of the change (its merge base with
-    the commit the base is at on GitHub: the PR's diff is base...head),
-    the branch's commits after origin/<base> (0 in a card an older build drew;
+    ReadyCardFile is ready-card.json, the ready card as the factory drew it: its
+    revision (a new one each time what it shows changed) and when it was drawn,
+    the head and the base of the change (its merge base with the commit the
+    base is at on GitHub: the PR's diff is base...head), the branch's commits
+    after the commit the base is at on GitHub (0 in a card an older build drew;
     the PR's status file counts them), the hash of report.md and pr-body.md as
     shown and the hash of the diff (the patch id of base...head), the branch,
     the PR's title, the copy a push frees (its directory's name) and its path,
@@ -23271,6 +23271,14 @@ func (c *Client) LsRemote(ctx context.Context, dir string, timeout time.Duration
     LsRemote runs `git ls-remote <origin> patterns...` in dir, reaching origin
     the way fetches do (NetworkRemote with HTTPSFetch), and returns its output.
     A failure is an expected answer (logged at Debug): callers probe with it.
+
+func (c *Client) LsRemoteApart(ctx context.Context, dir, url string, timeout time.Duration, patterns ...string) (string, error)
+    LsRemoteApart is LsRemoteVia of url where PushLeaseApart pushes it
+    (a github.com SSH url over HTTPS when HTTPSFetch is on), run in a
+    repository of its own whose objects are dir's (isolate), never in dir:
+    no setting of dir's config, which an agent's pane can write, rewrites url
+    (url.<base>.insteadOf), so a read of a branch sees it where its push would
+    go. A failure is an expected answer (logged at Debug).
 
 func (c *Client) LsRemoteGitHub(ctx context.Context, dir, owner, repo string, timeout time.Duration, patterns ...string) (string, error)
     LsRemoteGitHub is LsRemoteVia of github.com/<owner>/<repo> over HTTPS

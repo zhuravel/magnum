@@ -28142,6 +28142,23 @@ skill versions); people add theirs to the sections before it, at the end of the 
     fake ssh): every scp-like URL the rule takes started SSH (an empty or odd user, `~x@`, a path after the colon that
     starts with `/`), and every one git read as a path (`/…`, `./…`, `../…`, `~/…`) had a slash in the user part,
     which the check refuses. None other was found, so the rule is unchanged.
+  - The nits. `gitHubSchemes` no longer takes `http://`: GitHub only redirects it to HTTPS (git's
+    `http.followRedirects=initial` sends no credentials in clear text there), so taking it gained nothing. The ready
+    card's `Commits` (and the PR's status file, which copies it) count the branch's commits after the commit the base
+    is at on GitHub, read with the card's base in the same repository of the factory's own (`cardBaseOf`), no longer
+    after `origin/<base>`: with the remote rewritten, the card's files held the writer's commit X while its count left
+    X out. The publish reads the remote branch at the push URL `pushTarget` checked, where the push goes
+    (`gitx.LsRemoteApart`: a github.com SSH URL over HTTPS with `HTTPSFetch`, as `PushLeaseApart` pushes it, from a
+    repository of its own), no longer `git ls-remote origin` in the copy: F2 left that read as it was, since a
+    rewrite there could only skip or refuse a push, and now the read and the push use one URL. Not
+    `LsRemoteVia(target)` alone, which the review named: run in the copy it still follows the copy's `insteadOf` of the
+    explicit URL (with `remoteHead` on it, the new test below fails as before), and it reads an SSH URL over SSH while
+    the push goes over HTTPS. Tests, failing first: the `http://` row of
+    `TestThePublishTakesTheRepositorysGitHubURLInAnyForm` (taken), the count in
+    `TestTheReadyCardShowsTheChangeFromGitHubsBase` (1, not 2), `TestThePublishReadsTheRemoteBranchWhereItPushes` (an
+    `insteadOf` made as the read runs sent the task to you over the pane's branch) in internal/factory;
+    `TestLsRemoteApartReadsTheURLItWasGiven` and `TestLsRemoteApartGoesOverHTTPSAsPushesDo` in internal/gitx (no such
+    method). No migration, no new key, no new dependencies.
 
 ## Learned rules
 

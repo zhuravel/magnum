@@ -221,7 +221,7 @@ func (e *Engine) publish(ctx context.Context, t registry.Task, git *gitx.Client,
 		return view, fmt.Sprintf("gh acts as %s in your gh config dir, not as %s, the login the PR opens as: nothing is pushed "+
 			"(gh auth switch --hostname github.com --user %s)", active, login, login), nil
 	}
-	remote, err := remoteHead(ctx, git, dir, branch)
+	remote, err := remoteHead(ctx, git, dir, target, branch)
 	if err != nil {
 		return view, "", err
 	}
@@ -337,11 +337,14 @@ func prMismatch(v PRView, login, base, sha string) string {
 	return ""
 }
 
-// remoteHead is branch's head on origin, read from the copy at dir with git
-// (ls-remote): "" when origin has no such branch.
-func remoteHead(ctx context.Context, git *gitx.Client, dir, branch string) (string, error) {
+// remoteHead is branch's head at url, the push URL pushTarget checked, read
+// with git (ls-remote) where the push goes (LsRemoteApart: from a
+// repository of its own with the objects of the copy at dir, so no rewrite
+// of the copy's config made after the check reaches the read): "" when it
+// has no such branch.
+func remoteHead(ctx context.Context, git *gitx.Client, dir, url, branch string) (string, error) {
 	ref := "refs/heads/" + branch
-	out, err := git.LsRemote(ctx, dir, lsRemoteTimeout, ref)
+	out, err := git.LsRemoteApart(ctx, dir, url, lsRemoteTimeout, ref)
 	if err != nil {
 		return "", err
 	}

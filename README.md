@@ -5655,10 +5655,12 @@ since changes neither), checks that origin reaches the task's repository on GitH
 fetch origin from or push it to, as git resolves them (`git remote get-url --all origin` and `--push`, so a
 `remote.origin.pushurl`, a `url.<x>.insteadOf` or `pushInsteadOf` counts), must be `github.com/<owner>/<name>` of the
 `[[factory.repo]]` in any form git reads (`git@github.com:<owner>/<name>.git`, `ssh://`, `https://`, the names'
-case aside); a URL that is not needs you, naming it (`nothing is pushed: origin pushes to <url>, not <repo> on
+case aside; never plain `http://`, a local path or `file://`); a URL that is not needs you, naming it (`nothing is pushed: origin pushes to <url>, not <repo> on
 GitHub; …`), before anything is read, pushed or opened, since the copies share the main clone's config and the
 writer's pane can rewrite it. It then checks that gh acts as your login in your gh config dir (`gh api user`; another account
-needs you, naming both, before anything is pushed or opened), reads the remote branch (`git ls-remote`) and the PRs of the branch
+needs you, naming both, before anything is pushed or opened), reads the remote branch at the push URL it checked, where
+the push goes and from a repository of its own as the push is (`git ls-remote <url>`: a rewrite of the copy's config
+after the check reaches neither), and the PRs of the branch
 (only the repository's own: a fork's PR of a branch of the same name is none of the task's),
 pushes with a lease to origin's push URL from a repository of its own, where no setting of the copy's applies
 (`git push --force-with-lease=refs/heads/<branch>:<expected head> <url> <sha>:refs/heads/<branch>`, a github.com
@@ -5757,7 +5759,7 @@ stages: a retry refuses it.
 on the PR renders as its factory part (see [Review status comment](#review-status-comment)): `<data dir>/factory/pr-status/<owner>/<repo>/<number>.json`
 (`internal/prstatus` holds its contract). It holds counts, fixed words and times, never the text of a PR, a ticket, a
 question or an agent: the task's id; the plan (the questions it asked you that stand, and the ones you answered); the
-code (the branch's commits after the base, as the ready card you pushed counted them; the factory's proof, `none`,
+code (the branch's commits after the base on GitHub, as the ready card you pushed counted them; the factory's proof, `none`,
 `red`, `red_to_green`, or `green` for a kind whose proof is green; its spec files); the local review (its rounds, its
 end, `clean`, `findings` or `failed`, and the notes it left open, the PR body's Known list); the publish time;
 magnum's fix loop on the PR, from magnum's registry (`none`, `running`, `needs_you` while its end left the PR to you

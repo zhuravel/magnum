@@ -229,3 +229,52 @@ func TestPushLeaseApartGoesOverHTTPSAsFetchesDo(t *testing.T) {
 		t.Fatalf("the push ran as %q, want it from a repository of its own to the HTTPS URL with gh's helper", push)
 	}
 }
+
+// LsRemoteApart reads the URL it was given as PushLeaseApart pushes to it,
+// from a repository of its own: an insteadOf of the clone's that rewrites
+// the URL to another repository is not applied, so the read sees the
+// branch where the push would go. A malformed URL or one with credentials
+// is refused before any read.
+func TestLsRemoteApartReadsTheURLItWasGiven(t *testing.T) {
+	fx, bare := pushFixture(t)
+	ctx := context.Background()
+	const branch = "zhuravel-PR-12432-copy"
+	fx.git(fx.clone, "switch", "--quiet", "-c", branch)
+	head := fx.commit(fx.clone, "app/credit.rb", "points = 10\n", "PR-12432 counts the points")
+	fx.git(fx.clone, "push", "--quiet", bare, head+":refs/heads/"+branch)
+	elsewhere := filepath.Join(filepath.Dir(bare), "elsewhere.git")
+	fx.git(filepath.Dir(bare), "clone", "--quiet", "--bare", fx.origin, elsewhere)
+	fx.git(fx.clone, "config", "url."+elsewhere+".insteadOf", bare)
+
+	out, err := fx.c.LsRemoteApart(ctx, fx.clone, bare, pushTimeout, "refs/heads/"+branch)
+	if err != nil || out != head+"\trefs/heads/"+branch {
+		t.Fatalf("LsRemoteApart = %q, %v; want %.12s of the URL it was given, not of the clone's rewrite", out, err, head)
+	}
+	for _, bad := range []string{"", "-oProxyCommand=x", "https://user:pw@github.com/talkable/widget.git"} {
+		if _, err := fx.c.LsRemoteApart(ctx, fx.clone, bad, pushTimeout, "refs/heads/"+branch); err == nil {
+			t.Errorf("LsRemoteApart of %q went through", bad)
+		}
+	}
+}
+
+// With HTTPSFetch a github.com SSH URL is read over HTTPS with gh as git's
+// only credential helper, where PushLeaseApart pushes it, from a repository
+// of its own (--git-dir), never from the clone.
+func TestLsRemoteApartGoesOverHTTPSAsPushesDo(t *testing.T) {
+	ctx := context.Background()
+	c, f := newFake(outRule(filepath.Join(clone, ".git")+"\n", "git", "-C", clone, "rev-parse"), okRule("git"))
+	c.HTTPSFetch = true
+	if _, err := c.LsRemoteApart(ctx, clone, "git@github.com:talkable/widget.git", pushTimeout, "refs/heads/b"); err != nil {
+		t.Fatal(err)
+	}
+	var read []string
+	for _, call := range f.Calls {
+		if slices.Contains(call.Args, "ls-remote") {
+			read = call.Args
+		}
+	}
+	if len(read) == 0 || !strings.HasPrefix(read[0], "--git-dir=") ||
+		!slices.Contains(read, "credential.helper=!gh auth git-credential") || !slices.Contains(read, "https://github.com/talkable/widget.git") {
+		t.Fatalf("the read ran as %q, want it from a repository of its own of the HTTPS URL with gh's helper", read)
+	}
+}

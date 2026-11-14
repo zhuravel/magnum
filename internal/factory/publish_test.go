@@ -779,6 +779,36 @@ func TestThePublishRefusesARemoteTheWriterRewrote(t *testing.T) {
 	}
 }
 
+// The publish reads the remote branch where it pushes: at the push URL its
+// check took, from a repository of its own (LsRemoteApart), never through
+// origin as the copy's config names it then, which the writer's pane can
+// rewrite after the check. A url.<x>.insteadOf of the origin, made as the
+// read runs, to a repository of the pane's whose branch is at another head,
+// changes nothing: the read sees GitHub's (no branch yet), the head you
+// approved is pushed there, and the task is published.
+func TestThePublishReadsTheRemoteBranchWhereItPushes(t *testing.T) {
+	r := newReadyRig(t)
+	task, head := r.toCard("PR-12432")
+	own := filepath.Join(r.root, "own.git")
+	r.git(r.root, "clone", "--quiet", "--bare", r.origin, own)
+	r.git(own, "update-ref", "refs/heads/"+task.Branch, r.git(r.origin, "rev-parse", "refs/heads/master"))
+	var once sync.Once
+	r.mu.Lock()
+	r.onRun = func(_ context.Context, c execx.Cmd) {
+		if c.Name == "git" && slices.Contains(c.Args, "ls-remote") {
+			once.Do(func() { r.gitOut(r.main, "config", "url."+own+".insteadOf", r.origin) })
+		}
+	}
+	r.mu.Unlock()
+	if q := r.decideOn(task.ID, r.card(task.ID), ChoicePush, "", ""); q.State != registry.RequestDone {
+		t.Fatalf("push request %s: %q", q.State, q.Result)
+	}
+	if got := r.published(task.ID); got.State != registry.TaskPublished || r.remoteHead(task.Branch) != head {
+		t.Fatalf("task %s waits %q, GitHub's %s at %q; want it published at %s, the read not rewritten", got.State, got.WaitsWhat,
+			task.Branch, r.remoteHead(task.Branch), short(head))
+	}
+}
+
 // The live main clones' origins are SSH (git@github.com:<owner>/<name>.git):
 // every form gitx.ParseRemote reads of the repository's URL on GitHub
 // passes the publish's check, the names' case aside, and the push goes to
@@ -801,6 +831,7 @@ func TestThePublishTakesTheRepositorysGitHubURLInAnyForm(t *testing.T) {
 		"/srv/git@github.com:example/shop.git":                      false, // a slash before the colon: git reads a local path
 		"./git@github.com:example/shop.git":                         false,
 		"file://github.com/example/shop.git":                        false,
+		"http://github.com/example/shop.git":                        false, // plain HTTP gains nothing over HTTPS
 		"https://github.com.example/example/shop":                   false,
 		"https://github.com@example.com/example/shop.git":           false,
 		"ext::ssh -oProxyCommand=x git@github.com:example/shop.git": false,

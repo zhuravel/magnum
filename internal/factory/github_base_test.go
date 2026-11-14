@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -309,10 +310,10 @@ func TestTheCardsFlagsUseGitHubsBase(t *testing.T) {
 
 // The ready card shows the change from where it starts on GitHub: its
 // base (where the diff you page starts), its files and its diff's hash are
-// those of the head's merge base with master on GitHub, never with the
-// copy's origin/<base>, which the writer's pane pointed at a commit of its
-// own that the fix builds on. The writer's file is on the card, not in the
-// plan.
+// those of the head's merge base with master on GitHub, and its commits
+// those after it, never with the copy's origin/<base>, which the writer's
+// pane pointed at a commit of its own that the fix builds on. The writer's
+// file is on the card, not in the plan, and its commit is counted.
 func TestTheReadyCardShowsTheChangeFromGitHubsBase(t *testing.T) {
 	r := newReadyRig(t)
 	onGitHub := r.git(r.origin, "rev-parse", "refs/heads/master")
@@ -328,6 +329,9 @@ func TestTheReadyCardShowsTheChangeFromGitHubsBase(t *testing.T) {
 	}
 	if dh, err := r.e.d.Git.OwnDiffID(r.ctx, r.copyDir, onGitHub, head); err != nil || c.DiffHash != dh {
 		t.Fatalf("the card's diff hash %s (%v), want the one from master on GitHub, %s", c.DiffHash, err, dh)
+	}
+	if want := r.git(r.copyDir, "rev-list", "--count", onGitHub+".."+head); strconv.Itoa(c.Commits) != want {
+		t.Fatalf("the card counts %d commits, want %s, the branch's after master on GitHub (the writer's own among them)", c.Commits, want)
 	}
 }
 

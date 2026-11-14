@@ -123,11 +123,35 @@ func (c *Client) PushLease(ctx context.Context, dir, sha, branch, expect string)
 // pushed to as it is, gh still git's only helper. Its guards are
 // PushLease's.
 func (c *Client) PushLeaseApart(ctx context.Context, dir, url, sha, branch, expect string) error {
-	target := url
-	if _, to := NetworkRemote(url, c.HTTPSFetch); to != remote {
-		target = to
+	return c.pushIsolated(ctx, dir, c.apartURL(url), sha, branch, expect, nil)
+}
+
+// LsRemoteApart is LsRemoteVia of url where PushLeaseApart pushes it (a
+// github.com SSH url over HTTPS when HTTPSFetch is on), run in a repository
+// of its own whose objects are dir's (isolate), never in dir: no setting
+// of dir's config, which an agent's pane can write, rewrites url
+// (url.<base>.insteadOf), so a read of a branch sees it where its push
+// would go. A failure is an expected answer (logged at Debug).
+func (c *Client) LsRemoteApart(ctx context.Context, dir, url string, timeout time.Duration, patterns ...string) (string, error) {
+	if err := checkURL(url); err != nil {
+		return "", err
 	}
-	return c.pushIsolated(ctx, dir, target, sha, branch, expect, nil)
+	iso, done, err := c.isolate(ctx, dir)
+	if err != nil {
+		return "", fmt.Errorf("gitx: ls-remote: %w", err)
+	}
+	defer done()
+	return c.LsRemoteVia(ctx, iso, c.apartURL(url), timeout, patterns...)
+}
+
+// apartURL is the URL PushLeaseApart and LsRemoteApart reach url at: a
+// github.com SSH url's HTTPS URL when HTTPSFetch is on (NetworkRemote),
+// any other url as it is.
+func (c *Client) apartURL(url string) string {
+	if _, to := NetworkRemote(url, c.HTTPSFetch); to != remote {
+		return to
+	}
+	return url
 }
 
 // pushLease is PushLease's and PushLeaseVia's core: the checks, then the

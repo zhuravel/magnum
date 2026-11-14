@@ -342,8 +342,9 @@ func (g ghClient) BranchSHA(ctx context.Context, repo, branch string) (string, e
 }
 
 // gitHubSchemes are the URL schemes of a remote URL that reaches GitHub
-// (IsRepoURL), besides the scp-like git@github.com:<owner>/<name>.git.
-var gitHubSchemes = []string{"https", "http", "ssh", "git+ssh", "ssh+git", "git"}
+// (IsRepoURL), besides the scp-like git@github.com:<owner>/<name>.git;
+// never plain http, which GitHub only redirects to https.
+var gitHubSchemes = []string{"https", "ssh", "git+ssh", "ssh+git", "git"}
 
 // IsRepoURL reports whether url, a git remote URL as git resolves it
 // (gitx.OriginURLs), is repo (owner/name) on github.com: any form
