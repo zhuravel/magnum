@@ -187,9 +187,11 @@ func TestFreezeLocalOfARoundWithoutATicketFile(t *testing.T) {
 // What cannot be frozen whole is refused, naming why: a task or a round the registry does not hold,
 // a round several cycles ran without the cycle that picks one, a round that left no result (it never
 // ended, or was set aside) or another round's, no description, no prepass.json or one of another
-// head, a scratch directory outside the task's local review, no roles in its begin event, and
-// answers.md written after it began when its ticket file did not hold the answers and the factory's
-// registry holds no answer to rebuild them from: the replay would read what the round could not.
+// head, a scratch directory outside the task's local review, no roles in its begin event, a base
+// merge's narrow round (its scratch directory holds the remerge.diff its judge read alone, which a
+// replay does not hand its judge, so it would judge the whole change), and answers.md written after
+// it began when its ticket file did not hold the answers and the factory's registry holds no answer
+// to rebuild them from: the replay would read what the round could not.
 func TestFreezeLocalRefusesARoundItCannotFreezeWhole(t *testing.T) {
 	type tc struct {
 		name         string
@@ -233,6 +235,10 @@ func TestFreezeLocalRefusesARoundItCannotFreezeWhole(t *testing.T) {
 		{name: "a scratch elsewhere", change: func(t *testing.T, f *freezeFixture) { t.Helper(); f.result.Scratch = t.TempDir(); f.writeResult(t) },
 			task: 1, round: 1, want: []string{"not in", "local-review"}},
 		{name: "no roles", stmts: []string{`DELETE FROM events`}, task: 1, round: 1, want: []string{"round 1", "roles"}},
+		{name: "a base merge's narrow round", change: func(t *testing.T, f *freezeFixture) {
+			t.Helper()
+			writeFile(t, filepath.Join(f.scratch, LocalRemergeFile), "diff --git a/app/credit.rb b/app/credit.rb\n")
+		}, task: 1, round: 1, want: []string{"narrow round", LocalRemergeFile, "whole change"}},
 		{name: "answers written since, and none in the registry", stmts: []string{`DELETE FROM questions`},
 			change: func(t *testing.T, f *freezeFixture) { t.Helper(); f.touch(t, "answers.md", roundStart.Add(time.Hour)) },
 			task:   1, round: 1, want: []string{"answers.md", "after round 1 began", "no answer"}},

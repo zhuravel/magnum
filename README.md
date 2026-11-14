@@ -8100,7 +8100,9 @@ many answers it left out. The base branch is the `[[factory.repo]]`'s. They go t
 `task-<id>-round-<n>` unless `--name`), so its replays never read the task's directory, which can be cleaned. A
 round it cannot freeze whole is refused, saying what is missing: no such task or round (`--cycle <n>` picks the
 cycle when the task's loops ran the round more than once), a round that never ended, its scratch directory or
-its `prepass.json` gone, no begin event naming its roles, an `answers.md` written since it began when its
+its `prepass.json` gone, no begin event naming its roles, a base merge's narrow round (its scratch directory
+holds the `remerge.diff` its judge read alone, which a replay does not hand its judge, so it would judge the whole
+change), an `answers.md` written since it began when its
 ticket file did not hold the answers and the registry holds none to rebuild them from; and so is a name the corpus or the local cases have already. It prints the round's
 findings and the case to add to the local cases' corpus, `~/.local/share/magnum/learn/local/cases.toml` (create it
 with the first case), with the defects the round should have found, in the posted cases' syntax: `kind = "local"`,

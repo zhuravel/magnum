@@ -27978,6 +27978,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
     change: no record, no event.
   - `base-merge.json` records the check of the head, with the summary it carries, before the factory acts on it.
     A restart decides alike, and a narrow round that runs again in its cycle stays narrow (`narrowAt`).
+  - `magnum eval add --local-task` refuses to freeze a narrow round (its scratch directory holds `remerge.diff`):
+    `LocalInputs` keeps the round's roles (the judge alone) but no remerge diff, so its replay would have the judge
+    review the whole change alone, scored against the findings of a round that read the merge alone. Recording the
+    diff was the other way: a fourth frozen text, optional where `LoadLocalInputs` requires every text of every
+    case, a field of `LocalInputs` and the replay's hand-over, for a round that is rare and the judge's alone. The
+    refusal is one check, and it names why, so another round of the task can be frozen.
   - The ready card's recommendation names the check before the review's end: `base merged cleanly: no review
     round`, `base merged with conflicts: a narrow round reviewed its resolutions in <files>`, or `base merged with
     changes git's own merge would not make: a narrow round reviewed them in <files>` (three files, then a count).
@@ -27995,7 +28001,8 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestANarrowLocalJudgeReviewsTheRemergeDiffOfTheMerge` (agents), `TestANarrowLocalRoundsJudgeReviewsTheRemergeDiff`
   (pipeline), `TestALocalRoundOfABaseMergeHandsItsJudgeTheRemerge` (engine) and
   `TestRunLocalHandsTheEngineANarrowRoundOfABaseMerge` (evalrun), the last four on `remerge_file` since the fix
-  round. No migration, no new key.
+  round; and the narrow round's row of `TestFreezeLocalRefusesARoundItCannotFreezeWhole` (evalrun; the fix round:
+  it was frozen). No migration, no new key.
 
 ## Learned rules
 

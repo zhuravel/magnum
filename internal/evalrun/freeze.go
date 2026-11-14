@@ -193,7 +193,11 @@ func LoadLocalInputs(dir string) (LocalInputs, error) {
 //
 // The base branch is the [[factory.repo]]'s (default master). What cannot
 // be frozen whole is an error that says what is missing; it returns the
-// round's result too, whose findings `eval add` prints.
+// round's result too, whose findings `eval add` prints. A base merge's
+// narrow round (its scratch directory holds the remerge.diff its judge
+// read, LocalRemergeFile) is refused: its replay would hand the judge no
+// remerge diff and judge the whole change alone, scored against the
+// findings of a round that read the merge alone.
 func FreezeLocal(ctx context.Context, d Deps, taskID int64, round, cycle int) (LocalInputs, LocalResult, error) {
 	var res LocalResult
 	lt, err := factoryread.LocalReview(ctx, d.Layout.FactoryDB(), taskID)
@@ -233,6 +237,13 @@ func FreezeLocal(ctx context.Context, d Deps, taskID int64, round, cycle int) (L
 	desc, err := os.ReadFile(filepath.Join(scratch, LocalDescriptionFile))
 	if err != nil {
 		return fail("the %s its judge read is gone: %v", LocalDescriptionFile, err)
+	}
+	switch _, err := os.Lstat(filepath.Join(scratch, LocalRemergeFile)); {
+	case err == nil:
+		return fail("it is a base merge's narrow round, whose judge read the merge's remerge diff alone (%s), and a replay of the "+
+			"case hands its judge no remerge diff, so it would judge the whole change: freeze another round of the task", LocalRemergeFile)
+	case !errors.Is(err, fs.ErrNotExist):
+		return fail("its %s: %v", LocalRemergeFile, err)
 	}
 	title, body, _ := strings.Cut(string(desc), "\n")
 	title, ok := strings.CutPrefix(title, "# ")

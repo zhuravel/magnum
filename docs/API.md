@@ -13786,9 +13786,13 @@ func FreezeLocal(ctx context.Context, d Deps, taskID int64, round, cycle int) (L
         file was not written after it began; else the answers rebuilt from the
         factory's registry as they stood when the round began (answersAt).
 
-    The base branch is the [[factory.repo]]'s (default master). What cannot be
-    frozen whole is an error that says what is missing; it returns the round's
-    result too, whose findings `eval add` prints.
+    The base branch is the [[factory.repo]]'s (default master). What cannot
+    be frozen whole is an error that says what is missing; it returns the
+    round's result too, whose findings `eval add` prints. A base merge's
+    narrow round (its scratch directory holds the remerge.diff its judge read,
+    LocalRemergeFile) is refused: its replay would hand the judge no remerge
+    diff and judge the whole change alone, scored against the findings of a
+    round that read the merge alone.
 
 func Inputs(cfg *config.Config) string
     Inputs is a hash (12 hex) of what a replay's review reads besides the PR
