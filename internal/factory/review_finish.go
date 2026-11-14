@@ -118,13 +118,22 @@ const finishThen = "no round starts after it. A safe stop (no P0 or P1, a verdic
 	"no product question open) goes to the ready card with its open findings under KNOWN, the card saying the review was ended by you; " +
 	"any other waits on you"
 
+// finishCleanMerge is what the plan at a head no round reviewed says of a
+// head that only merges the base cleanly into the head the review passed
+// (mergedBase): it gets no round, and the stage passes at once with the
+// review's end carried there, not one you ended.
+const finishCleanMerge = ". A head that only merges the base cleanly into the head the review passed gets no round: the stage passes at once, " +
+	"and the review's end before the merge holds there, the card saying the base merged cleanly"
+
 // FinishReviewPlan is what finish-review does to task t now, read from reg
 // and the task's directory under l, as its y/N, its --dry-run, the
 // screen's question and the daemon's answer say it: the round in flight
 // finishes (or is read, or the writer's fix of its findings finishes), or,
 // between rounds, the review ends at once on the writer's fix of the last
 // round's findings, which no round reviews; a head no round reviewed yet
-// gets its round first. Then no round starts. A second opinion that has
+// gets its round first, but for a clean merge of the base into the head the
+// review passed, which gets none (finishCleanMerge: the review passes there
+// as before the merge). Then no round starts. A second opinion that has
 // not begun after a clean round does not run, and the review ends clean on
 // that round (secondPending, dropSecond).
 func FinishReviewPlan(ctx context.Context, reg *registry.Registry, l paths.Layout, t registry.Task) (string, error) {
@@ -134,7 +143,7 @@ func FinishReviewPlan(ctx context.Context, reg *registry.Registry, l paths.Layou
 	}
 	dir := l.FactoryTaskDir(t.ID)
 	now := "no round of its local review ran yet: its first round runs and finishes, then"
-	plan := ""
+	plan, after := "", ""
 	if n := len(cycles); n > 0 {
 		last := cycles[n-1]
 		fixing := fmt.Sprintf("the writer fixes round %d's findings: its fix finishes, the review ends at once on it (FIXED AFTER on "+
@@ -155,11 +164,11 @@ func FinishReviewPlan(ctx context.Context, reg *registry.Registry, l paths.Layou
 		case stopFixDue(dir, last, t.HeadSHA):
 			now = fixing
 		default:
-			now = "no round reviewed its head yet: one round runs and finishes, then"
+			now, after = "no round reviewed its head yet: one round runs and finishes, then", finishCleanMerge
 		}
 	}
 	if plan == "" {
-		plan = now + " " + finishThen
+		plan = now + " " + finishThen + after
 	}
 	if m, ok := readFinish(dir); ok {
 		plan += fmt.Sprintf(" (you asked already, at %s)", m.At.Local().Format("Jan 2 15:04"))

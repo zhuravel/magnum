@@ -245,6 +245,33 @@ func TestAnEvilMergeIsReviewedNarrowlyOnWhatGitWouldNotHaveMerged(t *testing.T) 
 	}
 }
 
+// Your finish-review at a head no round reviewed says what a clean merge of
+// the base gets there: no round, and the review's end before the merge
+// holds (the stage passes at once, the card saying the base merged
+// cleanly, not that you ended the review). What the plan promised, the
+// stage then does: no round at the merge.
+func TestFinishReviewAtACleanBaseMergeSaysNoRoundRuns(t *testing.T) {
+	r := newReadyRig(t)
+	task, _ := r.toCleanBase("PR-12410")
+	merged := r.writerMerges(task, nil)
+	at := r.reload(task.ID)
+	at.HeadSHA = merged // the head the coding stage's checks record next, before the review stage's first pass
+	plan, err := FinishReviewPlan(r.ctx, r.reg, r.layout, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"no round reviewed its head yet: one round runs", "only merges the base cleanly",
+		"gets no round", "the review's end before the merge holds"} {
+		if !strings.Contains(plan, want) {
+			t.Errorf("the plan %q lacks %q", plan, want)
+		}
+	}
+	r.toBody(task)
+	if calls := r.rv.calls(); len(calls) != 1 {
+		t.Fatalf("local rounds %+v, want none at the clean merge", calls)
+	}
+}
+
 // A merge with a commit beside it is no merge alone: the head gets a full
 // round of the watch's roles on the whole change, as before, and an event
 // says why.

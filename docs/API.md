@@ -14834,7 +14834,9 @@ func FinishReviewPlan(ctx context.Context, reg *registry.Registry, l paths.Layou
     question and the daemon's answer say it: the round in flight finishes (or
     is read, or the writer's fix of its findings finishes), or, between rounds,
     the review ends at once on the writer's fix of the last round's findings,
-    which no round reviews; a head no round reviewed yet gets its round first.
+    which no round reviews; a head no round reviewed yet gets its round first,
+    but for a clean merge of the base into the head the review passed, which
+    gets none (finishCleanMerge: the review passes there as before the merge).
     Then no round starts. A second opinion that has not begun after a clean
     round does not run, and the review ends clean on that round (secondPending,
     dropSecond).

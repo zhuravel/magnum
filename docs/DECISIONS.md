@@ -27987,6 +27987,12 @@ skill versions); people add theirs to the sections before it, at the end of the 
   - The ready card's recommendation names the check before the review's end: `base merged cleanly: no review
     round`, `base merged with conflicts: a narrow round reviewed its resolutions in <files>`, or `base merged with
     changes git's own merge would not make: a narrow round reviewed them in <files>` (three files, then a count).
+  - finish-review's plan at a head no round reviewed yet (its y/N, `--dry-run`, the screen's `S`, the daemon's
+    answer), its help and its README row say that a head that only merges the base cleanly into the head the
+    review passed gets no round: the stage passes at once and the review's end before the merge holds there
+    (`finishCleanMerge`). They promised one round there, then the card saying you ended the review, where
+    `mergedBase` passes the stage in its first pass with the carried end. The plan reads no git, and in the window
+    (before that first pass) no record tells a clean merge yet, so the words name both cases.
   - Rejected: telling the cases apart from the writer's reply or the rework record. The writer's words decide
     nothing; git does. Rejected too: running the precheck on the remerge diff's files alone, since the precheck
     already runs on the change at the merge, which holds them.
@@ -28001,8 +28007,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestANarrowLocalJudgeReviewsTheRemergeDiffOfTheMerge` (agents), `TestANarrowLocalRoundsJudgeReviewsTheRemergeDiff`
   (pipeline), `TestALocalRoundOfABaseMergeHandsItsJudgeTheRemerge` (engine) and
   `TestRunLocalHandsTheEngineANarrowRoundOfABaseMerge` (evalrun), the last four on `remerge_file` since the fix
-  round; and the narrow round's row of `TestFreezeLocalRefusesARoundItCannotFreezeWhole` (evalrun; the fix round:
-  it was frozen). No migration, no new key.
+  round; the narrow round's row of `TestFreezeLocalRefusesARoundItCannotFreezeWhole` (evalrun; the fix round: it
+  was frozen); and `TestFinishReviewAtACleanBaseMergeSaysNoRoundRuns` (factory; the fix round: the plan promised a
+  round). No migration, no new key.
 
 ## Learned rules
 

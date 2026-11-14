@@ -22,7 +22,9 @@ func newFactoryFinishCmd(c *Context) *cobra.Command {
 		"End a factory task's local review now (<task> is its id or its Jira key), as the factory screen's S does. The round "+
 			"in flight finishes, never cut, and no round starts after it; between rounds, the review ends at once on the writer's "+
 			"fix of the last round's findings, which no round reviews (the ready card lists them under FIXED AFTER), and a head no "+
-			"round reviewed yet gets its one round first. Then the stage ends as at [factory.local_review] max_rounds: a safe stop "+
+			"round reviewed yet gets its one round first, but for one that only merges the base cleanly into the head the review "+
+			"passed, which gets none: the stage passes at once, and the review's end before the merge holds there. Otherwise "+
+			"the stage ends as at [factory.local_review] max_rounds: a safe stop "+
 			"(no P0 or P1, a verdict that does not block, no finding the writer declined in its loop, no product question open) goes to the ready card with its "+
 			"open findings under KNOWN, the card saying the review was ended by you; any other waits on you, and your retry lets the "+
 			"loop go on. A second opinion that has not begun after a clean round does not run: the review ends clean on that round, "+
