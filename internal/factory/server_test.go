@@ -54,6 +54,47 @@ func TestStartServerRecordsThePidAndTheStartOfTheCopysServer(t *testing.T) {
 	}
 }
 
+// ServerRunning tells a QA boot whether the copy's server still runs: no
+// for a copy whose server the factory never started, yes while the leader
+// it recorded runs with its start, and no once that leader ended or a later
+// process took its pid. A process table that cannot be read cannot tell.
+func TestServerRunningFollowsTheRecordedLeader(t *testing.T) {
+	r := newCopiesRig(t, 1)
+	c := r.claim(r.task("PR-1"))
+	if up, err := r.c.ServerRunning(r.ctx, c); err != nil || up {
+		t.Fatalf("ServerRunning before any start = %v, %v; want false", up, err)
+	}
+	if err := r.c.StartServer(r.ctx, c); err != nil {
+		t.Fatalf("StartServer: %v", err)
+	}
+	if up, err := r.c.ServerRunning(r.ctx, c); err != nil || !up {
+		t.Fatalf("ServerRunning of a server that runs = %v, %v; want true", up, err)
+	}
+	r.mu.Lock()
+	r.failTable = 1
+	r.mu.Unlock()
+	if _, err := r.c.ServerRunning(r.ctx, c); err == nil {
+		t.Fatal("ServerRunning with no process table told, want its error")
+	}
+	leader := r.spawned[0].PID
+	r.mu.Lock()
+	for i, p := range r.table {
+		if p.PID == leader { // the server ended; another process got its pid
+			r.table[i] = execx.Process{PID: leader, PPID: 1, PGID: leader, Start: "Thu Nov  5 10:00:00 2026", Name: "postgres"}
+		}
+	}
+	r.mu.Unlock()
+	if up, err := r.c.ServerRunning(r.ctx, c); err != nil || up {
+		t.Fatalf("ServerRunning of a leader whose pid another process took = %v, %v; want false", up, err)
+	}
+	r.mu.Lock()
+	r.table = slices.DeleteFunc(r.table, func(p execx.Process) bool { return p.PID == leader })
+	r.mu.Unlock()
+	if up, err := r.c.ServerRunning(r.ctx, c); err != nil || up {
+		t.Fatalf("ServerRunning of a leader that ended = %v, %v; want false", up, err)
+	}
+}
+
 // After a restart every recorded server is a stray (no stage owns it):
 // Reconcile kills one whose pid and start both match the record, and leaves
 // alone a process that took a dead server's pid, with another start. Both

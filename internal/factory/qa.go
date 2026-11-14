@@ -1304,16 +1304,22 @@ func (e *Engine) startQASession(ctx context.Context, t registry.Task, c Copy, ru
 				sess.ready, sess.err = false, qaPanic{msg: msg}
 			}
 		}()
-		sess.ready, sess.err = e.bootQA(bctx, probe, host, run.Ready, boot)
+		sess.ready, sess.err = e.bootQA(bctx, c, probe, host, run.Ready, boot)
 	})
 	ok = true
 	return nil
 }
 
-// bootQA probes the ready path at url (Host host) every qaProbeEvery until
-// it answers 2xx or 3xx (true), or boot passed on the engine's clock, or ctx
-// ended: the error names the ready path, the boot and the last answer.
-func (e *Engine) bootQA(ctx context.Context, url, host, ready string, boot time.Duration) (bool, error) {
+// bootQA probes the ready path at url (Host host) of copy c's server every
+// qaProbeEvery until it answers 2xx or 3xx (true), or boot passed on the
+// engine's clock, or ctx ended: the error names the ready path, the boot and
+// the last answer. A probe that gets no such answer asks whether the server
+// still runs (Copies.ServerRunning): one that ended (its command failed
+// before it served, or a server stopped it) fails the boot at once, naming
+// the server's log, and a read that cannot tell goes on probing. The
+// server's command must stay in the foreground: one whose leader exits
+// while a child of it boots on (a daemon) ends its boot here.
+func (e *Engine) bootQA(ctx context.Context, c Copy, url, host, ready string, boot time.Duration) (bool, error) {
 	start := e.now()
 	var last string // what the last probe met
 	for {
@@ -1325,6 +1331,10 @@ func (e *Engine) bootQA(ctx context.Context, url, host, ready string, boot time.
 			last = textx.Clip(textx.FirstLine(scrub.Text(err.Error())), qaWhyRunes)
 		default:
 			last = "it answered " + strconv.Itoa(status)
+		}
+		if up, err := e.d.Copies.ServerRunning(ctx, c); err == nil && !up {
+			return false, fmt.Errorf("the copy's server ended before it answered %s (last: %s); its log is %s", ready, last,
+				serverLogIn(e.d.Layout.Logs(), c.Name))
 		}
 		failed := fmt.Errorf("the copy's server did not answer %s within %s (last: %s)", ready, boot, last)
 		if e.now().Sub(start) >= boot {

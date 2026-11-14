@@ -921,6 +921,9 @@ type fakeCopies struct {
 	startErrs   []error
 	browserDirs []string
 	up          map[string]bool
+	// endAtStart is how many of the next servers that start end at once
+	// after their start, before they answer: ServerRunning says so.
+	endAtStart int
 	// The backoff repairs: due are what RepairDue answers, one each (none
 	// once they run out) and dueAsked how many times it was asked;
 	// repairErrs are what the Repair calls return, one each (nil once they
@@ -1064,8 +1067,20 @@ func (f *fakeCopies) StartServer(_ context.Context, c Copy) error {
 	if f.up == nil {
 		f.up = map[string]bool{}
 	}
+	if f.endAtStart > 0 {
+		f.endAtStart--
+		return nil
+	}
 	f.up[c.Name] = true
 	return nil
+}
+
+// ServerRunning reports whether copy c's server started and has not stopped
+// or ended since.
+func (f *fakeCopies) ServerRunning(_ context.Context, c Copy) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.up[c.Name], nil
 }
 
 func (f *fakeCopies) StopServer(ctx context.Context, c Copy) error {

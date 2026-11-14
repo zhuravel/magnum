@@ -4713,7 +4713,9 @@ stages = [
   (default `max_active`) and `min_free_disk_gb` (default `[daemon]`'s) have defaults. `copy_name` and `copies`
   must not render a name or path a `[[pool]]` renders. `setup`, `teardown`, `post_checkout`, `reset_db`,
   `copy_files`, `strip_env`, `env` and `databases` are a pool's keys; `installs` runs its `run` when its
-  `lock` file differs from the copy's last install; `server` starts the copy's local server. `reviewer` is a
+  `lock` file differs from the copy's last install; `server` starts the copy's local server, a shell line that
+  stays in the foreground (steps joined by `&&` before it, such as a seed or an asset build, run first, within
+  QA's `boot`). `reviewer` is a
   GitHub login. `error_skill` (the read-only error-tracker skill), `pr_body_skill` (the skill that lays out
   the PR's description, one word; see the PR body below), `ghost_marker`, `table_stats` and
   `large_table_rows` (the gh-ost rule for migrations) and `consoles` (remote consoles that no factory command
@@ -6101,7 +6103,9 @@ fixes = 2                                      # the writer's turns for QA's def
   beside it: never named as fixed. At the head the writer declined a defect at, a walk that does not find it
   waits on you too, as the factory's own check found it there, naming the writer's reply with its risk.
 - **When QA needs you.** The task waits on you with what happened and `magnum factory retry <id>`: the server
-  did not answer within `boot` (after one more boot), the port answered before the server started, `when`
+  did not answer within `boot`, or its process ended before it answered (both after one more boot; the end
+  names the server's log, and fails the boot at once, so a command that stays in the foreground, as `overmind
+  start` and `rails server` do, is what `server` must be), the port answered before the server started, `when`
   failed, the run went over its `cap`, the Mac's memory stopped it twice, the walker wrote no valid
   `verdict.json` after one nudge, it reached no page, or it could not reach a state of the change. For a walk
   that reached its pages, found nothing that blocks there and could not reach a state, a plain retry walks

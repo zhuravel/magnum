@@ -264,7 +264,9 @@ databases = [
 #   { lock = "Gemfile.lock", run = "bundle install --jobs 4" },
 #   { lock = "pnpm-lock.yaml", run = "pnpm install --frozen-lockfile" },
 # ]
-# server = "bin/worktree-run"              # starts the copy's local server
+# server = "bin/worktree-run"              # starts the copy's local server, in the foreground (a shell line: steps
+#                                          # joined by && run first, as a seed or an asset build); a QA boot whose
+#                                          # server's process ends before it answers ready fails at once
 # env = { WT_BRANCH = "{copy}", PORT = "31{n}0", REDIS_DB_OFFSET = "{n*16}", REDIS_URL = "redis://127.0.0.1:6379" }
 #                                          # {copy} (or {slot}): the copy's name, {n}: its number; PORT: the port of
 #                                          # the copy's server, which [factory.repo.qa] needs: a port from 1024 to
@@ -350,7 +352,8 @@ databases = [
 #                                          # (default none); a stop then ends what of the copy still listens on its
 #                                          # port, never a process outside it: one outside the copy on the port is
 #                                          # left alone, and the stop counts as done
-#   boot = "5m"                            # the server must answer ready within this (default 5m)
+#   boot = "5m"                            # the server must answer ready within this (default 5m); one whose process
+#                                          # ends first fails its boot at once, naming its log
 #   cap = "50m"                            # one run in all, the boot included (default 50m, at most 3h): keep it
 #                                          # above boot plus the walker's timeout (fx-qa: 35m); the walker launches
 #                                          # with --no-chrome and --disallowedTools for MCP tools and for open and

@@ -15083,6 +15083,7 @@ type Copies interface {
 	FixReserved(ctx context.Context) ([]FixReservation, error)
 	StartServer(ctx context.Context, c Copy) error
 	StopServer(ctx context.Context, c Copy) error
+	ServerRunning(ctx context.Context, c Copy) (bool, error)
 	StartBrowser(ctx context.Context, c Copy, dir string) (cdp string, err error)
 	StopBrowser(ctx context.Context, c Copy) error
 	Reconcile(ctx context.Context) error
@@ -15092,15 +15093,16 @@ type Copies interface {
 }
     Copies are the repositories' copies the tasks work in (copies.go): a claim
     for a task (the copy it used last first), its release, how many are free,
-    the copies reserved and for which task, the copy's local server, the
-    factory's headless Chrome for a copy's QA run (its profile in dir/chrome,
-    cdp its DevTools endpoint, http://127.0.0.1:<port>), the reconcile of the
-    servers and the browsers after a restart, and the broken copies (the one
-    whose backoff repair is due, its repair, and the repositories whose every
-    copy broke the same way: repair.go). The fixes of your PRs claim checkouts
-    of their own (fix_copies.go): a fix copy, set apart from the tasks',
-    or a per-PR checkout without databases, at the PR's remote head, its release
-    (a per-PR checkout's removal) and the checkouts the PRs' fix work holds.
+    the copies reserved and for which task, the copy's local server (whether it
+    still runs, which a QA boot asks between its probes), the factory's headless
+    Chrome for a copy's QA run (its profile in dir/chrome, cdp its DevTools
+    endpoint, http://127.0.0.1:<port>), the reconcile of the servers and the
+    browsers after a restart, and the broken copies (the one whose backoff
+    repair is due, its repair, and the repositories whose every copy broke the
+    same way: repair.go). The fixes of your PRs claim checkouts of their own
+    (fix_copies.go): a fix copy, set apart from the tasks', or a per-PR checkout
+    without databases, at the PR's remote head, its release (a per-PR checkout's
+    removal) and the checkouts the PRs' fix work holds.
 
 func NewCopies(cfg *config.Config, sm *slots.Manager, st *store.Store, git *gitx.Client, run execx.Runner, my slots.MySQL,
 	panes func(context.Context) (herdr.Snapshot, error), owner func(context.Context, registry.Task) (store.PR, error),

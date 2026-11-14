@@ -27884,6 +27884,28 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestAnInstallDrainsWaitSaysTheWorkInFlightFinishes`. The fixtures of the drain in the CLI's and the
   screen's tests now carry the daemon's words.
 
+- **A QA boot whose server's process ends before it answers fails at once, naming the server's log**
+  (2026-11-14, visual QA for talkable/talkable). A QA boot only probed the ready path, every 2 seconds, until
+  `boot` ran out. A server whose command failed before it served (a seed or an asset build its shell line runs
+  first, a stale pidfile, a port its asset server could not bind) was waited out for the whole boot, then for a
+  boot more, and the wait on you said it "did not answer /up within 5m0s (last: connection refused)", which
+  names neither the end nor where to look. A repository whose server line compiles its assets and seeds its
+  data before the app starts needs a boot of 10 minutes, so that was 20 minutes of a heavy slot and the Mac's QA
+  lock for a failure known in seconds. Now each probe that gets no 2xx or 3xx asks the copies whether the
+  server still runs (`Copies.ServerRunning`: the process at the recorded pid with the recorded start, as the
+  stop and the reconcile tell a server; no lock, so another copy's stop never holds the boot up). One that ended
+  fails the boot at once: "the copy's server ended before it answered /up (last: …); its log is
+  …/factory-server-<copy>.log". The boot more and the wait on you are as before. A read that cannot tell (the
+  process table, the record) goes on probing. So `server` must stay in the foreground, as the design already
+  assumed (the stop signals the group its leader leads, and a start whose leader is gone at once fails): one
+  that daemonizes and exits while its child boots now fails its boot, where it used to pass when the child
+  answered within the boot. Rejected: a fixed check interval apart from the probe's (the probe's 2 seconds is
+  cheap enough: one `ps` per failed probe); the reaper's exit status kept in memory (it names the exit code,
+  but a restart forgets it, and the record's pid and start are what every other server check trusts); the
+  log's last line in the reason (a server's output can carry anything, and the path is enough to look).
+  Tests, failing first: `TestAServerThatEndsDuringItsBootFailsTheBootAtOnce` (it waited two boots of 5m0s and
+  named neither) and `TestServerRunningFollowsTheRecordedLeader` (no such method).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

@@ -226,6 +226,22 @@ func (c *copySet) StopServer(ctx context.Context, cp Copy) error {
 	return held
 }
 
+// ServerRunning reports whether the server StartServer recorded for copy cp
+// still runs: the process at its pid has the start its record names, so a
+// leader that ended, or a pid another process took since, does not. A copy
+// with no record runs no server of the factory's. An error is a record or a
+// process table that could not be read: the caller cannot tell. It takes no
+// lock: a QA boot asks it between its probes, and a stop of another copy's
+// server (minutes, at most) never holds that boot up.
+func (c *copySet) ServerRunning(ctx context.Context, cp Copy) (bool, error) {
+	rec, ok, err := c.serverOf(ctx, cp.Name)
+	if err != nil || !ok {
+		return false, err
+	}
+	_, alive, err := c.running(ctx, rec)
+	return alive, err
+}
+
 // Reconcile ends the servers a stopped daemon left. After a restart no stage
 // owns a server (the engine runs it before its first tick), so each one is
 // a stray: a recorded one is killed only while the process at its pid has

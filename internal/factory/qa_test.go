@@ -434,6 +434,36 @@ func TestAServerThatFailsToStartGetsOneRetry(t *testing.T) {
 	r.qaFree(task.ID)
 }
 
+// A server whose process ends during its boot, before it answered its ready
+// path (a seed or an asset build its command runs first failed, a stale
+// pidfile stopped it), fails the boot at once, not after the whole boot: one
+// more boot, then QA is unavailable, naming the end and the server's log, on
+// the engine's clock well within one boot.
+func TestAServerThatEndsDuringItsBootFailsTheBootAtOnce(t *testing.T) {
+	r := newQARig(t)
+	r.copies.endAtStart = 2
+	task, head := r.qaTask("PR-12409")
+	start := r.clock.Now()
+	got := r.toYou(task)
+	l := r.copies.log()
+	if len(l.started) != 2 || len(l.stopped) != 2 || len(l.browsers) != 0 {
+		t.Fatalf("servers started %v, stopped %v, browsers %v; want two boots, each stopped, and no browser", l.started, l.stopped, l.browsers)
+	}
+	res := r.qaResult(task.ID, 1, head)
+	log := serverLogIn(r.layout.Logs(), "factory1")
+	if res.Outcome != QAOutcomeUnavailable || !strings.Contains(res.Why, "the copy's server ended before it answered /up") ||
+		!strings.Contains(res.Why, log) {
+		t.Fatalf("result.json %+v, want unavailable naming the server's end and its log %s", res, log)
+	}
+	if took := r.clock.Now().Sub(start); took >= 5*time.Minute {
+		t.Fatalf("QA gave up after %s on the engine's clock, want less than one boot of 5m0s: each boot ends with its server", took)
+	}
+	if !strings.Contains(got.WaitsWhat, "QA could not run") || !strings.Contains(got.WaitsWhat, "magnum factory retry") {
+		t.Fatalf("the task waits %q, want the reason and the retry command", got.WaitsWhat)
+	}
+	r.qaFree(task.ID)
+}
+
 // One QA runs on the Mac at a time: while another holds the machine's QA
 // lock, the task waits, holding no heavy slot, and starts once it is free.
 func TestOneQAAtATimeOnTheMac(t *testing.T) {
