@@ -144,6 +144,35 @@ func TestTheGitHubClientReadsTheMergeMethods(t *testing.T) {
 	}
 }
 
+// The GitHub client reads the commit a branch is at from GitHub's own ref of
+// it (`gh api repos/<repo>/git/ref/heads/<branch>`), as your gh login and
+// never through a clone's remote config, which the base merge's check
+// trusts no more: an answer that is no full commit id is an error.
+func TestTheGitHubClientReadsABranchsCommitOnGitHubAsYou(t *testing.T) {
+	const sha = "3c3d79e4fc0c04f4d49bd3467fc079f6bc2662ad"
+	answer := sha + "\n"
+	run := &ghRunner{answer: func(execx.Cmd) string { return answer }}
+	cfg := config.Defaults()
+	cfg.Identities = []config.Identity{{Name: "zhuravel", Kind: "gh", Login: "zhuravel"}}
+	gh := NewGitHub(cfg, run)
+	ctx := t.Context()
+
+	if got, err := gh.BranchSHA(ctx, "example/shop", "release/2026"); err != nil || got != sha {
+		t.Fatalf("BranchSHA = %q, %v; want %s", got, err, sha)
+	}
+	c := run.cmds[0]
+	want := []string{"api", "repos/example/shop/git/ref/heads/release/2026", "--jq", ".object.sha"}
+	if c.Name != "gh" || !slices.Equal(c.Args, want) || c.Mutates || c.Env["GH_HOST"] != "github.com" || !slices.Contains(c.Unset, "GH_TOKEN") {
+		t.Fatalf("gh %q (mutates %v), env %v, unset %v; want %q as your login", c.Args, c.Mutates, c.Env, c.Unset, want)
+	}
+	for _, bad := range []string{"", "null", "3c3d79e4", strings.ToUpper(sha), sha + " " + sha} {
+		answer = bad
+		if got, err := gh.BranchSHA(ctx, "example/shop", "master"); err == nil {
+			t.Errorf("BranchSHA of %q = %q, want an error", bad, got)
+		}
+	}
+}
+
 // The publish checks the card's review again before it pushes: a task at
 // its publish stage whose review is no longer clean at the approved head
 // needs you, and nothing leaves the Mac.

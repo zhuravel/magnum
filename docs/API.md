@@ -15574,12 +15574,15 @@ type GitHub interface {
 	ViewPR(ctx context.Context, repo string, number int) (PRView, error)
 	ActiveLogin(ctx context.Context, repo string) (string, error)
 	MergeMethods(ctx context.Context, repo string) (MergeMethods, error)
+	BranchSHA(ctx context.Context, repo, branch string) (string, error)
 }
     GitHub opens a task's PR (ready for review, never a draft) and reads it
     back, by its branch or its number; ActiveLogin is the login gh acts as for
-    repo now (the account active in your gh config dir), and MergeMethods the
-    ways repo's settings let a PR merge, which the prompts of the roles that ask
-    you questions name.
+    repo now (the account active in your gh config dir), MergeMethods the ways
+    repo's settings let a PR merge, which the prompts of the roles that ask you
+    questions name, and BranchSHA the commit a branch of repo is at on GitHub,
+    which the base merge's check reads the base at (checkBaseMerge), never
+    through a clone's remote config.
 
 func NewGitHub(cfg *config.Config, run execx.Runner) GitHub
     NewGitHub is the factory's GitHub over run: gh as your gh identity for each

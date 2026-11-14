@@ -28012,6 +28012,33 @@ skill versions); people add theirs to the sections before it, at the end of the 
   was frozen); and `TestFinishReviewAtACleanBaseMergeSaysNoRoundRuns` (factory; the fix round: the plan promised a
   round). No migration, no new key.
 
+- **The base merge's check takes the base GitHub reports, not only the clone's remote** (2026-11-14, the follow-up
+  F1 of the base merge's review). The check force-fetches `origin/<base>` before it reads it, since the writer's pane
+  can move that ref, but `FetchBranch` goes where the main clone's config says, and the copies share that config: a
+  pane that sets `remote.origin.url` to a bare repository of its own (or adds a `url.<x>.insteadOf`) whose master is
+  its own commit, and merges that commit into the reviewed head, passed the fetched ref's test, and a clean merge of
+  it got no round. Now the merge's second parent must also be the base GitHub reports, or an ancestor of it
+  (`IsAncestor`, in `Isolated`): `githubBase` reads it through the factory's GitHub as you (`GitHub.BranchSHA`,
+  `gh api repos/<repo>/git/ref/heads/<base> --jq .object.sha`, the identity the publish and the local review use),
+  never through git's remote config. It reads GitHub before the fetch, so a base that moves on GitHub between the
+  two is fetched too, and the merged commit, an ancestor of the newer base, stays a base merge. A failed read (or a
+  factory with no GitHub), an answer that is no full commit id, a commit the copy has no object of, and a second
+  parent off that base each give a full round, and the round's event says why (`… is no commit of master on GitHub
+  at <sha>`, `the factory cannot read master on GitHub: …`). The read costs one REST call per merge head the check
+  decides (`base-merge.json` keeps the decision); a head that is no merge reads nothing. The fetch and its test stay:
+  the fetch brings the commit GitHub names to the copy, and `origin/<base>` is where the rounds' diffs start
+  (`branchHead`'s merge base). That start still trusts the remote config: under a rewritten remote a full round's
+  diff starts at the writer's commit and leaves its change out, as it did before the fast path; the PR's review on
+  GitHub, whose diff starts at GitHub's base, sees it. That is left for its own change, with the ready card's flags
+  fetch and the publish's push, which read the same config. Rejected: reading the base with `git ls-remote` (the
+  same remote config the pane can rewrite). Tests, failing first: `TestABaseMergeOfARemoteTheWriterRewroteGetsAFullRound`
+  (the merge got no round), `TestAFailedReadOfGitHubsBaseGetsAFullRound` (the merge got no round with the read
+  failing), `TestABaseMergeOfGitHubsBaseOrItsAncestorStaysClean` (the check read no base on GitHub) and
+  `TestTheGitHubClientReadsABranchsCommitOnGitHubAsYou` (the client had no such read), in internal/factory. Proved
+  by mutation too: with the read kept and its commit not checked, the first two fail (a commit the copy lacks read
+  clean); with the read moved after the fetch, the third fails (the moved base's commit is missing, a full round).
+  No migration, no new key.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

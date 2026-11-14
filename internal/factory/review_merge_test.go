@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -457,6 +458,136 @@ func TestABaseMergeOfACommitOnlyTheCopysRefNamesGetsAFullRound(t *testing.T) {
 	r.setFailGit(nil)
 	if err != nil || !ok || bm.Kind != mergeFull || !strings.Contains(bm.Why, "fetch origin/master") {
 		t.Fatalf("a fetch that fails: %+v, %v, %v; want a full round naming the fetch", bm, ok, err)
+	}
+}
+
+// fullRoundAt fails the test unless the local rounds after the first are a
+// full round at head: the first round's roles on the whole change, not
+// the narrow round of a base merge (the full round's clean end on the
+// wider change may get its second opinion after it).
+func (r *readyRig) fullRoundAt(head string) {
+	r.t.Helper()
+	calls := r.rv.calls()
+	if len(calls) < 2 || calls[1].HeadSHA != head || calls[1].Remerge || calls[1].Round != 1 || !slices.Equal(calls[1].Roles, calls[0].Roles) {
+		for _, c := range calls {
+			r.t.Logf("round %d at %s: %v (remerge %v)", c.Round, short(c.HeadSHA), c.Roles, c.Remerge)
+		}
+		r.t.Fatalf("local rounds above, want a full round of the first round's roles at %s", short(head))
+	}
+}
+
+// fullRoundEvent fails the test unless a review event of task id says the
+// head gets a full round, with each of words.
+func (r *readyRig) fullRoundEvent(id int64, words ...string) {
+	r.t.Helper()
+	evs := r.events(id, "review")
+	if !slices.ContainsFunc(evs, func(ev registry.Event) bool {
+		return strings.Contains(ev.Text, "a full round") && !slices.ContainsFunc(words, func(w string) bool { return !strings.Contains(ev.Text, w) })
+	}) {
+		r.t.Fatalf("review events %+v, want one that says the head gets a full round, naming %q", evs, words)
+	}
+}
+
+// The base is the one GitHub reports, read through the factory's GitHub as
+// you, never through the clone's remote config alone: the forced fetch goes
+// where the main clone's remote.origin.url says, which the writer's pane
+// can rewrite (or redirect with a url.<x>.insteadOf). The writer points it
+// at a bare repository of its own whose master is its own commit, fetches,
+// and merges that commit into the reviewed head. The fetch sets
+// origin/master to that commit again, but it is no commit of master on
+// GitHub, so the head gets a full round of the watch's roles, with an
+// event that says so.
+func TestABaseMergeOfARemoteTheWriterRewroteGetsAFullRound(t *testing.T) {
+	r := newReadyRig(t)
+	task, _ := r.toCleanBase("PR-12411")
+	r.clock.Add(time.Minute)
+	own := filepath.Join(r.root, "own.git")
+	r.git(r.root, "clone", "--quiet", "--bare", r.origin, own)
+	r.git(r.copyDir, "switch", "--quiet", "-c", "own", "origin/master")
+	mine := r.commit("the writer's own change", map[string]string{"lib/own.rb": "class Own\nend\n"})
+	r.git(r.copyDir, "push", "--quiet", own, "own:master")
+	r.git(r.main, "config", "remote.origin.url", own)
+	r.git(r.copyDir, "fetch", "--quiet", "origin")
+	r.git(r.copyDir, "switch", "--quiet", task.Branch)
+	r.git(r.copyDir, "merge", "--quiet", "--no-edit", "origin/master")
+	merged := r.git(r.copyDir, "rev-parse", "HEAD")
+	r.taskFile(task.ID, proofFile, `{"specs": ["spec/models/credit_points_spec.rb"]}`)
+	r.ended(task, "fx-writer")
+	r.toBody(task)
+
+	r.fullRoundAt(merged)
+	r.fullRoundEvent(task.ID, "is no commit of master on GitHub", short(mine))
+	if got := r.git(r.copyDir, "rev-parse", "origin/master"); got != mine {
+		t.Fatalf("origin/master is at %s after the check's fetch, want the writer's %s: the rig's rewritten remote is not what the fetch read",
+			short(got), short(mine))
+	}
+}
+
+// A read of the base on GitHub that fails is a full round, as a fetch that
+// fails is: without it the check cannot tell a commit of the base from one
+// of the writer's own. So is a base GitHub reports at a commit the copy has
+// no object of (git cannot tell whether the merged commit is one of it),
+// and a factory daemon with no GitHub to read the base on. The same merge
+// with GitHub's base read is clean.
+func TestAFailedReadOfGitHubsBaseGetsAFullRound(t *testing.T) {
+	r := newReadyRig(t)
+	task, reviewed := r.toCleanBase("PR-12412")
+	r.gh.setBase("", errors.New("gh: HTTP 502: Bad Gateway"), nil)
+	merged := r.writerMerges(task, nil)
+	r.toBody(task)
+
+	r.fullRoundAt(merged)
+	r.fullRoundEvent(task.ID, "master on GitHub", "HTTP 502")
+
+	task.HeadSHA = merged
+	check := func(what, kind, why string) {
+		t.Helper()
+		bm, ok, err := r.e.checkBaseMerge(r.ctx, task, r.cp, reviewed)
+		if err != nil || !ok || bm.Kind != kind || !strings.Contains(bm.Why, why) {
+			t.Fatalf("%s: %+v, %v, %v; want %s naming %q", what, bm, ok, err, kind, why)
+		}
+	}
+	r.gh.setBase(strings.Repeat("ab", 20), nil, nil)
+	check("a base at a commit the copy has no object of", mergeFull, "master on GitHub at abababababab")
+	r.gh.setBase("", nil, nil)
+	check("GitHub's base read", mergeClean, "")
+	r.e.d.GitHub = nil
+	check("no GitHub", mergeFull, "GitHub")
+	r.e.d.GitHub = r.gh
+}
+
+// A merge of the base GitHub reports, or of an ancestor of it, stays a base
+// merge: a clean one gets no round, as before. The base moves on GitHub as
+// the check reads it, so the merged commit is an ancestor of the base GitHub
+// reports, and the check reads GitHub before it fetches, which brings that
+// newer commit to the copy.
+func TestABaseMergeOfGitHubsBaseOrItsAncestorStaysClean(t *testing.T) {
+	r := newReadyRig(t)
+	task, reviewed := r.toCleanBase("PR-12413")
+	merged := r.writerMerges(task, nil)
+	r.toBody(task)
+
+	if calls := r.rv.calls(); len(calls) != 1 {
+		t.Fatalf("local rounds %+v, want none at the clean merge", calls)
+	}
+	onGitHub := r.git(r.origin, "rev-parse", "refs/heads/master")
+	if sum := r.summaryOf(task.ID); sum.Head != merged || sum.BaseMerge == nil || sum.BaseMerge.Kind != mergeClean || sum.BaseMerge.BaseSHA != onGitHub {
+		t.Fatalf("review-summary.json %+v (base merge %+v), want the clean merge of %s, GitHub's base", sum, sum.BaseMerge, short(onGitHub))
+	}
+	if r.gh.baseReads() == 0 {
+		t.Fatal("the check never read the base on GitHub")
+	}
+
+	var moved string
+	r.gh.setBase("", nil, func() {
+		if moved == "" {
+			moved = r.moveMaster("README", "shop, moved again on GitHub\n")
+		}
+	})
+	task.HeadSHA = merged
+	bm, ok, err := r.e.checkBaseMerge(r.ctx, task, r.cp, reviewed)
+	if err != nil || !ok || bm.Kind != mergeClean || bm.BaseSHA != onGitHub || moved == "" {
+		t.Fatalf("a merge of an ancestor of GitHub's base %s: %+v, %v, %v; want a clean merge of %s", short(moved), bm, ok, err, short(onGitHub))
 	}
 }
 

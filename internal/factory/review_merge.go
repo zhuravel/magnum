@@ -11,7 +11,9 @@ package factory
 // merge of two parents whose first is the head the review passed (its
 // review-summary.json) and whose second is a commit of origin/<base>,
 // fetched from the remote first, since the writer's pane can move the
-// copy's ref (checkBaseMerge, in a repository of the factory's own:
+// copy's ref, and of the base GitHub reports, read as you, since the pane
+// can rewrite the remote the fetch goes to (checkBaseMerge, in a
+// repository of the factory's own:
 // gitx.Isolated, so no merge driver, attribute or commit-graph of the
 // copy's applies, and gitx reads the real objects, GIT_NO_REPLACE_OBJECTS):
 //   - git's own merge of the two (merge-tree) is the merge's tree: a clean
@@ -31,8 +33,9 @@ package factory
 //     follows it.
 //   - anything else (commits besides the merge, a merge of something other
 //     than the base, parents that are not the reviewed head and the base, a
-//     conflict the merge left as git's merge wrote it, a remerge diff git
-//     cannot produce) gets a full round, as before, and an event says why.
+//     base the factory cannot fetch or read on GitHub, a conflict the merge
+//     left as git's merge wrote it, a remerge diff git cannot produce) gets
+//     a full round, as before, and an event says why.
 // base-merge.json records the check of the head before the factory acts on
 // it, so a restart decides alike, and a narrow round that runs again in its
 // cycle stays narrow.
@@ -47,6 +50,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 	"github.com/zhuravel/magnum/internal/gitx"
 )
@@ -180,9 +184,14 @@ func (e *Engine) baseMergeOf(ctx context.Context, t registry.Task, c Copy, sum R
 // fetched from the remote first and then read in the copy (readBaseMerge):
 // copies are worktrees of the main clone, so the writer's pane can move
 // that ref, and a commit of the writer's own that it names would read as
-// the base. ok is false for an ordinary change. A
-// read git cannot make, but for a cancelled one, is a full round with why,
-// never a stop of the stage: a full round is what every head got before.
+// the base. The fetch goes where the main clone's config says, which the
+// pane can rewrite too (remote.origin.url, a url.<x>.insteadOf), so the
+// merge's second parent must also be the base GitHub reports, or an
+// ancestor of it (githubBase, read before the fetch, which then brings the
+// commit it names when the base moves between the two). ok is false for an
+// ordinary change. A read git or GitHub cannot make, but for a cancelled
+// one, is a full round with why, never a stop of the stage: a full round
+// is what every head got before.
 func (e *Engine) checkBaseMerge(ctx context.Context, t registry.Task, c Copy, reviewed string) (BaseMerge, bool, error) {
 	repo, err := e.factoryRepo(t)
 	if err != nil {
@@ -211,6 +220,10 @@ func (e *Engine) checkBaseMerge(ctx context.Context, t registry.Task, c Copy, re
 		}
 		return bm, false, nil // an ordinary change
 	}
+	onGitHub, why, err := e.githubBase(ctx, repo)
+	if why != "" {
+		return full(why, err)
+	}
 	// The copy's origin/<base> is the main clone's ref, which the writer's
 	// pane can move: the forced fetch the ready card's flags make sets it
 	// to the remote's base first.
@@ -221,10 +234,9 @@ func (e *Engine) checkBaseMerge(ctx context.Context, t registry.Task, c Copy, re
 	if err != nil {
 		return full("git cannot read "+bm.Base, err)
 	}
-	var why string
 	err = git.Isolated(ctx, c.Path, func(iso string) error {
 		var err error
-		why, err = e.readBaseMerge(ctx, iso, &bm, tip)
+		why, err = e.readBaseMerge(ctx, iso, &bm, baseTip{sha: tip, name: bm.Base}, onGitHub)
 		return err
 	})
 	switch {
@@ -253,11 +265,35 @@ func (e *Engine) besidesMerge(ctx context.Context, c Copy, bm BaseMerge) (string
 		short(bm.Reviewed)), nil
 }
 
+// baseTip is a commit of the base (sha) a base merge's second parent must
+// be, or be an ancestor of, and its name in a why: origin/<base> after the
+// fetch, the base on GitHub.
+type baseTip struct{ sha, name string }
+
+// githubBase is the commit repo's base is at on GitHub, read through the
+// factory's GitHub as you (BranchSHA), never through the main clone's
+// remote config, which the writer's pane can point at a repository of its
+// own; why says why the check cannot read it (with err, the read's
+// failure), and a factory with no GitHub reads none.
+func (e *Engine) githubBase(ctx context.Context, repo config.FactoryRepo) (tip baseTip, why string, err error) {
+	name := baseOf(repo) + " on GitHub"
+	if e.d.GitHub == nil {
+		return tip, "this factory daemon has no GitHub to read " + name + " from", nil
+	}
+	sha, err := e.d.GitHub.BranchSHA(ctx, repo.Repo, baseOf(repo))
+	if err != nil {
+		return tip, "the factory cannot read " + name, err
+	}
+	return baseTip{sha: sha, name: name + " at " + short(sha)}, "", nil
+}
+
 // readBaseMerge checks bm's head, a merge of two parents, in iso, a
 // repository of the factory's own with the copy's objects, against
-// bm.Reviewed and tip, origin/<base>'s commit, and fills in bm; why says
-// why it gets a full round (with err, a read git could not make).
-func (e *Engine) readBaseMerge(ctx context.Context, iso string, bm *BaseMerge, tip string) (why string, err error) {
+// bm.Reviewed and tips, the base's commits its second parent must be on
+// (each one itself, or an ancestor of it: a tip at a commit the copy has no
+// object of is a read git cannot make), and fills in bm; why says why it
+// gets a full round (with err, a read git could not make).
+func (e *Engine) readBaseMerge(ctx context.Context, iso string, bm *BaseMerge, tips ...baseTip) (why string, err error) {
 	git := e.d.Git
 	parents, err := git.Parents(ctx, iso, bm.Head)
 	switch {
@@ -270,12 +306,14 @@ func (e *Engine) readBaseMerge(ctx context.Context, iso string, bm *BaseMerge, t
 	if parents[0] != bm.Reviewed {
 		return fmt.Sprintf("its first parent %s is not %s, which the local review passed", short(parents[0]), short(bm.Reviewed)), nil
 	}
-	onBase, err := git.IsAncestor(ctx, iso, parents[1], tip)
-	switch {
-	case err != nil:
-		return "git cannot tell whether its second parent is a commit of " + bm.Base, err
-	case !onBase:
-		return fmt.Sprintf("its second parent %s is no commit of %s", short(parents[1]), bm.Base), nil
+	for _, tip := range tips {
+		onBase, err := git.IsAncestor(ctx, iso, parents[1], tip.sha)
+		switch {
+		case err != nil:
+			return "git cannot tell whether its second parent is a commit of " + tip.name, err
+		case !onBase:
+			return fmt.Sprintf("its second parent %s is no commit of %s", short(parents[1]), tip.name), nil
+		}
 	}
 	tree, conflicts, err := git.MergeTree(ctx, iso, parents[0], parents[1])
 	if err != nil {

@@ -8,8 +8,9 @@ package factory
 // environment, which could push or open the PR as someone else
 // (asOperator). It opens a PR ready for review (never --draft), finds the
 // PR of a branch among the repository's own (never a fork's of the same
-// branch name) and reads PRs back; the title and the body file pass to gh
-// as arguments, never through a shell.
+// branch name) and reads PRs back, and the commit a branch is at, which the
+// base merge's check takes as the base; the title and the body file pass
+// to gh as arguments, never through a shell.
 
 import (
 	"cmp"
@@ -317,6 +318,27 @@ func (g ghClient) MergeMethods(ctx context.Context, repo string) (MergeMethods, 
 		return MergeMethods{}, fmt.Errorf("%s allows no merge method", label)
 	}
 	return m, nil
+}
+
+// commitIDRe is a full commit id, SHA-1's or SHA-256's.
+var commitIDRe = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+
+// BranchSHA is the commit branch of repo is at on GitHub, read as you from
+// GitHub's own ref of it (`gh api repos/<repo>/git/ref/heads/<branch>`,
+// which answers 404 for no such branch), never through a clone's remote
+// config, which a pane in the clone can rewrite: an answer that is no full
+// commit id is an error.
+func (g ghClient) BranchSHA(ctx context.Context, repo, branch string) (string, error) {
+	path := "repos/" + repo + "/git/ref/heads/" + branch
+	res, err := g.gh(ctx, repo, "gh api "+path, false, "api", path, "--jq", ".object.sha")
+	if err != nil {
+		return "", err
+	}
+	sha := strings.TrimSpace(res.Out())
+	if !commitIDRe.MatchString(sha) {
+		return "", fmt.Errorf("gh api %s names no commit: %.80q", path, sha)
+	}
+	return sha, nil
 }
 
 // ViewPR reads PR number of repo back.

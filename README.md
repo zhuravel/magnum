@@ -5546,7 +5546,9 @@ open, and the round runs again in it. The stage passes only on a loop that revie
 A new head that only merges the base into the head the review passed is the exception. The factory reads git
 (never the writer's reply), in a repository of its own where no merge driver or attribute of the copy's applies:
 the head must be a merge of two parents, the first the reviewed head and the second a commit of `origin/<base>`,
-which the factory fetches from the remote first (the copy's ref is the main clone's, which the writer's pane can move).
+which the factory fetches from the remote first (the copy's ref is the main clone's, which the writer's pane can move),
+and a commit of the base GitHub reports (`gh api repos/<repo>/git/ref/heads/<base>`, as your gh login), since the fetch
+goes where the main clone's config says, which the pane can rewrite too.
 When git's own merge of the two is the merge (no conflict, the same tree), no round runs: the review's end holds at
 the merge, the factory's proof and precheck having run there as at any head, and the ready card says `base merged
 cleanly: no review round`. When the merge resolved conflicts, or changed what git's own merge would not (an evil
@@ -5557,8 +5559,8 @@ counts toward `max_rounds` as any round does, at and past the limit too; no seco
 keeps what the review before the merge left under KNOWN. The card names it and its files (`base merged with
 conflicts: a narrow round reviewed its resolutions in app/models/concerns/featurable.rb, db/schema.rb`). Any
 other head gets a full round, as before, and a review event says why: commits besides the merge, a merge of
-something other than the base, a merge into another head than the reviewed one, a base the factory cannot fetch,
-a conflict left exactly as git's merge wrote it, or a remerge diff git cannot produce. `base-merge.json` in the task's directory records the check,
+something other than the base, a merge into another head than the reviewed one, a base the factory cannot fetch
+or read on GitHub, a conflict left exactly as git's merge wrote it, or a remerge diff git cannot produce. `base-merge.json` in the task's directory records the check,
 so a restart decides alike.
 
 One clean round is a noisy answer: two runs of the same roles on one head disagreed on a P2 in 2 of 4 PRs, and the

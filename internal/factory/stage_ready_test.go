@@ -53,6 +53,51 @@ type fakeGitHub struct {
 	mergesOnRead   func()
 	mergesLeft     time.Duration
 	mergesDeadline bool
+	// base is the commit BranchSHA reports for a branch ("" = the bare
+	// origin's branch: GitHub's own repository, whatever a clone's remote
+	// config names), or baseErr its failure; baseCalls counts its calls, and
+	// onBaseRead runs as each read begins, before the answer is read.
+	base       string
+	baseErr    error
+	baseCalls  int
+	onBaseRead func()
+}
+
+// BranchSHA is the commit branch is at on GitHub: the bare origin's, unless
+// setBase says otherwise.
+func (f *fakeGitHub) BranchSHA(_ context.Context, _ string, branch string) (string, error) {
+	f.mu.Lock()
+	f.baseCalls++
+	onRead := f.onBaseRead
+	f.mu.Unlock()
+	if onRead != nil {
+		onRead()
+	}
+	f.mu.Lock()
+	sha, err := f.base, f.baseErr
+	f.mu.Unlock()
+	if err != nil || sha != "" {
+		return sha, err
+	}
+	if sha = f.r.gitOut(f.r.origin, "rev-parse", "refs/heads/"+branch); sha == "" {
+		return "", fmt.Errorf("gh: Not Found (HTTP 404): no branch %s", branch)
+	}
+	return sha, nil
+}
+
+// setBase has BranchSHA report sha (with err its failure; "" and nil: the
+// bare origin's branch), with onRead run as each read begins.
+func (f *fakeGitHub) setBase(sha string, err error, onRead func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.base, f.baseErr, f.onBaseRead = sha, err, onRead
+}
+
+// baseReads is how many times BranchSHA was called.
+func (f *fakeGitHub) baseReads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.baseCalls
 }
 
 func (f *fakeGitHub) MergeMethods(ctx context.Context, _ string) (MergeMethods, error) {
