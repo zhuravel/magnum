@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"slices"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/factory/registry"
 )
 
@@ -178,6 +180,46 @@ func TestAGitHubServerErrorAtTheRoundsBaseDoesNotSendTheTaskToYouAtOnce(t *testi
 	}
 	if !slices.ContainsFunc(r.eventTexts(task.ID, "alert"), func(s string) bool { return strings.Contains(s, "HTTP 502") }) {
 		t.Fatalf("alerts %q, want one naming GitHub's answer", r.eventTexts(task.ID, "alert"))
+	}
+}
+
+// A round that waits for the heavy slot reads no base on GitHub: the read
+// comes once the round may start, after its waits and the heavy slot, so a
+// pass that waits costs GitHub no call. Another task's round holds the
+// slot for 3 polls, and the task waits on it without a read; once the slot
+// is free, one read, and the round starts.
+func TestARoundThatWaitsForTheHeavySlotReadsNoBaseOnGitHub(t *testing.T) {
+	r := newReviewRig(t, result())
+	r.cfg.Factory.HeavyStages = 1
+	other := r.kindTask("PR-12428", "bug", "local_review")
+	review := r.e.runners[config.FactoryStageReview]
+	r.stage(config.FactoryStageReview, func(ctx context.Context, t registry.Task, st config.FactoryStage) (bool, error) {
+		if t.ID == other.ID {
+			return false, nil // its round runs: it holds the heavy slot
+		}
+		return review(ctx, t, st)
+	})
+	release, ok := r.e.heavy(r.ctx, other, heavyReview)
+	if !ok {
+		t.Fatal("the other task could not take the heavy slot")
+	}
+	task, head := r.reviewTask("PR-12429")
+	for range 3 {
+		r.clock.Add(45 * time.Second)
+		r.tick()
+		r.e.waitBackground()
+	}
+	if got := r.reload(task.ID); got.WaitsWho != "heavy" || got.WaitsWhat != "PR-12428's local review runs" || len(r.rv.calls()) != 0 ||
+		r.gh.baseReads() != 0 {
+		t.Fatalf("task waits %q: %q after %d rounds and %d reads of GitHub's base; want it waiting for the heavy slot with none",
+			got.WaitsWho, got.WaitsWhat, len(r.rv.calls()), r.gh.baseReads())
+	}
+	release()
+	r.clock.Add(45 * time.Second)
+	r.run(4, func() bool { return len(r.rv.calls()) > 0 })
+	if calls := r.rv.calls(); len(calls) != 1 || calls[0].HeadSHA != head || r.gh.baseReads() != 1 {
+		t.Fatalf("%d rounds and %d reads of GitHub's base once the slot is free, want one round at %s after one read", len(calls),
+			r.gh.baseReads(), short(head))
 	}
 }
 

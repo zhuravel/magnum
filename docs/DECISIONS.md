@@ -28129,6 +28129,10 @@ skill versions); people add theirs to the sections before it, at the end of the 
     failure of a task's does: its blocker comes after the same 30 minutes.
     Test, failing first: `TestAGitHubServerErrorAtTheRoundsBaseDoesNotSendTheTaskToYouAtOnce` (the task needed you
     after 4 polls of HTTP 502); it also holds the bound, a 502 that lasts 30 minutes needing you with an alert.
+  - No test pinned F2's first refinement, the read of GitHub's base once the round may start: with `roundBase` moved
+    before the heavy slot, every factory test passed, and a round waiting on another task's slot read GitHub each
+    poll. The code was right; `TestARoundThatWaitsForTheHeavySlotReadsNoBaseOnGitHub` now pins it (3 polls on the
+    slot, no read; the slot freed, one read and the round). Proved by that mutation: the test fails with 2 reads.
 
 ## Learned rules
 
