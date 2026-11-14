@@ -28039,6 +28039,62 @@ skill versions); people add theirs to the sections before it, at the end of the 
   clean); with the read moved after the fetch, the third fails (the moved base's commit is missing, a full round).
   No migration, no new key.
 
+- **The local rounds, the ready card's flags and the publish trust GitHub's base and URL, not the clone's remote**
+  (2026-11-14, F2, the follow-up the base merge's review left: "the rounds' diff base, the card's flags fetch and the
+  publish's push still trust the main clone's remote config"). The copies are worktrees of the main clone and share
+  its config, which the writer's pane can rewrite (`remote.origin.url` or `pushurl`, a `url.<x>.insteadOf` or
+  `pushInsteadOf`). With `origin/<base>` fetched to a commit X of the writer's own and the fix built on it, a full
+  round diffed X..head and left X's change unreviewed (GitHub's PR diff starts at the real base, so magnum's review
+  there still saw it), the card read the change's files and its conflicts against X, and the push could go to a
+  repository of the pane's choosing, as you.
+  - The rounds: `startRound` takes the round's base from `roundBase` once the round may start (after the waits and
+    the heavy slot, as the narrow round's remerge diff is made, so a pass that waits reads GitHub not at all): the
+    commit the base is at on GitHub, read as you (`githubBase`, F1's `BranchSHA`), a forced fetch of `origin/<base>`
+    after the read (it brings that commit when the base moved), and `git merge-base <head> <that commit>`, both
+    read in `Isolated` (no commit-graph or replace ref of the copy's). A failed read, no GitHub, a commit the copy has
+    no object of after the fetch, or no merge base start no round on a guessed base: the task waits saying why
+    (`round 1 of the local review cannot start: …; the factory tries again at the next poll`) and the pass fails, so
+    it is tried again a poll later, one read a try (`retryLater`), and after `stageFailLimit` tries or
+    `stageFailSpan` the task needs you with the reason and an alert (`taskFailed`); a network cause goes to the
+    infrastructure hold, which needs you after `holdNeedsYou`. So a GitHub outage holds the rounds, never silently
+    and never past those bounds, as the reviewer asked (the factory must deliver: the wait is bounded and names its
+    cause). A full round of F1's (a failed read at a base merge) now waits for that base too, then runs.
+  - The flags: `flags` reads the same base (`baseOnGitHub`, the fetch now after GitHub's read), the changed files and
+    the old guards from the head's merge base with it, and the conflicts with `git merge-tree` against that commit in
+    the same repository of the factory's own, where no merge driver or attribute of the copy's applies, as F1's
+    check merges. A commit the copy has no object of, or a failed read, is an error naming it, never "no
+    conflicts": the ready stage's pass fails and is bounded as above. A conflict sends the writer to merge that
+    commit (`rework.json`'s `base_sha`, which `mergeProblem` checks at the next head), not `origin/<base>`'s.
+  - The publish: `pushTarget` reads origin's fetch and push URLs as git resolves them (`gitx.OriginURLs`: `git
+    remote get-url --all origin` and `--push`, every rewrite of every config level expanded, credentials stripped:
+    no config key read by hand) and pushes only when every one is the task's repository on GitHub as the factory
+    knows it from `[[factory.repo]]` (`GitHub.IsRepoURL`: any form `gitx.ParseRemote` reads of
+    `github.com/<owner>/<name>`, the scp-like SSH form of the live main clones included, the names' case aside;
+    never a local path, `file://`, a `<transport>::<address>` or another host). Any other URL needs you, naming it,
+    before anything is read, pushed or opened. The push then goes to origin's push URL from a repository of its own
+    (`gitx.PushLeaseApart`, `pushIsolated`), so no setting of the copy's reaches it: neither a rewrite made after the
+    check nor an insteadOf of the HTTPS URL a github.com SSH origin is pushed over (`HTTPSFetch`), which
+    `get-url` of an SSH origin cannot show. The fetch URLs count too, since `HTTPSFetch` derives the HTTPS URL it
+    reaches from them, and the read of the remote branch uses them. The live origins are SSH, whose push went over
+    HTTPS with gh as git's only credential helper already; an HTTPS origin's push now gets its credentials from gh
+    alone too (your gh config dir), no longer from a helper of the clone's config.
+  - Rejected: pushing to `https://github.com/<repo>.git` built from the config alone (`PushLeaseGitHubAs`), which
+    would refuse nothing and say nothing of a rewritten remote; reading `url.*` keys by hand (git's own resolution
+    is the one that applies); and a wait with no bound for an unreadable base (a GitHub outage or a rate limit would
+    stall every review in silence).
+  - Left as it was: branchHead's base (the merge base with `origin/<base>`) still serves the factory's proof, the
+    precheck, QA, the card's diff hash and the fix go-on's log, and the read of the remote branch (`git ls-remote`)
+    still runs in the copy: a rewrite there can only make the publish skip a push GitHub then lacks (the PR's
+    creation or its read back fails) or refuse one, never push elsewhere. The coding rig's tests now have the fake
+    GitHub, whose base is the bare origin's and whose repository URL is the origin's path.
+  Tests, failing first: `TestARoundsDiffBaseIsGitHubsBaseNotTheRewrittenRemote` (the round diffed from the writer's
+  commit), `TestARoundWaitsWhenGitHubsBaseCannotBeRead` (the round started), `TestTheCardsFlagsUseGitHubsBase` (no
+  conflict and no writer's file with the rewritten remote), `TestTheCardsFlagsNeedGitHubsBaseInTheCopy` (a missing
+  base read as no conflicts), `TestThePublishRefusesARemoteTheWriterRewrote` (the head went to the pushurl's
+  repository and a PR was opened) and `TestThePublishTakesTheRepositorysGitHubURLInAnyForm` in internal/factory;
+  `TestOriginURLsAreWhereGitSendsAFetchAndAPush`, `TestPushLeaseApartGoesToTheURLItWasGiven` and
+  `TestPushLeaseApartGoesOverHTTPSAsFetchesDo` in internal/gitx. No migration, no new key, no new dependencies.
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

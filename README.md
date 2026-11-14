@@ -5433,7 +5433,15 @@ review session (`[herdr] review_session`, where a round opens its panes; yours b
 (`herdr: …`; with no herdr server running in a named one, the factory opens `herdr --session <name>` in a new
 terminal window, at most twice an hour, never your own session), and for a heavy
 slot; the factory reads magnum's registry and never migrates it (a registry of another schema waits, saying to
-restart magnum's daemon first). A round's roles work in the copy itself: before its result is read, the copy
+restart magnum's daemon first). Once it may start, a round's diff starts where the change starts on GitHub: at the
+merge base of the head with the commit the base is at on GitHub (`gh api repos/<repo>/git/ref/heads/<base>`, as
+your gh login), fetched to the main clone after the read and found in a repository of the factory's own, never at
+the copy's `origin/<base>`: the copies share the main clone's remote config, which the writer's pane can rewrite
+(`remote.origin.url`, a `url.<x>.insteadOf`) so that `origin/<base>` names a commit of its own, whose change a diff
+from there would leave out. A read that fails, or a commit the copy has no object of after the fetch, starts no
+round on a guessed base: the task waits saying why (`review: round 1 of the local review cannot start: the factory
+cannot read master on GitHub: …`), the factory tries again a poll later, and after 5 tries (or 5 minutes) the task
+needs you with the reason, as with any stage that keeps failing. A round's roles work in the copy itself: before its result is read, the copy
 must be as the round found it (the task's branch, at the head it reviewed, no tracked change, no untracked file
 the copy did not have before the round, file by file: a reviewer's probe file the writer's `git add -A` would
 commit). What a round left on that branch at that head (a reviewer's `bundle check` adds a line to
@@ -5608,12 +5616,16 @@ the local review left open`), as a layout that folds every section but a few fol
 place of the earlier one, after the marker `<!-- magnum factory: the Known list -->`. The ready stage
 (`ready_push`) draws the card only when the local review ended clean or on an oscillation at the task's head,
 the factory's proof and precheck passed there (`precheck.json`) and your gh identity is configured; otherwise
-the task needs you (`no ready card: …`). It reads a fresh `origin/<base>` and merges it into the head in memory
-(`git merge-tree`, no work tree touched): on a conflict the card names it and the task goes back to its coding
+the task needs you (`no ready card: …`). It reads the commit the base is at on GitHub (as the round does, then a
+fetch of `origin/<base>`), reads the change's files from the head's merge base with it, and merges it into the head
+in memory (`git merge-tree`, in a repository of the factory's own: no work tree touched, no merge driver or
+attribute of the copy's applied); a commit the copy has no object of after the fetch, or a read that fails, draws
+no card ("no conflicts" is never a guess): the stage is tried again a poll later and needs you after 5 tries. On a
+conflict the card names it and the task goes back to its coding
 stage, where the writer merges the base (its prompt names `origin/<base>` and the conflicting paths), the
 proof and the precheck run again, a fresh local loop reviews the merge, the judge drafts the body again, and
 the next card is a new revision. The coding stage passes such a turn only on a head that holds the base's
-commit the card saw: a writer that ends its turn without the merge gets one fix turn naming the base (within the
+commit the card saw (the one GitHub reported): a writer that ends its turn without the merge gets one fix turn naming the base (within the
 stage's 5 fix turns), then the task needs you (`the fx-writer agent did not merge origin/<base>`), and the same
 conflict at the same base a second time needs you instead of another round, as does a conflict after three merges of the base in a row
 (`origin/<base> conflicted with <branch> 3 times in a row`): merge the base on the branch in the copy
@@ -5632,12 +5644,19 @@ decide`. A drop is bound to no card: it stops a task at its ready stage even aft
 On your push the factory, never an agent, publishes the approved head once (the effect
 `publish:<task>:<sha>`): it checks the card's conditions again, the branch in the copy at the head you approved
 and the PR body as the card showed it, pushes to the branch and under the title the card named (a key linked
-since changes neither), checks that gh acts as your login in your gh config dir (`gh api user`; another account
+since changes neither), checks that origin reaches the task's repository on GitHub alone: every URL git would
+fetch origin from or push it to, as git resolves them (`git remote get-url --all origin` and `--push`, so a
+`remote.origin.pushurl`, a `url.<x>.insteadOf` or `pushInsteadOf` counts), must be `github.com/<owner>/<name>` of the
+`[[factory.repo]]` in any form git reads (`git@github.com:<owner>/<name>.git`, `ssh://`, `https://`, the names'
+case aside); a URL that is not needs you, naming it (`nothing is pushed: origin pushes to <url>, not <repo> on
+GitHub; …`), before anything is read, pushed or opened, since the copies share the main clone's config and the
+writer's pane can rewrite it. It then checks that gh acts as your login in your gh config dir (`gh api user`; another account
 needs you, naming both, before anything is pushed or opened), reads the remote branch (`git ls-remote`) and the PRs of the branch
 (only the repository's own: a fork's PR of a branch of the same name is none of the task's),
-pushes with a lease (`git push --force-with-lease=refs/heads/<branch>:<expected head> origin
-<sha>:refs/heads/<branch>`, refused for a commit that does not descend from the expected head, so it never
-rewrites history), opens the PR ready for review (never a draft) with `gh pr create` as your gh identity (the one
+pushes with a lease to origin's push URL from a repository of its own, where no setting of the copy's applies
+(`git push --force-with-lease=refs/heads/<branch>:<expected head> <url> <sha>:refs/heads/<branch>`, a github.com
+SSH URL over HTTPS with gh as git's only credential helper, refused for a commit that does not descend from the
+expected head, so it never rewrites history), opens the PR ready for review (never a draft) with `gh pr create` as your gh identity (the one
 the local review runs as) and the drafted body, and reads it back: the author must be your login, the base the
 repository's, the head the approved one, and it must not be a draft, or the task needs you (`the PR's <field>
 is not what you approved`). It never forces: a remote branch at a head it did not push, or a PR of the branch
