@@ -296,8 +296,11 @@ func secondIn(dir string, loop []registry.Cycle) int {
 
 // withSecond is sum, the end of a loop, with the loop's second opinion
 // (secondIn): its judge and its round, and at the head the clean round it
-// followed reviewed, that round's leftovers and doubts sum lacks.
+// followed reviewed, that round's leftovers and doubts sum lacks; and, for
+// a loop a base merge's narrow round began, with that merge and what the
+// review before it left (withMerge).
 func withSecond(dir string, loop []registry.Cycle, sum ReviewSummary) ReviewSummary {
+	sum = withMerge(dir, loop, sum)
 	i := secondIn(dir, loop)
 	if i < 0 {
 		return sum
@@ -390,7 +393,9 @@ func (e *Engine) secondSpent(ctx context.Context, t registry.Task, so secondOpin
 // runs on Codex, a judge of another kind takes its place (otherJudge), Codex
 // works on the task (else its rounds ran with that judge already) and the
 // round is not the last a loop numbers; each of these that fails is an
-// event saying so, and a narrow change or "never" none. The opinion is
+// event saying so, and a narrow change or "never" none. A base merge's
+// narrow round (narrowAt) gets none, with an event: it read the merge's
+// remerge diff alone, and the change before it passed. The opinion is
 // written first, its event next, and cy ends with the loop going on: the
 // next round is the second opinion (secondRound). A daemon that stopped
 // after the write ends cy now, and writes the event if it did not.
@@ -403,6 +408,11 @@ func (e *Engine) decideSecond(ctx context.Context, t registry.Task, c Copy, cy r
 	}
 	setting := e.cfg.Factory.LocalReview.SecondJudge
 	if setting == config.FactorySecondJudgeNever {
+		return false, nil
+	}
+	if narrowAt(dir, cy.HeadBefore) { // the round read a base merge's remerge diff alone: the change before it passed the review
+		e.event(ctx, t.ID, "review", registry.PhaseInfo, fmt.Sprintf("no second opinion after round %d (cycle %d): it reviewed the base merge's "+
+			"remerge diff alone, and the change before the merge passed the local review", round, cy.N))
 		return false, nil
 	}
 	var unfinished registry.Cycle

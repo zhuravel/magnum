@@ -231,6 +231,11 @@ type ReviewSummary struct {
 	// ready card and the PR body name; 0 for any other end.
 	Limit      int `json:"limit,omitempty"`
 	TaskRounds int `json:"task_rounds,omitempty"`
+	// BaseMerge is the check of a head that merged the base into the head
+	// the review passed (review_merge.go): a clean merge's, which carried
+	// the review there with no round, or a narrow round's, whose loop
+	// this summary ends. nil for any other review.
+	BaseMerge *BaseMerge `json:"base_merge,omitempty"`
 }
 
 // localRound is a round that runs off the loop: its cycle (id and number),
@@ -308,7 +313,11 @@ func (e *Engine) sweepRounds(tasks []registry.Task) {
 // that ended one: with you (cap, unavailable, operator), and your "go on"
 // after it starts a loop afresh, or clean or on an oscillation, and a head
 // the loop did not review (a send back's commits, the base merged after a
-// conflict at the ready card) starts a fresh loop of up to cycles rounds.
+// conflict at the ready card) starts a fresh loop of up to cycles rounds,
+// unless it only merges the base into the head the review passed
+// (mergedBase): a clean merge passes the stage with no round, and one that
+// resolved conflicts or changed more than git's own merge gets a narrow
+// round of the judge on its remerge diff (review_merge.go).
 // Your "go on" after a stop at the cap, at the head its round reviewed, or
 // the factory's own after a safe one (goOnAtCap), first hands that round's
 // findings to the writer (capFix), and the fresh loop reviews the writer's
@@ -392,6 +401,11 @@ func (e *Engine) reviewPass(ctx context.Context, t registry.Task, st config.Fact
 	}
 	if handled, done, err := e.finishBetween(ctx, t, cycles); handled || err != nil {
 		return done, err
+	}
+	if len(loop) == 0 { // a fresh loop's start: a head that merges the base into the head the review passed is checked first
+		if handled, done, err := e.mergedBase(ctx, t, c); handled || err != nil {
+			return done, err
+		}
 	}
 	return false, e.startRound(ctx, t, c, nil, len(loop)+1)
 }
@@ -501,9 +515,10 @@ func loopCycles(cs []registry.Cycle) []registry.Cycle {
 // once it may: not while the daemon drains (a stop's drain, or install's),
 // and after the waits of the lowest priority (reviewWait) and a heavy slot.
 // Its roles are the watch's (reviewRoles), the judge_fallback in the
-// judge's place for the task's second opinion (secondRound), its case the
-// change at the task's proven head (localCase); the round runs off the loop
-// (launchRound).
+// judge's place for the task's second opinion (secondRound), the judge
+// alone at a head whose base merge base-merge.json names narrow (narrowAt:
+// its case's Remerge), its case the change at the task's proven head
+// (localCase); the round runs off the loop (launchRound).
 func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *registry.Cycle, round int) error {
 	if e.startsHeld() {
 		return nil
@@ -526,6 +541,7 @@ func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *re
 	if err != nil {
 		return e.stageFailed(ctx, t, err)
 	}
+	roles, narrow := e.narrowRoles(t, cy, roles, second)
 	who, what, err := e.reviewWait(ctx, t, roles)
 	if err != nil {
 		return err
@@ -572,6 +588,7 @@ func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *re
 		return e.headMoved(ctx, t, bh.Head)
 	}
 	lc := e.localCase(t, *w, c, bh, repo, roles, round)
+	lc.Remerge = narrow
 	release, ok := e.heavy(ctx, t, heavyReview)
 	if !ok {
 		return nil // the task waits "heavy: …"
@@ -899,9 +916,13 @@ func (e *Engine) launchRound(ctx context.Context, t registry.Task, cy registry.C
 	e.reviews[t.ID] = r
 	e.reviewMu.Unlock()
 	endWork := e.beginWork(WorkRound, t.ID, fmt.Sprintf("local review round %d of %s", lc.Round, TaskKey(t)))
-	e.waitOn(ctx, t, waitReview, fmt.Sprintf("round %d of the local review runs%s", lc.Round, judge.wait()))
-	e.event(ctx, t.ID, "review", registry.PhaseBegin, fmt.Sprintf("round %d (cycle %d) at %s: %s%s", lc.Round, cy.N, short(lc.HeadSHA),
-		strings.Join(lc.Roles, ", "), judge.begin()))
+	narrow, narrowWait := "", ""
+	if lc.Remerge { // the base merge's narrow round
+		narrow, narrowWait = "; narrow: the judge alone on the base merge's remerge diff", " (narrow: the judge alone on the base merge's remerge diff)"
+	}
+	e.waitOn(ctx, t, waitReview, fmt.Sprintf("round %d of the local review runs%s%s", lc.Round, judge.wait(), narrowWait))
+	e.event(ctx, t.ID, "review", registry.PhaseBegin, fmt.Sprintf("round %d (cycle %d) at %s: %s%s%s", lc.Round, cy.N, short(lc.HeadSHA),
+		strings.Join(lc.Roles, ", "), judge.begin(), narrow))
 	path := filepath.Join(e.d.Layout.FactoryTaskDir(t.ID), reviewRoundFile(cy.N))
 	e.bg.Go(func() {
 		defer endWork()

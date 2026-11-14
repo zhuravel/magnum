@@ -297,11 +297,13 @@ func summaryEndsAt(dir, head string) bool {
 }
 
 // summaryExitAt reports whether review-summary.json in dir ended the loop
-// at head with one of exits.
+// at head with one of exits, or carried the review there over a clean
+// merge of the base, whatever its exit (mergedCleanAt): no round reviewed
+// that head, so no cycle ended there, and the review passed there as it
+// passed before the merge.
 func summaryExitAt(dir, head string, exits ...string) bool {
-	var sum ReviewSummary
-	b, err := os.ReadFile(filepath.Join(dir, reviewSummaryFile))
-	return err == nil && json.Unmarshal(b, &sum) == nil && slices.Contains(exits, sum.Exit) && head != "" && sum.Head == head
+	sum, ok := readSummary(dir)
+	return ok && head != "" && sum.Head == head && (slices.Contains(exits, sum.Exit) || sum.mergedCleanAt(head))
 }
 
 // secondHeld is why the task's second opinion, one round more, does not

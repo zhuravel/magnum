@@ -15084,6 +15084,24 @@ type AnswerPayload struct {
     the batch from it. It is left out of the request when zero, so a daemon that
     predates it still takes an answer that names no time.
 
+type BaseMerge struct {
+	Head      string   `json:"head"`
+	Reviewed  string   `json:"reviewed"`
+	Base      string   `json:"base"`
+	BaseSHA   string   `json:"base_sha,omitempty"`
+	Kind      string   `json:"kind"`
+	Files     []string `json:"files,omitempty"`
+	Conflicts []string `json:"conflicts,omitempty"`
+	Why       string   `json:"why,omitempty"`
+}
+    BaseMerge is the check of a head (Head, the task's) that merges the base
+    into the head the local review passed: its first parent (Reviewed),
+    the base's ref (Base, origin/<base>) and its second parent (BaseSHA), what
+    the check made of it (Kind), and for a narrow one the files of its remerge
+    diff (Files: the conflicts it resolved and the changes git's own merge would
+    not make) and those git's merge conflicts in (Conflicts); Why is why a full
+    one is no merge of the base alone.
+
 type CardFile struct {
 	Path    string `json:"path"`
 	Added   int    `json:"added,omitempty"`
@@ -16469,6 +16487,11 @@ type ReviewSummary struct {
 	// ready card and the PR body name; 0 for any other end.
 	Limit      int `json:"limit,omitempty"`
 	TaskRounds int `json:"task_rounds,omitempty"`
+	// BaseMerge is the check of a head that merged the base into the head
+	// the review passed (review_merge.go): a clean merge's, which carried
+	// the review there with no round, or a narrow round's, whose loop
+	// this summary ends. nil for any other review.
+	BaseMerge *BaseMerge `json:"base_merge,omitempty"`
 }
     ReviewSummary is review-summary.json: how the local review ended (exit clean
     or oscillation, or cap_fixed for a loop that passed at its cap after the

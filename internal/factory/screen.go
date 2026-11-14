@@ -1331,8 +1331,20 @@ func noPushOf(card ReadyCardFile) string {
 
 // readyRecommendation is the choice the ready card recommends (one of
 // readyChoices) and why, from what it shows: card, and the checks the
-// factory ran itself that failed at its head (failed).
+// factory ran itself that failed at its head (failed). A push's why starts
+// with the check of a base merge the review summary carries, when there is
+// one ("base merged cleanly: no review round", or the narrow round and its
+// files: BaseMerge.cardWords).
 func readyRecommendation(card ReadyCardFile, failed []string) (choice, why string) {
+	choice, why = readyWhy(card, failed)
+	if w := card.Review.BaseMerge.cardWords(); w != "" && choice == ChoicePush {
+		why = w + "; " + why
+	}
+	return choice, why
+}
+
+// readyWhy is readyRecommendation without the base merge's words.
+func readyWhy(card ReadyCardFile, failed []string) (choice, why string) {
 	rev := card.Review
 	switch {
 	case noPushOf(card) != "":

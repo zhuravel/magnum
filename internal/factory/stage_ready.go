@@ -10,8 +10,10 @@ package factory
 // on a conflict the task goes back through its own stages, no second
 // path: the writer merges the base in a coding turn (rework.json names
 // origin/<base> and the paths), the proof and the precheck run again, the
-// new head gets a fresh local loop, the judge drafts the body again, and
-// the next card is a new revision. The card (ready-card.json) holds what
+// new head gets the local review's check of a base merge (a narrow round
+// of the judge on the merge's resolutions, review_merge.go; none for a
+// clean merge), the judge drafts the body again, and the next card is a
+// new revision. The card (ready-card.json) holds what
 // your decision binds to: the head, the hash of report.md and pr-body.md as
 // shown, and the hash of the diff. Your decision (decide) is refused when
 // any of them changed since ("the branch changed after you read it"); a
@@ -817,7 +819,8 @@ func (e *Engine) drawCard(ctx context.Context, t registry.Task, c Copy, now card
 // (mergeProblem). The same conflict at the same base a second time (a merge
 // turn the card sent the task back for already, whose merge did not take)
 // is a needsYou, never another round, and so is a base that conflicted
-// maxBaseMerges times in a row (each merge costs a fresh local loop).
+// maxBaseMerges times in a row (each merge costs a narrow round of the
+// local review, and a new card).
 func (e *Engine) mergeTheBase(ctx context.Context, t registry.Task, card ReadyCardFile, base, baseSHA string, conflicts []string) error {
 	dir := e.d.Layout.FactoryTaskDir(t.ID)
 	if prev, ok := sameConflict(dir, baseSHA, conflicts); ok {

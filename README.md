@@ -5543,6 +5543,22 @@ parking the task on you, its P3s left for the card and `w`, and a review event s
 open, and the round runs again in it. The stage passes only on a loop that reviewed the task's head: a new head
 (a send back's commits, the base merged after a conflict at the card, a commit of yours) starts a fresh loop of up to `cycles` rounds.
 
+A new head that only merges the base into the head the review passed is the exception. The factory reads git
+(never the writer's reply), in a repository of its own where no merge driver or attribute of the copy's applies:
+the head must be a merge of two parents, the first the reviewed head and the second a commit of `origin/<base>`.
+When git's own merge of the two is the merge (no conflict, the same tree), no round runs: the review's end holds at
+the merge, the factory's proof and precheck having run there as at any head, and the ready card says `base merged
+cleanly: no review round`. When the merge resolved conflicts, or changed what git's own merge would not (an evil
+merge), one narrow round runs: the review's judge alone reads `git show --remerge-diff <merge>`, the conflicts' resolutions and
+any extra change, with the plan as the change's purpose, and its findings go to the writer as any round's do. It
+counts toward `max_rounds` as any round does, at and past the limit too; no second opinion follows it, and its end
+keeps what the review before the merge left under KNOWN. The card names it and its files (`base merged with
+conflicts: a narrow round reviewed its resolutions in app/models/concerns/featurable.rb, db/schema.rb`). Any
+other head gets a full round, as before, and a review event says why: commits besides the merge, a merge of
+something other than the base, a merge into another head than the reviewed one, a conflict left exactly as git's
+merge wrote it, or a remerge diff git cannot produce. `base-merge.json` in the task's directory records the check,
+so a restart decides alike.
+
 One clean round is a noisy answer: two runs of the same roles on one head disagreed on a P2 in 2 of 4 PRs, and the
 same judge run again mostly repeats itself. So a round that ends clean with the watch's judge on Codex gets a
 second opinion before the stage ends (`[factory.local_review] second_judge`: `"wide"`, the default, on a wide
