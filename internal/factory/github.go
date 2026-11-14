@@ -366,7 +366,7 @@ func isGitHubRepoURL(repo, url string) bool {
 			return false
 		}
 	} else if user, _, ok := strings.Cut(url, "@"); !ok || strings.ContainsAny(user, ":/") {
-		return false // neither a URL nor the scp-like <user>@<host>:<path>
+		return false // neither a URL nor the scp-like <user>@<host>:<path>; git reads a slash before the colon as a local path
 	}
 	r, ok := gitx.ParseRemote(url)
 	return ok && r.Host == "github.com" && strings.EqualFold(r.FullName(), repo)

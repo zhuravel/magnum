@@ -28133,6 +28133,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
     before the heavy slot, every factory test passed, and a round waiting on another task's slot read GitHub each
     poll. The code was right; `TestARoundThatWaitsForTheHeavySlotReadsNoBaseOnGitHub` now pins it (3 polls on the
     slot, no read; the slot freed, one read and the round). Proved by that mutation: the test fails with 2 reads.
+  - No test pinned `isGitHubRepoURL`'s check of the scp-like user part, the one guard against a local path that
+    `gitx.ParseRemote` reads as GitHub: git reads `/srv/git@github.com:example/shop.git` and
+    `./git@github.com:example/shop.git` as paths (a slash before the first colon), and with the check gone the
+    publish would push your approved head to such a URL, the writer's local repository. Both are now refused in
+    `TestThePublishTakesTheRepositorysGitHubURLInAnyForm`; proved by the mutation that drops the check (both taken as
+    the push URL). Searched for another such form with git itself (`git ls-remote` in an empty temporary directory, a
+    fake ssh): every scp-like URL the rule takes started SSH (an empty or odd user, `~x@`, a path after the colon that
+    starts with `/`), and every one git read as a path (`/…`, `./…`, `../…`, `~/…`) had a slash in the user part,
+    which the check refuses. None other was found, so the rule is unchanged.
 
 ## Learned rules
 

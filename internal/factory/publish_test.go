@@ -783,7 +783,8 @@ func TestThePublishRefusesARemoteTheWriterRewrote(t *testing.T) {
 // every form gitx.ParseRemote reads of the repository's URL on GitHub
 // passes the publish's check, the names' case aside, and the push goes to
 // origin's push URL; another repository on GitHub, another host, a local
-// path and a file:// URL do not.
+// path (one with a slash before an scp-like git@github.com: too, which git
+// reads as a path and gitx.ParseRemote as GitHub) and a file:// URL do not.
 func TestThePublishTakesTheRepositorysGitHubURLInAnyForm(t *testing.T) {
 	r := newCodingRig(t)
 	task := r.codingTask("PR-12431", "bug")
@@ -797,6 +798,8 @@ func TestThePublishTakesTheRepositorysGitHubURLInAnyForm(t *testing.T) {
 		"git@github.com:alice/shop.git":                             false,
 		"git@gitlab.com:example/shop.git":                           false,
 		"/srv/git/example/shop.git":                                 false,
+		"/srv/git@github.com:example/shop.git":                      false, // a slash before the colon: git reads a local path
+		"./git@github.com:example/shop.git":                         false,
 		"file://github.com/example/shop.git":                        false,
 		"https://github.com.example/example/shop":                   false,
 		"https://github.com@example.com/example/shop.git":           false,
