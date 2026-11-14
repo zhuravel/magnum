@@ -85,6 +85,13 @@ func (f *fakeGitHub) BranchSHA(_ context.Context, _ string, branch string) (stri
 	return sha, nil
 }
 
+// IsRepoURL reports whether url is the repository on GitHub: the bare
+// origin's path, the rig's GitHub, or any URL the client's own rule takes
+// (isGitHubRepoURL).
+func (f *fakeGitHub) IsRepoURL(repo, url string) bool {
+	return (f.r != nil && url == f.r.origin) || isGitHubRepoURL(repo, url)
+}
+
 // setBase has BranchSHA report sha (with err its failure; "" and nil: the
 // bare origin's branch), with onRead run as each read begins.
 func (f *fakeGitHub) setBase(sha string, err error, onRead func()) {

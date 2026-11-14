@@ -11,8 +11,12 @@ package factory
 // head you approved and the PR body as the card showed it. A daemon
 // stopped in the middle resumes from the effect row: it reads the remote
 // branch (git ls-remote) and the PRs of the branch first, so a branch at
-// the approved head is not pushed again and a PR is opened once. It never
-// forces: a remote branch at a head the factory did not push, or a PR of
+// the approved head is not pushed again and a PR is opened once. It pushes
+// only to the repository's own URL on GitHub: origin's URLs as git
+// resolves them must all be the task's repository there (pushTarget),
+// else it needs you naming the URL, and the push goes from a repository of
+// its own (PushLeaseApart), where no setting of the copy's applies. It
+// never forces: a remote branch at a head the factory did not push, or a PR of
 // the branch that is not the one you approved, needs you, naming it. The
 // PR read back must be yours, on the base, at the approved head and not a
 // draft, or the task needs you naming the field. Then the PR is linked,
@@ -194,15 +198,21 @@ type publishing struct {
 
 // publish pushes pub.sha to pub.branch from the copy at dir with git (as
 // you: operatorGit) and opens its PR on pub.base as pub.login, each step
-// guarded and evented: gh must act as your login first (ActiveLogin, before
-// anything is pushed or opened), the remote branch and the PRs of the
-// branch are read before any step, so a step done before is not done
-// again, and nothing is forced. problem is what needs you (another gh
-// account, a branch or a PR that is not the one you approved, the PR read
-// back); err a failure to run, which the effect runs again after.
+// guarded and evented: origin must reach the repository on GitHub alone
+// (pushTarget: the URL the push goes to), then gh must act as your login
+// (ActiveLogin, before anything is pushed or opened), the remote branch and
+// the PRs of the branch are read before any step, so a step done before is
+// not done again, and nothing is forced. problem is what needs you (a
+// remote that is not GitHub's, another gh account, a branch or a PR that
+// is not the one you approved, the PR read back); err a failure to run,
+// which the effect runs again after.
 func (e *Engine) publish(ctx context.Context, t registry.Task, git *gitx.Client, dir string, pub publishing) (view PRView, problem string,
 	err error) {
 	gh, branch, base, sha, login := e.d.GitHub, pub.branch, pub.base, pub.sha, pub.login
+	target, why, err := e.pushTarget(ctx, git, dir, t)
+	if err != nil || why != "" {
+		return view, why, err
+	}
 	active, err := gh.ActiveLogin(ctx, t.Repo)
 	if err != nil {
 		return view, "", err
@@ -241,7 +251,7 @@ func (e *Engine) publish(ctx context.Context, t registry.Task, git *gitx.Client,
 		e.event(ctx, t.ID, "publish", registry.PhaseOK, "push: "+branch+" is at "+short(sha)+" on origin already")
 	case "":
 		if err := step("push", "pushes "+short(sha)+" of "+t.Branch+" to "+branch+" (a new branch)", func() (string, error) {
-			return "pushed " + short(sha), git.PushLease(ctx, dir, sha, branch, "")
+			return "pushed " + short(sha), git.PushLeaseApart(ctx, dir, target, sha, branch, "")
 		}); err != nil {
 			return view, "", err
 		}
@@ -270,6 +280,44 @@ func (e *Engine) publish(ctx context.Context, t registry.Task, git *gitx.Client,
 		return view, field, nil
 	}
 	return view, "", nil
+}
+
+// pushTarget is the URL the publish of task t pushes to from the copy at
+// dir, with git (as you): origin's push URL as git resolves it, every
+// rewrite of the config applied (gitx.OriginURLs), and only once every URL
+// git reaches origin at, to fetch or to push, is the task's repository on
+// GitHub, as the factory knows it from [[factory.repo]] (GitHub.IsRepoURL),
+// never as the main clone's config alone says: the copies share that
+// config, and the writer's pane can rewrite remote.origin.url or
+// remote.origin.pushurl, or add a url.<x>.insteadOf or pushInsteadOf, so
+// that your approved head, pushed as you, goes to a repository of its own.
+// why names the URL that is not GitHub's, which needs you before anything
+// is read from it, pushed or opened; err is a read git could not make.
+// The push itself goes from a repository of its own (PushLeaseApart), so
+// no rewrite made after the check reaches it.
+func (e *Engine) pushTarget(ctx context.Context, git *gitx.Client, dir string, t registry.Task) (target, why string, err error) {
+	for _, push := range []bool{false, true} {
+		urls, err := git.OriginURLs(ctx, dir, push)
+		if err != nil {
+			return "", "", err
+		}
+		for _, url := range urls {
+			if e.d.GitHub.IsRepoURL(t.Repo, url) {
+				continue
+			}
+			verb := "fetches from"
+			if push {
+				verb = "pushes to"
+			}
+			return "", fmt.Sprintf("nothing is pushed: origin %s %s, not %s on GitHub; the main clone's git config (remote.origin.url or "+
+				"pushurl, a url.<x>.insteadOf or pushInsteadOf) points it elsewhere: set it back to the repository's GitHub URL "+
+				"(git remote get-url --push --all origin shows where it goes), then `magnum factory retry %d`", verb, url, t.Repo, t.ID), nil
+		}
+		if push {
+			target = urls[0]
+		}
+	}
+	return target, "", nil
 }
 
 // prMismatch is the first field of PR v that is not what you approved

@@ -15537,14 +15537,17 @@ type Flags struct {
 	OldGuards                          []OldGuard
 	Conflicts                          []string
 	PrecheckUnfinished                 string
+
+	// Has unexported fields.
 }
-    Flags are what the ready card's FLAGS line names: the migrations
-    the branch adds (with their flags), the sensitive files it changes,
-    the files it changes that the plan did not name, the old guards it touches,
-    the CI jobs whose commands did not run locally ("<workflow>: <job>"), the
-    paths merging origin/<base> into it would conflict in, and what the precheck
+    Flags are what the ready card's FLAGS line names: the migrations the branch
+    adds (with their flags), the sensitive files it changes, the files it
+    changes that the plan did not name, the old guards it touches, the CI jobs
+    whose commands did not run locally ("<workflow>: <job>"), the paths merging
+    the base GitHub reports into it would conflict in, and what the precheck
     that passed at the head did not finish (its cap's note, from precheck.json;
-    "" for nothing).
+    "" for nothing). The change is read from its merge base with that commit,
+    whose id the flags keep as the base a merge turn is sent to merge.
 
 func (f Flags) Lines() []string
     Lines are the flags as the card's FLAGS line says them, one each; none when
@@ -15575,14 +15578,17 @@ type GitHub interface {
 	ActiveLogin(ctx context.Context, repo string) (string, error)
 	MergeMethods(ctx context.Context, repo string) (MergeMethods, error)
 	BranchSHA(ctx context.Context, repo, branch string) (string, error)
+	IsRepoURL(repo, url string) bool
 }
     GitHub opens a task's PR (ready for review, never a draft) and reads it
     back, by its branch or its number; ActiveLogin is the login gh acts as for
     repo now (the account active in your gh config dir), MergeMethods the ways
     repo's settings let a PR merge, which the prompts of the roles that ask you
     questions name, and BranchSHA the commit a branch of repo is at on GitHub,
-    which the base merge's check reads the base at (checkBaseMerge), never
-    through a clone's remote config.
+    which the base merge's check, the local rounds and the ready card's flags
+    read the base at (checkBaseMerge, baseOnGitHub), never through a clone's
+    remote config. IsRepoURL reports whether a git remote URL is repo's on
+    GitHub: the publish pushes only to such a URL (pushTarget).
 
 func NewGitHub(cfg *config.Config, run execx.Runner) GitHub
     NewGitHub is the factory's GitHub over run: gh as your gh identity for each

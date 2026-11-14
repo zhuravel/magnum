@@ -730,6 +730,91 @@ func TestAPublishedTaskFreesItsCopyAndStartsTheQueuedOne(t *testing.T) {
 	}
 }
 
+// The publish pushes only to the repository's own URL on GitHub, as the
+// factory knows the repository (its [[factory.repo]]'s owner/name), never
+// where the main clone's remote config alone says, which the writer's pane
+// can rewrite: git resolves where it would fetch origin from and push it
+// to (`git remote get-url --all`, and `--push`), and a remote.origin.pushurl,
+// a url.<x>.pushInsteadOf or insteadOf, or a remote.origin.url that points
+// elsewhere needs you, naming the URL, before anything is read from it,
+// pushed or opened. With the remote back on GitHub's URL, your retry
+// publishes the head you approved.
+func TestThePublishRefusesARemoteTheWriterRewrote(t *testing.T) {
+	r := newReadyRig(t)
+	task, head := r.toCard("PR-12430")
+	other := filepath.Join(r.root, "other.git")
+	r.git(r.root, "init", "--quiet", "--bare", other)
+	r.git(r.main, "config", "remote.origin.pushurl", other)
+	if q := r.decideOn(task.ID, r.card(task.ID), ChoicePush, "", ""); q.State != registry.RequestDone {
+		t.Fatalf("push request %s: %q", q.State, q.Result)
+	}
+	got := r.published(task.ID)
+	if got.State != registry.TaskNeedsYou || !strings.Contains(got.WaitsWhat, other) || !strings.Contains(got.WaitsWhat, "nothing is pushed") ||
+		r.remoteHead(task.Branch) != "" || r.gitOut(other, "for-each-ref", "--format=%(refname)") != "" || len(r.gh.createCalls()) != 0 {
+		t.Fatalf("task %s waits %q; GitHub's %s at %q, %q pushed elsewhere, %d PRs; want you, the URL named, and nothing pushed",
+			got.State, got.WaitsWhat, task.Branch, r.remoteHead(task.Branch), r.gitOut(other, "for-each-ref", "--format=%(refname)"),
+			len(r.gh.createCalls()))
+	}
+	r.git(r.main, "config", "--unset", "remote.origin.pushurl")
+
+	for _, rw := range []struct {
+		what       string
+		set, unset []string
+	}{
+		{"a pushInsteadOf", []string{"config", "url." + other + ".pushInsteadOf", r.origin}, []string{"config", "--unset", "url." + other + ".pushInsteadOf"}},
+		{"an insteadOf", []string{"config", "url." + other + ".insteadOf", r.origin}, []string{"config", "--unset", "url." + other + ".insteadOf"}},
+		{"remote.origin.url", []string{"remote", "set-url", "origin", other}, []string{"remote", "set-url", "origin", r.origin}},
+	} {
+		r.git(r.main, rw.set...)
+		if _, why, err := r.e.pushTarget(r.ctx, r.e.d.Git, r.copyDir, task); err != nil || !strings.Contains(why, other) {
+			t.Errorf("%s: the publish's check says %q (%v), want it refused naming %s", rw.what, why, err, other)
+		}
+		r.git(r.main, rw.unset...)
+	}
+
+	r.retryAnswer(task.ID)
+	if got := r.published(task.ID); got.State != registry.TaskPublished || r.remoteHead(task.Branch) != head {
+		t.Fatalf("task %s waits %q, GitHub's %s at %q; want it published at %s once the remote is GitHub's", got.State, got.WaitsWhat,
+			task.Branch, r.remoteHead(task.Branch), short(head))
+	}
+}
+
+// The live main clones' origins are SSH (git@github.com:<owner>/<name>.git):
+// every form gitx.ParseRemote reads of the repository's URL on GitHub
+// passes the publish's check, the names' case aside, and the push goes to
+// origin's push URL; another repository on GitHub, another host, a local
+// path and a file:// URL do not.
+func TestThePublishTakesTheRepositorysGitHubURLInAnyForm(t *testing.T) {
+	r := newCodingRig(t)
+	task := r.codingTask("PR-12431", "bug")
+	r.e.d.GitHub = NewGitHub(r.cfg, nil) // the client's own rule, not the rig's
+	for url, ok := range map[string]bool{
+		"git@github.com:example/shop.git":                           true,
+		"ssh://git@github.com/Example/Shop":                         true,
+		"https://github.com/example/shop.git":                       true,
+		"https://github.com/example/shop":                           true,
+		"git@github.com:example/shop-fork.git":                      false,
+		"git@github.com:alice/shop.git":                             false,
+		"git@gitlab.com:example/shop.git":                           false,
+		"/srv/git/example/shop.git":                                 false,
+		"file://github.com/example/shop.git":                        false,
+		"https://github.com.example/example/shop":                   false,
+		"https://github.com@example.com/example/shop.git":           false,
+		"ext::ssh -oProxyCommand=x git@github.com:example/shop.git": false,
+	} {
+		r.git(r.main, "remote", "set-url", "origin", url)
+		target, why, err := r.e.pushTarget(r.ctx, r.e.d.Git, r.copyDir, task)
+		if err != nil || (why == "") != ok || (ok && target != url) {
+			t.Errorf("origin %s: the push goes to %q, refused %q (%v); want it taken %v", url, target, why, err, ok)
+		}
+	}
+	r.git(r.main, "remote", "set-url", "origin", "https://github.com/example/shop.git")
+	r.git(r.main, "config", "remote.origin.pushurl", "git@github.com:example/shop.git")
+	if target, why, err := r.e.pushTarget(r.ctx, r.e.d.Git, r.copyDir, task); err != nil || why != "" || target != "git@github.com:example/shop.git" {
+		t.Fatalf("an SSH pushurl beside an HTTPS URL: the push goes to %q, refused %q (%v); want the pushurl taken", target, why, err)
+	}
+}
+
 // The factory sends magnum no review request: magnum's request table stays
 // untouched, the PR is no draft and magnum reviews it by itself.
 func TestTheFactorySendsMagnumNoReviewRequest(t *testing.T) {

@@ -190,8 +190,11 @@ type PRView struct {
 // for repo now (the account active in your gh config dir), MergeMethods
 // the ways repo's settings let a PR merge, which the prompts of the roles
 // that ask you questions name, and BranchSHA the commit a branch of repo
-// is at on GitHub, which the base merge's check reads the base at
-// (checkBaseMerge), never through a clone's remote config.
+// is at on GitHub, which the base merge's check, the local rounds and the
+// ready card's flags read the base at (checkBaseMerge, baseOnGitHub),
+// never through a clone's remote config. IsRepoURL reports whether a git
+// remote URL is repo's on GitHub: the publish pushes only to such a URL
+// (pushTarget).
 type GitHub interface {
 	CreatePR(ctx context.Context, repo, base, branch, title, bodyFile string) (PRView, error)
 	PRByBranch(ctx context.Context, repo, branch string) (PRView, bool, error)
@@ -199,6 +202,7 @@ type GitHub interface {
 	ActiveLogin(ctx context.Context, repo string) (string, error)
 	MergeMethods(ctx context.Context, repo string) (MergeMethods, error)
 	BranchSHA(ctx context.Context, repo, branch string) (string, error)
+	IsRepoURL(repo, url string) bool
 }
 
 // MergeMethods are the ways a repository's GitHub settings let a pull

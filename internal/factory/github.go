@@ -341,6 +341,37 @@ func (g ghClient) BranchSHA(ctx context.Context, repo, branch string) (string, e
 	return sha, nil
 }
 
+// gitHubSchemes are the URL schemes of a remote URL that reaches GitHub
+// (IsRepoURL), besides the scp-like git@github.com:<owner>/<name>.git.
+var gitHubSchemes = []string{"https", "http", "ssh", "git+ssh", "ssh+git", "git"}
+
+// IsRepoURL reports whether url, a git remote URL as git resolves it
+// (gitx.OriginURLs), is repo (owner/name) on github.com: any form
+// gitx.ParseRemote reads (https, ssh://, the scp-like
+// git@github.com:<repo>.git, git://), with or without .git, the names'
+// case aside, as GitHub's are; never a local path, a file:// URL, a
+// transport helper's <transport>::<address> or another scheme git would
+// reach elsewhere by, whatever host it names.
+func (g ghClient) IsRepoURL(repo, url string) bool {
+	return isGitHubRepoURL(repo, url)
+}
+
+// isGitHubRepoURL is IsRepoURL's rule.
+func isGitHubRepoURL(repo, url string) bool {
+	if url == "" || strings.ContainsFunc(url, func(r rune) bool { return r <= ' ' }) || strings.Contains(url, "::") {
+		return false
+	}
+	if scheme, _, ok := strings.Cut(url, "://"); ok {
+		if !slices.Contains(gitHubSchemes, strings.ToLower(scheme)) {
+			return false
+		}
+	} else if user, _, ok := strings.Cut(url, "@"); !ok || strings.ContainsAny(user, ":/") {
+		return false // neither a URL nor the scp-like <user>@<host>:<path>
+	}
+	r, ok := gitx.ParseRemote(url)
+	return ok && r.Host == "github.com" && strings.EqualFold(r.FullName(), repo)
+}
+
 // ViewPR reads PR number of repo back.
 func (g ghClient) ViewPR(ctx context.Context, repo string, number int) (PRView, error) {
 	res, err := g.gh(ctx, repo, fmt.Sprintf("gh pr view %s#%d", repo, number), false,
