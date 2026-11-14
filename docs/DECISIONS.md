@@ -27927,6 +27927,7 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `TestTheQABlockReadsTheWalkersLocalData`, the "data two lines" row of `TestTheQABlockIsValidated`,
   `TestTheWalkerGetsTheRepositorysSignInAndLocalData` and the new phrases of
   `TestCheckPromptsRendersTheQAWalkersPrompt` (none of the key, the field or the sentence existed).
+
 - **A merge of the base after the local review gets a narrow check, not a full round** (2026-11-13, the operator's
   decision; built 2026-11-14). Task 9 (PR-27708) reached its ready card. Then origin/master conflicted with the branch
   in app/models/concerns/featurable.rb and db/schema.rb, and the card sent the task back to coding. The writer merged
