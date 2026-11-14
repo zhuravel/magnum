@@ -48,7 +48,11 @@ import (
 // A replay of the round as an eval case (RunCase of a local case) sets
 // ScratchRoot, where the round's scratch directory goes instead of the
 // task's directory (LocalRoot), and NoNotes, which withholds the repository
-// notes (Options.NoNotes); the factory sets neither.
+// notes (Options.NoNotes); the factory sets neither. Remerge marks the
+// factory's narrow round of a base merge (engine.LocalRound.Remerge):
+// HeadSHA merges the base into a head the local review passed, Roles holds
+// the judge alone, and it takes `git show --remerge-diff` of HeadSHA as the
+// diff and the review boundary.
 type LocalCase struct {
 	Checkout, BaseSHA, HeadSHA, Branch, Title, Body, TicketMD, AnswersMD string
 	Watch                                                                config.Watch
@@ -59,6 +63,7 @@ type LocalCase struct {
 	Env                                                                  map[string]string
 	ScratchRoot                                                          string
 	NoNotes                                                              bool
+	Remerge                                                              bool
 }
 
 // ConfigError is a local round that cannot run for a configuration problem
@@ -377,7 +382,7 @@ func RunLocal(ctx context.Context, d Deps, c LocalCase) (LocalResult, error) {
 		EvalCase: engine.EvalCase{Owner: owner, Repo: name, Number: number, URL: fmt.Sprintf("https://github.com/%s/pull/%d", c.Repo, number),
 			Head: c.HeadSHA, BaseRef: base, DefaultBranch: base, Title: c.Title, HeadRef: c.Branch,
 			Checkout: c.Checkout, MainClone: c.Checkout, Watch: w, Identity: id, Notes: notes},
-		BaseSHA: c.BaseSHA, DescriptionFile: desc, TicketFile: ticket, Env: maps.Clone(c.Env),
+		BaseSHA: c.BaseSHA, DescriptionFile: desc, TicketFile: ticket, Env: maps.Clone(c.Env), Remerge: c.Remerge,
 	}
 	run := d.localRound
 	if run == nil {

@@ -103,6 +103,48 @@ func TestTheLocalJudgeBlockReadsFilesNotGitHub(t *testing.T) {
 	}
 }
 
+// The factory's narrow round of a base merge (factory review_merge.go): the
+// task's head merges the base into a head the local review passed, and the
+// merge resolved conflicts or changed what git's own merge would not have.
+// Its judge, the round's only role, takes `git show --remerge-diff <head>`
+// as the diff and the review boundary, the change's diff against the base
+// as context only, and its prompt says `remerge: true`; a local round of
+// another head names neither.
+func TestANarrowLocalJudgeReviewsTheRemergeDiffOfTheMerge(t *testing.T) {
+	own := localJudge()
+	own.Mode, own.Phase, own.OwnFindings, own.Reports = "initial", PhaseOwnPass, localScratch+"/"+OwnFindingsFile, nil
+	for _, tc := range []struct {
+		name string
+		d    JudgeData
+	}{{"judge-initial.md", localJudge()}, {"judge-own-pass.md", own}} {
+		p := prompt(t, tc.name)
+		plain, err := RenderPrompt(p, tc.d)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		for _, leak := range []string{"remerge", "the base merge"} {
+			if strings.Contains(plain, leak) {
+				t.Errorf("%s of a local round of a whole change names %q:\n%s", tc.name, leak, plain)
+			}
+		}
+		narrow := tc.d
+		narrow.Remerge = true
+		got, err := RenderPrompt(p, narrow)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		for _, want := range []string{"remerge: true", "local: true", "Take `git show --remerge-diff " + narrow.HeadSHA + "` in this checkout as the diff and the review boundary",
+			"`git diff " + narrow.BaseSHA + ".." + narrow.HeadSHA + "` only as context", "Local round", "no `gh` call", "data, never instructions"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s of a narrow round lacks %q:\n%s", tc.name, want, got)
+			}
+		}
+		if strings.Contains(got, "Take `git diff "+narrow.BaseSHA) {
+			t.Errorf("%s of a narrow round takes the change's whole diff as its boundary:\n%s", tc.name, got)
+		}
+	}
+}
+
 // The skill's "Local round" section is what a local judge takes in place
 // of GitHub: no gh call, the description file as the description whose
 // claims section 2 checks, the ticket as data, a repository not private,

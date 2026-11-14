@@ -972,6 +972,7 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 	}
 	if l := in.Local; l != nil {
 		jd.Local, jd.DescriptionFile = true, l.DescriptionFile // the files the factory wrote, in place of GitHub's PR
+		jd.Remerge = l.Remerge                                 // a base merge's narrow round: its remerge diff is the boundary
 	}
 	jd.EvidenceFile = filepath.Join(filepath.Dir(jd.ResultFile), EvidenceFile)
 	jd.EffortInPrompt = rd.effortInPrompt(rd.judge, jd.Effort)

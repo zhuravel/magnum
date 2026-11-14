@@ -400,6 +400,28 @@ func TestRunLocalReadsTheJudgesResult(t *testing.T) {
 	}
 }
 
+// The factory's narrow round of a base merge runs its judge alone on the
+// merge's remerge diff: the case's Remerge and its one role reach the
+// engine's round, whose judge's result the round reads as any round's.
+func TestRunLocalHandsTheEngineANarrowRoundOfABaseMerge(t *testing.T) {
+	d, runs := localFixture(t, cleanResult)
+	c := localCase(t, 2)
+	c.Roles, c.Remerge = []string{"codex-judge"}, true
+	res, err := RunLocal(t.Context(), d, c)
+	if err != nil || res.Verdict != "clean" {
+		t.Fatalf("RunLocal = %+v, %v; want the judge's clean result", res, err)
+	}
+	if lr := (*runs)[0].round; !lr.Remerge || !slices.Equal(lr.Watch.Roles, []string{"codex-judge"}) || lr.BaseSHA != c.BaseSHA || lr.Head != c.HeadSHA {
+		t.Fatalf("round %+v, want the judge alone on the remerge, at the change's base", lr)
+	}
+	if _, err := RunLocal(t.Context(), d, localCase(t, 3)); err != nil {
+		t.Fatal(err)
+	}
+	if lr := (*runs)[1].round; lr.Remerge {
+		t.Fatal("a round of a whole change is a base merge's narrow round")
+	}
+}
+
 // A case the round cannot run never starts: no copy, no base or head, no
 // task, no repository, no round.
 func TestRunLocalRefusesACaseItCannotRun(t *testing.T) {

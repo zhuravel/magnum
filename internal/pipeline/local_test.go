@@ -66,3 +66,40 @@ func TestALocalRoundsJudgeReadsTheFactorysFiles(t *testing.T) {
 		t.Errorf("the claude reviewer's prompt does not name %s: %+v", local.DescriptionFile, claude)
 	}
 }
+
+// The factory's narrow round of a base merge (Local.Remerge): its judge's
+// prompt says `remerge: true` and takes `git show --remerge-diff <head>` as
+// the boundary, and post_review still checks the anchors against the
+// change's local diff (--local-base <base>). A local round without it says
+// neither.
+func TestANarrowLocalRoundsJudgeReviewsTheRemergeDiff(t *testing.T) {
+	for _, remerge := range []bool{true, false} {
+		e := newEnv(t)
+		local := &Local{DescriptionFile: filepath.Join(t.TempDir(), "description.md"), Remerge: remerge}
+		if err := os.WriteFile(local.DescriptionFile, []byte("# PR-12388 Payout methods\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		p := e.judgePosts(0, "", "COMMENT")
+		p.gh, p.status = nil, "dry_run"
+		e.ag.behaviors[agents.RoleJudge] = []behavior{p.behavior(t)}
+		in := e.input(KindInitial)
+		in.Blind, in.DryRun, in.Local = true, true, local
+		res, err := e.r.RunRound(e.ctx, in)
+		if err != nil || res.Outcome != OutcomeDryRun {
+			t.Fatalf("remerge %v: RunRound = %+v, %v", remerge, res, err)
+		}
+		judge := e.ag.submitsFor(agents.RoleJudge)
+		if len(judge) == 0 {
+			t.Fatalf("remerge %v: no judge prompt", remerge)
+		}
+		for _, j := range judge {
+			said := strings.Contains(j.Text, "\nremerge: true\n") && strings.Contains(j.Text, "`git show --remerge-diff "+in.TargetSHA+"`")
+			if said != remerge {
+				t.Errorf("remerge %v: the judge's prompt names the narrow round: %v\n%s", remerge, said, j.Text)
+			}
+			if line := promptField(t, j.Text, "post_review"); !strings.Contains(line, " --local-base "+in.BaseSHA+" ") {
+				t.Errorf("remerge %v: post_review %q lacks --local-base %s", remerge, line, in.BaseSHA)
+			}
+		}
+	}
+}

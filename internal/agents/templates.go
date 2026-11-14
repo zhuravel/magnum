@@ -354,6 +354,13 @@ type JudgeData struct {
 	// both zero, and its prompts render as they always did.
 	Local           bool
 	DescriptionFile string
+	// Remerge (with Local): the factory's narrow round of a base merge
+	// (pipeline.Local.Remerge), rendered as `remerge: true` only then:
+	// HeadSHA merges the base into a head the local review passed, and the
+	// judge takes `git show --remerge-diff HeadSHA` (the conflicts the
+	// merge resolved, the changes git's own merge would not have made) as
+	// the diff and the review boundary, the change's diff only as context.
+	Remerge bool
 	// PostMerge: GitHub merged the PR before magnum reviewed HeadSHA
 	// (pipeline.RoundInput.PostMerge), rendered as `post_merge: true` only
 	// then; the skill posts a COMMENT that asks for follow-ups, and

@@ -1879,6 +1879,13 @@ type JudgeData struct {
 	// both zero, and its prompts render as they always did.
 	Local           bool
 	DescriptionFile string
+	// Remerge (with Local): the factory's narrow round of a base merge
+	// (pipeline.Local.Remerge), rendered as `remerge: true` only then:
+	// HeadSHA merges the base into a head the local review passed, and the
+	// judge takes `git show --remerge-diff HeadSHA` (the conflicts the
+	// merge resolved, the changes git's own merge would not have made) as
+	// the diff and the review boundary, the change's diff only as context.
+	Remerge bool
 	// PostMerge: GitHub merged the PR before magnum reviewed HeadSHA
 	// (pipeline.RoundInput.PostMerge), rendered as `post_merge: true` only
 	// then; the skill posts a COMMENT that asks for follow-ups, and
@@ -11945,6 +11952,12 @@ type LocalRound struct {
 	// worktree was prepared with (the per-PR env under the worktree's own
 	// workspace name), so its roles never use a copy's databases.
 	Env map[string]string
+	// Remerge marks the factory's narrow round of a base merge: Head merges
+	// the base into a head the local review passed, and the judge, the
+	// round's only role, takes `git show --remerge-diff` of it as the diff
+	// and the review boundary (pipeline.Local.Remerge); BaseSHA stays the
+	// change's base, which post-review anchors on.
+	Remerge bool
 }
     LocalRound is one round of the factory's local review of a change before
     its PR exists (docs/superpowers/specs/2026-11-03-factory-design.md, section
@@ -13967,28 +13980,33 @@ type LocalCase struct {
 	Env                                                                  map[string]string
 	ScratchRoot                                                          string
 	NoNotes                                                              bool
+	Remerge                                                              bool
 }
-    LocalCase is one round of the factory's local review: magnum's full review
-    of a change in the task's copy, as a blind dry run, before any PR exists
-    (docs/superpowers/specs/2026-11-03-factory-design.md, section 6.5). Checkout
-    is the copy, BaseSHA and HeadSHA the change's ends, Branch its branch,
-    Title (with the Jira key), Body and TicketMD what the judge reads from
-    files instead of GitHub; Body is the factory's own plan, not a person's
-    description, and AnswersMD the operator's answers to the factory's
-    questions (the task's answers.md, "" when it has none), the only statement
-    of intent a person made: they follow the ticket in the ticket file under
-    one fixed heading. Watch is the repository's [[watch]], whose review roles
-    round 1 runs, Roles the roles of this round and Round its number, from 1.
-    TaskID is the task whose change it is and Repo its repository (owner/name):
-    the round's synthetic PR number (LocalNumber) and its scratch directory
-    (LocalRoot) come from them. Base is the base branch ("" = master), Env the
-    round's environment (engine.LocalRound.Env): the factory gives the copy's,
-    the one its agents get in it; the replay of a local case (RunCase) the
-    per-PR worktree env of the synthetic number, never a copy's. The factory's
-    LocalReviewer takes it. A replay of the round as an eval case (RunCase of
-    a local case) sets ScratchRoot, where the round's scratch directory goes
-    instead of the task's directory (LocalRoot), and NoNotes, which withholds
-    the repository notes (Options.NoNotes); the factory sets neither.
+    LocalCase is one round of the factory's local review: magnum's full
+    review of a change in the task's copy, as a blind dry run, before
+    any PR exists (docs/superpowers/specs/2026-11-03-factory-design.md,
+    section 6.5). Checkout is the copy, BaseSHA and HeadSHA the change's ends,
+    Branch its branch, Title (with the Jira key), Body and TicketMD what the
+    judge reads from files instead of GitHub; Body is the factory's own plan,
+    not a person's description, and AnswersMD the operator's answers to
+    the factory's questions (the task's answers.md, "" when it has none),
+    the only statement of intent a person made: they follow the ticket in the
+    ticket file under one fixed heading. Watch is the repository's [[watch]],
+    whose review roles round 1 runs, Roles the roles of this round and Round
+    its number, from 1. TaskID is the task whose change it is and Repo its
+    repository (owner/name): the round's synthetic PR number (LocalNumber)
+    and its scratch directory (LocalRoot) come from them. Base is the base
+    branch ("" = master), Env the round's environment (engine.LocalRound.Env):
+    the factory gives the copy's, the one its agents get in it; the replay of
+    a local case (RunCase) the per-PR worktree env of the synthetic number,
+    never a copy's. The factory's LocalReviewer takes it. A replay of the
+    round as an eval case (RunCase of a local case) sets ScratchRoot, where the
+    round's scratch directory goes instead of the task's directory (LocalRoot),
+    and NoNotes, which withholds the repository notes (Options.NoNotes);
+    the factory sets neither. Remerge marks the factory's narrow round of a base
+    merge (engine.LocalRound.Remerge): HeadSHA merges the base into a head the
+    local review passed, Roles holds the judge alone, and it takes `git show
+    --remerge-diff` of HeadSHA as the diff and the review boundary.
 
 type LocalFinding struct {
 	Severity, Title, Path    string
@@ -28475,6 +28493,7 @@ type Keys interface {
 
 type Local struct {
 	DescriptionFile, TicketFile string
+	Remerge                     bool
 }
     Local is what a local round (RoundInput.Local) hands its roles as files
     in place of GitHub's PR: DescriptionFile, the change's title and body as
@@ -28483,7 +28502,10 @@ type Local struct {
     operator's answers to the factory's questions under "## The operator's
     answers to the factory's questions" (evalrun.LocalTicket; "" = neither).
     Both are absolute paths, written before the round; their text is data and
-    never reaches a prompt.
+    never reaches a prompt. Remerge marks the factory's narrow round of a base
+    merge: the round's head merges the base into a head the local review passed,
+    and its judge takes `git show --remerge-diff` of it as the diff and the
+    review boundary (agents.JudgeData.Remerge).
 
 type Method struct {
 	File      string `json:"file"`

@@ -82,6 +82,34 @@ func TestRunLocalAlwaysGivesPostReviewTheBase(t *testing.T) {
 	if !strings.Contains(line, " --dry-run ") || !strings.Contains(line, " --local-base "+c.BaseSHA+" ") {
 		t.Fatalf("post_review %q lacks --dry-run --local-base %s", line, c.BaseSHA)
 	}
+	if in.Local.Remerge {
+		t.Fatal("a local round of a whole change is a base merge's narrow round")
+	}
+}
+
+// The factory's narrow round of a base merge (LocalRound.Remerge) reaches
+// the round as Local.Remerge, so its judge takes the merge's remerge diff
+// as the boundary; its base stays the change's, which post_review anchors
+// on.
+func TestALocalRoundOfABaseMergeHandsItsJudgeTheRemerge(t *testing.T) {
+	h := newHarness(t, func(h *harness) {
+		h.layout = paths.Layout{Home: h.layout.Home, Scratch: t.TempDir()}
+		h.d.Layout = h.layout
+	})
+	h.rd.script = func(pipeline.RoundInput) (pipeline.RoundResult, error) {
+		return pipeline.RoundResult{Outcome: pipeline.OutcomeDryRun}, nil
+	}
+	c := localRound(h, t.TempDir(), 2)
+	c.Remerge = true
+	if _, _, err := h.e.RunLocal(h.ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.rd.inputs) != 1 {
+		t.Fatalf("rounds: %d", len(h.rd.inputs))
+	}
+	if in := h.rd.inputs[0]; in.Local == nil || !in.Local.Remerge || in.BaseSHA != c.BaseSHA || in.TargetSHA != c.Head {
+		t.Fatalf("round input: base=%s target=%s local=%+v, want the remerge at the change's base", in.BaseSHA, in.TargetSHA, in.Local)
+	}
 }
 
 // A local round a restart cut runs again as the same round of the same

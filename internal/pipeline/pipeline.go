@@ -514,9 +514,13 @@ type RoundInput struct {
 // operator's answers to the factory's questions under "## The operator's
 // answers to the factory's questions" (evalrun.LocalTicket; "" = neither).
 // Both are absolute paths, written before the round; their text is data and
-// never reaches a prompt.
+// never reaches a prompt. Remerge marks the factory's narrow round of a base
+// merge: the round's head merges the base into a head the local review
+// passed, and its judge takes `git show --remerge-diff` of it as the diff
+// and the review boundary (agents.JudgeData.Remerge).
 type Local struct {
 	DescriptionFile, TicketFile string
+	Remerge                     bool
 }
 
 // Switched is the checkout after RoundInput.Switch.
