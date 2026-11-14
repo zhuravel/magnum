@@ -525,15 +525,23 @@ func TestABaseMergeOfARemoteTheWriterRewroteGetsAFullRound(t *testing.T) {
 
 // A read of the base on GitHub that fails is a full round, as a fetch that
 // fails is: without it the check cannot tell a commit of the base from one
-// of the writer's own. So is a base GitHub reports at a commit the copy has
-// no object of (git cannot tell whether the merged commit is one of it),
-// and a factory daemon with no GitHub to read the base on. The same merge
-// with GitHub's base read is clean.
+// of the writer's own. That round starts once GitHub reports the base its
+// diff starts from (roundBase), and waits saying so until then. So is a
+// base GitHub reports at a commit the copy has no object of (git cannot
+// tell whether the merged commit is one of it), and a factory daemon with
+// no GitHub to read the base on. The same merge with GitHub's base read is
+// clean.
 func TestAFailedReadOfGitHubsBaseGetsAFullRound(t *testing.T) {
 	r := newReadyRig(t)
 	task, reviewed := r.toCleanBase("PR-12412")
 	r.gh.setBase("", errors.New("gh: HTTP 502: Bad Gateway"), nil)
 	merged := r.writerMerges(task, nil)
+	r.run(16, func() bool { return strings.Contains(r.reload(task.ID).WaitsWhat, "cannot start") })
+	if got := r.reload(task.ID); len(r.rv.calls()) != 1 || !strings.Contains(got.WaitsWhat, "master on GitHub") {
+		t.Fatalf("%d rounds; task waits %q: want the full round waiting on GitHub's base", len(r.rv.calls()), got.WaitsWhat)
+	}
+	r.gh.setBase("", nil, nil)
+	r.clock.Add(time.Minute) // past the failed pass's poll
 	r.toBody(task)
 
 	r.fullRoundAt(merged)

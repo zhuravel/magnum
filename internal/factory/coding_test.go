@@ -35,6 +35,10 @@ type codingRig struct {
 	root, origin, work, main, copyDir string
 	real                              *execx.Real
 	cp                                Copy
+	// gh is the factory's GitHub, whose repository is the bare origin: the
+	// base it reports (BranchSHA) is the origin's, whatever the main
+	// clone's remote config names.
+	gh *fakeGitHub
 
 	mu      sync.Mutex
 	scripts []scriptRun
@@ -129,10 +133,12 @@ func newCodingRig(t *testing.T) *codingRig {
 		}}}
 	r.origin, r.work = filepath.Join(root, "origin.git"), filepath.Join(root, "work")
 	r.main, r.copyDir = filepath.Join(root, "shop"), filepath.Join(root, "shop.factory1")
+	r.gh = &fakeGitHub{r: r}
 	r.harness = newHarness(t, func(d *Deps) {
 		run := rigRunner{r}
 		d.Run = run
 		d.Git = gitx.New(Guard(run, d.Config))
+		d.GitHub = r.gh
 	})
 	r.e.lockPoll = 5 * time.Millisecond
 	r.cfg.Factory.Repos = []config.FactoryRepo{{Repo: "example/shop", Base: "master", MainClone: r.main,

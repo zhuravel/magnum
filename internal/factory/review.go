@@ -519,7 +519,8 @@ func loopCycles(cs []registry.Cycle) []registry.Cycle {
 // alone at a head whose base merge base-merge.json names narrow (narrowAt:
 // its case's Remerge, with the merge's remerge diff made apart from the
 // copy, remergeDiff), its case the change at the task's proven head
-// (localCase); the round runs off the loop (launchRound).
+// (localCase) from where it starts on GitHub (roundBase: without that base
+// no round starts); the round runs off the loop (launchRound).
 func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *registry.Cycle, round int) error {
 	if e.startsHeld() {
 		return nil
@@ -593,6 +594,13 @@ func (e *Engine) startRound(ctx context.Context, t registry.Task, c Copy, cy *re
 	release, ok := e.heavy(ctx, t, heavyReview)
 	if !ok {
 		return nil // the task waits "heavy: …"
+	}
+	// The diff starts where the change starts on GitHub, never at the copy's
+	// origin/<base>, whose remote the writer's pane can rewrite: read once
+	// the round may start, so a pass that waits reads GitHub not at all.
+	if lc.BaseSHA, err = e.roundBase(ctx, t, c, repo, bh.Head, round); err != nil {
+		release()
+		return err
 	}
 	if narrow { // made once the round may start: a pass that waits makes no repository of its own
 		if lc.RemergeDiff, err = e.remergeDiff(ctx, t, c, lc.HeadSHA); err != nil {
@@ -886,7 +894,8 @@ func (j roundJudge) wait() string {
 }
 
 // localCase is round `round` of task t's change in copy c: the branch's
-// head and its base (bh), the title the PR will have (prTitle: the issue key
+// head and its base (bh; startRound puts the base on GitHub in its place,
+// roundBase), the title the PR will have (prTitle: the issue key
 // laid out by the repository's title_format), the plan as the body
 // (report.md: the factory's own guess, which the judge's skill reads as no
 // person's intent), the ticket (ticket.md, else the operator's request), the

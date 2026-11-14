@@ -225,10 +225,9 @@ func (f *fakeGitHub) addPR(branch string, v PRView) {
 
 // readyRig is the review rig with the ready card and the publish wired:
 // every local round clean unless answers say otherwise, your gh identity
-// zhuravel, and the fake GitHub.
+// zhuravel, and the coding rig's fake GitHub.
 type readyRig struct {
 	*reviewRig
-	gh *fakeGitHub
 }
 
 func newReadyRig(t *testing.T, answers ...func(evalrun.LocalCase) evalrun.LocalResult) *readyRig {
@@ -238,10 +237,6 @@ func newReadyRig(t *testing.T, answers ...func(evalrun.LocalCase) evalrun.LocalR
 	}
 	r := &readyRig{reviewRig: newReviewRig(t, answers...)}
 	r.cfg.Identities = append(r.cfg.Identities, config.Identity{Name: "zhuravel", Kind: "gh", Login: "zhuravel"})
-	r.gh = &fakeGitHub{r: r.codingRig}
-	for _, d := range []*Deps{&r.deps, &r.e.d} {
-		d.GitHub = r.gh
-	}
 	return r
 }
 
