@@ -62,40 +62,64 @@ type OldGuard struct {
 // oldGuardMonths is the age from which a changed guard is flagged.
 const oldGuardMonths = 6
 
-// flags reads task t's change in copy c (its branch at its head) for the
-// ready card: see Flags. The change starts at its merge base with the
-// commit the base is at on GitHub, read as you and fetched to the main
-// clone (baseOnGitHub), and the conflicts come from `git merge-tree`
-// against that commit; without it there are no flags, and the error says
-// why.
-func (e *Engine) flags(ctx context.Context, t registry.Task, c Copy) (Flags, error) {
-	var f Flags
-	repo, err := e.factoryRepo(t)
-	if err != nil {
-		return f, err
-	}
-	bh, err := e.branchHead(ctx, t, c, repo)
-	if err != nil {
-		return f, err
-	}
-	if bh.Problem != "" {
-		return f, fmt.Errorf("the flags of %s: %s", t.Branch, bh.Problem)
-	}
-	// The change and its conflicts are read against the base GitHub
-	// reports, never the copy's origin/<base> (baseOnGitHub): the
-	// conflicts in the same repository of the factory's own, where no
-	// merge driver or attribute of the copy's applies.
-	gb, err := e.baseOnGitHub(ctx, repo, c, bh.Head, func(iso string, b gitHubBase) error {
+// cardBase is where the change of a ready card starts on GitHub
+// (baseOnGitHub) and the paths merging that commit into its head would
+// conflict in.
+type cardBase struct {
+	gitHubBase
+	conflicts []string
+}
+
+// cardBaseOf is task t's cardBase at head in copy c: the base on GitHub,
+// and the conflicts from `git merge-tree` against it in the same
+// repository of the factory's own, where no merge driver or attribute of
+// the copy's applies. Without it there is no card, and the error says why.
+func (e *Engine) cardBaseOf(ctx context.Context, t registry.Task, repo config.FactoryRepo, c Copy, head string) (cardBase, error) {
+	var cb cardBase
+	gb, err := e.baseOnGitHub(ctx, repo, c, head, func(iso string, b gitHubBase) error {
 		var err error
-		if f.Conflicts, err = e.d.Git.MergeConflicts(ctx, iso, bh.Head, b.tip); err != nil {
-			return fmt.Errorf("git cannot merge %s into %s in memory: %w", b.name, short(bh.Head), err)
+		if cb.conflicts, err = e.d.Git.MergeConflicts(ctx, iso, head, b.tip); err != nil {
+			return fmt.Errorf("git cannot merge %s into %s in memory: %w", b.name, short(head), err)
 		}
 		return nil
 	})
 	if err != nil {
-		return f, fmt.Errorf("the flags of %s: %w", t.Branch, err)
+		return cardBase{}, fmt.Errorf("no ready card of %s: %w", t.Branch, err)
 	}
-	f.baseSHA, bh.Base = gb.tip, gb.base
+	cb.gitHubBase = gb
+	return cb, nil
+}
+
+// flags reads task t's change in copy c (its branch at its head) for the
+// ready card: see Flags. The change starts at its merge base with the
+// commit the base is at on GitHub, read as you and fetched to the main
+// clone, and the conflicts come from `git merge-tree` against that commit
+// (cardBaseOf); without it there are no flags, and the error says why.
+func (e *Engine) flags(ctx context.Context, t registry.Task, c Copy) (Flags, error) {
+	repo, err := e.factoryRepo(t)
+	if err != nil {
+		return Flags{}, err
+	}
+	bh, err := e.branchHead(ctx, t, c, repo)
+	if err != nil {
+		return Flags{}, err
+	}
+	if bh.Problem != "" {
+		return Flags{}, fmt.Errorf("the flags of %s: %s", t.Branch, bh.Problem)
+	}
+	cb, err := e.cardBaseOf(ctx, t, repo, c, bh.Head)
+	if err != nil {
+		return Flags{}, err
+	}
+	return e.flagsAt(ctx, t, c, repo, bh, cb)
+}
+
+// flagsAt are the flags of task t's change at bh.Head in copy c, read from
+// where it starts on GitHub (cb: the ready stage reads it once for its
+// pass, for the card and its flags alike), never from bh.Base.
+func (e *Engine) flagsAt(ctx context.Context, t registry.Task, c Copy, repo config.FactoryRepo, bh branchHead, cb cardBase) (Flags, error) {
+	f := Flags{Conflicts: cb.conflicts, baseSHA: cb.tip}
+	bh.Base = cb.base
 	git := e.d.Git
 	changes, err := git.ChangedFiles(ctx, c.Path, bh.Base, bh.Head)
 	if err != nil {

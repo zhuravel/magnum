@@ -5617,7 +5617,8 @@ place of the earlier one, after the marker `<!-- magnum factory: the Known list 
 (`ready_push`) draws the card only when the local review ended clean or on an oscillation at the task's head,
 the factory's proof and precheck passed there (`precheck.json`) and your gh identity is configured; otherwise
 the task needs you (`no ready card: …`). It reads the commit the base is at on GitHub (as the round does, then a
-fetch of `origin/<base>`), reads the change's files from the head's merge base with it, and merges it into the head
+fetch of `origin/<base>`), shows the change from the head's merge base with it (the card's base, its files, the
+hash of its diff and the diff its pager shows start there, as the FLAGS line's files do), and merges it into the head
 in memory (`git merge-tree`, in a repository of the factory's own: no work tree touched, no merge driver or
 attribute of the copy's applied); a commit the copy has no object of after the fetch, or a read that fails, draws
 no card ("no conflicts" is never a guess): the stage is tried again a poll later and needs you after 5 tries. On a

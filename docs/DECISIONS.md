@@ -28059,12 +28059,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
     infrastructure hold, which needs you after `holdNeedsYou`. So a GitHub outage holds the rounds, never silently
     and never past those bounds, as the reviewer asked (the factory must deliver: the wait is bounded and names its
     cause). A full round of F1's (a failed read at a base merge) now waits for that base too, then runs.
-  - The flags: `flags` reads the same base (`baseOnGitHub`, the fetch now after GitHub's read), the changed files and
-    the old guards from the head's merge base with it, and the conflicts with `git merge-tree` against that commit in
-    the same repository of the factory's own, where no merge driver or attribute of the copy's applies, as F1's
-    check merges. A commit the copy has no object of, or a failed read, is an error naming it, never "no
-    conflicts": the ready stage's pass fails and is bounded as above. A conflict sends the writer to merge that
-    commit (`rework.json`'s `base_sha`, which `mergeProblem` checks at the next head), not `origin/<base>`'s.
+  - The card and its flags: the ready stage reads the same base once a pass (`cardBaseOf`: `baseOnGitHub`, the fetch
+    now after GitHub's read), and the card shows the change from the head's merge base with it: the card's `base`
+    (where the diff its pager shows starts), its files and the hash of its diff, which your decision binds to, as the
+    FLAGS line's changed files and old guards (`flagsAt`) read it. The conflicts come from `git merge-tree` against
+    that commit in the same repository of the factory's own, where no merge driver or attribute of the copy's
+    applies, as F1's check merges. A commit the copy has no object of, or a failed read, is an error naming it, never
+    "no conflicts": no card is drawn, and the ready stage's pass fails and is bounded as above. A conflict sends the
+    writer to merge that commit (`rework.json`'s `base_sha`, which `mergeProblem` checks at the next head), not
+    `origin/<base>`'s. A card drawn before keeps its hash: the merge base with GitHub's commit is the one with a
+    fresh `origin/<base>` unless the remote was rewritten.
   - The publish: `pushTarget` reads origin's fetch and push URLs as git resolves them (`gitx.OriginURLs`: `git
     remote get-url --all origin` and `--push`, every rewrite of every config level expanded, credentials stripped:
     no config key read by hand) and pushes only when every one is the task's repository on GitHub as the factory
@@ -28083,14 +28087,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
     is the one that applies); and a wait with no bound for an unreadable base (a GitHub outage or a rate limit would
     stall every review in silence).
   - Left as it was: branchHead's base (the merge base with `origin/<base>`) still serves the factory's proof, the
-    precheck, QA, the card's diff hash and the fix go-on's log, and the read of the remote branch (`git ls-remote`)
+    precheck, QA and the fix go-on's log, and the read of the remote branch (`git ls-remote`)
     still runs in the copy: a rewrite there can only make the publish skip a push GitHub then lacks (the PR's
     creation or its read back fails) or refuse one, never push elsewhere. The coding rig's tests now have the fake
     GitHub, whose base is the bare origin's and whose repository URL is the origin's path.
   Tests, failing first: `TestARoundsDiffBaseIsGitHubsBaseNotTheRewrittenRemote` (the round diffed from the writer's
   commit), `TestARoundWaitsWhenGitHubsBaseCannotBeRead` (the round started), `TestTheCardsFlagsUseGitHubsBase` (no
   conflict and no writer's file with the rewritten remote), `TestTheCardsFlagsNeedGitHubsBaseInTheCopy` (a missing
-  base read as no conflicts), `TestThePublishRefusesARemoteTheWriterRewrote` (the head went to the pushurl's
+  base read as no conflicts), `TestTheReadyCardShowsTheChangeFromGitHubsBase` (the card's base was the writer's
+  commit, its files without the writer's), `TestThePublishRefusesARemoteTheWriterRewrote` (the head went to the pushurl's
   repository and a PR was opened) and `TestThePublishTakesTheRepositorysGitHubURLInAnyForm` in internal/factory;
   `TestOriginURLsAreWhereGitSendsAFetchAndAPush`, `TestPushLeaseApartGoesToTheURLItWasGiven` and
   `TestPushLeaseApartGoesOverHTTPSAsFetchesDo` in internal/gitx. No migration, no new key, no new dependencies.

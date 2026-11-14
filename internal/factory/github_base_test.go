@@ -148,6 +148,30 @@ func TestTheCardsFlagsUseGitHubsBase(t *testing.T) {
 	}
 }
 
+// The ready card shows the change from where it starts on GitHub: its
+// base (where the diff you page starts), its files and its diff's hash are
+// those of the head's merge base with master on GitHub, never with the
+// copy's origin/<base>, which the writer's pane pointed at a commit of its
+// own that the fix builds on. The writer's file is on the card, not in the
+// plan.
+func TestTheReadyCardShowsTheChangeFromGitHubsBase(t *testing.T) {
+	r := newReadyRig(t)
+	onGitHub := r.git(r.origin, "rev-parse", "refs/heads/master")
+	task := r.codingTask("PR-12424", "bug")
+	mine := r.commit("the writer's own change", map[string]string{"lib/own.rb": "class Own\nend\n"})
+	r.rewriteOrigin(mine)
+	_, head := r.cardOf(task)
+
+	c := r.card(task.ID)
+	if c.Head != head || c.Base != onGitHub || !slices.ContainsFunc(c.Files, func(f CardFile) bool { return f.Path == "lib/own.rb" && !f.InPlan }) {
+		t.Fatalf("card at %s from %s with files %+v; want it at %s from master on GitHub (%s), not the writer's %s, lib/own.rb on it",
+			short(c.Head), short(c.Base), c.Files, short(head), short(onGitHub), short(mine))
+	}
+	if dh, err := r.e.d.Git.OwnDiffID(r.ctx, r.copyDir, onGitHub, head); err != nil || c.DiffHash != dh {
+		t.Fatalf("the card's diff hash %s (%v), want the one from master on GitHub, %s", c.DiffHash, err, dh)
+	}
+}
+
 // The flags need the base GitHub reports in the copy: a commit the copy
 // has no object of even after the fetch (the main clone's remote reaches
 // another repository than GitHub's), or a read of GitHub that fails, is an

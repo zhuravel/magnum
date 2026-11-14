@@ -109,8 +109,9 @@ type DecidePayload struct {
 
 // ReadyCardFile is ready-card.json, the ready card as the factory drew it:
 // its revision (a new one each time what it shows changed) and when it was
-// drawn, the head and the base of the change (the PR's diff is
-// base...head), the branch's commits after origin/<base> (0 in a card an
+// drawn, the head and the base of the change (its merge base with the
+// commit the base is at on GitHub: the PR's diff is base...head), the
+// branch's commits after origin/<base> (0 in a card an
 // older build drew; the PR's status file counts them), the hash of
 // report.md and pr-body.md as shown and the hash of the diff (the patch id
 // of base...head), the branch, the PR's title, the copy a push frees (its
@@ -578,6 +579,13 @@ func (e *Engine) runReady(ctx context.Context, t registry.Task, _ config.Factory
 	case bh.Head != t.HeadSHA:
 		return false, e.headMoved(ctx, t, bh.Head)
 	}
+	// The card shows the change from where it starts on GitHub, and its
+	// flags read it from there, never from the copy's origin/<base>.
+	cb, err := e.cardBaseOf(ctx, t, repo, c, bh.Head)
+	if err != nil {
+		return false, err
+	}
+	bh.Base = cb.base
 	now, err := e.cardNow(ctx, t, c, bh)
 	if err != nil {
 		return false, err
@@ -588,7 +596,7 @@ func (e *Engine) runReady(ctx context.Context, t registry.Task, _ config.Factory
 	if err := e.nameRemoteBranch(ctx, &t); err != nil {
 		return false, e.stageFailed(ctx, t, err)
 	}
-	f, err := e.flags(ctx, t, c)
+	f, err := e.flagsAt(ctx, t, c, repo, bh, cb)
 	if err != nil {
 		return false, err
 	}
@@ -596,7 +604,7 @@ func (e *Engine) runReady(ctx context.Context, t registry.Task, _ config.Factory
 	if err != nil {
 		return false, err
 	}
-	if len(f.Conflicts) > 0 { // the card names them, and the writer merges the base before you read one: the commit GitHub reports, which they are with
+	if len(f.Conflicts) > 0 { // the card names them, and the writer merges the base (GitHub's commit) before you read one
 		return false, e.stageFailed(ctx, t, e.mergeTheBase(ctx, t, card, "origin/"+baseOf(repo), f.baseSHA, f.Conflicts))
 	}
 	e.toOperator(ctx, t, fmt.Sprintf("%s (card %d): %s", readyWait, card.Revision, card.Title), "the ready card")
@@ -718,7 +726,8 @@ func holdsKey(branch, key string) bool {
 		strings.Contains(branch, "-"+key+"-"))
 }
 
-// cardNow is what task t's card shows of its change in copy c now (bh).
+// cardNow is what task t's card shows of its change in copy c now (bh,
+// whose base runReady sets to the one on GitHub: cardBaseOf).
 func (e *Engine) cardNow(ctx context.Context, t registry.Task, c Copy, bh branchHead) (cardState, error) {
 	rh, err := reportHash(e.d.Layout.FactoryTaskDir(t.ID))
 	if err != nil {

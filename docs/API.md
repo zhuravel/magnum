@@ -16403,8 +16403,9 @@ type ReadyCardFile struct {
 	QA         *QAResult     `json:"qa,omitempty"`
 }
     ReadyCardFile is ready-card.json, the ready card as the factory drew it:
-    its revision (a new one each time what it shows changed) and when it was
-    drawn, the head and the base of the change (the PR's diff is base...head),
+    its revision (a new one each time what it shows changed) and when it
+    was drawn, the head and the base of the change (its merge base with
+    the commit the base is at on GitHub: the PR's diff is base...head),
     the branch's commits after origin/<base> (0 in a card an older build drew;
     the PR's status file counts them), the hash of report.md and pr-body.md as
     shown and the hash of the diff (the patch id of base...head), the branch,
