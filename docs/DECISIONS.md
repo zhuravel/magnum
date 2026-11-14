@@ -27937,7 +27937,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
   which reads the real objects (`GIT_NO_REPLACE_OBJECTS`, no graft file), in a repository of the factory's own
   (`Isolated`), so no merge driver, attribute or commit-graph of the copy's applies, as the held merge reads its
   merge. Only a merge of two parents qualifies: its first parent the reviewed head, its second a commit of
-  origin/<base> (`IsAncestor` of the copy's `origin/<base>`). A first look at the head's parents in the copy tells a
+  origin/<base> (`IsAncestor` of the copy's `origin/<base>`, after the forced fetch the ready card's flags make,
+  `FetchBranch` in the main clone). The copies are worktrees of the main clone, so `refs/remotes/origin/<base>` is a
+  ref the writer's pane can move: a commit of the writer's own, named origin/master with `update-ref` and merged
+  into the reviewed head, read as a clean base merge and got no round. The fetch sets the ref to the remote's base
+  first, and a fetch that fails is a full round. A first look at the head's parents in the copy tells a
   merge from any other head, so an ordinary head, which every pass of a waiting round reads again, costs two reads
   and no temporary repository; a commit-graph that lies there can only make a merge read as none, which gets a full
   round, and a merge's parents are read again in the factory's own repository before anything is decided.
@@ -27959,9 +27963,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
     follows it (an event says why): the change before the merge passed already. The specs the precheck picks for
     the changed files ran as usual.
   - *Any other head* gets a full round, as before: commits besides the merge, a merge of something other than the
-    base, a merge whose first parent is not the reviewed head, a conflict the merge left exactly as git's merge
-    wrote it (in no remerge diff, so a narrow round would never see it: `mergeKind`), or a remerge diff git cannot
-    produce (`gitx.RemergeFiles` fails). An event says why. Conflict markers committed as `git merge` wrote them
+    base, a merge whose first parent is not the reviewed head, a base the factory cannot fetch, a conflict the
+    merge left exactly as git's merge wrote it (in no remerge diff, so a narrow round would never see it:
+    `mergeKind`), or a remerge diff git cannot produce (`gitx.RemergeFiles` fails). An event says why. Conflict markers committed as `git merge` wrote them
     differ from the remerge's own labels, so they show in the narrow round's diff. A head that is no merge and
     has none since the reviewed head is an ordinary change: no record, no event.
   - `base-merge.json` records the check of the head, with the summary it carries, before the factory acts on it.
@@ -27975,8 +27979,9 @@ skill versions); people add theirs to the sections before it, at the end of the 
   Tests, failing first: `TestACleanBaseMergeGetsNoReviewRound`, `TestABaseMergeWithConflictsGetsANarrowRoundOnItsResolutions`,
   `TestAnEvilMergeIsReviewedNarrowlyOnWhatGitWouldNotHaveMerged`, `TestCommitsBesidesTheMergeGetAFullRound`,
   `TestOnlyAMergeOfTheBaseIntoTheReviewedHeadSkipsTheFullRound`, `TestANarrowRoundCountsTowardMaxRounds`,
-  `TestTheReadyCardNamesTheBaseMergeCheck` and `TestACleanBaseMergesPassHoldsAfterARestartAndForQA` in
-  internal/factory; `TestRemergeFilesAreTheFilesAMergeDiffersInFromGitsOwnMerge` in internal/gitx;
+  `TestTheReadyCardNamesTheBaseMergeCheck`, `TestACleanBaseMergesPassHoldsAfterARestartAndForQA` and
+  `TestABaseMergeOfACommitOnlyTheCopysRefNamesGetsAFullRound` (the fix round: one round fewer, none at the merge,
+  before the fetch) in internal/factory; `TestRemergeFilesAreTheFilesAMergeDiffersInFromGitsOwnMerge` in internal/gitx;
   `TestANarrowLocalJudgeReviewsTheRemergeDiffOfTheMerge` (agents), `TestANarrowLocalRoundsJudgeReviewsTheRemergeDiff`
   (pipeline), `TestALocalRoundOfABaseMergeHandsItsJudgeTheRemerge` (engine) and
   `TestRunLocalHandsTheEngineANarrowRoundOfABaseMerge` (evalrun). No migration, no new key.

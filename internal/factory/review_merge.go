@@ -9,10 +9,11 @@ package factory
 // at a head the review did not pass (reviewPass: mergedBase), the factory
 // reads from git, never from the writer's words, whether that head is a
 // merge of two parents whose first is the head the review passed (its
-// review-summary.json) and whose second is a commit of origin/<base>
-// (checkBaseMerge, in a repository of the factory's own: gitx.Isolated, so
-// no merge driver, attribute or commit-graph of the copy's applies, and
-// gitx reads the real objects, GIT_NO_REPLACE_OBJECTS):
+// review-summary.json) and whose second is a commit of origin/<base>,
+// fetched from the remote first, since the writer's pane can move the
+// copy's ref (checkBaseMerge, in a repository of the factory's own:
+// gitx.Isolated, so no merge driver, attribute or commit-graph of the
+// copy's applies, and gitx reads the real objects, GIT_NO_REPLACE_OBJECTS):
 //   - git's own merge of the two (merge-tree) is the merge's tree: a clean
 //     merge gets no round. The review's end is carried to the head
 //     (review-summary.json with BaseMerge) and the stage passes; the
@@ -172,7 +173,10 @@ func (e *Engine) baseMergeOf(ctx context.Context, t registry.Task, c Copy, sum R
 // ordinary change, or commits besides a merge); a merge is read again, and
 // checked, in a repository of the factory's own (Isolated: no merge
 // driver, attribute or commit-graph of the copy's), with origin/<base>
-// read in the copy (readBaseMerge). ok is false for an ordinary change. A
+// fetched from the remote first and then read in the copy (readBaseMerge):
+// copies are worktrees of the main clone, so the writer's pane can move
+// that ref, and a commit of the writer's own that it names would read as
+// the base. ok is false for an ordinary change. A
 // read git cannot make, but for a cancelled one, is a full round with why,
 // never a stop of the stage: a full round is what every head got before.
 func (e *Engine) checkBaseMerge(ctx context.Context, t registry.Task, c Copy, reviewed string) (BaseMerge, bool, error) {
@@ -202,6 +206,12 @@ func (e *Engine) checkBaseMerge(ctx context.Context, t registry.Task, c Copy, re
 			return full(cmp.Or(why, "git cannot list its commits since "+short(reviewed)), err)
 		}
 		return bm, false, nil // an ordinary change
+	}
+	// The copy's origin/<base> is the main clone's ref, which the writer's
+	// pane can move: the forced fetch the ready card's flags make sets it
+	// to the remote's base first.
+	if err := git.FetchBranch(ctx, cmp.Or(repo.MainClone, c.Path), baseOf(repo)); err != nil {
+		return full("git cannot fetch "+bm.Base, err)
 	}
 	tip, err := git.RevParse(ctx, c.Path, bm.Base)
 	if err != nil {

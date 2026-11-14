@@ -327,6 +327,55 @@ func TestOnlyAMergeOfTheBaseIntoTheReviewedHeadSkipsTheFullRound(t *testing.T) {
 	}
 }
 
+// The base's tip is the remote's, never the copy's origin/master alone:
+// copies are worktrees of the main clone, so the writer's pane can move
+// that ref. The writer commits its own change off origin/master, names it
+// origin/master (update-ref) and merges it into the reviewed head: the
+// check fetches the base first, finds the merged commit on no commit of
+// the real origin/master, and the head gets a full round of the watch's
+// roles, with an event naming origin/master. A fetch that fails is a full
+// round too.
+func TestABaseMergeOfACommitOnlyTheCopysRefNamesGetsAFullRound(t *testing.T) {
+	r := newReadyRig(t)
+	task, _ := r.toCleanBase("PR-12408")
+	r.clock.Add(time.Minute)
+	r.git(r.copyDir, "switch", "--quiet", "-c", "own", "origin/master")
+	own := r.commit("the writer's own change", map[string]string{"lib/own.rb": "class Own\nend\n"})
+	r.git(r.copyDir, "update-ref", "refs/remotes/origin/master", own)
+	r.git(r.copyDir, "switch", "--quiet", task.Branch)
+	r.git(r.copyDir, "merge", "--quiet", "--no-edit", "origin/master")
+	merged := r.git(r.copyDir, "rev-parse", "HEAD")
+	r.taskFile(task.ID, proofFile, `{"specs": ["spec/models/credit_points_spec.rb"]}`)
+	r.ended(task, "fx-writer")
+	r.toBody(task)
+
+	calls := r.rv.calls() // the full round's clean end on the wider change gets its second opinion after it
+	if len(calls) < 2 || calls[1].HeadSHA != merged || calls[1].Remerge || calls[1].Round != 1 || !slices.Equal(calls[1].Roles, calls[0].Roles) {
+		for _, c := range calls {
+			t.Logf("round %d at %s: %v (remerge %v)", c.Round, short(c.HeadSHA), c.Roles, c.Remerge)
+		}
+		t.Fatalf("local rounds above, want a full round of the first round's roles at %s", short(merged))
+	}
+	if !slices.ContainsFunc(r.events(task.ID, "review"), func(ev registry.Event) bool {
+		return strings.Contains(ev.Text, "a full round") && strings.Contains(ev.Text, "is no commit of origin/master")
+	}) {
+		t.Fatalf("review events %+v, want one that says the merged commit is no commit of origin/master", r.events(task.ID, "review"))
+	}
+
+	r.setFailGit(func(args []string) error {
+		if slices.Contains(args, "fetch") {
+			return errors.New("fatal: unable to access the remote")
+		}
+		return nil
+	})
+	task.HeadSHA = merged
+	bm, ok, err := r.e.checkBaseMerge(r.ctx, task, r.cp, calls[0].HeadSHA)
+	r.setFailGit(nil)
+	if err != nil || !ok || bm.Kind != mergeFull || !strings.Contains(bm.Why, "fetch origin/master") {
+		t.Fatalf("a fetch that fails: %+v, %v, %v; want a full round naming the fetch", bm, ok, err)
+	}
+}
+
 // The narrow round is a round of the task's life: it counts toward
 // [factory.local_review] max_rounds, and at the limit its end decides as
 // any round's does there. A P2 it finds at the task's second round, the
