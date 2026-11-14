@@ -23400,6 +23400,18 @@ func (c *Client) RemergeDiff(ctx context.Context, dir, merge string, paths ...st
     daemon shows it to the operator before the y that pushes a merge it holds
     (engine.HeldMerge).
 
+func (c *Client) RemergeFiles(ctx context.Context, dir, merge string) ([]string, error)
+    RemergeFiles are the files in which merge, a merge commit of two parents,
+    differs from git's own merge of them, each once, in git's order:
+    the files `git show --remerge-diff --name-only` lists, the conflicts the
+    merge resolved and the changes it made that git's merge would not have,
+    with no rename detection (a file moved names both of its paths). None for a
+    merge that is git's own. A commit of another number of parents is refused,
+    since --remerge-diff would list its own changes, and so is an output past
+    execx.MaxOutput. git's merge here runs dir's merge drivers, as RemergeDiff's
+    does: in a clone an agent's pane writes, run it in Isolated. The factory
+    checks a merge of the base with it (factory.BaseMerge).
+
 func (c *Client) RemoteURL(ctx context.Context, dir string) (string, error)
     RemoteURL returns the URL of origin in dir. Credentials embedded in the URL
     are stripped (see stripUserinfo) so the value is safe to log.

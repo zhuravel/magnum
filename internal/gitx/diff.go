@@ -487,6 +487,42 @@ func (c *Client) RemergeDiff(ctx context.Context, dir, merge string, paths ...st
 	return string(res.Stdout), nil
 }
 
+// RemergeFiles are the files in which merge, a merge commit of two
+// parents, differs from git's own merge of them, each once, in git's
+// order: the files `git show --remerge-diff --name-only` lists, the
+// conflicts the merge resolved and the changes it made that git's merge
+// would not have, with no rename detection (a file moved names both of its
+// paths). None for a merge that is git's own. A commit of another number
+// of parents is refused, since --remerge-diff would list its own changes,
+// and so is an output past execx.MaxOutput. git's merge here runs dir's
+// merge drivers, as RemergeDiff's does: in a clone an agent's pane writes,
+// run it in Isolated. The factory checks a merge of the base with it
+// (factory.BaseMerge).
+func (c *Client) RemergeFiles(ctx context.Context, dir, merge string) ([]string, error) {
+	parents, err := c.Parents(ctx, dir, merge)
+	if err != nil {
+		return nil, err
+	}
+	if len(parents) != 2 {
+		return nil, fmt.Errorf("gitx: show --remerge-diff %s: a commit of %d parents, not a merge of two", merge, len(parents))
+	}
+	res, err := c.git(ctx, dir, call{label: "show --remerge-diff --name-only " + merge},
+		"show", "--remerge-diff", "--name-only", "-z", "--no-renames", "--no-color", "--no-ext-diff", "--format=", merge+"^{commit}", "--")
+	if err != nil {
+		return nil, err
+	}
+	if res.Truncated {
+		return nil, fmt.Errorf("gitx: show --remerge-diff %s: more than %d bytes", merge, execx.MaxOutput)
+	}
+	var out []string
+	for p := range strings.SplitSeq(string(res.Stdout), "\x00") {
+		if p != "" && !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
 // PathsDiff is the diff from a to b in paths (each taken literally from
 // the top): `git diff a b -- paths`, with no external diff, textconv or
 // color, every file as text (--text); an output past execx.MaxOutput is an

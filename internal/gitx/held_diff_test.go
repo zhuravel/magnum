@@ -309,3 +309,72 @@ func TestGitxsGraftFileAddsNoAdviceToGitsOutput(t *testing.T) {
 		t.Errorf("git's stderr carries the graft file's advice:\n%s", res.Stderr)
 	}
 }
+
+// The factory's check of a base merge (internal/factory, review_merge.go)
+// asks which files a merge of the base differs in from git's own merge of
+// its parents: RemergeFiles lists the files `git show --remerge-diff`
+// shows, the conflicts the merge resolved and the changes it made that
+// git's merge would not have (an "evil merge"), and none for a merge that
+// is git's own. A commit of one parent is refused, since --remerge-diff
+// would list its own changes, and so is an option in the merge's place.
+func TestRemergeFilesAreTheFilesAMergeDiffersInFromGitsOwnMerge(t *testing.T) {
+	fx := newHeldMergeFixture(t)
+	ctx := context.Background()
+	dir := fx.origin
+	if got, err := fx.c.RemergeFiles(ctx, dir, fx.resolved); err != nil || !slices.Equal(got, []string{".github/workflows/ci.yml"}) {
+		t.Errorf("RemergeFiles of the resolved merge = %q, %v; want ci.yml alone", got, err)
+	}
+	if got, err := fx.c.RemergeFiles(ctx, dir, fx.clean); err != nil || len(got) != 0 {
+		t.Errorf("RemergeFiles of a clean merge = %q, %v; want none", got, err)
+	}
+	// an evil merge: git's merge is clean, and the commit adds a file and changes another beyond it
+	fx.git(dir, "checkout", "--quiet", "-b", "evil", fx.resolved)
+	fx.write(dir, "app/a.rb", "a = 4\n")
+	fx.git(dir, "add", ".")
+	fx.git(dir, "commit", "--quiet", "-m", "the PR again")
+	fx.git(dir, "checkout", "--quiet", "main")
+	fx.write(dir, "app/b.rb", "b = 1\n")
+	fx.git(dir, "add", ".")
+	fx.git(dir, "commit", "--quiet", "-m", "the base again")
+	fx.git(dir, "checkout", "--quiet", "evil")
+	fx.git(dir, "merge", "--quiet", "--no-commit", "main")
+	fx.write(dir, "app/evil file.rb", "evil\n")
+	fx.write(dir, "README.md", "changed in the merge\n")
+	fx.git(dir, "add", ".")
+	fx.git(dir, "commit", "--quiet", "--no-edit")
+	evil := fx.git(dir, "rev-parse", "HEAD")
+	if got, err := fx.c.RemergeFiles(ctx, dir, evil); err != nil || !slices.Equal(got, []string{"README.md", "app/evil file.rb"}) {
+		t.Errorf("RemergeFiles of an evil merge = %q, %v; want README.md and app/evil file.rb", got, err)
+	}
+	// in a repository of the daemon's own, by the full id, alike
+	if err := fx.c.Isolated(ctx, dir, func(iso string) error {
+		got, err := fx.c.RemergeFiles(ctx, iso, evil)
+		if err != nil || !slices.Equal(got, []string{"README.md", "app/evil file.rb"}) {
+			t.Errorf("RemergeFiles in Isolated = %q, %v; want the evil merge's files", got, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := fx.c.RemergeFiles(ctx, dir, fx.head); err == nil {
+		t.Errorf("RemergeFiles of a commit of one parent = %q, want an error", got)
+	}
+	if _, err := fx.c.RemergeFiles(ctx, dir, "-x"); err == nil {
+		t.Error("an option as the merge was taken")
+	}
+}
+
+// A remerge diff past execx.MaxOutput is no list of files: RemergeFiles
+// refuses an output cut at the cap, as the other diff readers do, and the
+// factory then reviews the head in a full round.
+func TestRemergeFilesRefusesAnOutputCutAtTheCap(t *testing.T) {
+	const slot = "/w/talkable.factory1"
+	merge := strings.Repeat("d3", 20)
+	parents := merge + " " + strings.Repeat("a1", 20) + " " + strings.Repeat("b2", 20) + "\n"
+	c, _ := newFake(
+		execx.Rule{Prefix: []string{"git", "-C", slot, "rev-list", "--parents"}, Result: execx.Result{Stdout: []byte(parents)}},
+		execx.Rule{Prefix: []string{"git", "-C", slot, "show"}, Result: execx.Result{Stdout: []byte("app/a.rb\x00"), Truncated: true}})
+	if got, err := c.RemergeFiles(context.Background(), slot, merge); err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Errorf("RemergeFiles of a cut output = %q, %v; want an error", got, err)
+	}
+}
